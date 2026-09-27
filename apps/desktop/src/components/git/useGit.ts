@@ -22,11 +22,13 @@ export function useGit(
   refreshKey: string,
 ) {
   const scope = available ? workspaceId : null;
+  // The native reader is shared across workspaces. Keep its queue alive when
+  // the selected workspace (and the client that binds it) changes.
+  const tail = useRef<Promise<unknown>>(Promise.resolve());
   const client = useMemo(() => {
-    let tail: Promise<unknown> = Promise.resolve();
     const queue = <T>(action: () => Promise<T>): Promise<T> => {
-      const result = tail.then(action, action);
-      tail = result.catch(() => undefined);
+      const result = tail.current.then(action, action);
+      tail.current = result.catch(() => undefined);
       return result;
     };
     return {
@@ -110,7 +112,6 @@ export function useGit(
     generation.current += 1;
     inFlight.current = false;
     pending.current = false;
-    void refresh();
     return () => {
       generation.current += 1;
     };

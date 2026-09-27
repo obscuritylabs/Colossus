@@ -296,10 +296,19 @@ export function WorkSurface({
     readStoredAsidePaneWidth,
   );
   const [browserPaneWidth, setBrowserPaneWidth] = useState<number | null>(null);
+  const [gitPaneWidth, setGitPaneWidth] = useState<number | null>(null);
   const asidePaneWidth =
-    activeDrawer === "browser" ? browserPaneWidth : savedAsideWidth;
+    activeDrawer === "git"
+      ? gitPaneWidth
+      : activeDrawer === "browser"
+        ? browserPaneWidth
+        : savedAsideWidth;
   const setAsidePaneWidth =
-    activeDrawer === "browser" ? setBrowserPaneWidth : setSavedAsideWidth;
+    activeDrawer === "git"
+      ? setGitPaneWidth
+      : activeDrawer === "browser"
+        ? setBrowserPaneWidth
+        : setSavedAsideWidth;
   const workLayoutRef = useRef<HTMLDivElement>(null);
   const feedScrollRef = useRef<HTMLDivElement>(null);
   const stableFeedPositionRef = useRef({ top: 0, left: 0 });
@@ -544,9 +553,11 @@ export function WorkSurface({
       setAsidePaneWidth((current) =>
         clampAsidePaneWidth(
           current ??
-            (activeDrawer === "details"
-              ? 320
-              : defaultAsidePaneWidth(layoutWidth)),
+            (activeDrawer === "git"
+              ? 360
+              : activeDrawer === "details"
+                ? 320
+                : defaultAsidePaneWidth(layoutWidth)),
           layoutWidth,
         ),
       );
@@ -616,10 +627,12 @@ export function WorkSurface({
       }
       const focusable = Array.from(
         drawerRef.current?.querySelectorAll<HTMLElement>(
-          'button:not(:disabled):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])',
+          'button:not(:disabled):not([tabindex="-1"]), input:not(:disabled):not([tabindex="-1"]), select:not(:disabled):not([tabindex="-1"]), textarea:not(:disabled):not([tabindex="-1"]), a[href]:not([tabindex="-1"]), summary:not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])',
         ) ?? [],
       ).filter(
-        (element) => !element.hidden && element.closest("[hidden]") === null,
+        (element) =>
+          element.getClientRects().length > 0 &&
+          element.closest("[hidden]") === null,
       );
       const first = focusable[0];
       const last = focusable.at(-1);
@@ -881,7 +894,8 @@ export function WorkSurface({
 
   function commitAsideWidth(width: number) {
     const nextWidth = previewAsideWidth(width);
-    if (activeDrawer !== "browser") storeAsidePaneWidth(nextWidth);
+    if (activeDrawer !== "browser" && activeDrawer !== "git")
+      storeAsidePaneWidth(nextWidth);
   }
 
   function finishAsideResize(pointerId: number, handle: HTMLElement) {
@@ -1420,11 +1434,14 @@ export function WorkSurface({
               if (layoutWidth === undefined || layoutWidth <= 0) {
                 return;
               }
-              if (activeDrawer !== "browser") clearStoredAsidePaneWidth();
+              if (activeDrawer !== "browser" && activeDrawer !== "git")
+                clearStoredAsidePaneWidth();
               setAsidePaneWidth(
-                activeDrawer === "details"
-                  ? clampAsidePaneWidth(320, layoutWidth)
-                  : defaultAsidePaneWidth(layoutWidth),
+                activeDrawer === "git"
+                  ? clampAsidePaneWidth(360, layoutWidth)
+                  : activeDrawer === "details"
+                    ? clampAsidePaneWidth(320, layoutWidth)
+                    : defaultAsidePaneWidth(layoutWidth),
               );
             }}
           />
@@ -1476,6 +1493,7 @@ export function WorkSurface({
               <GitPane
                 key={gitWorkspaceId}
                 git={git}
+                closeRef={drawerCloseRef}
                 onClose={closeDrawer}
                 onOpenFile={openWorkspaceSource}
               />

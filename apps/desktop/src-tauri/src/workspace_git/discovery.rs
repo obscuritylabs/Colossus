@@ -212,9 +212,16 @@ pub(super) fn inspect_metadata(binding: &RepositoryBinding) -> Result<(), Comman
                     "Git metadata contains an unsupported filesystem link.",
                 ));
             }
-            if path == binding.common.path.join("objects/info/alternates")
-                || path == binding.common.path.join("objects/info/http-alternates")
-            {
+            // libgit2 opens these names case-insensitively on common Windows
+            // and macOS filesystems. Reject case variants on every platform.
+            let relative = path
+                .strip_prefix(&binding.common.path)
+                .ok()
+                .map(|path| path.to_string_lossy().replace('\\', "/"));
+            if relative.as_deref().is_some_and(|path| {
+                path.eq_ignore_ascii_case("objects/info/alternates")
+                    || path.eq_ignore_ascii_case("objects/info/http-alternates")
+            }) {
                 return Err(error(
                     "Repositories with alternate object stores are not supported yet.",
                 ));
@@ -229,7 +236,11 @@ pub(super) fn inspect_metadata(binding: &RepositoryBinding) -> Result<(), Comman
                 }
             } else if !metadata.is_file()
                 || metadata.len() > 512 * 1024 * 1024
-                || (entry.file_name() == "index" && metadata.len() > 16 * 1024 * 1024)
+                || (entry
+                    .file_name()
+                    .as_encoded_bytes()
+                    .eq_ignore_ascii_case(b"index")
+                    && metadata.len() > 16 * 1024 * 1024)
             {
                 return Err(error("Git metadata exceeds the inspection limit."));
             }

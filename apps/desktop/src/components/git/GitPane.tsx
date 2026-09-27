@@ -1,18 +1,14 @@
 import {
   IconGitBranch,
-  IconGitCommit,
+  IconLock,
   IconLoader2,
   IconRefresh,
   IconX,
 } from "@tabler/icons-react";
-import { useEffect, useRef, useState } from "react";
-import type {
-  GitCommit,
-  GitCommitDetails,
-  GitFile,
-  GitRepository,
-} from "../../git";
-import { gitBranchLabel, gitFileGroups } from "../../git";
+import { useState, type Ref } from "react";
+import { gitBranchLabel } from "../../git";
+import { GitChanges } from "./GitChanges";
+import { GitHistory } from "./GitHistory";
 import type { GitController } from "./useGit";
 import "./git.css";
 
@@ -62,10 +58,12 @@ export function GitPane({
   git,
   onClose,
   onOpenFile,
+  closeRef,
 }: {
   git: GitController;
   onClose: () => void;
   onOpenFile: (path: string) => void;
+  closeRef: Ref<HTMLButtonElement>;
 }) {
   const [tab, setTab] = useState<"changes" | "history">("changes");
   const repository = git.status?.repository;
@@ -77,7 +75,9 @@ export function GitPane({
             <IconGitBranch size={19} aria-hidden="true" />
             Git
           </h2>
-          <p>{repository?.name ?? "Current workspace"}</p>
+          <span className="git-repository-name" title={repository?.name}>
+            {repository?.name ?? "Current workspace"}
+          </span>
         </div>
         <div>
           <button
@@ -96,6 +96,7 @@ export function GitPane({
             type="button"
             className="icon-button"
             aria-label="Close Git panel"
+            ref={closeRef}
             onClick={onClose}
           >
             <IconX size={18} />
@@ -142,30 +143,36 @@ export function GitPane({
       ) : null}
       {repository ? (
         <>
-          <div className="git-repository-summary">
-            {repository.notes.map((note) => (
-              <p key={note} className="git-notice">
-                {note}
-              </p>
-            ))}
-            <strong>
-              <IconGitBranch size={16} />
+          <div className="git-branch-context">
+            <IconGitBranch size={15} aria-hidden="true" />
+            <strong title={gitBranchLabel(repository)}>
               {gitBranchLabel(repository)}
             </strong>
-            <p>
-              {repository.linkedWorktree ? "Linked worktree" : "Repository"}
-              {repository.head === null ? " · No commits yet" : ""}
-            </p>
-            {repository.operation ? (
-              <p className="git-notice">{repository.operation}</p>
-            ) : null}
-            {repository.scoped ? (
-              <p>
-                File paths are limited to this workspace. History describes the
-                repository.
-              </p>
+            {repository.linkedWorktree ? (
+              <span className="git-worktree-label" title="Linked worktree">
+                Worktree
+              </span>
             ) : null}
           </div>
+          {repository.head === null ? (
+            <p className="git-context-note">No commits yet</p>
+          ) : null}
+          {repository.operation ? (
+            <p className="git-notice git-operation">{repository.operation}</p>
+          ) : null}
+          {repository.scoped ? (
+            <p className="git-context-note">
+              Files in this workspace · History for the repository
+            </p>
+          ) : null}
+          {repository.notes.length > 0 ? (
+            <details className="git-repository-notes">
+              <summary>Repository notes ({repository.notes.length})</summary>
+              {repository.notes.map((note) => (
+                <p key={note}>{note}</p>
+              ))}
+            </details>
+          ) : null}
           <div className="git-tabs" role="tablist" aria-label="Git views">
             {(["changes", "history"] as const).map((value) => (
               <button
@@ -175,6 +182,11 @@ export function GitPane({
                 type="button"
                 aria-selected={tab === value}
                 aria-controls="git-tab-panel"
+                aria-label={
+                  value === "changes"
+                    ? `Changes (${repository.files.length}${repository.truncated ? "+" : ""})`
+                    : "History"
+                }
                 tabIndex={tab === value ? 0 : -1}
                 onClick={() => setTab(value)}
                 onKeyDown={(event) => {
@@ -186,9 +198,17 @@ export function GitPane({
                   }
                 }}
               >
-                {value === "changes"
-                  ? `Changes (${repository.files.length}${repository.truncated ? "+" : ""})`
-                  : "History"}
+                {value === "changes" ? (
+                  <>
+                    Changes{" "}
+                    <span className="git-tab-count">
+                      {repository.files.length}
+                      {repository.truncated ? "+" : ""}
+                    </span>
+                  </>
+                ) : (
+                  "History"
+                )}
               </button>
             ))}
           </div>
@@ -199,9 +219,13 @@ export function GitPane({
             aria-labelledby={`git-tab-${tab}`}
           >
             {tab === "changes" ? (
-              <Changes repository={repository} onOpenFile={onOpenFile} />
+              <GitChanges
+                key={repository.id}
+                repository={repository}
+                onOpenFile={onOpenFile}
+              />
             ) : (
-              <History
+              <GitHistory
                 key={`${repository.id}:${repository.head}`}
                 repository={repository}
                 git={git}
@@ -211,307 +235,27 @@ export function GitPane({
         </>
       ) : null}
       <footer className="git-pane-footer">
-        Read-only · {git.busy ? "Refreshing…" : "Refreshes while you work"}
+        <span>
+          <IconLock size={12} aria-hidden="true" />
+          Read-only
+        </span>
+        <span role="status">
+          {git.busy ? (
+            <>
+              <IconLoader2
+                size={12}
+                className="git-spinner"
+                aria-hidden="true"
+              />
+              Refreshing…
+            </>
+          ) : git.error ? (
+            "Refresh failed"
+          ) : (
+            "Auto-refresh on"
+          )}
+        </span>
       </footer>
     </section>
   );
-}
-
-function Changes({
-  repository,
-  onOpenFile,
-}: {
-  repository: GitRepository;
-  onOpenFile: (path: string) => void;
-}) {
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const selected = repository.files.find((file) => file.path === selectedPath);
-  return (
-    <>
-      {repository.truncated ? (
-        <p className="git-notice">
-          Showing a limited file list. Counts reflect the displayed files.
-        </p>
-      ) : null}
-      {repository.files.length === 0 ? (
-        <div className="git-empty">
-          <h3>
-            {repository.truncated
-              ? "No displayable changes"
-              : "Working tree clean"}
-          </h3>
-          <p>
-            {repository.truncated
-              ? "Some paths could not be displayed."
-              : "There are no changes in this workspace."}
-          </p>
-        </div>
-      ) : null}
-      {gitFileGroups(repository.files)
-        .filter((group) => group.files.length > 0)
-        .map((group) => (
-          <section
-            className="git-file-group"
-            key={group.label}
-            aria-label={group.label}
-          >
-            <h3>
-              {group.label}
-              <span>{group.files.length}</span>
-            </h3>
-            {group.files.map((file) => (
-              <button
-                type="button"
-                className="git-file-row"
-                key={file.path}
-                aria-pressed={file.path === selectedPath}
-                onClick={() => setSelectedPath(file.path)}
-              >
-                <span>{file.path}</span>
-                <small>
-                  {group.label === "Staged"
-                    ? file.staged
-                    : group.label === "Unstaged"
-                      ? file.unstaged
-                      : group.label === "Conflicts"
-                        ? "conflict"
-                        : "new"}
-                </small>
-              </button>
-            ))}
-          </section>
-        ))}
-      {selected ? (
-        <FileDetails file={selected} onOpenFile={onOpenFile} />
-      ) : null}
-    </>
-  );
-}
-function FileDetails({
-  file,
-  onOpenFile,
-}: {
-  file: GitFile;
-  onOpenFile: (path: string) => void;
-}) {
-  return (
-    <section className="git-file-details" aria-label="Changed file details">
-      <h3>{file.path}</h3>
-      {file.previousPath ? <p>Renamed from {file.previousPath}</p> : null}
-      <dl>
-        <dt>Staged</dt>
-        <dd>{file.staged ?? "No"}</dd>
-        <dt>Unstaged</dt>
-        <dd>{file.untracked ? "Untracked" : (file.unstaged ?? "No")}</dd>
-        {file.conflicted ? (
-          <>
-            <dt>Conflict</dt>
-            <dd>Needs resolution</dd>
-          </>
-        ) : null}
-      </dl>
-      {file.staged !== "deleted" && file.unstaged !== "deleted" ? (
-        <button
-          type="button"
-          className="button secondary compact"
-          onClick={() => onOpenFile(file.path)}
-        >
-          Open current file
-        </button>
-      ) : (
-        <p>This file has been deleted.</p>
-      )}
-    </section>
-  );
-}
-
-function History({
-  repository,
-  git,
-}: {
-  repository: GitRepository;
-  git: GitController;
-}) {
-  const [commits, setCommits] = useState<GitCommit[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [limited, setLimited] = useState(false);
-  const [busy, setBusy] = useState(true);
-  const [error, setError] = useState("");
-  const [details, setDetails] = useState<GitCommitDetails | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
-  const request = useRef(0);
-  useEffect(() => {
-    let current = true;
-    void git.client
-      .history(repository.id, null)
-      .then((page) => {
-        if (current) {
-          setCommits(page.commits);
-          setCursor(page.nextCursor);
-          setLimited(page.limited);
-        }
-      })
-      .catch((error: unknown) => {
-        if (current) setError(errorText(error));
-      })
-      .finally(() => {
-        if (current) setBusy(false);
-      });
-    return () => {
-      current = false;
-      request.current += 1;
-    };
-  }, [git.client, repository.id]);
-  async function loadMore(pageCursor: string | null = cursor) {
-    const version = ++request.current;
-    setBusy(true);
-    setError("");
-    try {
-      const page = await git.client.history(repository.id, pageCursor);
-      if (request.current === version) {
-        setCommits((old) =>
-          pageCursor === null ? page.commits : [...old, ...page.commits],
-        );
-        if (pageCursor === null) {
-          setSelected(null);
-          setDetails(null);
-        }
-        setCursor(page.nextCursor);
-        setLimited(page.limited);
-      }
-    } catch (error) {
-      if (request.current === version) setError(errorText(error));
-    } finally {
-      if (request.current === version) setBusy(false);
-    }
-  }
-  async function inspect(commitId: string) {
-    const version = ++request.current;
-    setSelected(commitId);
-    setDetails(null);
-    setBusy(true);
-    setError("");
-    try {
-      const result = await git.client.details(repository.id, commitId);
-      if (request.current === version) setDetails(result);
-    } catch (error) {
-      if (request.current === version) setError(errorText(error));
-    } finally {
-      if (request.current === version) setBusy(false);
-    }
-  }
-  return (
-    <>
-      {error ? (
-        <p className="git-notice" role="alert">
-          {error}
-          <button
-            type="button"
-            className="button secondary compact"
-            disabled={busy}
-            onClick={() => void loadMore(null)}
-          >
-            Retry history
-          </button>
-        </p>
-      ) : null}
-      {busy ? (
-        <p className="git-progress" role="status">
-          <IconLoader2 className="git-spinner" size={16} />
-          Reading history…
-        </p>
-      ) : null}
-      {!busy && !error && commits.length === 0 ? (
-        <p className="git-empty">No commits yet.</p>
-      ) : null}
-      <div className="git-commits">
-        {commits.map((commit) => (
-          <button
-            className="git-commit-row"
-            disabled={busy}
-            key={commit.id}
-            type="button"
-            aria-pressed={selected === commit.id}
-            onClick={() => void inspect(commit.id)}
-          >
-            <IconGitCommit size={18} aria-hidden="true" />
-            <span>
-              <strong>{commit.subject}</strong>
-              <small>
-                {commit.author} ·{" "}
-                {new Date(commit.timestamp * 1000).toLocaleDateString()} ·{" "}
-                {commit.id.slice(0, 7)}
-              </small>
-            </span>
-          </button>
-        ))}
-      </div>
-      {cursor ? (
-        <button
-          className="button secondary compact"
-          type="button"
-          disabled={busy}
-          onClick={() => void loadMore()}
-        >
-          Load older commits
-        </button>
-      ) : null}
-      {limited ? (
-        <p className="git-notice">Showing the most recent 400 commits.</p>
-      ) : null}
-      {details ? (
-        <section className="git-file-details" aria-label="Commit details">
-          <h3>{details.commit.subject}</h3>
-          <code>{details.commit.id}</code>
-          <p>
-            {details.commit.author} ·{" "}
-            {new Date(details.commit.timestamp * 1000).toLocaleString()}
-          </p>
-          <pre>{details.message}</pre>
-          {details.parents.length > 0 ? (
-            <dl>
-              <dt>{details.parents.length === 1 ? "Parent" : "Parents"}</dt>
-              <dd>
-                {details.parents.map((parent) => (
-                  <div key={parent}>
-                    <code>{parent}</code>
-                  </div>
-                ))}
-              </dd>
-            </dl>
-          ) : null}
-          <h4>Affected files</h4>
-          {details.parents.length > 1 ? (
-            <p>Compared with the first parent.</p>
-          ) : details.parents.length === 0 ? (
-            <p>Initial commit.</p>
-          ) : null}
-          {details.files.map((file) => (
-            <div className="git-file-row" key={file.path}>
-              <span>
-                {file.path}
-                {file.previousPath ? (
-                  <small> ← {file.previousPath}</small>
-                ) : null}
-              </span>
-              <small>{file.status}</small>
-            </div>
-          ))}
-          {details.files.length === 0 ? (
-            <p>No affected files in this workspace.</p>
-          ) : null}
-          {details.truncated ? (
-            <p>Some commit details were truncated.</p>
-          ) : null}
-        </section>
-      ) : null}
-    </>
-  );
-}
-function errorText(error: unknown): string {
-  return error instanceof Error
-    ? error.message
-    : typeof error === "object" && error !== null && "message" in error
-      ? String(error.message)
-      : "Could not load Git history.";
 }

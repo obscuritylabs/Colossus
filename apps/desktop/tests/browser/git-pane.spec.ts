@@ -26,7 +26,7 @@ test("Git shows the branch, grouped changes and history without losing a draft",
   ).toBeVisible();
   await pane
     .getByRole("region", { name: "Staged", exact: true })
-    .getByRole("button")
+    .getByRole("button", { name: /WorkSurface.tsx/ })
     .click();
   await expect(
     pane.getByRole("region", { name: "Changed file details" }),
@@ -40,6 +40,115 @@ test("Git shows the branch, grouped changes and history without losing a draft",
   await expect(
     page.getByRole("textbox", { name: "Prompt", exact: true }),
   ).toHaveValue("Keep my draft while I inspect Git.");
+});
+
+test("Git has its own compact width and preserves a user resize", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 950 });
+  await page.goto("/?fixture=operations-studio");
+  await page.getByRole("button", { name: /Open Git:/ }).click();
+  const resize = page.getByRole("separator", { name: "Resize Git panel" });
+  await expect(resize).toHaveAttribute("aria-valuenow", "360");
+  await resize.press("ArrowLeft");
+  const width = await resize.getAttribute("aria-valuenow");
+  expect(Number(width)).toBeGreaterThan(360);
+  await page.getByRole("button", { name: "Open Aside", exact: true }).click();
+  const asideResize = page.getByRole("separator", {
+    name: "Resize Aside conversation",
+  });
+  await asideResize.press("End");
+  await page.getByRole("button", { name: /Open Git:/ }).click();
+  await expect(resize).toHaveAttribute("aria-valuenow", width!);
+  await resize.dblclick();
+  await expect(resize).toHaveAttribute("aria-valuenow", "360");
+});
+
+test("file groups collapse, filter by directory, and keep details visible", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 950 });
+  await page.goto("/?fixture=operations-studio&git=many");
+  await page.getByRole("button", { name: /Open Git:/ }).click();
+  const pane = page.getByRole("region", { name: "Workspace Git", exact: true });
+  const group = pane.getByRole("region", { name: "Unstaged", exact: true });
+  const toggle = group.getByRole("button", { name: /^Unstaged/ });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  const filter = pane.getByRole("searchbox", { name: "Filter files" });
+  await filter.fill("FEATURE-59");
+  const file = group.getByRole("button", { name: /feature-59\/index.ts/ });
+  await expect(file).toBeVisible();
+  await file.click();
+  const inspector = pane.getByRole("region", { name: "Changed file details" });
+  await expect(inspector).toBeInViewport();
+  await pane.getByRole("button", { name: "Clear filter files" }).click();
+  await expect(inspector).toBeInViewport();
+  await expect(inspector).toContainText("src/features/feature-59/index.ts");
+  await filter.fill("not-a-matching-path");
+  await expect(pane.getByText(/No files match/)).toBeVisible();
+  await inspector.getByRole("button", { name: "Close file details" }).click();
+  await expect(filter).toBeFocused();
+});
+
+test("file inspector explains conflicts, deletions and renamed paths", async ({
+  page,
+}) => {
+  await page.goto("/?fixture=operations-studio&git=many");
+  await page.getByRole("button", { name: /Open Git:/ }).click();
+  const pane = page.getByRole("region", { name: "Workspace Git", exact: true });
+  const inspector = pane.getByRole("region", { name: "Changed file details" });
+  await pane.getByRole("button", { name: /conflict.tsx, Conflicts/ }).click();
+  await expect(inspector).toContainText("Needs resolution");
+  await pane
+    .getByRole("searchbox", { name: "Filter files" })
+    .fill("removed.ts");
+  await pane.getByRole("button", { name: /removed.ts, Unstaged/ }).click();
+  await expect(inspector).toContainText("This file has been deleted");
+  await expect(
+    inspector.getByRole("button", { name: "Open current file" }),
+  ).toHaveCount(0);
+  await pane
+    .getByRole("searchbox", { name: "Filter files" })
+    .fill("new-name.ts");
+  await pane.getByRole("button", { name: /new-name.ts, Staged/ }).click();
+  await expect(inspector).toContainText("Renamed from src/old-name.ts");
+});
+
+test("history filtering and commit details preserve navigation and focus", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 950 });
+  await page.goto("/?fixture=operations-studio");
+  await page.getByRole("button", { name: /Open Git:/ }).click();
+  const pane = page.getByRole("region", { name: "Workspace Git", exact: true });
+  await pane.getByRole("tab", { name: "History", exact: true }).click();
+  const filter = pane.getByRole("searchbox", { name: "Filter loaded commits" });
+  await filter.fill("Desktop team");
+  const commit = pane.getByRole("button", { name: /Add browser navigation/ });
+  await expect(commit).toBeVisible();
+  await expect(
+    pane.getByRole("button", { name: /Improve desktop setup/ }),
+  ).toHaveCount(0);
+  await commit.click();
+  const details = pane.getByRole("region", { name: "Commit details" });
+  await expect(
+    details.getByRole("button", { name: "Back to history" }),
+  ).toBeFocused();
+  await expect(
+    details.getByRole("heading", {
+      name: "Add browser navigation and tab controls",
+    }),
+  ).toBeVisible();
+  await expect(details.getByText("Commit metadata")).toBeVisible();
+  await expect(details).toContainText(
+    "Renamed from src/components/GitPane.tsx",
+  );
+  await details.getByRole("button", { name: "Back to history" }).click();
+  await expect(filter).toHaveValue("Desktop team");
+  await expect(commit).toBeFocused();
+  await filter.fill("no such commit");
+  await expect(pane.getByText(/No loaded commits match/)).toBeVisible();
 });
 
 for (const [scenario, expected] of [
@@ -61,6 +170,8 @@ test("slow refresh keeps the composer usable and shows progress", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 950 });
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
   await page.goto("/?fixture=operations-studio&git=slow");
   await page.getByRole("button", { name: /Open Git:/ }).click();
   await expect(
@@ -68,8 +179,12 @@ test("slow refresh keeps the composer usable and shows progress", async ({
   ).toContainText("Refreshing");
   const prompt = page.getByRole("textbox", { name: "Prompt", exact: true });
   await prompt.fill("Typing while Git refreshes");
+  await page.clock.runFor(1500);
   await expect(page.getByRole("tab", { name: "Changes (3)" })).toBeVisible();
   await expect(prompt).toHaveValue("Typing while Git refreshes");
+  await expect(
+    page.getByRole("region", { name: "Workspace Git", exact: true }),
+  ).toContainText("Auto-refresh on");
 });
 
 test("Git is accessible at desktop and compact widths", async ({ page }) => {
@@ -132,9 +247,6 @@ test("workspace switching discards an old pending Git refresh", async ({
     page.getByRole("region", { name: "Workspace Git", exact: true }),
   ).toContainText("Refreshing");
   await page.getByRole("button", { name: "Research Lab", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: /Open Git: research/ }),
-  ).toBeVisible();
   await page.clock.runFor(1500);
   await expect(
     page.getByRole("button", { name: /Open Git: research/ }),
@@ -142,4 +254,61 @@ test("workspace switching discards an old pending Git refresh", async ({
   await expect(
     page.getByRole("button", { name: /Open Git: codex/ }),
   ).toHaveCount(0);
+  await expect(page.getByRole("alert")).not.toBeVisible();
 });
+
+for (const colorTheme of ["dark", "light"]) {
+  test(`Git stays usable in a short ${colorTheme} window with large text`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 880, height: 560 });
+    await page.addInitScript((theme) => {
+      localStorage.setItem(
+        "colossus.desktop.appearance.v1",
+        JSON.stringify({
+          colorTheme: theme,
+          textSize: "large",
+          showSecurityWarnings: false,
+        }),
+      );
+    }, colorTheme);
+    await page.goto("/?fixture=operations-studio");
+    await page.getByRole("button", { name: /Open Git:/ }).click();
+    const pane = page.getByRole("region", {
+      name: "Workspace Git",
+      exact: true,
+    });
+    const close = pane.getByRole("button", { name: "Close Git panel" });
+    await expect(close).toBeFocused();
+    const filter = pane.getByRole("searchbox", { name: "Filter files" });
+    await filter.fill("missing-path");
+    await pane.getByRole("button", { name: "Clear filter files" }).click();
+    await pane.getByRole("button", { name: /README.md, Unstaged/ }).click();
+    await expect(
+      pane.getByRole("button", { name: "Open current file" }),
+    ).toBeInViewport();
+    expect(
+      (await new AxeBuilder({ page }).include(".git-pane").analyze())
+        .violations,
+    ).toEqual([]);
+    await pane.getByRole("tab", { name: "History", exact: true }).click();
+    expect(
+      (await new AxeBuilder({ page }).include(".git-pane").analyze())
+        .violations,
+    ).toEqual([]);
+    await pane
+      .getByRole("button", { name: /Improve desktop setup/ })
+      .press("Enter");
+    await expect(
+      pane.getByRole("button", { name: "Back to history" }),
+    ).toBeFocused();
+    await pane.getByText("Commit metadata", { exact: true }).click();
+    expect(
+      (await new AxeBuilder({ page }).include(".git-pane").analyze())
+        .violations,
+    ).toEqual([]);
+    await page.screenshot({
+      path: `output/playwright/git-short-${colorTheme}.png`,
+    });
+  });
+}

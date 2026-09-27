@@ -218,6 +218,36 @@ fn alternate_object_store_and_forged_worktree_links_are_rejected() {
 }
 
 #[test]
+fn alternate_object_store_case_variants_are_rejected_before_opening() {
+    for path in [
+        ".git/objects/info/Alternates",
+        ".git/objects/info/HTTP-Alternates",
+        ".git/OBJECTS/INFO/ALTERNATES",
+    ] {
+        let fixture = Fixture::new();
+        fixture.write(path, "outside\n");
+        let binding = discover(&fixture.root).unwrap().unwrap();
+        let failure = super::discovery::inspect_metadata(&binding).unwrap_err();
+        assert!(
+            failure.message.contains("alternate object stores"),
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn oversized_case_variant_index_is_rejected_before_opening() {
+    let fixture = Fixture::new();
+    fs::File::create(fixture.root.join(".git/INDEX"))
+        .unwrap()
+        .set_len(17 * 1024 * 1024)
+        .unwrap();
+    let binding = discover(&fixture.root).unwrap().unwrap();
+    let failure = super::discovery::inspect_metadata(&binding).unwrap_err();
+    assert!(failure.message.contains("inspection limit"));
+}
+
+#[test]
 fn staged_rename_matches_git_and_commit_details_preserve_the_old_path() {
     let fixture = Fixture::new();
     fixture.write("before.txt", "original content\n");
