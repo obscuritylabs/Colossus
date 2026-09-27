@@ -79,6 +79,8 @@ import {
 } from "./SessionWorkspace";
 import type { SessionWorkspaceView } from "./SessionWorkspace";
 import { ThreadDetailsPanel } from "./ThreadDetailsPanel";
+import { GitIndicator, GitPane } from "./git/GitPane";
+import { useGit } from "./git/useGit";
 import { useBrowser } from "./browser/useBrowser";
 import { BrowserLinkContext } from "./browser/BrowserLink";
 
@@ -89,6 +91,8 @@ const BrowserPane = lazy(() =>
 );
 
 interface WorkSurfaceProps {
+  gitWorkspaceId?: string | null;
+  gitAvailable?: boolean;
   browserScope?: string | null;
   browserFixture?: boolean;
   title: string;
@@ -175,6 +179,8 @@ const STARTERS = [
 const IGNORE_SESSION_WORKSPACE_VIEW = () => undefined;
 
 export function WorkSurface({
+  gitWorkspaceId = null,
+  gitAvailable = false,
   title,
   view,
   conversationViews,
@@ -263,7 +269,14 @@ export function WorkSurface({
     () => window.matchMedia("(max-width: 980px)").matches,
   );
   const [activeDrawer, setActiveDrawer] = useState<
-    "files" | "artifacts" | "aside" | "research" | "details" | "browser" | null
+    | "files"
+    | "artifacts"
+    | "aside"
+    | "research"
+    | "details"
+    | "browser"
+    | "git"
+    | null
   >(() =>
     window.matchMedia("(min-width: 1200px)").matches ? "details" : null,
   );
@@ -308,6 +321,14 @@ export function WorkSurface({
     width: number;
   } | null>(null);
   const run = view?.run;
+  const git = useGit(
+    gitWorkspaceId,
+    gitAvailable,
+    activeDrawer === "git",
+    browserFixture,
+    `${run?.runId ?? ""}:${run?.status ?? ""}`,
+  );
+  const gitTriggerRef = useRef<HTMLSpanElement>(null);
   const status = run === undefined ? null : presentRunStatus(run.status);
   const startedAt = run?.startedAt ?? run?.createdAt;
   const startedLabel =
@@ -316,6 +337,7 @@ export function WorkSurface({
   const researchDrawerAvailable = run?.mode === "research";
   const researchOutput = view?.output ?? "";
   const resizableDrawer =
+    activeDrawer === "git" ||
     activeDrawer === "browser" ||
     activeDrawer === "aside" ||
     activeDrawer === "research" ||
@@ -540,6 +562,7 @@ export function WorkSurface({
 
   useEffect(() => {
     if (
+      (activeDrawer === "git" && !git.available) ||
       (activeDrawer === "files" && !filesAvailable) ||
       (activeDrawer === "artifacts" && !artifactsAvailable) ||
       (activeDrawer === "research" && !researchDrawerAvailable) ||
@@ -551,6 +574,7 @@ export function WorkSurface({
     activeDrawer,
     artifactsAvailable,
     filesAvailable,
+    git.available,
     researchDrawerAvailable,
     run,
   ]);
@@ -697,20 +721,28 @@ export function WorkSurface({
 
   function toggleDrawer(
     drawer:
-      "files" | "artifacts" | "aside" | "research" | "details" | "browser",
+      | "files"
+      | "artifacts"
+      | "aside"
+      | "research"
+      | "details"
+      | "browser"
+      | "git",
   ) {
     const trigger =
-      drawer === "browser"
-        ? browserTriggerRef.current
-        : drawer === "files"
-          ? filesTriggerRef.current
-          : drawer === "artifacts"
-            ? artifactTriggerRef.current
-            : drawer === "aside"
-              ? asideTriggerRef.current
-              : drawer === "research"
-                ? researchTriggerRef.current
-                : detailsTriggerRef.current;
+      drawer === "git"
+        ? (gitTriggerRef.current?.querySelector("button") ?? null)
+        : drawer === "browser"
+          ? browserTriggerRef.current
+          : drawer === "files"
+            ? filesTriggerRef.current
+            : drawer === "artifacts"
+              ? artifactTriggerRef.current
+              : drawer === "aside"
+                ? asideTriggerRef.current
+                : drawer === "research"
+                  ? researchTriggerRef.current
+                  : detailsTriggerRef.current;
     lastDrawerTriggerRef.current = trigger;
     if (activeDrawer === drawer) {
       if (drawer === "aside") {
@@ -876,6 +908,15 @@ export function WorkSurface({
             <span>Work</span>
             <span aria-hidden="true">/</span>
             <span>{status?.label ?? "New work"}</span>
+            {git.available ? (
+              <span ref={gitTriggerRef}>
+                <GitIndicator
+                  git={git}
+                  open={activeDrawer === "git"}
+                  onClick={() => toggleDrawer("git")}
+                />
+              </span>
+            ) : null}
           </p>
           <h2>{title}</h2>
           {run !== undefined ? (
@@ -1301,13 +1342,15 @@ export function WorkSurface({
             className="aside-resize-handle"
             role="separator"
             aria-label={
-              activeDrawer === "browser"
-                ? "Resize browser pane"
-                : activeDrawer === "aside"
-                  ? "Resize Aside conversation"
-                  : activeDrawer === "research"
-                    ? "Resize Research sources"
-                    : "Resize Thread details"
+              activeDrawer === "git"
+                ? "Resize Git panel"
+                : activeDrawer === "browser"
+                  ? "Resize browser pane"
+                  : activeDrawer === "aside"
+                    ? "Resize Aside conversation"
+                    : activeDrawer === "research"
+                      ? "Resize Research sources"
+                      : "Resize Thread details"
             }
             aria-orientation="vertical"
             aria-valuemin={MIN_ASIDE_PANE_WIDTH}
@@ -1397,7 +1440,8 @@ export function WorkSurface({
             onClick={closeDrawer}
           />
         ) : null}
-        {browser.snapshot.available ||
+        {git.available ||
+        browser.snapshot.available ||
         filesAvailable ||
         artifactsAvailable ||
         run !== undefined ||
@@ -1411,21 +1455,31 @@ export function WorkSurface({
               activeDrawer !== null && compactLayout ? true : undefined
             }
             aria-label={
-              activeDrawer === "browser"
-                ? "Browser pane"
-                : activeDrawer === "files"
-                  ? "Workspace files"
-                  : activeDrawer === "artifacts"
-                    ? "Artifact preview"
-                    : activeDrawer === "aside"
-                      ? "Aside conversation"
-                      : activeDrawer === "research"
-                        ? "Research sources"
-                        : activeDrawer === "details"
-                          ? "Thread details"
-                          : undefined
+              activeDrawer === "git"
+                ? "Git panel"
+                : activeDrawer === "browser"
+                  ? "Browser pane"
+                  : activeDrawer === "files"
+                    ? "Workspace files"
+                    : activeDrawer === "artifacts"
+                      ? "Artifact preview"
+                      : activeDrawer === "aside"
+                        ? "Aside conversation"
+                        : activeDrawer === "research"
+                          ? "Research sources"
+                          : activeDrawer === "details"
+                            ? "Thread details"
+                            : undefined
             }
           >
+            {activeDrawer === "git" ? (
+              <GitPane
+                key={gitWorkspaceId}
+                git={git}
+                onClose={closeDrawer}
+                onOpenFile={openWorkspaceSource}
+              />
+            ) : null}
             {activeDrawer === "browser" ? (
               <Suspense
                 fallback={
@@ -1442,7 +1496,9 @@ export function WorkSurface({
                 />
               </Suspense>
             ) : null}
-            {activeDrawer !== "aside" && activeDrawer !== "browser" ? (
+            {activeDrawer !== "aside" &&
+            activeDrawer !== "browser" &&
+            activeDrawer !== "git" ? (
               <button
                 ref={drawerCloseRef}
                 className="icon-button compact-drawer-close artifact-drawer-close"

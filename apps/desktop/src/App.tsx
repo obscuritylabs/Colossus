@@ -4943,6 +4943,8 @@ export default function App() {
         </Suspense>
       ) : surface === "work" ? (
         <WorkSurface
+          gitWorkspaceId={desktop.workspace?.workspaceId ?? null}
+          gitAvailable={desktop.capabilities.files}
           browserScope={desktop.selectedTargetId}
           browserFixture={FIXTURE_MODE}
           title={title}

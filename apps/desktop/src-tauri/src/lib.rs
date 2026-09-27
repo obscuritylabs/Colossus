@@ -33,6 +33,7 @@ mod terminal_process;
 mod terminal_protocol;
 mod updates;
 mod workspace_files;
+mod workspace_git;
 
 /// Run the opt-in native browser acceptance harness.
 #[cfg(feature = "browser-test-bridge")]
@@ -85,6 +86,9 @@ use terminal_commands::{
 };
 use updates::{check_desktop_update, install_desktop_update};
 use workspace_files::{list_workspace_directory, read_workspace_file};
+use workspace_git::commands::{
+    get_workspace_git_commit, get_workspace_git_status, list_workspace_git_commits,
+};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// Start the native Colossus desktop application.
@@ -110,6 +114,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state::AppState::default())
         .manage(command_review::CommandReviewState::default())
+        .manage(workspace_git::commands::GitState::default())
         .setup(|app| {
             browser::start_watchdog(app.handle().clone());
             Ok(())
@@ -211,6 +216,9 @@ pub fn run() {
             restore_thread,
             respond_interaction,
             list_workspace_directory,
+            get_workspace_git_status,
+            list_workspace_git_commits,
+            get_workspace_git_commit,
             read_workspace_file,
             show_terminal_window,
             terminal_context,

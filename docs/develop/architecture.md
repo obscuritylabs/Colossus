@@ -145,6 +145,10 @@ commands dispatch it without receiving secret values from the renderer.
   commands accept the opaque selected-Workspace identity plus a validated
   relative path; they do not add model, tool, policy, state, or mutation logic to the
   renderer.
+- Desktop Git inspection is a read-only human surface with a private native Git
+  reader. Repository handles bind the selected workspace and validated metadata
+  directories; no Git execution or write capability is exposed. See
+  [ADR 0004](adr/0004-desktop-git-inspection.md).
 - Desktop's opt-in browser preview is a separate human browsing surface. Native
   session/tab state and engine integration stay in the Desktop browser manager and
   private native adapter. Guests receive no application capability. Future browser
