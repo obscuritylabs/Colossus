@@ -33,7 +33,9 @@ const MANAGED_DIRECTORY: &str = "managed-local";
 const TRUST_DIRECTORY: &str = "trust";
 const MAX_CA_BUNDLE_BYTES: u64 = 4 * 1024 * 1024;
 const SELF_TEST_DIRECTORY: &str = "self-test";
-const SELF_TEST_RUNTIME_DIRECTORY: &str = "runtime-v2";
+// Setup diagnostics have no user conversations. Leave the old path-bound journal
+// intact and start a new namespace; never reset a workspace journal or its anchor.
+const SELF_TEST_RUNTIME_DIRECTORY: &str = "runtime-v3";
 const SELF_TEST_WORKSPACE_DIRECTORY: &str = "workspace";
 const CODEX_AUTH_DIRECTORY: &str = "codex-auth";
 #[cfg(windows)]
@@ -3264,7 +3266,7 @@ mod tests {
             .instance_dir
             .parent()
             .expect("self-test root")
-            .join("runtime");
+            .join("runtime-v2");
         ensure_private_directory(&legacy_runtime).expect("legacy runtime");
 
         assert_eq!(

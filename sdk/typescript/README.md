@@ -7,7 +7,7 @@ backend so bearer credentials never enter renderer memory.
 Install the SDK version that matches the Colossus core release:
 
 ```console
-npm install @obscuritylabs/colossus-sdk@0.11.0
+npm install @obscuritylabs/colossus-sdk@0.11.1
 ```
 
 ```ts

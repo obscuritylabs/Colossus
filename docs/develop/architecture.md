@@ -171,6 +171,12 @@ commands dispatch it without receiving secret values from the renderer.
   Provider adapters normalize bounded, optional model-card metadata. Missing limits
   or capabilities remain distinguishable from provider-declared values, and model
   selection never grants tools or changes policy based on remote descriptions.
+- Disposable Desktop setup diagnostics bind their protected journal identity to the
+  canonical runtime directory and its filesystem identity. Versioned migration moves
+  setup to a new namespace without resetting or bypassing workspace journal anchors.
+  Windows NSIS cleanup is a native-only entry point with a fixed default-home scope;
+  it reads bounded ownership metadata, removes exact OS key accounts, and refuses
+  reparse points, active files, or shared CLI state. It is not a renderer command.
 - Top-level user-facing runs snapshot bounded home and repository `AGENTS.md`
   instructions before provider execution. Goal iterations and delegated subagents
   carry that immutable snapshot and provenance; internal risk, summarization, and

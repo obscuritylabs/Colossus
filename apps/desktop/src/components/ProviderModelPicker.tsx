@@ -121,8 +121,7 @@ export function ProviderModelPicker({
       ) : null}
       {state === "error" ? (
         <p role="alert" className="page-error">
-          {error} Check your API base URL and sign-in details, then try again.
-          You can also enter a model ID below.
+          {error}
         </p>
       ) : null}
       {state === "loaded" && models.length === 0 ? (

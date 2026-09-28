@@ -15,6 +15,11 @@ pub trait PlatformKeyStore: Send + Sync {
     fn read(&self, account: &str) -> Result<Option<Zeroizing<Vec<u8>>>, CredentialError>;
     /// Store a new key envelope; the vault's exclusive lease serializes first creation.
     fn write(&self, account: &str, envelope: &[u8]) -> Result<(), CredentialError>;
+    /// Remove one owned key during explicit uninstall. Missing entries are success.
+    /// Adapters without teardown support fail closed.
+    fn delete(&self, _account: &str) -> Result<(), CredentialError> {
+        Err(CredentialError::Unavailable)
+    }
 }
 
 /// Explicit per-platform credential store, independent of process-global keyring defaults.
@@ -41,6 +46,13 @@ impl PlatformKeyStore for SystemKeyStore {
             return Err(CredentialError::InvalidInput);
         }
         entry(account)?.set_secret(envelope).map_err(safe_error)
+    }
+
+    fn delete(&self, account: &str) -> Result<(), CredentialError> {
+        match entry(account)?.delete_credential() {
+            Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
+            Err(error) => Err(safe_error(error)),
+        }
     }
 }
 
