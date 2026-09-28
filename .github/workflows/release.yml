@@ -941,7 +941,7 @@ jobs:
     name: Sign, package, and smoke Windows Desktop
     if: needs.validate.outputs.publish_draft == 'true'
     needs: validate
-    runs-on: windows-2025
+    runs-on: windows-latest-l
     environment: release-signing
     timeout-minutes: 100
     permissions:
