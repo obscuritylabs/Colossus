@@ -58,3 +58,33 @@ fn is_partition(part: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
+
+pub(super) fn plugin_blob(relative: &Path) -> bool {
+    let Some(parts) = relative
+        .iter()
+        .map(|part| part.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    match parts.as_slice() {
+        ["plugins", "blobs", "sha256", digest] => is_partition(digest),
+        [
+            "plugins",
+            "layouts",
+            "sha256",
+            layout,
+            "blobs",
+            "sha256",
+            digest,
+        ] => is_partition(layout) && is_partition(digest),
+        ["plugins", "staging", staging, "blobs", "sha256", digest] => {
+            staging
+                .strip_prefix("generated-layout-")
+                .or_else(|| staging.strip_prefix("retained-layout-"))
+                .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+                && is_partition(digest)
+        }
+        _ => false,
+    }
+}

@@ -143,8 +143,11 @@ acceptance. Browser mocks alone do not exercise this native boundary.
 The Windows pre-merge lane also runs `native_catalog_` and `native_uninstall_` with
 `--ignored`. The reset regression retains an old secure anchor while recreating the
 same home path and verifies both restart stability and successful fresh discovery.
-Uninstall acceptance removes generated runtime keys and a real encrypted vault key,
-preserves unrelated entries, and never targets the operator's default Desktop home.
+Uninstall acceptance removes generated runtime keys, a real encrypted vault key, and
+read-only hard-linked plugin caches while preserving unrelated entries and external
+hard links. Native setup acceptance also tears down its actual sidecar-created homes
+through the Windows uninstall helper. These tests never target the operator's default
+Desktop home.
 
 ### Desktop embedded browser preview
 

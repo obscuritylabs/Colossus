@@ -62,6 +62,13 @@ impl CatalogTestHome {
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.starts_with(ROOT_PREFIX))
         );
+        #[cfg(windows)]
+        if self.path.exists() {
+            // Exercise uninstall against an actual sidecar-created home, including
+            // bundled plugin layouts, after every native setup acceptance run.
+            crate::uninstall::cleanup(&self.path)
+                .expect("uninstall the generated native catalog home");
+        }
         if let Some(instance) = self.runtime_instance {
             // These are the exact accounts of this generated runtime, never a
             // service-wide search or keys from a user-selected Desktop home.

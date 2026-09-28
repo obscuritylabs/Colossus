@@ -146,6 +146,11 @@ test("Windows uninstall data deletion is opt-in, confirmed before mutation, and 
   assert.match(hooks, /IfErrors colossus_cleanup_failed/u);
   assert.match(hooks, /\$0 != 0/u);
   assert.match(hooks, /MB_RETRYCANCEL/u);
+  assert.match(hooks, /\$0 = 2[\s\S]*Desktop data is still in use/u);
+  assert.match(hooks, /\$0 = 3[\s\S]*could not verify that all Desktop data is safe/u);
+  assert.match(hooks, /\$0 = 4[\s\S]*could not remove its saved credentials/u);
+  assert.match(hooks, /\$0 = 5[\s\S]*Windows could not remove the Desktop data files/u);
+  assert.match(hooks, /without selecting Delete application data/u);
   assert.doesNotMatch(hooks, /RMDir|DeleteRegKey|cmdkey|PowerShell/iu);
   const bridge = read("apps/desktop/src-tauri/src/lib.rs");
   assert.ok(bridge.indexOf("uninstall::run_if_requested()") < bridge.indexOf("SettingsStore::open_application()"));
