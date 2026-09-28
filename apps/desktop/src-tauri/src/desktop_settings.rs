@@ -33,7 +33,9 @@ const MANAGED_DIRECTORY: &str = "managed-local";
 const TRUST_DIRECTORY: &str = "trust";
 const MAX_CA_BUNDLE_BYTES: u64 = 4 * 1024 * 1024;
 const SELF_TEST_DIRECTORY: &str = "self-test";
-const SELF_TEST_RUNTIME_DIRECTORY: &str = "runtime-v2";
+// Setup diagnostics have no user conversations. Leave the old path-bound journal
+// intact and start a new namespace; never reset a workspace journal or its anchor.
+const SELF_TEST_RUNTIME_DIRECTORY: &str = "runtime-v3";
 const SELF_TEST_WORKSPACE_DIRECTORY: &str = "workspace";
 const CODEX_AUTH_DIRECTORY: &str = "codex-auth";
 #[cfg(windows)]
@@ -692,6 +694,25 @@ fn settings_schema_version(bytes: &[u8]) -> Result<u16, CommandErrorDto> {
         .ok_or_else(storage_error)
 }
 
+/// Decode supported schemas without saving, clearing stale workspace references,
+/// opening a runtime, or touching credentials. Uninstall needs the original paths
+/// even when ordinary startup would subsequently ask the user to reselect them.
+pub(crate) fn decode_settings(bytes: &[u8]) -> Result<(DesktopSettings, bool), CommandErrorDto> {
+    if bytes.len() as u64 > MAX_SETTINGS_BYTES {
+        return Err(storage_error());
+    }
+    let version = settings_schema_version(bytes)?;
+    let settings = match version {
+        1 => migrate_v1_settings(serde_json::from_slice(bytes).map_err(|_| storage_error())?)?,
+        2 | 3 => migrate_legacy_settings(bytes, version)?,
+        4 => migrate_v4_settings(bytes)?,
+        5 => migrate_v5_settings(bytes)?,
+        SETTINGS_SCHEMA_VERSION => serde_json::from_slice(bytes).map_err(|_| storage_error())?,
+        _ => return Err(storage_error()),
+    };
+    Ok((settings, version != SETTINGS_SCHEMA_VERSION))
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct SettingsStore {
     root: PathBuf,
@@ -822,23 +843,7 @@ impl SettingsStore {
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_SETTINGS_BYTES {
             return Err(storage_error());
         }
-        let schema_version = settings_schema_version(&bytes)?;
-        let (mut settings, mut migrated_settings) = if schema_version == 1 {
-            let legacy: LegacyDesktopSettingsV1 =
-                serde_json::from_slice(&bytes).map_err(|_| storage_error())?;
-            (migrate_v1_settings(legacy)?, true)
-        } else if matches!(schema_version, 2 | 3) {
-            (migrate_legacy_settings(&bytes, schema_version)?, true)
-        } else if schema_version == 4 {
-            (migrate_v4_settings(&bytes)?, true)
-        } else if schema_version == 5 {
-            (migrate_v5_settings(&bytes)?, true)
-        } else {
-            (
-                serde_json::from_slice(&bytes).map_err(|_| storage_error())?,
-                false,
-            )
-        };
+        let (mut settings, mut migrated_settings) = decode_settings(&bytes)?;
         migrated_settings |= settings.migrate_workspace_to_space();
         let previous_global = settings.global_configuration.clone();
         let previous_space_configuration = settings
@@ -3264,7 +3269,7 @@ mod tests {
             .instance_dir
             .parent()
             .expect("self-test root")
-            .join("runtime");
+            .join("runtime-v2");
         ensure_private_directory(&legacy_runtime).expect("legacy runtime");
 
         assert_eq!(

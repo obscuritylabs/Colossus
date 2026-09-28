@@ -86,6 +86,11 @@ pub(super) struct KeyState {
 }
 
 impl PlatformKeyStore for MemoryKeys {
+    fn delete(&self, account: &str) -> Result<(), CredentialError> {
+        self.state.lock().unwrap().values.remove(account);
+        Ok(())
+    }
+
     fn read(&self, account: &str) -> Result<Option<Zeroizing<Vec<u8>>>, CredentialError> {
         let mut state = self.state.lock().unwrap();
         state.reads += 1;

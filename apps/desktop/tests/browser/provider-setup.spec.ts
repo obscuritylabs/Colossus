@@ -355,6 +355,7 @@ async function mountSetup(
         setupRequests: { command: string; args: Record<string, unknown> }[];
         releaseSlowCatalog: (() => void) | undefined;
         failCatalog: boolean;
+        catalogError: string | undefined;
         failPresets: boolean;
         failSave: boolean;
       };
@@ -438,7 +439,7 @@ async function mountSetup(
               return {
                 credentialId: "saved-credential",
                 models: [],
-                errorMessage: "Authentication failed.",
+                errorMessage: state.catalogError ?? "Authentication failed.",
               };
             return {
               credentialId:
@@ -1364,6 +1365,32 @@ test("a rejected key in fresh setup can be replaced without reusing its saved re
     expect(request).toMatchObject({ credentialAction: "replace" });
     expect(request).not.toHaveProperty("credentialId");
   }
+});
+
+test("runtime setup failures do not blame provider credentials and remain retryable", async ({
+  page,
+}) => {
+  await mountSetup(page);
+  const message = "The local runtime could not initialize its private storage.";
+  await page.evaluate((message) => {
+    const state = window as unknown as {
+      failCatalog: boolean;
+      catalogError: string;
+    };
+    state.failCatalog = true;
+    state.catalogError = message;
+  }, message);
+  await page.getByRole("button", { name: "Load models", exact: true }).click();
+  await expect(
+    page.locator(".provider-model-picker").getByRole("alert"),
+  ).toHaveText(message);
+  await page.evaluate(() => {
+    (window as unknown as { failCatalog: boolean }).failCatalog = false;
+  });
+  await page.getByRole("button", { name: "Retry loading models" }).click();
+  await expect(
+    page.getByRole("button", { name: /Compact Reasoner/ }),
+  ).toBeVisible();
 });
 
 for (const advanced of [false, true]) {

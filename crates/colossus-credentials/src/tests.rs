@@ -58,9 +58,39 @@ fn absent_reads_contains_and_delete_do_not_create_files_or_platform_entries() {
     assert!(vault.read(&key()).unwrap().is_none());
     assert!(!vault.contains(&key()).unwrap());
     vault.delete(&key()).unwrap();
+    vault.delete_key_for_uninstall().unwrap();
     assert_eq!(std::fs::read_dir(fixture.root.path()).unwrap().count(), 0);
     let state = keys.state.lock().unwrap();
     assert_eq!((state.reads, state.writes), (0, 0));
+}
+
+#[test]
+fn uninstall_key_removal_is_scoped_retryable_and_requires_exclusive_ownership() {
+    let fixture = Fixture::new();
+    let other = Fixture::new();
+    let keys = Arc::new(MemoryKeys::default());
+    let vault = fixture.vault(keys.clone());
+    vault.write(&key(), &record(100)).unwrap();
+    let other_vault = other.vault(keys.clone());
+    other_vault.write(&key(), &record(100)).unwrap();
+    assert_eq!(keys.state.lock().unwrap().values.len(), 2);
+    let busy = fixture.vault(keys.clone());
+    assert!(matches!(
+        busy.delete_key_for_uninstall(),
+        Err(CredentialError::Busy)
+    ));
+    drop(vault);
+    let wrong_scope = fixture.vault_with_scope(keys.clone(), "other-owner");
+    assert!(matches!(
+        wrong_scope.delete_key_for_uninstall(),
+        Err(CredentialError::Corrupt)
+    ));
+    drop(wrong_scope);
+    busy.delete_key_for_uninstall().unwrap();
+    busy.delete_key_for_uninstall().unwrap();
+    assert_eq!(keys.state.lock().unwrap().values.len(), 1);
+    assert!(other_vault.read(&key()).unwrap().is_some());
+    assert!(fixture.root.path().join(DATABASE_FILE).is_file());
 }
 
 #[test]

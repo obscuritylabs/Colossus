@@ -95,6 +95,24 @@ impl PlatformCredentialVault {
         *self.failure.lock().unwrap() = Some(checkpoint);
     }
 
+    /// Irreversibly remove this vault's OS key for a confirmed application uninstall.
+    ///
+    /// The caller must own the private root, stop its consumers, and subsequently
+    /// delete its files. This retains the exclusive vault lease and metadata so a
+    /// failed cleanup can be retried. No records or key material are read, and a
+    /// missing vault or already removed key succeeds without creating a new key.
+    pub fn delete_key_for_uninstall(&self) -> Result<(), CredentialError> {
+        let guard = self.opened(false)?;
+        let Some(vault) = guard.as_ref() else {
+            return Ok(());
+        };
+        let Some(metadata) = vault.metadata()? else {
+            return Ok(());
+        };
+        metadata.validate(&self.owner_scope_hash)?;
+        self.keys.delete(&metadata.account())
+    }
+
     #[cfg(test)]
     fn checkpoint(&self, checkpoint: InitializationCheckpoint) -> Result<(), CredentialError> {
         let mut failure = self.failure.lock().unwrap();

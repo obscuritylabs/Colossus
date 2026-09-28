@@ -67,7 +67,7 @@ export function buildMcpHealthFixture(
       stage: "complete",
       failure: null,
       configuration: {
-        runtimeVersion: "0.11.0",
+        runtimeVersion: "0.11.1",
         transport,
         endpointSha256: transport === "stdio" ? null : "a".repeat(64),
         additionalCaCertificates: transport === "stdio" ? 0 : 2,

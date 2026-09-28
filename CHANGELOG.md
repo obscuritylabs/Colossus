@@ -8,6 +8,20 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-09-28
+
+### Fixed
+
+- Fixed Desktop model loading and installation checks after deleting and recreating
+  the application data folder. Setup now binds its protected journal to the actual
+  directory identity and automatically uses a new diagnostic namespace for older
+  installations, preserving workspace conversations and their integrity checks.
+- Fixed Windows uninstall's optional application-data cleanup to include the default
+  Desktop home and its identifiable protected keys. A destructive-data confirmation
+  explains what is lost; normal uninstall and updates continue to preserve data.
+- Removed misleading provider URL and sign-in advice from local runtime failures
+  displayed during model discovery.
+
 ## [0.11.0] - 2026-09-27
 
 ### Added

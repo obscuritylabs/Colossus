@@ -132,6 +132,26 @@ test("development Tauri configuration uses prepared native executables", () => {
   });
 });
 
+test("Windows uninstall data deletion is opt-in, confirmed before mutation, and never used for updates", () => {
+  const config = json("apps/desktop/src-tauri/tauri.windows.conf.json");
+  assert.equal(config.bundle.windows.nsis.installerHooks, "installer-hooks.nsh");
+  const hooks = read("apps/desktop/src-tauri/installer-hooks.nsh");
+  assert.match(hooks, /\$DeleteAppDataCheckboxState = 1/u);
+  assert.match(hooks, /\$UpdateMode <> 1/u);
+  assert.match(hooks, /MB_DEFBUTTON2/u);
+  assert.match(hooks, /\/SD IDNO/u);
+  assert.match(hooks, /local conversations, provider and model configurations, saved Desktop credentials/u);
+  assert.ok(hooks.indexOf("MessageBox MB_YESNO") < hooks.indexOf("ExecWait"));
+  assert.ok(hooks.indexOf("CheckIfAppIsRunning") < hooks.indexOf("ExecWait"));
+  assert.match(hooks, /IfErrors colossus_cleanup_failed/u);
+  assert.match(hooks, /\$0 != 0/u);
+  assert.match(hooks, /MB_RETRYCANCEL/u);
+  assert.doesNotMatch(hooks, /RMDir|DeleteRegKey|cmdkey|PowerShell/iu);
+  const bridge = read("apps/desktop/src-tauri/src/lib.rs");
+  assert.ok(bridge.indexOf("uninstall::run_if_requested()") < bridge.indexOf("SettingsStore::open_application()"));
+  assert.ok(!bridge.slice(bridge.indexOf("tauri::generate_handler!")).includes("uninstall::"));
+});
+
 test("Windows Desktop seals signed releases in the required order", () => {
   const config = json("apps/desktop/src-tauri/tauri.windows.conf.json");
   assert.deepEqual(config.bundle.targets, ["nsis"]);

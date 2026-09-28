@@ -50,7 +50,7 @@ use crate::{
 
 const APPLICATION_ID: &str = "app:colossus-desktop-managed";
 const SELF_TEST_APPLICATION_ID: &str = "app:colossus-desktop-self-test";
-const SELF_TEST_INSTANCE_DOMAIN: &[u8] = b"colossus-desktop-self-test-instance-v2\0";
+const SELF_TEST_INSTANCE_DOMAIN: &[u8] = b"colossus-desktop-self-test-instance-v3\0";
 const ACTIVE_RUN_PAGE_SIZE: u32 = 100;
 const MAX_ACTIVE_RUN_PAGES: usize = 4_096;
 const CONFIGURATION_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -463,10 +463,21 @@ pub(crate) async fn self_test(
 }
 
 fn self_test_instance_id(instance_dir: &Path) -> Result<InstanceId, CommandErrorDto> {
+    // Bind the lifetime of the diagnostic data, not just its pathname. The
+    // filesystem identity survives restart but changes when a deleted home is
+    // recreated, so an empty journal cannot inherit that old home's secure anchor.
     let canonical = std::fs::canonicalize(instance_dir).map_err(|_| {
         CommandErrorDto::local_sanitized(
             "desktop_storage",
             "The offline self-test runtime is unavailable.",
+            false,
+        )
+    })?;
+    let workspace = crate::desktop_settings::validate_workspace(&canonical)?;
+    let identity = workspace.identity.ok_or_else(|| {
+        CommandErrorDto::local_sanitized(
+            "desktop_storage",
+            "The setup runtime identity is unavailable.",
             false,
         )
     })?;
@@ -480,6 +491,8 @@ fn self_test_instance_id(instance_dir: &Path) -> Result<InstanceId, CommandError
     let mut digest = Sha256::new();
     digest.update(SELF_TEST_INSTANCE_DOMAIN);
     digest.update(encoded.as_bytes());
+    digest.update(identity.version.to_le_bytes());
+    digest.update(identity.sha256.as_bytes());
     let digest = digest.finalize();
     let mut bytes = [0_u8; 16];
     bytes.copy_from_slice(&digest[..16]);
@@ -1477,6 +1490,14 @@ mod tests {
 
         assert_eq!(first_id, first_alias);
         assert_ne!(first_id, second_id);
+        // Keep the previous directory alive under another name to prove that a
+        // replacement at the exact original path cannot reuse its keyring scope.
+        std::fs::rename(&first, first.with_file_name("previous")).expect("retain old runtime");
+        std::fs::create_dir(&first).expect("recreate runtime at the same path");
+        assert_ne!(
+            first_id,
+            self_test_instance_id(&first).expect("new instance")
+        );
         let encoded = first_id.to_string();
         assert_eq!(&encoded[14..15], "8");
         assert!(matches!(&encoded[19..20], "8" | "9" | "a" | "b"));

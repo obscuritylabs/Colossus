@@ -5,7 +5,7 @@ Its organization-qualified distribution name avoids an unrelated project that ow
 normalized `colossus-sdk` name; the import namespace remains `colossus_sdk`.
 
 ```console
-python -m pip install obscuritylabs-colossus-sdk==0.11.0
+python -m pip install obscuritylabs-colossus-sdk==0.11.1
 ```
 
 ```python

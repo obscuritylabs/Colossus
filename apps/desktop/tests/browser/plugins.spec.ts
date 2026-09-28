@@ -9,7 +9,7 @@ test.beforeEach(async ({ page }) => {
       icon_data_url: icon,
       manifest: {
         name: "colossus",
-        version: "0.11.0",
+        version: "0.11.1",
         description: "Core authoring and development skills",
       },
       digest: `sha256:${"1".repeat(64)}`,
@@ -234,7 +234,7 @@ test("failed plugin MCP diagnostics keep TLS evidence readable before expansion"
         stage: "initialize",
         failure: { code: "tls", httpStatus: null },
         configuration: {
-          runtimeVersion: "0.11.0",
+          runtimeVersion: "0.11.1",
           transport: "streamable_http",
           endpointSha256: "a".repeat(64),
           additionalCaCertificates: 2,

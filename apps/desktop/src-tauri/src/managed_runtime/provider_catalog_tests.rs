@@ -115,6 +115,84 @@ struct CatalogResponse {
     bearer: Option<&'static str>,
 }
 
+#[test]
+#[ignore = "requires prepared Desktop sidecar binaries, platform storage, and loopback access"]
+fn native_catalog_recreated_home_does_not_reuse_previous_secure_anchor() {
+    let mut original = CatalogTestHome::new();
+    let store = original.open_store();
+    let original_path = original.path.clone();
+    let old_id = original.runtime_instance.expect("first identity");
+    let (provider, server) = catalog_fixture(
+        [MODEL_CARD, MODEL_CARD, RETRY_CARD]
+            .into_iter()
+            .map(|body| CatalogResponse {
+                status: 200,
+                body,
+                bearer: None,
+            })
+            .collect(),
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        discover_provider_models(
+            &AppState::default(),
+            &store,
+            &DesktopSettings::default(),
+            &provider,
+        )
+        .await
+        .expect("first setup");
+        drop(store);
+        let reopened = original.open_store();
+        assert_eq!(original.runtime_instance, Some(old_id));
+        discover_provider_models(
+            &AppState::default(),
+            &reopened,
+            &DesktopSettings::default(),
+            &provider,
+        )
+        .await
+        .expect("restart retains data identity");
+        drop(reopened);
+        // Retain the old database and OS anchor, then recreate the SAME path as a
+        // clean install. Both generated homes and exact keys are cleaned by guards.
+        let retained =
+            original_path.with_file_name(format!("{ROOT_PREFIX}retained-{}", uuid::Uuid::new_v4()));
+        std::fs::rename(&original_path, &retained).expect("retain old home");
+        original.path = retained;
+        let anchor = keyring::Entry::new(
+            RUNTIME_KEY_SERVICE,
+            &format!("journal-anchor:journal-{old_id}"),
+        )
+        .unwrap();
+        assert!(
+            anchor.get_secret().is_ok(),
+            "old secure anchor survives the data reset"
+        );
+        let mut recreated = CatalogTestHome::new();
+        recreated.path = original_path;
+        let fresh = recreated.open_store();
+        assert_ne!(recreated.runtime_instance, Some(old_id));
+        let cards = discover_provider_models(
+            &AppState::default(),
+            &fresh,
+            &DesktopSettings::default(),
+            &provider,
+        )
+        .await
+        .expect("same-path fresh setup with old anchor present");
+        assert_eq!(cards[0].id, "fixture-model-retry");
+        assert!(
+            anchor.get_secret().is_ok(),
+            "setup must not delete the old journal anchor"
+        );
+    });
+    server.join().unwrap();
+}
+
 fn catalog_fixture(
     responses: Vec<CatalogResponse>,
 ) -> (ProviderSetting, std::thread::JoinHandle<()>) {

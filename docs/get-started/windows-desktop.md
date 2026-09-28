@@ -163,8 +163,25 @@ that no `colossus-sidecar.exe` or app-owned `colossus.exe` process remains:
 Get-Process "colossus-sidecar", "colossus" -ErrorAction SilentlyContinue
 ```
 
-Application settings and Windows Credential Manager entries are intentionally treated
-as user data. Remove them only under your organization's retention policy.
+Normal uninstall and upgrades preserve your data. **Delete application data** is
+unchecked by default. Selecting it asks you to confirm permanent deletion of local
+conversations, provider/model configuration, saved Desktop credentials, plugins, and
+Desktop settings before cleanup starts.
+
+Confirmed cleanup removes `%LOCALAPPDATA%\ColossusDesktopHome`, its identifiable
+Windows Credential Manager keys, and Tauri's application/cache data. Project folders,
+custom `COLOSSUS_HOME` directories, shared CLI data, and credentials for external
+daemons remain outside this cleanup. If the default home was deliberately shared with
+the CLI, or contains unrecognized folders, cleanup stops rather than deleting those
+items. Supported older settings are inspected without requiring a first launch or
+discarding their workspace references. Entries whose identifying
+metadata was previously deleted cannot be safely attributed and are not swept by name.
+
+If cleanup fails, uninstall stops and offers Retry; close running Colossus tasks first.
+Some items may already have been deleted. Do not manually remove individual protected
+journal files or keys to repair setup. Version 0.11.1 migrates the disposable setup
+diagnostics automatically while leaving workspace histories and their security checks
+intact.
 
 ## Expected result
 

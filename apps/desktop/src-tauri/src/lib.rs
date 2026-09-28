@@ -31,6 +31,8 @@ mod terminal;
 mod terminal_commands;
 mod terminal_process;
 mod terminal_protocol;
+#[cfg(windows)]
+mod uninstall;
 mod updates;
 mod workspace_files;
 mod workspace_git;
@@ -101,6 +103,10 @@ use workspace_git::commands::{
 // Composition-only registration list: native command implementations stay in modules.
 #[allow(clippy::too_many_lines)]
 pub fn run() {
+    #[cfg(windows)]
+    if let Some(code) = uninstall::run_if_requested() {
+        std::process::exit(code);
+    }
     if let Err(error) = desktop_settings::SettingsStore::open_application() {
         eprintln!("Colossus Desktop could not start: {}", error.message);
         std::process::exit(1);
