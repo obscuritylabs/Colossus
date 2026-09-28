@@ -62,6 +62,7 @@ use std::{
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
+mod acp;
 mod artifact_args;
 mod artifact_commands;
 mod cli;
