@@ -1,6 +1,9 @@
 //! Real provider → recovery → prepared approval → process, with a private home.
 use super::*;
-use std::sync::{Arc, Mutex};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 const REASON: &str = "Verify command approval with a local marker.";
 
@@ -103,6 +106,16 @@ fn command_reason_recovery_and_full_details_precede_allow_or_deny() {
         let (origin, provider) = server(allow, json!({"command": script, "cwd": "."}));
         let config = config(&workspace, &origin);
         let mut process = command(Path::new(env!("CARGO_BIN_EXE_colossus")), &config);
+        // Bind command syntax to its interpreter rather than inheriting SHELL
+        // (PowerShell on some developer machines, cmd.exe on Windows CI).
+        let shell = if cfg!(windows) {
+            PathBuf::from(std::env::var_os("SystemRoot").expect("Windows system root"))
+                .join("System32")
+                .join("cmd.exe")
+        } else {
+            PathBuf::from("/bin/sh")
+        };
+        process.env("SHELL", shell);
         process
             .current_dir(&workspace)
             .args([

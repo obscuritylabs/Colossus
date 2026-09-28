@@ -6,15 +6,9 @@ import {
 } from "../../api";
 import type { GitStatus, GitCommitPage, GitCommitDetails } from "../../git";
 import { GitStatusCache } from "./statusCache";
+import { queueGitRead as queue } from "./readQueue";
 
 const statusCache = new GitStatusCache();
-// The native reader is shared across workspaces and WorkSurface remounts.
-let tail: Promise<unknown> = Promise.resolve();
-function queue<T>(action: () => Promise<T>): Promise<T> {
-  const result = tail.then(action, action);
-  tail = result.catch(() => undefined);
-  return result;
-}
 
 function message(error: unknown): string {
   return error instanceof Error

@@ -14,6 +14,7 @@ not duplicate current configuration or operator procedures.
 - [ADR 0002: Interface and presentation boundary](0002-interface-presentation-boundary.md)
 - [ADR 0003: Desktop browser boundary](0003-desktop-browser-boundary.md)
 - [ADR 0004: Desktop Git inspection](0004-desktop-git-inspection.md)
+- [ADR 0005: Desktop file search and diffs](0005-desktop-file-diffs.md)
 
 Use the next sequential number. Record context, decision, consequences, status, and the
 date; link to canonical current documentation rather than copying it.

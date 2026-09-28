@@ -46,6 +46,8 @@ import {
   diagnoseManagedTelemetry,
   getManagedExtensionInventory,
   getManagedConfiguration,
+  getWorkspaceGitDiff,
+  searchWorkspaceFiles,
   getSessionMap,
   getThreadDelegate,
   getRun,
@@ -777,5 +779,28 @@ describe("desktop API target routing", () => {
     expect(JSON.stringify(tauri.invoke.mock.calls)).not.toContain(
       "/Users/alex",
     );
+  });
+});
+
+describe("workspace inspection requests", () => {
+  it("sends only workspace identity, scoped path and native comparison selection", async () => {
+    await getWorkspaceGitDiff("workspace", "src/main.rs", {
+      repositoryId: "native-handle",
+      source: "commit",
+      commitId: "listed-sha",
+    });
+    expect(tauri.invoke).toHaveBeenLastCalledWith("get_workspace_git_diff", {
+      request: {
+        workspaceId: "workspace",
+        path: "src/main.rs",
+        repositoryId: "native-handle",
+        source: "commit",
+        commitId: "listed-sha",
+      },
+    });
+    await searchWorkspaceFiles("workspace", "src/main");
+    expect(tauri.invoke).toHaveBeenLastCalledWith("search_workspace_files", {
+      request: { workspaceId: "workspace", query: "src/main" },
+    });
   });
 });

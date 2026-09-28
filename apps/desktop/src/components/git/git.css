@@ -635,3 +635,9 @@ button.git-file-row:hover,
     max-width: 150px;
   }
 }
+.git-diff-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}

@@ -1,582 +1,346 @@
 import {
-  IconChevronDown,
-  IconChevronRight,
-  IconCode,
   IconFileCode,
-  IconFileText,
-  IconFolder,
-  IconFolderOpen,
+  IconGitCompare,
+  IconLoader2,
   IconRefresh,
-  IconShieldLock,
   IconX,
 } from "@tabler/icons-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
-  WorkspaceDirectory,
-  WorkspaceEntry,
   WorkspaceFile,
   WorkspaceSummary,
+  WorkspaceDirectory,
 } from "../types";
-import type { ResolvedColorTheme } from "../theme/appearance";
+import type { GitDiffSelection, GitFileDiff } from "../git";
 import { useAppearance } from "../theme/AppearanceProvider";
-
-const MAX_OPEN_FILES = 8;
-
-type DirectoryLoader = (
-  workspaceId: string,
-  path?: string,
-) => Promise<WorkspaceDirectory>;
-type FileLoader = (workspaceId: string, path: string) => Promise<WorkspaceFile>;
-
-interface WorkspaceFilesProps {
-  workspace: WorkspaceSummary | null;
-  available: boolean;
-  listDirectory: DirectoryLoader;
-  readFile: FileLoader;
-  onOpenSettings: () => void;
-  openRequest: WorkspaceFileOpenRequest | null;
-}
+import {
+  FileExplorer,
+  type DirectoryLoader,
+  type SearchLoader,
+} from "./files/FileExplorer";
+import { HighlightedCode } from "./files/SourcePreview";
+import { DiffViewer } from "./files/DiffViewer";
+import "./files/files.css";
 
 export interface WorkspaceFileOpenRequest {
   workspaceId: string;
   path: string;
   requestId: number;
+  diff?: GitDiffSelection | undefined;
+}
+interface WorkspaceFilesProps {
+  workspace: WorkspaceSummary | null;
+  available: boolean;
+  listDirectory: DirectoryLoader;
+  searchFiles: SearchLoader;
+  readFile: (workspaceId: string, path: string) => Promise<WorkspaceFile>;
+  readDiff: (
+    workspaceId: string,
+    path: string,
+    selection: GitDiffSelection,
+  ) => Promise<GitFileDiff>;
+  onOpenSettings: () => void;
+  openRequest: WorkspaceFileOpenRequest | null;
+}
+interface Document {
+  id: string;
+  path: string;
+  selection?: GitDiffSelection | undefined;
+  file?: WorkspaceFile;
+  diff?: GitFileDiff;
+  loading: boolean;
+  error: string;
+  version: number;
 }
 
-function humanFileSize(bytes: number): string {
-  if (bytes < 1_024) {
-    return `${bytes} B`;
-  }
-  if (bytes < 1_024 * 1_024) {
-    return `${(bytes / 1_024).toFixed(bytes < 10_240 ? 1 : 0)} KB`;
-  }
-  return `${(bytes / (1_024 * 1_024)).toFixed(1)} MB`;
-}
-
-function entryIcon(entry: WorkspaceEntry, expanded: boolean) {
-  if (entry.kind === "directory") {
-    return expanded ? (
-      <IconFolderOpen size={16} stroke={1.7} aria-hidden="true" />
-    ) : (
-      <IconFolder size={16} stroke={1.7} aria-hidden="true" />
-    );
-  }
-  const extension = entry.name.split(".").at(-1)?.toLowerCase();
-  return [
-    "c",
-    "cc",
-    "cpp",
-    "css",
-    "go",
-    "h",
-    "html",
-    "java",
-    "js",
-    "jsx",
-    "py",
-    "rs",
-    "sh",
-    "sql",
-    "ts",
-    "tsx",
-  ].includes(extension ?? "") ? (
-    <IconFileCode size={16} stroke={1.65} aria-hidden="true" />
-  ) : (
-    <IconFileText size={16} stroke={1.65} aria-hidden="true" />
-  );
-}
-
-async function highlight(
-  content: string,
-  language: string,
-  colorTheme: ResolvedColorTheme,
-): Promise<import("../syntax-highlighter").HighlightedLine[]> {
-  const { highlightSource } = await import("../syntax-highlighter");
-  return highlightSource(content, language, colorTheme);
-}
-
-function HighlightedCode({
-  file,
-  colorTheme,
-}: {
-  file: WorkspaceFile;
-  colorTheme: ResolvedColorTheme;
-}) {
-  const [lines, setLines] = useState<
-    import("../syntax-highlighter").HighlightedLine[] | null
-  >(null);
-
-  useEffect(() => {
-    let current = true;
-    setLines(null);
-    void highlight(file.content, file.language, colorTheme)
-      .then((highlighted) => {
-        if (current) {
-          setLines(highlighted);
-        }
-      })
-      .catch(() => {
-        if (current) {
-          setLines(
-            file.content
-              .split("\n")
-              .map((line) => [{ content: line, color: undefined }]),
-          );
-        }
-      });
-    return () => {
-      current = false;
-    };
-  }, [colorTheme, file.content, file.language]);
-
-  const visibleLines =
-    lines ??
-    file.content
-      .split("\n")
-      .map((line) => [{ content: line, color: undefined }]);
-
-  return (
-    <div
-      className="file-code-scroll"
-      aria-label={`${file.name} source preview`}
-      tabIndex={0}
-    >
-      <div className="file-code" role="presentation">
-        {visibleLines.map((line, index) => (
-          <div className="file-code-line" key={`${index}-${line.length}`}>
-            <span className="file-line-number" aria-hidden="true">
-              {index + 1}
-            </span>
-            <code>
-              {line.length === 0 ? (
-                <span>&nbsp;</span>
-              ) : (
-                line.map((token, tokenIndex) => (
-                  <span
-                    key={`${tokenIndex}-${token.content.length}`}
-                    style={
-                      token.color === undefined
-                        ? undefined
-                        : { color: token.color }
-                    }
-                  >
-                    {token.content}
-                  </span>
-                ))
-              )}
-            </code>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-export function WorkspaceFiles({
-  workspace,
-  available,
-  listDirectory,
-  readFile,
-  onOpenSettings,
-  openRequest,
-}: WorkspaceFilesProps) {
-  const { resolvedColorTheme } = useAppearance();
-  const [directories, setDirectories] = useState<
-    ReadonlyMap<string, WorkspaceDirectory>
-  >(new Map());
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set([""]));
-  const [directoryLoading, setDirectoryLoading] = useState<ReadonlySet<string>>(
-    new Set(),
-  );
-  const [files, setFiles] = useState<ReadonlyMap<string, WorkspaceFile>>(
-    new Map(),
-  );
-  const filesRef = useRef<ReadonlyMap<string, WorkspaceFile>>(new Map());
-  const [openPaths, setOpenPaths] = useState<readonly string[]>([]);
-  const [activePath, setActivePath] = useState<string | null>(null);
-  const [loadingPath, setLoadingPath] = useState<string | null>(null);
-  const [error, setError] = useState("");
-  const requestGeneration = useRef(0);
-  const openRequestRef = useRef(openRequest);
-  openRequestRef.current = openRequest;
-
-  const openFile = useCallback(
-    async (path: string) => {
-      if (workspace === null || !available) {
-        return;
-      }
-      setError("");
-      setActivePath(path);
-      setOpenPaths((current) => {
-        if (current.includes(path)) {
-          return current;
-        }
-        return [...current.slice(-(MAX_OPEN_FILES - 1)), path];
-      });
-      if (filesRef.current.has(path)) {
-        return;
-      }
-      const generation = requestGeneration.current;
-      setLoadingPath(path);
-      try {
-        const preview = await readFile(workspace.workspaceId, path);
-        if (generation !== requestGeneration.current) {
-          return;
-        }
-        setFiles((current) => {
-          const next = new Map(current).set(path, preview);
-          filesRef.current = next;
-          return next;
-        });
-      } catch (cause: unknown) {
-        if (generation !== requestGeneration.current) {
-          return;
-        }
-        setError(
-          cause instanceof Error
-            ? cause.message
-            : "This file could not be previewed.",
-        );
-      } finally {
-        if (generation === requestGeneration.current) {
-          setLoadingPath((current) => (current === path ? null : current));
-        }
-      }
-    },
-    [available, readFile, workspace],
-  );
-
-  const loadDirectory = useCallback(
-    async (path: string) => {
-      if (workspace === null || !available) {
-        return null;
-      }
-      setDirectoryLoading((current) => new Set(current).add(path));
-      setError("");
-      const generation = requestGeneration.current;
-      try {
-        const directory = await listDirectory(workspace.workspaceId, path);
-        if (generation !== requestGeneration.current) {
-          return null;
-        }
-        setDirectories((current) => new Map(current).set(path, directory));
-        return directory;
-      } catch (cause: unknown) {
-        if (generation === requestGeneration.current) {
-          setError(
-            cause instanceof Error
-              ? cause.message
-              : "This folder could not be opened.",
-          );
-        }
-        return null;
-      } finally {
-        if (generation === requestGeneration.current) {
-          setDirectoryLoading((current) => {
-            const next = new Set(current);
-            next.delete(path);
-            return next;
-          });
-        }
-      }
-    },
-    [available, listDirectory, workspace],
-  );
-
-  const resetExplorer = useCallback(() => {
-    requestGeneration.current += 1;
-    setDirectories(new Map());
-    setExpanded(new Set([""]));
-    setDirectoryLoading(new Set());
-    setFiles(new Map());
-    filesRef.current = new Map();
-    setOpenPaths([]);
-    setActivePath(null);
-    setLoadingPath(null);
-    setError("");
-  }, []);
-
-  useEffect(() => {
-    resetExplorer();
-    if (workspace === null || !available) {
-      return;
-    }
-    const generation = requestGeneration.current;
-    void listDirectory(workspace.workspaceId, "")
-      .then((root) => {
-        if (generation !== requestGeneration.current) {
-          return;
-        }
-        setDirectories(new Map([["", root]]));
-        const readme = root.entries.find(
-          (entry) =>
-            entry.kind === "file" && entry.name.toLowerCase() === "readme.md",
-        );
-        if (
-          readme !== undefined &&
-          openRequestRef.current?.workspaceId !== workspace.workspaceId
-        ) {
-          void openFile(readme.path);
-        }
-      })
-      .catch((cause: unknown) => {
-        if (generation === requestGeneration.current) {
-          setError(
-            cause instanceof Error
-              ? cause.message
-              : "The workspace could not be opened.",
-          );
-        }
-      });
-  }, [available, listDirectory, openFile, resetExplorer, workspace]);
-
-  useEffect(() => {
-    if (
-      openRequest === null ||
-      workspace === null ||
-      openRequest.workspaceId !== workspace.workspaceId
-    ) {
-      return;
-    }
-    void openFile(openRequest.path);
-  }, [openFile, openRequest, workspace]);
-
-  const activeFile = activePath === null ? undefined : files.get(activePath);
-  const exclusionCount = useMemo(
-    () =>
-      Array.from(directories.values()).reduce(
-        (total, directory) => total + directory.excludedCount,
-        0,
-      ),
-    [directories],
-  );
-
-  function toggleDirectory(path: string) {
-    const isExpanded = expanded.has(path);
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (isExpanded) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
-      return next;
-    });
-    if (!isExpanded && !directories.has(path)) {
-      void loadDirectory(path);
-    }
-  }
-
-  function closeFile(path: string) {
-    setOpenPaths((current) => {
-      const index = current.indexOf(path);
-      const next = current.filter((candidate) => candidate !== path);
-      if (activePath === path) {
-        setActivePath(next[index] ?? next[index - 1] ?? null);
-      }
-      return next;
-    });
-  }
-
-  function renderDirectory(path: string, depth: number): React.ReactNode {
-    const directory = directories.get(path);
-    if (directory === undefined) {
-      return directoryLoading.has(path) ? (
-        <p
-          className="file-tree-loading"
-          style={{ paddingLeft: 16 + depth * 14 }}
-        >
-          Loading…
+export function WorkspaceFiles(props: WorkspaceFilesProps) {
+  if (!props.available || !props.workspace)
+    return (
+      <section className="file-explorer-unavailable">
+        <strong>Managed Local files unavailable</strong>
+        <p>
+          Select the local workspace and enable Development or Allow all access
+          to browse it.
         </p>
-      ) : null;
-    }
-    return directory.entries.map((entry) => {
-      const isDirectory = entry.kind === "directory";
-      const isExpanded = isDirectory && expanded.has(entry.path);
-      return (
-        <div className="file-tree-node" key={entry.path}>
-          <button
-            type="button"
-            className={activePath === entry.path ? "is-active" : undefined}
-            style={{ paddingLeft: 9 + depth * 14 }}
-            aria-expanded={isDirectory ? isExpanded : undefined}
-            title={entry.path}
-            onClick={() => {
-              if (isDirectory) {
-                toggleDirectory(entry.path);
-              } else {
-                void openFile(entry.path);
-              }
-            }}
-          >
-            <span className="file-tree-chevron" aria-hidden="true">
-              {isDirectory ? (
-                isExpanded ? (
-                  <IconChevronDown size={14} stroke={1.8} />
-                ) : (
-                  <IconChevronRight size={14} stroke={1.8} />
-                )
-              ) : null}
-            </span>
-            <span className="file-tree-icon" aria-hidden="true">
-              {entryIcon(entry, isExpanded)}
-            </span>
-            <span>{entry.name}</span>
-          </button>
-          {isDirectory && isExpanded
-            ? renderDirectory(entry.path, depth + 1)
-            : null}
-        </div>
-      );
-    });
-  }
-
+        <button
+          className="button secondary"
+          type="button"
+          onClick={props.onOpenSettings}
+        >
+          Open settings
+        </button>
+      </section>
+    );
+  // A selection change disposes all file contents and outstanding UI requests.
   return (
-    <section className="workspace-files-drawer" aria-label="Workspace files">
-      <aside className="file-explorer" aria-label="Workspace files">
-        <header className="file-explorer-header">
-          <div>
-            <p>Workspace files</p>
-            <h1>{workspace?.displayName ?? "Files"}</h1>
-            <span>{workspace?.displayPath ?? "No workspace selected"}</span>
-          </div>
+    <WorkspaceFilesView
+      key={props.workspace.workspaceId}
+      {...props}
+      workspace={props.workspace}
+    />
+  );
+}
+
+function WorkspaceFilesView({
+  workspace,
+  listDirectory,
+  searchFiles,
+  readFile,
+  readDiff,
+  openRequest,
+}: WorkspaceFilesProps & { workspace: WorkspaceSummary }) {
+  const { resolvedColorTheme } = useAppearance();
+  const [documents, setDocuments] = useState<Document[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [reveal, setReveal] = useState<{
+    path: string;
+    sequence: number;
+  } | null>(null);
+  const [explorerVisible, setExplorerVisible] = useState(true);
+  const request = useRef(0);
+  const live = useRef(true);
+  const documentNav = useRef<HTMLElement>(null);
+  const tabs = useRef(documents);
+  tabs.current = documents;
+  const active = documents.find((doc) => doc.id === activeId);
+  useEffect(() => {
+    const nav = documentNav.current;
+    if (!nav) return;
+    const revealActiveTab = () =>
+      nav
+        .querySelector<HTMLButtonElement>('button[aria-pressed="true"]')
+        ?.parentElement?.scrollIntoView({
+          block: "nearest",
+          inline: "nearest",
+        });
+    revealActiveTab();
+    const observer = new ResizeObserver(revealActiveTab);
+    observer.observe(nav);
+    return () => observer.disconnect();
+  }, [activeId, documents]);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, []);
+  const open = useCallback(
+    async (path: string, selection?: GitDiffSelection, refresh = false) => {
+      const id = selection
+        ? `${selection.source}:${selection.commitId ?? ""}:${path}`
+        : `file:${path}`;
+      setActiveId(id);
+      const existing = tabs.current.find((doc) => doc.id === id);
+      if (!refresh && existing && !existing.error) return;
+      const version = ++request.current;
+      const document: Document = {
+        id,
+        path,
+        selection,
+        loading: true,
+        error: "",
+        version,
+      };
+      // Eight live documents is also the content-cache bound; closing a tab releases it.
+      setDocuments((old) => [
+        ...old.filter((doc) => doc.id !== id).slice(-7),
+        document,
+      ]);
+      try {
+        const result = selection
+          ? { diff: await readDiff(workspace.workspaceId, path, selection) }
+          : { file: await readFile(workspace.workspaceId, path) };
+        if (live.current)
+          setDocuments((old) =>
+            old.map((doc) =>
+              doc.id === id && doc.version === version
+                ? { ...doc, ...result, loading: false }
+                : doc,
+            ),
+          );
+      } catch (e) {
+        if (live.current)
+          setDocuments((old) =>
+            old.map((doc) =>
+              doc.id === id && doc.version === version
+                ? {
+                    ...doc,
+                    loading: false,
+                    error:
+                      e instanceof Error
+                        ? e.message
+                        : "This preview is unavailable. Refresh and try again.",
+                  }
+                : doc,
+            ),
+          );
+      }
+    },
+    [workspace.workspaceId, readDiff, readFile],
+  );
+  useEffect(() => {
+    if (!openRequest || openRequest.workspaceId !== workspace.workspaceId)
+      return;
+    void open(openRequest.path, openRequest.diff, true);
+    setReveal({ path: openRequest.path, sequence: openRequest.requestId });
+  }, [openRequest, workspace.workspaceId, open]);
+  const openReadme = useCallback(
+    (root: WorkspaceDirectory) => {
+      const readme = root.entries.find(
+        (entry) =>
+          entry.kind === "file" && entry.name.toLowerCase() === "readme.md",
+      );
+      if (request.current === 0 && readme) void open(readme.path);
+    },
+    [open],
+  );
+  function locate(path: string) {
+    setExplorerVisible(true);
+    setReveal((old) => ({ path, sequence: (old?.sequence ?? 0) + 1 }));
+  }
+  function close(id: string) {
+    requestAnimationFrame(() =>
+      documentNav.current
+        ?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')
+        ?.focus(),
+    );
+    const index = documents.findIndex((doc) => doc.id === id);
+    const remaining = documents.filter((doc) => doc.id !== id);
+    setDocuments(remaining);
+    if (activeId === id)
+      setActiveId(remaining[index]?.id ?? remaining[index - 1]?.id ?? null);
+  }
+  return (
+    <section
+      className={`workspace-files-drawer enhanced-files${explorerVisible ? "" : " explorer-hidden"}`}
+      aria-label="Workspace files"
+    >
+      {explorerVisible ? (
+        <FileExplorer
+          workspace={workspace}
+          listDirectory={listDirectory}
+          onRootLoaded={openReadme}
+          searchFiles={searchFiles}
+          activePath={active?.path ?? null}
+          reveal={reveal}
+          onOpen={(path) => {
+            void open(path);
+          }}
+        />
+      ) : null}
+      <section className="file-workspace" aria-label="File preview">
+        <header className="file-viewer-header">
           <button
             type="button"
-            aria-label="Refresh workspace files"
-            title="Refresh workspace files"
-            disabled={!available}
-            onClick={() => {
-              resetExplorer();
-              if (workspace !== null && available) {
-                void loadDirectory("");
-              }
-            }}
+            className="button secondary compact"
+            aria-expanded={explorerVisible}
+            onClick={() => setExplorerVisible((v) => !v)}
           >
-            <IconRefresh size={17} stroke={1.7} aria-hidden="true" />
+            {explorerVisible ? "Hide files" : "Show files"}
+          </button>
+          <span title={active?.path}>{active?.path ?? "Workspace files"}</span>
+          <span className="file-viewer-readonly">Read-only</span>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Refresh file preview"
+            disabled={!active || active.loading}
+            onClick={() =>
+              active && void open(active.path, active.selection, true)
+            }
+          >
+            <IconRefresh size={16} />
           </button>
         </header>
-
-        {available ? (
-          <>
-            <nav className="file-tree" aria-label="Workspace tree">
-              {renderDirectory("", 0)}
-              {directoryLoading.has("") ? (
-                <p className="file-tree-loading">Loading workspace…</p>
-              ) : null}
-            </nav>
-            <footer className="file-explorer-footer">
-              <IconShieldLock size={15} stroke={1.7} aria-hidden="true" />
-              <span>
-                Read-only · {exclusionCount} protected or generated{" "}
-                {exclusionCount === 1 ? "entry" : "entries"} hidden
-              </span>
-            </footer>
-          </>
-        ) : (
-          <div className="file-explorer-unavailable">
-            <IconShieldLock size={23} stroke={1.5} aria-hidden="true" />
-            <strong>Managed Local files unavailable</strong>
-            <p>
-              Select the local workspace and enable Development or Allow all
-              access to browse it.
-            </p>
+        <nav ref={documentNav} className="file-tabs" aria-label="Open files">
+          {documents.map((doc) => (
+            <div className="file-tab-wrap" key={doc.id}>
+              <button
+                className="file-tab"
+                type="button"
+                aria-pressed={activeId === doc.id}
+                title={`${doc.path}${doc.selection ? ` · ${doc.selection.source}` : ""}`}
+                onClick={() => setActiveId(doc.id)}
+              >
+                {doc.selection ? (
+                  <IconGitCompare size={14} />
+                ) : (
+                  <IconFileCode size={14} />
+                )}
+                <span>
+                  {doc.path.split("/").at(-1)}
+                  {doc.selection
+                    ? ` · ${doc.selection.source === "commit" ? doc.selection.commitId?.slice(0, 7) : doc.selection.source}`
+                    : ""}
+                </span>
+              </button>
+              <button
+                className="file-tab-close"
+                type="button"
+                aria-label={`Close ${doc.path.split("/").at(-1)}${doc.selection ? ` ${doc.selection.source} diff` : ""}`}
+                onClick={() => close(doc.id)}
+              >
+                <IconX size={13} />
+              </button>
+            </div>
+          ))}
+        </nav>
+        {active?.loading ? (
+          <div className="file-preview-empty" role="status">
+            <IconLoader2 size={25} className="git-spinner" />
+            <strong>Opening {active.path.split("/").at(-1)}…</strong>
+          </div>
+        ) : active?.error ? (
+          <div className="file-preview-error" role="alert">
+            <strong>Preview unavailable</strong>
+            <p>{active.error}</p>
             <button
-              className="button secondary"
               type="button"
-              onClick={onOpenSettings}
+              className="button secondary compact"
+              onClick={() => void open(active.path, active.selection, true)}
             >
-              Open settings
+              Retry preview
             </button>
           </div>
-        )}
-      </aside>
-
-      <section className="file-workspace" aria-label="File preview">
-        <header className="surface-header file-surface-header">
-          <div className="surface-title-copy">
-            <p className="surface-breadcrumb">Files / Workspace</p>
-            <h2>{activeFile?.name ?? "Workspace preview"}</h2>
-            <span>
-              {activeFile?.path ??
-                "Open a source file from the explorer to inspect it here."}
-            </span>
-          </div>
-          <span className="file-readonly-badge">
-            <IconShieldLock size={15} stroke={1.7} aria-hidden="true" />
-            Read-only
-          </span>
-        </header>
-
-        <nav className="file-tabs" aria-label="Open files">
-          {openPaths.map((path) => {
-            const opened = files.get(path);
-            const name = opened?.name ?? path.split("/").at(-1) ?? path;
-            return (
-              <div className="file-tab-wrap" key={path}>
-                <button
-                  className="file-tab"
-                  type="button"
-                  aria-pressed={activePath === path}
-                  title={path}
-                  onClick={() => setActivePath(path)}
-                >
-                  <IconFileCode size={14} stroke={1.6} aria-hidden="true" />
-                  <span>{name}</span>
-                </button>
-                <button
-                  className="file-tab-close"
-                  type="button"
-                  aria-label={`Close ${name}`}
-                  title={`Close ${name}`}
-                  onClick={() => closeFile(path)}
-                >
-                  <IconX size={13} stroke={1.8} aria-hidden="true" />
-                </button>
-              </div>
-            );
-          })}
-        </nav>
-
-        {error !== "" ? (
-          <div className="file-preview-error" role="alert">
-            <IconShieldLock size={19} stroke={1.6} aria-hidden="true" />
-            <div>
-              <strong>Preview unavailable</strong>
-              <p>{error}</p>
-            </div>
-          </div>
-        ) : null}
-
-        {activeFile !== undefined ? (
+        ) : active?.diff ? (
+          <DiffViewer
+            key={`${active.id}:${active.version}`}
+            diff={active.diff}
+            onReveal={() => locate(active.path)}
+            onOpenFile={() => void open(active.path)}
+          />
+        ) : active?.file ? (
           <section className="file-preview">
             <div className="file-preview-meta">
-              <span>
-                <IconCode size={15} stroke={1.7} aria-hidden="true" />
-                {activeFile.language}
-              </span>
-              <span>{activeFile.lineCount.toLocaleString()} lines</span>
-              <span>{humanFileSize(activeFile.sizeBytes)}</span>
-              <span>UTF-8</span>
+              <span>{active.file.language}</span>
+              <span>{active.file.lineCount.toLocaleString()} lines</span>
+              <span>{active.file.sizeBytes.toLocaleString()} bytes</span>
+              <button
+                type="button"
+                className="button secondary compact"
+                onClick={() => locate(active.path)}
+              >
+                Reveal in explorer
+              </button>
             </div>
-            <HighlightedCode
-              file={activeFile}
-              colorTheme={resolvedColorTheme}
-            />
+            {active.file.content === "" ? (
+              <p className="diff-empty">Empty file.</p>
+            ) : (
+              <HighlightedCode
+                key={`${active.id}:${active.version}`}
+                file={active.file}
+                colorTheme={resolvedColorTheme}
+              />
+            )}
           </section>
-        ) : loadingPath !== null ? (
-          <div className="file-preview-empty">
-            <IconCode size={30} stroke={1.3} aria-hidden="true" />
-            <strong>Opening {loadingPath.split("/").at(-1)}</strong>
-            <p>Preparing a bounded syntax-highlighted preview…</p>
-          </div>
         ) : (
           <div className="file-preview-empty">
-            <IconCode size={30} stroke={1.3} aria-hidden="true" />
+            <IconFileCode size={30} />
             <strong>Select a file to preview</strong>
+            <p>Find a file by name or open a changed file from Git.</p>
             <p>
-              Source stays read-only here. Colossus changes files through the
-              existing policy and approval path.
+              Files stay read-only. Changes use the existing policy and approval
+              path.
             </p>
           </div>
         )}

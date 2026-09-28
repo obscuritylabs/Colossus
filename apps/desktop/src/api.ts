@@ -5,6 +5,28 @@ import { readNativeDialogAppearance } from "./theme/appearance";
 import type { ProviderPreset, ProviderCatalogModel } from "./providerCatalog";
 import type { GitStatus, GitCommitPage, GitCommitDetails } from "./git";
 
+export function getWorkspaceGitDiff(
+  workspaceId: string,
+  path: string,
+  selection: import("./git").GitDiffSelection,
+): Promise<import("./git").GitFileDiff> {
+  return call("get_workspace_git_diff", {
+    request: { workspaceId, path, ...selection },
+  });
+}
+
+export interface WorkspaceSearchResults {
+  paths: string[];
+  truncated: boolean;
+  scanned: number;
+}
+export function searchWorkspaceFiles(
+  workspaceId: string,
+  query: string,
+): Promise<WorkspaceSearchResults> {
+  return call("search_workspace_files", { request: { workspaceId, query } });
+}
+
 export function getWorkspaceGitStatus(
   workspaceId: string,
   approveRepository = false,

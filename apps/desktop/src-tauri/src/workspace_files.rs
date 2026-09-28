@@ -22,7 +22,7 @@ use crate::{
 
 const MAX_DIRECTORY_ENTRIES: usize = 500;
 const MAX_DIRECTORY_SCAN_ENTRIES: usize = 2_048;
-const MAX_FILE_BYTES: u64 = 256 * 1_024;
+pub(crate) const MAX_FILE_BYTES: u64 = 256 * 1_024;
 const MAX_RELATIVE_PATH_BYTES: usize = 2_048;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -114,7 +114,7 @@ fn settings_store() -> Result<SettingsStore, CommandErrorDto> {
     SettingsStore::open_application()
 }
 
-fn authorize_workspace<'a>(
+pub(crate) fn authorize_workspace<'a>(
     settings: &'a DesktopSettings,
     workspace_id: &str,
 ) -> Result<&'a WorkspaceSetting, CommandErrorDto> {
@@ -198,7 +198,14 @@ fn list_directory(root: &Path, relative: &str) -> Result<WorkspaceDirectoryDto, 
 pub(crate) fn read_file(root: &Path, relative: &str) -> Result<WorkspaceFileDto, CommandErrorDto> {
     let candidate = resolve_relative(root, relative, false)?;
     let before = fs::symlink_metadata(&candidate).map_err(|_| workspace_read_error())?;
-    if before.file_type().is_symlink() || !before.is_file() || before.len() > MAX_FILE_BYTES {
+    if before.len() > MAX_FILE_BYTES {
+        return Err(CommandErrorDto::local_sanitized(
+            "file_preview_too_large",
+            "This file exceeds the 256 KiB preview limit.",
+            false,
+        ));
+    }
+    if before.file_type().is_symlink() || !before.is_file() {
         return Err(preview_unavailable());
     }
     #[cfg(windows)]
@@ -220,7 +227,8 @@ pub(crate) fn read_file(root: &Path, relative: &str) -> Result<WorkspaceFileDto,
         return Err(workspace_read_error());
     }
 
-    let mut bytes = Vec::with_capacity(usize::try_from(opened.len()).unwrap_or_default());
+    let mut bytes =
+        Vec::with_capacity(usize::try_from(opened.len().min(MAX_FILE_BYTES)).unwrap_or_default());
     file.take(MAX_FILE_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| workspace_read_error())?;
@@ -307,7 +315,7 @@ pub(crate) fn read_repository_configuration(root: &Path) -> Result<String, Comma
     Ok(content)
 }
 
-fn resolve_relative(
+pub(crate) fn resolve_relative(
     root: &Path,
     relative: &str,
     allow_empty: bool,
@@ -412,7 +420,7 @@ fn join_relative(parent: &str, name: &str) -> String {
     }
 }
 
-fn renderer_safe_name(value: &str) -> bool {
+pub(crate) fn renderer_safe_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 255
         && !value.chars().any(|character| {
@@ -428,7 +436,7 @@ fn renderer_safe_name(value: &str) -> bool {
         })
 }
 
-fn hidden_entry(name: &str) -> bool {
+pub(crate) fn hidden_entry(name: &str) -> bool {
     let lowercase = name.to_ascii_lowercase();
     matches!(
         lowercase.as_str(),
@@ -477,7 +485,7 @@ fn hidden_entry(name: &str) -> bool {
             })
 }
 
-fn unsafe_text_character(character: char) -> bool {
+pub(crate) fn unsafe_text_character(character: char) -> bool {
     (character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
         || matches!(
             character,
@@ -489,7 +497,7 @@ fn unsafe_text_character(character: char) -> bool {
         )
 }
 
-fn language_for(name: &str) -> &'static str {
+pub(crate) fn language_for(name: &str) -> &'static str {
     let lowercase = name.to_ascii_lowercase();
     if matches!(lowercase.as_str(), "dockerfile" | "containerfile") {
         return "dockerfile";

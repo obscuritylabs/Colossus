@@ -6,6 +6,49 @@ export interface GitFile {
   untracked: boolean;
   conflicted: boolean;
 }
+
+export type GitDiffSource = "staged" | "unstaged" | "untracked" | "commit";
+export interface GitDiffSelection {
+  repositoryId: string;
+  source: GitDiffSource;
+  commitId?: string;
+}
+export interface GitFileVersion {
+  state:
+    | "text"
+    | "absent"
+    | "binary"
+    | "too_large"
+    | "unsupported"
+    | "unavailable"
+    | "conflict";
+  content: string | null;
+  sizeBytes: number | null;
+}
+export interface GitDiffLine {
+  kind: "added" | "removed" | "context";
+  oldLine: number | null;
+  newLine: number | null;
+}
+export interface GitDiffHunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: GitDiffLine[];
+}
+export interface GitFileDiff {
+  path: string;
+  previousPath: string | null;
+  language: string;
+  before: GitFileVersion;
+  after: GitFileVersion;
+  hunks: GitDiffHunk[];
+  additions: number;
+  deletions: number;
+  truncated: boolean;
+  note: string | null;
+}
 export interface GitRepository {
   id: string;
   name: string;

@@ -71,11 +71,16 @@ export function GitPane({
   git,
   onClose,
   onOpenFile,
+  onOpenDiff,
   closeRef,
 }: {
   git: GitController;
   onClose: () => void;
   onOpenFile: (path: string) => void;
+  onOpenDiff: (
+    path: string,
+    selection: import("../../git").GitDiffSelection,
+  ) => void;
   closeRef: Ref<HTMLButtonElement>;
 }) {
   const [tab, setTab] = useState<"changes" | "history">("changes");
@@ -236,12 +241,14 @@ export function GitPane({
                 key={repository.id}
                 repository={repository}
                 onOpenFile={onOpenFile}
+                onOpenDiff={onOpenDiff}
               />
             ) : (
               <GitHistory
                 key={`${repository.id}:${repository.head}`}
                 repository={repository}
                 git={git}
+                onOpenDiff={onOpenDiff}
               />
             )}
           </div>

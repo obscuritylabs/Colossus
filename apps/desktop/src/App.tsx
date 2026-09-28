@@ -39,6 +39,8 @@ import {
   listAsides,
   listSessionActivity,
   listWorkspaceDirectory,
+  searchWorkspaceFiles,
+  getWorkspaceGitDiff,
   listRuns,
   onSpaceAttention,
   onSpaceStatusChanged,
@@ -89,6 +91,7 @@ import { WorkSurface } from "./components/WorkSurface";
 import type { SessionWorkspaceView } from "./components/SessionWorkspace";
 import type { WorkspaceFileOpenRequest } from "./components/WorkspaceFiles";
 import { WorkspaceFiles } from "./components/WorkspaceFiles";
+import { queueGitRead } from "./components/git/readQueue";
 import {
   managedOnboardingRequired,
   managedSetupLaunchFailure,
@@ -191,6 +194,7 @@ import {
 import {
   listFixtureWorkspaceDirectory,
   readFixtureWorkspaceFile,
+  searchFixtureWorkspaceFiles,
 } from "./dev/workspace-files-fixture";
 
 const OnboardingSurface = lazy(() =>
@@ -208,6 +212,22 @@ const FIXTURE_MODE =
     FIXTURE_SCENARIO === "activity-comparison" ||
     FIXTURE_SCENARIO === "interaction-question" ||
     FIXTURE_SCENARIO === "plan-workflow");
+function readDesktopDiff(
+  workspaceId: string,
+  path: string,
+  selection: import("./git").GitDiffSelection,
+) {
+  return queueGitRead(async () => {
+    if (import.meta.env.DEV && FIXTURE_MODE)
+      return (await import("./dev/file-diff-fixture")).readFixtureDiff(
+        workspaceId,
+        path,
+        selection,
+      );
+    return getWorkspaceGitDiff(workspaceId, path, selection);
+  });
+}
+
 const FIXTURE_ACTIVITY_LIVE =
   FIXTURE_MODE && FIXTURE_QUERY.get("activityLive") === "1";
 const FIXTURE_SPACE_STARTUP =
@@ -4981,7 +5001,7 @@ export default function App() {
           followRequestSequence={conversationFollowRequest}
           composer={composer}
           filesAvailable={desktop.capabilities.files}
-          onOpenWorkspaceFile={(path) => {
+          onOpenWorkspaceFile={(path, diff) => {
             if (desktop.workspace === null) {
               return;
             }
@@ -4990,6 +5010,7 @@ export default function App() {
               workspaceId: desktop.workspace.workspaceId,
               path,
               requestId: workspaceFileOpenSequence.current,
+              diff,
             });
           }}
           artifactsAvailable={desktop.capabilities.artifacts}
@@ -5048,6 +5069,12 @@ export default function App() {
               }
               readFile={
                 FIXTURE_MODE ? readFixtureWorkspaceFile : readWorkspaceFile
+              }
+              readDiff={readDesktopDiff}
+              searchFiles={
+                FIXTURE_MODE
+                  ? searchFixtureWorkspaceFiles
+                  : searchWorkspaceFiles
               }
               onOpenSettings={() => setSurface("settings")}
               openRequest={workspaceFileOpenRequest}

@@ -123,6 +123,108 @@ describe("chatReducer", () => {
     expect(view?.lastSequence).toBe(2);
   });
 
+  describe.each(["hydrate_run", "upsert_run"] as const)("%s replay", (type) => {
+    it.each([false, true])(
+      "keeps saved output while replaying history (partial stream: %s)",
+      (hasPartialStream) => {
+        const result = {
+          output: "Hello world",
+          profile: "default",
+          modelProfile: "default",
+          providerProfile: "default-provider",
+          model: "test-model",
+          elapsedSeconds: 1,
+        };
+        const run: Run = {
+          ...baseRun,
+          status: "completed",
+          lastSequence: 6,
+          terminal: { type: "result", result },
+        };
+        const replay = [
+          update(1, { type: "state", status: "running" }),
+          update(2, {
+            type: "notice",
+            reason: "progress",
+            message: "Read source file",
+          }),
+          update(3, { type: "output_delta", delta: "Hello" }),
+          update(4, { type: "output_delta", delta: " world" }),
+          update(5, {
+            type: "usage",
+            usage: {
+              inputTokens: 100,
+              outputTokens: 2,
+              totalTokens: 102,
+              cachedInputTokens: null,
+              reasoningTokens: null,
+            },
+          }),
+          update(6, { type: "result", result }),
+        ];
+        let state = hasPartialStream ? withRun() : initialChatState;
+        if (hasPartialStream) {
+          for (const event of replay.slice(0, 3)) {
+            state = chatReducer(state, {
+              type: "ingest_update",
+              update: event,
+            });
+          }
+        }
+        state = chatReducer(
+          state,
+          type === "hydrate_run"
+            ? { type, details: { run, pendingInteractions: [] } }
+            : { type, run },
+        );
+        expect(state.views.get(run.runId)?.output).toBe(result.output);
+        for (const event of replay) {
+          state = chatReducer(state, { type: "ingest_update", update: event });
+          expect(state.views.get(run.runId)?.output).toBe(result.output);
+        }
+        const view = state.views.get(run.runId);
+        expect(view?.lastSequence).toBe(6);
+        expect(view?.updates.map((event) => event.update.type)).toEqual([
+          "state",
+          "notice",
+          "usage",
+          "result",
+        ]);
+        expect(view?.usage?.outputTokens).toBe(2);
+        expect(view?.run.status).toBe("completed");
+      },
+    );
+  });
+
+  it("rebuilds streamed output when a terminal summary omits its text", () => {
+    const result = {
+      output: "",
+      profile: "default",
+      modelProfile: "default",
+      providerProfile: "default-provider",
+      model: "test-model",
+      elapsedSeconds: 1,
+    };
+    let state = chatReducer(initialChatState, {
+      type: "upsert_run",
+      run: {
+        ...baseRun,
+        status: "completed",
+        lastSequence: 2,
+        terminal: { type: "result", result },
+      },
+    });
+    state = chatReducer(state, {
+      type: "ingest_update",
+      update: update(1, { type: "output_delta", delta: "Saved answer" }),
+    });
+    state = chatReducer(state, {
+      type: "ingest_update",
+      update: update(2, { type: "result", result }),
+    });
+    expect(state.views.get(baseRun.runId)?.output).toBe("Saved answer");
+  });
+
   it("projects result, failure, and cancellation updates into terminal run state", () => {
     const result = update(1, {
       type: "result",

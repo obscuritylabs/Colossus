@@ -18,7 +18,7 @@ pub(super) const HISTORY_LIMIT: usize = 400;
 const FILE_LIMIT: usize = 1000;
 
 pub(super) struct Reader {
-    repo: Repository,
+    pub(super) repo: Repository,
     _config: tempfile::NamedTempFile,
     notes: Vec<&'static str>,
 }
@@ -487,7 +487,7 @@ fn failed(_: git2::Error) -> CommandErrorDto {
     error("Git could not read this repository. Check its metadata and refresh.")
 }
 
-fn index_stamp(
+pub(super) fn index_stamp(
     binding: &RepositoryBinding,
 ) -> Result<Option<(u64, std::time::SystemTime)>, CommandErrorDto> {
     match fs::metadata(binding.git.path.join("index")) {

@@ -10,7 +10,10 @@ use uuid::Uuid;
 
 use super::{
     discovery::{RepositoryBinding, discover},
-    dto::{CommitDetails, CommitPage, CommitRequest, GitStatus, HistoryRequest, StatusRequest},
+    dto::{
+        CommitDetails, CommitPage, CommitRequest, DiffRequest, DiffSource, FileDiff, GitStatus,
+        HistoryRequest, StatusRequest,
+    },
     error,
     reader::{HISTORY_LIMIT, PAGE_SIZE, Reader},
 };
@@ -336,6 +339,48 @@ pub(crate) async fn get_workspace_git_commit(
     .await
 }
 
+#[tauri::command]
+pub(crate) async fn get_workspace_git_diff(
+    caller: Webview,
+    state: State<'_, AppState>,
+    git: State<'_, GitState>,
+    request: DiffRequest,
+) -> Result<FileDiff, CommandErrorDto> {
+    crate::browser::commands::require_controller(&caller)?;
+    let context = Context::capture(&state, &request.workspace_id)?;
+    let operation_context = context.clone();
+    run(&state, &git, context, move |session| {
+        let current = current_session(session, &operation_context, &request.repository_id)?;
+        authorize_diff(current, &request)?;
+        let reader = Reader::open(&current.binding)?;
+        if reader.head()?.1 != current.head {
+            return Err(error("HEAD changed. Refresh Git before opening a diff."));
+        }
+        let result = reader.diff(&current.binding, &request)?;
+        current.binding.revalidate()?;
+        if reader.head()?.1 != current.head {
+            return Err(error("HEAD changed. Refresh Git before opening a diff."));
+        }
+        Ok(result)
+    })
+    .await
+}
+
+fn authorize_diff(session: &Session, request: &DiffRequest) -> Result<(), CommandErrorDto> {
+    if request.source == DiffSource::Commit {
+        if !request
+            .commit_id
+            .as_ref()
+            .is_some_and(|id| session.listed.contains(id))
+        {
+            return Err(error("Choose a commit from the current history list."));
+        }
+    } else if request.commit_id.is_some() {
+        return Err(error("A working-tree comparison cannot select a commit."));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,5 +440,47 @@ mod tests {
         assert!(history_offset(current, Some("../other-repository")).is_err());
         current.cursor = None;
         assert!(history_offset(current, Some("native-cursor")).is_err());
+    }
+    #[test]
+    fn diff_cannot_select_arbitrary_revisions_or_mix_sources() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(directory.path()).unwrap();
+        git2::Repository::init(&root).unwrap();
+        let session = Session {
+            context: Context {
+                workspace: validate_workspace(&root).unwrap(),
+                target: "local".into(),
+                epoch: 1,
+            },
+            binding: discover(&root).unwrap().unwrap(),
+            id: "native".into(),
+            head: None,
+            listed: HashSet::from(["listed-commit".into()]),
+            cursor: None,
+            offset: 0,
+        };
+        let mut request = DiffRequest {
+            workspace_id: "local".into(),
+            repository_id: "native".into(),
+            path: "file.rs".into(),
+            source: DiffSource::Commit,
+            commit_id: Some("listed-commit".into()),
+        };
+        assert!(authorize_diff(&session, &request).is_ok());
+        for id in [None, Some("HEAD~3".into()), Some("unlisted-commit".into())] {
+            request.commit_id = id;
+            assert!(authorize_diff(&session, &request).is_err());
+        }
+        for source in [
+            DiffSource::Staged,
+            DiffSource::Unstaged,
+            DiffSource::Untracked,
+        ] {
+            request.source = source;
+            request.commit_id = Some("listed-commit".into());
+            assert!(authorize_diff(&session, &request).is_err());
+            request.commit_id = None;
+            assert!(authorize_diff(&session, &request).is_ok());
+        }
     }
 }

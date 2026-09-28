@@ -18,9 +18,18 @@ const DIRECTORIES: Readonly<Record<string, readonly WorkspaceEntry[]>> = {
     directory("crates", "crates"),
     directory("docs", "docs"),
     directory("scripts", "scripts"),
+    directory("src", "src"),
     file("AGENTS.md", "AGENTS.md", 1_204),
     file("Cargo.toml", "Cargo.toml", 4_892),
     file("README.md", "README.md", 3_426),
+  ],
+  src: [directory("components", "src/components")],
+  "src/components": [
+    directory("git", "src/components/git"),
+    file("WorkSurface.tsx", "src/components/WorkSurface.tsx", 400),
+  ],
+  "src/components/git": [
+    file("GitPane.tsx", "src/components/git/GitPane.tsx", 400),
   ],
   apps: [directory("desktop", "apps/desktop")],
   "apps/desktop": [
@@ -231,6 +240,19 @@ export async function readFixtureWorkspaceFile(
   _workspaceId: string,
   path: string,
 ): Promise<WorkspaceFile> {
+  if (path.includes("deleted"))
+    throw new Error("This file has been deleted from the working tree.");
+  if (path.includes("binary"))
+    throw new Error("This file cannot be previewed as bounded UTF-8 text.");
+  if (path.includes("empty"))
+    return {
+      path,
+      name: "empty.txt",
+      language: "text",
+      content: "",
+      lineCount: 1,
+      sizeBytes: 0,
+    };
   const known = CONTENT[path];
   if (known !== undefined) {
     return { ...known, path };
@@ -243,6 +265,34 @@ export async function readFixtureWorkspaceFile(
     sizeBytes: 1_024,
     lineCount: 5,
     content: `// Deterministic preview fixture for ${path}\n\nexport const ready = true;\n`,
+  };
+}
+
+export async function searchFixtureWorkspaceFiles(
+  _workspaceId: string,
+  query: string,
+): Promise<import("../api").WorkspaceSearchResults> {
+  const many =
+    new URLSearchParams(window.location.search).get("files") === "many";
+  const paths = [
+    ...Object.values(DIRECTORIES)
+      .flat()
+      .filter((e) => e.kind === "file")
+      .map((e) => e.path),
+    ...(many
+      ? Array.from(
+          { length: 5000 },
+          (_, i) => `src/features/feature-${i}/view.tsx`,
+        )
+      : []),
+  ];
+  const matches = paths.filter((path) =>
+    path.toLowerCase().includes(query.toLowerCase()),
+  );
+  return {
+    paths: matches.slice(0, 200),
+    truncated: matches.length > 200,
+    scanned: paths.length,
   };
 }
 

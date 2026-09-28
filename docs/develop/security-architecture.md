@@ -701,6 +701,15 @@ write, arbitrary object read, subprocess, hook, filter, or network operation is 
 Repository includes and alternate object stores are rejected. See
 [ADR 0004](adr/0004-desktop-git-inspection.md) for bounds and library limitations.
 
+Workspace file search traverses only the selected workspace with the same protected-name
+and link exclusions. It returns bounded names/paths, never content or a persistent index.
+Diff reads require a changed file from current status or a listed commit in the native
+repository session. Historical/deleted paths retain file-viewer exclusions. Blobs are
+size-checked before loading; comparisons return bounded text and line references, not
+HTML. No external filter, text converter, or arbitrary revision is accepted. The renderer
+disposes cached documents on workspace changes. See
+[ADR 0005](adr/0005-desktop-file-diffs.md) for limits and acceptance coverage.
+
 The opt-in embedded browser mounts untrusted guest WebViews under the Desktop window.
 Main-app capabilities bind the exact local main WebView, not every child of that
 window. Browser commands also validate caller document, selected workspace, and tab

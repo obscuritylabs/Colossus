@@ -1,5 +1,65 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DiffSource {
+    Staged,
+    Unstaged,
+    Untracked,
+    Commit,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct DiffRequest {
+    pub workspace_id: String,
+    pub repository_id: String,
+    pub path: String,
+    pub source: DiffSource,
+    pub commit_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileVersion {
+    pub state: &'static str,
+    pub content: Option<String>,
+    pub size_bytes: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileDiff {
+    pub path: String,
+    pub previous_path: Option<String>,
+    pub language: String,
+    pub before: FileVersion,
+    pub after: FileVersion,
+    pub hunks: Vec<DiffHunk>,
+    pub additions: usize,
+    pub deletions: usize,
+    pub truncated: bool,
+    pub note: Option<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DiffHunk {
+    pub old_start: u32,
+    pub old_lines: u32,
+    pub new_start: u32,
+    pub new_lines: u32,
+    pub lines: Vec<DiffLine>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DiffLine {
+    pub kind: &'static str,
+    pub old_line: Option<u32>,
+    pub new_line: Option<u32>,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct StatusRequest {
