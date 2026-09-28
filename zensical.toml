@@ -114,6 +114,7 @@ nav = [
       { "ADR 0001: Rust runtime cutover" = "develop/adr/0001-rust-runtime-cutover.md" },
       { "ADR 0002: Interface boundary" = "develop/adr/0002-interface-presentation-boundary.md" },
       { "ADR 0004: Desktop Git inspection" = "develop/adr/0004-desktop-git-inspection.md" },
+      { "ADR 0005: Desktop file search and diffs" = "develop/adr/0005-desktop-file-diffs.md" },
     ] },
     { "Runtime and ports" = "develop/runtime-ports.md" },
     { "OpenTelemetry implementation" = "develop/observability.md" },

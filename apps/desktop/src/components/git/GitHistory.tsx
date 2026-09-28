@@ -7,9 +7,14 @@ import { FileName, GitFilter, StatusBadge } from "./GitPrimitives";
 export function GitHistory({
   repository,
   git,
+  onOpenDiff,
 }: {
   repository: GitRepository;
   git: GitController;
+  onOpenDiff: (
+    path: string,
+    selection: import("../../git").GitDiffSelection,
+  ) => void;
 }) {
   const [commits, setCommits] = useState<GitCommit[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -261,10 +266,21 @@ export function GitHistory({
               ) : null}
               {details.files.map((file) => (
                 <div key={file.path}>
-                  <div className="git-file-row">
+                  <button
+                    type="button"
+                    className="git-file-row"
+                    aria-label={`View commit diff for ${file.path}`}
+                    onClick={() =>
+                      onOpenDiff(file.path, {
+                        repositoryId: repository.id,
+                        source: "commit",
+                        commitId: details.commit.id,
+                      })
+                    }
+                  >
                     <FileName path={file.path} />
                     <StatusBadge status={file.status} />
-                  </div>
+                  </button>
                   {file.previousPath ? (
                     <p className="git-previous-path">
                       Renamed from {file.previousPath}

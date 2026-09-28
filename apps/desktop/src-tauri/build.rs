@@ -101,6 +101,8 @@ const COMMANDS: &[&str] = &[
     "get_workspace_git_status",
     "list_workspace_git_commits",
     "get_workspace_git_commit",
+    "get_workspace_git_diff",
+    "search_workspace_files",
     "read_workspace_file",
     "show_terminal_window",
     "terminal_context",

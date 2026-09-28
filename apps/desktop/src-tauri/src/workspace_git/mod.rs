@@ -1,6 +1,7 @@
 //! Read-only, selected-workspace Git inspection. No agent or repository-write API.
 
 pub(crate) mod commands;
+mod diff;
 mod discovery;
 mod dto;
 mod reader;

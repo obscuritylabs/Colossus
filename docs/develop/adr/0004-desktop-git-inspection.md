@@ -80,8 +80,9 @@ to the first parent. Git messages, paths, and errors never become instructions.
 
 Desktop gains a compact branch indicator and a resizable Changes/History pane, while
 retaining the existing composer and file-preview boundary. Submodule working-tree
-inspection, external filters, alternate object stores, full diffs, and writes remain
-separate work. Unsupported repository formats fail clearly instead of appearing clean.
+inspection, external filters, alternate object stores, and writes remain separate work.
+Bounded text diffs are described in [ADR 0005](0005-desktop-file-diffs.md).
+Unsupported repository formats fail clearly instead of appearing clean.
 
 Native fixtures cover real repositories, linked worktrees, subdirectories, detached and
 unborn HEAD, mixed staging, ignored paths, renames, conflicts, history, replacement, and

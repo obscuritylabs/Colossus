@@ -12,8 +12,13 @@ import { FileName, GitFilter, StatusBadge } from "./GitPrimitives";
 export function GitChanges({
   repository,
   onOpenFile,
+  onOpenDiff,
 }: {
   repository: GitRepository;
+  onOpenDiff: (
+    path: string,
+    selection: import("../../git").GitDiffSelection,
+  ) => void;
   onOpenFile: (path: string) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -138,6 +143,9 @@ export function GitChanges({
         <FileDetails
           file={selected}
           onOpenFile={onOpenFile}
+          onOpenDiff={(source) =>
+            onOpenDiff(selected.path, { repositoryId: repository.id, source })
+          }
           onClose={() => {
             setSelectedPath(null);
             if (lastSelected.current?.getClientRects().length)
@@ -159,8 +167,10 @@ function FileDetails({
   file,
   onOpenFile,
   onClose,
+  onOpenDiff,
 }: {
   file: GitFile;
+  onOpenDiff: (source: import("../../git").GitDiffSource) => void;
   onOpenFile: (path: string) => void;
   onClose: () => void;
 }) {
@@ -216,6 +226,37 @@ function FileDetails({
           </>
         )}
       </div>
+      {!file.conflicted ? (
+        <div className="git-diff-actions">
+          {file.staged ? (
+            <button
+              type="button"
+              className="button secondary compact"
+              onClick={() => onOpenDiff("staged")}
+            >
+              View staged diff
+            </button>
+          ) : null}
+          {file.unstaged ? (
+            <button
+              type="button"
+              className="button secondary compact"
+              onClick={() => onOpenDiff("unstaged")}
+            >
+              View unstaged diff
+            </button>
+          ) : null}
+          {file.untracked ? (
+            <button
+              type="button"
+              className="button secondary compact"
+              onClick={() => onOpenDiff("untracked")}
+            >
+              View new file diff
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {deleted ? (
         <p>This file has been deleted.</p>
       ) : (

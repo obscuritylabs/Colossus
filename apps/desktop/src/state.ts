@@ -33,6 +33,8 @@ export interface RunView {
   /** Accepted renderer request, retained across snapshots until lifecycle metadata arrives. */
   localPlanContinuation?: { planId: string; revision: number };
   output: string;
+  /** Output deltas at or before this snapshot cursor are already represented. */
+  outputSnapshotSequence?: number;
   updates: RunUpdate[];
   seenSequences: ReadonlySet<number>;
   lastSequence: number;
@@ -98,6 +100,19 @@ function terminalOutput(terminal: RunTerminal | null): string {
   return terminal?.type === "result"
     ? boundedOutput(terminal.result.output)
     : "";
+}
+
+function snapshotOutput(
+  run: Run,
+  current?: RunView,
+): Pick<RunView, "output" | "outputSnapshotSequence"> {
+  const output = terminalOutput(run.terminal);
+  return output !== ""
+    ? { output, outputSnapshotSequence: run.lastSequence }
+    : {
+        output: current?.output ?? "",
+        outputSnapshotSequence: current?.outputSnapshotSequence ?? 0,
+      };
 }
 
 function boundedFeedText(
@@ -182,7 +197,7 @@ function newView(run: Run, pendingInteractions: Interaction[] = []): RunView {
   return {
     run: compactRun(run),
     localPrompt: null,
-    output: terminalOutput(run.terminal),
+    ...snapshotOutput(run),
     updates: [],
     seenSequences: new Set(),
     lastSequence: 0,
@@ -490,7 +505,9 @@ function applyUpdate(view: RunView, update: RunUpdate): RunView {
       run = { ...run, status: update.update.status };
       break;
     case "output_delta":
-      output = boundedOutput(output + update.update.delta);
+      if (update.sequence > (view.outputSnapshotSequence ?? 0)) {
+        output = boundedOutput(output + update.update.delta);
+      }
       break;
     case "interaction":
       pendingInteractions = upsertInteraction(
@@ -633,7 +650,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           : {
               ...current,
               run: compactRun(action.run),
-              output: current.output || terminalOutput(action.run.terminal),
+              ...snapshotOutput(action.run, current),
               pendingInteractions: isTerminalStatus(action.run.status)
                 ? []
                 : current.pendingInteractions,
@@ -681,7 +698,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           : {
               ...current,
               run: compactRun(run),
-              output: current.output || terminalOutput(run.terminal),
+              ...snapshotOutput(run, current),
               pendingInteractions: retainedInteractions,
             },
       );

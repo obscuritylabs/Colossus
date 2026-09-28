@@ -149,6 +149,9 @@ commands dispatch it without receiving secret values from the renderer.
   reader. Repository handles bind the selected workspace and validated metadata
   directories; no Git execution or write capability is exposed. See
   [ADR 0004](adr/0004-desktop-git-inspection.md).
+- Desktop file search and text diffs reuse the same native workspace/Git authority.
+  The read-only renderer owns presentation and bounded document lifetimes; see
+  [ADR 0005](adr/0005-desktop-file-diffs.md).
 - Desktop's opt-in browser preview is a separate human browsing surface. Native
   session/tab state and engine integration stay in the Desktop browser manager and
   private native adapter. Guests receive no application capability. Future browser

@@ -28,6 +28,8 @@ function renderFiles(available: boolean): string {
         available,
         listDirectory: vi.fn(),
         readFile: vi.fn(),
+        readDiff: vi.fn(),
+        searchFiles: vi.fn(),
         onOpenSettings: vi.fn(),
         openRequest: null,
       }),
@@ -39,16 +41,14 @@ describe("WorkspaceFiles", () => {
   it("establishes the explorer and read-only preview hierarchy", () => {
     const markup = renderFiles(true);
 
-    expect(markup).toContain('class="workspace-files-drawer"');
+    expect(markup).toContain("workspace-files-drawer enhanced-files");
     expect(markup).toContain('aria-label="Workspace files"');
     expect(markup).toContain("<h1>Colossus</h1>");
     expect(markup).toContain("~/tools/Colossus");
     expect(markup).toContain("Read-only");
     expect(markup).toContain("Select a file to preview");
     expect(markup).toContain("existing policy and approval path");
-    expect(markup).toContain(
-      '<nav class="file-tree" aria-label="Workspace tree">',
-    );
+    expect(markup).toContain('aria-label="Workspace tree"');
     expect(markup).toContain(
       '<nav class="file-tabs" aria-label="Open files"></nav>',
     );

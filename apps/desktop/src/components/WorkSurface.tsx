@@ -2,6 +2,8 @@ import {
   IconArrowDown,
   IconClock,
   IconFiles,
+  IconArrowsMaximize,
+  IconArrowsMinimize,
   IconGlobe,
   IconFolderOpen,
   IconLayoutSidebarRight,
@@ -119,7 +121,10 @@ interface WorkSurfaceProps {
   composer: (contextActions: ReactNode) => ReactNode;
   filesPanel: ReactNode;
   filesAvailable: boolean;
-  onOpenWorkspaceFile: (path: string) => void;
+  onOpenWorkspaceFile: (
+    path: string,
+    diff?: import("../git").GitDiffSelection,
+  ) => void;
   artifactsAvailable: boolean;
   asideView: RunView | undefined;
   asideConversationViews: readonly RunView[];
@@ -296,19 +301,25 @@ export function WorkSurface({
     readStoredAsidePaneWidth,
   );
   const [browserPaneWidth, setBrowserPaneWidth] = useState<number | null>(null);
+  const [filesPaneWidth, setFilesPaneWidth] = useState<number | null>(null);
+  const [filesExpanded, setFilesExpanded] = useState(false);
   const [gitPaneWidth, setGitPaneWidth] = useState<number | null>(null);
   const asidePaneWidth =
     activeDrawer === "git"
       ? gitPaneWidth
-      : activeDrawer === "browser"
-        ? browserPaneWidth
-        : savedAsideWidth;
+      : activeDrawer === "files"
+        ? filesPaneWidth
+        : activeDrawer === "browser"
+          ? browserPaneWidth
+          : savedAsideWidth;
   const setAsidePaneWidth =
     activeDrawer === "git"
       ? setGitPaneWidth
-      : activeDrawer === "browser"
-        ? setBrowserPaneWidth
-        : setSavedAsideWidth;
+      : activeDrawer === "files"
+        ? setFilesPaneWidth
+        : activeDrawer === "browser"
+          ? setBrowserPaneWidth
+          : setSavedAsideWidth;
   const workLayoutRef = useRef<HTMLDivElement>(null);
   const feedScrollRef = useRef<HTMLDivElement>(null);
   const stableFeedPositionRef = useRef({ top: 0, left: 0 });
@@ -346,6 +357,7 @@ export function WorkSurface({
   const researchDrawerAvailable = run?.mode === "research";
   const researchOutput = view?.output ?? "";
   const resizableDrawer =
+    activeDrawer === "files" ||
     activeDrawer === "git" ||
     activeDrawer === "browser" ||
     activeDrawer === "aside" ||
@@ -555,9 +567,11 @@ export function WorkSurface({
           current ??
             (activeDrawer === "git"
               ? 360
-              : activeDrawer === "details"
-                ? 320
-                : defaultAsidePaneWidth(layoutWidth)),
+              : activeDrawer === "files"
+                ? 740
+                : activeDrawer === "details"
+                  ? 320
+                  : defaultAsidePaneWidth(layoutWidth)),
           layoutWidth,
         ),
       );
@@ -785,12 +799,16 @@ export function WorkSurface({
     setActiveDrawer(drawer);
   }
 
-  function openWorkspaceSource(path: string) {
+  function openWorkspaceSource(
+    path: string,
+    diff?: import("../git").GitDiffSelection,
+  ) {
     onCloseWorkNavigation();
     lastDrawerTriggerRef.current = filesTriggerRef.current;
     setFilesDrawerMounted(true);
     setActiveDrawer("files");
-    onOpenWorkspaceFile(path);
+    if (diff) setFilesExpanded(true);
+    onOpenWorkspaceFile(path, diff);
   }
 
   function openResearchDrawer() {
@@ -894,7 +912,11 @@ export function WorkSurface({
 
   function commitAsideWidth(width: number) {
     const nextWidth = previewAsideWidth(width);
-    if (activeDrawer !== "browser" && activeDrawer !== "git")
+    if (
+      activeDrawer !== "browser" &&
+      activeDrawer !== "git" &&
+      activeDrawer !== "files"
+    )
       storeAsidePaneWidth(nextWidth);
   }
 
@@ -1123,7 +1145,7 @@ export function WorkSurface({
 
       <div
         ref={workLayoutRef}
-        className={`work-layout${activeDrawer !== null ? " is-work-drawer-open" : ""}${resizableDrawer ? " is-aside-open" : ""}${activeDrawer === "browser" ? " is-browser-open" : ""}${activeDrawer === "browser" && browserExpanded ? " is-browser-expanded" : ""}`}
+        className={`work-layout${activeDrawer === "files" && filesExpanded ? " is-files-expanded" : ""}${activeDrawer !== null ? " is-work-drawer-open" : ""}${resizableDrawer ? " is-aside-open" : ""}${activeDrawer === "browser" ? " is-browser-open" : ""}${activeDrawer === "browser" && browserExpanded ? " is-browser-expanded" : ""}`}
         style={
           asidePaneWidth === null
             ? undefined
@@ -1361,13 +1383,15 @@ export function WorkSurface({
             aria-label={
               activeDrawer === "git"
                 ? "Resize Git panel"
-                : activeDrawer === "browser"
-                  ? "Resize browser pane"
-                  : activeDrawer === "aside"
-                    ? "Resize Aside conversation"
-                    : activeDrawer === "research"
-                      ? "Resize Research sources"
-                      : "Resize Thread details"
+                : activeDrawer === "files"
+                  ? "Resize files panel"
+                  : activeDrawer === "browser"
+                    ? "Resize browser pane"
+                    : activeDrawer === "aside"
+                      ? "Resize Aside conversation"
+                      : activeDrawer === "research"
+                        ? "Resize Research sources"
+                        : "Resize Thread details"
             }
             aria-orientation="vertical"
             aria-valuemin={MIN_ASIDE_PANE_WIDTH}
@@ -1437,14 +1461,20 @@ export function WorkSurface({
               if (layoutWidth === undefined || layoutWidth <= 0) {
                 return;
               }
-              if (activeDrawer !== "browser" && activeDrawer !== "git")
+              if (
+                activeDrawer !== "browser" &&
+                activeDrawer !== "git" &&
+                activeDrawer !== "files"
+              )
                 clearStoredAsidePaneWidth();
               setAsidePaneWidth(
                 activeDrawer === "git"
                   ? clampAsidePaneWidth(360, layoutWidth)
                   : activeDrawer === "details"
                     ? clampAsidePaneWidth(320, layoutWidth)
-                    : defaultAsidePaneWidth(layoutWidth),
+                    : activeDrawer === "files"
+                      ? clampAsidePaneWidth(740, layoutWidth)
+                      : defaultAsidePaneWidth(layoutWidth),
               );
             }}
           />
@@ -1499,6 +1529,7 @@ export function WorkSurface({
                 closeRef={drawerCloseRef}
                 onClose={closeDrawer}
                 onOpenFile={openWorkspaceSource}
+                onOpenDiff={openWorkspaceSource}
               />
             ) : null}
             {activeDrawer === "browser" ? (
@@ -1516,6 +1547,22 @@ export function WorkSurface({
                   onClose={closeDrawer}
                 />
               </Suspense>
+            ) : null}
+            {activeDrawer === "files" && !compactLayout ? (
+              <button
+                type="button"
+                className="icon-button files-expand-button"
+                aria-label={
+                  filesExpanded ? "Restore files panel" : "Expand files panel"
+                }
+                onClick={() => setFilesExpanded((v) => !v)}
+              >
+                {filesExpanded ? (
+                  <IconArrowsMinimize size={17} />
+                ) : (
+                  <IconArrowsMaximize size={17} />
+                )}
+              </button>
             ) : null}
             {activeDrawer !== "aside" &&
             activeDrawer !== "browser" &&
