@@ -239,6 +239,10 @@ fn acp_v1_stdio_streams_a_durable_echo_turn_and_rejects_unowned_roots() {
 }
 
 fn read_http_request(stream: &mut std::net::TcpStream) {
+    // Accepted sockets inherit the listener's nonblocking mode on Windows.
+    stream
+        .set_nonblocking(false)
+        .expect("blocking provider stream");
     stream
         .set_read_timeout(Some(Duration::from_secs(20)))
         .expect("provider read timeout");
