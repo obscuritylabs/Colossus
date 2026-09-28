@@ -430,6 +430,25 @@ terminal window, or exiting Desktop requests best-effort process-group cleanup; 
 cannot guarantee cleanup after an arbitrary shell child deliberately detaches and
 reparents itself.
 
+## Inspect Git
+
+For a local workspace with file access enabled, the Work header shows the current
+branch and changed-file count. Select it to open the resizable Git panel. **Changes**
+groups staged, unstaged, untracked, and conflicted files; **History** shows recent
+commits and their affected files. A file can appear in both staged and unstaged groups,
+while the header counts it once. The branch belongs to the current workspace checkout.
+
+Git refreshes on focus, workspace changes, run state changes, and periodically while
+the app is visible. You can also select **Refresh Git**. The reader is packaged with
+Desktop, so inspection does not require installing Git separately. It does not stage,
+commit, switch branches, or contact remotes.
+
+For linked worktrees and folders inside a larger repository, **Connect Git** opens a
+native confirmation before reading metadata outside the selected folder. Commit
+messages describe the repository, while file lists stay limited to the workspace.
+The panel explains unsupported configurations, limited results, and read errors.
+External daemon repositories cannot be inspected by the local reader.
+
 ## Expected result
 
 The selected folder appears as a Managed Local workspace, runtime health reaches

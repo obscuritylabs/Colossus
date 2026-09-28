@@ -5,6 +5,9 @@
   "local": true,
   "webviews": ["main"],
   "permissions": [
+    "allow-get-workspace-git-status",
+    "allow-list-workspace-git-commits",
+    "allow-get-workspace-git-commit",
     "allow-browser-context",
     "allow-browser-command",
     "allow-browser-viewport",

@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { CSSProperties, FormEvent } from "react";
+import type { CSSProperties, FormEvent, ReactNode } from "react";
 import { syncSavedSettings } from "./managed-settings-updates";
 
 import {
@@ -3689,7 +3689,10 @@ export default function App() {
             targetId: requestedSpace.targetId,
           },
           workspace: {
-            workspaceId: requestedSpace.spaceId,
+            workspaceId:
+              desktopRef.current.targets.find(
+                (target) => target.targetId === requestedSpace.targetId,
+              )?.workspace?.workspaceId ?? requestedSpace.spaceId,
             displayName: requestedSpace.displayName,
             displayPath: requestedSpace.displayPath,
           },
@@ -4690,8 +4693,9 @@ export default function App() {
     setSurface(nextSurface);
   }, []);
 
-  const composer = (
+  const composer = (contextActions: ReactNode) => (
     <WorkComposer
+      contextActions={contextActions}
       pluginSkills={completionSkills}
       pluginSelections={pluginSelections}
       onRemovePluginSkill={(id) =>
@@ -4943,6 +4947,8 @@ export default function App() {
         </Suspense>
       ) : surface === "work" ? (
         <WorkSurface
+          gitWorkspaceId={desktop.workspace?.workspaceId ?? null}
+          gitAvailable={desktop.capabilities.files}
           browserScope={desktop.selectedTargetId}
           browserFixture={FIXTURE_MODE}
           title={title}

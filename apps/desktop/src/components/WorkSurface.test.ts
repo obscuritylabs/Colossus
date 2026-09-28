@@ -95,7 +95,7 @@ function renderSurface(
         selectedSpaceName: "Colossus",
         threadPinned: true,
         followRequestSequence: 0,
-        composer: createElement("div"),
+        composer: () => createElement("div"),
         filesPanel: createElement("div", null, "Workspace file explorer"),
         filesAvailable: capabilities.files,
         onOpenWorkspaceFile: vi.fn(),

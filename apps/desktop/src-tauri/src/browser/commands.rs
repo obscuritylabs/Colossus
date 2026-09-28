@@ -5,7 +5,7 @@ use super::{
 use crate::{dto::CommandErrorDto, state::AppState};
 use tauri::{AppHandle, State, Webview};
 
-fn require_controller(caller: &Webview) -> Result<(), CommandErrorDto> {
+pub(crate) fn require_controller(caller: &Webview) -> Result<(), CommandErrorDto> {
     let url = caller
         .url()
         .map_err(|_| error("The browser controller is unavailable."))?;

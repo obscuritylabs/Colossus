@@ -692,6 +692,15 @@ native boundary returns at most 256 KiB of text and exposes no write, execute, p
 network, arbitrary-open, or SDK command. Source changes continue through ordinary
 permit-bound agent effects; the viewer cannot mutate them.
 
+Desktop Git inspection adds a separate read-only metadata surface; the file viewer
+continues to exclude `.git`. The main native commands bind the selected workspace,
+selection epoch, repository directory identities, and native-issued history handles.
+Shared worktree or ancestor metadata outside the selected folder requires native
+confirmation. Relative file lists remain scoped to the workspace. No repository
+write, arbitrary object read, subprocess, hook, filter, or network operation is exposed.
+Repository includes and alternate object stores are rejected. See
+[ADR 0004](adr/0004-desktop-git-inspection.md) for bounds and library limitations.
+
 The opt-in embedded browser mounts untrusted guest WebViews under the Desktop window.
 Main-app capabilities bind the exact local main WebView, not every child of that
 window. Browser commands also validate caller document, selected workspace, and tab
