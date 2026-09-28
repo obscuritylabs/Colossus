@@ -70,6 +70,8 @@ pub(super) enum Command {
     Integrations(IntegrationsCommand),
     /// Discover and invoke explicitly configured MCP servers.
     Mcp(McpCommand),
+    /// Serve the stable ACP v1 agent protocol over stdio for a local editor.
+    Acp,
     /// Execute one audited model turn through the configured role.
     Run {
         /// User prompt sent as the complete logical request content.
