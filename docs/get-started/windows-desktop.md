@@ -172,7 +172,9 @@ Confirmed cleanup removes `%LOCALAPPDATA%\ColossusDesktopHome`, its identifiable
 Windows Credential Manager keys, and Tauri's application/cache data. Project folders,
 custom `COLOSSUS_HOME` directories, shared CLI data, and credentials for external
 daemons remain outside this cleanup. If the default home was deliberately shared with
-the CLI, cleanup stops rather than deleting shared state. Entries whose identifying
+the CLI, or contains unrecognized folders, cleanup stops rather than deleting those
+items. Supported older settings are inspected without requiring a first launch or
+discarding their workspace references. Entries whose identifying
 metadata was previously deleted cannot be safely attributed and are not swept by name.
 
 If cleanup fails, uninstall stops and offers Retry; close running Colossus tasks first.

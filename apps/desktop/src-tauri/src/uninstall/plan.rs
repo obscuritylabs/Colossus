@@ -43,17 +43,13 @@ impl CleanupPlan {
                 }
                 let path = entry.map_err(|_| ())?.path();
                 let metadata = fs::symlink_metadata(&path).map_err(|_| ())?;
+                let relative = path.strip_prefix(home).map_err(|_| ())?;
+                if !super::ownership::owned_path(relative, metadata.is_dir()) {
+                    // Unknown folders may contain projects whose settings record
+                    // no longer exists. Never infer ownership from containment.
+                    return Err(());
+                }
                 if metadata.is_dir() {
-                    // A deliberately shared CLI home needs manual cleanup; it is
-                    // outside this uninstall's ownership, even at the default path.
-                    let relative = path.strip_prefix(home).map_err(|_| ())?;
-                    let parts = relative
-                        .iter()
-                        .filter_map(|part| part.to_str())
-                        .collect::<Vec<_>>();
-                    if matches!(parts.as_slice(), ["workspaces", _, "cli"]) {
-                        return Err(());
-                    }
                     BoundPath::open_directory(&path).map_err(|_| ())?;
                     directories.push((path, depth + 1));
                 } else {
@@ -124,8 +120,8 @@ impl CleanupPlan {
         if path == home.join("desktop/settings.json") {
             // Only legacy provider handles recorded by this Desktop are eligible.
             // External-daemon credentials can be shared with other homes; keep them.
-            let settings: crate::desktop_settings::DesktopSettings =
-                serde_json::from_slice(&read_metadata(path)?).map_err(|_| ())?;
+            let (settings, _) =
+                crate::desktop_settings::decode_settings(&read_metadata(path)?).map_err(|_| ())?;
             let canonical_home = fs::canonicalize(home).map_err(|_| ())?;
             for workspace in settings
                 .workspace

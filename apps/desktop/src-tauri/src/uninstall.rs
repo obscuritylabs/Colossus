@@ -1,5 +1,6 @@
 //! Native-only, explicitly confirmed NSIS cleanup. Never exposed through renderer IPC.
 
+mod ownership;
 mod plan;
 #[cfg(test)]
 mod tests;

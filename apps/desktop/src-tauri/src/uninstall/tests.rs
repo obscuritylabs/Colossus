@@ -32,7 +32,7 @@ fn cleanup_removes_only_the_supplied_private_test_home_and_is_repeatable() {
     let (guard, home) = fixture();
     let project = guard.path().join("project.txt");
     fs::write(&project, b"project stays").unwrap();
-    create_private_file(&home.join("settings-marker"), b"desktop data").unwrap();
+    create_private_file(&home.join("AGENTS.md"), b"desktop data").unwrap();
     create_private_directory(&home.join("plugins")).unwrap();
     create_private_directory(&home.join("plugins/cli")).unwrap();
     cleanup(&home).unwrap();
@@ -44,7 +44,7 @@ fn cleanup_removes_only_the_supplied_private_test_home_and_is_repeatable() {
 #[test]
 fn cleanup_rejects_busy_data_before_removing_any_files() {
     let (_guard, home) = fixture();
-    let path = home.join("state.redb");
+    let path = home.join("config.yaml");
     create_private_file(&path, b"existing history").unwrap();
     let held = fs::OpenOptions::new()
         .read(true)
@@ -57,10 +57,71 @@ fn cleanup_rejects_busy_data_before_removing_any_files() {
 }
 
 #[test]
+fn cleanup_rejects_unregistered_projects_even_when_settings_are_missing() {
+    for relative in ["my-project", "desktop/my-project"] {
+        let (_guard, home) = fixture();
+        create_private_directory(&home.join("desktop")).unwrap();
+        let project = home.join(relative);
+        create_private_directory(&project).unwrap();
+        create_private_file(&project.join("source.txt"), b"unregistered project").unwrap();
+        create_private_file(
+            &home.join("AGENTS.md"),
+            b"preserve until complete validation",
+        )
+        .unwrap();
+        assert!(cleanup(&home).is_err());
+        assert_eq!(
+            fs::read(project.join("source.txt")).unwrap(),
+            b"unregistered project"
+        );
+        assert!(home.join("AGENTS.md").is_file());
+    }
+}
+
+#[test]
+fn cleanup_reads_supported_legacy_settings_without_launching_or_rewriting_them() {
+    for version in 1..=6 {
+        let (_guard, home) = fixture();
+        create_private_directory(&home.join("desktop")).unwrap();
+        let credential = uuid::Uuid::new_v4().to_string();
+        let mut value = if version == 1 {
+            serde_json::json!({
+                "schemaVersion": 1, "managedInstanceId": uuid::Uuid::new_v4(),
+                "workspace": null, "provider": {
+                    "kind": "openai_compatible", "model": "fixture", "baseUrl": "https://example.test/v1", "credentialId": credential
+                },
+                "accessProfile": "minimal", "terminalEnabled": false, "selectedTargetId": null
+            })
+        } else {
+            let settings = crate::desktop_settings::DesktopSettings {
+                pending_provider_cleanup_ids: vec![credential.clone()],
+                ..crate::desktop_settings::DesktopSettings::default()
+            };
+            serde_json::to_value(settings).unwrap()
+        };
+        value["schemaVersion"] = version.into();
+        if version == 2 || version == 3 {
+            value.as_object_mut().unwrap().remove("executionBoundary");
+        }
+        let bytes = serde_json::to_vec(&value).unwrap();
+        let path = home.join("desktop/settings.json");
+        create_private_file(&path, &bytes).unwrap();
+        let plan = plan::CleanupPlan::inspect(&home).unwrap();
+        assert!(plan.keys.contains(&(PROVIDER_SERVICE.into(), credential)));
+        assert_eq!(
+            fs::read(path).unwrap(),
+            bytes,
+            "cleanup inspection must be read-only"
+        );
+    }
+}
+
+#[test]
 fn cleanup_preserves_a_project_selected_inside_the_application_home() {
     let (_guard, home) = fixture();
     let desktop = home.join("desktop");
-    let project = home.join("my-project");
+    create_private_directory(&home.join("plugins")).unwrap();
+    let project = home.join("plugins/my-project");
     create_private_directory(&desktop).unwrap();
     create_private_directory(&project).unwrap();
     create_private_file(&project.join("source.txt"), b"project source").unwrap();
@@ -101,8 +162,9 @@ fn cleanup_rejects_foreign_key_service_and_shared_cli_data_without_deletion() {
     assert!(path.join("managed-config.yaml").is_file());
     let (_guard, home) = fixture();
     create_private_directory(&home.join("workspaces")).unwrap();
-    create_private_directory(&home.join("workspaces/partition")).unwrap();
-    create_private_directory(&home.join("workspaces/partition/cli")).unwrap();
+    let partition = home.join("workspaces").join("a".repeat(64));
+    create_private_directory(&partition).unwrap();
+    create_private_directory(&partition.join("cli")).unwrap();
     assert!(cleanup(&home).is_err());
     assert!(home.is_dir());
 }
