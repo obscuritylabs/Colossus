@@ -140,6 +140,12 @@ inspection. It does not
 automate native consent or credential-entry dialogs; those still require on-screen
 acceptance. Browser mocks alone do not exercise this native boundary.
 
+The Windows pre-merge lane also runs `native_catalog_` and `native_uninstall_` with
+`--ignored`. The reset regression retains an old secure anchor while recreating the
+same home path and verifies both restart stability and successful fresh discovery.
+Uninstall acceptance removes generated runtime keys and a real encrypted vault key,
+preserves unrelated entries, and never targets the operator's default Desktop home.
+
 ### Desktop embedded browser preview
 
 From `apps/desktop`, run `npm run test:browser-native` to build and exercise the

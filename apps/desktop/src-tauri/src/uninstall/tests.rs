@@ -143,3 +143,65 @@ fn native_uninstall_removes_exact_owned_keys_and_preserves_unrelated_entries() {
         ));
     }
 }
+
+#[test]
+#[ignore = "requires Windows Credential Manager; uses a disposable encrypted vault"]
+fn native_uninstall_removes_the_saved_credential_vault_key() {
+    use colossus_contracts::VaultRecord;
+    use colossus_ports::{CredentialKey, CredentialVault as _};
+    use redb::ReadableDatabase as _;
+
+    let (_guard, home) = fixture();
+    let desktop = home.join("desktop");
+    create_private_directory(&desktop).unwrap();
+    let root = ConfinedRoot::bind(&desktop).unwrap();
+    let vault = PlatformCredentialVault::new(root.clone(), "desktop-manual").unwrap();
+    vault
+        .write(
+            &CredentialKey::new("desktop-manual", "fixture").unwrap(),
+            &VaultRecord::new(b"disposable test credential".to_vec()).unwrap(),
+        )
+        .unwrap();
+    drop(vault);
+    // Inspect only the non-secret ownership identifiers; never enumerate OS keys.
+    let account = {
+        let file = root
+            .open_existing_file_read_write(Path::new("credentials-v1.redb"))
+            .unwrap();
+        let database = redb::Database::builder()
+            .create_file(file.into_file())
+            .unwrap();
+        let read = database.begin_read().unwrap();
+        let table = read
+            .open_table(redb::TableDefinition::<&str, &[u8]>::new(
+                "credential_vault_metadata",
+            ))
+            .unwrap();
+        let value = table.get("state").unwrap().unwrap();
+        let metadata: serde_json::Value = serde_json::from_slice(value.value()).unwrap();
+        format!(
+            "v1.{}.{}",
+            metadata["vault_id"].as_str().unwrap(),
+            metadata["key_id"].as_str().unwrap()
+        )
+    };
+    drop(root);
+    let modifiers = std::collections::HashMap::from([("persistence", "Local")]);
+    let entry = windows_native_keyring_store::Store::new()
+        .unwrap()
+        .build(
+            "com.obscuritylabs.colossus.credentials.v1",
+            &account,
+            Some(&modifiers),
+        )
+        .unwrap();
+    assert!(entry.get_secret().is_ok());
+    let result = cleanup(&home);
+    let removed = matches!(entry.get_secret(), Err(keyring_core::Error::NoEntry));
+    if !removed {
+        entry.delete_credential().unwrap();
+    }
+    result.unwrap();
+    assert!(removed);
+    assert!(!home.exists());
+}
