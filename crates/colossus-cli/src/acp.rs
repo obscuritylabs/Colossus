@@ -22,6 +22,7 @@ use std::{
 };
 
 const MAX_PROMPT_BYTES: usize = 1024 * 1024;
+const MAX_CONNECTION_SESSIONS: usize = 64;
 
 #[derive(Default)]
 pub(super) struct AcpApprovalProvider {
@@ -250,6 +251,7 @@ struct AcpObserver {
     connection: ConnectionTo<Client>,
     session_id: SessionId,
     emitted_text: bool,
+    outstanding_tools: HashSet<String>,
 }
 
 impl AcpObserver {
@@ -268,6 +270,16 @@ impl AcpObserver {
         }
         Ok(())
     }
+
+    fn finish_outstanding_tools(&mut self) -> Result<(), ModelProviderError> {
+        for tool_call_id in self.outstanding_tools.drain().collect::<Vec<_>>() {
+            self.update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                tool_call_id,
+                ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
+            )))?;
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -278,18 +290,19 @@ impl RunEventObserver for AcpObserver {
                 event: ProviderEvent::ModelDelta { text },
             } => self.text(text)?,
             RunEvent::ToolStarted { call, .. } => {
+                let tool_call_id = format!("{}:{}", envelope.run_id, call.call_id);
+                self.outstanding_tools.insert(tool_call_id.clone());
                 self.update(SessionUpdate::ToolCall(
-                    ToolCall::new(
-                        format!("{}:{}", envelope.run_id, call.call_id),
-                        call.name.clone(),
-                    )
-                    .name(call.name)
-                    .status(ToolCallStatus::InProgress),
+                    ToolCall::new(tool_call_id, call.name.clone())
+                        .name(call.name)
+                        .status(ToolCallStatus::InProgress),
                 ))?;
             }
             RunEvent::ToolCompleted { result, .. } => {
+                let tool_call_id = format!("{}:{}", envelope.run_id, result.call_id);
+                self.outstanding_tools.remove(&tool_call_id);
                 self.update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
-                    format!("{}:{}", envelope.run_id, result.call_id),
+                    tool_call_id,
                     ToolCallUpdateFields::new().status(if result.exit_code == 0 {
                         ToolCallStatus::Completed
                     } else {
@@ -298,8 +311,10 @@ impl RunEventObserver for AcpObserver {
                 )))?;
             }
             RunEvent::ToolCancelled { call, .. } => {
+                let tool_call_id = format!("{}:{}", envelope.run_id, call.call_id);
+                self.outstanding_tools.remove(&tool_call_id);
                 self.update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
-                    format!("{}:{}", envelope.run_id, call.call_id),
+                    tool_call_id,
                     ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
                 )))?;
             }
@@ -335,13 +350,17 @@ pub(super) async fn serve(
         .name("colossus")
         .on_receive_request(
             async move |request: InitializeRequest, responder, connection| {
-                if request.protocol_version == ProtocolVersion::V1 {
-                    *initialize_approvals
-                        .connection
-                        .lock()
-                        .expect("ACP connection lock poisoned") = Some(connection);
-                    initialize_state.initialized.store(true, Ordering::Release);
+                if request.protocol_version < ProtocolVersion::V1 {
+                    return responder.respond_with_error(agent_client_protocol::Error::new(
+                        -32602,
+                        "ACP protocol v0 is unsupported",
+                    ));
                 }
+                *initialize_approvals
+                    .connection
+                    .lock()
+                    .expect("ACP connection lock poisoned") = Some(connection);
+                initialize_state.initialized.store(true, Ordering::Release);
                 responder.respond(
                     InitializeResponse::new(ProtocolVersion::V1)
                         .agent_capabilities(AgentCapabilities::new())
@@ -359,6 +378,16 @@ pub(super) async fn serve(
                         &request.additional_directories,
                         !request.mcp_servers.is_empty(),
                     )?;
+                    let mut sessions = new_state
+                        .sessions
+                        .lock()
+                        .expect("ACP sessions lock poisoned");
+                    if sessions.len() >= MAX_CONNECTION_SESSIONS {
+                        return Err(agent_client_protocol::Error::new(
+                            -32000,
+                            "ACP connection session limit reached",
+                        ));
+                    }
                     let session = new_state
                         .runtime
                         .create_session(None)
@@ -367,11 +396,7 @@ pub(super) async fn serve(
                         .runtime
                         .checkpoint()
                         .map_err(|_| agent_client_protocol::Error::internal_error())?;
-                    new_state
-                        .sessions
-                        .lock()
-                        .expect("ACP sessions lock poisoned")
-                        .insert(session.id.clone());
+                    sessions.insert(session.id.clone());
                     Ok(NewSessionResponse::new(session.id))
                 })();
                 match response {
@@ -408,22 +433,24 @@ pub(super) async fn serve(
                         .active
                         .lock()
                         .expect("ACP active lock poisoned");
-                    if active.contains_key(&session_id) {
+                    if !active.is_empty() {
                         return responder.respond_with_error(agent_client_protocol::Error::new(
                             -32600,
-                            "a prompt is already active for this session",
+                            "an ACP prompt is already active for this workspace",
                         ));
                     }
                     active.insert(session_id.clone(), control.clone());
                 }
                 let state = Arc::clone(&prompt_state);
                 let updates_connection = connection.clone();
-                connection.spawn(async move {
+                let spawn_session_id = session_id.clone();
+                if let Err(error) = connection.spawn(async move {
                     let _gate = state.run_gate.lock().await;
                     let mut observer = AcpObserver {
                         connection: updates_connection,
                         session_id: request.session_id,
                         emitted_text: false,
+                        outstanding_tools: HashSet::new(),
                     };
                     let result = state
                         .runtime
@@ -439,11 +466,13 @@ pub(super) async fn serve(
                             &control,
                         )
                         .await;
+                    let finish_result = observer.finish_outstanding_tools();
                     state
                         .active
                         .lock()
                         .expect("ACP active lock poisoned")
                         .remove(&session_id);
+                    finish_result.map_err(|_| agent_client_protocol::Error::internal_error())?;
                     match result {
                         Ok(AgentRunOutcome::Completed { result }) => {
                             if !observer.emitted_text {
@@ -474,7 +503,14 @@ pub(super) async fn serve(
                         }
                     }
                     Ok(())
-                })?;
+                }) {
+                    prompt_state
+                        .active
+                        .lock()
+                        .expect("ACP active lock poisoned")
+                        .remove(&spawn_session_id);
+                    return Err(error);
+                }
                 Ok(())
             },
             agent_client_protocol::on_receive_request!(),

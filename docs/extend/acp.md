@@ -33,6 +33,8 @@ engine and stream released assistant text and tool status updates. `session/canc
 requests a cooperative stop. Editor permission choices support **allow once** and
 **reject**; approval is bound to the exact Colossus policy request and cannot turn a
 policy denial into an allowed effect. Do not pass `--approval-mode` to `acp`.
+Each connection can create up to 64 sessions and run one prompt at a time for the
+selected workspace.
 
 This first ACP interface accepts text and resource links in prompts. Resource links
 are passed as references in the prompt; Colossus does not fetch them on the editor's

@@ -150,11 +150,15 @@ fn acp_v1_stdio_streams_a_durable_echo_turn_and_rejects_unowned_roots() {
     assert_eq!(agent.next()["error"]["code"], -32700);
     agent.send(json!({"jsonrpc":"2.0","id":8,"method":"session/new","params":{"cwd":workspace,"mcpServers":[]}}));
     assert_eq!(agent.response(8)["error"]["code"], -32000);
+    agent.send(
+        json!({"jsonrpc":"2.0","id":11,"method":"initialize","params":{"protocolVersion":0}}),
+    );
+    assert_eq!(agent.response(11)["error"]["code"], -32602);
     agent
         .send(json!({"jsonrpc":"2.0","id":9,"method":"initialize","params":{"protocolVersion":2}}));
     assert_eq!(agent.response(9)["result"]["protocolVersion"], 1);
     agent.send(json!({"jsonrpc":"2.0","id":10,"method":"session/new","params":{"cwd":workspace,"mcpServers":[]}}));
-    assert_eq!(agent.response(10)["error"]["code"], -32000);
+    assert!(agent.response(10)["result"]["sessionId"].is_string());
     agent
         .send(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}));
     let initialized = agent.response(1);
@@ -198,6 +202,12 @@ fn acp_v1_stdio_streams_a_durable_echo_turn_and_rejects_unowned_roots() {
 
     agent.send(json!({"jsonrpc":"2.0","id":6,"method":"session/new","params":{"cwd":workspace,"additionalDirectories":[outside],"mcpServers":[]}}));
     assert_eq!(agent.response(6)["error"]["code"], -32602);
+    for id in 100..162 {
+        agent.send(json!({"jsonrpc":"2.0","id":id,"method":"session/new","params":{"cwd":workspace,"mcpServers":[]}}));
+        assert!(agent.response(id)["result"]["sessionId"].is_string());
+    }
+    agent.send(json!({"jsonrpc":"2.0","id":162,"method":"session/new","params":{"cwd":workspace,"mcpServers":[]}}));
+    assert_eq!(agent.response(162)["error"]["code"], -32000);
     agent.finish();
 
     let mut inspect = Command::new(binary);
@@ -397,6 +407,17 @@ fn acp_permission_response_is_bound_to_colossus_policy_and_tool_execution() {
         let details = permission["params"]["toolCall"]["content"].to_string();
         assert!(details.contains("filesystem.write"), "{details}");
         assert!(details.contains("approved.txt"), "{details}");
+        agent.send(json!({"jsonrpc":"2.0","id":4,"method":"session/new","params":{"cwd":workspace,"mcpServers":[]}}));
+        let other_session = agent.response(4)["result"]["sessionId"]
+            .as_str()
+            .expect("second session id")
+            .to_owned();
+        agent.send(
+            json!({"jsonrpc":"2.0","id":5,"method":"session/prompt","params":{
+                "sessionId":other_session,"prompt":[{"type":"text","text":"queued turn"}]
+            }}),
+        );
+        assert_eq!(agent.response(5)["error"]["code"], -32600);
         if cancel {
             agent.send(
                 json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":session}}),
@@ -409,7 +430,28 @@ fn acp_permission_response_is_bound_to_colossus_policy_and_tool_execution() {
                 "outcome":{"outcome":"selected","optionId":option}
             }}));
         }
-        let response = agent.response(3);
+        let mut terminal_tool_status = None;
+        let response = loop {
+            let frame = agent.next();
+            if frame["id"] == 3 {
+                break frame;
+            }
+            if frame["method"] == "session/update"
+                && frame["params"]["update"]["sessionUpdate"] == "tool_call_update"
+                && frame["params"]["update"]["toolCallId"]
+                    .as_str()
+                    .is_some_and(|id| !id.starts_with("approval:"))
+            {
+                terminal_tool_status = frame["params"]["update"]["status"]
+                    .as_str()
+                    .map(str::to_owned);
+            }
+        };
+        assert_eq!(
+            terminal_tool_status.as_deref(),
+            Some(if should_write { "completed" } else { "failed" }),
+            "terminal tool update before {response}"
+        );
         if cancel {
             assert_eq!(response["result"]["stopReason"], "cancelled", "{response}");
             assert!(!workspace.join("approved.txt").exists());
