@@ -16,6 +16,7 @@ mechanism that fits the capability.
 | Distribute Agent Skills, resources, and MCP servers | [Agent Plugin](plugins.md) |
 | Connect a supported service or OpenAPI operation | [Integration](integrations.md) |
 | Run a configured external tool server | [MCP](mcp.md) |
+| Use Colossus as an agent inside a compatible editor | [ACP](acp.md) |
 
 ## One trust model
 

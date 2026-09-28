@@ -95,6 +95,7 @@ model output.
 | `bundle` | Build, verify, and install signed offline bundles |
 | `integrations` | Manage persisted integrations and imported OpenAPI tools |
 | `mcp` | Discover and invoke configured MCP servers |
+| `acp` | Serve the stable ACP v1 agent protocol over stdio for a local editor |
 | `run` | Execute one audited model turn through a configured role |
 | `echo` | Run the credential-free, network-free smoke provider |
 | `tui` | Start the interactive terminal interface |
@@ -143,7 +144,7 @@ positional:
 | `bundle` | `key-info`, `verify PATH`, `build SOURCE DESTINATION`, `install PATH --prefix PATH` |
 | `integrations` | `list`, `show NAME`, `connect NAME`, `import-openapi NAME SPEC`, `disconnect NAME`, `call TOOL ARGUMENTS` |
 | `mcp` | `servers`, `tools`, `doctor SERVER`, `call SERVER TOOL ARGUMENTS`, `auth login SERVER [--manual]`, `auth status SERVER`, `auth logout SERVER` |
-| Top-level execution | `run [PROMPT]`, `echo MESSAGE`, `tui`, `worker` |
+| Top-level execution | `acp`, `run [PROMPT]`, `echo MESSAGE`, `tui`, `worker` |
 
 ## Important defaults and bounds
 
@@ -168,6 +169,7 @@ positional:
 | `research run` | `--depth standard`; planned-query budgets are `quick=1`, `standard=3`, `deep=6`; `--source repo,web,mcp` |
 | `artifacts upload` | Policy-authorized bounded files; `--purpose run-input`; encrypted bytes are owner-bound to the CLI application identity |
 | `run` | `--role primary`; `--goal-max-iterations 5`; fresh session unless `--session` or `--resume`; `--attach PATH` repeats up to 16 inputs. Text files retain the 1 MiB aggregate UTF-8 bound; static PNG, JPEG, and WebP images are limited to 16 MiB each and 32 MiB combined. |
+| `acp` | ACP v1 on stdin/stdout, selected workspace only, one active prompt per session, `primary` role, one MiB text prompt bound; see [ACP editor setup](../extend/acp.md) |
 | `tui` | fresh session unless `--session` or `--resume` |
 | `worker` | serves authenticated local IPC; add `--public-api-dir ABS_OWNER_PRIVATE_DIR` to host authenticated loopback gRPC; `--once`, `--status`, `--shutdown`, enrollment, and revocation modes conflict |
 

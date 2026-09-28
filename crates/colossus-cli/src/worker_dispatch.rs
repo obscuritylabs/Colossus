@@ -1227,6 +1227,7 @@ pub(super) async fn dispatch_to_worker_if_active(
             Ok(true)
         }
         Command::Update(_)
+        | Command::Acp
         | Command::Worker(_)
         | Command::Config(_)
         | Command::Codex(_)

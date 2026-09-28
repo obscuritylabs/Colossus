@@ -82,6 +82,9 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
     {
         return Err("--worker-required is only valid with the TUI".into());
     }
+    if matches!(cli.command, Command::Acp) && cli.approval_mode.is_some() {
+        return Err("ACP uses fail-closed approvals; --approval-mode is unavailable".into());
+    }
     if matches!(cli.command, Command::SandboxHelper) {
         colossus_sandbox::run_helper_stdio()?;
         return Ok(());
@@ -334,21 +337,22 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         .as_ref()
         .map(|workspace| inherited_desktop_worker_client(&config, workspace))
         .transpose()?;
-    if dispatch_to_worker_if_active(
-        &config,
-        &config_path,
-        &runtime_options.workspace,
-        &cli.command,
-        WorkerDispatchOptions {
-            approval_mode: cli.approval_mode,
-            no_alt_screen: cli.no_alt_screen,
-            alt_screen: cli.alt_screen,
-            worker_required: cli.worker_required,
-            inherited_worker,
-            config_resolution: config_resolution.clone(),
-        },
-    )
-    .await?
+    if !matches!(cli.command, Command::Acp)
+        && dispatch_to_worker_if_active(
+            &config,
+            &config_path,
+            &runtime_options.workspace,
+            &cli.command,
+            WorkerDispatchOptions {
+                approval_mode: cli.approval_mode,
+                no_alt_screen: cli.no_alt_screen,
+                alt_screen: cli.alt_screen,
+                worker_required: cli.worker_required,
+                inherited_worker,
+                config_resolution: config_resolution.clone(),
+            },
+        )
+        .await?
     {
         return Ok(());
     }
@@ -360,6 +364,8 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
     }
     let prompt_router = interactive_tui.then(|| Arc::new(tui_host::TuiPromptRouter::default()));
     let configured_approval = cli.approval_mode.unwrap_or(ApprovalMode::Ask);
+    let acp_approvals =
+        matches!(&cli.command, Command::Acp).then(|| Arc::new(acp::AcpApprovalProvider::default()));
     let tui_approvals = prompt_router.as_ref().map(|router| {
         Arc::new(tui_host::TuiApprovalProvider::new(
             Arc::clone(router),
@@ -369,6 +375,11 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
     let approvals: Arc<dyn ApprovalProvider> = tui_approvals
         .as_ref()
         .map(|approvals| Arc::clone(approvals) as Arc<dyn ApprovalProvider>)
+        .or_else(|| {
+            acp_approvals
+                .as_ref()
+                .map(|approvals| Arc::clone(approvals) as Arc<dyn ApprovalProvider>)
+        })
         .unwrap_or_else(|| approval_provider(&cli.command, cli.approval_mode));
     let user_prompts: Option<Arc<dyn UserPromptProvider>> =
         if let Some(router) = prompt_router.as_ref() {
@@ -382,6 +393,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         } else {
             None
         };
+    let acp_workspace = runtime_options.workspace.clone();
     let runtime = Arc::new(
         Runtime::open_with_options(&config, approvals, user_prompts, runtime_options)
             .map_err(runtime_open_error)?,
@@ -390,6 +402,10 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         .run_with_background_projection_maintenance(async {
             let mut deferred_run_response = None;
             match cli.command {
+        Command::Acp => acp::serve(
+            Arc::clone(&runtime), &acp_workspace,
+            acp_approvals.as_ref().ok_or("ACP approval bridge is unavailable")?.clone(),
+        ).await?,
         Command::Update(_) => unreachable!("handled before runtime construction"),
         Command::Config(ConfigCommand {
             command: ConfigAction::Effective,
