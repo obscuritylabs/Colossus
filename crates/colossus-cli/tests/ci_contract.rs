@@ -400,7 +400,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
 }
 
 #[test]
-fn release_separates_the_stable_core_from_the_desktop_preview() {
+fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
     let workflow = workflow("release.yml");
     let release_jobs = jobs(&workflow);
     assert_eq!(
@@ -445,8 +445,10 @@ fn release_separates_the_stable_core_from_the_desktop_preview() {
             "desktop_macos",
             "desktop_macos_build",
             "desktop_windows_preview",
+            "desktop_windows_signed",
             "sdk_release",
             "validate",
+            "windows_cli_sign",
         ]
         .into_iter()
         .map(str::to_owned)
@@ -473,6 +475,8 @@ fn release_separates_the_stable_core_from_the_desktop_preview() {
         "test \"$MACOS_DESKTOP_BUILD_RESULT\" = skipped",
         "test \"$MACOS_DESKTOP_RESULT\" = skipped",
         "test \"$WINDOWS_DESKTOP_RESULT\" = skipped",
+        "windows_cli_sign=\"$WINDOWS_CLI_SIGN_RESULT\"",
+        "desktop_windows_signed=\"$WINDOWS_SIGNED_DESKTOP_RESULT\"",
         "test \"$SDK_RELEASE_RESULT\" = skipped",
         "obscuritylabs-colossus-sdk-${RELEASE_VERSION}.tgz",
         "obscuritylabs_colossus_sdk-${RELEASE_VERSION}-py3-none-any.whl",
@@ -499,10 +503,13 @@ fn release_separates_the_stable_core_from_the_desktop_preview() {
         "shasum -a 256",
         "runs-on: windows-latest-l",
         "./scripts/package-desktop-windows.ps1",
-        "codeSigning = \"unsigned_developer_preview\"",
+        "codeSigning = \"unsigned_validation_only\"",
         "smartScreenWarningExpected = $true",
-        "Colossus-Desktop-UNSIGNED-$label-$env:RELEASE_TAG-x86_64-pc-windows-msvc-setup.exe",
-        "-eq 21",
+        "Colossus-Desktop-UNSIGNED-VALIDATION-ONLY-$env:RELEASE_TAG-x86_64-pc-windows-msvc-setup.exe",
+        "codeSigning = 'azure_artifact_signing'",
+        "Colossus-Desktop-STABLE-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe",
+        "Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe",
+        "-eq 25",
         "-eq 22",
     ] {
         assert!(
@@ -523,14 +530,19 @@ fn release_separates_the_stable_core_from_the_desktop_preview() {
     let windows_start = source[sign_start..]
         .find("  desktop_windows_preview:")
         .map(|offset| sign_start + offset)
-        .expect("Windows preview job");
-    let gate_start = source[windows_start..]
-        .find("  gate:")
+        .expect("Windows validation job");
+    let signed_windows_start = source[windows_start..]
+        .find("  desktop_windows_signed:")
         .map(|offset| windows_start + offset)
+        .expect("Windows signed job");
+    let gate_start = source[signed_windows_start..]
+        .find("  gate:")
+        .map(|offset| signed_windows_start + offset)
         .expect("gate job");
     let build_job = &source[build_start..sign_start];
     let sign_job = &source[sign_start..windows_start];
-    let windows_job = &source[windows_start..gate_start];
+    let windows_job = &source[windows_start..signed_windows_start];
+    let signed_windows_job = &source[signed_windows_start..gate_start];
     for forbidden in [
         "${{ secrets.",
         "MACOS_DEVELOPER_ID_P12",
@@ -549,9 +561,27 @@ fn release_separates_the_stable_core_from_the_desktop_preview() {
             "Desktop signing job contains build authority {forbidden}"
         );
     }
-    assert!(windows_job.contains("if: needs.validate.outputs.target_channel != 'stable'"));
+    assert!(windows_job.contains("publish_draft != 'true'"));
     assert!(windows_job.contains("COLOSSUS_DESKTOP_TEAM_ID: UNSIGNED"));
-    assert!(!windows_job.contains("AUTHENTICODE"));
+    assert!(signed_windows_job.contains("environment: release-signing"));
+    assert!(signed_windows_job.contains("COLOSSUS_DESKTOP_TEAM_ID: OBSCURITY_LABS_LLC"));
+    for phase in [
+        "-Phase build",
+        "-Phase bind",
+        "-Phase bundle",
+        "-Phase finalize",
+    ] {
+        assert!(signed_windows_job.contains(phase));
+    }
+    let cli_sign_job = job(release_jobs, "windows_cli_sign");
+    assert_eq!(
+        field(cli_sign_job, "runs-on").as_str(),
+        Some("windows-2025")
+    );
+    assert_eq!(
+        field(cli_sign_job, "environment").as_str(),
+        Some("release-signing")
+    );
     let channel_source =
         fs::read_to_string(repository_root().join(".github/workflows/desktop-update-channels.yml"))
             .expect("read Desktop update channel workflow");
@@ -731,6 +761,20 @@ fn tracked_ruleset_starts_in_evaluation_and_has_no_bypass() {
     ] {
         assert!(source.contains(required), "ruleset is missing {required}");
     }
+    let status_checks = field(ruleset, "rules")
+        .as_array()
+        .expect("ruleset rules")
+        .iter()
+        .find(|rule| rule["type"] == "required_status_checks")
+        .expect("required status checks rule");
+    let parameters = mapping(
+        field(mapping(status_checks, "status checks"), "parameters"),
+        "status checks parameters",
+    );
+    assert_eq!(
+        field(parameters, "strict_required_status_checks_policy").as_bool(),
+        Some(false),
+    );
 
     let bootstrap =
         fs::read_to_string(repository_root().join("scripts/ci/configure-repository.sh"))

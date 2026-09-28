@@ -8,6 +8,30 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-27
+
+### Added
+
+- Added Azure Artifact Signing for Windows release executables and Desktop installers,
+  with signed CLI and sidecar binaries inside the Windows Desktop bundle.
+- Added managed ripgrep to CLI and Desktop release bundles so search works without a
+  separate host installation.
+- Added Desktop browser preview, streamlined setup and settings, provider icons, and
+  model-aware composition.
+- Added bounded MCP tool discovery for agents and workspace-wide decisions.
+
+### Changed
+
+- Improved provider discovery across CLI and Desktop and made Shift+Enter insert a
+  newline in the terminal interface.
+- Released the Rust workspace, bundled plugin, Desktop fixtures, and TypeScript,
+  Python, and Go SDKs as `0.11.0`.
+
+### Fixed
+
+- Reported the host operating system to shell execution and allowed checked pull
+  requests to merge after `main` advances when no merge conflict exists.
+
 ## [0.10.10-preview.19] - 2026-09-24
 
 ### Added

@@ -750,7 +750,11 @@ function SessionRecordGroup({
         <Icon size={18} stroke={1.6} aria-hidden="true" />
         <span>
           <strong>{family.label}</strong>
-          <small>Durable records available in this session</small>
+          <small>
+            {family.id === "decisions"
+              ? "Active and historical decisions across this Workspace"
+              : "Durable records available in this session"}
+          </small>
         </span>
         <b>{records.length}</b>
         <IconChevronRight size={15} stroke={1.6} aria-hidden="true" />

@@ -9,12 +9,12 @@ type: how-to
 
 ## Goal
 
-Publish one stable Colossus core version as six GitHub CLI archives, two reviewed
-bootstrap installers, `@obscuritylabs/colossus-sdk` on npm,
-`obscuritylabs-colossus-sdk` on PyPI,
-and `sdk/go/vX.Y.Z` from the same immutable source commit. Stable core releases do not
-contain Desktop artifacts and do not require Apple, Tauri updater, or Authenticode
-credentials.
+Publish one stable Colossus version as six GitHub CLI archives, a signed Windows x64
+Desktop installer, two reviewed bootstrap installers,
+`@obscuritylabs/colossus-sdk` on npm, `obscuritylabs-colossus-sdk` on PyPI, and
+`sdk/go/vX.Y.Z` from the same immutable source commit. Stable releases require Azure
+Artifact Signing for the Windows executables and installer. They do not include a
+macOS Desktop artifact until Apple signing and notarization are configured.
 
 ## Prerequisites
 
@@ -91,7 +91,8 @@ gh workflow run release.yml --ref BRANCH -f version=vX.Y.Z
 
 For a stable target this proves release readiness, all six native CLI jobs, SDK
 generation and tests, package construction, intrinsic package metadata, the candidate
-manifest, and checksums. All Desktop jobs must be skipped. Download the
+manifest, and checksums. Signed Windows jobs are skipped because manual dispatch cannot
+enter the tag-scoped `release-signing` environment. Download the
 `colossus-sdk-release` Actions artifact if manual package inspection is needed.
 
 ### Create and approve the release
@@ -103,7 +104,8 @@ git tag -a vX.Y.Z -m "Colossus vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-The tag workflow creates a draft only after the six CLI archives and immutable SDK
+The tag workflow creates a draft only after the six CLI archives, signed Windows x64
+Desktop installer, and immutable SDK
 candidate pass. Before publishing the draft, verify that it contains exactly:
 
 - six CLI archives and six adjacent `.sha256` files;
@@ -111,7 +113,9 @@ candidate pass. Before publishing the draft, verify that it contains exactly:
 - one npm `.tgz`;
 - one Python wheel and one source distribution;
 - `colossus-sdk-vX.Y.Z-manifest.json`; and
-- `colossus-sdk-vX.Y.Z-SHA256SUMS`.
+- `colossus-sdk-vX.Y.Z-SHA256SUMS`;
+- a signed `Colossus-Desktop-STABLE-vX.Y.Z-x86_64-pc-windows-msvc-setup.exe`,
+  its `.sha256`, sealed bundle manifest, and provenance JSON.
 
 Publishing the stable draft triggers `publish-sdk.yml`. Approve its one
 `sdk-production` deployment. The job reverifies the exact release assets against the
@@ -125,11 +129,11 @@ the core tag's commit.
 
 ## Expected result
 
-The stable GitHub Release contains exactly the six CLI archives, their checksums, the
-two repository-owned bootstrap installers and their checksums, and the five immutable
-SDK candidate files. The protected publisher releases the same version to npm and PyPI
-and creates the Go module tag at the identical source commit. No stable core job
-requests or produces Desktop signing material.
+The stable GitHub Release contains the six CLI archives and checksums, the two
+repository-owned bootstrap installers and checksums, the five immutable SDK candidate
+files, and four signed Windows Desktop assets. The Windows CLI archives contain signed
+executables. The protected publisher releases the same version to npm and PyPI and
+creates the Go module tag at the identical source commit.
 
 ## Verification
 
@@ -217,10 +221,32 @@ flow for later stable versions.
 
 ### Developer Previews and Desktop
 
-Annotated `vX.Y.Z-preview.N` tags retain the visibly unsigned macOS and Windows Desktop
-Developer Preview path. They do not build stable SDK registry candidates and cannot
-publish npm, PyPI, or Go versions. Production Desktop signing and update-channel
-publication remain an independent release track.
+Annotated `vX.Y.Z-preview.N` tags retain the ad-hoc signed, unnotarized macOS Desktop
+Developer Preview and add a signed Windows Desktop Developer Preview. They do not build
+stable SDK registry candidates or publish npm, PyPI, or Go versions. Both Windows
+channels use manual updates until a separate Tauri updater key and feed are configured.
+
+### Windows Artifact Signing authority
+
+The tag-scoped `release-signing` GitHub environment is federated to the Azure app
+registration with subject
+`repo:obscuritylabs/Colossus:environment:release-signing`. The app needs the
+**Artifact Signing Certificate Profile Signer** role on the `colossus-code-sign`
+Artifact Signing account. The workflow reads the repository secrets
+`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` through
+`azure/login` with GitHub OIDC. It signs with the `colossus` Public Trust profile
+at the East US endpoint and an RFC 3161 timestamp. No certificate private key is
+exported into GitHub.
+
+The x64 signing runner signs both Windows CLI architectures after their native
+build and smoke tests, then recomputes each ZIP checksum. For Desktop it signs the
+sidecar and CLI before the bundle manifest is hashed. Tauri patches the manifest-bound
+app for NSIS, then invokes the Azure signer for the patched app, NSIS support DLLs,
+temporary PE uninstaller, and installer. Every installed binary must verify as
+**Obscurity Labs LLC**
+with a timestamp before release upload. A passing GitHub signing smoke run is
+recorded in the release PR; ordinary branch and manual validation builds do not
+receive signing authority.
 
 ### Release asset OCI images
 

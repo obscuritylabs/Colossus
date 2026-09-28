@@ -16,6 +16,7 @@ const forbiddenFixtureStrings = [
   "plugin-test-bridge",
   "approval-test-bridge",
   "nativeCommandApproval",
+  "Unsupported setup preview command:",
 ];
 
 async function files(directory) {

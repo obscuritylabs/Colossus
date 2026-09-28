@@ -67,6 +67,9 @@ test("composer retains visible, accessible controls at narrow widths in both the
         composer.getByRole("button", { name: /^Model settings:/ }),
       ).toBeInViewport();
       await expect(
+        composer.getByRole("button", { name: /^Open Git:/ }),
+      ).toBeInViewport();
+      await expect(
         composer.getByRole("combobox", {
           name: "Permission mode",
           exact: true,

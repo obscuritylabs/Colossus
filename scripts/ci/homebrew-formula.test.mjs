@@ -39,9 +39,10 @@ test("renders a fixed-origin two-architecture prebuilt formula", () => {
   assert.match(formula, /b{64}/u);
   assert.match(
     formula,
-    /\(bin\/"colossus"\)\.write_env_script libexec\/"colossus", COLOSSUS_INSTALLER_KIND: "homebrew"/u,
+    /\(bin\/"colossus"\)\.write_env_script libexec\/"colossus", env/u,
   );
   assert.match(formula, /COLOSSUS_INSTALLER_KIND: "homebrew"/u);
+  assert.match(formula, /COLOSSUS_BUNDLED_RIPGREP: bundled_rg/u);
   assert.match(formula, /colossus --version/u);
   assert.doesNotMatch(formula, /^\s*version\s+"/mu);
   assert.doesNotMatch(formula, /\n\s*bin\.write_env_script/u);

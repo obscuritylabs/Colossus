@@ -34,13 +34,13 @@ pub enum DecisionPriority {
     Normal,
 }
 
-/// Canonical future-facing key decision reconstructed from immutable events.
+/// Canonical workspace-wide key decision reconstructed from immutable events.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KeyDecision {
     /// Stable decision identifier.
     pub id: String,
-    /// Owning session identifier.
+    /// Originating session identifier, retained as provenance.
     pub session_id: String,
     /// Optional originating goal.
     pub goal_id: Option<String>,

@@ -32,6 +32,8 @@ const DESKTOP_CODE_IDENTIFIER: &str = "com.obscuritylabs.colossus.desktop";
 const SIDECAR_CODE_IDENTIFIER: &str = "com.obscuritylabs.colossus.desktop.sidecar";
 #[cfg(not(debug_assertions))]
 const CLI_CODE_IDENTIFIER: &str = "com.obscuritylabs.colossus.desktop.cli";
+#[cfg(not(debug_assertions))]
+const RIPGREP_CODE_IDENTIFIER: &str = "com.obscuritylabs.colossus.desktop.ripgrep";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -42,6 +44,8 @@ struct BundleManifest {
     release_channel: ReleaseChannel,
     sidecar: BundledExecutable,
     cli: BundledExecutable,
+    #[serde(default)]
+    ripgrep: Option<BundledExecutable>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -115,7 +119,12 @@ fn verified_manifest(
     manifest: &BundleManifest,
     release_directory: Option<&Path>,
 ) -> Result<VerifiedBundle, CommandErrorDto> {
-    if manifest.schema_version != 2
+    if manifest.schema_version
+        != if manifest.profile == BundleProfile::Release {
+            3
+        } else {
+            2
+        }
         || manifest.target_triple != env!("COLOSSUS_DESKTOP_TARGET_TRIPLE")
     {
         return Err(integrity_error());
@@ -135,10 +144,29 @@ fn verified_manifest(
 
     let sidecar = resolve_executable(&manifest.sidecar, manifest.profile, release_directory)?;
     let cli = resolve_executable(&manifest.cli, manifest.profile, release_directory)?;
+    #[cfg(not(debug_assertions))]
+    let ripgrep = resolve_executable(
+        manifest.ripgrep.as_ref().ok_or_else(integrity_error)?,
+        manifest.profile,
+        release_directory,
+    )?;
+    #[cfg(debug_assertions)]
+    if manifest.ripgrep.is_some() {
+        return Err(integrity_error());
+    }
     let macos_code_signing_requirement = bundle_code_signing_requirement(manifest.release_channel)?;
     let sidecar_digest =
         Sha256Digest::from_hex(&manifest.sidecar.sha256).map_err(|_| integrity_error())?;
     let cli_digest = Sha256Digest::from_hex(&manifest.cli.sha256).map_err(|_| integrity_error())?;
+    #[cfg(not(debug_assertions))]
+    verify_ripgrep_digest(
+        &ripgrep,
+        &manifest
+            .ripgrep
+            .as_ref()
+            .ok_or_else(integrity_error)?
+            .sha256,
+    )?;
     let sidecar = VerifiedExecutable::new(sidecar, sidecar_digest)
         .map_err(|_| integrity_error())?
         .with_macos_code_signing_requirement(macos_code_signing_requirement);
@@ -147,6 +175,7 @@ fn verified_manifest(
     {
         verify_release_code_identity(sidecar.path(), SIDECAR_CODE_IDENTIFIER)?;
         verify_release_code_identity(&cli, CLI_CODE_IDENTIFIER)?;
+        verify_release_code_identity(&ripgrep, RIPGREP_CODE_IDENTIFIER)?;
     }
     Ok(VerifiedBundle {
         sidecar,
@@ -156,13 +185,55 @@ fn verified_manifest(
     })
 }
 
+#[cfg(not(debug_assertions))]
+fn verify_ripgrep_digest(path: &Path, expected: &str) -> Result<(), CommandErrorDto> {
+    use std::io::Read as _;
+    let expected = Sha256Digest::from_hex(expected).map_err(|_| integrity_error())?;
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| integrity_error())?;
+    if !metadata.file_type().is_file() || metadata.len() == 0 || metadata.len() > 512 * 1024 * 1024
+    {
+        return Err(integrity_error());
+    }
+    #[cfg(unix)]
+    let mut file = std::fs::File::from(
+        rustix::fs::open(
+            path,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::CLOEXEC
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|_| integrity_error())?,
+    );
+    #[cfg(windows)]
+    let mut file = colossus_windows_native::BoundPath::open_file(path)
+        .and_then(|binding| binding.try_clone_file())
+        .map_err(|_| integrity_error())?;
+    let opened = file.metadata().map_err(|_| integrity_error())?;
+    if !opened.file_type().is_file() || opened.len() != metadata.len() {
+        return Err(integrity_error());
+    }
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let count = file.read(&mut buffer).map_err(|_| integrity_error())?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    let actual: [u8; 32] = digest.finalize().into();
+    if actual == *expected.as_bytes() {
+        Ok(())
+    } else {
+        Err(integrity_error())
+    }
+}
+
 fn bundle_code_signing_requirement(
     release_channel: ReleaseChannel,
 ) -> Result<MacosCodeSigningRequirement, CommandErrorDto> {
-    #[cfg(windows)]
-    if release_channel == ReleaseChannel::Stable {
-        return Err(integrity_error());
-    }
     match release_channel {
         ReleaseChannel::Development | ReleaseChannel::Stable => {
             Ok(MacosCodeSigningRequirement::AppleTeam)
@@ -385,8 +456,10 @@ fn verify_outer_app_signature(app_root: &Path) -> Result<(), CommandErrorDto> {
 
 #[cfg(all(target_os = "windows", not(debug_assertions)))]
 fn verify_outer_app_signature(app_root: &Path) -> Result<(), CommandErrorDto> {
-    if expected_release_channel()? != ReleaseChannel::DeveloperPreview
-        || EXPECTED_RELEASE_TEAM_ID != "UNSIGNED"
+    if !matches!(
+        expected_release_channel()?,
+        ReleaseChannel::Stable | ReleaseChannel::DeveloperPreview
+    ) || EXPECTED_RELEASE_TEAM_ID != "OBSCURITY_LABS_LLC"
     {
         return Err(integrity_error());
     }
@@ -468,8 +541,10 @@ fn verify_release_code_identity(
     path: &Path,
     _expected_identifier: &str,
 ) -> Result<(), CommandErrorDto> {
-    if expected_release_channel()? != ReleaseChannel::DeveloperPreview
-        || EXPECTED_RELEASE_TEAM_ID != "UNSIGNED"
+    if !matches!(
+        expected_release_channel()?,
+        ReleaseChannel::Stable | ReleaseChannel::DeveloperPreview
+    ) || EXPECTED_RELEASE_TEAM_ID != "OBSCURITY_LABS_LLC"
     {
         return Err(integrity_error());
     }
@@ -586,7 +661,10 @@ mod tests {
             MacosCodeSigningRequirement::AppleTeam
         );
         #[cfg(windows)]
-        assert!(bundle_code_signing_requirement(ReleaseChannel::Stable).is_err());
+        assert_eq!(
+            bundle_code_signing_requirement(ReleaseChannel::Stable).expect("stable requirement"),
+            MacosCodeSigningRequirement::AppleTeam
+        );
         assert_eq!(
             bundle_code_signing_requirement(ReleaseChannel::DeveloperPreview)
                 .expect("preview requirement"),

@@ -714,7 +714,7 @@ impl WorkerInteractiveHost {
             "decisions" => {
                 self.document(
                     WorkerOperation::DecisionList {
-                        session_id: Some(session_id.into()),
+                        session_id: None,
                         status: Some(colossus_contracts::DecisionStatus::Active),
                         limit: 100,
                     },

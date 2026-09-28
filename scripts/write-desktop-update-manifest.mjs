@@ -69,7 +69,7 @@ export function buildDesktopUpdateManifest({
   };
 
   if (preview) {
-    const windowsName = `Colossus-Desktop-UNSIGNED-DEVELOPER-PREVIEW-${tag}-x86_64-pc-windows-msvc-setup.exe`;
+    const windowsName = `Colossus-Desktop-DEVELOPER-PREVIEW-${tag}-x86_64-pc-windows-msvc-setup.exe`;
     exactFile(join(directory, windowsName));
     platforms[`windows-x86_64-${channel}`] = {
       signature: signature(join(directory, `${windowsName}.sig`)),

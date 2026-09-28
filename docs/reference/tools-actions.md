@@ -72,6 +72,12 @@ policy, approval, permits, or audit.
 
 ## `shell.run`
 
+Published CLI and Desktop builds include a pinned `rg` for command searches. When
+`shell.run` has execute authority for that exact file, `rg` resolves to the managed
+copy before an ambient executable. Its presence does not change the approval and
+sandbox rules for `shell.run`. For ordinary workspace search, `filesystem.search`
+remains available without process execution, including in Plan Mode.
+
 The model-visible tool description includes the host operating system before the
 agent's first command. It is a hint for native execution; a configured OCI container
 may use a different OS, and command syntax still depends on the selected shell.

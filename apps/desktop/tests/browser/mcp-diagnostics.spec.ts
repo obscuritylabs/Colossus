@@ -13,7 +13,7 @@ for (const width of [1280, 700]) {
     }
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page
-      .getByRole("button", { name: "Review and apply r4", exact: true })
+      .getByRole("button", { name: "Apply global updates", exact: true })
       .click();
     await page
       .getByRole("navigation", { name: "Settings sections" })

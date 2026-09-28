@@ -257,7 +257,7 @@ pub(super) async fn worker_line_runner(
             print_json(
                 &client
                     .call(WorkerOperation::DecisionList {
-                        session_id: Some(active_session_id.clone()),
+                        session_id: None,
                         status: Some(DecisionStatus::Active),
                         limit: 100,
                     })

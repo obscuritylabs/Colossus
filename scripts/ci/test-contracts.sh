@@ -63,7 +63,7 @@ expect_classification 'rust_required=true
 docs_required=false
 dependency_required=false
 sdk_required=false
-desktop_required=true' apps/desktop/src/App.tsx scripts/desktop-dev scripts/package-desktop-macos scripts/patch-desktop-manifest-binding.mjs scripts/prepare-desktop-binaries scripts/write-desktop-bundle-manifest.mjs scripts/verify-desktop-bundle.mjs scripts/verify-desktop-unsigned-archive.mjs crates/colossus-sdk/src/lib.rs crates/colossus-sidecar/src/main.rs crates/colossus-sidecar-protocol/src/lib.rs
+desktop_required=true' apps/desktop/src/App.tsx release/ripgrep.json scripts/desktop-dev scripts/package-desktop-macos scripts/package-desktop-windows.ps1 scripts/stage-ripgrep.mjs scripts/patch-desktop-manifest-binding.mjs scripts/prepare-desktop-binaries scripts/write-desktop-bundle-manifest.mjs scripts/verify-desktop-bundle.mjs scripts/verify-desktop-unsigned-archive.mjs crates/colossus-sdk/src/lib.rs crates/colossus-sidecar/src/main.rs crates/colossus-sidecar-protocol/src/lib.rs
 expect_classification 'rust_required=true
 docs_required=false
 dependency_required=false
@@ -163,4 +163,5 @@ fi
 
 "${NODE:-node}" --test "$script_dir/sdk-release.test.mjs"
 "${NODE:-node}" --test "$script_dir/homebrew-formula.test.mjs"
+"${NODE:-node}" --test "$script_dir/ripgrep-pin.test.mjs"
 "${NODE:-node}" --test "$script_dir/release-oci.test.mjs"

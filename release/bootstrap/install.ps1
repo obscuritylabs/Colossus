@@ -269,6 +269,17 @@ try {
     $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $zip = [IO.Compression.ZipFile]::OpenRead($archivePath)
     try {
+        $hasTools = @($zip.Entries | Where-Object {
+            $_.FullName.Replace('\', '/').StartsWith("$package/tools/", [StringComparison]::Ordinal)
+        }).Count -gt 0
+        if ($hasTools) {
+            $expectedEntries += @(
+                "$package/tools/rg.exe",
+                "$package/tools/COPYING",
+                "$package/tools/LICENSE-MIT",
+                "$package/tools/UNLICENSE"
+            )
+        }
         [long]$expandedBytes = 0
         foreach ($entry in $zip.Entries) {
             $name = $entry.FullName.Replace('\', '/')
@@ -284,7 +295,7 @@ try {
                 ($windowsAttributes -band [int][IO.FileAttributes]::ReparsePoint) -ne 0) {
                 Throw-InstallerError "archive contains a link or reparse point"
             }
-            if ($name -eq "$package/") {
+            if ($name -eq "$package/" -or ($hasTools -and $name -eq "$package/tools/")) {
                 continue
             }
             if ($expectedEntries -cnotcontains $name -or $entry.Name.Length -eq 0) {
@@ -304,9 +315,12 @@ try {
         $extractRoot = Join-Path $temporaryRoot "extract"
         $packageRoot = Join-Path $extractRoot $package
         New-Item -ItemType Directory -Path $packageRoot | Out-Null
+        if ($hasTools) {
+            New-Item -ItemType Directory -Path (Join-Path $packageRoot "tools") | Out-Null
+        }
         foreach ($entry in $zip.Entries) {
             $name = $entry.FullName.Replace('\', '/')
-            if ($name -eq "$package/") { continue }
+            if ($name -eq "$package/" -or ($hasTools -and $name -eq "$package/tools/")) { continue }
             $leaf = $name.Substring($package.Length + 1)
             $destination = Join-Path $packageRoot $leaf
             $source = $entry.Open()
@@ -327,7 +341,11 @@ try {
         $zip.Dispose()
     }
 
-    foreach ($leaf in @("colossus.exe", "install-metadata", "install.ps1", "LICENSE", "README.md")) {
+    $requiredFiles = @("colossus.exe", "install-metadata", "install.ps1", "LICENSE", "README.md")
+    if ($hasTools) {
+        $requiredFiles += @("tools/rg.exe", "tools/COPYING", "tools/LICENSE-MIT", "tools/UNLICENSE")
+    }
+    foreach ($leaf in $requiredFiles) {
         $item = Get-Item -LiteralPath (Join-Path $packageRoot $leaf) -Force
         if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
             Throw-InstallerError "extracted package contains a reparse point"

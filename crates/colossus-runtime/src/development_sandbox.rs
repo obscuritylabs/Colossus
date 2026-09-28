@@ -52,6 +52,7 @@ pub(super) fn derive_development_sandbox(
         .filter_map(|path| fs::canonicalize(path).ok())
         .filter(|path| path.is_dir() && !path.starts_with(workspace))
         .collect::<Vec<_>>();
+    let packaged_ripgrep = managed_ripgrep().ok().flatten();
     if let Some(path) = std::env::var_os("PATH") {
         command_roots.extend(
             std::env::split_paths(&path)
@@ -63,6 +64,17 @@ pub(super) fn derive_development_sandbox(
     command_roots.sort();
     command_roots.dedup();
     command_roots.truncate(MAX_COMMAND_ROOTS);
+    if let Some(directory) = packaged_ripgrep
+        .as_ref()
+        .and_then(|path| path.parent())
+        .filter(|directory| !directory.starts_with(workspace))
+        && !command_roots.iter().any(|root| root == directory)
+    {
+        if command_roots.len() == MAX_COMMAND_ROOTS {
+            command_roots.pop();
+        }
+        command_roots.push(directory.to_path_buf());
+    }
 
     let mut runtime_roots = platform_runtime_roots()
         .into_iter()
@@ -96,6 +108,13 @@ pub(super) fn derive_development_sandbox(
             mode: "execute".into(),
         });
         executables.push(git);
+    }
+    if let Some(ripgrep) = packaged_ripgrep.filter(|path| !path.starts_with(workspace)) {
+        filesystem.push(FilesystemGrant {
+            root: ripgrep.display().to_string(),
+            mode: "execute".into(),
+        });
+        executables.push(ripgrep);
     }
     dedupe_grants(&mut filesystem);
     executables.sort();

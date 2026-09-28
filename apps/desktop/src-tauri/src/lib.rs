@@ -1,4 +1,6 @@
+mod app_context;
 mod approval_adapter;
+mod browser;
 mod bundle;
 mod codex_auth;
 mod command_review;
@@ -31,7 +33,15 @@ mod terminal_process;
 mod terminal_protocol;
 mod updates;
 mod workspace_files;
+mod workspace_git;
 
+/// Run the opt-in native browser acceptance harness.
+#[cfg(feature = "browser-test-bridge")]
+pub fn run_browser_acceptance() {
+    browser::acceptance::run();
+}
+
+use browser::commands::{browser_command, browser_context, browser_viewport};
 use codex_auth::{codex_auth_login, codex_auth_logout, codex_auth_status};
 use command_review::{command_review_context, finish_command_review};
 use commands::{
@@ -51,6 +61,7 @@ use diagnostics::{desktop_release_metadata, export_diagnostics};
 use managed_configuration_commands::catalog_deletion::{
     delete_global_model, delete_global_provider,
 };
+use managed_configuration_commands::updates::sync_managed_configuration;
 use managed_configuration_commands::{
     apply_space_configuration, create_managed_credential, delete_global_mcp_server,
     delete_managed_credential, get_managed_configuration, reenter_managed_credential,
@@ -75,6 +86,9 @@ use terminal_commands::{
 };
 use updates::{check_desktop_update, install_desktop_update};
 use workspace_files::{list_workspace_directory, read_workspace_file};
+use workspace_git::commands::{
+    get_workspace_git_commit, get_workspace_git_status, list_workspace_git_commits,
+};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// Start the native Colossus desktop application.
@@ -100,7 +114,24 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state::AppState::default())
         .manage(command_review::CommandReviewState::default())
+        .manage(workspace_git::commands::GitState::default())
+        .setup(|app| {
+            browser::start_watchdog(app.handle().clone());
+            Ok(())
+        })
+        .on_page_load(|view, payload| {
+            if view.label() == "main"
+                && matches!(payload.event(), tauri::webview::PageLoadEvent::Started)
+            {
+                use tauri::Manager as _;
+                view.state::<state::AppState>().browser.controller_loading();
+            }
+        })
+        .on_window_event(browser::handle_window_event)
         .invoke_handler(tauri::generate_handler![
+            browser_context,
+            browser_command,
+            browser_viewport,
             command_review_context,
             finish_command_review,
             get_plugin_inventory,
@@ -154,6 +185,7 @@ pub fn run() {
             upsert_global_telemetry_profile,
             save_space_configuration,
             apply_space_configuration,
+            sync_managed_configuration,
             create_managed_credential,
             rotate_managed_credential,
             reenter_managed_credential,
@@ -184,6 +216,9 @@ pub fn run() {
             restore_thread,
             respond_interaction,
             list_workspace_directory,
+            get_workspace_git_status,
+            list_workspace_git_commits,
+            get_workspace_git_commit,
             read_workspace_file,
             show_terminal_window,
             terminal_context,
@@ -193,7 +228,7 @@ pub fn run() {
             signal_terminal,
             close_terminal,
         ])
-        .build(tauri::generate_context!())
+        .build(app_context::create())
         .expect("failed to build the Colossus desktop application");
     application.run(|app, event| {
         if matches!(event, tauri::RunEvent::ExitRequested { .. }) {

@@ -545,6 +545,9 @@ export interface ManagedSpaceConfigurationSnapshot {
   status:
     | "active"
     | "update_available"
+    | "update_waiting"
+    | "update_confirmation"
+    | "update_failed"
     | "draining"
     | "starting"
     | "restarting"
@@ -887,6 +890,7 @@ export interface SessionMapGoal {
 
 export interface SessionMapDecision {
   id: string;
+  sessionId: string;
   goalId?: string;
   planId?: string;
   source: "user" | "agent";

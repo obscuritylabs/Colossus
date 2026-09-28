@@ -49,8 +49,10 @@ Open **Settings → Global → Plugins** for shared plugin defaults, inclusion a
 exclusion lists, trust profiles, OCI registries, and plugin MCP server overlays.
 **Settings → Workspace → Plugins** shows the same controls for the selected workspace,
 with each value's source and an **Inherit** action to remove an override. Save global
-changes, then review and apply the new revision in existing workspaces; workspace edits
-use **Apply Workspace changes**. These settings configure the runtime; installing,
+changes; ordinary updates apply when each workspace is idle. Changes to plugin permissions,
+trust, registries, and selection rules require confirmation through **Apply global updates**
+in the workspace footer. Workspace edits use **Apply Workspace changes** in that same footer
+and include pending global updates. These settings configure the runtime; installing,
 updating, and activating packages remains in **Plugins** in the main navigation.
 
 Use **Use in this conversation** for a sticky selection, or start one message with

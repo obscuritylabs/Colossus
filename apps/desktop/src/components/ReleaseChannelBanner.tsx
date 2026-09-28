@@ -13,14 +13,18 @@ export function ReleaseChannelBanner({
     return null;
   }
 
-  const description =
+  let description = "Preview build for local testing";
+  if (
     releaseMetadata?.platform === "macos" &&
     releaseMetadata.codeSigning === "ad_hoc"
-      ? "Ad-hoc signed and not Apple-notarized"
-      : releaseMetadata?.platform === "windows" &&
-          releaseMetadata.codeSigning === "unsigned"
-        ? "Unsigned preview build for local testing"
-        : "Preview build for local testing";
+  ) {
+    description = "Ad-hoc signed and not Apple-notarized";
+  } else if (
+    releaseMetadata?.platform === "windows" &&
+    releaseMetadata.codeSigning === "verified"
+  ) {
+    description = "Signed by Obscurity Labs LLC; preview build for testing";
+  }
 
   return (
     <aside

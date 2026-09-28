@@ -171,7 +171,16 @@ impl WorkEffectExecutor {
                 "subagents cannot delegate recursively".into(),
             ));
         }
-        if operation_session != requested_session {
+        // Decisions are workspace-wide. A tool in any session of this runtime
+        // may manage an older decision; its original session remains audit lineage.
+        if operation_session != requested_session
+            && !matches!(
+                operation,
+                WorkOperation::DecisionUpdate { .. }
+                    | WorkOperation::DecisionArchive { .. }
+                    | WorkOperation::DecisionSupersede { .. }
+            )
+        {
             return Err(ExecutionError::Failed(
                 "work tool cannot access another session".into(),
             ));
@@ -189,9 +198,9 @@ impl EffectExecutor for WorkEffectExecutor {
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
         let mutation: WorkOperation = serde_json::from_value(request.content.clone())
             .map_err(|error| ExecutionError::Failed(error.to_string()))?;
-        if request.action != mutation.action() {
+        if request.action != mutation.action() || request.resource != mutation.resource() {
             return Err(ExecutionError::Failed(
-                "work mutation action does not match its validated content".into(),
+                "work request does not match its authorized content".into(),
             ));
         }
         self.validate_scope(request, &mutation)?;
@@ -304,13 +313,11 @@ impl EffectExecutor for WorkEffectExecutor {
                 ))
             }
             WorkOperation::DecisionList {
-                session_id,
+                session_id: _,
+                scope: DecisionListScope::Workspace,
                 status,
                 limit,
-            } => work_result(
-                self.repository
-                    .list_decisions(Some(&session_id), status, limit),
-            ),
+            } => work_result(self.repository.list_decisions(None, status, limit)),
             WorkOperation::PlanCreate {
                 session_id,
                 prompt,

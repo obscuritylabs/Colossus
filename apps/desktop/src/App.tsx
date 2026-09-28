@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -7,7 +9,8 @@ import {
   useRef,
   useState,
 } from "react";
-import type { CSSProperties, FormEvent } from "react";
+import type { CSSProperties, FormEvent, ReactNode } from "react";
+import { syncSavedSettings } from "./managed-settings-updates";
 
 import {
   CommandFailure,
@@ -72,7 +75,6 @@ import { OperationsSurface } from "./components/OperationsSurface";
 import { pluginSelectionKey } from "./plugins";
 import { usePluginSkills } from "./use-plugin-skills";
 import type { AsideDraft } from "./components/AsidePanel";
-import { OnboardingSurface } from "./components/OnboardingSurface";
 import { ReleaseChannelBanner } from "./components/ReleaseChannelBanner";
 import type { WorkspaceSurface } from "./components/ProductRail";
 import { WorkComposer } from "./components/WorkComposer";
@@ -190,6 +192,12 @@ import {
   listFixtureWorkspaceDirectory,
   readFixtureWorkspaceFile,
 } from "./dev/workspace-files-fixture";
+
+const OnboardingSurface = lazy(() =>
+  import("./components/OnboardingSurface").then((module) => ({
+    default: module.OnboardingSurface,
+  })),
+);
 
 const FIXTURE_QUERY = new URLSearchParams(window.location.search);
 const FIXTURE_SCENARIO = FIXTURE_QUERY.get("fixture");
@@ -1565,6 +1573,9 @@ export default function App() {
       }
       polling = true;
       try {
+        // Native reconciliation waits for idle workspaces and never approves
+        // permission increases. Keep it running after Settings is closed.
+        await syncSavedSettings().catch(() => null);
         const status = await desktopStatus();
         if (!cancelled && !connectingRef.current && !submitInFlight.current) {
           await acceptDesktopStatus(status, false);
@@ -3678,7 +3689,10 @@ export default function App() {
             targetId: requestedSpace.targetId,
           },
           workspace: {
-            workspaceId: requestedSpace.spaceId,
+            workspaceId:
+              desktopRef.current.targets.find(
+                (target) => target.targetId === requestedSpace.targetId,
+              )?.workspace?.workspaceId ?? requestedSpace.spaceId,
             displayName: requestedSpace.displayName,
             displayPath: requestedSpace.displayPath,
           },
@@ -4679,8 +4693,9 @@ export default function App() {
     setSurface(nextSurface);
   }, []);
 
-  const composer = (
+  const composer = (contextActions: ReactNode) => (
     <WorkComposer
+      contextActions={contextActions}
       pluginSkills={completionSkills}
       pluginSelections={pluginSelections}
       onRemovePluginSkill={(id) =>
@@ -4895,34 +4910,47 @@ export default function App() {
       )}
 
       {onboardingActive ? (
-        <OnboardingSurface
-          desktop={desktop}
-          busy={connecting}
-          error={[
-            actionError?.message,
-            ...(actionError?.violations.map(
-              (violation) => violation.description,
-            ) ?? []),
-          ]
-            .filter(Boolean)
-            .join(" ")}
-          onChooseWorkspace={handleChooseWorkspace}
-          onConfigure={handleConfigureManaged}
-          onApplyConfiguration={handleApplyManagedModelConfiguration}
-          onCodexLogin={handleCodexLogin}
-          onCodexLogout={handleCodexLogout}
-          onRunSelfTest={handleManagedSelfTest}
-          onUseExternal={async () => {
-            await handleAddExternalTarget();
-          }}
-          dismissible={showOnboarding && !onboardingRequired}
-          onCancel={() => {
-            setActionError(null);
-            setShowOnboarding(false);
-          }}
-        />
+        <Suspense
+          fallback={
+            <main className="onboarding-surface" aria-busy="true">
+              <p role="status">Loading setup…</p>
+            </main>
+          }
+        >
+          <OnboardingSurface
+            desktop={desktop}
+            busy={connecting}
+            error={[
+              actionError?.message,
+              ...(actionError?.violations.map(
+                (violation) => violation.description,
+              ) ?? []),
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            onChooseWorkspace={handleChooseWorkspace}
+            onImportCaBundle={handleImportCaBundle}
+            onConfigure={handleConfigureManaged}
+            onApplyConfiguration={handleApplyManagedModelConfiguration}
+            onCodexLogin={handleCodexLogin}
+            onCodexLogout={handleCodexLogout}
+            onRunSelfTest={handleManagedSelfTest}
+            onUseExternal={async () => {
+              await handleAddExternalTarget();
+            }}
+            dismissible={showOnboarding && !onboardingRequired}
+            onCancel={() => {
+              setActionError(null);
+              setShowOnboarding(false);
+            }}
+          />
+        </Suspense>
       ) : surface === "work" ? (
         <WorkSurface
+          gitWorkspaceId={desktop.workspace?.workspaceId ?? null}
+          gitAvailable={desktop.capabilities.files}
+          browserScope={desktop.selectedTargetId}
+          browserFixture={FIXTURE_MODE}
           title={title}
           view={activeView}
           conversationViews={conversationViews}

@@ -3,6 +3,34 @@ import { listen } from "@tauri-apps/api/event";
 import type { PluginInventory, PluginRequest } from "./plugins";
 import { readNativeDialogAppearance } from "./theme/appearance";
 import type { ProviderPreset, ProviderCatalogModel } from "./providerCatalog";
+import type { GitStatus, GitCommitPage, GitCommitDetails } from "./git";
+
+export function getWorkspaceGitStatus(
+  workspaceId: string,
+  approveRepository = false,
+): Promise<GitStatus> {
+  return call("get_workspace_git_status", {
+    request: { workspaceId, approveRepository },
+  });
+}
+export function listWorkspaceGitCommits(
+  workspaceId: string,
+  repositoryId: string,
+  cursor: string | null,
+): Promise<GitCommitPage> {
+  return call("list_workspace_git_commits", {
+    request: { workspaceId, repositoryId, cursor },
+  });
+}
+export function getWorkspaceGitCommit(
+  workspaceId: string,
+  repositoryId: string,
+  commitId: string,
+): Promise<GitCommitDetails> {
+  return call("get_workspace_git_commit", {
+    request: { workspaceId, repositoryId, commitId },
+  });
+}
 
 export function getProviderPresets(): Promise<ProviderPreset[]> {
   return call("get_provider_presets");
@@ -319,6 +347,10 @@ export function searchSpaceThreads(
 
 export function getManagedConfiguration(): Promise<ManagedSettingsSnapshot> {
   return call("get_managed_configuration");
+}
+
+export function syncManagedConfiguration(): Promise<ManagedSettingsSnapshot | null> {
+  return call("sync_managed_configuration");
 }
 
 export function diagnoseManagedMcpServer(

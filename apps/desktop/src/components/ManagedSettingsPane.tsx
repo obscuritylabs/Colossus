@@ -1,4 +1,8 @@
 import { SettingsFrame } from "./SettingsFrame";
+import {
+  subscribeSettingsUpdates,
+  syncSavedSettings,
+} from "../managed-settings-updates";
 import { McpHealthDetails } from "./McpHealthDetails";
 import {
   IconActivityHeartbeat,
@@ -197,6 +201,8 @@ interface SpaceDraft {
 }
 
 export interface McpCredentialBindingDraft {
+  /** Editor identity stays stable as names change; never sent to the runtime. */
+  rowId: string;
   name: string;
   credentialId: string;
   scheme: string;
@@ -1396,11 +1402,11 @@ export function buildManagedSettingsFixture(
       archived: space.archived,
       status:
         fixture && index === 0
-          ? ("update_available" as const)
+          ? ("update_confirmation" as const)
           : ("active" as const),
       statusMessage:
         fixture && index === 0
-          ? "Global changes are ready to review and apply."
+          ? "Global changes saved. Applying them requires confirmation of increased permissions or sensitive telemetry."
           : "Runtime configuration is active.",
       pendingGlobalRevision: fixture && index === 0 ? 4 : null,
       configuration: {
@@ -1710,11 +1716,31 @@ export function ManagedSettingsPane({
   }, []);
 
   useEffect(() => {
-    setDefaults(defaultsDraft(snapshot));
+    return subscribeSettingsUpdates(setSnapshot);
+  }, []);
+
+  const previousDefaults = useRef(defaultsDraft(initial));
+  useEffect(() => {
+    const before = previousDefaults.current;
+    const next = defaultsDraft(snapshot);
+    setDefaults((current) =>
+      JSON.stringify(current) === JSON.stringify(before) ? next : current,
+    );
+    previousDefaults.current = next;
   }, [snapshot]);
 
+  const previousSpace = useRef(selectedSpace);
   useEffect(() => {
-    if (selectedSpace) setSpace(spaceDraft(selectedSpace));
+    const before = previousSpace.current;
+    if (selectedSpace)
+      setSpace((current) =>
+        !before ||
+        before.id !== selectedSpace.id ||
+        JSON.stringify(current) === JSON.stringify(spaceDraft(before))
+          ? spaceDraft(selectedSpace)
+          : current,
+      );
+    previousSpace.current = selectedSpace;
   }, [selectedSpace]);
 
   useEffect(() => {
@@ -1790,6 +1816,10 @@ export function ManagedSettingsPane({
     try {
       const next = isTauriRuntime() ? await action() : fixtureAction();
       setSnapshot(next);
+      if (isTauriRuntime()) {
+        // Saving succeeded even when a separate automatic restart must wait.
+        await syncSavedSettings().catch(() => null);
+      }
       pushToast(success);
       return true;
     } catch (error: unknown) {
@@ -1857,7 +1887,9 @@ export function ManagedSettingsPane({
           for (const configuredSpace of draft.spaces) {
             configuredSpace.pendingGlobalRevision =
               draft.globalConfiguration.revision;
-            configuredSpace.status = "update_available";
+            configuredSpace.status = "update_confirmation";
+            configuredSpace.statusMessage =
+              "Global changes saved. Apply them to this workspace to confirm the permission changes.";
           }
         }),
       "Global changes saved.",
@@ -1969,6 +2001,9 @@ export function ManagedSettingsPane({
         ]);
         target.status = "active";
         target.statusMessage = "Workspace settings applied.";
+        target.pendingGlobalRevision = null;
+        target.configuration.acceptedGlobalRevision =
+          draft.globalConfiguration.revision;
         return draft;
       },
       "Workspace settings applied.",
@@ -2705,23 +2740,12 @@ export function ManagedSettingsPane({
                   ? "Re-import config"
                   : "Import config"}
               </button>
-              {selectedSpace.pendingGlobalRevision ? (
-                <button
-                  className="button primary"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void applyPendingRevision()}
-                >
-                  <IconRefresh size={16} aria-hidden="true" />
-                  Review and apply r{selectedSpace.pendingGlobalRevision}
-                </button>
-              ) : null}
             </div>
           ) : null}
         </div>
       ) : null}
 
-      {failure ? (
+      {failure && query ? (
         <p className="managed-settings-message is-error" role="alert">
           {failure}
         </p>
@@ -2828,16 +2852,15 @@ export function ManagedSettingsPane({
             onRemoveCaBundle={onRemoveCaBundle}
             onExportDiagnostics={onExportDiagnostics}
           />
-          {globalTab === "defaults" || globalTab === "plugins" ? (
-            <SettingsActionBar
-              dirty={defaultsDirty}
-              busy={busy}
-              failure={failure}
-              label="Save global changes"
-              onDiscard={() => setDefaults(defaultsDraft(snapshot))}
-              onApply={() => void saveDefaults()}
-            />
-          ) : null}
+          <SettingsActionBar
+            dirty={defaultsDirty}
+            busy={busy}
+            failure={failure}
+            label="Save global changes"
+            savedMessage={globalUpdateMessage(snapshot)}
+            onDiscard={() => setDefaults(defaultsDraft(snapshot))}
+            onApply={() => void saveDefaults()}
+          />
         </>
       ) : (
         <>
@@ -2903,10 +2926,15 @@ export function ManagedSettingsPane({
             busy={busy}
             failure={failure}
             label="Apply Workspace changes"
+            pending={
+              selectedSpace?.pendingGlobalRevision ? selectedSpace : undefined
+            }
             onDiscard={() =>
               selectedSpace && setSpace(spaceDraft(selectedSpace))
             }
-            onApply={() => void saveSpace()}
+            onApply={() =>
+              void (spaceDirty ? saveSpace() : applyPendingRevision())
+            }
           />
           {importProposal ? (
             <RepositoryImportDialog
@@ -5534,7 +5562,15 @@ function RuntimeStatus({
         : "tone-warning";
   return (
     <span className={`status-chip ${tone}`} title={space.statusMessage}>
-      {space.status.replaceAll("_", " ")}
+      {space.status === "update_waiting"
+        ? "Waiting for active work"
+        : space.status === "update_confirmation"
+          ? "Confirmation needed"
+          : space.status === "update_failed"
+            ? "Update failed"
+            : space.status === "update_available"
+              ? "Update pending"
+              : space.status.replaceAll("_", " ")}
     </span>
   );
 }
@@ -5858,11 +5894,26 @@ export function RepositoryImportDialog({
   );
 }
 
+function globalUpdateMessage(snapshot: ManagedSettingsSnapshot) {
+  const pending = snapshot.spaces.filter(
+    (space) => !space.archived && space.pendingGlobalRevision,
+  );
+  if (!pending.length) return "All changes saved and applied";
+  const attention = pending.filter((space) =>
+    ["update_confirmation", "update_failed"].includes(space.status),
+  );
+  if (attention.length)
+    return `Saved. Open Workspace settings for ${attention.map((space) => space.name).join(", ")} to ${attention.some((space) => space.status === "update_failed") ? "retry or confirm" : "confirm"} the update.`;
+  return "Saved. Global updates apply automatically when active work finishes.";
+}
+
 export function SettingsActionBar({
   dirty,
   busy,
   failure,
   label,
+  pending,
+  savedMessage = "All changes saved and applied",
   onDiscard,
   onApply,
 }: {
@@ -5870,34 +5921,56 @@ export function SettingsActionBar({
   busy: boolean;
   failure: string;
   label: string;
+  pending?: ManagedSpaceConfigurationSnapshot | undefined;
+  savedMessage?: string;
   onDiscard: () => void;
   onApply: () => void;
 }) {
+  const needsAction =
+    pending &&
+    ["update_confirmation", "update_failed"].includes(pending.status);
+  const showAction = dirty || needsAction;
+  const actionLabel = dirty
+    ? label
+    : pending?.status === "update_failed"
+      ? "Retry global update"
+      : "Apply global updates";
+  const message =
+    failure ||
+    (dirty
+      ? pending
+        ? "Unsaved workspace changes. Saved global updates will be included."
+        : "Unsaved changes"
+      : pending?.statusMessage || savedMessage);
   return (
     <div className="managed-settings-actions">
       <span
         className={failure ? "is-error" : undefined}
-        role={failure ? "alert" : undefined}
+        role={failure ? "alert" : "status"}
       >
-        {failure || (dirty ? "Unsaved changes" : "No local changes")}
+        {message}
       </span>
-      <button
-        className="button secondary"
-        type="button"
-        disabled={!dirty || busy}
-        onClick={onDiscard}
-      >
-        Discard
-      </button>
-      <button
-        className="button primary"
-        type="button"
-        disabled={!dirty || busy}
-        onClick={onApply}
-      >
-        <IconCheck size={16} />
-        {busy ? "Applying…" : label}
-      </button>
+      {dirty ? (
+        <button
+          className="button secondary"
+          type="button"
+          disabled={!dirty || busy}
+          onClick={onDiscard}
+        >
+          Discard
+        </button>
+      ) : null}
+      {showAction ? (
+        <button
+          className="button primary"
+          type="button"
+          disabled={busy}
+          onClick={onApply}
+        >
+          <IconCheck size={16} />
+          {busy ? "Applying…" : actionLabel}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -7592,7 +7665,7 @@ function CredentialBindingsEditor({
     <fieldset className="mcp-bindings-editor mcp-editor-wide">
       <legend>{title}</legend>
       {bindings.map((binding, index) => (
-        <div className="mcp-binding-row" key={`${binding.name}-${index}`}>
+        <div className="mcp-binding-row" key={binding.rowId}>
           <label>
             <span>{nameLabel}</span>
             <input
@@ -7639,7 +7712,15 @@ function CredentialBindingsEditor({
         type="button"
         disabled={disabled}
         onClick={() =>
-          onChange([...bindings, { name: "", credentialId: "", scheme: "" }])
+          onChange([
+            ...bindings,
+            {
+              rowId: crypto.randomUUID(),
+              name: "",
+              credentialId: "",
+              scheme: "",
+            },
+          ])
         }
       >
         <IconPlus size={15} /> Add binding
@@ -7661,11 +7742,17 @@ export function mcpDraft(
     argsText: server.args.join("\n"),
     workingDirectory: server.workingDirectory ?? "",
     environmentCredentials: Object.entries(server.environmentCredentials).map(
-      ([name, credentialId]) => ({ name, credentialId, scheme: "" }),
+      ([name, credentialId]) => ({
+        rowId: crypto.randomUUID(),
+        name,
+        credentialId,
+        scheme: "",
+      }),
     ),
     headers: server.headers,
     credentialHeaders: Object.entries(server.credentialHeaders).map(
       ([name, value]) => ({
+        rowId: crypto.randomUUID(),
         name,
         credentialId: value.credentialId,
         scheme: value.scheme ?? "",

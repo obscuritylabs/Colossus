@@ -114,8 +114,9 @@ if (
     "releaseChannel",
     "sidecar",
     "cli",
+    "ripgrep",
   ]) ||
-  manifest.schemaVersion !== 2 ||
+  manifest.schemaVersion !== 3 ||
   manifest.targetTriple !== target ||
   manifest.profile !== "release" ||
   manifest.releaseChannel !== releaseChannel
@@ -126,6 +127,7 @@ if (
 for (const [key, expectedName] of [
   ["sidecar", "colossus-sidecar"],
   ["cli", "colossus"],
+  ["ripgrep", "rg"],
 ]) {
   const entry = manifest[key];
   if (
@@ -139,6 +141,15 @@ for (const [key, expectedName] of [
   validateFile(binary, true);
   if ((await sha256(binary)) !== entry.sha256) {
     fail(`bundle manifest ${key} digest does not match`);
+  }
+}
+for (const notice of ["COPYING", "LICENSE-MIT", "UNLICENSE"]) {
+  const metadata = validateFile(
+    join(app, "Contents", "Resources", "ripgrep", notice),
+    false,
+  );
+  if ((metadata.mode & 0o444) !== 0o444) {
+    fail(`ripgrep notice is not readable: ${notice}`);
   }
 }
 

@@ -60,7 +60,7 @@ review.
 5. Before requesting full acceptance, inspect every unresolved pull-request review
    thread and required check, including automated ChatGPT/Codex review. Address each
    actionable finding in code and tests; do not treat a green build as a substitute for
-   review resolution. Once the PR gate is green on an up-to-date, non-draft PR, follow
+   review resolution. Once the PR gate is green on a conflict-free, non-draft PR, follow
    the [`ci:full` procedure](ci-cd.md#request-pre-merge-acceptance).
 
 6. Use a Conventional Commit message:

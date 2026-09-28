@@ -1017,7 +1017,7 @@ async fn active_decisions_are_binding_context_before_snapshots() {
     assert!(
         compacted.messages[0]
             .content
-            .starts_with("[Binding active key decisions]")
+            .starts_with("[Binding active workspace key decisions]")
     );
     assert!(compacted.messages[0].content.contains(&decision.id));
     assert!(
@@ -1051,6 +1051,57 @@ async fn active_decisions_are_binding_context_before_snapshots() {
             .content
             .starts_with("[Colossus context snapshot]")
     );
+}
+
+#[tokio::test]
+async fn active_decision_from_another_session_is_binding_until_archived() {
+    let provider: Arc<dyn ModelProvider> = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let (journal, sessions, _snapshots, service) = fixture(ContextConfig::default(), provider);
+    sessions
+        .create_session("session-2", None, user_actor())
+        .expect("second session");
+    let work: Arc<dyn WorkRepository> = Arc::new(EventSourcedWorkRepository::new(journal));
+    let work_service = WorkService::new(Arc::clone(&work), Arc::clone(&sessions));
+    let decision = work_service
+        .create_decision(
+            "session-1",
+            "Audit boundary",
+            "Append an immutable event for each durable mutation.",
+            colossus_contracts::DecisionSource::User,
+            DecisionPriority::Critical,
+            "Preserve evidence",
+            "When changing canonical state",
+            "",
+            "",
+            None,
+            None,
+            None,
+            user_actor(),
+        )
+        .expect("decision");
+    let service = service.with_work_repository(work);
+    let user_message = message(ModelMessageRole::User, "continue");
+    sessions
+        .append_message("session-2", "run-2", user_message.clone(), user_actor())
+        .expect("second session message");
+    let mut request = preparation_request(vec![user_message.clone()], false);
+    request.session_id = "session-2".into();
+    request.context.session_id = Some("session-2".into());
+    let prepared = service.prepare(request.clone()).await.expect("prepare");
+    assert!(prepared.messages[0].content.contains(&decision.id));
+    assert!(prepared.messages[0].content.contains(&decision.decision));
+
+    work_service
+        .archive_decision(&decision.id, user_actor())
+        .expect("archive");
+    let after_archive = service
+        .prepare(request)
+        .await
+        .expect("prepare after archive");
+    assert_eq!(after_archive.messages, vec![user_message]);
 }
 
 #[tokio::test]
@@ -1106,7 +1157,7 @@ async fn relevant_memories_follow_decisions_and_precede_snapshots() {
     assert!(
         prepared.messages[0]
             .content
-            .starts_with("[Binding active key decisions]")
+            .starts_with("[Binding active workspace key decisions]")
     );
     assert!(
         prepared.messages[1]

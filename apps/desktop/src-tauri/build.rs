@@ -11,6 +11,9 @@ const SIDECAR_FILE_STEM: &str = "colossus-sidecar";
 const CLI_FILE_STEM: &str = "colossus";
 
 const COMMANDS: &[&str] = &[
+    "browser_context",
+    "browser_command",
+    "browser_viewport",
     "command_review_context",
     "finish_command_review",
     "get_plugin_inventory",
@@ -64,6 +67,7 @@ const COMMANDS: &[&str] = &[
     "upsert_global_telemetry_profile",
     "save_space_configuration",
     "apply_space_configuration",
+    "sync_managed_configuration",
     "create_managed_credential",
     "rotate_managed_credential",
     "reenter_managed_credential",
@@ -94,6 +98,9 @@ const COMMANDS: &[&str] = &[
     "restore_thread",
     "respond_interaction",
     "list_workspace_directory",
+    "get_workspace_git_status",
+    "list_workspace_git_commits",
+    "get_workspace_git_commit",
     "read_workspace_file",
     "show_terminal_window",
     "terminal_context",
@@ -105,11 +112,21 @@ const COMMANDS: &[&str] = &[
 ];
 
 fn main() {
+    // Ask the MSVC linker to embed Common Controls v6 for every executable,
+    // including library tests and examples that use TaskDialogIndirect. Disable
+    // Tauri's binary-only copy below to avoid two MANIFEST resources in the app.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!(
+            "cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
+        );
+    }
     export_release_trust_configuration();
     stage_connection_config();
     stage_bundle_manifest();
     tauri_build::try_build(
         tauri_build::Attributes::new()
+            .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest())
             .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),
     )
     .expect("failed to build the Colossus desktop manifest");
@@ -144,12 +161,13 @@ fn export_release_trust_configuration() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("Cargo must provide target OS");
     if target_os == "windows" {
         match release_channel.as_str() {
-            "developer_preview" | "validation_only" => assert!(
+            "validation_only" => assert!(
                 team_id == "UNSIGNED",
-                "unsigned Windows preview builds require {TEAM_VARIABLE}=UNSIGNED"
+                "Windows validation builds require {TEAM_VARIABLE}=UNSIGNED"
             ),
-            "stable" => panic!(
-                "stable Windows Desktop is disabled until an Authenticode signer is configured"
+            "stable" | "developer_preview" => assert!(
+                team_id == "OBSCURITY_LABS_LLC",
+                "signed Windows releases require {TEAM_VARIABLE}=OBSCURITY_LABS_LLC"
             ),
             _ => panic!("{CHANNEL_VARIABLE} must be stable, developer_preview, or validation_only"),
         }
@@ -171,14 +189,17 @@ fn export_release_trust_configuration() {
         }
     }
     let signing_status = match (target_os.as_str(), release_channel.as_str()) {
-        ("windows", "developer_preview" | "validation_only") => "unsigned",
-        ("macos", "stable") => "verified",
+        ("windows", "validation_only") => "unsigned",
+        ("windows", "stable" | "developer_preview") | ("macos", "stable") => "verified",
         ("macos", "developer_preview" | "validation_only") => "ad_hoc",
         _ => "unsupported",
     };
-    let updates_enabled = release_channel == "stable";
     let update_endpoint = env::var(UPDATE_ENDPOINT_VARIABLE).unwrap_or_default();
     let update_public_key = env::var(UPDATE_PUBLIC_KEY_VARIABLE).unwrap_or_default();
+    // A first signed Windows release can use manual GitHub Release updates until
+    // a separate Tauri updater key and endpoint are configured.
+    let updates_enabled = release_channel == "stable"
+        && !(target_os == "windows" && update_endpoint.is_empty() && update_public_key.is_empty());
     if updates_enabled {
         assert!(
             valid_update_endpoint(&update_endpoint),
@@ -191,7 +212,7 @@ fn export_release_trust_configuration() {
     } else {
         assert!(
             update_endpoint.is_empty() && update_public_key.is_empty(),
-            "unsigned Developer Preview and validation-only Desktop builds must not advertise an update channel"
+            "Desktop builds without a configured update channel must not advertise partial update trust"
         );
     }
     println!("cargo:rustc-env={TEAM_VARIABLE}={team_id}");

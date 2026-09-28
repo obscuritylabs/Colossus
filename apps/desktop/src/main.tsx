@@ -21,6 +21,27 @@ const initialAppearance = initializeAppearance();
 
 if (
   import.meta.env.DEV &&
+  new URLSearchParams(window.location.search).get("fixture") === "setup"
+) {
+  void import("./dev/provider-setup-studio").then(
+    async ({ default: SetupStudio }) => {
+      const { installSetupPreviewApi } =
+        await import("./dev/setup-preview-api");
+      installSetupPreviewApi();
+      createRoot(root).render(
+        <AppearanceProvider initialPreference={initialAppearance}>
+          <SetupStudio
+            configured={false}
+            workspaceSelected={false}
+            hasCredential={false}
+            showControls={false}
+          />
+        </AppearanceProvider>,
+      );
+    },
+  );
+} else if (
+  import.meta.env.DEV &&
   new URLSearchParams(window.location.search).get("fixture") === "plugin-studio"
 ) {
   void import("./dev/plugin-studio").then(({ default: PluginStudio }) => {

@@ -274,6 +274,8 @@ prepare_colossus_home() {
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 source_binary=$script_dir/colossus
+source_tools=$script_dir/tools
+source_rg=$source_tools/rg
 metadata=$script_dir/install-metadata
 if ! { [ -f "$source_binary" ] && [ ! -L "$source_binary" ] && [ -x "$source_binary" ]; }; then
     fail "package colossus binary is missing, linked, or not executable"
@@ -281,6 +283,12 @@ fi
 if ! { [ -f "$metadata" ] && [ ! -L "$metadata" ]; }; then
     fail "package installation metadata is missing or linked"
 fi
+for source_tool_file in "$source_rg" "$source_tools/COPYING" "$source_tools/LICENSE-MIT" "$source_tools/UNLICENSE"; do
+    if ! { [ -f "$source_tool_file" ] && [ ! -L "$source_tool_file" ]; }; then
+        fail "package ripgrep or its license notices are missing or linked"
+    fi
+done
+[ -x "$source_rg" ] || fail "package ripgrep is not executable"
 [ "$(wc -l < "$metadata" | tr -d ' ')" -eq 6 ] || fail "package metadata must contain six fields"
 
 metadata_value() {
@@ -324,12 +332,43 @@ binary_version=$(
     "$source_binary" --version
 ) || fail "package colossus binary did not report its version"
 [ "$binary_version" = "colossus $version" ] || fail "package binary version disagrees with metadata"
-
 colossus_home=
 prepare_colossus_home
 
 bin_dir=$prefix/bin
 prepare_installation_directory "$bin_dir" "$prefix"
+tool_root=$bin_dir/.colossus-tools
+prepare_installation_directory "$tool_root" "$prefix"
+system_public=false
+if [ "$(id -u)" -eq 0 ] && ! directory_is_owner_private "$prefix"; then
+    system_public=true
+    chmod 0755 "$bin_dir" "$tool_root"
+fi
+tool_dir=$tool_root/$version
+if [ -e "$tool_dir" ] || [ -L "$tool_dir" ]; then
+    if ! { [ -d "$tool_dir" ] && [ ! -L "$tool_dir" ]; }; then
+        fail "existing managed ripgrep directory is linked or not a directory"
+    fi
+    require_private_write_directory "$tool_dir"
+    for tool_file in rg COPYING LICENSE-MIT UNLICENSE; do
+        if ! { [ -f "$tool_dir/$tool_file" ] && [ ! -L "$tool_dir/$tool_file" ] &&
+            cmp -s "$source_tools/$tool_file" "$tool_dir/$tool_file"; }; then
+            fail "existing managed ripgrep differs from this release; inspect $tool_dir"
+        fi
+    done
+    [ -x "$tool_dir/rg" ] || fail "existing managed ripgrep is not executable"
+else
+    staged_tool_dir=$(mktemp -d "$tool_root/.install.XXXXXX")
+    install -m 0755 "$source_rg" "$staged_tool_dir/rg"
+    for notice in COPYING LICENSE-MIT UNLICENSE; do
+        install -m 0644 "$source_tools/$notice" "$staged_tool_dir/$notice"
+    done
+    mv -- "$staged_tool_dir" "$tool_dir" ||
+        fail "managed ripgrep could not be installed"
+fi
+if [ "$system_public" = true ]; then
+    chmod 0755 "$tool_dir"
+fi
 
 if [ -n "${XDG_DATA_HOME:-}" ]; then
     case "$XDG_DATA_HOME" in
@@ -450,6 +489,7 @@ fi
 trap - EXIT HUP INT TERM
 
 printf '%s\n' "installed $target_binary"
+printf '%s\n' "installed managed ripgrep at $tool_dir/rg"
 printf '%s\n' "recorded direct installation receipt at $receipt"
 if [ -n "$colossus_home" ]; then
     printf '%s\n' "prepared Colossus home at $colossus_home"

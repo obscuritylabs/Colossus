@@ -12,23 +12,23 @@
         "x86_64-linux"
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
-      version = "0.10.9";
+      version = "0.11.0";
       releases = {
         aarch64-darwin = {
           target = "aarch64-apple-darwin";
-          sha256 = "9eb7f10e7cd345c20b3c63b51484d3749bd76ae2bd470fa6756781783f6742d9";
+          sha256 = "c5140fa28173641838069e4ec331ef3848c8f3a4f3149b174e09380719e75b9a";
         };
         x86_64-darwin = {
           target = "x86_64-apple-darwin";
-          sha256 = "5b9a57ccd2fdc5efe8c41b5e24594daacf9dfafa38bce3a3f240f7a07dd272fa";
+          sha256 = "c274017f83a11b47123e80471417548029123b245ae04b0ae4386b78c2b07478";
         };
         aarch64-linux = {
           target = "aarch64-unknown-linux-musl";
-          sha256 = "a1b7d0c3501615b016d27a24d069a17b383dbb923654f65c0c83b3cbd5fd7fe9";
+          sha256 = "efad03b81b04b66900acd4c835031aca4c2be4294a409d0c23df643e0f277407";
         };
         x86_64-linux = {
           target = "x86_64-unknown-linux-musl";
-          sha256 = "19d7e1e19f2bbfecfef486294f89f9802aec9a0447857119ffa855513e93250d";
+          sha256 = "f520245f4c02e5c3fe7b3e926bb2663d39b97566f0eefa34ef860a09d515f9c5";
         };
       };
     in {
@@ -51,13 +51,26 @@
             installPhase = ''
               runHook preInstall
               install -Dm755 colossus "$out/libexec/colossus"
+              if test -f tools/rg; then
+                install -Dm755 tools/rg "$out/libexec/rg"
+                for notice in COPYING LICENSE-MIT UNLICENSE; do
+                  install -Dm644 "tools/$notice" "$out/share/licenses/colossus/ripgrep/$notice"
+                done
+                bundled_rg=1
+              else
+                bundled_rg=0
+              fi
               makeWrapper "$out/libexec/colossus" "$out/bin/colossus" \
-                --set COLOSSUS_INSTALLER_KIND nix
+                --set COLOSSUS_INSTALLER_KIND nix \
+                --set COLOSSUS_BUNDLED_RIPGREP "$bundled_rg"
               runHook postInstall
             '';
             doInstallCheck = true;
             installCheckPhase = ''
               test "$("$out/bin/colossus" --version)" = "colossus ${version}"
+              if test -x "$out/libexec/rg"; then
+                "$out/libexec/rg" --version | grep '^ripgrep 15.2.0'
+              fi
             '';
             meta = {
               description = "Auditable runtime for agent work and durable automation";
