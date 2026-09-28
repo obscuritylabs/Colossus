@@ -1205,6 +1205,7 @@ test("Developer Preview compilation and ad-hoc signing use separate runners", ()
   assert.match(windowsJob, /Start-Process -FilePath \$uninstallers/u);
   assert.match(windowsJob, /Colossus processes remained after uninstall/u);
 
+  assert.match(signedWindowsJob, /runs-on: windows-latest-l/u);
   assert.match(signedWindowsJob, /environment: release-signing/u);
   assert.match(signedWindowsJob, /id-token: write/u);
   assert.match(signedWindowsJob, /COLOSSUS_DESKTOP_TEAM_ID: OBSCURITY_LABS_LLC/u);
