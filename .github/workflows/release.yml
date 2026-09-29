@@ -156,7 +156,9 @@ jobs:
           staged_binary="$install_dir/colossus"
           sudo install -d -o root -g root -m 0755 "$install_dir"
           sudo install -o root -g root -m 0755 /bin/true "$staged_binary"
-          sudo release/install-apparmor.sh "$staged_binary"
+          if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; then
+            sudo release/install-apparmor.sh "$staged_binary"
+          fi
           cargo build --locked -p colossus-cli --bin colossus
           sudo install -o root -g root -m 0755 \
             target/debug/colossus "$staged_binary"
@@ -249,7 +251,9 @@ jobs:
           staged_binary="$install_dir/colossus"
           sudo install -d -o root -g root -m 0755 "$install_dir"
           sudo install -o root -g root -m 0755 /bin/true "$staged_binary"
-          sudo release/install-apparmor.sh "$staged_binary"
+          if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; then
+            sudo release/install-apparmor.sh "$staged_binary"
+          fi
           cargo build --locked -p colossus-cli --bin colossus
           sudo install -o root -g root -m 0755 \
             target/debug/colossus "$staged_binary"

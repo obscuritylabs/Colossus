@@ -755,6 +755,15 @@ fn linux_profile_and_release_package_remain_hardened() {
             expected_staging_count,
             "{workflow_path} must fail fast on AppArmor path or parser errors before compiling"
         );
+        assert_eq!(
+            source
+                .matches(
+                    "if [ \"$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)\" = 1 ]; then\n            sudo release/install-apparmor.sh \"$staged_binary\""
+                )
+                .count(),
+            expected_staging_count,
+            "{workflow_path} must install the AppArmor profile whenever the host restricts user namespaces"
+        );
         for forbidden in [
             "/usr/local/libexec/colossus-ci",
             "/usr/lib/colossus-ci",
