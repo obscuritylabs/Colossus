@@ -106,9 +106,11 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         [
             "classify",
             "dependency-policy",
+            "desktop",
             "documentation",
             "gate",
-            "rust"
+            "rust",
+            "sdk",
         ]
         .into_iter()
         .collect()
@@ -117,6 +119,17 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         field(job(jobs, "rust"), "runs-on").as_str(),
         Some("ubuntu-latest-m")
     );
+    for (name, selector) in [("sdk", "sdk_required"), ("desktop", "desktop_required")] {
+        assert_eq!(
+            field(job(jobs, name), "runs-on").as_str(),
+            Some("ubuntu-latest")
+        );
+        assert_eq!(
+            field(job(jobs, name), "if").as_str(),
+            Some(format!("needs.classify.outputs.{selector} == 'true'").as_str())
+        );
+        assert_eq!(field(job(jobs, name), "needs").as_str(), Some("classify"));
+    }
     assert_eq!(
         field(job(jobs, "documentation"), "if").as_str(),
         Some("needs.classify.outputs.docs_required == 'true'")
@@ -126,6 +139,37 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         Some("Colossus PR gate")
     );
     assert_eq!(field(job(jobs, "gate"), "if").as_str(), Some("always()"));
+    let gate_needs = strings(field(job(jobs, "gate"), "needs"), "PR gate needs");
+    for name in [
+        "rust",
+        "sdk",
+        "desktop",
+        "documentation",
+        "dependency-policy",
+    ] {
+        assert!(gate_needs.contains(name), "PR gate must require {name}");
+    }
+    let rust_source = serde_json::to_string(job(jobs, "rust")).expect("serialize Rust PR job");
+    assert!(!rust_source.contains("cargo xtask check sdk"));
+    assert!(!rust_source.contains("cargo xtask check desktop"));
+    assert!(
+        serde_json::to_string(job(jobs, "sdk"))
+            .expect("serialize SDK PR job")
+            .contains("cargo xtask check sdk")
+    );
+    let desktop_source =
+        serde_json::to_string(job(jobs, "desktop")).expect("serialize Desktop PR job");
+    assert!(desktop_source.contains("cargo xtask check sidecar"));
+    assert!(desktop_source.contains("cargo xtask check desktop"));
+    let gate_run = field(
+        named_step(job(jobs, "gate"), "Require every selected PR validation"),
+        "run",
+    )
+    .as_str()
+    .expect("PR gate must run the base-revision selector");
+    assert_eq!(gate_run.matches("sh \"$trusted_gate\"").count(), 2);
+    assert!(gate_run.contains("\"$SDK_REQUIRED\" \"$SDK_RESULT\""));
+    assert!(gate_run.contains("\"$DESKTOP_REQUIRED\" \"$DESKTOP_RESULT\""));
 
     let source = fs::read_to_string(repository_root().join(".github/workflows/pr.yml"))
         .expect("read PR workflow");
