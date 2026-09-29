@@ -64,6 +64,9 @@ export function inspectSetupPackage(
 ): Promise<import("./setupPackages").SetupPackage | null> {
   return call("inspect_setup_package", { packageId });
 }
+export function cancelSetupPackageReview(sha256: string): Promise<void> {
+  return call("cancel_setup_package_review", { sha256 });
+}
 export function applySetupPackage(request: {
   sha256: string;
   trustCertificates: boolean;

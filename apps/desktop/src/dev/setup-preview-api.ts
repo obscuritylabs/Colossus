@@ -34,7 +34,11 @@ export function installSetupPreviewApi() {
         if (provider) provider.credentialId = "preview-key";
         return null;
       }
-      if (command === "open_setup_link") return null;
+      if (
+        command === "open_setup_link" ||
+        command === "cancel_setup_package_review"
+      )
+        return null;
       if (command === "get_provider_presets")
         return [
           {

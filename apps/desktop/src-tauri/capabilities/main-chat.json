@@ -24,6 +24,7 @@
     "allow-open-setup-link",
     "allow-list-setup-packages",
     "allow-inspect-setup-package",
+    "allow-cancel-setup-package-review",
     "allow-apply-setup-package",
     "allow-configure-setup-credential",
     "allow-use-setup-model",

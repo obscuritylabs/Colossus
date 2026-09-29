@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useRef, useState } from "react";
+import { useSetupPackages } from "./useSetupPackages";
 import { SetupReviewDialog } from "./SetupReviewDialog";
 import { DropdownSelect } from "../DropdownSelect";
 import {
@@ -7,7 +8,7 @@ import {
   IconChevronDown,
 } from "@tabler/icons-react";
 import {
-  listSetupPackages,
+  cancelSetupPackageReview,
   inspectSetupPackage,
   applySetupPackage,
   configureSetupCredential,
@@ -49,7 +50,7 @@ export function SetupPackagesPanel({
   onChooseProvider,
   compact = false,
 }: Props) {
-  const [packages, setPackages] = useState<SetupPackage[]>([]);
+  const { packages } = useSetupPackages();
   const reviewTrigger = useRef<HTMLElement | null>(null);
   const [review, setReview] = useState<SetupPackage | null>(null);
   const [open, setOpen] = useState(false);
@@ -70,22 +71,10 @@ export function SetupPackagesPanel({
   const signedIn = desktop.codexAuth?.state === "signed_in";
 
   async function refresh() {
-    setPackages(await listSetupPackages());
+    setupChanged();
     const snapshot = await getManagedConfiguration();
     setCredentials(snapshot.globalConfiguration.credentials);
   }
-  useEffect(() => {
-    let active = true;
-    void listSetupPackages().then(
-      (items) => {
-        if (active) setPackages(items);
-      },
-      () => {},
-    );
-    return () => {
-      active = false;
-    };
-  }, []);
   async function perform(action: () => Promise<void>) {
     if (disabled) return;
     setWorking(true);
@@ -116,6 +105,13 @@ export function SetupPackagesPanel({
       setTrust(false);
       setReplace(false);
       setOpen(true);
+    });
+  }
+  async function cancelReview() {
+    if (!review) return;
+    await perform(async () => {
+      await cancelSetupPackageReview(review.sha256);
+      setReview(null);
     });
   }
   async function apply() {
@@ -558,7 +554,7 @@ export function SetupPackagesPanel({
         <SetupReviewDialog
           busy={disabled}
           returnFocus={reviewTrigger.current}
-          onClose={() => setReview(null)}
+          onClose={() => void cancelReview()}
         >
           <div className="setup-package-review">
             <h2 id="setup-review-title">Review {review.name}</h2>
@@ -636,7 +632,7 @@ export function SetupPackagesPanel({
                 className="button secondary"
                 type="button"
                 disabled={disabled}
-                onClick={() => setReview(null)}
+                onClick={() => void cancelReview()}
               >
                 Cancel
               </button>

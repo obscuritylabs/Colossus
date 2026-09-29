@@ -85,8 +85,9 @@ use plugin_commands::{
 use plugin_selection::resolve_plugin_selection;
 use provider_catalog::{discover_managed_provider_models, get_provider_presets};
 use setup_package::{
-    apply_setup_package, configure_setup_credential, export_setup_package, inspect_setup_package,
-    list_setup_packages, open_setup_link, remove_setup_package, use_setup_model,
+    apply_setup_package, cancel_setup_package_review, configure_setup_credential,
+    export_setup_package, inspect_setup_package, list_setup_packages, open_setup_link,
+    remove_setup_package, use_setup_model,
 };
 use terminal_commands::{
     close_terminal, open_terminal, resize_terminal, show_terminal_window, signal_terminal,
@@ -162,6 +163,7 @@ pub fn run() {
             open_setup_link,
             list_setup_packages,
             inspect_setup_package,
+            cancel_setup_package_review,
             apply_setup_package,
             configure_setup_credential,
             use_setup_model,

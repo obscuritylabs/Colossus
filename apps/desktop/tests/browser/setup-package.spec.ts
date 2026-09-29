@@ -2,68 +2,88 @@ import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import sample from "../../src/dev/setup-package-preview.json" with { type: "json" };
 
-async function setup(page: Page) {
-  await page.addInitScript((sample) => {
-    const host = window as unknown as {
-      __TAURI_INTERNALS__: unknown;
-      setupCalls: { command: string; args: Record<string, unknown> }[];
-    };
-    host.setupCalls = [];
-    let imported: (typeof packet)[] = [];
-    const packet = {
-      ...sample,
-      certificateFingerprints: ["12".repeat(32)],
-      existingCertificateFingerprints: ["34".repeat(32)],
-    };
-    packet.providers[0]!.descriptionMarkdown +=
-      "\n\n![Remote](https://untrusted.example.com/tracking.png)\n<script>window.injected=true</script>";
-    host.__TAURI_INTERNALS__ = {
-      invoke: async (command: string, args: Record<string, unknown> = {}) => {
-        host.setupCalls.push({ command, args });
-        if (command === "list_setup_packages") return structuredClone(imported);
-        if (command === "inspect_setup_package")
-          return { ...packet, replacesVersion: imported.length ? "2" : null };
-        if (command === "apply_setup_package") {
-          imported = [structuredClone(packet)];
-          return null;
-        }
-        if (command === "get_managed_configuration")
-          return { globalConfiguration: { credentials: [] } };
-        if (command === "configure_setup_credential") {
-          const profile = (args.request as { profile: string }).profile;
-          const provider = imported[0]!.providers.find(
-            (entry) => entry.profile === profile,
-          )!;
-          (provider as { credentialId: string | null }).credentialId =
-            "saved-native-handle";
-          return null;
-        }
-        if (command === "get_provider_presets")
-          return [
-            {
-              id: "openrouter",
-              label: "OpenRouter",
-              protocol: "chat_completions",
-              baseUrl: "https://openrouter.ai/api/v1",
-              credentialEnv: "OPENROUTER_API_KEY",
-            },
-            {
-              id: "custom-chat",
-              label: "Custom Chat Completions",
-              protocol: "chat_completions",
-              baseUrl: null,
-              credentialEnv: null,
-            },
-          ];
-        if (
-          command === "apply_managed_model_configuration" ||
-          command === "open_setup_link"
-        )
-          return null;
-        throw new Error("Unexpected setup command: " + command);
-      },
-    };
-  }, sample);
+async function setup(
+  page: Page,
+  options: { preloaded?: boolean; busyCount?: number } = {},
+) {
+  await page.addInitScript(
+    ({ sample, options }) => {
+      const host = window as unknown as {
+        __TAURI_INTERNALS__: unknown;
+        setupCalls: { command: string; args: Record<string, unknown> }[];
+      };
+      host.setupCalls = [];
+      let imported: (typeof packet)[] = options.preloaded
+        ? [structuredClone(sample)]
+        : [];
+      let busyCount = options.busyCount ?? 0;
+      const packet = {
+        ...sample,
+        certificateFingerprints: ["12".repeat(32)],
+        existingCertificateFingerprints: ["34".repeat(32)],
+      };
+      packet.providers[0]!.descriptionMarkdown +=
+        "\n\n![Remote](https://untrusted.example.com/tracking.png)\n<script>window.injected=true</script>";
+      host.__TAURI_INTERNALS__ = {
+        invoke: async (command: string, args: Record<string, unknown> = {}) => {
+          host.setupCalls.push({ command, args });
+          if (command === "list_setup_packages") {
+            if (busyCount-- > 0)
+              throw {
+                code: "busy",
+                message: "Initialization is in progress.",
+                retryable: true,
+                outcomeUnknown: false,
+                violations: [],
+              };
+            return structuredClone(imported);
+          }
+          if (command === "inspect_setup_package")
+            return { ...packet, replacesVersion: imported.length ? "2" : null };
+          if (command === "apply_setup_package") {
+            imported = [structuredClone(packet)];
+            return null;
+          }
+          if (command === "get_managed_configuration")
+            return { globalConfiguration: { credentials: [] } };
+          if (command === "configure_setup_credential") {
+            const profile = (args.request as { profile: string }).profile;
+            const provider = imported[0]!.providers.find(
+              (entry) => entry.profile === profile,
+            )!;
+            (provider as { credentialId: string | null }).credentialId =
+              "saved-native-handle";
+            return null;
+          }
+          if (command === "get_provider_presets")
+            return [
+              {
+                id: "openrouter",
+                label: "OpenRouter",
+                protocol: "chat_completions",
+                baseUrl: "https://openrouter.ai/api/v1",
+                credentialEnv: "OPENROUTER_API_KEY",
+              },
+              {
+                id: "custom-chat",
+                label: "Custom Chat Completions",
+                protocol: "chat_completions",
+                baseUrl: null,
+                credentialEnv: null,
+              },
+            ];
+          if (
+            command === "apply_managed_model_configuration" ||
+            command === "open_setup_link" ||
+            command === "cancel_setup_package_review"
+          )
+            return null;
+          throw new Error("Unexpected setup command: " + command);
+        },
+      };
+    },
+    { sample, options },
+  );
   await page.goto("/?fixture=setup");
   await expect(
     page.getByRole("button", { name: "Import setup file", exact: true }),
@@ -306,6 +326,11 @@ test("review traps focus, restores it on Escape, and requires explicit replaceme
   await page.getByRole("dialog").press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(trigger).toBeFocused();
+  expect(
+    (await calls(page)).find(
+      (entry) => entry.command === "cancel_setup_package_review",
+    )?.args,
+  ).toEqual({ sha256: sample.sha256 });
   expect(
     (await calls(page)).filter((c) => c.command === "apply_setup_package"),
   ).toHaveLength(1);
@@ -569,4 +594,24 @@ test("replacing an imported package refreshes the selected connection and model 
       (entry) => entry.command === "apply_managed_model_configuration",
     ),
   ).toBe(false);
+});
+
+test("saved imports recover from startup contention without choosing builtin defaults", async ({
+  page,
+}) => {
+  await setup(page, { preloaded: true, busyCount: 4 });
+  await expect(page.getByText("5 providers · 6 models imported")).toBeVisible();
+  await toProviders(page);
+  await expect(
+    page.getByRole("radio", { name: "Company AI", exact: true }),
+  ).toBeChecked();
+  await next(page).click();
+  await expect(
+    page.getByRole("radio", { name: "company/engineering", exact: true }),
+  ).toBeChecked();
+  expect(
+    (await calls(page)).filter(
+      (entry) => entry.command === "list_setup_packages",
+    ).length,
+  ).toBeGreaterThan(4);
 });

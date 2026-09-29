@@ -29,6 +29,7 @@ const COMMANDS: &[&str] = &[
     "open_setup_link",
     "list_setup_packages",
     "inspect_setup_package",
+    "cancel_setup_package_review",
     "apply_setup_package",
     "configure_setup_credential",
     "use_setup_model",

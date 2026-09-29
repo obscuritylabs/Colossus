@@ -504,3 +504,38 @@ fn setup_package_archive_limits_are_enforced_before_parsing_members() {
             .contains("expanded")
     );
 }
+
+#[test]
+fn cancelled_setup_review_restores_saved_instructions_and_cannot_clear_a_newer_review() {
+    use super::commands::{Review, SetupReviewState};
+    let original = saved();
+    let mut replacement = original.clone();
+    replacement.sha256 = "b".repeat(64);
+    replacement.manifest.description_markdown = "https://new.example.test/token".into();
+    let settings = DesktopSettings {
+        setup_packages: vec![original.clone()],
+        ..DesktopSettings::default()
+    };
+    let reviews = SetupReviewState::default();
+    *reviews.0.lock().unwrap() = Some(Review {
+        package: replacement.clone(),
+        previous_sha256: Some(original.sha256.clone()),
+        certificate_fingerprints: Vec::new(),
+    });
+    reviews.cancel(&original.sha256).unwrap();
+    assert_eq!(
+        reviews.instructions(&settings, "company").unwrap(),
+        replacement
+    );
+    reviews.cancel(&replacement.sha256).unwrap();
+    assert!(reviews.0.lock().unwrap().is_none());
+    assert_eq!(
+        reviews.instructions(&settings, "company").unwrap(),
+        original
+    );
+    assert!(
+        reviews
+            .instructions(&DesktopSettings::default(), "company")
+            .is_err()
+    );
+}

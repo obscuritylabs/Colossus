@@ -24,12 +24,60 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt as _;
 
 #[derive(Default)]
-pub(crate) struct SetupReviewState(Mutex<Option<Review>>);
+pub(crate) struct SetupReviewState(pub(super) Mutex<Option<Review>>);
 
-struct Review {
-    package: SavedSetupPackage,
-    previous_sha256: Option<String>,
-    certificate_fingerprints: Vec<String>,
+impl SetupReviewState {
+    pub(super) fn cancel(&self, sha256: &str) -> Result<(), CommandErrorDto> {
+        let mut pending = self
+            .0
+            .lock()
+            .map_err(|_| invalid("Setup review is unavailable."))?;
+        if pending
+            .as_ref()
+            .is_some_and(|review| review.package.sha256 == sha256)
+        {
+            *pending = None;
+        }
+        Ok(())
+    }
+
+    pub(super) fn instructions(
+        &self,
+        settings: &DesktopSettings,
+        id: &str,
+    ) -> Result<SavedSetupPackage, CommandErrorDto> {
+        let pending = self
+            .0
+            .lock()
+            .map_err(|_| invalid("Setup review is unavailable."))?;
+        pending
+            .as_ref()
+            .map(|review| &review.package)
+            .filter(|package| package.manifest.id == id)
+            .or_else(|| {
+                settings
+                    .setup_packages
+                    .iter()
+                    .find(|package| package.manifest.id == id)
+            })
+            .cloned()
+            .ok_or_else(|| invalid("The setup instructions are unavailable."))
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::needless_pass_by_value)] // Tauri command arguments are owned.
+pub(crate) fn cancel_setup_package_review(
+    reviews: State<'_, SetupReviewState>,
+    sha256: String,
+) -> Result<(), CommandErrorDto> {
+    reviews.cancel(&sha256)
+}
+
+pub(super) struct Review {
+    pub(super) package: SavedSetupPackage,
+    pub(super) previous_sha256: Option<String>,
+    pub(super) certificate_fingerprints: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -531,22 +579,7 @@ pub(crate) async fn open_setup_link(
     use tauri::Manager as _;
     let _guard = connect_guard(&state)?;
     let settings = settings_store()?.load()?;
-    let pending = reviews
-        .0
-        .lock()
-        .map_err(|_| invalid("Setup review is unavailable."))?
-        .as_ref()
-        .map(|r| r.package.clone());
-    let package = pending
-        .as_ref()
-        .filter(|p| p.manifest.id == request.id)
-        .or_else(|| {
-            settings
-                .setup_packages
-                .iter()
-                .find(|p| p.manifest.id == request.id)
-        })
-        .ok_or_else(|| invalid("The setup instructions are unavailable."))?;
+    let package = reviews.instructions(&settings, &request.id)?;
     let url =
         url::Url::parse(&request.url).map_err(|_| invalid("The instruction link is invalid."))?;
     if request.url.len() > 2048
