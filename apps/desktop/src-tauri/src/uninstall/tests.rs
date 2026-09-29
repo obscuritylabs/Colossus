@@ -477,3 +477,44 @@ fn native_uninstall_cleans_home_after_bundled_cli_provider_presets() {
         b"keep project"
     );
 }
+
+#[test]
+fn cleanup_preserves_cli_data_written_after_the_final_idle_check() {
+    let (_guard, home) = fixture();
+    let cli = empty_cli_surface(&home);
+    let plan = plan::CleanupPlan::inspect(&home).unwrap();
+    plan.check_idle().unwrap();
+    // This is the interval between the final preflight and actual deletion.
+    create_private_file(&cli.join("state.redb"), b"concurrent CLI data").unwrap();
+    assert_eq!(plan.remove_data(), Err(CleanupError::UnsafeData));
+    assert_eq!(
+        fs::read(cli.join("state.redb")).unwrap(),
+        b"concurrent CLI data"
+    );
+}
+
+#[test]
+fn cleanup_preserves_cli_partitions_created_after_the_final_idle_check() {
+    let (_guard, home) = fixture();
+    let plan = plan::CleanupPlan::inspect(&home).unwrap();
+    plan.check_idle().unwrap();
+    let cli = empty_cli_surface(&home);
+    create_private_file(&cli.join("state.redb"), b"new CLI partition").unwrap();
+    assert_eq!(plan.remove_data(), Err(CleanupError::UnsafeData));
+    assert_eq!(
+        fs::read(cli.join("state.redb")).unwrap(),
+        b"new CLI partition"
+    );
+}
+
+#[test]
+fn cleanup_removes_read_only_home_metadata() {
+    let (_guard, home) = fixture();
+    let path = home.join("AGENTS.md");
+    create_private_file(&path, b"generated instructions").unwrap();
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&path, permissions).unwrap();
+    cleanup(&home).unwrap();
+    assert!(!home.exists());
+}

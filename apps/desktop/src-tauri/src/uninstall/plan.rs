@@ -19,6 +19,7 @@ pub(super) struct CleanupPlan {
     pub keys: BTreeSet<(String, String)>,
     pub vaults: Vec<(PathBuf, String)>,
     files: super::files::CleanupFiles,
+    removal: super::removal::CleanupRemoval,
     empty_cli_directories: Vec<EmptyCliDirectory>,
 }
 
@@ -33,6 +34,7 @@ impl CleanupPlan {
             keys: BTreeSet::new(),
             vaults: Vec::new(),
             files: super::files::CleanupFiles::default(),
+            removal: super::removal::CleanupRemoval::default(),
             empty_cli_directories: Vec::new(),
         };
         let mut directories = vec![(home.to_owned(), 0)];
@@ -43,6 +45,7 @@ impl CleanupPlan {
             }
             let binding = BoundPath::open_directory(&directory)
                 .map_err(|error| CleanupError::from_native(&error))?;
+            plan.removal.record(home, &directory, &binding, true)?;
             for entry in fs::read_dir(&directory).map_err(|error| CleanupError::from_io(&error))? {
                 entries += 1;
                 if entries > MAX_ENTRIES {
@@ -76,6 +79,7 @@ impl CleanupPlan {
                     let file = BoundPath::open_file(&path)
                         .map_err(|error| CleanupError::from_native(&error))?;
                     plan.files.push(&path, relative, &file)?;
+                    plan.removal.record(home, &path, &file, false)?;
                     plan.inspect_file(home, &path)?;
                 }
             }
@@ -181,6 +185,10 @@ impl CleanupPlan {
             }
         }
         Ok(())
+    }
+
+    pub fn remove_data(&self) -> Result<(), CleanupError> {
+        self.removal.remove()
     }
 
     pub fn check_idle(&self) -> Result<(), super::CleanupError> {

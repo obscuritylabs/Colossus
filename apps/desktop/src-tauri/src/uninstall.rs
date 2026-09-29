@@ -3,6 +3,7 @@
 mod files;
 mod ownership;
 mod plan;
+mod removal;
 #[cfg(test)]
 mod tests;
 
@@ -97,9 +98,9 @@ pub(super) fn cleanup(home: &Path) -> Result<(), CleanupError> {
     drop(vaults);
     binding.revalidate().map_err(|_| CleanupError::UnsafeData)?;
     plan.check_idle()?;
-    // Rust's Windows removal does not follow reparse points. Inspection rejects
-    // them as well; no project path from settings is ever passed to removal.
-    fs::remove_dir_all(home).map_err(|_| CleanupError::FileSystem)?;
+    // Shared CLI containers are removed only if empty at the deletion itself.
+    // Never recursively remove a container that can receive concurrent CLI data.
+    plan.remove_data()?;
     if fs::symlink_metadata(home).is_ok() {
         return Err(CleanupError::FileSystem);
     }
