@@ -2343,6 +2343,7 @@ mod tests {
 
     fn provider(base_url: &str) -> ProviderSetting {
         ProviderSetting {
+            credential_required: false,
             profile: "primary-provider".into(),
             kind: ProviderKindSetting::Compatible,
             base_url: base_url.into(),

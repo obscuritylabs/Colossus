@@ -21,7 +21,7 @@ fn bytes() -> Vec<u8> {
         ("config.yaml", CONFIG.as_bytes()),
     ])
 }
-fn saved() -> SavedSetupPackage {
+pub(super) fn saved() -> SavedSetupPackage {
     let source = archive::read(&bytes()).unwrap();
     let canonical = json!({"providers":{"profiles":{"company":{"kind":"open_ai_compatible","baseUrl":"https://ai.example.com/v1","credentialReference":"env:COMPANY_TOKEN"}}},"models":{"profiles":{},"roles":{}}});
     configuration::inspected(source, &canonical, &bytes()).unwrap()
@@ -211,7 +211,19 @@ async fn native_setup_package_uses_runtime_yaml_validation_without_provider_requ
         let canonical = response
             .canonical_config
             .expect("canonical provider/model configuration");
-        let package = configuration::inspected(source, &canonical, &bytes()).unwrap();
+        let mut package = configuration::inspected(source, &canonical, &bytes()).unwrap();
+        let mut settings = DesktopSettings::default();
+        super::catalog::import_catalog(&mut settings, &mut package, None).unwrap();
+        assert_eq!(
+            settings.global_configuration.providers.len(),
+            package.providers.len()
+        );
+        assert_eq!(
+            settings.global_configuration.models.len(),
+            package.models.len()
+        );
+        assert!(settings.providers.is_empty());
+        assert!(settings.models.is_empty());
         assert!(
             package
                 .providers

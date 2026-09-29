@@ -457,6 +457,7 @@ export interface ManagedProviderCatalogValue {
   kind: ProviderKind;
   baseUrl: string;
   credentialId?: string | null;
+  credentialRequired?: boolean;
   timeoutMs?: number | null;
 }
 

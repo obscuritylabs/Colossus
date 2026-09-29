@@ -1,5 +1,5 @@
 use super::{
-    archive, configuration,
+    archive, catalog, configuration,
     types::{PackageDto, SavedSetupPackage, invalid},
 };
 use crate::{
@@ -242,7 +242,9 @@ pub(crate) async fn apply_setup_package(
     if let Some(old) = old {
         configuration::preserve_credentials(&mut package, old);
     }
+    let old = old.cloned();
     let previous = settings.clone();
+    catalog::import_catalog(&mut settings, &mut package, old.as_ref())?;
     settings
         .setup_packages
         .retain(|p| p.manifest.id != package.manifest.id);
@@ -319,6 +321,7 @@ pub(crate) async fn configure_setup_credential(
     let label = package.manifest.providers[&request.profile]
         .display_name
         .clone();
+    let previous = package.clone();
     let credential_id = if let Some(id) = request.credential_id {
         crate::provider_catalog::validate_provider_credential(&settings, &id)?;
         id
@@ -345,6 +348,14 @@ pub(crate) async fn configure_setup_credential(
         .find(|p| p.connection.profile == request.profile)
         .ok_or_else(|| invalid("The setup provider changed."))?;
     provider.connection.credential_id = Some(credential_id);
+    let mut updated = package.clone();
+    catalog::update_credentials(&mut settings, &mut updated, &previous)?;
+    let saved = settings
+        .setup_packages
+        .iter_mut()
+        .find(|p| p.manifest.id == request.id)
+        .ok_or_else(|| invalid("The setup package changed."))?;
+    *saved = updated;
     store.save(&settings)
 }
 
@@ -619,10 +630,8 @@ pub(super) fn export_current(
     let mut presentation = BTreeMap::new();
     let mut providers = Vec::new();
     for (i, provider) in settings.providers.iter().enumerate() {
-        let slot = provider
-            .credential_id
-            .as_ref()
-            .map(|_| format!("env:COLOSSUS_PROVIDER_{}_TOKEN", i + 1));
+        let slot = (provider.credential_required || provider.credential_id.is_some())
+            .then(|| format!("env:COLOSSUS_PROVIDER_{}_TOKEN", i + 1));
         let kind = match provider.kind {
             ProviderKindSetting::Compatible => "open_ai_compatible",
             ProviderKindSetting::Responses => "open_ai_responses",
@@ -647,6 +656,7 @@ pub(super) fn export_current(
         );
         let mut connection = provider.clone();
         connection.credential_id = None;
+        connection.credential_required = slot.is_some();
         providers.push(SetupProvider {
             connection,
             credential_slot: slot,
@@ -684,5 +694,6 @@ pub(super) fn export_current(
         roles: settings.model_roles.clone(),
         icons: BTreeMap::new(),
         ca_pem: None,
+        catalog_resources: None,
     })
 }

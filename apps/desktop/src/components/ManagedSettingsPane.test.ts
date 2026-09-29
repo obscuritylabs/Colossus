@@ -1257,6 +1257,24 @@ describe("ManagedSettingsPane", () => {
       revisions: [{ revision: 1, value: provider }],
     };
     expect(managedProvider(providerDraft(providerEntry))).toEqual(provider);
+    const pendingProvider = {
+      ...provider,
+      credentialId: null,
+      credentialRequired: true,
+    };
+    const pendingEntry = {
+      ...providerEntry,
+      revisions: [{ revision: 1, value: pendingProvider }],
+    };
+    expect(managedProvider(providerDraft(pendingEntry))).toEqual(
+      pendingProvider,
+    );
+    expect(
+      managedProvider({
+        ...providerDraft(pendingEntry),
+        credentialId: "saved-key",
+      }).credentialRequired,
+    ).toBeUndefined();
 
     const model: ManagedModelCatalogValue = {
       profile: "reasoning",

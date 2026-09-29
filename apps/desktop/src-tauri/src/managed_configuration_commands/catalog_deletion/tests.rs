@@ -44,6 +44,7 @@ fn settings() -> DesktopSettings {
         global.providers.push(entry(
             id,
             ProviderSetting {
+                credential_required: false,
                 profile: profile.into(),
                 kind: ProviderKindSetting::Compatible,
                 base_url: "https://example.test/v1".into(),

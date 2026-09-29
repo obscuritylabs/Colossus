@@ -1250,6 +1250,7 @@ async fn configure_managed_codex_runtime(
         ));
     }
     settings.providers = vec![ProviderSetting {
+        credential_required: false,
         profile: "primary-provider".into(),
         kind: ProviderKindSetting::Codex,
         base_url: provider_base_url(ProviderKindSetting::Codex).into(),
@@ -1365,7 +1366,10 @@ pub(crate) async fn apply_managed_model_configuration_locked(
                 .push(credential_id.clone());
         }
     }
-    if let Err(error) = store.save(&settings) {
+    if let Err(error) = crate::setup_package::sync_configured_credentials(&mut settings)
+        .and_then(|()| crate::managed_configuration::select_configured_models(&mut settings))
+        .and_then(|()| store.save(&settings))
+    {
         rollback_staged_provider_credentials(
             state,
             &store,
@@ -1924,6 +1928,7 @@ fn persist_provider_rotation(
     let cleanup_staged = settings.clone();
     store_secret(&credential_id, secret)?;
     settings.providers = vec![ProviderSetting {
+        credential_required: false,
         profile: "primary-provider".into(),
         kind: request.provider_kind,
         base_url: provider_base_url(request.provider_kind).to_owned(),
@@ -3202,6 +3207,7 @@ mod tests {
     fn settings_with_provider(credential_id: &str) -> DesktopSettings {
         DesktopSettings {
             providers: vec![ProviderSetting {
+                credential_required: false,
                 profile: "primary-provider".into(),
                 kind: crate::desktop_settings::ProviderKindSetting::Compatible,
                 base_url: crate::desktop_settings::OPENROUTER_BASE_URL.into(),

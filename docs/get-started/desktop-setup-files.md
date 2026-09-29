@@ -27,8 +27,10 @@ capabilities, suggested roles, instructions, and certificate fingerprints before
 choosing **Import providers and models**. The review opens in a dialog; after import,
 the Desktop page shows a compact provider/model count beside appearance settings.
 
-Import saves setup entries without starting a provider or changing an existing
-workspace's model selection. No workspace or API key is required to import.
+Import adds every provider and model to the normal global inventory without starting
+a provider or changing an existing workspace's model selection. No workspace or API
+key is required to import. Connections awaiting a key show **Needs API key**; they
+are not treated as connections that allow anonymous access.
 
 Continue to **Workspace** to choose a folder, then **Provider** to see all imported
 connections. The package's primary provider is preselected. Select a provider to see
@@ -47,7 +49,15 @@ Other imported providers remain available for later selection. The selected prov
 and its models are added to the workspace; other providers' credentials are not
 required. Existing workspace configurations are never replaced by imported defaults.
 For an already configured workspace, **Settings → Global → Providers** also offers
-**Use in workspace**, with explicit replacement for conflicting profile definitions.
+**Use model in workspace** inside each provider’s expanded details, with explicit
+replacement for conflicting profile definitions. Key enrollment and workspace
+activation show progress and errors beside the action.
+
+Use **Manage setup files** to export a saved package, review its certificates, or
+remove the saved file and instructions. Removing a saved setup keeps providers,
+models, credentials, and existing workspaces. Delete unwanted providers and models
+from their normal inventory actions. Older saved setups are added to the inventory
+once when Desktop opens them; later inventory deletions stay deleted.
 
 ## Package layout
 
@@ -67,6 +77,8 @@ company.colossus-setup
 Only referenced assets belong in the archive. Icons and certificates are optional.
 Do not include scripts, executables, private keys, credentials, or application state.
 
+For a ready-to-package company example and repeatable manual checks, see
+[`examples/desktop-setup/`](https://github.com/obscuritylabs/Colossus/tree/main/examples/desktop-setup).
 Start with the repository's `examples/desktop-setup/manifest.yaml` and
 `examples/desktop-setup/config.yaml`. The adjacent
 `manifest.schema.json` describes manifest fields for offline editor assistance.

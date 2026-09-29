@@ -142,6 +142,9 @@ pub(super) fn inspected(
             _ => return Err(invalid("Unsupported provider protocol.")),
         };
         let connection = ProviderSetting {
+            credential_required: value["credentialReference"]
+                .as_str()
+                .is_some_and(|v| v.starts_with("env:")),
             profile: profile.clone(),
             kind,
             base_url: if kind == ProviderKindSetting::Codex {
@@ -211,6 +214,7 @@ pub(super) fn inspected(
         config_yaml: source.config_yaml,
         icons: source.icons,
         ca_pem: source.ca_pem,
+        catalog_resources: None,
         sha256: hex::encode(Sha256::digest(bytes)),
         providers,
         models,
@@ -250,6 +254,11 @@ pub(super) fn dto(
             .map(|p| {
                 let presentation = &package.manifest.providers[&p.connection.profile];
                 ProviderDto {
+                    catalog_resource_id: package
+                        .catalog_resources
+                        .as_ref()
+                        .and_then(|ids| ids.get(&format!("provider:{}", p.connection.profile)))
+                        .cloned(),
                     profile: p.connection.profile.clone(),
                     display_name: presentation.display_name.clone(),
                     description_markdown: presentation.description_markdown.clone(),
@@ -318,6 +327,7 @@ pub(crate) fn validate_saved(packages: &[SavedSetupPackage]) -> Result<(), Comma
             return Err(invalid("Saved setup package metadata is invalid."));
         }
         validate_saved_profiles(package)?;
+        super::catalog::validate_resources(package)?;
         // Reuse the same package reader to enforce metadata, asset, and certificate bounds.
         let source = super::archive::read(&super::archive::write(package)?)?;
         inspection_yaml(&source)?;

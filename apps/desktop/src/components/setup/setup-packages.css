@@ -490,3 +490,61 @@ dialog.setup-import-dialog {
   margin: 16px 0 8px;
   font-size: var(--font-size-body-sm);
 }
+.imported-provider-actions {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  min-width: 0;
+}
+.imported-provider-actions .markdown-content {
+  font-size: var(--font-size-body-sm);
+  max-width: 760px;
+}
+.imported-provider-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin: 12px 0;
+}
+.imported-provider-control > label {
+  display: grid;
+  gap: 6px;
+  flex: 0 1 340px;
+  min-width: 0;
+  font-size: var(--font-size-body-sm);
+}
+.imported-provider-control .dropdown-select {
+  width: 100%;
+}
+.imported-provider-replace {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-body-sm);
+}
+.imported-provider-replace input {
+  width: auto;
+  flex: none;
+}
+.setup-action-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+}
+.setup-action-spinner {
+  animation: setup-action-spin 1s linear infinite;
+  flex: none;
+}
+@keyframes setup-action-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .setup-action-spinner {
+    animation: none;
+  }
+}

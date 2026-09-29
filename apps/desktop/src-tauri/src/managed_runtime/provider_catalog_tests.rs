@@ -206,6 +206,7 @@ fn catalog_fixture(
     let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
     listener.set_nonblocking(true).expect("bounded listener");
     let provider = ProviderSetting {
+        credential_required: false,
         profile: "setup-provider".into(),
         kind: ProviderKindSetting::Compatible,
         base_url: format!("http://{}/v1", listener.local_addr().expect("address")),

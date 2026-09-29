@@ -25,6 +25,7 @@ export function installSetupPreviewApi() {
         packages = [structuredClone(samplePackage) as SetupPackage];
         return null;
       }
+      if (command === "desktop_status") return {};
       if (command === "get_managed_configuration")
         return { globalConfiguration: { credentials: [] } };
       if (command === "configure_setup_credential") {

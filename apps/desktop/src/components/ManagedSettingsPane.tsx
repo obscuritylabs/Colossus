@@ -1,4 +1,6 @@
 import { SetupPackagesPanel } from "./setup/SetupPackagesPanel";
+import { useSetupPackages } from "./setup/useSetupPackages";
+import { ImportedProviderActions } from "./setup/ImportedProviderActions";
 import { SettingsFrame } from "./SettingsFrame";
 import {
   subscribeSettingsUpdates,
@@ -239,6 +241,7 @@ export interface ProviderEditorDraft {
   kind: ManagedProviderCatalogValue["kind"];
   baseUrl: string;
   credentialId: string;
+  credentialRequired?: boolean;
   timeoutMs: number | null;
 }
 
@@ -2727,11 +2730,13 @@ export function ManagedSettingsPane({
         <SetupPackagesPanel
           desktop={desktop}
           busy={busy}
-          onStatusChange={() => {
+          onStatusChange={async () => {
+            setSnapshot(await getManagedConfiguration());
             window.dispatchEvent(new Event("colossus-setup-refresh"));
           }}
           onChooseProvider={() => onConfigureManaged()}
           compact={globalTab === "desktop"}
+          inventory
         />
       ) : null}
       {!query ? (
@@ -2800,6 +2805,10 @@ export function ManagedSettingsPane({
       ) : scope === "global" ? (
         <>
           <GlobalSettingsBody
+            onSetupChange={async () => {
+              setSnapshot(await getManagedConfiguration());
+              window.dispatchEvent(new Event("colossus-setup-refresh"));
+            }}
             tab={globalTab}
             snapshot={snapshot}
             defaults={defaults}
@@ -3001,6 +3010,7 @@ export function ManagedSettingsPane({
 }
 
 function GlobalSettingsBody({
+  onSetupChange,
   tab,
   snapshot,
   defaults,
@@ -3052,6 +3062,7 @@ function GlobalSettingsBody({
   onRemoveCaBundle,
   onExportDiagnostics,
 }: {
+  onSetupChange: () => Promise<void>;
   tab: GlobalTab;
   snapshot: ManagedSettingsSnapshot;
   defaults: DefaultsDraft;
@@ -3107,6 +3118,7 @@ function GlobalSettingsBody({
   onRemoveCaBundle: () => void;
   onExportDiagnostics: () => void;
 }) {
+  const { packages: setupPackages } = useSetupPackages();
   const global = snapshot.globalConfiguration;
   if (tab === "plugins") {
     return (
@@ -3740,6 +3752,22 @@ function GlobalSettingsBody({
           onAdd={() => setProviderEditor({ ...EMPTY_PROVIDER_DRAFT })}
           rows={activeProviders.map((entry) => {
             const provider = currentValue(entry);
+            const setup = setupPackages
+              .flatMap((item) =>
+                item.providers.map((candidate) => ({
+                  item,
+                  provider: candidate,
+                })),
+              )
+              .find(
+                ({ provider: candidate }) =>
+                  candidate.catalogResourceId === entry.id &&
+                  candidate.profile === provider.profile &&
+                  candidate.kind === provider.kind &&
+                  candidate.baseUrl === provider.baseUrl &&
+                  candidate.timeoutMs === (provider.timeoutMs ?? null) &&
+                  candidate.credentialId === (provider.credentialId ?? null),
+              );
             const codex = provider.kind === "open_ai_codex";
             const models = activeModels.filter(
               (model) =>
@@ -3760,7 +3788,14 @@ function GlobalSettingsBody({
               label: entry.label,
               name,
               description,
-              icon: <ProviderIcon provider={provider} size={28} />,
+              icon: (
+                <ProviderIcon
+                  provider={provider}
+                  size={28}
+                  customIcon={setup?.provider.icon ?? null}
+                  customDarkIcon={setup?.provider.darkIcon ?? null}
+                />
+              ),
               searchText: [
                 name,
                 entry.label,
@@ -3774,7 +3809,9 @@ function GlobalSettingsBody({
                     ? "Codex account"
                     : provider.credentialId
                       ? "Credential saved"
-                      : "No credential"}
+                      : provider.credentialRequired
+                        ? "Needs API key"
+                        : "No key required"}
                 </>
               ),
               usage: `${models.length} ${models.length === 1 ? "model" : "models"}`,
@@ -3803,7 +3840,9 @@ function GlobalSettingsBody({
                           : (credential?.label ??
                             (provider.credentialId
                               ? "Credential unavailable"
-                              : "No credential"))}
+                              : provider.credentialRequired
+                                ? "Needs API key"
+                                : "No key required"))}
                       </dd>
                       <dt>Request timeout</dt>
                       <dd>
@@ -3830,6 +3869,16 @@ function GlobalSettingsBody({
                       <p>No configured model uses this provider.</p>
                     )}
                   </div>
+                  {setup ? (
+                    <ImportedProviderActions
+                      item={setup.item}
+                      provider={setup.provider}
+                      desktop={desktop}
+                      credentials={global.credentials}
+                      busy={busy}
+                      onChanged={onSetupChange}
+                    />
+                  ) : null}
                 </>
               ),
             };
@@ -6774,7 +6823,11 @@ function ProviderEditor({
                 onChange({ ...draft, credentialId: event.target.value })
               }
             >
-              <option value="">None</option>
+              <option value="">
+                {draft.credentialRequired
+                  ? "Add API key later"
+                  : "No API key required"}
+              </option>
               {credentials.map((credential) => (
                 <option key={credential.id} value={credential.id}>
                   {credential.label}
@@ -7841,6 +7894,9 @@ export function managedProvider(
     baseUrl: codex ? "https://chatgpt.com/backend-api/codex" : draft.baseUrl,
     credentialId: codex || !draft.credentialId ? null : draft.credentialId,
     timeoutMs: draft.timeoutMs,
+    ...(!codex && !draft.credentialId && draft.credentialRequired
+      ? { credentialRequired: true }
+      : {}),
   };
 }
 
@@ -7906,6 +7962,7 @@ export function providerDraft(
     kind: provider.kind,
     baseUrl: provider.baseUrl,
     credentialId: provider.credentialId ?? "",
+    ...(provider.credentialRequired ? { credentialRequired: true } : {}),
     timeoutMs: provider.timeoutMs ?? null,
   };
 }

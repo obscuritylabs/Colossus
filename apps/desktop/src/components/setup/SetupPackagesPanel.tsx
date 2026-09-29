@@ -6,6 +6,7 @@ import {
   IconFileImport,
   IconPackage,
   IconChevronDown,
+  IconLoader2,
 } from "@tabler/icons-react";
 import {
   cancelSetupPackageReview,
@@ -41,6 +42,7 @@ interface Props {
   onSignIn?: () => void | Promise<void>;
   onChooseProvider?: (provider: SetupProvider, packageId: string) => void;
   compact?: boolean;
+  inventory?: boolean;
 }
 export function SetupPackagesPanel({
   desktop,
@@ -49,6 +51,7 @@ export function SetupPackagesPanel({
   onSignIn,
   onChooseProvider,
   compact = false,
+  inventory = false,
 }: Props) {
   const { packages } = useSetupPackages();
   const reviewTrigger = useRef<HTMLElement | null>(null);
@@ -125,10 +128,10 @@ export function SetupPackagesPanel({
       setReview(null);
       await refresh();
       setupChanged();
-      if (trust) await onStatusChange?.(await desktopStatus());
+      await onStatusChange?.(trust ? await desktopStatus() : desktop);
       setOpen(false);
       setNotice(
-        "Imported. Your providers and models are ready for the next steps.",
+        "Providers and models added to your inventory. Add API keys whenever you are ready.",
       );
     });
   }
@@ -462,9 +465,99 @@ export function SetupPackagesPanel({
       </div>
     );
   }
+  function installedPackages() {
+    return (
+      <div className="setup-installed-packages">
+        {!inventory && desktop.provider.configured ? (
+          <label className="setup-replace">
+            <input
+              type="checkbox"
+              checked={replaceProfiles}
+              disabled={disabled}
+              onChange={(event) => setReplaceProfiles(event.target.checked)}
+            />{" "}
+            Replace matching provider and model profiles when selecting a model
+            for this workspace
+          </label>
+        ) : null}
+        {packages.map((item) => (
+          <article key={item.id}>
+            <h2>
+              {item.name} <span>v{item.version}</span>
+            </h2>
+            {inventory ? (
+              <p>
+                {item.providers.length} providers ·{" "}
+                {item.providers.reduce(
+                  (count, provider) => count + provider.models.length,
+                  0,
+                )}{" "}
+                models
+              </p>
+            ) : (
+              <>
+                {instructions(item.descriptionMarkdown, item.id)}
+                {providerTable(item, false)}
+              </>
+            )}
+            <div className="setup-package-footer">
+              {item.certificateFingerprints.length ? (
+                <button
+                  type="button"
+                  className="text-button"
+                  disabled={disabled}
+                  onClick={() => void inspect(item.id)}
+                >
+                  Review CA certificates
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="text-button"
+                disabled={disabled}
+                onClick={() =>
+                  void perform(async () => {
+                    if (await exportSetupPackage(item.id))
+                      setNotice("Setup file exported without credentials.");
+                  })
+                }
+              >
+                Export setup file
+              </button>
+              <details>
+                <summary>Remove saved setup</summary>
+                <p>
+                  Removes this saved setup file and its instructions. Providers,
+                  models, workspaces, credentials, and trusted certificates are
+                  retained.
+                </p>
+                <button
+                  className="button secondary"
+                  type="button"
+                  disabled={disabled}
+                  onClick={() =>
+                    void perform(async () => {
+                      await removeSetupPackage({
+                        id: item.id,
+                        sha256: item.sha256,
+                      });
+                      await refresh();
+                      setupChanged();
+                    })
+                  }
+                >
+                  Remove {item.name}
+                </button>
+              </details>
+            </div>
+          </article>
+        ))}
+      </div>
+    );
+  }
   return (
     <section
-      className={`setup-packages${open && !compact ? "" : " setup-packages--collapsed"}`}
+      className={`setup-packages${open && !compact && !inventory ? "" : " setup-packages--collapsed"}`}
       aria-label="Desktop setup files"
       aria-busy={working}
     >
@@ -486,19 +579,22 @@ export function SetupPackagesPanel({
         >
           <IconFileImport size={17} /> Import setup file
         </button>
-        {packages.length && !compact ? (
+        {packages.length && (!compact || inventory) ? (
           <button
             className="text-button"
             type="button"
             disabled={disabled}
-            onClick={() => {
+            onClick={(event) => {
+              reviewTrigger.current = event.currentTarget;
               setOpen(!open);
               if (!open) void perform(refresh);
             }}
           >
-            {open
-              ? "Hide imported providers"
-              : `View imported providers (${packages.reduce((n, p) => n + p.providers.length, 0)})`}
+            {inventory
+              ? `Manage setup files (${packages.length})`
+              : open
+                ? "Hide imported providers"
+                : `View imported providers (${packages.reduce((n, p) => n + p.providers.length, 0)})`}
           </button>
         ) : null}
         {desktop.provider.configured ? (
@@ -517,13 +613,13 @@ export function SetupPackagesPanel({
           </button>
         ) : null}
       </div>
-      {error && !review ? (
+      {error && !review && !(inventory && open) ? (
         <p className="page-error" role="alert">
           {error}
         </p>
       ) : null}
       {notice ? <p role="status">{notice}</p> : null}
-      {compact && packages.length ? (
+      {compact && !inventory && packages.length ? (
         <div className="setup-import-summary">
           {packages.map((item) => (
             <div key={item.id}>
@@ -647,79 +743,43 @@ export function SetupPackagesPanel({
             </div>
           </div>
         </SetupReviewDialog>
-      ) : open && !compact ? (
-        <div className="setup-installed-packages">
-          {desktop.provider.configured ? (
-            <label className="setup-replace">
-              <input
-                type="checkbox"
-                checked={replaceProfiles}
+      ) : open && (!compact || inventory) ? (
+        inventory ? (
+          <SetupReviewDialog
+            busy={disabled}
+            returnFocus={reviewTrigger.current}
+            onClose={() => setOpen(false)}
+          >
+            <h2 id="setup-review-title">Setup files</h2>
+            <p>
+              Imported providers and models are in your inventory. Expand a
+              provider to add a key or choose a model for your workspace.
+            </p>
+            {error ? (
+              <p role="alert" className="page-error">
+                {error}
+              </p>
+            ) : null}
+            {working ? (
+              <p role="status">
+                <IconLoader2 className="setup-action-spinner" size={16} />{" "}
+                Updating setup…
+              </p>
+            ) : null}
+            {installedPackages()}
+            <div className="setup-package-footer">
+              <button
+                className="button secondary"
                 disabled={disabled}
-                onChange={(event) => setReplaceProfiles(event.target.checked)}
-              />{" "}
-              Replace matching provider and model profiles when selecting a
-              model for this workspace
-            </label>
-          ) : null}
-          {packages.map((item) => (
-            <article key={item.id}>
-              <h2>
-                {item.name} <span>v{item.version}</span>
-              </h2>
-              {instructions(item.descriptionMarkdown, item.id)}
-              {providerTable(item, false)}
-              <div className="setup-package-footer">
-                {item.certificateFingerprints.length ? (
-                  <button
-                    type="button"
-                    className="text-button"
-                    disabled={disabled}
-                    onClick={() => void inspect(item.id)}
-                  >
-                    Review CA certificates
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  className="text-button"
-                  disabled={disabled}
-                  onClick={() =>
-                    void perform(async () => {
-                      if (await exportSetupPackage(item.id))
-                        setNotice("Setup file exported without credentials.");
-                    })
-                  }
-                >
-                  Export setup file
-                </button>
-                <details>
-                  <summary>Remove saved setup</summary>
-                  <p>
-                    Removes these setup entries. Configured workspaces,
-                    credentials, and trusted certificates are retained.
-                  </p>
-                  <button
-                    className="button secondary"
-                    type="button"
-                    disabled={disabled}
-                    onClick={() =>
-                      void perform(async () => {
-                        await removeSetupPackage({
-                          id: item.id,
-                          sha256: item.sha256,
-                        });
-                        await refresh();
-                        setupChanged();
-                      })
-                    }
-                  >
-                    Remove {item.name}
-                  </button>
-                </details>
-              </div>
-            </article>
-          ))}
-        </div>
+                onClick={() => setOpen(false)}
+              >
+                Done
+              </button>
+            </div>
+          </SetupReviewDialog>
+        ) : (
+          installedPackages()
+        )
       ) : null}
     </section>
   );
