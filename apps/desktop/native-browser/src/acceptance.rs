@@ -1,4 +1,4 @@
-//! Test-only WebKit probes, excluded from ordinary Desktop builds and IPC.
+//! Test-only `WebKit` probes, excluded from ordinary Desktop builds and IPC.
 
 use std::{cell::RefCell, time::Duration};
 
@@ -13,7 +13,7 @@ use tauri::Webview;
 
 use crate::BrowserError;
 
-/// Evaluate a static acceptance probe through WebKit's own completion callback.
+/// Evaluate a static acceptance probe through `WebKit`'s own completion callback.
 ///
 /// The hardened guest replaces Wry's navigation delegate, so Wry never drains
 /// its initial script queue. Its generic evaluation API drops these callbacks.
