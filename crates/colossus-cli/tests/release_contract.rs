@@ -110,7 +110,11 @@ fn tag_validation_and_draft_publication_fail_closed() {
         "--draft --verify-tag --generate-notes",
         "refusing to retain unexpected draft asset",
         "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 25",
-        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 22",
+        "expected_assets=22",
+        "expected_assets=18",
+        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq \"$expected_assets\"",
+        "if [ \"$TEST_RELEASE\" = true ]; then",
+        "node scripts/ci/release-source-version.mjs \"$tag\" \"$workspace_version\"",
         "Colossus-Desktop-STABLE-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe",
         "Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe",
     ] {
@@ -305,6 +309,10 @@ fn public_bootstrap_installers_are_fixed_origin_bounded_and_release_owned() {
     let workflow = workflow("release.yml");
     let release_jobs = jobs(&workflow);
     let bootstrap = job(release_jobs, "bootstrap_installers");
+    assert_eq!(
+        field(bootstrap, "if").as_str(),
+        Some("needs.validate.outputs.test_release != 'true'")
+    );
     named_step(bootstrap, "Validate bootstrap installer syntax");
     named_step(bootstrap, "Stage immutable bootstrap installer assets");
     named_step(bootstrap, "Upload bootstrap installers and checksums");
@@ -313,7 +321,10 @@ fn public_bootstrap_installers_are_fixed_origin_bounded_and_release_owned() {
         fs::read_to_string(repository_root().join(".github/workflows/release.yml"))
             .expect("read release workflow");
     for required in [
-        "bootstrap_installers=${{ needs.bootstrap_installers.result }}",
+        "BOOTSTRAP_RESULT: ${{ needs.bootstrap_installers.result }}",
+        "bootstrap_installers=\"$BOOTSTRAP_RESULT\"",
+        "test \"$TARGET_CHANNEL\" = developer_preview",
+        "test \"$BOOTSTRAP_RESULT\" = skipped",
         "dist/colossus-install.sh",
         "dist/colossus-install.ps1",
         "colossus-install.sh.sha256",
