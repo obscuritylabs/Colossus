@@ -143,6 +143,7 @@ for (const kind of ["model", "provider"] as const) {
       state.deletionCalls = [];
       state.__TAURI_INTERNALS__ = {
         invoke: (command: string, args: unknown) => {
+          if (command === "list_setup_packages") return Promise.resolve([]);
           state.deletionCalls.push({ command, args });
           return new Promise((_resolve, reject) => {
             state.rejectDeletion = () =>
