@@ -75,10 +75,10 @@ fn actionlint_recognizes_the_provisioned_larger_runner() {
         labels,
         [
             "blacksmith-4vcpu-ubuntu-2404",
-            "blacksmith-4vcpu-ubuntu-2404-arm",
             "blacksmith-4vcpu-windows-2025",
             "blacksmith-6vcpu-macos-15",
             "blacksmith-8vcpu-windows-2025",
+            "ubuntu-latest-m",
         ]
         .into_iter()
         .map(str::to_owned)
@@ -772,7 +772,7 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
     let release_jobs = jobs(&workflow);
     assert_eq!(
         field(job(release_jobs, "validate"), "runs-on").as_str(),
-        Some("blacksmith-4vcpu-ubuntu-2404")
+        Some("ubuntu-latest-m")
     );
     let desktop_build = job(release_jobs, "desktop_macos_build");
     let desktop = job(release_jobs, "desktop_macos");
@@ -875,7 +875,7 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
         "Colossus-Desktop-VALIDATION-ONLY-ADHOC-${RELEASE_TAG}-aarch64-apple-darwin.zip",
         "colossus-desktop-validation-only-adhoc-aarch64-apple-darwin",
         "Upload non-runnable ADHOC validation archive and checksum",
-        "- runner: blacksmith-4vcpu-ubuntu-2404\n            target: x86_64-unknown-linux-musl",
+        "- runner: ubuntu-latest-m\n            target: x86_64-unknown-linux-musl",
         "shasum -a 256",
         "runs-on: blacksmith-8vcpu-windows-2025",
         "./scripts/package-desktop-windows.ps1",

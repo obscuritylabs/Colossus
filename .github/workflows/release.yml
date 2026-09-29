@@ -20,7 +20,7 @@ concurrency:
 jobs:
   validate:
     name: Validate release request
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest-m
     timeout-minutes: 45
     env:
       SCCACHE_GHA_ENABLED: "true"
@@ -37,7 +37,7 @@ jobs:
       test_release: ${{ steps.request.outputs.test_release }}
     steps:
       - name: Check out complete release history
-        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -156,9 +156,7 @@ jobs:
           staged_binary="$install_dir/colossus"
           sudo install -d -o root -g root -m 0755 "$install_dir"
           sudo install -o root -g root -m 0755 /bin/true "$staged_binary"
-          if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; then
-            sudo release/install-apparmor.sh "$staged_binary"
-          fi
+          sudo release/install-apparmor.sh "$staged_binary"
           cargo build --locked -p colossus-cli --bin colossus
           sudo install -o root -g root -m 0755 \
             target/debug/colossus "$staged_binary"
@@ -192,10 +190,10 @@ jobs:
           - runner: blacksmith-6vcpu-macos-15
             target: aarch64-apple-darwin
             archive: tar.gz
-          - runner: blacksmith-4vcpu-ubuntu-2404
+          - runner: ubuntu-latest-m
             target: x86_64-unknown-linux-musl
             archive: tar.gz
-          - runner: blacksmith-4vcpu-ubuntu-2404-arm
+          - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             archive: tar.gz
           - runner: blacksmith-8vcpu-windows-2025
@@ -251,9 +249,7 @@ jobs:
           staged_binary="$install_dir/colossus"
           sudo install -d -o root -g root -m 0755 "$install_dir"
           sudo install -o root -g root -m 0755 /bin/true "$staged_binary"
-          if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; then
-            sudo release/install-apparmor.sh "$staged_binary"
-          fi
+          sudo release/install-apparmor.sh "$staged_binary"
           cargo build --locked -p colossus-cli --bin colossus
           sudo install -o root -g root -m 0755 \
             target/debug/colossus "$staged_binary"

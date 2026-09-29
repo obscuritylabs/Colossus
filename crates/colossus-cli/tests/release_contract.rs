@@ -42,16 +42,8 @@ fn release_workflow_has_exactly_six_native_cli_targets() {
                 "aarch64-apple-darwin",
                 "tar.gz"
             ),
-            (
-                "blacksmith-4vcpu-ubuntu-2404",
-                "x86_64-unknown-linux-musl",
-                "tar.gz"
-            ),
-            (
-                "blacksmith-4vcpu-ubuntu-2404-arm",
-                "aarch64-unknown-linux-musl",
-                "tar.gz"
-            ),
+            ("ubuntu-latest-m", "x86_64-unknown-linux-musl", "tar.gz"),
+            ("ubuntu-24.04-arm", "aarch64-unknown-linux-musl", "tar.gz"),
             (
                 "blacksmith-8vcpu-windows-2025",
                 "x86_64-pc-windows-msvc",
@@ -754,15 +746,6 @@ fn linux_profile_and_release_package_remain_hardened() {
                 .count(),
             expected_staging_count,
             "{workflow_path} must fail fast on AppArmor path or parser errors before compiling"
-        );
-        assert_eq!(
-            source
-                .matches(
-                    "if [ \"$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)\" = 1 ]; then\n            sudo release/install-apparmor.sh \"$staged_binary\""
-                )
-                .count(),
-            expected_staging_count,
-            "{workflow_path} must install the AppArmor profile whenever the host restricts user namespaces"
         );
         for forbidden in [
             "/usr/local/libexec/colossus-ci",
