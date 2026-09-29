@@ -37,7 +37,7 @@ jobs:
       test_release: ${{ steps.request.outputs.test_release }}
     steps:
       - name: Check out complete release history
-        uses: useblacksmith/checkout@v1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -184,7 +184,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: blacksmith-6vcpu-macos-15
+          - runner: macos-15-intel
             target: x86_64-apple-darwin
             archive: tar.gz
           - runner: blacksmith-6vcpu-macos-15
@@ -199,7 +199,7 @@ jobs:
           - runner: blacksmith-8vcpu-windows-2025
             target: x86_64-pc-windows-msvc
             archive: zip
-          - runner: blacksmith-4vcpu-windows-2025
+          - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             archive: zip
     steps:
@@ -420,7 +420,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out repository bootstrap sources
-        uses: useblacksmith/checkout@v1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
 
       - name: Validate bootstrap installer syntax
         shell: bash
@@ -485,7 +485,7 @@ jobs:
       SOURCE_DATE_EPOCH: ${{ needs.validate.outputs.source_date_epoch }}
     steps:
       - name: Check out complete SDK release history
-        uses: useblacksmith/checkout@v1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -1205,7 +1205,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Check out gate contract
-        uses: useblacksmith/checkout@v1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
       - name: Require the complete core or Developer Preview release
         shell: bash
         env:
@@ -1269,7 +1269,7 @@ jobs:
       contents: write
     steps:
       - name: Check out the exact release verifier
-        uses: useblacksmith/checkout@v1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
         with:
           ref: ${{ needs.validate.outputs.tag }}
           persist-credentials: false

@@ -639,7 +639,7 @@ jobs:
       SCCACHE_GHA_RW_MODE: "READ_ONLY"
     steps:
       - name: Check out repository
-        uses: useblacksmith/checkout@v1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
       - name: Install pinned nightly Rust
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
         with:
@@ -692,7 +692,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: useblacksmith/checkout@v1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
       - name: Install Rust 1.96
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
         with:
@@ -721,7 +721,7 @@ jobs:
             image: chromadb/chroma:1.5.9@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6
     steps:
       - name: Check out repository
-        uses: useblacksmith/checkout@v1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
       - name: Install Rust 1.96
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
         with:
@@ -773,7 +773,7 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 12
     steps:
       - name: Check out repository
-        uses: useblacksmith/checkout@v1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
       - name: Install Rust 1.96
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
         with:
@@ -792,7 +792,7 @@ jobs:
     timeout-minutes: 40
     steps:
       - name: Check out repository
-        uses: useblacksmith/checkout@v1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
       - name: Install Rust 1.96
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
         with:
@@ -925,7 +925,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Check out gate contract
-        uses: useblacksmith/checkout@v1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: .ci-trusted

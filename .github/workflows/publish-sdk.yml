@@ -42,7 +42,7 @@ jobs:
       version: ${{ steps.release.outputs.version }}
     steps:
       - name: Check out the exact stable release tag
-        uses: useblacksmith/checkout@v1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -174,7 +174,7 @@ jobs:
       id-token: write
     steps:
       - name: Check out the exact stable release tag
-        uses: useblacksmith/checkout@v1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
         with:
           fetch-depth: 0
           fetch-tags: true

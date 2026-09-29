@@ -1,4 +1,7 @@
 self-hosted-runner:
   labels:
-    - ubuntu-latest-m
-    - windows-latest-l
+    - blacksmith-4vcpu-ubuntu-2404
+    - blacksmith-4vcpu-ubuntu-2404-arm
+    - blacksmith-4vcpu-windows-2025
+    - blacksmith-6vcpu-macos-15
+    - blacksmith-8vcpu-windows-2025

@@ -73,9 +73,16 @@ fn actionlint_recognizes_the_provisioned_larger_runner() {
     );
     assert_eq!(
         labels,
-        ["ubuntu-latest-m".to_owned(), "windows-latest-l".to_owned(),]
-            .into_iter()
-            .collect()
+        [
+            "blacksmith-4vcpu-ubuntu-2404",
+            "blacksmith-4vcpu-ubuntu-2404-arm",
+            "blacksmith-4vcpu-windows-2025",
+            "blacksmith-6vcpu-macos-15",
+            "blacksmith-8vcpu-windows-2025",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
     );
 }
 
@@ -543,11 +550,11 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     );
     assert_eq!(
         field(job(jobs, "macos-native"), "runs-on").as_str(),
-        Some("macos-14")
+        Some("blacksmith-6vcpu-macos-15")
     );
     assert_eq!(
         field(job(jobs, "macos-desktop-acceptance"), "runs-on").as_str(),
-        Some("macos-14")
+        Some("blacksmith-6vcpu-macos-15")
     );
     assert_eq!(
         field(job(jobs, "macos-desktop-acceptance"), "timeout-minutes").as_u64(),
@@ -556,7 +563,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     );
     assert_eq!(
         field(job(jobs, "macos-desktop-bundle"), "runs-on").as_str(),
-        Some("macos-14")
+        Some("blacksmith-6vcpu-macos-15")
     );
     assert_eq!(
         field(job(jobs, "macos-desktop-bundle"), "timeout-minutes").as_u64(),
@@ -699,7 +706,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     }
     assert_eq!(
         field(job(jobs, "live-security"), "runs-on").as_str(),
-        Some("ubuntu-latest-m")
+        Some("blacksmith-4vcpu-ubuntu-2404")
     );
     let podman_readiness = field(
         named_step(
@@ -765,24 +772,33 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
     let release_jobs = jobs(&workflow);
     assert_eq!(
         field(job(release_jobs, "validate"), "runs-on").as_str(),
-        Some("ubuntu-latest-m")
+        Some("blacksmith-4vcpu-ubuntu-2404")
     );
     let desktop_build = job(release_jobs, "desktop_macos_build");
     let desktop = job(release_jobs, "desktop_macos");
     let sdk = job(release_jobs, "sdk_release");
-    assert_eq!(field(sdk, "runs-on").as_str(), Some("ubuntu-latest-m"));
+    assert_eq!(
+        field(sdk, "runs-on").as_str(),
+        Some("blacksmith-4vcpu-ubuntu-2404")
+    );
     assert_eq!(field(sdk, "needs").as_str(), Some("validate"));
     assert_eq!(
         field(sdk, "if").as_str(),
         Some("needs.validate.outputs.target_channel == 'stable'")
     );
-    assert_eq!(field(desktop_build, "runs-on").as_str(), Some("macos-14"));
+    assert_eq!(
+        field(desktop_build, "runs-on").as_str(),
+        Some("blacksmith-6vcpu-macos-15")
+    );
     assert_eq!(field(desktop_build, "needs").as_str(), Some("validate"));
     assert_eq!(
         field(desktop_build, "if").as_str(),
         Some("needs.validate.outputs.target_channel != 'stable'")
     );
-    assert_eq!(field(desktop, "runs-on").as_str(), Some("macos-14"));
+    assert_eq!(
+        field(desktop, "runs-on").as_str(),
+        Some("blacksmith-6vcpu-macos-15")
+    );
     assert_eq!(
         field(desktop, "if").as_str(),
         Some("needs.validate.outputs.target_channel != 'stable'")
@@ -859,9 +875,9 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
         "Colossus-Desktop-VALIDATION-ONLY-ADHOC-${RELEASE_TAG}-aarch64-apple-darwin.zip",
         "colossus-desktop-validation-only-adhoc-aarch64-apple-darwin",
         "Upload non-runnable ADHOC validation archive and checksum",
-        "- runner: ubuntu-latest-m\n            target: x86_64-unknown-linux-musl",
+        "- runner: blacksmith-4vcpu-ubuntu-2404\n            target: x86_64-unknown-linux-musl",
         "shasum -a 256",
-        "runs-on: windows-latest-l",
+        "runs-on: blacksmith-8vcpu-windows-2025",
         "./scripts/package-desktop-windows.ps1",
         "codeSigning = \"unsigned_validation_only\"",
         "smartScreenWarningExpected = $true",
@@ -937,7 +953,7 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
     let cli_sign_job = job(release_jobs, "windows_cli_sign");
     assert_eq!(
         field(cli_sign_job, "runs-on").as_str(),
-        Some("windows-2025")
+        Some("blacksmith-4vcpu-windows-2025")
     );
     assert_eq!(
         field(cli_sign_job, "environment").as_str(),
@@ -984,7 +1000,7 @@ fn sdk_publication_is_oidc_protected_recoverable_and_byte_exact() {
         "sdk_base_tag: ${{ steps.release.outputs.sdk_base_tag }}",
         "source_date_epoch: ${{ steps.release.outputs.source_date_epoch }}",
         "cargo xtask check sdk --base \"$SDK_BASE_TAG\"",
-        "runs-on: ubuntu-latest-m",
+        "runs-on: blacksmith-4vcpu-ubuntu-2404",
         "timeout-minutes: 45",
         "npm install --global npm@11.5.1",
         "--output dist/sdk-rebuilt",
