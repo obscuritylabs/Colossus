@@ -5,3 +5,4 @@ self-hosted-runner:
     - blacksmith-6vcpu-macos-15
     - blacksmith-8vcpu-windows-2025
     - ubuntu-latest-m
+    - windows-latest-l

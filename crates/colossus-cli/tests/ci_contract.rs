@@ -79,6 +79,7 @@ fn actionlint_recognizes_the_provisioned_larger_runner() {
             "blacksmith-6vcpu-macos-15",
             "blacksmith-8vcpu-windows-2025",
             "ubuntu-latest-m",
+            "windows-latest-l",
         ]
         .into_iter()
         .map(str::to_owned)
