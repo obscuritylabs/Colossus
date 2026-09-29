@@ -59,6 +59,7 @@ async function installNativeSettingsMock(
     };
     host.__TAURI_INTERNALS__ = {
       invoke: async (command: string, args: any) => {
+        if (command === "list_setup_packages") return [];
         if (command === "get_managed_configuration")
           return structuredClone(snapshot);
         if (command === "save_global_defaults") {

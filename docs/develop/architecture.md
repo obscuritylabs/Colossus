@@ -171,6 +171,12 @@ commands dispatch it without receiving secret values from the renderer.
   Provider adapters normalize bounded, optional model-card metadata. Missing limits
   or capabilities remain distinguishable from provider-declared values, and model
   selection never grants tools or changes policy based on remote descriptions.
+- Desktop setup packages are native interface imports: `setup_package` bounds and
+  reviews an offline ZIP manifest, assets, and provider/model YAML. The verified
+  sidecar's existing inspection API validates runtime semantics; no runtime crate
+  is linked into Desktop. Saved setup metadata is separate from active workspace
+  configuration. Credentials, trust changes, and model activation reuse existing
+  native services and persist through the version-7 Desktop settings envelope.
 - Disposable Desktop setup diagnostics bind their protected journal identity to the
   canonical runtime directory and its filesystem identity. Versioned migration moves
   setup to a new namespace without resetting or bypassing workspace journal anchors.

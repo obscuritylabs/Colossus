@@ -8,6 +8,23 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-09-28
+
+### Added
+
+- Added offline Desktop setup packages with canonical YAML provider/model settings,
+  Markdown onboarding instructions, bundled provider icons, and optional CA certificates.
+  Imports preview endpoints, models and trust changes before saving; credentials stay
+  in the native vault and can be added when the provider is first used.
+- Added a five-provider sample package and a documented manifest schema for administrators.
+
+### Changed
+
+- Kept Desktop import compact and moved provider instructions, credential setup and
+  model selection into their respective onboarding steps. Imported model limits,
+  capabilities, reasoning settings and provider timeouts survive workspace activation.
+- Updated the coordinated workspace, bundled plugin and SDK metadata to `0.11.2`.
+
 ### Fixed
 
 - Windows Desktop application-data cleanup now accepts hard links contained entirely

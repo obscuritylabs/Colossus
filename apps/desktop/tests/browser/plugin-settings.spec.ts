@@ -215,6 +215,7 @@ test("plugin save uses the native defaults command and retains edits on failure"
     state.settingsCalls = [];
     state.__TAURI_INTERNALS__ = {
       invoke: async (command: string, args: unknown) => {
+        if (command === "list_setup_packages") return [];
         state.settingsCalls.push({ command, args });
         throw {
           code: "revision_conflict",

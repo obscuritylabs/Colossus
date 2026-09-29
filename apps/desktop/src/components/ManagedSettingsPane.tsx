@@ -1,3 +1,4 @@
+import { SetupPackagesPanel } from "./setup/SetupPackagesPanel";
 import { SettingsFrame } from "./SettingsFrame";
 import {
   subscribeSettingsUpdates,
@@ -2720,6 +2721,19 @@ export function ManagedSettingsPane({
       }
     >
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />
+      {!query &&
+      scope === "global" &&
+      (globalTab === "providers" || globalTab === "desktop") ? (
+        <SetupPackagesPanel
+          desktop={desktop}
+          busy={busy}
+          onStatusChange={() => {
+            window.dispatchEvent(new Event("colossus-setup-refresh"));
+          }}
+          onChooseProvider={() => onConfigureManaged()}
+          compact={globalTab === "desktop"}
+        />
+      ) : null}
       {!query ? (
         <div className="settings-page-context">
           <p className="surface-breadcrumb">

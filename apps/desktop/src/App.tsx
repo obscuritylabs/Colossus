@@ -3511,6 +3511,17 @@ export default function App() {
     }
   }
 
+  useEffect(() => {
+    const refreshSetup = () => {
+      void desktopStatus()
+        .then((status) => acceptDesktopStatus(status, true))
+        .catch((error: unknown) => setActionError(commandError(error)));
+    };
+    window.addEventListener("colossus-setup-refresh", refreshSetup);
+    return () =>
+      window.removeEventListener("colossus-setup-refresh", refreshSetup);
+  });
+
   async function handleCodexLogin() {
     if (connectingRef.current || submitInFlight.current) {
       return;
@@ -4952,6 +4963,9 @@ export default function App() {
             onImportCaBundle={handleImportCaBundle}
             onConfigure={handleConfigureManaged}
             onApplyConfiguration={handleApplyManagedModelConfiguration}
+            onSetupStatus={async (status) => {
+              await acceptDesktopStatus(status, true);
+            }}
             onCodexLogin={handleCodexLogin}
             onCodexLogout={handleCodexLogout}
             onRunSelfTest={handleManagedSelfTest}

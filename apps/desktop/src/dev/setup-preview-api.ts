@@ -1,3 +1,5 @@
+import samplePackage from "./setup-package-preview.json";
+import type { SetupPackage } from "../setupPackages";
 /** Isolated browser preview data. Never replaces a native or test bridge. */
 export function installSetupPreviewApi() {
   if (
@@ -7,8 +9,36 @@ export function installSetupPreviewApi() {
     return;
   const host = window as unknown as { __TAURI_INTERNALS__?: unknown };
   if (host.__TAURI_INTERNALS__) return;
+  let packages: SetupPackage[] = [];
   host.__TAURI_INTERNALS__ = {
-    invoke: async (command: string) => {
+    invoke: async (
+      command: string,
+      args: { request?: { profile?: string } } = {},
+    ) => {
+      if (command === "list_setup_packages") return structuredClone(packages);
+      if (command === "inspect_setup_package")
+        return {
+          ...structuredClone(samplePackage),
+          replacesVersion: packages.length ? "2" : null,
+        };
+      if (command === "apply_setup_package") {
+        packages = [structuredClone(samplePackage) as SetupPackage];
+        return null;
+      }
+      if (command === "get_managed_configuration")
+        return { globalConfiguration: { credentials: [] } };
+      if (command === "configure_setup_credential") {
+        const provider = packages[0]?.providers.find(
+          (entry) => entry.profile === args.request?.profile,
+        );
+        if (provider) provider.credentialId = "preview-key";
+        return null;
+      }
+      if (
+        command === "open_setup_link" ||
+        command === "cancel_setup_package_review"
+      )
+        return null;
       if (command === "get_provider_presets")
         return [
           {

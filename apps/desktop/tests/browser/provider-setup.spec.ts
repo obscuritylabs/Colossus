@@ -366,6 +366,7 @@ async function mountSetup(
       state.__TAURI_INTERNALS__ = {
         invoke: async (command: string, args: Record<string, unknown>) => {
           state.setupRequests.push({ command, args });
+          if (command === "list_setup_packages") return [];
           if (command === "get_provider_presets") {
             if (state.failPresets)
               throw {

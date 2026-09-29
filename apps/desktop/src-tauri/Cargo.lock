@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-api"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -749,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-api-proto"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "prost",
  "prost-types",
@@ -761,7 +761,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-codex-auth"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "base64 0.22.1",
  "colossus-windows-native",
@@ -779,7 +779,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-contracts"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "colossus-domain",
  "serde",
@@ -789,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-credentials"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "apple-native-keyring-store",
  "base64 0.22.1",
@@ -813,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-darwin-process"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "libc",
 ]
@@ -843,6 +843,7 @@ dependencies = [
  "getrandom 0.4.3",
  "git2",
  "hex",
+ "image",
  "keyring",
  "keyring-core",
  "minisign-verify",
@@ -868,15 +869,16 @@ dependencies = [
  "uuid",
  "windows-native-keyring-store",
  "zeroize",
+ "zip",
 ]
 
 [[package]]
 name = "colossus-domain"
-version = "0.11.1"
+version = "0.11.2"
 
 [[package]]
 name = "colossus-grpc"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "base64 0.22.1",
  "colossus-api",
@@ -914,7 +916,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-home"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "colossus-linux-native",
  "colossus-windows-native",
@@ -927,7 +929,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-linux-native"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "libc",
  "rustix",
@@ -935,7 +937,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-media"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -981,7 +983,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-network"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "hex",
  "reqwest 0.12.28",
@@ -994,7 +996,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-observability"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "colossus-contracts",
  "colossus-ports",
@@ -1010,7 +1012,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-ports"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "async-trait",
  "colossus-contracts",
@@ -1021,7 +1023,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-sdk"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1056,7 +1058,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-sidecar-protocol"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "colossus-contracts",
  "serde",
@@ -1070,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-windows-native"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "thiserror 2.0.19",
  "tokio",
@@ -1079,7 +1081,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-worker-protocol"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "base64 0.22.1",
  "colossus-contracts",
@@ -7435,6 +7437,7 @@ checksum = "caa8cd6af31c3b31c6631b8f483848b91589021b28fffe50adada48d4f4d2ed1"
 dependencies = [
  "arbitrary",
  "crc32fast",
+ "flate2",
  "indexmap 2.14.0",
  "memchr",
 ]

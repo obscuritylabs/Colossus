@@ -54,6 +54,63 @@ export function getWorkspaceGitCommit(
   });
 }
 
+export function listSetupPackages(): Promise<
+  import("./setupPackages").SetupPackage[]
+> {
+  return call("list_setup_packages");
+}
+export function inspectSetupPackage(
+  packageId: string | null,
+): Promise<import("./setupPackages").SetupPackage | null> {
+  return call("inspect_setup_package", { packageId });
+}
+export function cancelSetupPackageReview(sha256: string): Promise<void> {
+  return call("cancel_setup_package_review", { sha256 });
+}
+export function applySetupPackage(request: {
+  sha256: string;
+  trustCertificates: boolean;
+  replaceExisting: boolean;
+}): Promise<void> {
+  return call("apply_setup_package", { request });
+}
+export function configureSetupCredential(request: {
+  id: string;
+  sha256: string;
+  profile: string;
+  credentialId?: string;
+}): Promise<void> {
+  return call("configure_setup_credential", {
+    request,
+    appearance: readNativeDialogAppearance(),
+  });
+}
+export function useSetupModel(request: {
+  id: string;
+  sha256: string;
+  profile: string;
+  modelProfile: string;
+  workspaceId: string;
+  replaceConflicts: boolean;
+}): Promise<DesktopStatus> {
+  return call("use_setup_model", {
+    request,
+    appearance: readNativeDialogAppearance(),
+  });
+}
+export function removeSetupPackage(request: {
+  id: string;
+  sha256: string;
+}): Promise<void> {
+  return call("remove_setup_package", { request });
+}
+export function exportSetupPackage(packageId: string | null): Promise<boolean> {
+  return call("export_setup_package", { packageId });
+}
+export function openSetupLink(id: string, url: string): Promise<void> {
+  return call("open_setup_link", { request: { id, url } });
+}
+
 export function getProviderPresets(): Promise<ProviderPreset[]> {
   return call("get_provider_presets");
 }

@@ -9,6 +9,15 @@ import {
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import colossusMark from "../assets/colossus-mark.svg";
+import { useSetupPackages } from "./setup/useSetupPackages";
+import {
+  ImportedProviderPicker,
+  type ImportedProviderSelection,
+} from "./setup/ImportedProviderPicker";
+import { ImportedModelPicker } from "./setup/ImportedModelPicker";
+import { importedWorkspaceConfiguration, setupChanged } from "../setupPackages";
+import type { ManagedModelConfiguration } from "../types";
+import { SetupPackagesPanel } from "./setup/SetupPackagesPanel";
 import { SetupDesktopStep } from "./setup/SetupDesktopStep";
 import { setupSteps, validProviderUrl } from "./setup/setupSteps";
 import type { SetupStep } from "./setup/setupSteps";
@@ -32,7 +41,11 @@ import type { ManagedSetupDraft } from "./ModelConfigurationEditor";
 import { automaticProviderTimeoutMs } from "../providerTimeout";
 import { ProviderPresetSelect } from "./ProviderPresetSelect";
 import { ProviderModelPicker } from "./ProviderModelPicker";
-import { discoverManagedProviderModels } from "../api";
+import {
+  configureSetupCredential,
+  discoverManagedProviderModels,
+  listSetupPackages,
+} from "../api";
 import {
   resetModelMetadata,
   selectCatalogModel,
@@ -53,6 +66,7 @@ interface OnboardingSurfaceProps {
   onCodexLogout: () => Promise<void>;
   onUseExternal: () => Promise<void>;
   onImportCaBundle: () => Promise<void>;
+  onSetupStatus?: (status: DesktopStatus) => void | Promise<void>;
   dismissible: boolean;
   onCancel: () => void;
 }
@@ -94,6 +108,7 @@ function WorkspaceOnboardingForm({
   onCodexLogout,
   onUseExternal,
   onImportCaBundle,
+  onSetupStatus,
   dismissible,
   onCancel,
   catalogLoading,
@@ -153,7 +168,85 @@ function WorkspaceOnboardingForm({
   const [replaceCredential, setReplaceCredential] = useState(false);
   const [credentialRevision, setCredentialRevision] = useState(0);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const busy = runtimeBusy || catalogLoading;
+  const { packages, loaded: packagesLoaded } = useSetupPackages();
+  const [importedKey, setImportedKey] = useState<string | null>(null);
+  const [credentialBusy, setCredentialBusy] = useState(false);
+  const [setupError, setSetupError] = useState("");
+  const importedDigest = useRef<string | null>(null);
+  const initializedImport = useRef(false);
+  const selectedSetup =
+    packages
+      .flatMap((item) =>
+        item.providers.map((provider) => ({ package: item, provider })),
+      )
+      .find(
+        (entry) =>
+          entry.package.id + ":" + entry.provider.profile === importedKey,
+      ) ?? null;
+  function selectImportedModel(entry: ManagedModelConfiguration) {
+    setModel(entry.model);
+    setModelConfiguration(entry);
+  }
+  function selectImported(selection: ImportedProviderSelection) {
+    const provider = selection.provider;
+    importedDigest.current = selection.package.sha256;
+    setSetupError("");
+    setImportedKey(selection.package.id + ":" + provider.profile);
+    setProviderKind(provider.kind);
+    setBaseUrl(provider.baseUrl);
+    setCredentialId(provider.credentialId);
+    setNoCredential(!provider.credentialRequired);
+    setReplaceCredential(false);
+    const suggested =
+      provider.models.find(
+        (entry) => entry.profile === selection.package.roles.primary,
+      ) ?? provider.models[0];
+    if (suggested) selectImportedModel(suggested);
+    else {
+      clearModel();
+      setModelConfiguration((current) => ({
+        ...current,
+        providerProfile: provider.profile,
+      }));
+    }
+  }
+  useEffect(() => {
+    if (!packagesLoaded || initializedImport.current) return;
+    // Never replace an existing workspace configuration with imported defaults.
+    if (packages.length || step === "provider")
+      initializedImport.current = true;
+    if (desktop.provider.configured) return;
+    const candidates = packages.flatMap((item) =>
+      item.providers.map((provider) => ({ package: item, provider })),
+    );
+    const suggested =
+      candidates.find((entry) =>
+        entry.provider.models.some(
+          (candidate) => candidate.profile === entry.package.roles.primary,
+        ),
+      ) ?? candidates[0];
+    if (suggested) selectImported(suggested);
+  }, [packagesLoaded, packages, step]);
+  useEffect(() => {
+    if (selectedSetup) setCredentialId(selectedSetup.provider.credentialId);
+  }, [selectedSetup?.provider.credentialId, importedKey]);
+  useEffect(() => {
+    if (!importedKey || !packagesLoaded) return;
+    if (
+      selectedSetup &&
+      selectedSetup.package.sha256 !== importedDigest.current
+    ) {
+      selectImported(selectedSetup);
+      if (step !== "desktop" && step !== "workspace") onStepChange("provider");
+    } else if (!selectedSetup) {
+      setImportedKey(null);
+      setCredentialId(null);
+      setBaseUrl("");
+      clearModel();
+      if (step !== "desktop" && step !== "workspace") onStepChange("provider");
+    }
+  }, [packages, importedKey, packagesLoaded]);
+  const busy = runtimeBusy || catalogLoading || credentialBusy;
   const advancedRequired = requiresAdvancedModelSetup(
     desktop.managedModelConfiguration,
   );
@@ -175,10 +268,10 @@ function WorkspaceOnboardingForm({
   connectionRef.current = connectionKey;
   const errorRef = useRef<HTMLParagraphElement>(null);
   useEffect(() => {
-    if (error === "") return;
+    if (error === "" && setupError === "") return;
     errorRef.current?.focus({ preventScroll: true });
     errorRef.current?.scrollIntoView({ block: "nearest" });
-  }, [error]);
+  }, [error, setupError]);
   function clearModel() {
     setModel("");
     setModelConfiguration((current) => ({
@@ -230,6 +323,7 @@ function WorkspaceOnboardingForm({
     const provider = draft.providers[0];
     const selectedModel = draft.models[0];
     if (!provider || !selectedModel) return;
+    setImportedKey(null);
     setProviderKind(provider.providerKind);
     setBaseUrl(provider.baseUrl);
     setCredentialId(provider.credentialId || null);
@@ -268,6 +362,52 @@ function WorkspaceOnboardingForm({
       return;
     }
     if (guided && (!providerReady || !modelReady)) return;
+    if (selectedSetup && desktop.workspace) {
+      setSetupError("");
+      setCredentialBusy(true);
+      try {
+        let savedCredentialId = credentialId;
+        if (selectedSetup.provider.credentialRequired && !savedCredentialId) {
+          await configureSetupCredential({
+            id: selectedSetup.package.id,
+            sha256: selectedSetup.package.sha256,
+            profile: selectedSetup.provider.profile,
+          });
+          const refreshed = await listSetupPackages();
+          savedCredentialId =
+            refreshed
+              .find((entry) => entry.sha256 === selectedSetup.package.sha256)
+              ?.providers.find(
+                (entry) => entry.profile === selectedSetup.provider.profile,
+              )?.credentialId ?? null;
+          setupChanged();
+          if (!savedCredentialId)
+            throw new Error("The setup provider changed. Review it and retry.");
+          setCredentialId(savedCredentialId);
+        }
+        await onApplyConfiguration(
+          importedWorkspaceConfiguration(
+            selectedSetup.provider,
+            { ...modelConfiguration, model },
+            desktop.workspace.workspaceId,
+            accessProfile,
+            executionBoundary,
+            savedCredentialId ? "reuse" : credentialAction,
+            savedCredentialId,
+            selectedSetup.package.roles,
+          ),
+        );
+      } catch (failure) {
+        setSetupError(
+          failure instanceof Error
+            ? failure.message
+            : "Could not finish provider setup. Retry when ready.",
+        );
+      } finally {
+        setCredentialBusy(false);
+      }
+      return;
+    }
     await submitManagedRuntimeConfiguration(
       desktop.workspace,
       {
@@ -389,12 +529,30 @@ function WorkspaceOnboardingForm({
           </ol>
         ) : null}
 
-        {error !== "" ? (
+        {error !== "" || setupError !== "" ? (
           <p className="page-error" role="alert" ref={errorRef} tabIndex={-1}>
-            {error}
+            {error || setupError}
           </p>
         ) : null}
 
+        {(guided && step === "desktop") || !guided ? (
+          <SetupPackagesPanel
+            desktop={desktop}
+            busy={busy}
+            onStatusChange={onSetupStatus}
+            onSignIn={onCodexLogin}
+            compact={guided}
+            onChooseProvider={(provider) => {
+              setProviderKind(provider.kind);
+              setBaseUrl(provider.baseUrl);
+              clearModel();
+              setCredentialId(provider.credentialId);
+              setNoCredential(!provider.credentialRequired);
+              setReplaceCredential(false);
+              onStepChange("provider");
+            }}
+          />
+        ) : null}
         {guided && step === "desktop" ? (
           <SetupDesktopStep
             busy={busy}
@@ -442,10 +600,11 @@ function WorkspaceOnboardingForm({
                   initialDraft: {
                     providers: [
                       {
-                        profile: "primary-provider",
+                        profile:
+                          selectedSetup?.provider.profile ?? "primary-provider",
                         providerKind,
                         baseUrl,
-                        timeoutMs: null,
+                        timeoutMs: selectedSetup?.provider.timeoutMs ?? null,
                         effectiveTimeoutMs: automaticProviderTimeoutMs(baseUrl),
                         credentialAction,
                         ...(initialProvider?.hasCredential
@@ -458,7 +617,7 @@ function WorkspaceOnboardingForm({
                       },
                     ],
                     models: [{ ...modelConfiguration, model }],
-                    roles: { primary: "primary" },
+                    roles: { primary: modelConfiguration.profile },
                     accessProfile,
                     executionBoundary,
                   },
@@ -497,26 +656,77 @@ function WorkspaceOnboardingForm({
               className="setup-step-panel"
               hidden={guided && step !== "provider"}
             >
-              <div className="provider-fields">
-                <ProviderPresetSelect
-                  kind={providerKind}
-                  baseUrl={baseUrl}
+              {selectedSetup ? (
+                <ImportedProviderPicker
+                  packages={packages}
+                  selected={selectedSetup}
                   busy={busy}
-                  {...(initialProvider === undefined &&
-                  !desktop.provider.configured
-                    ? { defaultPresetId: "openrouter" }
-                    : {})}
-                  onSelect={(preset) => {
-                    setProviderKind(presetProviderKind(preset));
-                    setBaseUrl(preset.baseUrl ?? "");
+                  signedIn={codexReady}
+                  onSelect={selectImported}
+                  onBusyChange={setCredentialBusy}
+                  onOther={() => {
+                    setImportedKey(null);
                     clearModel();
+                    setBaseUrl("");
                     setCredentialId(null);
-                    setReplaceCredential(false);
-                    setNoCredential(
-                      preset.credentialEnv === null && preset.baseUrl !== null,
-                    );
+                    setNoCredential(false);
                   }}
                 />
+              ) : null}
+              {!selectedSetup && packages.length ? (
+                <button
+                  type="button"
+                  className="text-button"
+                  disabled={busy}
+                  onClick={() => {
+                    const item = packages[0]!;
+                    selectImported({
+                      package: item,
+                      provider: item.providers[0]!,
+                    });
+                  }}
+                >
+                  Back to imported providers
+                </button>
+              ) : null}
+              <div className="provider-fields" hidden={!!selectedSetup}>
+                {packagesLoaded && !selectedSetup ? (
+                  <ProviderPresetSelect
+                    kind={providerKind}
+                    baseUrl={baseUrl}
+                    busy={busy}
+                    {...(initialProvider === undefined &&
+                    !desktop.provider.configured &&
+                    packages.length === 0
+                      ? { defaultPresetId: "openrouter" }
+                      : {})}
+                    onSelect={(preset) => {
+                      if (preset.setup) {
+                        const item = packages.find(
+                          (item) => item.id === preset.setup!.packageId,
+                        );
+                        if (item) {
+                          selectImported({
+                            package: item,
+                            provider: preset.setup.provider,
+                          });
+                          return;
+                        }
+                      }
+                      setProviderKind(presetProviderKind(preset));
+                      setBaseUrl(preset.baseUrl ?? "");
+                      clearModel();
+                      setCredentialId(
+                        preset.setup?.provider.credentialId ?? null,
+                      );
+                      setReplaceCredential(false);
+                      setNoCredential(
+                        preset.credentialEnv === null &&
+                          preset.baseUrl !== null,
+                      );
+                    }}
+                  />
+                ) : null}
                 <label>
                   <span>API format</span>
                   <DropdownSelect
@@ -599,7 +809,7 @@ function WorkspaceOnboardingForm({
                     {codexReady ? "Sign out" : "Sign in with ChatGPT"}
                   </button>
                 </div>
-              ) : dismissible && hasSavedCredential ? (
+              ) : !selectedSetup && dismissible && hasSavedCredential ? (
                 <label className="provider-credential-toggle">
                   <input
                     type="checkbox"
@@ -617,7 +827,8 @@ function WorkspaceOnboardingForm({
                     </small>
                   </span>
                 </label>
-              ) : !hasSavedCredential &&
+              ) : !selectedSetup &&
+                !hasSavedCredential &&
                 credentialId !== null &&
                 !noCredential ? (
                 <button
@@ -634,7 +845,7 @@ function WorkspaceOnboardingForm({
                 </button>
               ) : null}
 
-              <div className="provider-security-note">
+              <div className="provider-security-note" hidden={!!selectedSetup}>
                 <IconCloudLock size={19} stroke={1.6} aria-hidden="true" />
                 <p>
                   {providerKind === "open_ai_codex"
@@ -651,135 +862,157 @@ function WorkspaceOnboardingForm({
               className="setup-step-panel"
               hidden={guided && step !== "model"}
             >
-              <ProviderModelPicker
-                headingLevel={2}
-                connectionKey={connectionKey}
-                model={model}
-                disabled={
-                  busy ||
-                  !providerReady ||
-                  (providerKind === "open_ai_codex" && !codexReady)
-                }
-                onLoad={async () => {
-                  const requestedConnection = connectionKey;
-                  onCatalogLoadingChange(true);
-                  try {
-                    const result = await discoverManagedProviderModels({
-                      workspaceId: desktop.workspace!.workspaceId,
-                      providerKind,
-                      baseUrl,
-                      ...(initialProvider && !providerChanged
-                        ? { providerProfile: initialProvider.profile }
-                        : {}),
-                      credentialAction,
-                      ...(credentialId !== null ? { credentialId } : {}),
-                    });
-                    if (connectionRef.current === requestedConnection)
-                      setCredentialId(result.credentialId);
-                    if (result.errorMessage)
-                      throw new Error(result.errorMessage);
-                    return result.models;
-                  } finally {
-                    onCatalogLoadingChange(false);
+              {selectedSetup?.provider.models.length ? (
+                <ImportedModelPicker
+                  selection={selectedSetup}
+                  selectedProfile={
+                    model.trim() !== "" && modelConfiguration.model === model
+                      ? modelConfiguration.profile
+                      : ""
                   }
-                }}
-                onSelect={(entry) => {
-                  setModel(entry.id);
-                  setModelConfiguration((current) =>
-                    selectCatalogModel(current, entry),
-                  );
-                }}
-              />
-              <div className="provider-fields">
-                <label>
-                  <span>Model ID</span>
-                  <input
-                    value={model}
-                    maxLength={256}
-                    required
-                    spellCheck={false}
-                    disabled={busy}
-                    onChange={(event) => {
-                      setModel(event.target.value);
-                      setModelConfiguration((current) => ({
-                        ...resetModelMetadata(current),
-                        model: event.target.value,
-                      }));
-                    }}
-                  />
-                </label>
-                <details className="provider-wide-field provider-model-overrides">
-                  <summary>Model limits and capabilities</summary>
-                  <p>
-                    Check these values against your provider’s model details.
-                    Enable only the features your model supports.
-                  </p>
-                  <div className="provider-fields">
-                    <label>
-                      <span>Context window (tokens)</span>
-                      <input
-                        type="number"
-                        min={1024}
-                        disabled={busy}
-                        value={modelConfiguration.contextWindowTokens}
-                        onChange={(event) =>
-                          setModelConfiguration((current) => ({
-                            ...current,
-                            contextWindowTokens: Number(event.target.value),
-                          }))
-                        }
-                      />
-                    </label>
-                    <label>
-                      <span>Maximum output (tokens)</span>
-                      <input
-                        type="number"
-                        min={1}
-                        disabled={busy}
-                        value={modelConfiguration.maxOutputTokens}
-                        onChange={(event) =>
-                          setModelConfiguration((current) => ({
-                            ...current,
-                            maxOutputTokens: Number(event.target.value),
-                          }))
-                        }
-                      />
-                    </label>
-                    {(["toolCalls", "streaming", "imageInputs"] as const).map(
-                      (capability) => (
-                        <label
-                          className="provider-credential-toggle"
-                          key={capability}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={
-                              modelConfiguration.capabilities[capability]
-                            }
-                            disabled={busy}
-                            onChange={(event) =>
-                              setModelConfiguration((current) => ({
-                                ...current,
-                                capabilities: {
-                                  ...current.capabilities,
-                                  [capability]: event.target.checked,
-                                },
-                              }))
-                            }
-                          />
-                          <span>
-                            {capability === "toolCalls"
-                              ? "Tools"
-                              : capability === "imageInputs"
-                                ? "Images"
-                                : "Streaming"}
-                          </span>
-                        </label>
-                      ),
-                    )}
-                  </div>
-                </details>
-              </div>
+                  busy={busy}
+                  onSelect={selectImportedModel}
+                />
+              ) : null}
+              <details
+                className="imported-model-custom"
+                open={!selectedSetup?.provider.models.length}
+              >
+                {selectedSetup?.provider.models.length ? (
+                  <summary>
+                    Choose a different model or edit its settings
+                  </summary>
+                ) : null}
+                <ProviderModelPicker
+                  headingLevel={2}
+                  connectionKey={connectionKey}
+                  model={model}
+                  disabled={
+                    busy ||
+                    !providerReady ||
+                    (providerKind === "open_ai_codex" && !codexReady)
+                  }
+                  onLoad={async () => {
+                    const requestedConnection = connectionKey;
+                    onCatalogLoadingChange(true);
+                    try {
+                      const result = await discoverManagedProviderModels({
+                        workspaceId: desktop.workspace!.workspaceId,
+                        providerKind,
+                        baseUrl,
+                        ...(initialProvider && !providerChanged
+                          ? { providerProfile: initialProvider.profile }
+                          : {}),
+                        credentialAction,
+                        ...(credentialId !== null ? { credentialId } : {}),
+                      });
+                      if (connectionRef.current === requestedConnection)
+                        setCredentialId(result.credentialId);
+                      if (result.errorMessage)
+                        throw new Error(result.errorMessage);
+                      return result.models;
+                    } finally {
+                      onCatalogLoadingChange(false);
+                    }
+                  }}
+                  onSelect={(entry) => {
+                    setModel(entry.id);
+                    setModelConfiguration((current) =>
+                      selectCatalogModel(current, entry),
+                    );
+                  }}
+                />
+                <div className="provider-fields">
+                  <label>
+                    <span>Model ID</span>
+                    <input
+                      value={model}
+                      maxLength={256}
+                      required
+                      spellCheck={false}
+                      disabled={busy}
+                      onChange={(event) => {
+                        setModel(event.target.value);
+                        setModelConfiguration((current) => ({
+                          ...resetModelMetadata(current),
+                          model: event.target.value,
+                        }));
+                      }}
+                    />
+                  </label>
+                  <details className="provider-wide-field provider-model-overrides">
+                    <summary>Model limits and capabilities</summary>
+                    <p>
+                      Check these values against your provider’s model details.
+                      Enable only the features your model supports.
+                    </p>
+                    <div className="provider-fields">
+                      <label>
+                        <span>Context window (tokens)</span>
+                        <input
+                          type="number"
+                          min={1024}
+                          disabled={busy}
+                          value={modelConfiguration.contextWindowTokens}
+                          onChange={(event) =>
+                            setModelConfiguration((current) => ({
+                              ...current,
+                              contextWindowTokens: Number(event.target.value),
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        <span>Maximum output (tokens)</span>
+                        <input
+                          type="number"
+                          min={1}
+                          disabled={busy}
+                          value={modelConfiguration.maxOutputTokens}
+                          onChange={(event) =>
+                            setModelConfiguration((current) => ({
+                              ...current,
+                              maxOutputTokens: Number(event.target.value),
+                            }))
+                          }
+                        />
+                      </label>
+                      {(["toolCalls", "streaming", "imageInputs"] as const).map(
+                        (capability) => (
+                          <label
+                            className="provider-credential-toggle"
+                            key={capability}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={
+                                modelConfiguration.capabilities[capability]
+                              }
+                              disabled={busy}
+                              onChange={(event) =>
+                                setModelConfiguration((current) => ({
+                                  ...current,
+                                  capabilities: {
+                                    ...current.capabilities,
+                                    [capability]: event.target.checked,
+                                  },
+                                }))
+                              }
+                            />
+                            <span>
+                              {capability === "toolCalls"
+                                ? "Tools"
+                                : capability === "imageInputs"
+                                  ? "Images"
+                                  : "Streaming"}
+                            </span>
+                          </label>
+                        ),
+                      )}
+                    </div>
+                  </details>
+                </div>
+              </details>
             </div>
             <div
               className="setup-step-panel"

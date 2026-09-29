@@ -133,6 +133,7 @@ test("plugin mentions complete with keyboard controls without submitting a messa
       window as unknown as { __TAURI_INTERNALS__: unknown }
     ).__TAURI_INTERNALS__ = {
       invoke: async (command: string) => {
+        if (command === "list_setup_packages") return [];
         if (command !== "get_plugin_inventory")
           throw new Error(`Unexpected command ${command}`);
         return {
@@ -341,11 +342,12 @@ test("Desktop settings exposes diagnostics export through the native command", a
   await page.evaluate(() => {
     const state = window as unknown as {
       diagnosticCommands: string[];
-      __TAURI_INTERNALS__: { invoke: (command: string) => Promise<boolean> };
+      __TAURI_INTERNALS__: { invoke: (command: string) => Promise<unknown> };
     };
     state.diagnosticCommands = [];
     state.__TAURI_INTERNALS__ = {
       invoke: async (command) => {
+        if (command === "list_setup_packages") return [];
         state.diagnosticCommands.push(command);
         return true;
       },

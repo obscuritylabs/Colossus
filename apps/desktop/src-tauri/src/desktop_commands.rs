@@ -1308,12 +1308,22 @@ pub(crate) async fn apply_managed_model_configuration(
     request: ApplyManagedModelConfigurationInput,
     appearance: provider_enrollment::DialogAppearanceInput,
 ) -> Result<DesktopStatusDto, CommandErrorDto> {
-    request.validate()?;
     let _guard = connect_guard(&state)?;
+    apply_managed_model_configuration_locked(&app, &state, request, appearance).await
+}
+
+/// Caller must retain the connection guard across preparation and application.
+pub(crate) async fn apply_managed_model_configuration_locked(
+    app: &AppHandle,
+    state: &AppState,
+    request: ApplyManagedModelConfigurationInput,
+    appearance: provider_enrollment::DialogAppearanceInput,
+) -> Result<DesktopStatusDto, CommandErrorDto> {
+    request.validate()?;
     let store = settings_store()?;
     let mut settings = store.load()?;
-    cleanup_pending_provider_credentials(&state, &store, &mut settings).await?;
-    confirm_managed_model_configuration(&app, &state, &settings, &request).await?;
+    cleanup_pending_provider_credentials(state, &store, &mut settings).await?;
+    confirm_managed_model_configuration(app, state, &settings, &request).await?;
     if request
         .providers
         .iter()
@@ -1323,10 +1333,10 @@ pub(crate) async fn apply_managed_model_configuration(
     }
 
     let previous_settings = settings.clone();
-    let credentials = plan_provider_credentials(&state, &store, &settings, &request).await?;
+    let credentials = plan_provider_credentials(state, &store, &settings, &request).await?;
     stage_provider_credentials(
-        &app,
-        &state,
+        app,
+        state,
         &store,
         &mut settings,
         &previous_settings,
@@ -1357,7 +1367,7 @@ pub(crate) async fn apply_managed_model_configuration(
     }
     if let Err(error) = store.save(&settings) {
         rollback_staged_provider_credentials(
-            &state,
+            state,
             &store,
             &mut settings,
             previous_settings,
@@ -1367,7 +1377,7 @@ pub(crate) async fn apply_managed_model_configuration(
         return Err(error);
     }
     restart_after_model_configuration(
-        &state,
+        state,
         &store,
         &mut settings,
         previous_settings,
@@ -1613,7 +1623,7 @@ async fn rollback_staged_provider_credentials(
     Ok(())
 }
 
-async fn reject_active_managed_runs(state: &AppState) -> Result<(), CommandErrorDto> {
+pub(crate) async fn reject_active_managed_runs(state: &AppState) -> Result<(), CommandErrorDto> {
     let Some(target_id) = state.selected_target_id().await else {
         return Ok(());
     };
@@ -2041,7 +2051,7 @@ async fn retire_pending_provider_credential(
     Ok(())
 }
 
-async fn restore_managed_after_rollback(
+pub(crate) async fn restore_managed_after_rollback(
     state: &AppState,
     store: &SettingsStore,
     settings: &DesktopSettings,
@@ -2057,7 +2067,7 @@ async fn restore_managed_after_rollback(
     }
 }
 
-fn has_managed_configuration(settings: &DesktopSettings) -> bool {
+pub(crate) fn has_managed_configuration(settings: &DesktopSettings) -> bool {
     settings.workspace.is_some() && settings.managed_configured()
 }
 

@@ -25,6 +25,7 @@ mod plugin_selection;
 mod provider_catalog;
 mod provider_enrollment;
 mod run_list;
+mod setup_package;
 mod space_search;
 mod state;
 mod terminal;
@@ -83,6 +84,11 @@ use plugin_commands::{
 };
 use plugin_selection::resolve_plugin_selection;
 use provider_catalog::{discover_managed_provider_models, get_provider_presets};
+use setup_package::{
+    apply_setup_package, cancel_setup_package_review, configure_setup_credential,
+    export_setup_package, inspect_setup_package, list_setup_packages, open_setup_link,
+    remove_setup_package, use_setup_model,
+};
 use terminal_commands::{
     close_terminal, open_terminal, resize_terminal, show_terminal_window, signal_terminal,
     terminal_context, write_terminal,
@@ -121,6 +127,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state::AppState::default())
+        .manage(setup_package::SetupReviewState::default())
         .manage(command_review::CommandReviewState::default())
         .manage(workspace_git::commands::GitState::default())
         .manage(workspace_search::SearchState::default())
@@ -153,6 +160,15 @@ pub fn run() {
             check_desktop_update,
             install_desktop_update,
             export_diagnostics,
+            open_setup_link,
+            list_setup_packages,
+            inspect_setup_package,
+            cancel_setup_package_review,
+            apply_setup_package,
+            configure_setup_credential,
+            use_setup_model,
+            remove_setup_package,
+            export_setup_package,
             initialize_desktop,
             desktop_status,
             codex_auth_status,
