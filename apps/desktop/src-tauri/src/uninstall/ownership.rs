@@ -14,7 +14,9 @@ pub(super) fn owned_path(relative: &Path, directory: bool) -> bool {
         ["desktop" | "workspaces" | "plugins"] | ["desktop", "self-test" | "managed-local"] => {
             directory
         }
-        ["workspaces", partition] => directory && is_partition(partition),
+        ["workspaces", partition] | ["workspaces", partition, "cli"] => {
+            directory && is_partition(partition)
+        }
         ["workspaces", partition, "desktop", ..] | ["desktop", "managed-local", partition, ..] => {
             is_partition(partition)
         }
@@ -50,6 +52,19 @@ pub(super) fn owned_path(relative: &Path, directory: bool) -> bool {
         }
         _ => false,
     }
+}
+
+// CLI metadata commands create this directory even when no CLI state is stored.
+// Only the directory itself is owned; every child remains rejected.
+pub(super) fn empty_cli_surface(relative: &Path) -> bool {
+    let Some(parts) = relative
+        .iter()
+        .map(|part| part.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    matches!(parts.as_slice(), ["workspaces", partition, "cli"] if is_partition(partition))
 }
 
 fn is_partition(part: &str) -> bool {
