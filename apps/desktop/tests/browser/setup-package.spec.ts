@@ -441,7 +441,9 @@ test("a cancelled deferred key prompt keeps Start retryable and never activates 
     exact: true,
   });
   await start.click();
-  await expect(page.getByRole("alert")).toContainText("cancelled");
+  await expect(
+    page.getByRole("alert").filter({ hasText: "API key entry was cancelled." }),
+  ).toBeVisible();
   expect(
     (await calls(page)).some(
       (entry) => entry.command === "apply_managed_model_configuration",
@@ -490,4 +492,81 @@ test("a saved imported key is reused at Start without prompting again", async ({
       { credentialAction: "reuse", credentialId: "saved-native-handle" },
     ],
   });
+});
+
+test("replacing an imported package refreshes the selected connection and model before activation", async ({
+  page,
+}) => {
+  await setup(page);
+  await importPackage(page);
+  await toProviders(page);
+  await page.getByRole("button", { name: "Add API key", exact: true }).click();
+  await expect(
+    page.getByText("Key saved · not checked", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "1 Desktop", exact: true }).click();
+  await page.evaluate(() => {
+    const host = window as unknown as {
+      __TAURI_INTERNALS__: {
+        invoke: (
+          command: string,
+          args?: Record<string, unknown>,
+        ) => Promise<unknown>;
+      };
+    };
+    const original = host.__TAURI_INTERNALS__.invoke;
+    let replaced = false;
+    const updated = (packet: typeof sample) => ({
+      ...packet,
+      sha256: "b".repeat(64),
+      version: "3",
+      providers: packet.providers.map((provider) =>
+        provider.profile === "company"
+          ? {
+              ...provider,
+              baseUrl: "https://updated.example.com/v1",
+              credentialId: null,
+              models: provider.models.map((model) => ({
+                ...model,
+                model: model.model + "-v3",
+              })),
+            }
+          : provider,
+      ),
+    });
+    host.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      const result = await original(command, args);
+      if (command === "inspect_setup_package")
+        return updated(result as typeof sample);
+      if (command === "apply_setup_package") replaced = true;
+      if (command === "list_setup_packages" && replaced)
+        return (result as (typeof sample)[]).map(updated);
+      return result;
+    };
+  });
+  await page
+    .getByRole("button", { name: "Import setup file", exact: true })
+    .click();
+  await page.getByRole("checkbox", { name: /Replace saved setup/ }).check();
+  await importButton(page).click();
+  await next(page).click();
+  await next(page).click();
+  await expect(
+    page.getByRole("radio", { name: "Company AI", exact: true }),
+  ).toBeChecked();
+  await expect(
+    page
+      .getByRole("article", { name: "Company AI details" })
+      .getByText("https://updated.example.com/v1", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Needs API key", { exact: true })).toBeVisible();
+  await next(page).click();
+  await expect(
+    page.getByRole("radio", { name: "company/engineering-v3", exact: true }),
+  ).toBeChecked();
+  expect(
+    (await calls(page)).some(
+      (entry) => entry.command === "apply_managed_model_configuration",
+    ),
+  ).toBe(false);
 });
