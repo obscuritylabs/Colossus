@@ -138,6 +138,7 @@ jobs:
         with:
           workspaces: . -> target
           shared-key: pr-linux
+          key: recipe-v1
           cache-targets: true
           save-if: false
       - name: Lint Rust workspace
@@ -171,6 +172,7 @@ jobs:
         with:
           workspaces: . -> target
           shared-key: pr-linux
+          key: recipe-v1
           cache-targets: true
           save-if: false
 

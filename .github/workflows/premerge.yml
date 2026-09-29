@@ -225,6 +225,7 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri -> target
           shared-key: macos-desktop-acceptance
+          key: recipe-v1
           cache-targets: true
           save-if: false
       - name: Validate desktop renderer
@@ -307,6 +308,7 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri -> target
           shared-key: macos-desktop-bundle
+          key: recipe-v1
           cache-targets: true
           save-if: false
       - name: Build the pruned Tauri application

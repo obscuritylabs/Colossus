@@ -45,6 +45,7 @@ jobs:
         with:
           workspaces: . -> target
           shared-key: pr-linux
+          key: recipe-v1
           cache-targets: true
       - name: Build Clippy dependencies
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -73,6 +74,7 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri -> target
           shared-key: macos-desktop-acceptance
+          key: recipe-v1
           cache-targets: true
       - name: Prepare verified debug desktop executables
         run: ./scripts/prepare-desktop-binaries debug
@@ -113,6 +115,7 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri -> target
           shared-key: macos-desktop-bundle
+          key: recipe-v1
           cache-targets: true
       - name: Build pruned Tauri application
         working-directory: apps/desktop

@@ -155,6 +155,7 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
         );
         for inputs in [warm_inputs, consumer_inputs] {
             assert_eq!(field(inputs, "shared-key").as_str(), Some(shared_key));
+            assert_eq!(field(inputs, "key").as_str(), Some("recipe-v1"));
             assert_eq!(field(inputs, "workspaces").as_str(), Some(workspace));
             assert_eq!(field(inputs, "cache-targets").as_bool(), Some(true));
         }
