@@ -20,14 +20,14 @@ concurrency:
 jobs:
   build:
     name: Build Zensical site
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     permissions:
       contents: read
       pages: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@v1 # v7.0.1
 
       - name: Build and verify documentation
         run: ./scripts/docs-site build
@@ -46,7 +46,7 @@ jobs:
     name: Deploy GitHub Pages
     if: ${{ github.ref == 'refs/heads/main' }}
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: read

@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [blacksmith-4vcpu-ubuntu-2404, blacksmith-6vcpu-macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     env:
@@ -69,7 +69,7 @@ jobs:
   windows:
     name: Anonymous install (Windows)
     if: github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
-    runs-on: windows-latest
+    runs-on: blacksmith-4vcpu-windows-2025
     timeout-minutes: 15
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}

@@ -20,7 +20,7 @@ concurrency:
 jobs:
   validate:
     name: Validate release request
-    runs-on: ubuntu-latest-m
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     env:
       SCCACHE_GHA_ENABLED: "true"
@@ -37,7 +37,7 @@ jobs:
       test_release: ${{ steps.request.outputs.test_release }}
     steps:
       - name: Check out complete release history
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@v1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -184,22 +184,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15-intel
+          - runner: blacksmith-6vcpu-macos-15
             target: x86_64-apple-darwin
             archive: tar.gz
-          - runner: macos-14
+          - runner: blacksmith-6vcpu-macos-15
             target: aarch64-apple-darwin
             archive: tar.gz
-          - runner: ubuntu-latest-m
+          - runner: blacksmith-4vcpu-ubuntu-2404
             target: x86_64-unknown-linux-musl
             archive: tar.gz
-          - runner: ubuntu-24.04-arm
+          - runner: blacksmith-4vcpu-ubuntu-2404-arm
             target: aarch64-unknown-linux-musl
             archive: tar.gz
-          - runner: windows-latest-l
+          - runner: blacksmith-8vcpu-windows-2025
             target: x86_64-pc-windows-msvc
             archive: zip
-          - runner: windows-11-arm
+          - runner: blacksmith-4vcpu-windows-2025
             target: aarch64-pc-windows-msvc
             archive: zip
     steps:
@@ -311,7 +311,7 @@ jobs:
     name: Sign Windows CLI ${{ matrix.target }}
     if: needs.validate.outputs.publish_draft == 'true'
     needs: [validate, artifacts]
-    runs-on: windows-2025
+    runs-on: blacksmith-4vcpu-windows-2025
     environment: release-signing
     timeout-minutes: 25
     permissions:
@@ -416,11 +416,11 @@ jobs:
     name: Package repository-owned bootstrap installers
     if: needs.validate.outputs.test_release != 'true'
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
       - name: Check out repository bootstrap sources
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@v1 # v7.0.1
 
       - name: Validate bootstrap installer syntax
         shell: bash
@@ -474,7 +474,7 @@ jobs:
     name: Build immutable stable SDK candidate
     if: needs.validate.outputs.target_channel == 'stable'
     needs: validate
-    runs-on: ubuntu-latest-m
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     environment:
       name: ${{ needs.validate.outputs.publish_draft == 'true' && vars.SCCACHE_R2_ENABLED == 'true' && 'sccache-r2-write' || 'release-validation' }}
       deployment: false
@@ -485,7 +485,7 @@ jobs:
       SOURCE_DATE_EPOCH: ${{ needs.validate.outputs.source_date_epoch }}
     steps:
       - name: Check out complete SDK release history
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@v1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -568,7 +568,7 @@ jobs:
     name: Build unsigned Colossus Desktop aarch64-apple-darwin
     if: needs.validate.outputs.target_channel != 'stable'
     needs: validate
-    runs-on: macos-14
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 60
     env:
       CARGO_INCREMENTAL: "0"
@@ -650,7 +650,7 @@ jobs:
     name: Package Colossus Desktop aarch64-apple-darwin
     if: needs.validate.outputs.target_channel != 'stable'
     needs: [validate, desktop_macos_build]
-    runs-on: macos-14
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 45
     env:
       COLOSSUS_DESKTOP_TARGET: aarch64-apple-darwin
@@ -789,7 +789,7 @@ jobs:
     name: Package unsigned Windows Desktop validation-only
     if: needs.validate.outputs.publish_draft != 'true' && needs.validate.outputs.target_channel != 'stable'
     needs: validate
-    runs-on: windows-latest-l
+    runs-on: blacksmith-8vcpu-windows-2025
     timeout-minutes: 75
     env:
       CARGO_INCREMENTAL: "0"
@@ -991,7 +991,7 @@ jobs:
     name: Sign, package, and smoke Windows Desktop
     if: needs.validate.outputs.publish_draft == 'true'
     needs: validate
-    runs-on: windows-latest-l
+    runs-on: blacksmith-8vcpu-windows-2025
     environment: release-signing
     timeout-minutes: 100
     permissions:
@@ -1201,11 +1201,11 @@ jobs:
         desktop_windows_preview,
         desktop_windows_signed,
       ]
-    runs-on: ubuntu-slim
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Check out gate contract
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@v1 # v7.0.1
       - name: Require the complete core or Developer Preview release
         shell: bash
         env:
@@ -1263,13 +1263,13 @@ jobs:
     name: Create draft GitHub Release
     if: ${{ !cancelled() && needs.validate.outputs.publish_draft == 'true' && needs.gate.result == 'success' }}
     needs: [validate, gate]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
       - name: Check out the exact release verifier
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@v1 # v7.0.1
         with:
           ref: ${{ needs.validate.outputs.tag }}
           persist-credentials: false
