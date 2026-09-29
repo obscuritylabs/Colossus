@@ -143,15 +143,15 @@ Apply `ci:full` only after the PR is ready to merge:
 Eligibility is checked on a cheap Linux runner before macOS or Windows is allocated. It
 rejects draft PRs, actors below write permission, and a missing or failed current-head PR
 gate. The required pre-merge gate fails on failed, cancelled, or unexpectedly skipped
-acceptance work. Separate macOS jobs keep the root native-debug graph from coexisting
-with the standalone Tauri graph on the runner's bounded disk. The desktop job lints and
-tests the standalone native bridge; runs pinned Chromium keyboard,
-accessibility, high-contrast, drawer, approval, and 880×640 layout acceptance; deletes
-its debug artifacts; then builds the bundled sidecar, CLI, and Tauri application into one
-shared non-incremental release tree. Its 100-minute job limit accommodates the
-debug/browser checks, cold optimized builds, and the final bundle rebuild even when
-the shared compiler cache is unavailable. All acceptance and packaging checks remain
-required.
+acceptance work. Three macOS jobs run concurrently on separate standard public runners.
+The native job keeps the root native-debug graph separate from the standalone Tauri
+graph on bounded runner disks. Desktop acceptance lints and tests the standalone native
+bridge and runs pinned Chromium keyboard, accessibility, high-contrast, drawer, approval,
+and 880×640 layout checks. Desktop packaging independently builds the bundled sidecar,
+CLI, and Tauri application in a non-incremental release tree, then verifies its bundle
+structure. Neither Desktop job waits for the other, and neither transfers its build tree.
+Each Desktop job allows 75 minutes for a cold build when the compiler cache is unavailable.
+All acceptance and packaging checks remain required.
 The native job exercises the otherwise-ignored real sidecar
 bootstrap/pinned-gRPC/guardian lifecycle and sandbox acceptance. Together they prove the
 pruned locked build, then create an ad-hoc signed two-phase app bundle and verify the outer
@@ -160,11 +160,13 @@ uses the explicit `ADHOC` team sentinel, tests structure only, and produces a ru
 intentionally refuses to start Managed Local. Distributable builds embed the expected
 10-character Apple Team ID, use Developer ID and notarization, and verify exact code
 identifiers for the app, sidecar, and CLI.
-The Windows lane runs renderer typechecking, renderer tests, and platform-sensitive
-Desktop contract tests before installing Rust or starting native compilation. Those
-independent checks continue into Windows native, worker, sandbox, binary preparation,
-Desktop Clippy, and Desktop library-test acceptance, then report every failed outcome
-together before the lane fails. Desktop checks run only when their required binaries were staged.
+The Windows runtime and Desktop jobs also run concurrently. Runtime uses a standard
+public Windows 2025 runner for renderer typechecking, tests, platform-sensitive contracts,
+native runtime, worker, and AppContainer sandbox acceptance. The Desktop job retains the
+larger GitHub Windows runner for binary preparation, native bridge, credential controls,
+WebView2, plugin, and approval acceptance. Each job reports all independent failed
+outcomes before failing; the required gate waits for both jobs. Desktop checks run only
+when their required binaries were staged.
 Portable formatting remains owned by the PR tier instead of being repeated on platform
 runners.
 Supply-chain acceptance audits both the root sidecar graph and the desktop's independent
