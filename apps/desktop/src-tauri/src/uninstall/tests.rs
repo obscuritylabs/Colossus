@@ -263,7 +263,12 @@ fn cleanup_rejects_foreign_key_service_and_shared_cli_data_without_deletion() {
     let partition = home.join("workspaces").join("a".repeat(64));
     create_private_directory(&partition).unwrap();
     create_private_directory(&partition.join("cli")).unwrap();
+    create_private_file(&partition.join("cli/state.redb"), b"preserve CLI data").unwrap();
     assert!(cleanup(&home).is_err());
+    assert_eq!(
+        fs::read(partition.join("cli/state.redb")).unwrap(),
+        b"preserve CLI data"
+    );
     assert!(home.is_dir());
 }
 
@@ -366,4 +371,109 @@ fn native_uninstall_removes_the_saved_credential_vault_key() {
     result.unwrap();
     assert!(removed);
     assert!(!home.exists());
+}
+
+#[test]
+fn cleanup_removes_empty_cli_surface_created_by_desktop_commands() {
+    use colossus_home::{ColossusHome, HomeSurface, detect_workspace_identity};
+
+    let (guard, home) = fixture();
+    let project = guard.path().join("project");
+    create_private_directory(&project).unwrap();
+    create_private_file(&project.join("source.txt"), b"keep project").unwrap();
+    let identity = detect_workspace_identity(&project).unwrap();
+    let application_home = ColossusHome::ensure_at(&home).unwrap();
+    let cli = application_home
+        .workspace_surface_dir(
+            identity.canonical_path(),
+            identity.as_ref(),
+            HomeSurface::Cli,
+        )
+        .unwrap();
+    assert!(cli.is_dir());
+    assert_eq!(fs::read_dir(&cli).unwrap().count(), 0);
+    drop(application_home);
+
+    cleanup(&home).unwrap();
+
+    assert!(!home.exists());
+    assert_eq!(
+        fs::read(project.join("source.txt")).unwrap(),
+        b"keep project"
+    );
+}
+
+fn empty_cli_surface(home: &Path) -> std::path::PathBuf {
+    let partition = home.join("workspaces").join("a".repeat(64));
+    let cli = partition.join("cli");
+    create_private_directory(&home.join("workspaces")).unwrap();
+    create_private_directory(&partition).unwrap();
+    create_private_directory(&cli).unwrap();
+    cli
+}
+
+#[test]
+fn cleanup_preserves_cli_subdirectories_even_without_files() {
+    let (_guard, home) = fixture();
+    let cli = empty_cli_surface(&home);
+    create_private_directory(&cli.join("project")).unwrap();
+    assert_eq!(cleanup(&home), Err(CleanupError::UnsafeData));
+    assert!(cli.join("project").is_dir());
+}
+
+#[test]
+fn cleanup_rechecks_cli_data_created_after_inspection() {
+    let (_guard, home) = fixture();
+    let cli = empty_cli_surface(&home);
+    let plan = plan::CleanupPlan::inspect(&home).unwrap();
+    create_private_file(&cli.join("state.redb"), b"new CLI data").unwrap();
+    assert_eq!(plan.check_idle(), Err(CleanupError::UnsafeData));
+    assert_eq!(fs::read(cli.join("state.redb")).unwrap(), b"new CLI data");
+}
+
+#[test]
+fn cleanup_rejects_replaced_empty_cli_directory() {
+    let (guard, home) = fixture();
+    let cli = empty_cli_surface(&home);
+    let plan = plan::CleanupPlan::inspect(&home).unwrap();
+    fs::rename(&cli, guard.path().join("original-cli")).unwrap();
+    create_private_directory(&cli).unwrap();
+    assert_eq!(plan.check_idle(), Err(CleanupError::UnsafeData));
+    assert!(cli.is_dir());
+}
+
+#[test]
+#[ignore = "requires the prepared bundled CLI; uses only a disposable home and workspace"]
+fn native_uninstall_cleans_home_after_bundled_cli_provider_presets() {
+    let (guard, home) = fixture();
+    let project = guard.path().join("project");
+    create_private_directory(&project).unwrap();
+    create_private_file(&project.join("source.txt"), b"keep project").unwrap();
+    let cli = std::env::var_os("COLOSSUS_ACCEPTANCE_CLI").map_or_else(
+        || {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("binaries/colossus-x86_64-pc-windows-msvc.exe")
+        },
+        std::path::PathBuf::from,
+    );
+    let output = std::process::Command::new(cli)
+        .arg("--workspace")
+        .arg(&project)
+        .args(["provider", "presets"])
+        .env("COLOSSUS_HOME", &home)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "bundled CLI provider presets failed: {}",
+        output.status
+    );
+    assert!(home.join("workspaces").is_dir());
+    plugin_blob(&home, true);
+    cleanup(&home).unwrap();
+    assert!(!home.exists());
+    assert_eq!(
+        fs::read(project.join("source.txt")).unwrap(),
+        b"keep project"
+    );
 }
