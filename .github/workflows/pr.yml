@@ -28,8 +28,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      # A second useblacksmith/checkout in this job would remount the git-mirror
+      # sticky disk over the first checkout's object alternates.
       - name: Check out trusted CI contracts
-        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: .ci-trusted
