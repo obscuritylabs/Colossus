@@ -160,6 +160,21 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
         }
         assert_eq!(field(consumer_inputs, "save-if").as_bool(), Some(false));
     }
+
+    let acceptance = job(jobs(&warm), "macos-desktop-acceptance");
+    let steps = field(acceptance, "steps")
+        .as_array()
+        .expect("macOS acceptance warm steps");
+    let step_index = |name| {
+        steps
+            .iter()
+            .position(|step| step.get("name").and_then(|name| name.as_str()) == Some(name))
+            .expect("required macOS acceptance warm step")
+    };
+    assert!(
+        step_index("Prepare verified debug desktop executables")
+            < step_index("Build Desktop native test dependencies")
+    );
 }
 
 #[test]

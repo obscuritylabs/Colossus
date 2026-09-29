@@ -74,6 +74,8 @@ jobs:
           workspaces: apps/desktop/src-tauri -> target
           shared-key: macos-desktop-acceptance
           cache-targets: true
+      - name: Prepare verified debug desktop executables
+        run: ./scripts/prepare-desktop-binaries debug
       - name: Build Desktop native test dependencies
         run: |
           cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
