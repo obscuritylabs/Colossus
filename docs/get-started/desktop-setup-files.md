@@ -7,9 +7,19 @@ type: how-to
 
 # Desktop setup files
 
+## Goal
+
 A Desktop setup file is a ZIP archive named `NAME.colossus-setup`. Build it inside
 your environment and transfer the single file to each computer. Inspection and
 import are local: they do not fetch schemas, icons, models, or credentials.
+
+## Prerequisites
+
+- Colossus Desktop installed on the receiving computer.
+- Your organization's provider endpoints, supported model settings, and token instructions.
+- A ZIP utility in the environment where you prepare the package.
+
+## Steps
 
 Choose **Import setup file** on the first Desktop setup page or under **Settings →
 Global → Providers** or **Desktop**. Review provider endpoints, model limits,
@@ -30,7 +40,8 @@ The **Model** step shows the chosen provider's bundled models, with the package'
 primary model selected when available. Limits and capabilities are displayed without
 contacting the provider. You can also discover other models or enter an ID manually.
 **Save and start** uses the existing native configuration and confirmation path.
-If the chosen provider needs a key, the secure prompt asks for it then.
+If the chosen provider needs a key, the secure prompt asks for it then and saves it
+for reuse with that imported provider. Cancelling leaves setup ready to retry.
 
 Other imported providers remain available for later selection. The selected provider
 and its models are added to the workspace; other providers' credentials are not
@@ -159,7 +170,20 @@ utility or network access is required.
 **Export workspace setup** creates provider/model YAML from the selected workspace,
 with portable placeholders for saved keys.
 
-## Limits and troubleshooting
+## Expected result
+
+One portable file makes your providers and model details available throughout Desktop
+setup. Each workspace activates only its chosen provider; other imported providers
+remain available without requiring their credentials.
+
+## Verification
+
+Import the package into a fresh Desktop profile. Review all provider endpoints and
+model details, then choose a workspace and confirm the recommended provider and model.
+Confirm token instructions display correctly and CA trust starts unchecked. Add a key
+when ready and use **Save and start** to configure the selected provider.
+
+## Failure path
 
 Packages support up to 16 providers and 64 models. Desktop retains at most four
 setup packages. The compressed archive is limited to 2 MiB, expanded content to
@@ -171,3 +195,9 @@ unreferenced files, unsupported versions, and unknown manifest/configuration fie
 are rejected. If inspection fails, the existing configuration remains unchanged.
 A model whose profile ID already has a different workspace definition needs explicit
 replacement or a distinct ID in the setup file.
+
+
+## Next step
+
+Share the reviewed setup file with your users. Continue with
+[Desktop setup](desktop.md) to configure workspaces and begin a conversation.

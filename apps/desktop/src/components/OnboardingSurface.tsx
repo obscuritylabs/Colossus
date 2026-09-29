@@ -529,7 +529,7 @@ function WorkspaceOnboardingForm({
           </ol>
         ) : null}
 
-        {error !== "" ? (
+        {error !== "" || setupError !== "" ? (
           <p className="page-error" role="alert" ref={errorRef} tabIndex={-1}>
             {error || setupError}
           </p>

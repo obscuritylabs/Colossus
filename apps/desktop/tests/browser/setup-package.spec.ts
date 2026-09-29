@@ -421,7 +421,13 @@ test("a cancelled deferred key prompt keeps Start retryable and never activates 
     host.__TAURI_INTERNALS__.invoke = async (command, args) => {
       if (command === "configure_setup_credential" && !cancelled) {
         cancelled = true;
-        throw new Error("API key entry was cancelled.");
+        throw {
+          code: "cancelled",
+          message: "API key entry was cancelled.",
+          retryable: false,
+          outcomeUnknown: false,
+          violations: [],
+        };
       }
       return original(command, args);
     };
