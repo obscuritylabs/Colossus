@@ -105,6 +105,8 @@
     "allow-read-workspace-file",
     "allow-show-terminal-window",
     "allow-check-desktop-update",
-    "allow-install-desktop-update"
+    "allow-install-desktop-update",
+    "allow-sync-status-bar-pins",
+    "allow-notify-background"
   ]
 }

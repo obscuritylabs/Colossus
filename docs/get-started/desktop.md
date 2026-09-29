@@ -25,6 +25,20 @@ The offline self-test does not require a provider key or network connection.
 For signed Windows 10/11 x64 packages, use the
 [Windows Desktop](windows-desktop.md) guide.
 
+## Menu bar and background work
+
+On macOS, Colossus places its icon in the menu bar. On Windows, it appears in the
+notification area. Closing the main window hides it while Colossus and its managed
+runtime keep running. Use **Open Colossus** to bring the window back, **New Work** to
+open a fresh composer, or choose a loaded pinned thread from the selected Workspace.
+To end the process and stop its managed runtime, choose **Shut Down Colossus**.
+
+When a running thread needs input, finishes, or stops with an error while the main
+window is hidden or unfocused, Colossus can show an operating-system notification.
+Notifications contain only a generic status message, not prompt or conversation
+content. The app suppresses duplicates and limits notification bursts. The operating
+system's notification settings control whether those messages appear.
+
 ## Steps
 
 ### 1. Download and verify Desktop

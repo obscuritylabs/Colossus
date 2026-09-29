@@ -80,8 +80,12 @@ authentication or refresh destinations remain available.
 
 Managed Local starts the sealed sidecar suspended, verifies its retained image identity,
 assigns it to a kill-on-close Job Object, establishes an authenticated local named pipe,
-and only then resumes it. Closing Desktop closes the Job Object and cleans up the
-sidecar process tree.
+and only then resumes it. Closing the main window hides it in the notification area
+while managed work continues. Choose **Shut Down Colossus** from the notification-area
+menu to exit Desktop, close the Job Object, and clean up the sidecar process tree.
+The menu also reopens the window, starts new work, and opens loaded pinned threads
+from the selected Workspace. Background work can show generic Windows notifications;
+Windows notification settings control their visibility.
 
 Desktop settings, generated configuration, runtime state, and imported connection files
 live in the workspace's private Desktop partition under the Colossus home and are checked
