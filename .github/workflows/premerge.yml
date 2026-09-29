@@ -148,8 +148,8 @@ jobs:
     if: needs.eligibility.result == 'success'
     needs: eligibility
     runs-on: macos-14
-    # Native/browser acceptance precedes a clean optimized CLI, sidecar, and app build.
-    timeout-minutes: 75
+    # Allow cold native/browser checks, optimized builds, and the final bundle rebuild.
+    timeout-minutes: 100
     env:
       SCCACHE_GHA_ENABLED: "true"
       COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"

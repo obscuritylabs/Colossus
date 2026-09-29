@@ -229,7 +229,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     );
     assert_eq!(
         field(job(jobs, "macos-desktop"), "timeout-minutes").as_u64(),
-        Some(75),
+        Some(100),
         "macOS Desktop acceptance must allow native/browser tests and cold release builds to finish"
     );
     assert_eq!(
