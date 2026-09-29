@@ -2,10 +2,16 @@
 
 use super::dto::BrowserAction;
 use crate::state::AppState;
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use tauri::{Manager as _, Webview};
 
-pub(crate) fn run() {
+pub(crate) fn run() -> i32 {
     println!("Starting native browser acceptance");
     let address = std::env::args().nth(1).expect("native browser fixture URL");
     let url = tauri::Url::parse(&address).expect("fixture URL");
@@ -28,6 +34,10 @@ pub(crate) fn run() {
     context.config_mut().build.dev_url = None;
     context.config_mut().app.windows[0].data_directory = Some(home.join("controller"));
     context.config_mut().app.windows[0].incognito = true;
+    context.config_mut().app.windows[0].width = 880.0;
+    context.config_mut().app.windows[0].height = 640.0;
+    let completed = Arc::new(AtomicBool::new(false));
+    let completion = completed.clone();
     let application = tauri::Builder::default()
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
@@ -43,6 +53,7 @@ pub(crate) fn run() {
                 match result {
                     Ok(()) => {
                         println!("native browser acceptance passed");
+                        completion.store(true, Ordering::SeqCst);
                         app.exit(0);
                     }
                     Err(error) => {
@@ -55,7 +66,10 @@ pub(crate) fn run() {
         })
         .build(context)
         .expect("native browser acceptance app");
-    application.run(|_, _| {});
+    application.run_return(|_, _| {});
+    // Native window teardown can return zero even after app.exit(1). Only a
+    // completed exercise authorizes success, including when the window closes early.
+    i32::from(!completed.load(Ordering::SeqCst))
 }
 
 async fn action(
@@ -236,10 +250,28 @@ async fn sessions(app: &tauri::AppHandle, address: &str, generation: u64) -> any
     Ok(())
 }
 
+fn acceptance_bounds(view: &Webview) -> anyhow::Result<super::dto::BrowserRect> {
+    let window = view.window();
+    let size = window
+        .inner_size()?
+        .to_logical::<f64>(window.scale_factor()?);
+    anyhow::ensure!(
+        size.width >= 64.0 && size.height >= 112.0,
+        "native window is too small"
+    );
+    Ok(super::dto::BrowserRect {
+        x: 16.0,
+        y: 64.0,
+        width: size.width - 32.0,
+        height: size.height - 80.0,
+    })
+}
+
 async fn permissions(view: &Webview) -> anyhow::Result<()> {
+    let rect = acceptance_bounds(view)?;
     view.set_bounds(tauri::Rect {
-        position: tauri::LogicalPosition::new(700.0, 200.0).into(),
-        size: tauri::LogicalSize::new(500.0, 400.0).into(),
+        position: tauri::LogicalPosition::new(rect.x, rect.y).into(),
+        size: tauri::LogicalSize::new(rect.width, rect.height).into(),
     })?;
     view.show()?;
     // The runner hides its console through STARTUPINFO on Windows. Force a
@@ -270,7 +302,7 @@ async fn permissions(view: &Webview) -> anyhow::Result<()> {
 }
 
 async fn viewport(app: &tauri::AppHandle, view: &Webview) -> anyhow::Result<()> {
-    use super::dto::{BrowserRect, BrowserViewportRequest};
+    use super::dto::BrowserViewportRequest;
     let state = app.state::<AppState>();
     let controller = app.get_webview("main").expect("controller");
     let active = colossus_native_browser::is_active(view).await?;
@@ -298,12 +330,7 @@ async fn viewport(app: &tauri::AppHandle, view: &Webview) -> anyhow::Result<()> 
             &BrowserViewportRequest {
                 generation,
                 tab_id: Some(view.label().to_owned()),
-                rect: Some(BrowserRect {
-                    x: 700.0,
-                    y: 200.0,
-                    width: 500.0,
-                    height: 400.0,
-                }),
+                rect: Some(acceptance_bounds(view)?),
             },
         )
         .await
@@ -318,7 +345,7 @@ async fn viewport(app: &tauri::AppHandle, view: &Webview) -> anyhow::Result<()> 
         .is_some_and(|tab| tab.heartbeat.is_some());
     anyhow::ensure!(
         leased == active,
-        "viewport visibility did not follow OS window activation"
+        "viewport visibility did not follow OS window activation: active={active}, leased={leased}"
     );
     state.browser.hide_all();
     println!("PASS native viewport activation boundary");

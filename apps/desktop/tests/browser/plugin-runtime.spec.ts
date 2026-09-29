@@ -252,9 +252,11 @@ test("browser → production native adapter → authenticated worker: offline co
     await skill.getByRole("button", { name: "Preview instructions" }).click();
     await expect(skill.locator("pre")).toContainText("plugin");
     await skill.getByRole("button", { name: "Browse resources" }).click();
+    // This crosses the real native bridge; use its bounded command budget rather
+    // than the five-second assertion default on loaded Windows CI runners.
     await expect(
       skill.getByRole("button", { name: /references\/.+\.md/u }).first(),
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 45_000 });
     await skill
       .getByRole("button", { name: "Use in this conversation" })
       .click();

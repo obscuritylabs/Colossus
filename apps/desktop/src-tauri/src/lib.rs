@@ -41,8 +41,9 @@ mod workspace_search;
 
 /// Run the opt-in native browser acceptance harness.
 #[cfg(feature = "browser-test-bridge")]
-pub fn run_browser_acceptance() {
-    browser::acceptance::run();
+#[must_use]
+pub fn run_browser_acceptance() -> i32 {
+    browser::acceptance::run()
 }
 
 use browser::commands::{browser_command, browser_context, browser_viewport};
