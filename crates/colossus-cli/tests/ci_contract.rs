@@ -108,7 +108,9 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
             "dependency-policy",
             "desktop",
             "documentation",
+            "format",
             "gate",
+            "lint",
             "rust",
             "sdk",
         ]
@@ -117,8 +119,19 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
     );
     assert_eq!(
         field(job(jobs, "rust"), "runs-on").as_str(),
-        Some("ubuntu-latest-m")
+        Some("ubuntu-latest")
     );
+    for name in ["format", "lint", "rust"] {
+        assert_eq!(
+            field(job(jobs, name), "runs-on").as_str(),
+            Some("ubuntu-latest")
+        );
+        assert_eq!(
+            field(job(jobs, name), "if").as_str(),
+            Some("needs.classify.outputs.rust_required == 'true'")
+        );
+        assert_eq!(field(job(jobs, name), "needs").as_str(), Some("classify"));
+    }
     for (name, selector) in [("sdk", "sdk_required"), ("desktop", "desktop_required")] {
         assert_eq!(
             field(job(jobs, name), "runs-on").as_str(),
@@ -141,6 +154,8 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
     assert_eq!(field(job(jobs, "gate"), "if").as_str(), Some("always()"));
     let gate_needs = strings(field(job(jobs, "gate"), "needs"), "PR gate needs");
     for name in [
+        "format",
+        "lint",
         "rust",
         "sdk",
         "desktop",
@@ -150,6 +165,9 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         assert!(gate_needs.contains(name), "PR gate must require {name}");
     }
     let rust_source = serde_json::to_string(job(jobs, "rust")).expect("serialize Rust PR job");
+    assert!(rust_source.contains("cargo test --locked --workspace --lib"));
+    assert!(!rust_source.contains("install-apparmor.sh"));
+    assert!(!rust_source.contains("cargo xtask check rust"));
     assert!(!rust_source.contains("cargo xtask check sdk"));
     assert!(!rust_source.contains("cargo xtask check desktop"));
     assert!(
@@ -167,7 +185,9 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
     )
     .as_str()
     .expect("PR gate must run the base-revision selector");
-    assert_eq!(gate_run.matches("sh \"$trusted_gate\"").count(), 2);
+    assert_eq!(gate_run.matches("sh \"$trusted_gate\"").count(), 3);
+    assert!(gate_run.contains("\"$RUST_REQUIRED\" \"$FORMAT_RESULT\""));
+    assert!(gate_run.contains("\"$RUST_REQUIRED\" \"$LINT_RESULT\""));
     assert!(gate_run.contains("\"$SDK_REQUIRED\" \"$SDK_RESULT\""));
     assert!(gate_run.contains("\"$DESKTOP_REQUIRED\" \"$DESKTOP_RESULT\""));
 
@@ -177,12 +197,13 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         assert!(!source.contains(forbidden), "PR tier contains {forbidden}");
     }
     for required in [
-        "cargo xtask check rust",
+        "cargo fmt --all -- --check",
+        "cargo clippy --locked --workspace --all-targets -- -D warnings",
+        "cargo test --locked --workspace --lib",
         "cargo xtask check sidecar",
         "cargo xtask check sdk --base \"$EVENT_BASE_SHA\"",
         "cargo xtask check desktop",
         "cargo xtask check dependencies",
-        "release/install-apparmor.sh",
         "ACTIONLINT_VERSION: 1.7.12",
         "ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
         "sha256sum --check --strict",
@@ -264,6 +285,21 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
 
     let jobs = jobs(&workflow);
     assert_eq!(
+        field(job(jobs, "linux-rust-integration"), "runs-on").as_str(),
+        Some("ubuntu-latest-m")
+    );
+    assert_eq!(
+        field(
+            named_step(
+                job(jobs, "linux-rust-integration"),
+                "Run complete Rust validation"
+            ),
+            "run"
+        )
+        .as_str(),
+        Some("cargo xtask check rust")
+    );
+    assert_eq!(
         field(job(jobs, "macos-native"), "runs-on").as_str(),
         Some("macos-14")
     );
@@ -314,6 +350,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     );
     let gate_needs = strings(field(job(jobs, "gate"), "needs"), "pre-merge gate needs");
     for name in [
+        "linux-rust-integration",
         "macos-desktop-acceptance",
         "macos-desktop-bundle",
         "windows-runtime",
@@ -325,6 +362,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         );
     }
     for name in [
+        "linux-rust-integration",
         "macos-native",
         "macos-desktop-acceptance",
         "macos-desktop-bundle",
@@ -359,6 +397,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "github.event.action == 'synchronize'",
         "--method DELETE",
         ".ci-trusted/scripts/ci/require-success.sh",
+        "release/install-apparmor.sh",
         "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0",
         "components: clippy,rustfmt",
         "CARGO_INCREMENTAL: \"0\"",

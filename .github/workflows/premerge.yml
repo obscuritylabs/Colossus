@@ -64,6 +64,55 @@ jobs:
             --jq '[.check_runs[] | select(.name == "Colossus PR gate" and .conclusion == "success")] | length > 0' \
             | grep -Fx true
 
+  linux-rust-integration:
+    name: Complete Linux Rust and AppArmor acceptance
+    if: needs.eligibility.result == 'success'
+    needs: eligibility
+    runs-on: ubuntu-latest-m
+    timeout-minutes: 60
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Install Node.js 22.18
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+          components: clippy,rustfmt
+      - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: . -> target
+          key: premerge-linux-rust-integration
+          cache-targets: false
+      - name: Prepare exact-path AppArmor profile for workspace tests
+        run: |
+          install_dir="/colossus-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          staged_binary="$install_dir/colossus"
+          sudo install -d -o root -g root -m 0755 "$install_dir"
+          sudo install -o root -g root -m 0755 /bin/true "$staged_binary"
+          sudo release/install-apparmor.sh "$staged_binary"
+          cargo build --locked -p colossus-cli --bin colossus
+          sudo install -o root -g root -m 0755 \
+            target/debug/colossus "$staged_binary"
+          printf 'COLOSSUS_NATIVE_TEST_BINARY=%s\n' "$staged_binary" >> "$GITHUB_ENV"
+      - name: Run complete Rust validation
+        run: cargo xtask check rust
+
   macos-native:
     name: Representative macOS native sandbox
     if: needs.eligibility.result == 'success'
@@ -821,7 +870,7 @@ jobs:
   gate:
     name: Colossus pre-merge gate
     if: always()
-    needs: [eligibility, macos-native, macos-desktop-acceptance, macos-desktop-bundle, windows-runtime, windows-desktop, credential-vault, fuzz, supply-chain, chroma, storage, live-security]
+    needs: [eligibility, linux-rust-integration, macos-native, macos-desktop-acceptance, macos-desktop-bundle, windows-runtime, windows-desktop, credential-vault, fuzz, supply-chain, chroma, storage, live-security]
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
@@ -834,6 +883,7 @@ jobs:
         env:
           RESULTS: >-
             eligibility=${{ needs.eligibility.result }}
+            linux-rust-integration=${{ needs['linux-rust-integration'].result }}
             macos=${{ needs['macos-native'].result }}
             macos-desktop-acceptance=${{ needs['macos-desktop-acceptance'].result }}
             macos-desktop-bundle=${{ needs['macos-desktop-bundle'].result }}

@@ -93,13 +93,73 @@ jobs:
       - name: Lint GitHub Actions workflows
         run: actionlint
 
-  rust:
-    name: Rust PR validation
+  format:
+    name: Rust formatting and structure
     if: needs.classify.outputs.rust_required == 'true'
     needs: classify
-    runs-on: ubuntu-latest-m
-    timeout-minutes: 45
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+          components: rustfmt
+      - name: Check formatting and crate structure
+        run: |
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
+          ./scripts/check_crate_roots.sh
+          cargo metadata --locked --no-deps --format-version 1 >/dev/null
+          cargo metadata --locked --manifest-path fuzz/Cargo.toml --no-deps --format-version 1 >/dev/null
+
+  lint:
+    name: Rust Clippy and fuzz harness lint
+    if: needs.classify.outputs.rust_required == 'true'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
     env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+          components: clippy
+      - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: . -> target
+          key: pr-rust-lint
+          cache-targets: false
+      - name: Lint Rust workspace
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Lint fuzz harnesses
+        run: cargo clippy --locked --manifest-path fuzz/Cargo.toml --bins -- -D warnings
+
+  rust:
+    name: Rust unit tests
+    if: needs.classify.outputs.rust_required == 'true'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
       SCCACHE_GHA_ENABLED: "true"
     steps:
       - name: Check out repository
@@ -111,7 +171,6 @@ jobs:
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
         with:
           toolchain: 1.96.0
-          components: clippy,rustfmt
 
       - name: Enable shared compiler cache
         id: sccache
@@ -126,22 +185,11 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: . -> target
+          key: pr-rust-unit
           cache-targets: false
 
-      - name: Prepare exact-path AppArmor profile for workspace tests
-        run: |
-          install_dir="/colossus-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          staged_binary="$install_dir/colossus"
-          sudo install -d -o root -g root -m 0755 "$install_dir"
-          sudo install -o root -g root -m 0755 /bin/true "$staged_binary"
-          sudo release/install-apparmor.sh "$staged_binary"
-          cargo build --locked -p colossus-cli --bin colossus
-          sudo install -o root -g root -m 0755 \
-            target/debug/colossus "$staged_binary"
-          printf 'COLOSSUS_NATIVE_TEST_BINARY=%s\n' "$staged_binary" >> "$GITHUB_ENV"
-
-      - name: Run complete Rust validation
-        run: cargo xtask check rust
+      - name: Run Rust workspace unit tests
+        run: cargo test --locked --workspace --lib
 
   sdk:
     name: Public SDK PR validation
@@ -289,7 +337,7 @@ jobs:
   gate:
     name: Colossus PR gate
     if: always()
-    needs: [classify, rust, sdk, desktop, documentation, dependency-policy]
+    needs: [classify, format, lint, rust, sdk, desktop, documentation, dependency-policy]
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
@@ -302,6 +350,8 @@ jobs:
       - name: Require every selected PR validation
         env:
           CLASSIFY_RESULT: ${{ needs.classify.result }}
+          FORMAT_RESULT: ${{ needs.format.result }}
+          LINT_RESULT: ${{ needs.lint.result }}
           RUST_REQUIRED: ${{ needs.classify.outputs.rust_required }}
           RUST_RESULT: ${{ needs.rust.result }}
           SDK_REQUIRED: ${{ needs.classify.outputs.sdk_required }}
@@ -327,11 +377,18 @@ jobs:
               "$SDK_REQUIRED" "$SDK_RESULT" \
               "$DESKTOP_REQUIRED" "$DESKTOP_RESULT" \
               false skipped
+            sh "$trusted_gate" \
+              "$CLASSIFY_RESULT" \
+              "$RUST_REQUIRED" "$FORMAT_RESULT" \
+              "$RUST_REQUIRED" "$LINT_RESULT" \
+              false skipped
           else
             # The base predates the contract, so the classifier selected every
             # validation tier. Require each one explicitly for this bootstrap run.
             test "$CLASSIFY_RESULT" = success
             test "$RUST_REQUIRED:$RUST_RESULT" = true:success
+            test "$RUST_REQUIRED:$FORMAT_RESULT" = true:success
+            test "$RUST_REQUIRED:$LINT_RESULT" = true:success
             test "$DOCS_REQUIRED:$DOCS_RESULT" = true:success
             test "$DEPENDENCY_REQUIRED:$DEPENDENCY_RESULT" = true:success
             test "$SDK_REQUIRED:$SDK_RESULT" = true:success
