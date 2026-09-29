@@ -165,3 +165,5 @@ fi
 "${NODE:-node}" --test "$script_dir/homebrew-formula.test.mjs"
 "${NODE:-node}" --test "$script_dir/ripgrep-pin.test.mjs"
 "${NODE:-node}" --test "$script_dir/release-oci.test.mjs"
+"${NODE:-node}" "$script_dir/check-toolchain.mjs"
+"${NODE:-node}" --test "$script_dir/check-toolchain.test.mjs"

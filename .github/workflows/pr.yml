@@ -39,6 +39,11 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: printf '%s\n' "$PR_TITLE" | sh .ci-trusted/scripts/check_conventional_commit.sh --stdin
 
+      - name: Install workflow tools
+        uses: ./.github/actions/setup-toolchain
+        with:
+          tools: node aqua:rhysd/actionlint python
+
       - name: Test proposed CI classification and gate contracts
         run: ./scripts/ci/test-contracts.sh
 
@@ -74,22 +79,6 @@ jobs:
           printf '%s\n' "$classification"
           printf '%s\n' "$classification" >> "$GITHUB_OUTPUT"
 
-      - name: Install checksum-verified workflow linter
-        env:
-          ACTIONLINT_VERSION: 1.7.12
-          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
-        run: |
-          set -euo pipefail
-          archive="$RUNNER_TEMP/actionlint.tar.gz"
-          install_dir="$RUNNER_TEMP/actionlint"
-          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
-            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
-            --output "$archive"
-          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$archive" | sha256sum --check --strict
-          mkdir -p "$install_dir"
-          tar -xzf "$archive" -C "$install_dir" actionlint
-          printf '%s\n' "$install_dir" >> "$GITHUB_PATH"
-
       - name: Lint GitHub Actions workflows
         run: actionlint
 
@@ -107,39 +96,42 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Node.js 22.18
+      - name: Install selected language toolchains
+        uses: ./.github/actions/setup-toolchain
+        with:
+          tools: rust ${{ (needs.classify.outputs.sdk_required == 'true' || needs.classify.outputs.desktop_required == 'true') && 'node' || '' }} ${{ needs.classify.outputs.sdk_required == 'true' && 'python go' || '' }}
+
+      - name: Cache npm downloads
         if: needs.classify.outputs.sdk_required == 'true' || needs.classify.outputs.desktop_required == 'true'
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
-          node-version: 22.18.0
-          cache: npm
-          cache-dependency-path: |
-            apps/desktop/package-lock.json
-            sdk/package-lock.json
-            sdk/typescript/package-lock.json
+          path: |
+            ~/.npm
+            ${{ runner.temp }}/npm-pack-cache
+          key: npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.lock', 'apps/desktop/package-lock.json', 'sdk/package-lock.json', 'sdk/typescript/package-lock.json') }}
 
-      - name: Install Python 3.10
+      - name: Cache pip downloads
         if: needs.classify.outputs.sdk_required == 'true'
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
-          python-version: 3.10.18
-          cache: pip
-          cache-dependency-path: |
-            sdk/python/requirements-codegen.txt
-            sdk/python/requirements-dev.txt
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.lock', 'sdk/python/requirements-codegen.txt', 'sdk/python/requirements-dev.txt') }}
 
-      - name: Install Go 1.25
+      - name: Locate Go caches
         if: needs.classify.outputs.sdk_required == 'true'
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version: 1.25.0
-          cache-dependency-path: sdk/go/go.sum
+        id: go-cache
+        run: |
+          printf 'build=%s\n' "$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          printf 'mod=%s\n' "$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
 
-      - name: Install Rust 1.96
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+      - name: Cache Go modules and builds
+        if: needs.classify.outputs.sdk_required == 'true'
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
-          toolchain: 1.96.0
-          components: clippy,rustfmt
+          path: |
+            ${{ steps.go-cache.outputs.build }}
+            ${{ steps.go-cache.outputs.mod }}
+          key: go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.lock', 'sdk/go/go.sum') }}
 
       - name: Enable shared compiler cache
         id: sccache
@@ -196,6 +188,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Install documentation compiler
+        uses: ./.github/actions/setup-toolchain
+        with:
+          tools: rust
+
       - name: Build and verify documentation
         run: cargo xtask check docs
 
@@ -218,16 +215,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Rust 1.96
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+      - name: Install supply-chain tools and compiler
+        uses: ./.github/actions/setup-toolchain
         with:
-          toolchain: 1.96.0
-
-      - name: Install checksum-verified pinned supply-chain tools
-        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
-        with:
-          tool: cargo-deny@0.20.2,cargo-audit@0.22.2
-          fallback: none
+          tools: rust aqua:EmbarkStudios/cargo-deny aqua:rustsec/rustsec/cargo-audit
 
       - name: Enforce dependency policy
         run: cargo xtask check dependencies
