@@ -750,7 +750,8 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
         "Colossus-Desktop-STABLE-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe",
         "Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe",
         "-eq 25",
-        "-eq 22",
+        "expected_assets=22",
+        "expected_assets=18",
     ] {
         assert!(
             source.contains(required),
