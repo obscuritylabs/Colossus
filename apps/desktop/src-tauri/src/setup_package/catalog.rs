@@ -19,6 +19,19 @@ fn current<T>(entry: &CatalogEntrySetting<T>) -> Option<&T> {
         .map(|r| &r.value)
 }
 
+fn resources_referenced_elsewhere(
+    settings: &DesktopSettings,
+    package_id: &str,
+) -> BTreeSet<String> {
+    settings
+        .setup_packages
+        .iter()
+        .filter(|package| package.manifest.id != package_id)
+        .filter_map(|package| package.catalog_resources.as_ref())
+        .flat_map(|resources| resources.values().cloned())
+        .collect()
+}
+
 fn retain_or_import<T: Clone + PartialEq>(
     entries: &mut Vec<CatalogEntrySetting<T>>,
     previous_id: Option<&String>,
@@ -68,6 +81,9 @@ pub(super) fn import_catalog(
     package: &mut SavedSetupPackage,
     previous: Option<&SavedSetupPackage>,
 ) -> Result<(), CommandErrorDto> {
+    // Exact-value imports may share entries. Only this package's exclusive entries
+    // may be revised; other packages must keep their original definitions.
+    let shared_resources = resources_referenced_elsewhere(settings, &package.manifest.id);
     let mut staged = settings.clone();
     let previous_revision = staged.global_configuration.revision;
     let mut changed = BTreeSet::new();
@@ -85,7 +101,8 @@ pub(super) fn import_catalog(
             &mut staged.global_configuration.providers,
             previous
                 .and_then(|old| old.catalog_resources.as_ref())
-                .and_then(|ids| ids.get(&key)),
+                .and_then(|ids| ids.get(&key))
+                .filter(|id| !shared_resources.contains(*id)),
             old_value.map(|p| &p.connection),
             &package.manifest.providers[&provider.connection.profile].display_name,
             &provider.connection,
@@ -99,7 +116,8 @@ pub(super) fn import_catalog(
             &mut staged.global_configuration.models,
             previous
                 .and_then(|old| old.catalog_resources.as_ref())
-                .and_then(|ids| ids.get(&key)),
+                .and_then(|ids| ids.get(&key))
+                .filter(|id| !shared_resources.contains(*id)),
             previous.and_then(|old| old.models.iter().find(|m| m.profile == model.profile)),
             &model.model,
             model,
@@ -127,6 +145,7 @@ pub(super) fn update_credentials(
     let Some(mut resources) = previous.catalog_resources.clone() else {
         return import_catalog(settings, package, Some(previous));
     };
+    let shared_resources = resources_referenced_elsewhere(settings, &package.manifest.id);
     let mut staged = settings.clone();
     let previous_revision = staged.global_configuration.revision;
     let mut changed = BTreeSet::new();
@@ -143,7 +162,9 @@ pub(super) fn update_credentials(
         let key = format!("provider:{}", provider.connection.profile);
         let id = retain_or_import(
             &mut staged.global_configuration.providers,
-            resources.get(&key),
+            resources
+                .get(&key)
+                .filter(|id| !shared_resources.contains(*id)),
             old.map(|old| &old.connection),
             &package.manifest.providers[&provider.connection.profile].display_name,
             &provider.connection,

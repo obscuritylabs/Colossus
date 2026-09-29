@@ -40,6 +40,99 @@ fn replacing_a_package_updates_its_entry_and_preserves_earlier_revisions() {
     assert_ne!(entry.revisions[0].value.timeout_ms, Some(12345));
 }
 
+fn settings_with_shared_packages() -> DesktopSettings {
+    let mut settings = DesktopSettings::default();
+    let mut package = saved();
+    package.models.push(
+        serde_json::from_value(serde_json::json!({
+            "profile": "assistant", "providerProfile": "company", "model": "company/assistant",
+            "contextWindowTokens": 32768, "maxOutputTokens": 4096,
+            "capabilities": { "toolCalls": true, "streaming": true, "imageInputs": false }
+        }))
+        .unwrap(),
+    );
+    import_catalog(&mut settings, &mut package, None).unwrap();
+    settings.setup_packages.push(package.clone());
+    package.manifest.id = "other-company".into();
+    import_catalog(&mut settings, &mut package, None).unwrap();
+    assert_eq!(
+        package.catalog_resources,
+        settings.setup_packages[0].catalog_resources
+    );
+    settings.setup_packages.push(package);
+    settings
+}
+
+#[test]
+fn replacing_a_package_preserves_definitions_referenced_by_another_package() {
+    let mut settings = settings_with_shared_packages();
+    let previous = settings.setup_packages[0].clone();
+    let other = settings.setup_packages[1].clone();
+    let shared_provider = settings.global_configuration.providers[0].clone();
+    let shared_model = settings.global_configuration.models[0].clone();
+    let mut package = previous.clone();
+    package.providers[0].connection.base_url = "https://new.example.com/v1".into();
+    package.models[0].model = "company/new-assistant".into();
+
+    import_catalog(&mut settings, &mut package, Some(&previous)).unwrap();
+
+    assert_eq!(settings.global_configuration.providers.len(), 2);
+    assert_eq!(settings.global_configuration.models.len(), 2);
+    assert_eq!(settings.global_configuration.providers[0], shared_provider);
+    assert_eq!(settings.global_configuration.models[0], shared_model);
+    assert_eq!(settings.setup_packages[1], other);
+    let resources = package.catalog_resources.as_ref().unwrap();
+    assert_ne!(resources["provider:company"], shared_provider.id);
+    assert_ne!(resources["model:assistant"], shared_model.id);
+    assert_eq!(
+        current(&settings.global_configuration.providers[1]),
+        Some(&package.providers[0].connection)
+    );
+    assert_eq!(
+        current(&settings.global_configuration.models[1]),
+        Some(&package.models[0])
+    );
+}
+
+#[test]
+fn unchanged_shared_definitions_remain_deduplicated_on_reimport() {
+    let mut settings = settings_with_shared_packages();
+    let before = settings.clone();
+    let previous = settings.setup_packages[0].clone();
+    let mut package = previous.clone();
+
+    import_catalog(&mut settings, &mut package, Some(&previous)).unwrap();
+
+    assert_eq!(settings, before);
+    assert_eq!(package.catalog_resources, previous.catalog_resources);
+}
+
+#[test]
+fn enrolling_a_key_preserves_another_packages_shared_connection() {
+    let mut settings = settings_with_shared_packages();
+    let previous = settings.setup_packages[0].clone();
+    let other = settings.setup_packages[1].clone();
+    let shared_provider = settings.global_configuration.providers[0].clone();
+    let models = settings.global_configuration.models.clone();
+    let mut package = previous.clone();
+    package.providers[0].connection.credential_id = Some(credential(&mut settings));
+
+    update_credentials(&mut settings, &mut package, &previous).unwrap();
+
+    assert_eq!(settings.global_configuration.providers.len(), 2);
+    assert_eq!(settings.global_configuration.providers[0], shared_provider);
+    assert_eq!(settings.setup_packages[1], other);
+    assert_eq!(settings.global_configuration.models, models);
+    let resources = package.catalog_resources.as_ref().unwrap();
+    assert_ne!(resources["provider:company"], shared_provider.id);
+    assert_eq!(resources["model:assistant"], models[0].id);
+    assert_eq!(
+        current(&settings.global_configuration.providers[1]),
+        Some(&package.providers[0].connection)
+    );
+    assert!(!package.providers[0].connection.credential_required);
+}
+
 #[test]
 fn repeated_import_is_idempotent_and_does_not_overwrite_manual_changes() {
     let mut settings = DesktopSettings::default();
