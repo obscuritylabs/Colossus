@@ -44,6 +44,7 @@ async function setup(
             imported = [structuredClone(packet)];
             return null;
           }
+          if (command === "desktop_status") return {};
           if (command === "get_managed_configuration")
             return { globalConfiguration: { credentials: [] } };
           if (command === "configure_setup_credential") {

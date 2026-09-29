@@ -1,6 +1,7 @@
 import type { ManagedModelConfiguration, ProviderKind } from "./types";
 
 export interface SetupProvider {
+  catalogResourceId?: string | null;
   profile: string;
   displayName: string;
   descriptionMarkdown: string;

@@ -122,6 +122,7 @@ mod tests {
     #[test]
     fn discovery_needs_no_selected_model_and_grants_no_extra_tools() {
         let runtime = catalog_runtime(&ProviderSetting {
+            credential_required: false,
             profile: "setup-provider".into(),
             kind: ProviderKindSetting::Compatible,
             base_url: "https://models.example.test/v1".into(),

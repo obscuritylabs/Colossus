@@ -1,3 +1,6 @@
+mod model_selection;
+pub(crate) use model_selection::select_configured_models;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -352,6 +355,7 @@ pub(crate) fn resolve_space_configuration(
         &space.configuration.catalog_revisions,
         "provider:",
     )?;
+    model_selection::require_provider_credentials(&providers)?;
     for provider in &mut providers {
         if let Some(credential) = provider.credential_id.as_mut() {
             apply_credential_override(credential, &space.configuration.credential_overrides);
@@ -984,6 +988,7 @@ mod tests {
 
     fn provider(base_url: &str) -> ProviderSetting {
         ProviderSetting {
+            credential_required: false,
             profile: "primary-provider".into(),
             kind: ProviderKindSetting::Compatible,
             base_url: base_url.into(),
@@ -1052,6 +1057,51 @@ mod tests {
             spaces[0].configuration.catalog_revisions["provider:primary-provider"].resource_id,
             spaces[2].configuration.catalog_revisions["provider:primary-provider"].resource_id
         );
+    }
+
+    #[test]
+    fn pending_imported_provider_cannot_be_activated_as_an_anonymous_connection() {
+        let mut connection = provider("https://example.test/v1");
+        connection.credential_id = None;
+        connection.credential_required = true;
+        let mut spaces = vec![space("one", connection)];
+        let mut global = GlobalConfigurationSetting::default();
+        initialize_catalog(&mut global, &mut spaces);
+        let error = resolve_space_configuration(&global, &spaces[0]).unwrap_err();
+        assert!(format!("{error:?}").contains("Add an API key"));
+    }
+
+    #[test]
+    fn explicit_setup_selection_replaces_runtime_model_pins_and_keeps_other_workspaces() {
+        let mut spaces = vec![
+            space("one", provider("https://old.example.test/v1")),
+            space("two", provider("https://old.example.test/v1")),
+        ];
+        let mut global = GlobalConfigurationSetting::default();
+        initialize_catalog(&mut global, &mut spaces);
+        let untouched = spaces[1].clone();
+        let new_provider = provider("https://new.example.test/v1");
+        let new_model = model("new-model");
+        let mut settings = crate::desktop_settings::DesktopSettings {
+            selected_space_id: Some(spaces[0].id.clone()),
+            providers: vec![new_provider.clone()],
+            models: vec![new_model.clone()],
+            model_roles: BTreeMap::from([("primary".into(), new_model.profile.clone())]),
+            spaces,
+            global_configuration: global,
+            ..Default::default()
+        };
+        select_configured_models(&mut settings).unwrap();
+        let resolved =
+            resolve_space_configuration(&settings.global_configuration, &settings.spaces[0])
+                .unwrap();
+        assert_eq!(resolved.providers, vec![new_provider]);
+        assert_eq!(resolved.models, vec![new_model]);
+        assert_eq!(resolved.model_roles, settings.model_roles);
+        assert_eq!(settings.spaces[1], untouched);
+        let before = settings.global_configuration.clone();
+        select_configured_models(&mut settings).unwrap();
+        assert_eq!(settings.global_configuration, before);
     }
 
     #[test]

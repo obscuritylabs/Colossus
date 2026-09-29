@@ -50,6 +50,9 @@ pub(crate) struct SavedSetupPackage {
     pub roles: BTreeMap<String, String>,
     pub icons: BTreeMap<String, String>,
     pub ca_pem: Option<String>,
+    /// Missing only for packages saved before imports populated the global catalog.
+    #[serde(default)]
+    pub catalog_resources: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Serialize)]
@@ -70,6 +73,7 @@ pub(crate) struct PackageDto {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProviderDto {
+    pub catalog_resource_id: Option<String>,
     pub profile: String,
     pub display_name: String,
     pub description_markdown: String,

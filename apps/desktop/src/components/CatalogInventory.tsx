@@ -75,7 +75,7 @@ export function CatalogInventory({
           <h3 id={`${id}-heading`}>{title}</h3>
           <p>
             {providers
-              ? "Connections used by your configured models."
+              ? "Saved connections for your workspaces."
               : "Choose and manage the models your workspaces use."}
           </p>
         </div>

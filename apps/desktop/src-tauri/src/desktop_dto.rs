@@ -578,6 +578,7 @@ impl ApplyManagedModelConfigurationInput {
         self.providers
             .iter()
             .map(|provider| ProviderSetting {
+                credential_required: false,
                 profile: provider.profile.clone(),
                 kind: provider.provider_kind,
                 base_url: provider.base_url.clone(),
@@ -945,6 +946,7 @@ mod tests {
         let credential_id = uuid::Uuid::now_v7().to_string();
         let settings = DesktopSettings {
             providers: vec![ProviderSetting {
+                credential_required: false,
                 profile: "provider".into(),
                 kind: ProviderKindSetting::Compatible,
                 base_url: "https://models.example.test/v1".into(),

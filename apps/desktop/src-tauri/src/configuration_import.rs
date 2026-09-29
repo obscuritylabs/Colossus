@@ -595,6 +595,7 @@ fn imported_providers(
             Ok((
                 profile.clone(),
                 ProviderSetting {
+                    credential_required: false,
                     profile: profile.clone(),
                     kind,
                     base_url,
@@ -1468,6 +1469,7 @@ mod tests {
         });
         let mut target = space("target");
         target.providers = vec![ProviderSetting {
+            credential_required: false,
             profile: "primary-provider".into(),
             kind: ProviderKindSetting::Codex,
             base_url: CODEX_BASE_URL.into(),

@@ -170,6 +170,9 @@ pub(crate) struct ProviderSetting {
     pub(crate) kind: ProviderKindSetting,
     pub(crate) base_url: String,
     pub(crate) credential_id: Option<String>,
+    /// A saved connection may await a key without becoming an anonymous connection.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) credential_required: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) timeout_ms: Option<u64>,
 }
@@ -192,7 +195,9 @@ pub(crate) fn managed_provider_setting_is_valid(provider: &ProviderSetting) -> b
             .as_deref()
             .is_none_or(valid_opaque_id)
         && (provider.kind != ProviderKindSetting::Codex
-            || (provider.base_url == CODEX_BASE_URL && provider.credential_id.is_none()))
+            || (provider.base_url == CODEX_BASE_URL
+                && provider.credential_id.is_none()
+                && !provider.credential_required))
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -865,6 +870,7 @@ impl SettingsStore {
                     .collect::<Vec<_>>();
         migrated_settings |= settings.archive_stale_same_path_spaces();
         settings.project_selected_space();
+        migrated_settings |= crate::setup_package::migrate_catalog(&mut settings);
         let legacy_workspace_requires_reselection =
             settings.workspace.as_ref().is_some_and(|workspace| {
                 workspace
@@ -2204,6 +2210,7 @@ mod tests {
     ) -> DesktopSettings {
         DesktopSettings {
             providers: vec![ProviderSetting {
+                credential_required: false,
                 profile: "primary-provider".into(),
                 kind,
                 base_url: base_url.into(),

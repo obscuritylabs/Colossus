@@ -285,6 +285,7 @@ fn resolved_configuration(origin: &str, size: usize) -> ResolvedSpaceConfigurati
         terminal_enabled: false,
         field_overrides: Vec::new(),
         providers: vec![ProviderSetting {
+            credential_required: false,
             profile: "fixture".into(),
             kind: ProviderKindSetting::Compatible,
             base_url: format!("{origin}/provider/{size}"),

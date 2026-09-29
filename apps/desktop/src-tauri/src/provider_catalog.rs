@@ -94,6 +94,7 @@ pub(crate) async fn discover_managed_provider_models(
     // Native prompts can remain open while a selected folder is replaced externally.
     validate_request(&settings, &request)?;
     let provider = ProviderSetting {
+        credential_required: false,
         profile: "setup-provider".into(),
         kind: request.provider_kind,
         base_url: request.base_url,
@@ -502,6 +503,7 @@ mod tests {
     fn saved_secondary_provider_reuse_is_bound_to_its_endpoint() {
         let settings = DesktopSettings {
             providers: vec![ProviderSetting {
+                credential_required: false,
                 profile: "secondary".into(),
                 kind: ProviderKindSetting::Compatible,
                 base_url: "https://models.example.test/v1".into(),
@@ -535,6 +537,7 @@ mod tests {
             managed_configuration::{CredentialBackendSetting, CredentialMetadataSetting},
         };
         let provider = |id: &str| ProviderSetting {
+            credential_required: false,
             profile: id.into(),
             kind: ProviderKindSetting::Compatible,
             base_url: "https://models.example.test/v1".into(),
