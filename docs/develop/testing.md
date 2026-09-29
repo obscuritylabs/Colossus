@@ -149,6 +149,19 @@ hard links. Native setup acceptance also tears down its actual sidecar-created h
 through the Windows uninstall helper. These tests never target the operator's default
 Desktop home.
 
+### Desktop setup package acceptance
+
+After preparing the Desktop sidecar, run
+`cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib native_setup_package_ -- --ignored`.
+This operator-owned check proves both provider-only packages and the documented
+provider/model example pass the real sidecar's YAML inspector without provider
+requests. Ordinary `setup_package::tests` cover offline ZIP bounds, credential
+placeholders, metadata migration, export, CA handling, and activation conflicts.
+From `apps/desktop`, `npx playwright test tests/browser/setup-package.spec.ts`
+checks the import review, explicit trust/replacement choices, deferred credentials,
+Markdown isolation, and imported provider selection. Native file pickers and vault
+entry dialogs still require on-screen acceptance.
+
 ### Desktop embedded browser preview
 
 From `apps/desktop`, run `npm run test:browser-native` to build and exercise the

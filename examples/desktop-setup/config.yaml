@@ -1,0 +1,85 @@
+schemaVersion: 3
+providers:
+  profiles:
+    company:
+      kind: open_ai_compatible
+      baseUrl: https://ai.example.com/v1
+      credentialReference: env:COMPANY_AI_TOKEN
+      timeoutMs: 30000
+    research:
+      kind: open_ai_compatible
+      baseUrl: https://research.example.com/v1
+      credentialReference: env:RESEARCH_AI_TOKEN
+      timeoutMs: 120000
+    vision:
+      kind: open_ai_responses
+      baseUrl: https://vision.example.com/v1
+      credentialReference: env:VISION_AI_TOKEN
+    code:
+      kind: open_ai_compatible
+      baseUrl: https://code.example.com/v1
+      credentialReference: env:CODE_LAB_TOKEN
+    local:
+      kind: open_ai_compatible
+      baseUrl: http://127.0.0.1:11434/v1
+      timeoutMs: 300000
+models:
+  profiles:
+    engineering:
+      providerProfile: company
+      model: company/engineering
+      contextWindowTokens: 32768
+      maxOutputTokens: 4096
+      reasoningEffort: high
+      capabilities:
+        toolCalls: true
+        streaming: true
+        imageInputs: false
+    general:
+      providerProfile: company
+      model: company/general
+      contextWindowTokens: 65536
+      maxOutputTokens: 8192
+      capabilities:
+        toolCalls: true
+        streaming: true
+        imageInputs: false
+    research:
+      providerProfile: research
+      model: research/analyst
+      contextWindowTokens: 131072
+      maxOutputTokens: 16384
+      reasoningEffort: high
+      capabilities:
+        toolCalls: true
+        streaming: true
+        imageInputs: false
+    vision:
+      providerProfile: vision
+      model: vision/reader
+      contextWindowTokens: 65536
+      maxOutputTokens: 8192
+      capabilities:
+        toolCalls: true
+        streaming: true
+        imageInputs: true
+    code:
+      providerProfile: code
+      model: code/assistant
+      contextWindowTokens: 65536
+      maxOutputTokens: 8192
+      capabilities:
+        toolCalls: true
+        streaming: true
+        imageInputs: false
+    local:
+      providerProfile: local
+      model: example-local
+      contextWindowTokens: 32768
+      maxOutputTokens: 4096
+      capabilities:
+        toolCalls: true
+        streaming: true
+        imageInputs: false
+  roles:
+    primary: engineering

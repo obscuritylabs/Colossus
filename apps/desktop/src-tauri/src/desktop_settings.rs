@@ -26,7 +26,7 @@ use std::fs::File;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
-const SETTINGS_SCHEMA_VERSION: u16 = 6;
+const SETTINGS_SCHEMA_VERSION: u16 = 7;
 const SETTINGS_FILE: &str = "settings.json";
 const THREAD_SEARCH_FILE: &str = "thread-search.redb";
 const MANAGED_DIRECTORY: &str = "managed-local";
@@ -297,6 +297,8 @@ pub(crate) struct DesktopSettings {
     /// Versioned reusable definitions and defaults shared by Desktop Workspaces.
     #[serde(default)]
     pub(crate) global_configuration: GlobalConfigurationSetting,
+    #[serde(default)]
+    pub(crate) setup_packages: Vec<crate::setup_package::SavedSetupPackage>,
     /// Bounded linkage metadata for Workspace-scoped side conversations. No prompt,
     /// message, tool output, or selected text is persisted here.
     #[serde(default)]
@@ -367,6 +369,7 @@ impl Default for DesktopSettings {
             spaces: Vec::new(),
             selected_space_id: None,
             global_configuration: GlobalConfigurationSetting::default(),
+            setup_packages: Vec::new(),
             asides: Vec::new(),
             workspace: None,
             providers: Vec::new(),
@@ -707,6 +710,7 @@ pub(crate) fn decode_settings(bytes: &[u8]) -> Result<(DesktopSettings, bool), C
         2 | 3 => migrate_legacy_settings(bytes, version)?,
         4 => migrate_v4_settings(bytes)?,
         5 => migrate_v5_settings(bytes)?,
+        6 => migrate_v6_settings(bytes)?,
         SETTINGS_SCHEMA_VERSION => serde_json::from_slice(bytes).map_err(|_| storage_error())?,
         _ => return Err(storage_error()),
     };
@@ -1006,7 +1010,14 @@ impl SettingsStore {
         source_path: &Path,
     ) -> Result<CaBundleSetting, CommandErrorDto> {
         let bytes = read_ca_bundle_source(source_path)?;
-        let roots = colossus_network::AdditionalRootCertificates::from_pem_bundle(&bytes)
+        self.stage_ca_bundle_bytes(&bytes)
+    }
+
+    pub(crate) fn stage_ca_bundle_bytes(
+        &self,
+        bytes: &[u8],
+    ) -> Result<CaBundleSetting, CommandErrorDto> {
+        let roots = colossus_network::AdditionalRootCertificates::from_pem_bundle(bytes)
             .map_err(|_| ca_bundle_error("The selected file is not a valid PEM CA bundle."))?;
         let bundle = CaBundleSetting {
             bundle_id: Uuid::now_v7().to_string(),
@@ -1016,7 +1027,7 @@ impl SettingsStore {
         let directory = self.root.join(TRUST_DIRECTORY);
         ensure_private_directory(&directory)?;
         let destination = ca_bundle_storage_path(&directory, &bundle)?;
-        write_private_file(&destination, &bytes)?;
+        write_private_file(&destination, bytes)?;
         self.ca_bundle_path(&bundle)?;
         Ok(bundle)
     }
@@ -1175,6 +1186,7 @@ fn migrate_v1_settings(
         spaces: Vec::new(),
         selected_space_id: None,
         global_configuration: GlobalConfigurationSetting::default(),
+        setup_packages: Vec::new(),
         asides: Vec::new(),
         workspace: legacy.workspace,
         providers: Vec::new(),
@@ -1192,6 +1204,14 @@ fn migrate_v1_settings(
         external_targets: legacy.external_targets,
         legacy_connection_migrated: legacy.legacy_connection_migrated,
     })
+}
+
+fn migrate_v6_settings(bytes: &[u8]) -> Result<DesktopSettings, CommandErrorDto> {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| storage_error())?;
+    value["schemaVersion"] = serde_json::json!(SETTINGS_SCHEMA_VERSION);
+    value["setupPackages"] = serde_json::json!([]);
+    serde_json::from_value(value).map_err(|_| storage_error())
 }
 
 fn migrate_v4_settings(bytes: &[u8]) -> Result<DesktopSettings, CommandErrorDto> {
@@ -1300,6 +1320,7 @@ const fn legacy_execution_boundary(profile: AccessProfileSetting) -> ExecutionBo
 }
 
 fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> {
+    crate::setup_package::validate_saved(&settings.setup_packages)?;
     if settings.schema_version != SETTINGS_SCHEMA_VERSION
         || settings.local_terminal_consent_version > LOCAL_TERMINAL_CONSENT_VERSION
         || !Uuid::parse_str(&settings.managed_instance_id).is_ok_and(|value| !value.is_nil())

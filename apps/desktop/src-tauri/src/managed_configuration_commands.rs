@@ -1377,6 +1377,15 @@ pub(crate) fn advance_unaffected_spaces(
 
 fn credential_dependents(settings: &DesktopSettings, credential_id: &str) -> Vec<String> {
     let mut dependents = BTreeSet::new();
+    for package in &settings.setup_packages {
+        if package
+            .providers
+            .iter()
+            .any(|p| p.connection.credential_id.as_deref() == Some(credential_id))
+        {
+            dependents.insert(format!("Setup package {}", package.manifest.name));
+        }
+    }
     for space in &settings.spaces {
         if space
             .configuration

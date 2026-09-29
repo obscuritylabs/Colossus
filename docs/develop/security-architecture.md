@@ -660,6 +660,26 @@ bounded redacted error. Child provider deltas, hidden reasoning, and private tra
 are never copied into the parent interface event stream.
 See [Public API and application SDKs](application-sdk.md) for the complete topology.
 
+Desktop setup files are untrusted, bounded ZIP inputs, selected through a native
+picker and read into memory without filesystem extraction. The importer rejects
+traversal, duplicate/case-colliding names, links, unknown fields, unreferenced files,
+and unsupported versions. PNG icons are decoded under resource limits and re-encoded;
+Markdown uses the renderer's sanitized, image-free display. Rendering performs no
+remote fetch. Human-clicked HTTP(S) instruction links use the native system browser.
+The renderer receives bounded presentation DTOs, not raw YAML or PEM bytes.
+
+Provider/model YAML is inspected by the verified sidecar without constructing a
+provider connection. Temporary storage and network declarations exist only for
+validation. The package cannot configure tools, permissions, canonical state, host
+credentials, or runtime grants. Native import reviews bind the archive digest,
+previous package identity, and previous certificate fingerprints; replacement and
+CA trust require separate affirmative choices. API keys remain in the native vault
+and may be added later. Applying a packaged CA replaces the app-owned additional
+bundle through the existing guarded restart/rollback path; OS trust is unchanged.
+Model activation holds the connection guard, binds the selected workspace, and reuses
+native credential, origin, access, and runtime startup checks. Package removal does
+not implicitly revoke separate credential, workspace, or trust configuration.
+
 Desktop Workspaces are native-owned folder bindings, persisted as neutral
 `WorkspaceProfile` records. The renderer can add a Workspace only through the native folder
 picker, and duplicate canonical object identities are rejected or explicitly restored

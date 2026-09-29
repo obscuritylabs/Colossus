@@ -7,6 +7,10 @@ export interface ProviderPreset {
   protocol: "chat_completions" | "responses" | "codex";
   baseUrl: string | null;
   credentialEnv: string | null;
+  setup?: {
+    packageId: string;
+    provider: import("./setupPackages").SetupProvider;
+  };
 }
 
 export interface ProviderCatalogModel {

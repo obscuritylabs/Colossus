@@ -47,6 +47,8 @@ tauri-build = { version = "=2.6.3", features = [] }
 [dependencies]
 anyhow = "1.0.104"
 base64 = "0.22.1"
+zip = { version = "4.6.1", default-features = false, features = ["deflate-flate2"] }
+image = { version = "0.25.9", default-features = false, features = ["png"] }
 colossus-codex-auth = { version = "=0.11.1", path = "../../../crates/colossus-codex-auth" }
 colossus-contracts = { version = "=0.11.1", path = "../../../crates/colossus-contracts" }
 colossus-credentials = { version = "=0.11.1", path = "../../../crates/colossus-credentials" }

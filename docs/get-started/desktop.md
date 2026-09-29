@@ -57,6 +57,10 @@ Appearance preferences and imported certificates apply immediately; you can chan
 later in Settings. Use **Back** or a completed step to revisit your choices without
 losing the setup draft.
 
+If your organization provides a [Desktop setup file](desktop-setup-files.md), use
+**Import setup file** on this first page to review bundled providers, models,
+instructions, icons, and optional CA certificates. API keys can be added later.
+
 On the Workspace step, choose a folder through the native picker. The app records
 an opaque workspace binding in `$COLOSSUS_HOME/desktop/settings.json`. It does not write
 Colossus configuration, state, or credentials into the selected repository. Managed

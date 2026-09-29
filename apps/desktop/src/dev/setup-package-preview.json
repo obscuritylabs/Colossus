@@ -1,0 +1,163 @@
+{
+  "id": "company-ai",
+  "name": "Company AI setup",
+  "version": "2",
+  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "descriptionMarkdown": "Five example providers for exploring Desktop setup. Company AI is recommended to start.\n\nThese are sample endpoints and model IDs. Replace them with your organization’s connections before distribution.",
+  "providers": [
+    {
+      "profile": "company",
+      "displayName": "Company AI",
+      "descriptionMarkdown": "### Get an API token\n1. Open the [AI portal](https://ai.example.com/tokens).\n2. Select **Create token**.\n3. Use **Add API key** to enter it securely.\n\nConnect to your company network before using this provider.",
+      "kind": "openai_compatible",
+      "baseUrl": "https://ai.example.com/v1",
+      "timeoutMs": 30000,
+      "credentialRequired": true,
+      "credentialId": null,
+      "icon": null,
+      "darkIcon": null,
+      "models": [
+        {
+          "profile": "engineering",
+          "providerProfile": "company",
+          "model": "company/engineering",
+          "contextWindowTokens": 32768,
+          "maxOutputTokens": 4096,
+          "reasoningEffort": "high",
+          "capabilities": {
+            "toolCalls": true,
+            "streaming": true,
+            "imageInputs": false
+          }
+        },
+        {
+          "profile": "general",
+          "providerProfile": "company",
+          "model": "company/general",
+          "contextWindowTokens": 65536,
+          "maxOutputTokens": 8192,
+          "capabilities": {
+            "toolCalls": true,
+            "streaming": true,
+            "imageInputs": false
+          },
+          "reasoningEffort": null
+        }
+      ]
+    },
+    {
+      "profile": "research",
+      "displayName": "Research Gateway",
+      "descriptionMarkdown": "### Request access\nAsk your research team administrator for a token, then choose **Add API key**.\n\nUse this connection for long documents and analysis.",
+      "kind": "openai_compatible",
+      "baseUrl": "https://research.example.com/v1",
+      "timeoutMs": 120000,
+      "credentialRequired": true,
+      "credentialId": null,
+      "icon": null,
+      "darkIcon": null,
+      "models": [
+        {
+          "profile": "research",
+          "providerProfile": "research",
+          "model": "research/analyst",
+          "contextWindowTokens": 131072,
+          "maxOutputTokens": 16384,
+          "reasoningEffort": "high",
+          "capabilities": {
+            "toolCalls": true,
+            "streaming": true,
+            "imageInputs": false
+          }
+        }
+      ]
+    },
+    {
+      "profile": "vision",
+      "displayName": "Vision Gateway",
+      "descriptionMarkdown": "### Connect your account\nCreate a token in the [vision portal](https://vision.example.com/tokens).\n\nThis model accepts **images and text** through the Responses API.",
+      "kind": "openai_responses",
+      "baseUrl": "https://vision.example.com/v1",
+      "timeoutMs": null,
+      "credentialRequired": true,
+      "credentialId": null,
+      "icon": null,
+      "darkIcon": null,
+      "models": [
+        {
+          "profile": "vision",
+          "providerProfile": "vision",
+          "model": "vision/reader",
+          "contextWindowTokens": 65536,
+          "maxOutputTokens": 8192,
+          "capabilities": {
+            "toolCalls": true,
+            "streaming": true,
+            "imageInputs": true
+          },
+          "reasoningEffort": null
+        }
+      ]
+    },
+    {
+      "profile": "code",
+      "displayName": "Code Lab",
+      "descriptionMarkdown": "### Get a development token\nVisit the [developer portal](https://code.example.com/tokens) and request access to Code Lab.\n\nKeep tokens private. Enter them only in the secure Colossus prompt.",
+      "kind": "openai_compatible",
+      "baseUrl": "https://code.example.com/v1",
+      "timeoutMs": null,
+      "credentialRequired": true,
+      "credentialId": null,
+      "icon": null,
+      "darkIcon": null,
+      "models": [
+        {
+          "profile": "code",
+          "providerProfile": "code",
+          "model": "code/assistant",
+          "contextWindowTokens": 65536,
+          "maxOutputTokens": 8192,
+          "capabilities": {
+            "toolCalls": true,
+            "streaming": true,
+            "imageInputs": false
+          },
+          "reasoningEffort": null
+        }
+      ]
+    },
+    {
+      "profile": "local",
+      "displayName": "Local Models",
+      "descriptionMarkdown": "### Start your local server\nRun your compatible model server on **port 11434**, then update the sample model ID to one installed on your computer.\n\nNo API key is required. Your server must be running before you connect.",
+      "kind": "openai_compatible",
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "timeoutMs": 300000,
+      "credentialRequired": false,
+      "credentialId": null,
+      "icon": null,
+      "darkIcon": null,
+      "models": [
+        {
+          "profile": "local",
+          "providerProfile": "local",
+          "model": "example-local",
+          "contextWindowTokens": 32768,
+          "maxOutputTokens": 4096,
+          "capabilities": {
+            "toolCalls": true,
+            "streaming": true,
+            "imageInputs": false
+          },
+          "reasoningEffort": null
+        }
+      ]
+    }
+  ],
+  "roles": {
+    "primary": "engineering"
+  },
+  "certificateFingerprints": [],
+  "existingCertificateFingerprints": [],
+  "replacesVersion": null
+}

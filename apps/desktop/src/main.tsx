@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client";
+import { SetupPresentationProvider } from "./SetupPresentation";
 
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import {
@@ -81,7 +82,9 @@ if (
     createRoot(root).render(
       <AppearanceProvider initialPreference={initialAppearance}>
         <AppErrorBoundary>
-          <App />
+          <SetupPresentationProvider>
+            <App />
+          </SetupPresentationProvider>
         </AppErrorBoundary>
       </AppearanceProvider>,
     );
