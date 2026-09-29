@@ -106,17 +106,43 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         [
             "classify",
             "dependency-policy",
+            "desktop",
             "documentation",
+            "format",
             "gate",
-            "rust"
+            "lint",
+            "rust",
+            "sdk",
         ]
         .into_iter()
         .collect()
     );
     assert_eq!(
         field(job(jobs, "rust"), "runs-on").as_str(),
-        Some("ubuntu-latest-m")
+        Some("ubuntu-latest")
     );
+    for name in ["format", "lint", "rust"] {
+        assert_eq!(
+            field(job(jobs, name), "runs-on").as_str(),
+            Some("ubuntu-latest")
+        );
+        assert_eq!(
+            field(job(jobs, name), "if").as_str(),
+            Some("needs.classify.outputs.rust_required == 'true'")
+        );
+        assert_eq!(field(job(jobs, name), "needs").as_str(), Some("classify"));
+    }
+    for (name, selector) in [("sdk", "sdk_required"), ("desktop", "desktop_required")] {
+        assert_eq!(
+            field(job(jobs, name), "runs-on").as_str(),
+            Some("ubuntu-latest")
+        );
+        assert_eq!(
+            field(job(jobs, name), "if").as_str(),
+            Some(format!("needs.classify.outputs.{selector} == 'true'").as_str())
+        );
+        assert_eq!(field(job(jobs, name), "needs").as_str(), Some("classify"));
+    }
     assert_eq!(
         field(job(jobs, "documentation"), "if").as_str(),
         Some("needs.classify.outputs.docs_required == 'true'")
@@ -126,6 +152,44 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         Some("Colossus PR gate")
     );
     assert_eq!(field(job(jobs, "gate"), "if").as_str(), Some("always()"));
+    let gate_needs = strings(field(job(jobs, "gate"), "needs"), "PR gate needs");
+    for name in [
+        "format",
+        "lint",
+        "rust",
+        "sdk",
+        "desktop",
+        "documentation",
+        "dependency-policy",
+    ] {
+        assert!(gate_needs.contains(name), "PR gate must require {name}");
+    }
+    let rust_source = serde_json::to_string(job(jobs, "rust")).expect("serialize Rust PR job");
+    assert!(rust_source.contains("cargo test --locked --workspace --lib"));
+    assert!(!rust_source.contains("install-apparmor.sh"));
+    assert!(!rust_source.contains("cargo xtask check rust"));
+    assert!(!rust_source.contains("cargo xtask check sdk"));
+    assert!(!rust_source.contains("cargo xtask check desktop"));
+    assert!(
+        serde_json::to_string(job(jobs, "sdk"))
+            .expect("serialize SDK PR job")
+            .contains("cargo xtask check sdk")
+    );
+    let desktop_source =
+        serde_json::to_string(job(jobs, "desktop")).expect("serialize Desktop PR job");
+    assert!(desktop_source.contains("cargo xtask check sidecar"));
+    assert!(desktop_source.contains("cargo xtask check desktop"));
+    let gate_run = field(
+        named_step(job(jobs, "gate"), "Require every selected PR validation"),
+        "run",
+    )
+    .as_str()
+    .expect("PR gate must run the base-revision selector");
+    assert_eq!(gate_run.matches("sh \"$trusted_gate\"").count(), 3);
+    assert!(gate_run.contains("\"$RUST_REQUIRED\" \"$FORMAT_RESULT\""));
+    assert!(gate_run.contains("\"$RUST_REQUIRED\" \"$LINT_RESULT\""));
+    assert!(gate_run.contains("\"$SDK_REQUIRED\" \"$SDK_RESULT\""));
+    assert!(gate_run.contains("\"$DESKTOP_REQUIRED\" \"$DESKTOP_RESULT\""));
 
     let source = fs::read_to_string(repository_root().join(".github/workflows/pr.yml"))
         .expect("read PR workflow");
@@ -133,12 +197,13 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         assert!(!source.contains(forbidden), "PR tier contains {forbidden}");
     }
     for required in [
-        "cargo xtask check rust",
+        "cargo fmt --all -- --check",
+        "cargo clippy --locked --workspace --all-targets -- -D warnings",
+        "cargo test --locked --workspace --lib",
         "cargo xtask check sidecar",
         "cargo xtask check sdk --base \"$EVENT_BASE_SHA\"",
         "cargo xtask check desktop",
         "cargo xtask check dependencies",
-        "release/install-apparmor.sh",
         "ACTIONLINT_VERSION: 1.7.12",
         "ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
         "sha256sum --check --strict",
@@ -220,26 +285,59 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
 
     let jobs = jobs(&workflow);
     assert_eq!(
+        field(job(jobs, "linux-rust-integration"), "runs-on").as_str(),
+        Some("ubuntu-latest-m")
+    );
+    assert_eq!(
+        field(
+            named_step(
+                job(jobs, "linux-rust-integration"),
+                "Run complete Rust validation"
+            ),
+            "run"
+        )
+        .as_str(),
+        Some("cargo xtask check rust")
+    );
+    assert_eq!(
         field(job(jobs, "macos-native"), "runs-on").as_str(),
         Some("macos-14")
     );
     assert_eq!(
-        field(job(jobs, "macos-desktop"), "runs-on").as_str(),
+        field(job(jobs, "macos-desktop-acceptance"), "runs-on").as_str(),
         Some("macos-14")
     );
     assert_eq!(
-        field(job(jobs, "macos-desktop"), "timeout-minutes").as_u64(),
-        Some(100),
-        "macOS Desktop acceptance must allow native/browser tests and cold release builds to finish"
+        field(job(jobs, "macos-desktop-acceptance"), "timeout-minutes").as_u64(),
+        Some(75),
+        "macOS Desktop acceptance must allow native and browser tests to finish"
+    );
+    assert_eq!(
+        field(job(jobs, "macos-desktop-bundle"), "runs-on").as_str(),
+        Some("macos-14")
+    );
+    assert_eq!(
+        field(job(jobs, "macos-desktop-bundle"), "timeout-minutes").as_u64(),
+        Some(75),
+        "macOS Desktop packaging must allow a cold optimized build to finish"
     );
     assert_eq!(
         field(job(jobs, "windows-runtime"), "runs-on").as_str(),
-        Some("windows-latest-l")
+        Some("windows-2025")
     );
     assert_eq!(
         field(job(jobs, "windows-runtime"), "timeout-minutes").as_u64(),
-        Some(75),
-        "Windows acceptance must allow the native and Desktop checks to finish"
+        Some(40),
+        "Windows runtime acceptance must allow cold standard-runner compilation"
+    );
+    assert_eq!(
+        field(job(jobs, "windows-desktop"), "runs-on").as_str(),
+        Some("windows-latest-l")
+    );
+    assert_eq!(
+        field(job(jobs, "windows-desktop"), "timeout-minutes").as_u64(),
+        Some(65),
+        "Windows Desktop acceptance must allow a cold native build"
     );
     assert_eq!(
         field(job(jobs, "gate"), "name").as_str(),
@@ -250,10 +348,26 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         Some("always()"),
         "the required gate must fail closed on synchronize and non-ci:full label events"
     );
+    let gate_needs = strings(field(job(jobs, "gate"), "needs"), "pre-merge gate needs");
     for name in [
-        "macos-native",
-        "macos-desktop",
+        "linux-rust-integration",
+        "macos-desktop-acceptance",
+        "macos-desktop-bundle",
         "windows-runtime",
+        "windows-desktop",
+    ] {
+        assert!(
+            gate_needs.contains(name),
+            "pre-merge gate must require {name}"
+        );
+    }
+    for name in [
+        "linux-rust-integration",
+        "macos-native",
+        "macos-desktop-acceptance",
+        "macos-desktop-bundle",
+        "windows-runtime",
+        "windows-desktop",
         "fuzz",
         "supply-chain",
         "chroma",
@@ -283,6 +397,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "github.event.action == 'synchronize'",
         "--method DELETE",
         ".ci-trusted/scripts/ci/require-success.sh",
+        "release/install-apparmor.sh",
         "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0",
         "components: clippy,rustfmt",
         "CARGO_INCREMENTAL: \"0\"",
@@ -299,8 +414,6 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "--test native_lifecycle -- --ignored --nocapture",
         "cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings",
         "cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
-        "test \"$CARGO_TARGET_DIR\" = \"$expected\"",
-        "rm -rf \"$expected/debug\"",
         "for attempt in 1 2 3",
         "docker pull \"${{ matrix.image }}\"",
         "cargo xtask check dependencies",
@@ -386,11 +499,16 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     assert!(!native_source.contains("npm run tauri:"));
     assert!(!native_source.contains("apps/desktop/src-tauri/target"));
 
-    let desktop_source =
-        serde_json::to_string(job(jobs, "macos-desktop")).expect("serialize macOS desktop job");
-    assert!(desktop_source.contains("npm run tauri:build"));
-    assert!(desktop_source.contains("npm run tauri:bundle:macos"));
-    assert!(desktop_source.contains("CARGO_TARGET_DIR"));
+    let desktop_acceptance = serde_json::to_string(job(jobs, "macos-desktop-acceptance"))
+        .expect("serialize macOS desktop acceptance job");
+    let desktop_bundle = serde_json::to_string(job(jobs, "macos-desktop-bundle"))
+        .expect("serialize macOS desktop bundle job");
+    assert!(desktop_acceptance.contains("npm run test:browser-native"));
+    assert!(!desktop_acceptance.contains("npm run tauri:build"));
+    assert!(desktop_bundle.contains("npm run tauri:build"));
+    assert!(desktop_bundle.contains("npm run tauri:bundle:macos"));
+    assert!(desktop_bundle.contains("CARGO_TARGET_DIR"));
+    assert!(!desktop_bundle.contains("npm run test:browser-native"));
 
     let concurrency = mapping(field(root, "concurrency"), "pre-merge concurrency");
     assert_eq!(
@@ -1036,6 +1154,7 @@ fn conventional_commit_checker_remains_python_free() {
 fn windows_native_acceptance_cannot_be_masked_by_a_later_command() {
     let premerge = workflow("premerge.yml");
     let premerge_windows = job(jobs(&premerge), "windows-runtime");
+    let premerge_desktop = job(jobs(&premerge), "windows-desktop");
     assert_eq!(
         field(
             named_step(
@@ -1084,9 +1203,6 @@ fn windows_native_acceptance_cannot_be_masked_by_a_later_command() {
         "Run Windows Colossus-home acceptance",
         "Run Windows Codex credential-store acceptance",
         "Run Windows worker and AppContainer escape acceptance",
-        "Prepare Windows Managed Local executables",
-        "Lint the Windows native Desktop bridge",
-        "Test the Windows native Desktop bridge",
     ] {
         assert_eq!(
             field(named_step(premerge_windows, name), "continue-on-error").as_bool(),
@@ -1094,7 +1210,21 @@ fn windows_native_acceptance_cannot_be_masked_by_a_later_command() {
             "{name} must preserve later independent outcomes"
         );
     }
-    let aggregate = named_step(premerge_windows, "Require every Windows acceptance check");
+    for name in [
+        "Prepare Windows Managed Local executables",
+        "Lint the Windows native Desktop bridge",
+        "Test the Windows native Desktop bridge",
+    ] {
+        assert_eq!(
+            field(named_step(premerge_desktop, name), "continue-on-error").as_bool(),
+            Some(true),
+            "{name} must preserve later independent outcomes"
+        );
+    }
+    let aggregate = named_step(
+        premerge_windows,
+        "Require every Windows runtime acceptance check",
+    );
     let aggregate_run = field(aggregate, "run")
         .as_str()
         .expect("Windows acceptance aggregate must be a script");
@@ -1106,13 +1236,29 @@ fn windows_native_acceptance_cannot_be_masked_by_a_later_command() {
         "HOME_OUTCOME",
         "CODEX_AUTH_OUTCOME",
         "WORKER_OUTCOME",
-        "PREPARE_OUTCOME",
-        "CLIPPY_OUTCOME",
-        "NATIVE_TEST_OUTCOME",
     ] {
         assert!(
             aggregate_run.contains(outcome),
             "Windows acceptance aggregate is missing {outcome}"
+        );
+    }
+    let desktop_aggregate = named_step(
+        premerge_desktop,
+        "Require every Windows Desktop acceptance check",
+    );
+    let desktop_run = field(desktop_aggregate, "run")
+        .as_str()
+        .expect("Windows Desktop acceptance aggregate must be a script");
+    for outcome in [
+        "PREPARE_OUTCOME",
+        "CLIPPY_OUTCOME",
+        "NATIVE_TEST_OUTCOME",
+        "PLUGIN_RUNTIME_OUTCOME",
+        "APPROVAL_RUNTIME_OUTCOME",
+    ] {
+        assert!(
+            desktop_run.contains(outcome),
+            "Windows Desktop acceptance aggregate is missing {outcome}"
         );
     }
 

@@ -695,12 +695,15 @@ fn linux_profile_and_release_package_remain_hardened() {
     assert!(unix.contains("release/install-apparmor.sh"));
     assert!(unix.contains("release/colossus.apparmor.in"));
 
-    for workflow_path in [".github/workflows/pr.yml", ".github/workflows/release.yml"] {
+    for workflow_path in [
+        ".github/workflows/premerge.yml",
+        ".github/workflows/release.yml",
+    ] {
         let source = fs::read_to_string(repository_root().join(workflow_path))
             .unwrap_or_else(|error| panic!("read {workflow_path}: {error}"));
         let staging_directory =
             r#"install_dir="/colossus-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}""#;
-        let expected_staging_count = if workflow_path.ends_with("/pr.yml") {
+        let expected_staging_count = if workflow_path.ends_with("/premerge.yml") {
             1
         } else {
             2

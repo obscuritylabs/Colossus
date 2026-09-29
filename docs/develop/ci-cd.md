@@ -59,16 +59,15 @@ flowchart LR
 
 ## Tiers and cost ceilings
 
-| Tier | Trigger | Hosted coverage | Stable gate | Planning ceiling |
-|---|---|---|---|---:|
-| PR validation | Open, edit, reopen, synchronize, or mark ready | Linux and selected documentation/dependency jobs | `Colossus PR gate` | $0.15 per update |
-| Pre-merge acceptance | Apply `ci:full` | macOS 14 ARM, Windows 2025 x64, bounded fuzzing, supply chain, Chroma, PostgreSQL, OCI, OPA, and mTLS | `Colossus pre-merge gate` | $0.75 per final run |
-| Release | Push an annotated stable or approved prerelease tag | Six CLI targets; signed Windows CLI and Desktop; stable SDK or macOS Developer Preview | `Colossus release gate` | Varies with Windows signing time |
+| Tier | Trigger | Hosted coverage | Stable gate | Runner cost |
+|---|---|---|---|---|
+| PR validation | Open, edit, reopen, synchronize, or mark ready | Parallel standard Linux formatting, lint, unit, SDK, Desktop, documentation, and dependency jobs selected by changed paths | `Colossus PR gate` | Free standard public runners |
+| Pre-merge acceptance | Apply `ci:full` | macOS 14 ARM, Windows 2025 x64, Linux integration, bounded fuzzing, supply chain, Chroma, PostgreSQL, OCI, OPA, and mTLS | `Colossus pre-merge gate` | Larger Linux and Windows Desktop runners are billed; standard public runners are free |
+| Release | Push an annotated stable or approved prerelease tag | Six CLI targets; signed Windows CLI and Desktop; stable SDK or macOS Developer Preview | `Colossus release gate` | Larger runners are billed |
 
-These ceilings are planning targets based on hosted-runner rates and observed durations,
-not billing or runtime enforcement. A job timeout remains mandatory for every hosted job.
-The four-core `ubuntu-latest-m` larger runner is reserved for the longest CPU-bound x64
-Linux lane in each tier: complete PR validation, live OCI/OPA acceptance, release
+A job timeout remains mandatory for every hosted job.
+The four-core `ubuntu-latest-m` larger runner is reserved for final Linux integration,
+live OCI/OPA acceptance, release
 readiness, and the x86_64 Linux release artifact. Short control jobs, documentation,
 dependency inspection, service-backed integration tests, and bounded single-process
 fuzzing stay on standard or slim runners so larger-runner capacity is not spent where it
@@ -82,9 +81,11 @@ linting recognizes it.
 
 The classifier fails closed. Documentation-only paths build the documentation site and
 skip Rust. Code, configuration, build, release, CI, renamed unknown paths, and unknown
-new paths run the complete Linux Rust gate. API and SDK paths additionally select SDK
-generation, compatibility, language tests, and release-package checks inside that job.
-Desktop application, launcher, and Rust SDK paths select renderer checks there and the
+new paths run Linux formatting, Clippy, and workspace library tests on separate standard
+public runners. API and SDK paths additionally select SDK
+generation, compatibility, language tests, and release-package checks on a separate
+standard public Linux runner. Desktop application, launcher, and Rust SDK paths select
+sidecar and renderer checks on another standard public Linux runner and the
 native Tauri acceptance described below. Rust, npm, Go, and Python dependency manifests
 and lockfiles also run license, source, ban, and advisory policy, including the standalone
 desktop Cargo graph.
@@ -108,18 +109,19 @@ predates the SDK or desktop outputs, the workflow appends both selections as `tr
 old base cannot silently skip either component. This prevents a CI-changing PR from
 suppressing validation by weakening its own classifier or gate scripts.
 
-The Rust job combines Conventional Commit validation, exact AppArmor installation, and
-the repository-owned `cargo xtask` component checks. The Rust component covers
-formatting, crate-root structure, locked metadata, Clippy, the complete workspace suite,
-and fuzz-harness linting. When selected, the SDK component installs pinned Node.js,
+Classification owns Conventional Commit validation. The three Rust jobs independently
+check formatting and crate structure, Clippy including fuzz harnesses, and workspace
+library tests. They run on standard public Linux runners. When selected, the SDK component installs pinned Node.js,
 Python, and Go toolchains for reproducible generation and packaging, while the Desktop
 component checks the standalone native bridge formatting, installs the renderer
 lockfile, and audits, tests, and builds the renderer. Desktop selection also exercises
-the managed-sidecar protocol and host crates. The workflow retains trusted-base
+the managed-sidecar protocol and host crates. All selected jobs run concurrently after
+classification, and each owns its own toolchain and cache. The workflow retains trusted-base
 classification and runner provisioning, but does not duplicate portable check recipes
 or allocate macOS or Windows runners.
 The aggregate gate accepts a skipped job only when the classifier explicitly marked
-that job unnecessary; the stable seven-argument gate contract remains unchanged.
+that job unnecessary; it invokes the trusted base revision's seven-argument selector
+three times to cover formatting, lint, unit, SDK, Desktop, documentation, and dependency policy.
 
 Documentation deployment is separate: pull requests build documentation in PR
 validation, while `main` changes are deployed by the Documentation workflow.
@@ -143,15 +145,19 @@ Apply `ci:full` only after the PR is ready to merge:
 Eligibility is checked on a cheap Linux runner before macOS or Windows is allocated. It
 rejects draft PRs, actors below write permission, and a missing or failed current-head PR
 gate. The required pre-merge gate fails on failed, cancelled, or unexpectedly skipped
-acceptance work. Separate macOS jobs keep the root native-debug graph from coexisting
-with the standalone Tauri graph on the runner's bounded disk. The desktop job lints and
-tests the standalone native bridge; runs pinned Chromium keyboard,
-accessibility, high-contrast, drawer, approval, and 880×640 layout acceptance; deletes
-its debug artifacts; then builds the bundled sidecar, CLI, and Tauri application into one
-shared non-incremental release tree. Its 100-minute job limit accommodates the
-debug/browser checks, cold optimized builds, and the final bundle rebuild even when
-the shared compiler cache is unavailable. All acceptance and packaging checks remain
-required.
+acceptance work. Three macOS jobs run concurrently on separate standard public runners.
+The complete Linux Rust suite, including native sandbox integration, runs on one larger
+Linux runner only after `ci:full` eligibility. Its exact-path AppArmor profile grants
+the temporary root-owned CLI the Linux user namespace authority needed by those tests.
+The required gate waits for this suite and all platform jobs.
+The native job keeps the root native-debug graph separate from the standalone Tauri
+graph on bounded runner disks. Desktop acceptance lints and tests the standalone native
+bridge and runs pinned Chromium keyboard, accessibility, high-contrast, drawer, approval,
+and 880×640 layout checks. Desktop packaging independently builds the bundled sidecar,
+CLI, and Tauri application in a non-incremental release tree, then verifies its bundle
+structure. Neither Desktop job waits for the other, and neither transfers its build tree.
+Each Desktop job allows 75 minutes for a cold build when the compiler cache is unavailable.
+All acceptance and packaging checks remain required.
 The native job exercises the otherwise-ignored real sidecar
 bootstrap/pinned-gRPC/guardian lifecycle and sandbox acceptance. Together they prove the
 pruned locked build, then create an ad-hoc signed two-phase app bundle and verify the outer
@@ -160,11 +166,13 @@ uses the explicit `ADHOC` team sentinel, tests structure only, and produces a ru
 intentionally refuses to start Managed Local. Distributable builds embed the expected
 10-character Apple Team ID, use Developer ID and notarization, and verify exact code
 identifiers for the app, sidecar, and CLI.
-The Windows lane runs renderer typechecking, renderer tests, and platform-sensitive
-Desktop contract tests before installing Rust or starting native compilation. Those
-independent checks continue into Windows native, worker, sandbox, binary preparation,
-Desktop Clippy, and Desktop library-test acceptance, then report every failed outcome
-together before the lane fails. Desktop checks run only when their required binaries were staged.
+The Windows runtime and Desktop jobs also run concurrently. Runtime uses a standard
+public Windows 2025 runner for renderer typechecking, tests, platform-sensitive contracts,
+native runtime, worker, and AppContainer sandbox acceptance. The Desktop job retains the
+larger GitHub Windows runner for binary preparation, native bridge, credential controls,
+WebView2, plugin, and approval acceptance. Each job reports all independent failed
+outcomes before failing; the required gate waits for both jobs. Desktop checks run only
+when their required binaries were staged.
 Portable formatting remains owned by the PR tier instead of being repeated on platform
 runners.
 Supply-chain acceptance audits both the root sidecar graph and the desktop's independent
