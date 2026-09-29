@@ -89,8 +89,10 @@ release bundle caches. Each `rust-cache` workspace maps its target relative to i
 workspace (`apps/desktop/src-tauri -> target`), and those jobs do not save duplicate
 PR-scoped archives. `rust-cache` caches dependency build artifacts in `target`, not
 the application binaries or workspace crates, so a warm run still compiles changed
-Colossus code. Cache misses build normally. The remaining SDK, release, and native
-lanes continue using the optional `sccache` compiler cache.
+Colossus code. Cache misses build normally. Other PR and pre-merge lanes use the
+optional `sccache` compiler cache in GitHub read-only mode. This preserves existing
+compiler cache reads without flooding GitHub's per-repository cache upload limit.
+Release lanes continue using their existing `sccache` configuration.
 
 To inspect or refresh the shared archives:
 

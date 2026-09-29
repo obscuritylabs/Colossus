@@ -175,6 +175,29 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
         step_index("Prepare verified debug desktop executables")
             < step_index("Build Desktop native test dependencies")
     );
+
+    for (workflow, names) in [
+        (&pr, &["sdk", "desktop"][..]),
+        (
+            &premerge,
+            &[
+                "linux-rust-integration",
+                "macos-native",
+                "windows-runtime",
+                "windows-desktop",
+                "fuzz",
+            ][..],
+        ),
+    ] {
+        for name in names {
+            let env = mapping(field(job(jobs(workflow), name), "env"), name);
+            assert_eq!(
+                field(env, "SCCACHE_GHA_RW_MODE").as_str(),
+                Some("READ_ONLY"),
+                "{name} must not spend the repository's cache upload rate limit"
+            );
+        }
+    }
 }
 
 #[test]
