@@ -51,9 +51,107 @@ fn cleanup_rejects_busy_data_before_removing_any_files() {
         .share_mode(0)
         .open(&path)
         .unwrap();
-    assert!(cleanup(&home).is_err());
+    assert_eq!(cleanup(&home), Err(CleanupError::Busy));
     drop(held);
     assert_eq!(fs::read(path).unwrap(), b"existing history");
+}
+
+fn plugin_blob(home: &Path, linked: bool) -> std::path::PathBuf {
+    let blob = "a".repeat(64);
+    let layout = "b".repeat(64);
+    let global = home.join("plugins/blobs/sha256").join(&blob);
+    let retained = home
+        .join("plugins/layouts/sha256")
+        .join(layout)
+        .join("blobs/sha256")
+        .join(blob);
+    fs::create_dir_all(global.parent().unwrap()).unwrap();
+    fs::create_dir_all(retained.parent().unwrap()).unwrap();
+    fs::write(&global, b"installed plugin blob").unwrap();
+    if linked {
+        fs::hard_link(&global, &retained).unwrap();
+    } else {
+        fs::copy(&global, &retained).unwrap();
+    }
+    let mut permissions = fs::metadata(&retained).unwrap().permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&retained, permissions).unwrap();
+    let layout_root = retained
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    fs::write(layout_root.join("index.json"), b"plugin layout index").unwrap();
+    for path in [layout_root.to_owned(), layout_root.join("index.json")] {
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+    global
+}
+
+#[test]
+fn cleanup_removes_read_only_plugin_cache_with_retained_hard_links() {
+    let (_guard, home) = fixture();
+    plugin_blob(&home, true);
+    cleanup(&home).unwrap();
+    assert!(!home.exists());
+}
+
+#[test]
+fn cleanup_removes_read_only_plugin_cache_with_copied_blobs() {
+    let (_guard, home) = fixture();
+    plugin_blob(&home, false);
+    cleanup(&home).unwrap();
+    assert!(!home.exists());
+}
+
+#[test]
+fn cleanup_preserves_external_hard_link_and_read_only_attributes() {
+    let (guard, home) = fixture();
+    let global = plugin_blob(&home, true);
+    let external = guard.path().join("external-plugin-blob");
+    fs::hard_link(&global, &external).unwrap();
+    assert_eq!(cleanup(&home), Err(CleanupError::UnsafeData));
+    assert_eq!(fs::read(&external).unwrap(), b"installed plugin blob");
+    assert!(fs::metadata(&external).unwrap().permissions().readonly());
+    assert!(home.is_dir());
+}
+
+#[test]
+fn cleanup_rejects_hard_links_between_non_cache_files() {
+    let (_guard, home) = fixture();
+    create_private_file(&home.join("AGENTS.md"), b"keep linked metadata").unwrap();
+    fs::hard_link(home.join("AGENTS.md"), home.join("config.yaml")).unwrap();
+    assert_eq!(cleanup(&home), Err(CleanupError::UnsafeData));
+    assert!(home.join("AGENTS.md").exists());
+}
+
+#[test]
+fn cleanup_rechecks_links_added_after_inspection() {
+    let (guard, home) = fixture();
+    let global = plugin_blob(&home, true);
+    let plan = plan::CleanupPlan::inspect(&home).unwrap();
+    fs::hard_link(global, guard.path().join("new-external-link")).unwrap();
+    assert_eq!(plan.check_idle(), Err(CleanupError::UnsafeData));
+}
+
+#[test]
+fn cleanup_accepts_a_blob_shared_by_retained_and_pending_layouts() {
+    let (_guard, home) = fixture();
+    let global = plugin_blob(&home, true);
+    for prefix in ["generated-layout-", "retained-layout-"] {
+        let staging = home
+            .join("plugins/staging")
+            .join(format!("{prefix}{}", uuid::Uuid::new_v4()))
+            .join("blobs/sha256");
+        fs::create_dir_all(&staging).unwrap();
+        fs::hard_link(&global, staging.join(global.file_name().unwrap())).unwrap();
+    }
+    cleanup(&home).unwrap();
+    assert!(!home.exists());
 }
 
 #[test]
@@ -173,6 +271,7 @@ fn cleanup_rejects_foreign_key_service_and_shared_cli_data_without_deletion() {
 #[ignore = "requires Windows Credential Manager; uses only generated disposable entries"]
 fn native_uninstall_removes_exact_owned_keys_and_preserves_unrelated_entries() {
     let (_guard, home) = fixture();
+    plugin_blob(&home, true);
     let id = uuid::Uuid::new_v4();
     runtime(&home, RUNTIME_SERVICE, id);
     let modifiers = std::collections::HashMap::from([("persistence", "Local")]);
@@ -214,6 +313,7 @@ fn native_uninstall_removes_the_saved_credential_vault_key() {
     use redb::ReadableDatabase as _;
 
     let (_guard, home) = fixture();
+    plugin_blob(&home, true);
     let desktop = home.join("desktop");
     create_private_directory(&desktop).unwrap();
     let root = ConfinedRoot::bind(&desktop).unwrap();

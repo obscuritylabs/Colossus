@@ -1,6 +1,6 @@
 //! Bound and inspect only the dedicated default Desktop home. Never scan the OS store.
 
-use super::{PROVIDER_SERVICE, RUNTIME_SERVICE};
+use super::{CleanupError, PROVIDER_SERVICE, RUNTIME_SERVICE};
 use colossus_windows_native::BoundPath;
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
@@ -8,7 +8,6 @@ use std::{
     collections::BTreeSet,
     fs,
     io::Read as _,
-    os::windows::fs::OpenOptionsExt as _,
     path::{Path, PathBuf},
 };
 use uuid::Uuid;
@@ -19,64 +18,70 @@ const MAX_METADATA_BYTES: u64 = 1024 * 1024;
 pub(super) struct CleanupPlan {
     pub keys: BTreeSet<(String, String)>,
     pub vaults: Vec<(PathBuf, String)>,
-    files: Vec<PathBuf>,
+    files: super::files::CleanupFiles,
 }
 
 impl CleanupPlan {
-    pub fn inspect(home: &Path) -> Result<Self, ()> {
+    pub fn inspect(home: &Path) -> Result<Self, CleanupError> {
         let mut plan = Self {
             keys: BTreeSet::new(),
             vaults: Vec::new(),
-            files: Vec::new(),
+            files: super::files::CleanupFiles::default(),
         };
         let mut directories = vec![(home.to_owned(), 0)];
         let mut entries = 0;
         while let Some((directory, depth)) = directories.pop() {
             if depth > 32 {
-                return Err(());
+                return Err(CleanupError::UnsafeData);
             }
-            let binding = BoundPath::open_directory(&directory).map_err(|_| ())?;
-            for entry in fs::read_dir(&directory).map_err(|_| ())? {
+            let binding = BoundPath::open_directory(&directory)
+                .map_err(|error| CleanupError::from_native(&error))?;
+            for entry in fs::read_dir(&directory).map_err(|error| CleanupError::from_io(&error))? {
                 entries += 1;
                 if entries > MAX_ENTRIES {
-                    return Err(());
+                    return Err(CleanupError::UnsafeData);
                 }
-                let path = entry.map_err(|_| ())?.path();
-                let metadata = fs::symlink_metadata(&path).map_err(|_| ())?;
-                let relative = path.strip_prefix(home).map_err(|_| ())?;
+                let path = entry.map_err(|error| CleanupError::from_io(&error))?.path();
+                let metadata =
+                    fs::symlink_metadata(&path).map_err(|error| CleanupError::from_io(&error))?;
+                let relative = path
+                    .strip_prefix(home)
+                    .map_err(|_| CleanupError::UnsafeData)?;
                 if !super::ownership::owned_path(relative, metadata.is_dir()) {
                     // Unknown folders may contain projects whose settings record
                     // no longer exists. Never infer ownership from containment.
-                    return Err(());
+                    return Err(CleanupError::UnsafeData);
                 }
                 if metadata.is_dir() {
-                    BoundPath::open_directory(&path).map_err(|_| ())?;
+                    BoundPath::open_directory(&path)
+                        .map_err(|error| CleanupError::from_native(&error))?;
                     directories.push((path, depth + 1));
                 } else {
-                    let file = BoundPath::open_file(&path).map_err(|_| ())?;
-                    if file.link_count().map_err(|_| ())? != 1 {
-                        return Err(());
-                    }
+                    let file = BoundPath::open_file(&path)
+                        .map_err(|error| CleanupError::from_native(&error))?;
+                    plan.files.push(&path, relative, &file)?;
                     plan.inspect_file(home, &path)?;
-                    plan.files.push(path);
                 }
             }
-            binding.revalidate().map_err(|_| ())?;
+            binding.revalidate().map_err(|_| CleanupError::UnsafeData)?;
         }
+        plan.files.validate_links()?;
         Ok(plan)
     }
 
-    fn inspect_file(&mut self, home: &Path, path: &Path) -> Result<(), ()> {
-        let directory = path.parent().ok_or(())?;
-        let relative = directory.strip_prefix(home).map_err(|_| ())?;
+    fn inspect_file(&mut self, home: &Path, path: &Path) -> Result<(), CleanupError> {
+        let directory = path.parent().ok_or(CleanupError::UnsafeData)?;
+        let relative = directory
+            .strip_prefix(home)
+            .map_err(|_| CleanupError::UnsafeData)?;
         let runtime = is_runtime_directory(relative);
         if path
             .file_name()
             .is_some_and(|name| name == "managed-config.yaml")
             && runtime
         {
-            let config: ManagedConfig =
-                serde_saphyr::from_slice(&read_metadata(path)?).map_err(|_| ())?;
+            let config: ManagedConfig = serde_saphyr::from_slice(&read_metadata(path)?)
+                .map_err(|_| CleanupError::UnsafeData)?;
             if let Keys::Platform {
                 service,
                 journal_key_id,
@@ -84,13 +89,18 @@ impl CleanupPlan {
             } = config.storage.keys
             {
                 if service != RUNTIME_SERVICE {
-                    return Err(());
+                    return Err(CleanupError::UnsafeData);
                 }
-                let instance = journal_key_id.strip_prefix("journal-").ok_or(())?;
-                if Uuid::parse_str(instance).map_err(|_| ())?.to_string() != instance
+                let instance = journal_key_id
+                    .strip_prefix("journal-")
+                    .ok_or(CleanupError::UnsafeData)?;
+                if Uuid::parse_str(instance)
+                    .map_err(|_| CleanupError::UnsafeData)?
+                    .to_string()
+                    != instance
                     || signing_key_id != format!("checkpoint-{instance}")
                 {
-                    return Err(());
+                    return Err(CleanupError::UnsafeData);
                 }
                 for account in [
                     format!("journal-key:{journal_key_id}"),
@@ -108,21 +118,22 @@ impl CleanupPlan {
             let scope = if relative == Path::new("desktop") {
                 "desktop-manual".to_owned()
             } else if runtime {
-                let canonical = fs::canonicalize(directory).map_err(|_| ())?;
+                let canonical =
+                    fs::canonicalize(directory).map_err(|_| CleanupError::UnsafeData)?;
                 let identity = serde_json::to_vec(&("colossus-runtime-oauth-vault-v1", canonical))
-                    .map_err(|_| ())?;
+                    .map_err(|_| CleanupError::UnsafeData)?;
                 format!("runtime-oauth-{:x}", Sha256::digest(identity))
             } else {
-                return Err(());
+                return Err(CleanupError::UnsafeData);
             };
             self.vaults.push((directory.to_owned(), scope));
         }
         if path == home.join("desktop/settings.json") {
             // Only legacy provider handles recorded by this Desktop are eligible.
             // External-daemon credentials can be shared with other homes; keep them.
-            let (settings, _) =
-                crate::desktop_settings::decode_settings(&read_metadata(path)?).map_err(|_| ())?;
-            let canonical_home = fs::canonicalize(home).map_err(|_| ())?;
+            let (settings, _) = crate::desktop_settings::decode_settings(&read_metadata(path)?)
+                .map_err(|_| CleanupError::UnsafeData)?;
+            let canonical_home = fs::canonicalize(home).map_err(|_| CleanupError::UnsafeData)?;
             for workspace in settings
                 .workspace
                 .iter()
@@ -134,7 +145,7 @@ impl CleanupPlan {
                         .is_ok_and(|path| path.starts_with(&canonical_home))
                 {
                     // Even an unusually located user project is never app data.
-                    return Err(());
+                    return Err(CleanupError::UnsafeData);
                 }
             }
             for id in settings.provider_credential_ids().into_iter().chain(
@@ -143,8 +154,12 @@ impl CleanupPlan {
                     .iter()
                     .map(String::as_str),
             ) {
-                if Uuid::parse_str(id).map_err(|_| ())?.to_string() != id {
-                    return Err(());
+                if Uuid::parse_str(id)
+                    .map_err(|_| CleanupError::UnsafeData)?
+                    .to_string()
+                    != id
+                {
+                    return Err(CleanupError::UnsafeData);
                 }
                 self.keys.insert((PROVIDER_SERVICE.into(), id.into()));
             }
@@ -152,34 +167,27 @@ impl CleanupPlan {
         Ok(())
     }
 
-    pub fn check_idle(&self) -> Result<(), ()> {
-        for path in &self.files {
-            // Fail before deleting keys when a sidecar, vault, or Desktop still
-            // holds a file open. The helper never terminates unrelated processes.
-            fs::OpenOptions::new()
-                .read(true)
-                .share_mode(0)
-                .open(path)
-                .map_err(|_| ())?;
-        }
-        Ok(())
+    pub fn check_idle(&self) -> Result<(), super::CleanupError> {
+        self.files.check_idle()
     }
 }
 
-fn read_metadata(path: &Path) -> Result<Vec<u8>, ()> {
-    let binding = BoundPath::open_file(path).map_err(|_| ())?;
-    binding.validate_private_owner_dacl().map_err(|_| ())?;
+fn read_metadata(path: &Path) -> Result<Vec<u8>, CleanupError> {
+    let binding = BoundPath::open_file(path).map_err(|error| CleanupError::from_native(&error))?;
+    binding
+        .validate_private_owner_dacl()
+        .map_err(|_| CleanupError::UnsafeData)?;
     let mut bytes = Vec::new();
     binding
         .try_clone_file()
-        .map_err(|_| ())?
+        .map_err(|_| CleanupError::UnsafeData)?
         .take(MAX_METADATA_BYTES + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| ())?;
+        .map_err(|_| CleanupError::UnsafeData)?;
     if bytes.len() as u64 > MAX_METADATA_BYTES {
-        return Err(());
+        return Err(CleanupError::UnsafeData);
     }
-    binding.revalidate().map_err(|_| ())?;
+    binding.revalidate().map_err(|_| CleanupError::UnsafeData)?;
     Ok(bytes)
 }
 

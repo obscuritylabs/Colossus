@@ -177,7 +177,10 @@ items. Supported older settings are inspected without requiring a first launch o
 discarding their workspace references. Entries whose identifying
 metadata was previously deleted cannot be safely attributed and are not swept by name.
 
-If cleanup fails, uninstall stops and offers Retry; close running Colossus tasks first.
+If cleanup fails, uninstall stops and explains whether files are in use, ownership
+cannot be verified, credentials could not be removed, or Windows rejected file removal.
+Close running Colossus tasks when files are in use, then choose Retry. To preserve the
+remaining data, cancel and uninstall again without selecting **Delete application data**.
 Some items may already have been deleted. Do not manually remove individual protected
 journal files or keys to repair setup. Version 0.11.1 migrates the disposable setup
 diagnostics automatically while leaving workspace histories and their security checks

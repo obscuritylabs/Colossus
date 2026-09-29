@@ -176,7 +176,9 @@ commands dispatch it without receiving secret values from the renderer.
   setup to a new namespace without resetting or bypassing workspace journal anchors.
   Windows NSIS cleanup is a native-only entry point with a fixed default-home scope;
   it reads bounded ownership metadata, removes exact OS key accounts, and refuses
-  reparse points, active files, or shared CLI state. It is not a renderer command.
+  reparse points, active files, or shared CLI state. Plugin cache hard links are allowed
+  only when every filesystem name belongs to an inspected blob in that cache; external
+  aliases and links involving other data remain protected. It is not a renderer command.
 - Top-level user-facing runs snapshot bounded home and repository `AGENTS.md`
   instructions before provider execution. Goal iterations and delegated subagents
   carry that immutable snapshot and provenance; internal risk, summarization, and

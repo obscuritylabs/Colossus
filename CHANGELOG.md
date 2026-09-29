@@ -8,6 +8,12 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows Desktop application-data cleanup now accepts hard links contained entirely
+  within the plugin cache and explains why cleanup stops instead of always reporting
+  running tasks. External hard links and unrecognized data remain protected.
+
 ## [0.11.1] - 2026-09-28
 
 ### Fixed
