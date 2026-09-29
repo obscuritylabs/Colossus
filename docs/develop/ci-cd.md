@@ -75,6 +75,30 @@ does not materially shorten the critical path. The repository's
 `.github/actionlint.yaml` registers the provisioned larger-runner name so local workflow
 linting recognizes it.
 
+## Rust build caches
+
+GitHub scopes a cache written by a pull-request run to that PR's merge ref. Another
+PR cannot restore it, even when its cache key is identical. The `Warm Rust build
+caches` workflow writes dependency build archives on `main` after Rust manifests,
+lockfiles, toolchain files, or the cache workflows change. Writers can also run it
+manually. It uses standard public Linux and macOS runners and is not a merge gate.
+
+The Linux PR lint and unit jobs restore one shared dependency build cache from
+`main`. The two macOS Desktop pre-merge jobs restore separate debug acceptance and
+release bundle caches. Each `rust-cache` workspace maps its target relative to its
+workspace (`apps/desktop/src-tauri -> target`), and those jobs do not save duplicate
+PR-scoped archives. `rust-cache` caches dependency build artifacts in `target`, not
+the application binaries or workspace crates, so a warm run still compiles changed
+Colossus code. Cache misses build normally. The remaining SDK, release, and native
+lanes continue using the optional `sccache` compiler cache.
+
+To inspect or refresh the shared archives:
+
+```bash
+gh cache list --key v0-rust --ref refs/heads/main
+gh workflow run cache-warm.yml --ref main
+```
+
 ## Steps
 
 ## Pull-request validation

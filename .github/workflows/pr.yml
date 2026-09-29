@@ -124,7 +124,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
-      SCCACHE_GHA_ENABLED: "true"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -133,19 +133,13 @@ jobs:
         with:
           toolchain: 1.96.0
           components: clippy
-      - name: Enable shared compiler cache
-        id: sccache
-        continue-on-error: true
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
-      - name: Activate shared compiler cache
-        if: steps.sccache.outcome == 'success'
-        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
-      - name: Cache Cargo registry
+      - name: Restore main Rust dependency build cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: . -> target
-          key: pr-rust-lint
-          cache-targets: false
+          shared-key: pr-linux
+          cache-targets: true
+          save-if: false
       - name: Lint Rust workspace
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Lint fuzz harnesses
@@ -159,8 +153,8 @@ jobs:
     timeout-minutes: 35
     env:
       CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
-      SCCACHE_GHA_ENABLED: "true"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -172,21 +166,13 @@ jobs:
         with:
           toolchain: 1.96.0
 
-      - name: Enable shared compiler cache
-        id: sccache
-        continue-on-error: true
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
-
-      - name: Activate shared compiler cache
-        if: steps.sccache.outcome == 'success'
-        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
-
-      - name: Cache Cargo registry
+      - name: Restore main Rust dependency build cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: . -> target
-          key: pr-rust-unit
-          cache-targets: false
+          shared-key: pr-linux
+          cache-targets: true
+          save-if: false
 
       - name: Run Rust workspace unit tests
         run: cargo test --locked --workspace --lib
