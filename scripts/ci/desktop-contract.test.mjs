@@ -1086,22 +1086,35 @@ test("portable Desktop validation owns formatting and canonical line endings", (
 
 test("pre-merge desktop packaging declares its non-runnable trust channel", () => {
   const workflow = read(".github/workflows/premerge.yml");
-  const desktopStart = workflow.indexOf("  macos-desktop:");
-  const windowsStart = workflow.indexOf("  windows-runtime:", desktopStart);
-  assert.ok(desktopStart >= 0 && windowsStart > desktopStart);
-  const desktop = workflow.slice(desktopStart, windowsStart);
-  assert.match(desktop, /COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"/u);
-  assert.match(desktop, /COLOSSUS_DESKTOP_RELEASE_CHANNEL: "validation_only"/u);
-  assert.match(desktop, /Build validation-only ADHOC macOS bundle structure/u);
+  const acceptanceStart = workflow.indexOf("  macos-desktop-acceptance:");
+  const bundleStart = workflow.indexOf("  macos-desktop-bundle:", acceptanceStart);
+  const runtimeStart = workflow.indexOf("  windows-runtime:", bundleStart);
+  const windowsDesktopStart = workflow.indexOf("  windows-desktop:", runtimeStart);
+  const windowsEnd = workflow.indexOf("  fuzz:", windowsDesktopStart);
+  assert.ok(
+    acceptanceStart >= 0 &&
+      bundleStart > acceptanceStart &&
+      runtimeStart > bundleStart &&
+      windowsDesktopStart > runtimeStart &&
+      windowsEnd > windowsDesktopStart,
+  );
+  const acceptance = workflow.slice(acceptanceStart, bundleStart);
+  const bundle = workflow.slice(bundleStart, runtimeStart);
+  assert.match(acceptance, /npm run test:browser-native/u);
+  assert.doesNotMatch(acceptance, /npm run tauri:build/u);
+  assert.match(bundle, /COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"/u);
+  assert.match(bundle, /COLOSSUS_DESKTOP_RELEASE_CHANNEL: "validation_only"/u);
+  assert.match(bundle, /Build validation-only ADHOC macOS bundle structure/u);
+  assert.doesNotMatch(bundle, /npm run test:browser-native/u);
 
-  const windowsEnd = workflow.indexOf("  fuzz:", windowsStart);
-  assert.ok(windowsEnd > windowsStart);
-  const windows = workflow.slice(windowsStart, windowsEnd);
-  assert.match(windows, /runs-on: windows-latest-l/u);
-  assert.match(windows, /COLOSSUS_DESKTOP_TEAM_ID: "UNSIGNED"/u);
-  assert.match(windows, /cargo xtask desktop prepare --profile debug/u);
+  const windows = workflow.slice(runtimeStart, windowsDesktopStart);
+  const windowsDesktop = workflow.slice(windowsDesktopStart, windowsEnd);
+  assert.match(windows, /runs-on: windows-2025/u);
+  assert.match(windowsDesktop, /runs-on: windows-latest-l/u);
+  assert.match(windowsDesktop, /COLOSSUS_DESKTOP_TEAM_ID: "UNSIGNED"/u);
+  assert.match(windowsDesktop, /cargo xtask desktop prepare --profile debug/u);
   assert.match(
-    windows,
+    windowsDesktop,
     /cargo test --locked --manifest-path apps\/desktop\/src-tauri\/Cargo\.toml --lib/u,
   );
   assert.match(windows, /npm run typecheck/u);
@@ -1124,10 +1137,12 @@ test("pre-merge desktop packaging declares its non-runnable trust channel", () =
   );
   assert.match(windows, /steps\.windows_sdk_path\.outcome/u);
   assert.match(windows, /steps\.worker_acceptance\.outcome/u);
-  assert.match(windows, /steps\.desktop_prepare\.outcome/u);
-  assert.match(windows, /steps\.native_clippy\.outcome/u);
-  assert.match(windows, /steps\.native_tests\.outcome/u);
-  assert.match(windows, /if: steps\.desktop_prepare\.outcome == 'success'/u);
+  assert.match(windowsDesktop, /steps\.desktop_prepare\.outcome/u);
+  assert.match(windowsDesktop, /steps\.native_clippy\.outcome/u);
+  assert.match(windowsDesktop, /steps\.native_tests\.outcome/u);
+  assert.match(windowsDesktop, /if: steps\.desktop_prepare\.outcome == 'success'/u);
+  assert.match(windows, /Require every Windows runtime acceptance check/u);
+  assert.match(windowsDesktop, /Require every Windows Desktop acceptance check/u);
   assert.ok(
     windows.indexOf("npm run typecheck") < windows.indexOf("Install Rust 1.96"),
   );
