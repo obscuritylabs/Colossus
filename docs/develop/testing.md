@@ -172,8 +172,12 @@ after the process exits. It never uses saved Desktop credentials or workspaces.
 
 The harness checks real engine history, temporary cookie sharing/isolation, foreign
 workspace rejection, guest IPC/app-origin denial, native permission denial, suppressed
-script dialogs, popups, downloads, and clear/close behavior. Its fixture evaluation is
-compiled only with `browser-test-bridge`; no generic evaluation IPC command exists.
+script dialogs, popups, downloads, and clear/close behavior. Fixture evaluation is
+behind `browser-test-bridge` and the native adapter's `native-test-driver` feature;
+no generic evaluation IPC command exists. macOS probes call WebKit directly because
+the hardened guest replaces Wry's navigation delegate and its initial script queue
+is never drained. The harness also rejects script exceptions and verifies that a
+later probe still completes.
 The macOS and Windows pre-merge lanes own this acceptance tier.
 
 Set `COLOSSUS_BROWSER_INTERACTIVE_ACCEPTANCE=1` in an interactive desktop session

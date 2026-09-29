@@ -7,6 +7,9 @@ rust-version = "1.96"
 license = "Apache-2.0"
 workspace = "../src-tauri"
 
+[features]
+native-test-driver = ["objc2-foundation/NSData", "objc2-foundation/NSJSONSerialization"]
+
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
 tauri = { version = "=2.11.5", features = ["unstable"] }

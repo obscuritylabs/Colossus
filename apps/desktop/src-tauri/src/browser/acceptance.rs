@@ -95,7 +95,14 @@ async fn action(
         .map_err(|e| anyhow::anyhow!(e.message))
 }
 
-async fn evaluate(view: &Webview, script: &str) -> anyhow::Result<serde_json::Value> {
+#[cfg(target_os = "macos")]
+async fn evaluate(view: &Webview, script: &'static str) -> anyhow::Result<serde_json::Value> {
+    let value = colossus_native_browser::acceptance::evaluate(view, script).await?;
+    Ok(serde_json::from_str(&value)?)
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn evaluate(view: &Webview, script: &'static str) -> anyhow::Result<serde_json::Value> {
     let (send, receive) = tokio::sync::oneshot::channel();
     let send = std::sync::Mutex::new(Some(send));
     view.eval_with_callback(script, move |result| {
@@ -132,6 +139,23 @@ async fn exercise(app: &tauri::AppHandle, address: &str) -> anyhow::Result<()> {
     let first_view = app.get_webview(&a).expect("first native guest");
     wait_title(&first_view, "First page").await?;
     println!("PASS native create and load");
+    #[cfg(target_os = "macos")]
+    {
+        anyhow::ensure!(
+            evaluate(
+                &first_view,
+                "throw new Error('synthetic acceptance failure')"
+            )
+            .await
+            .is_err(),
+            "native script exception was accepted"
+        );
+        anyhow::ensure!(
+            evaluate(&first_view, "'callback recovered'").await? == "callback recovered",
+            "native callback did not recover after a script exception"
+        );
+        println!("PASS native evaluation error and recovery");
+    }
     history(app, address, &a, &first_view).await?;
     sessions(app, address, first.generation).await?;
     Ok(())

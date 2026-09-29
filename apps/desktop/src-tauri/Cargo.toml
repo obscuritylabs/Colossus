@@ -15,7 +15,7 @@ members = ["../native-credential-ui", "../native-browser"]
 plugin-test-bridge = []
 approval-test-bridge = []
 browser-preview = []
-browser-test-bridge = ["browser-preview"]
+browser-test-bridge = ["browser-preview", "colossus-native-browser/native-test-driver"]
 
 [[example]]
 name = "plugin-test-bridge"
