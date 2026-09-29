@@ -226,6 +226,16 @@ Developer Preview and add a signed Windows Desktop Developer Preview. They do no
 stable SDK registry candidates or publish npm, PyPI, or Go versions. Both Windows
 channels use manual updates until a separate Tauri updater key and feed are configured.
 
+For a test build from `main` without a coordinated version bump, a preview tag may also
+identify its exact stable source version: for example, `v0.11.2-preview.1` may build
+source version `0.11.2`. The normal main-ancestry, release-readiness, signing, and
+Desktop smoke gates still apply. The release is a prerelease and does not publish SDKs.
+Its binaries and CLI archive names retain the source version; install Desktop from the
+attached installer or app archive and extract CLI archives manually. These test releases
+omit the four bootstrap installer assets because bootstrap installation requires the
+tag and binary versions to match. Stable tags and already-versioned preview sources
+still require an exact version match.
+
 ### Windows Artifact Signing authority
 
 The tag-scoped `release-signing` GitHub environment is federated to the Azure app

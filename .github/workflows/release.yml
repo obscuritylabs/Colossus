@@ -34,6 +34,7 @@ jobs:
       release_channel: ${{ steps.request.outputs.release_channel }}
       target_channel: ${{ steps.request.outputs.target_channel }}
       prerelease: ${{ steps.request.outputs.prerelease }}
+      test_release: ${{ steps.request.outputs.test_release }}
     steps:
       - name: Check out complete release history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -68,6 +69,11 @@ jobs:
         with:
           tool: cargo-deny@0.20.2,cargo-audit@0.22.2
           fallback: none
+
+      - name: Install Node.js 22.18
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
 
       - name: Validate tag, version, changelog, and ancestry
         id: request
@@ -125,7 +131,11 @@ jobs:
             "$(git rev-list -n 1 "$sdk_base_tag")" "$source_commit"
           workspace_version=$(cargo metadata --locked --no-deps --format-version 1 \
             | jq -r '.packages[] | select(.name == "colossus-cli") | .version')
-          test "$version" = "$workspace_version"
+          version=$(node scripts/ci/release-source-version.mjs "$tag" "$workspace_version")
+          test_release=false
+          if [ "$version" != "${tag#v}" ]; then
+            test_release=true
+          fi
           grep -F "## [$version]" CHANGELOG.md >/dev/null
           {
             printf 'version=%s\n' "$version"
@@ -137,6 +147,7 @@ jobs:
             printf 'release_channel=%s\n' "$release_channel"
             printf 'target_channel=%s\n' "$tag_channel"
             printf 'prerelease=%s\n' "$prerelease"
+            printf 'test_release=%s\n' "$test_release"
           } >> "$GITHUB_OUTPUT"
 
       - name: Prepare exact-path AppArmor profile for readiness tests
@@ -389,6 +400,7 @@ jobs:
 
   bootstrap_installers:
     name: Package repository-owned bootstrap installers
+    if: needs.validate.outputs.test_release != 'true'
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1166,12 +1178,19 @@ jobs:
           WINDOWS_DESKTOP_RESULT: ${{ needs.desktop_windows_preview.result }}
           WINDOWS_SIGNED_DESKTOP_RESULT: ${{ needs.desktop_windows_signed.result }}
           WINDOWS_CLI_SIGN_RESULT: ${{ needs.windows_cli_sign.result }}
+          TEST_RELEASE: ${{ needs.validate.outputs.test_release }}
+          BOOTSTRAP_RESULT: ${{ needs.bootstrap_installers.result }}
         run: |
           set -euo pipefail
           ./scripts/ci/require-success.sh \
             validate=${{ needs.validate.result }} \
-            artifacts=${{ needs.artifacts.result }} \
-            bootstrap_installers=${{ needs.bootstrap_installers.result }}
+            artifacts=${{ needs.artifacts.result }}
+          if [ "$TEST_RELEASE" = true ]; then
+            test "$TARGET_CHANNEL" = developer_preview
+            test "$BOOTSTRAP_RESULT" = skipped
+          else
+            ./scripts/ci/require-success.sh bootstrap_installers="$BOOTSTRAP_RESULT"
+          fi
           if [ "$TARGET_CHANNEL" = stable ]; then
             ./scripts/ci/require-success.sh sdk_release="$SDK_RELEASE_RESULT"
             test "$MACOS_DESKTOP_BUILD_RESULT" = skipped
@@ -1231,6 +1250,7 @@ jobs:
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
           SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
+          TEST_RELEASE: ${{ needs.validate.outputs.test_release }}
         run: |
           set -euo pipefail
           case "$RELEASE_CHANNEL" in
@@ -1256,7 +1276,11 @@ jobs:
                 "$sdk_dir" "$RELEASE_VERSION" "$SOURCE_COMMIT"
               ;;
             developer_preview)
-              test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 22
+              expected_assets=22
+              if [ "$TEST_RELEASE" = true ]; then
+                expected_assets=18
+              fi
+              test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq "$expected_assets"
               desktop="Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip"
               windows="Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe"
               test -f "dist/$windows"
@@ -1272,13 +1296,15 @@ jobs:
               exit 1
               ;;
           esac
-          for bootstrap_asset in \
-            colossus-install.sh \
-            colossus-install.sh.sha256 \
-            colossus-install.ps1 \
-            colossus-install.ps1.sha256; do
-            test -f "dist/$bootstrap_asset"
-          done
+          if [ "$TEST_RELEASE" != true ]; then
+            for bootstrap_asset in \
+              colossus-install.sh \
+              colossus-install.sh.sha256 \
+              colossus-install.ps1 \
+              colossus-install.ps1.sha256; do
+              test -f "dist/$bootstrap_asset"
+            done
+          fi
           for checksum in dist/*.sha256; do
             (cd dist && sha256sum --check --strict "$(basename "$checksum")")
           done
@@ -1291,6 +1317,8 @@ jobs:
           RELEASE_PRERELEASE: ${{ needs.validate.outputs.prerelease }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
           RUNNER_TEMP: ${{ runner.temp }}
+          TEST_RELEASE: ${{ needs.validate.outputs.test_release }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
           existing=$RUNNER_TEMP/existing-release.json
@@ -1352,6 +1380,11 @@ jobs:
                 "$checksum_note" \
                 '' \
                 'For first launch, extract the archive, Control-click **Colossus Desktop**, choose **Open**, then confirm **Open**. If macOS still blocks it, use **System Settings > Privacy & Security > Open Anyway**. Do not disable Gatekeeper globally.')
+              if [ "$TEST_RELEASE" = true ]; then
+                preview_notes=$(printf '%s\n\n%s\n%s\n' "$preview_notes" \
+                  "This test build keeps source version $RELEASE_VERSION without a version bump. CLI archives retain the source version in their names and version output." \
+                  'Install Desktop using the attached installer or app archive. Extract CLI archives manually. Bootstrap installers are omitted because their exact tag/version contract does not apply to this test build. No SDK packages are published.')
+              fi
               gh release create "$RELEASE_TAG" dist/* \
                 --draft --prerelease --verify-tag --generate-notes \
                 --notes "$preview_notes" \
