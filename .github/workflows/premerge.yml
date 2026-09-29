@@ -72,6 +72,7 @@ jobs:
     timeout-minutes: 60
     env:
       SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -121,6 +122,7 @@ jobs:
     timeout-minutes: 45
     env:
       SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
       COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
       CARGO_INCREMENTAL: "0"
     steps:
@@ -199,7 +201,6 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 75
     env:
-      SCCACHE_GHA_ENABLED: "true"
       COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
       COLOSSUS_DESKTOP_RELEASE_CHANNEL: "validation_only"
       CARGO_INCREMENTAL: "0"
@@ -219,19 +220,14 @@ jobs:
         with:
           toolchain: 1.96.0
           components: clippy,rustfmt
-      - name: Enable shared compiler cache
-        id: sccache
-        continue-on-error: true
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
-      - name: Activate shared compiler cache
-        if: steps.sccache.outcome == 'success'
-        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
-      - name: Cache standalone desktop target
+      - name: Restore main Desktop acceptance build cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          workspaces: apps/desktop/src-tauri -> apps/desktop/src-tauri/target
-          key: premerge-macos-desktop-acceptance-arm
-          cache-targets: false
+          workspaces: apps/desktop/src-tauri -> target
+          shared-key: macos-desktop-acceptance
+          key: recipe-v1
+          cache-targets: true
+          save-if: false
       - name: Validate desktop renderer
         run: cargo xtask check desktop
       - name: Install the pinned Chromium browser
@@ -287,7 +283,6 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 75
     env:
-      SCCACHE_GHA_ENABLED: "true"
       COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
       COLOSSUS_DESKTOP_RELEASE_CHANNEL: "validation_only"
       CARGO_INCREMENTAL: "0"
@@ -308,19 +303,14 @@ jobs:
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
         with:
           toolchain: 1.96.0
-      - name: Enable shared compiler cache
-        id: sccache
-        continue-on-error: true
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
-      - name: Activate shared compiler cache
-        if: steps.sccache.outcome == 'success'
-        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
-      - name: Cache standalone desktop target
+      - name: Restore main Desktop bundle build cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          workspaces: apps/desktop/src-tauri -> apps/desktop/src-tauri/target
-          key: premerge-macos-desktop-bundle-arm
-          cache-targets: false
+          workspaces: apps/desktop/src-tauri -> target
+          shared-key: macos-desktop-bundle
+          key: recipe-v1
+          cache-targets: true
+          save-if: false
       - name: Build the pruned Tauri application
         working-directory: apps/desktop
         run: npm run tauri:build
@@ -341,6 +331,7 @@ jobs:
       COLOSSUS_DESKTOP_RELEASE_CHANNEL: "development"
       COLOSSUS_DESKTOP_TEAM_ID: "UNSIGNED"
       SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -457,6 +448,7 @@ jobs:
       COLOSSUS_DESKTOP_RELEASE_CHANNEL: "development"
       COLOSSUS_DESKTOP_TEAM_ID: "UNSIGNED"
       SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -597,6 +589,7 @@ jobs:
     timeout-minutes: 15
     env:
       SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

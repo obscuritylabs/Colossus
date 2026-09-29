@@ -1,0 +1,122 @@
+name: Warm Rust build caches
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - rust-toolchain
+      - rust-toolchain.toml
+      - .cargo/config.toml
+      - .github/workflows/cache-warm.yml
+      - .github/workflows/pr.yml
+      - .github/workflows/premerge.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cache-warm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-pr:
+    name: Warm Linux PR dependency builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+          components: clippy
+      - name: Save Linux PR dependency build cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: . -> target
+          shared-key: pr-linux
+          key: recipe-v1
+          cache-targets: true
+      - name: Build Clippy dependencies
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Build library test dependencies
+        run: cargo test --locked --workspace --lib --no-run
+
+  macos-desktop-acceptance:
+    name: Warm macOS Desktop acceptance dependencies
+    runs-on: macos-14
+    timeout-minutes: 75
+    env:
+      COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
+      COLOSSUS_DESKTOP_RELEASE_CHANNEL: "validation_only"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+          components: clippy,rustfmt
+      - name: Save macOS Desktop acceptance build cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+          shared-key: macos-desktop-acceptance
+          key: recipe-v1
+          cache-targets: true
+      - name: Prepare verified debug desktop executables
+        run: ./scripts/prepare-desktop-binaries debug
+      - name: Build Desktop native test dependencies
+        run: |
+          cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib --no-run
+          cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --all-targets --features browser-test-bridge -- -D warnings
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --lib --features browser-preview --no-run
+
+  macos-desktop-bundle:
+    name: Warm macOS Desktop bundle dependencies
+    runs-on: macos-14
+    timeout-minutes: 75
+    env:
+      COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
+      COLOSSUS_DESKTOP_RELEASE_CHANNEL: "validation_only"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Node.js 22.18
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Install locked Desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci --ignore-scripts
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+      - name: Save macOS Desktop bundle build cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+          shared-key: macos-desktop-bundle
+          key: recipe-v1
+          cache-targets: true
+      - name: Build pruned Tauri application
+        working-directory: apps/desktop
+        run: npm run tauri:build
