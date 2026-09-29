@@ -15,7 +15,8 @@ review.
 ## Prerequisites
 
 - A source checkout.
-- The toolchain and platform requirements in [Source setup and test tiers](setup-testing.md).
+- The toolchain and platform requirements in [Source setup and test tiers](setup-testing.md),
+  including optional mise provisioning. Direct Cargo and script commands remain supported.
 - Familiarity with [Architecture overview](architecture.md) and
   [Security architecture](security-architecture.md) for boundary-sensitive work.
 

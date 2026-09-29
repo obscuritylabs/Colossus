@@ -17,6 +17,9 @@ test loop.
 - Rust `1.96` with edition `2024` support.
 - Git and the native build dependencies required by your platform.
 - A source checkout at the repository root.
+- Permission for test processes to bind local loopback sockets. Integration tests
+  start temporary servers; sandbox restrictions otherwise fail with
+  `Operation not permitted`.
 
 The tracked development container is the supported ready-to-build Linux environment.
 It uses digest-pinned official Debian Bookworm base images and a locked Rust feature,
@@ -30,6 +33,34 @@ Rust API contract builds use the exact cross-platform `protoc-bin-vendored` work
 dependency, so contributors and release runners do not need an ambient `protoc` binary.
 Language SDK generation remains separate and uses its own pinned local generator
 toolchain under `sdk/`.
+
+## Optional mise bootstrap
+
+The root `mise.toml` is an opt-in bootstrap for Node, Python, Go, actionlint,
+cargo-deny and cargo-audit. It reads Rust from `rust-toolchain.toml`; it does not
+install native system libraries, Docker, SDK-local generators or the fuzz nightly.
+See the [toolchain inventory](toolchain-inventory.md) for declarations and check owners.
+CI and devcontainer provisioning still use their existing pins.
+
+With mise already installed, inspect the repository configuration before trusting it:
+
+```bash
+mise trust mise.toml
+mise install
+mise exec -- cargo xtask check workflows
+```
+
+Plain Cargo and script commands remain supported without mise. A shell-level
+`RUSTUP_TOOLCHAIN` override can supersede the repository pin; check
+`rustup show active-toolchain` when diagnosing a mismatch. Initial installation needs
+network access. An offline setup must already contain the tools, package caches and
+native dependencies; the offline runtime does not imply offline tool installation.
+The repository does not yet pin the mise executable or supply backend/platform locks.
+
+`AGENTS.md` is the canonical agent guide and `CLAUDE.md` is a relative symlink to it.
+On Windows, enable symlink support before checkout (for example, Developer Mode and
+Git's `core.symlinks=true`); a checkout that materializes a text file containing only
+`AGENTS.md` is not an equivalent guide. Verify the link again in a new worktree.
 
 ## Steps
 

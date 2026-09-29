@@ -1,0 +1,28 @@
+# Optional developer toolchain for Colossus.
+#
+# mise is opt-in: without it installed this file is inert and every documented
+# `cargo`, `npm`, and `./scripts/*` workflow keeps working unchanged. With it
+# installed, `mise install` provisions the tools listed below at existing pins.
+# Native libraries, Docker, SDK generators and fuzz nightly have separate owners;
+# see docs/develop/toolchain-inventory.md. CI and devcontainer provisioning still
+# use their existing declarations; this optional bootstrap has no backend lockfile.
+
+[settings]
+# Read the Rust channel from rust-toolchain.toml rather than duplicating it
+# here. mise drives rustup under the hood, so rustup stays authoritative for
+# toolchain selection, components, and the fuzz jobs' separate nightly.
+idiomatic_version_file_enable_tools = ["rust"]
+
+[tools]
+# SDK generation (sdk/) and the Desktop renderer (apps/desktop/).
+node = "22.18.0"
+python = "3.10.18"
+go = "1.25.0"
+
+# `cargo xtask check workflows`
+actionlint = "1.7.12"
+
+# `cargo xtask check dependencies`. Mirrors .devcontainer/Dockerfile, which
+# installs these with `cargo install --version <v> --locked`.
+"cargo:cargo-deny" = "0.20.2"
+"cargo:cargo-audit" = "0.22.2"
