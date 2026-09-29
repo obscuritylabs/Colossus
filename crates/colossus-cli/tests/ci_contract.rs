@@ -80,6 +80,128 @@ fn actionlint_recognizes_the_provisioned_larger_runner() {
 }
 
 #[test]
+fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
+    let warm = workflow("cache-warm.yml");
+    let warm_root = mapping(&warm, "cache warm workflow");
+    let triggers = mapping(field(warm_root, "on"), "cache warm triggers");
+    assert_eq!(
+        triggers.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        ["push", "workflow_dispatch"].into_iter().collect()
+    );
+    let push = mapping(field(triggers, "push"), "cache warm push trigger");
+    assert_eq!(
+        strings(field(push, "branches"), "cache warm branches"),
+        ["main".to_owned()].into_iter().collect()
+    );
+
+    let pr = workflow("pr.yml");
+    let premerge = workflow("premerge.yml");
+    for (warm_job, consumer_job, consumer_workflow, cache_step, shared_key, workspace, runner) in [
+        (
+            "linux-pr",
+            "lint",
+            &pr,
+            "Restore main Rust dependency build cache",
+            "pr-linux",
+            ". -> target",
+            "ubuntu-latest",
+        ),
+        (
+            "linux-pr",
+            "rust",
+            &pr,
+            "Restore main Rust dependency build cache",
+            "pr-linux",
+            ". -> target",
+            "ubuntu-latest",
+        ),
+        (
+            "macos-desktop-acceptance",
+            "macos-desktop-acceptance",
+            &premerge,
+            "Restore main Desktop acceptance build cache",
+            "macos-desktop-acceptance",
+            "apps/desktop/src-tauri -> target",
+            "macos-14",
+        ),
+        (
+            "macos-desktop-bundle",
+            "macos-desktop-bundle",
+            &premerge,
+            "Restore main Desktop bundle build cache",
+            "macos-desktop-bundle",
+            "apps/desktop/src-tauri -> target",
+            "macos-14",
+        ),
+    ] {
+        let warm_job = job(jobs(&warm), warm_job);
+        let consumer_job = job(jobs(consumer_workflow), consumer_job);
+        assert_eq!(field(warm_job, "runs-on").as_str(), Some(runner));
+        assert_eq!(field(consumer_job, "runs-on").as_str(), Some(runner));
+        let warm_cache_name = if runner == "ubuntu-latest" {
+            "Save Linux PR dependency build cache"
+        } else if shared_key == "macos-desktop-acceptance" {
+            "Save macOS Desktop acceptance build cache"
+        } else {
+            "Save macOS Desktop bundle build cache"
+        };
+        let warm_inputs = mapping(
+            field(named_step(warm_job, warm_cache_name), "with"),
+            "main cache inputs",
+        );
+        let consumer_inputs = mapping(
+            field(named_step(consumer_job, cache_step), "with"),
+            "consumer cache inputs",
+        );
+        for inputs in [warm_inputs, consumer_inputs] {
+            assert_eq!(field(inputs, "shared-key").as_str(), Some(shared_key));
+            assert_eq!(field(inputs, "key").as_str(), Some("recipe-v1"));
+            assert_eq!(field(inputs, "workspaces").as_str(), Some(workspace));
+            assert_eq!(field(inputs, "cache-targets").as_bool(), Some(true));
+        }
+        assert_eq!(field(consumer_inputs, "save-if").as_bool(), Some(false));
+    }
+
+    let acceptance = job(jobs(&warm), "macos-desktop-acceptance");
+    let steps = field(acceptance, "steps")
+        .as_array()
+        .expect("macOS acceptance warm steps");
+    let step_index = |name| {
+        steps
+            .iter()
+            .position(|step| step.get("name").and_then(|name| name.as_str()) == Some(name))
+            .expect("required macOS acceptance warm step")
+    };
+    assert!(
+        step_index("Prepare verified debug desktop executables")
+            < step_index("Build Desktop native test dependencies")
+    );
+
+    for (workflow, names) in [
+        (&pr, &["sdk", "desktop"][..]),
+        (
+            &premerge,
+            &[
+                "linux-rust-integration",
+                "macos-native",
+                "windows-runtime",
+                "windows-desktop",
+                "fuzz",
+            ][..],
+        ),
+    ] {
+        for name in names {
+            let env = mapping(field(job(jobs(workflow), name), "env"), name);
+            assert_eq!(
+                field(env, "SCCACHE_GHA_RW_MODE").as_str(),
+                Some("READ_ONLY"),
+                "{name} must not spend the repository's cache upload rate limit"
+            );
+        }
+    }
+}
+
+#[test]
 fn pr_workflow_selects_only_the_required_validation_tier() {
     let workflow = workflow("pr.yml");
     let root = mapping(&workflow, "PR workflow");
