@@ -11,6 +11,7 @@ import {
 } from "react";
 import type { CSSProperties, FormEvent, ReactNode } from "react";
 import { syncSavedSettings } from "./managed-settings-updates";
+import { terminalRequestForScope } from "./components/tools/TerminalDock";
 
 import {
   CommandFailure,
@@ -62,7 +63,6 @@ import {
   selectTarget,
   setApprovalMode,
   setTerminalEnabled,
-  showTerminalWindow,
   syncStatusBarPins,
   archiveSpace,
   watchRun,
@@ -4458,6 +4458,17 @@ export default function App() {
     }
   }
 
+  const [terminalDockRequest, setTerminalDockRequest] = useState<
+    import("./components/tools/TerminalDock").TerminalDockRequest | null
+  >(null);
+  const terminalRequestSequence = useRef(0);
+
+  useEffect(() => setTerminalDockRequest(null), [desktop.selectedTargetId]);
+  const currentTerminalRequest = terminalRequestForScope(
+    terminalDockRequest,
+    desktop.selectedTargetId,
+  );
+
   async function handleOpenTerminal(
     kind: TerminalKind,
     planContext?: { sessionId: string; planId: string },
@@ -4474,13 +4485,17 @@ export default function App() {
       setSurface("settings");
       return;
     }
-    try {
-      if (!FIXTURE_MODE) {
-        await showTerminalWindow(kind, planContext);
-      }
-    } catch (error: unknown) {
-      setActionError(commandError(error));
-    }
+    terminalRequestSequence.current = Math.max(
+      Date.now(),
+      terminalRequestSequence.current + 1,
+    );
+    setTerminalDockRequest({
+      scope: status.selectedTargetId,
+      kind,
+      planContext,
+      sequence: terminalRequestSequence.current,
+    });
+    setSurface("work");
   }
 
   const activeView =
@@ -5091,6 +5106,23 @@ export default function App() {
           gitAvailable={desktop.capabilities.files}
           browserScope={desktop.selectedTargetId}
           browserFixture={FIXTURE_MODE}
+          terminalSupported={
+            desktop.capabilities.tui || desktop.capabilities.shellTerminal
+          }
+          terminalReady={
+            desktop.terminalEnabled &&
+            (currentTerminalRequest?.kind === "shell"
+              ? desktop.capabilities.shellTerminal
+              : currentTerminalRequest?.kind === "colossus_tui"
+                ? terminalAvailable
+                : terminalAvailable || desktop.capabilities.shellTerminal)
+          }
+          terminalRequest={currentTerminalRequest}
+          onOpenGenericTerminal={() => setTerminalDockRequest(null)}
+          onTerminalSettings={() => {
+            setSettingsStartTab("runtime");
+            setSurface("settings");
+          }}
           title={title}
           view={activeView}
           conversationViews={conversationViews}

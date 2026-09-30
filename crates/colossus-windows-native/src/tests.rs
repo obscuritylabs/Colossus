@@ -377,11 +377,16 @@ fn private_file_replacement_rejects_untrusted_ancestor_authority() {
 #[cfg(windows)]
 #[test]
 fn conpty_fixture_process() {
-    use std::io::{Read as _, Write as _};
+    use std::io::{IsTerminal as _, Read as _, Write as _};
 
     if std::env::var_os("COLOSSUS_DESKTOP_TUI_AUTH_INPUT_HANDLE_V1").is_none() {
         return;
     }
+    // Authentication alone does not prove that a real CLI will enter TUI mode.
+    // Redirected parent handles must never replace the child's console streams.
+    assert!(std::io::stdin().is_terminal(), "ConPTY stdin");
+    assert!(std::io::stdout().is_terminal(), "ConPTY stdout");
+    assert!(std::io::stderr().is_terminal(), "ConPTY stderr");
     let mut channels = take_desktop_tui_authentication_channels().expect("authentication channels");
     let mut request = [0_u8; 4];
     channels

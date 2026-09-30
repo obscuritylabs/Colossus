@@ -21,7 +21,7 @@ test("staged, unstaged and commit snapshots keep separate tabs", async ({
   await page.goto("/?fixture=operations-studio");
   await openDiff(page);
   await page
-    .getByRole("button", { name: "Close files drawer", exact: true })
+    .getByRole("button", { name: "Close tool pane", exact: true })
     .click();
   await page.getByRole("button", { name: /Open Git:/ }).click();
   await page
@@ -41,7 +41,7 @@ test("staged, unstaged and commit snapshots keep separate tabs", async ({
     .click();
   await expect(diff).toContainText("'Staged'");
   await page
-    .getByRole("button", { name: "Close files drawer", exact: true })
+    .getByRole("button", { name: "Close tool pane", exact: true })
     .click();
   await page.getByRole("button", { name: /Open Git:/ }).click();
   const git = page.getByRole("region", { name: "Workspace Git", exact: true });
@@ -68,7 +68,7 @@ test("the selected file tab stays visible when tabs overflow or the panel narrow
     .getByRole("button", { name: "Open files panel", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "Expand files panel", exact: true })
+    .getByRole("button", { name: "Expand tool pane", exact: true })
     .click();
   const search = page.getByRole("searchbox", {
     name: "Find files by name or path",
@@ -140,7 +140,7 @@ test("diffs expand, navigate changes and restore a preserved chat draft", async 
     .click();
   await expect(diff).toBeVisible();
   await page
-    .getByRole("button", { name: "Restore files panel", exact: true })
+    .getByRole("button", { name: "Restore tool pane", exact: true })
     .click();
   await expect(prompt).toHaveValue("Preserve this draft");
   const resize = page.getByRole("separator", { name: "Resize files panel" });
@@ -148,7 +148,7 @@ test("diffs expand, navigate changes and restore a preserved chat draft", async 
   await resize.press("ArrowRight");
   await expect(resize).not.toHaveAttribute("aria-valuenow", String(width));
   await page
-    .getByRole("button", { name: "Expand files panel", exact: true })
+    .getByRole("button", { name: "Expand tool pane", exact: true })
     .click();
   await diff.getByRole("button", { name: "Side by side", exact: true }).click();
   await page.screenshot({ path: "output/playwright/file-diff-dark.png" });
@@ -163,7 +163,7 @@ test("file search finds unopened descendants, bounds broad results, and reveals 
     .getByRole("button", { name: "Open files panel", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "Expand files panel", exact: true })
+    .getByRole("button", { name: "Expand tool pane", exact: true })
     .click();
   const search = page.getByRole("searchbox", {
     name: "Find files by name or path",

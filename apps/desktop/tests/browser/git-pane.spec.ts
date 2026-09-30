@@ -46,7 +46,7 @@ test("Git shows the branch, grouped changes and history without losing a draft",
   await expect(
     pane.getByRole("region", { name: "Commit details" }),
   ).toContainText("Affected files");
-  await page.getByRole("button", { name: "Close Git panel" }).click();
+  await page.getByRole("button", { name: "Close tool pane" }).click();
   await expect(indicator).toBeFocused();
   await expect(
     page.getByRole("textbox", { name: "Prompt", exact: true }),
@@ -74,7 +74,7 @@ test("Git stays available on views without a message composer", async ({
         .getByRole("region", { name: "Workspace Git", exact: true })
         .getByRole("heading", { name: "Git", exact: true }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Close Git panel" }).click();
+    await page.getByRole("button", { name: "Close tool pane" }).click();
   }
   await views
     .getByRole("button", { name: "Conversation", exact: true })
@@ -97,7 +97,8 @@ test("Git has its own compact width and preserves a user resize", async ({
   await resize.press("ArrowLeft");
   const width = await resize.getAttribute("aria-valuenow");
   expect(Number(width)).toBeGreaterThan(360);
-  await page.getByRole("button", { name: "Open Aside", exact: true }).click();
+  await page.getByRole("button", { name: "Open tools", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: /^Aside/ }).click();
   const asideResize = page.getByRole("separator", {
     name: "Resize Aside conversation",
   });
@@ -226,7 +227,7 @@ test("a folder without Git keeps only an accessible icon in the composer", async
   await expect(
     page.getByRole("region", { name: "Workspace Git", exact: true }),
   ).toContainText("No Git repository");
-  await page.getByRole("button", { name: "Close Git panel" }).click();
+  await page.getByRole("button", { name: "Close tool pane" }).click();
   await expect(indicator).toBeFocused();
 });
 
@@ -393,7 +394,7 @@ test("Git is accessible at desktop and compact widths", async ({ page }) => {
       page.getByRole("button", { name: "Refresh Git", exact: true }),
     ).toBeInViewport();
     await expect(
-      page.getByRole("button", { name: "Close Git panel" }),
+      page.getByRole("button", { name: "Close tool pane" }),
     ).toBeInViewport();
     const results = await new AxeBuilder({ page })
       .include(".git-pane")
@@ -470,7 +471,7 @@ for (const colorTheme of ["dark", "light"]) {
       name: "Workspace Git",
       exact: true,
     });
-    const close = pane.getByRole("button", { name: "Close Git panel" });
+    const close = page.getByRole("button", { name: "Close tool pane" });
     await expect(close).toBeFocused();
     const filter = pane.getByRole("searchbox", { name: "Filter files" });
     await filter.fill("missing-path");

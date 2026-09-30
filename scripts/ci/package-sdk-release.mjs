@@ -12,6 +12,7 @@ import {
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { authorizeSdkPublication } from "./sdk-publication-policy.mjs";
 
 const repository = realpathSync(join(dirname(fileURLToPath(import.meta.url)), "../.."));
 const stableVersionPattern = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u;
@@ -45,6 +46,7 @@ function packageVersions() {
   );
   const cli = cargo.packages.find(({ name }) => name === "colossus-cli");
   if (!cli) fail("cargo metadata did not contain colossus-cli");
+  authorizeSdkPublication(cargo, false);
 
   const npm = JSON.parse(
     readFileSync(join(repository, "sdk/typescript/package.json"), "utf8"),

@@ -417,6 +417,18 @@ drain and checkpoint; it does not stop an installed External daemon.
 
 ### 7. Opt into local terminals
 
+Use **Tools** above the conversation to open Files, Browser, Terminal, Changes,
+Artifacts, thread details, or Aside. The selector at the top of the right pane
+switches tools. Closing the pane keeps your conversation draft, browser tabs, and
+terminal sessions; close an individual terminal tab to end its session. Switching
+workspaces closes that workspace's terminal sessions.
+
+On Windows, **Browser** opens websites and local previews beside your conversation.
+Its temporary session is separate from your normal browser and ends when its last
+tab closes or Desktop exits. Use the system-browser action for downloads and sites
+that require file uploads or device permissions. macOS browsing remains available
+only in preview builds.
+
 The dedicated terminal WebView can open the bundled Colossus TUI for the active managed
 workspace and, on macOS, one fixed local shell. Enabling this feature for the first time
 requires a native operating-system confirmation. Consent recorded by an earlier
@@ -425,6 +437,11 @@ supply an executable, environment, absolute working directory, or arbitrary argu
 Clipboard escape writes, automatic URL opening, remote navigation, and general
 renderer-initiated process spawning are disabled; manual copy and paste remain user
 actions.
+
+After enabling local terminals, **Terminal** opens the TUI in the right pane when
+Managed Local is ready. On macOS, it can open Shell while the managed runtime is
+unavailable. Explicit **Open Colossus TUI** and **Open Shell** actions select the
+requested terminal type in that pane.
 
 **Open Colossus TUI** starts the verified bundled CLI suspended with fixed arguments,
 binds its live code identity to the signed bundle manifest before resuming it, and then

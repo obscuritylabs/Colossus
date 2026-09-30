@@ -114,6 +114,8 @@ const COMMANDS: &[&str] = &[
     "search_workspace_files",
     "read_workspace_file",
     "show_terminal_window",
+    "mount_terminal_pane",
+    "terminal_pane_viewport",
     "terminal_context",
     "open_terminal",
     "write_terminal",

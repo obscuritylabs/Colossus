@@ -72,8 +72,17 @@ protected publisher can reproduce every candidate byte. The release packager als
 normalizes the Python source archive's order, ownership, permissions, and timestamps;
 setuptools does not apply `SOURCE_DATE_EPOCH` to all sdist metadata itself.
 
-All internal Rust packages must retain `publish = false`. Regenerate the SDK input
-digest after changing package metadata, then run the completion gates:
+All internal Rust packages must retain `publish = false`.
+
+Set `workspace.metadata.release.publish-sdks` in `Cargo.toml` for each release:
+`true` allows coordinated SDK registry publication; `false` selects Core/Desktop-only
+publication. Both modes build and verify SDK candidate archives with aligned versions.
+The publisher reads this required boolean from the immutable release tag and blocks
+its privileged publication job when false, including manual recovery requests. Missing
+or malformed policy fails validation. Version 0.11.4 uses `false`.
+
+Regenerate the SDK input digest after changing package metadata, then run the
+completion gates:
 
 ```bash
 ./sdk/scripts/install-codegen-tools
@@ -117,7 +126,8 @@ candidate pass. Before publishing the draft, verify that it contains exactly:
 - a signed `Colossus-Desktop-STABLE-vX.Y.Z-x86_64-pc-windows-msvc-setup.exe`,
   its `.sha256`, sealed bundle manifest, and provenance JSON.
 
-Publishing the stable draft triggers `publish-sdk.yml`. Approve its one
+Publishing the stable draft triggers `publish-sdk.yml`. For a release whose policy
+allows SDK publication, approve its one
 `sdk-production` deployment. The job reverifies the exact release assets against the
 `colossus-sdk-release` artifact of the successful `release.yml` run for the tag, so
 release-asset write access alone cannot substitute bytes that the tag never produced;
@@ -132,19 +142,26 @@ the core tag's commit.
 The stable GitHub Release contains the six CLI archives and checksums, the two
 repository-owned bootstrap installers and checksums, the five immutable SDK candidate
 files, and four signed Windows Desktop assets. The Windows CLI archives contain signed
-executables. The protected publisher releases the same version to npm and PyPI and
-creates the Go module tag at the identical source commit.
+executables. When `publish-sdks` is true, the protected publisher releases the same
+version to npm and PyPI and creates the Go module tag at the identical source commit.
+For Core/Desktop-only releases, candidate validation passes and the publication job
+is skipped; no registry packages or Go module tag are created.
 
 ## Verification
 
 ```bash
 gh release view vX.Y.Z
+```
+
+For releases with SDK publication enabled, also check the registries:
+
+```bash
 npm view @obscuritylabs/colossus-sdk@X.Y.Z version dist.tarball
 python -m pip index versions obscuritylabs-colossus-sdk
 go list -m github.com/obscuritylabs/colossus/sdk/go@vX.Y.Z
 ```
 
-Also verify that `git rev-list -n 1 vX.Y.Z` and
+For those releases, verify that `git rev-list -n 1 vX.Y.Z` and
 `git rev-list -n 1 sdk/go/vX.Y.Z` are identical. A stable core GitHub Release must not
 contain an unsigned Desktop asset. The Desktop update-channel workflow runs only for a
 separately produced stable release that contains a verified `stable.json` asset.

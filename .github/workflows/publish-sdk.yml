@@ -94,6 +94,8 @@ jobs:
           else
             authorize_publish=$DISPATCH_PUBLISH
           fi
+          authorize_publish=$(cargo metadata --locked --no-deps --format-version 1 \
+            | node scripts/ci/sdk-publication-policy.mjs "$authorize_publish")
           {
             printf 'authorize_publish=%s\n' "$authorize_publish"
             printf 'source_commit=%s\n' "$source_commit"

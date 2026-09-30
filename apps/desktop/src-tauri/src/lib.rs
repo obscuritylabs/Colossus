@@ -91,6 +91,7 @@ use setup_package::{
     export_setup_package, inspect_setup_package, list_setup_packages, open_setup_link,
     remove_setup_package, use_setup_model,
 };
+use terminal_commands::pane::{mount_terminal_pane, terminal_pane_viewport};
 use terminal_commands::{
     close_terminal, open_terminal, resize_terminal, show_terminal_window, signal_terminal,
     terminal_context, write_terminal,
@@ -132,6 +133,7 @@ pub fn run() {
     let application = application.plugin(tauri_plugin_notification::init());
     let application = application
         .manage(state::AppState::default())
+        .manage(terminal_commands::pane::TerminalPaneState::default())
         .manage(status_bar::StatusBarState::default())
         .manage(setup_package::SetupReviewState::default())
         .manage(command_review::CommandReviewState::default())
@@ -140,6 +142,7 @@ pub fn run() {
         .setup(|app| {
             status_bar::setup(app)?;
             browser::start_watchdog(app.handle().clone());
+            terminal_commands::pane::start_watchdog(app.handle().clone());
             Ok(())
         })
         .on_page_load(|view, payload| {
@@ -148,6 +151,7 @@ pub fn run() {
             {
                 use tauri::Manager as _;
                 view.state::<state::AppState>().browser.controller_loading();
+                terminal_commands::pane::hide(view.app_handle(), true);
             }
         })
         .on_window_event(|window, event| {
@@ -155,6 +159,8 @@ pub fn run() {
             status_bar::handle_window_event(window, event);
         })
         .invoke_handler(tauri::generate_handler![
+            mount_terminal_pane,
+            terminal_pane_viewport,
             browser_context,
             browser_command,
             browser_viewport,

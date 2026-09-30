@@ -16,6 +16,7 @@ import test from "node:test";
 
 import { assessPypiRelease } from "./check-sdk-registry-state.mjs";
 import { validateReleaseIdentity } from "./package-sdk-release.mjs";
+import { authorizeSdkPublication } from "./sdk-publication-policy.mjs";
 import {
   compareSdkReleaseDirectories,
   expectedSdkFiles,
@@ -30,6 +31,19 @@ const versions = {
   npmName: "@obscuritylabs/colossus-sdk",
   goModule: "github.com/obscuritylabs/colossus/sdk/go",
 };
+
+test("Core/Desktop policy blocks automatic and manually requested SDK publication", () => {
+  const metadata = (enabled) => ({ metadata: { release: { "publish-sdks": enabled } } });
+  assert.equal(authorizeSdkPublication(metadata(false), true), false);
+  assert.equal(authorizeSdkPublication(metadata(false), false), false);
+  assert.equal(authorizeSdkPublication(metadata(true), false), false);
+  assert.equal(authorizeSdkPublication(metadata(true), true), true);
+  for (const policy of [undefined, null, "false", "true", 0, 1]) {
+    assert.throws(() => authorizeSdkPublication(metadata(policy), true));
+  }
+  assert.throws(() => authorizeSdkPublication({}, true));
+  assert.throws(() => authorizeSdkPublication(metadata(true), "true"));
+});
 
 test("release identity requires one stable version across every SDK", () => {
   assert.doesNotThrow(() =>

@@ -25,7 +25,7 @@ pub(super) struct Registry {
 impl Registry {
     pub(super) fn snapshot(&self) -> BrowserSnapshotDto {
         BrowserSnapshotDto {
-            available: cfg!(feature = "browser-preview") && cfg!(any(windows, target_os = "macos")),
+            available: cfg!(windows) || cfg!(all(feature = "browser-preview", target_os = "macos")),
             generation: self.generation,
             tabs: self
                 .tabs

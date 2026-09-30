@@ -141,7 +141,7 @@ describe("WorkSurface side panels", () => {
   it("offers released Research citations in the resizable side panel", () => {
     const markup = renderSurface([], undefined, false, true, "research");
 
-    expect(markup).toContain('aria-label="Open Research sources"');
+    expect(markup).toContain("Research sources");
     expect(markup).toContain('aria-label="Research sources"');
     expect(markup).toContain("Runtime docs");
     expect(markup).toContain("Research mode");
@@ -159,15 +159,15 @@ describe("WorkSurface side panels", () => {
     expect(markup).not.toContain('class="agent-flow"');
   });
 
-  it("keeps an empty artifact panel collapsed behind a count-bearing toggle", () => {
+  it("keeps tools collapsed with artifact counts in the menu", () => {
     const markup = renderSurface([]);
 
     expect(markup).toContain('aria-controls="work-side-drawer"');
-    expect(markup.match(/aria-controls="work-side-drawer"/g)).toHaveLength(2);
+    expect(markup.match(/aria-controls="work-side-drawer"/g)).toHaveLength(1);
     expect(markup).toContain('aria-expanded="false"');
     expect(markup).toContain("Open files panel");
-    expect(markup).toContain("Open artifacts panel, 0 artifacts");
-    expect(markup).toContain('<span class="artifact-count"');
+    expect(markup).toContain("Outputs produced in this conversation");
+    expect(markup).toContain('<span class="tool-count"');
     expect(markup).toContain(">0</span>");
     expect(markup).toContain('<div class="work-layout">');
     expect(markup).not.toContain("is-work-drawer-open");
@@ -185,7 +185,7 @@ describe("WorkSurface side panels", () => {
       },
     ]);
 
-    expect(markup).toContain("Open artifacts panel, 1 artifact");
+    expect(markup).toContain("Outputs produced in this conversation");
     expect(markup).toContain(">1</span>");
     expect(markup).not.toContain("is-work-drawer-open");
   });
@@ -194,7 +194,7 @@ describe("WorkSurface side panels", () => {
     const markup = renderSurface([], { files: false, artifacts: false });
 
     expect(markup).not.toContain("Open files panel");
-    expect(markup).not.toContain("Open artifacts panel");
+    expect(markup).not.toContain("Outputs produced in this conversation");
     expect(markup).not.toContain('id="work-side-drawer"');
   });
 
@@ -236,7 +236,7 @@ describe("WorkSurface side panels", () => {
       true,
     );
 
-    expect(markup).toContain('aria-label="Open thread details"');
+    expect(markup).toContain("Thread details");
     expect(markup).toContain('id="thread-details-title"');
     expect(markup).toContain("Colossus");
     expect(markup).toContain("bootstrap.rs");

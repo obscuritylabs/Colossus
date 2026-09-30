@@ -1,0 +1,164 @@
+.tool-switcher {
+  position: relative;
+  min-width: 0;
+}
+.tool-switcher-trigger {
+  gap: 7px;
+  min-height: 32px;
+}
+.tool-switcher-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 7px);
+  z-index: 80;
+  width: 280px;
+  max-width: calc(100vw - 32px);
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 12px 36px #0005;
+}
+.tool-switcher-menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.tool-switcher-menu button:hover,
+.tool-switcher-menu button:focus-visible {
+  background: var(--surface-control);
+}
+.tool-switcher-menu button > span {
+  flex: 1;
+  min-width: 0;
+}
+.tool-switcher-menu strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.tool-switcher-menu small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.tool-count {
+  color: var(--muted);
+  font-size: 11px;
+}
+.work-tool-shortcuts {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.work-tool-shortcuts .icon-button {
+  width: 32px;
+  height: 32px;
+}
+.work-tool-shortcuts .icon-button[aria-expanded="true"] {
+  color: var(--accent);
+  background: var(--surface-control);
+}
+.work-tools-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  /* Native panes reserve the first 48px for trusted application controls. */
+  flex: 0 0 48px;
+  padding: 5px 9px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.work-tools-header .tool-switcher-menu {
+  left: 0;
+  right: auto;
+}
+.work-tools-header .tool-switcher-trigger {
+  border-color: transparent;
+  background: transparent;
+}
+.work-tools-actions {
+  display: flex;
+  gap: 2px;
+}
+.work-tools-actions .icon-button {
+  width: 28px;
+  height: 28px;
+}
+.work-side-drawer:has(.work-tools-header) {
+  display: flex;
+  flex-direction: column;
+}
+.work-side-drawer > .work-drawer-panel:not([hidden]),
+.work-side-drawer > .browser-pane,
+.work-side-drawer > .git-pane {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.terminal-dock {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+.terminal-dock-message {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+.terminal-dock-message h3,
+.terminal-dock-message p {
+  margin: 0;
+}
+.terminal-dock-message p {
+  max-width: 38ch;
+  line-height: 1.6;
+}
+.terminal-dock-message button {
+  margin-top: 6px;
+}
+
+.browser-pane-actions[hidden] {
+  display: none;
+}
+
+.work-layout.is-browser-expanded {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+.work-layout.is-browser-expanded > .work-thread,
+.work-layout.is-browser-expanded > .aside-resize-handle {
+  display: none;
+}
+.work-side-drawer > .work-drawer-panel:not([hidden]) {
+  height: auto;
+}
+.work-tools-header
+  ~ .git-pane
+  .git-pane-header
+  button[aria-label="Close Git panel"] {
+  display: none;
+}
+
+.tool-switcher-menu[hidden] {
+  display: none;
+}
