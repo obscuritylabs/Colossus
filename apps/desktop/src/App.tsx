@@ -62,7 +62,6 @@ import {
   selectTarget,
   setApprovalMode,
   setTerminalEnabled,
-  showTerminalWindow,
   syncStatusBarPins,
   archiveSpace,
   watchRun,
@@ -4458,6 +4457,12 @@ export default function App() {
     }
   }
 
+  const [terminalDockRequest, setTerminalDockRequest] = useState<
+    import("./components/tools/TerminalDock").TerminalDockRequest | null
+  >(null);
+
+  useEffect(() => setTerminalDockRequest(null), [desktop.selectedTargetId]);
+
   async function handleOpenTerminal(
     kind: TerminalKind,
     planContext?: { sessionId: string; planId: string },
@@ -4474,13 +4479,12 @@ export default function App() {
       setSurface("settings");
       return;
     }
-    try {
-      if (!FIXTURE_MODE) {
-        await showTerminalWindow(kind, planContext);
-      }
-    } catch (error: unknown) {
-      setActionError(commandError(error));
-    }
+    setTerminalDockRequest((previous) => ({
+      kind,
+      planContext,
+      sequence: Math.max(Date.now(), (previous?.sequence ?? 0) + 1),
+    }));
+    setSurface("work");
   }
 
   const activeView =
@@ -5091,6 +5095,22 @@ export default function App() {
           gitAvailable={desktop.capabilities.files}
           browserScope={desktop.selectedTargetId}
           browserFixture={FIXTURE_MODE}
+          terminalSupported={
+            desktop.capabilities.tui || desktop.capabilities.shellTerminal
+          }
+          terminalReady={
+            desktop.terminalEnabled &&
+            (terminalDockRequest?.kind === "shell"
+              ? desktop.capabilities.shellTerminal
+              : terminalDockRequest?.kind === "colossus_tui"
+                ? terminalAvailable
+                : terminalAvailable || desktop.capabilities.shellTerminal)
+          }
+          terminalRequest={terminalDockRequest}
+          onTerminalSettings={() => {
+            setSettingsStartTab("runtime");
+            setSurface("settings");
+          }}
           title={title}
           view={activeView}
           conversationViews={conversationViews}

@@ -453,7 +453,9 @@ test("terminal PTY authority is isolated from the main WebView", () => {
   assert.deepEqual(main.webviews, ["main"]);
   assert.equal(main.windows, undefined);
   assert.equal(main.remote, undefined);
-  assert.deepEqual(terminal.windows, ["terminal"]);
+  assert.deepEqual(terminal.webviews, ["terminal"]);
+  assert.equal(terminal.windows, undefined);
+  assert.equal(terminal.remote, undefined);
   assert.equal(terminal.local, true);
   assert.deepEqual(terminal.permissions, [
     "allow-terminal-context",

@@ -16,11 +16,13 @@ import "./browser.css";
 
 export function BrowserPane({
   controller,
+  docked = false,
   expanded,
   onExpand,
   onClose,
 }: {
   controller: BrowserController;
+  docked?: boolean;
   expanded: boolean;
   onExpand: () => void;
   onClose: () => void;
@@ -180,7 +182,7 @@ export function BrowserPane({
         >
           <IconPlus size={17} />
         </button>
-        <div className="browser-pane-actions">
+        <div className="browser-pane-actions" hidden={docked}>
           <button
             className="icon-button"
             type="button"

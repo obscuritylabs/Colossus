@@ -555,7 +555,7 @@ jobs:
         run: npm run build
       - name: Exercise the bundled Windows terminal document and IPC
         if: steps.desktop_prepare.outcome == 'success'
-        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib native_terminal_ -- --ignored --nocapture --test-threads=1
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --features tauri/custom-protocol --lib native_terminal_ -- --ignored --nocapture --test-threads=1
       - name: Lint Windows native credential controls
         if: steps.desktop_prepare.outcome == 'success'
         run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --all-targets --all-features -- -D warnings

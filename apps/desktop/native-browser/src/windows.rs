@@ -26,6 +26,65 @@ use windows::{
 
 use crate::{BrowserError, BrowserEvent, EventSink, NavigationAction, NavigationPolicy, PageState};
 
+/// A fixed engine policy, not a renderer-accessible `DevTools` endpoint. Install
+/// before the first navigation and fail closed if the runtime cannot apply it.
+pub(crate) async fn restrict_file_picker(view: &tauri::Webview) -> Result<(), BrowserError> {
+    fixed_protocol_command(
+        view,
+        "Page.setInterceptFileChooserDialog",
+        r#"{"enabled":true,"cancel":true}"#,
+    )
+    .await
+    .map(|_| ())
+}
+
+async fn fixed_protocol_command(
+    view: &tauri::Webview,
+    method: &'static str,
+    parameters: &'static str,
+) -> Result<String, BrowserError> {
+    let (send, receive) = tokio::sync::oneshot::channel();
+    view.with_webview(move |native| {
+        let send = std::sync::Arc::new(std::sync::Mutex::new(Some(send)));
+        let completed = send.clone();
+        // SAFETY: The COM view and completion handler remain on their owning
+        // apartment. The command and its parameters are fixed by native code.
+        let result = unsafe {
+            native.controller().CoreWebView2().and_then(|view| {
+                view.CallDevToolsProtocolMethod(
+                    &HSTRING::from(method),
+                    &HSTRING::from(parameters),
+                    &webview2_com::CallDevToolsProtocolMethodCompletedHandler::create(Box::new(
+                        move |result, value| {
+                            if let Ok(mut sender) = completed.lock()
+                                && let Some(sender) = sender.take()
+                            {
+                                let _ = sender.send(
+                                    result
+                                        .map(|()| value)
+                                        .map_err(|_| BrowserError::Unavailable),
+                                );
+                            }
+                            Ok(())
+                        },
+                    )),
+                )
+            })
+        };
+        if result.is_err()
+            && let Ok(mut sender) = send.lock()
+            && let Some(sender) = sender.take()
+        {
+            let _ = sender.send(Err(BrowserError::Unavailable));
+        }
+    })
+    .map_err(|_| BrowserError::Closed)?;
+    tokio::time::timeout(std::time::Duration::from_secs(5), receive)
+        .await
+        .map_err(|_| BrowserError::TimedOut)?
+        .map_err(|_| BrowserError::Closed)?
+}
+
 pub(crate) fn harden(
     native: &PlatformWebview,
     policy: NavigationPolicy,
@@ -286,4 +345,13 @@ pub(crate) fn is_active(native: &PlatformWebview) -> Result<bool, BrowserError> 
         let root = GetAncestor(parent, GA_ROOT);
         Ok(!root.is_invalid() && root == GetForegroundWindow())
     }
+}
+
+/// Synthetic user-activation probe. Never present in ordinary builds or IPC.
+///
+/// # Errors
+/// Fails if the engine cannot execute the test or the picker remains open.
+#[cfg(feature = "native-test-driver")]
+pub async fn probe_file_picker(view: &tauri::Webview) -> Result<String, BrowserError> {
+    fixed_protocol_command(view, "Runtime.evaluate", r#"{"expression":"new Promise(resolve => { const input = document.createElement('input'); input.type = 'file'; input.addEventListener('cancel', () => resolve(true)); document.body.append(input); input.showPicker(); setTimeout(() => resolve(false), 1500); })","awaitPromise":true,"returnByValue":true,"userGesture":true}"#).await
 }

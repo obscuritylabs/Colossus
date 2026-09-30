@@ -44,7 +44,7 @@ test("composer retains visible, accessible controls at narrow widths in both the
   // The wide fixture starts with thread details open. Close that panel before
   // narrowing the viewport, where it deliberately becomes a modal overlay.
   await page
-    .getByRole("button", { name: "Close thread details", exact: true })
+    .getByRole("button", { name: "Close tool pane", exact: true })
     .click();
   for (const theme of ["light", "dark"]) {
     await page.evaluate(
@@ -120,7 +120,7 @@ test("new messages use a compact header, writing area, and footer", async ({
   page,
 }) => {
   await page
-    .getByRole("button", { name: "Close thread details", exact: true })
+    .getByRole("button", { name: "Close tool pane", exact: true })
     .click();
   await page.setViewportSize({ width: 880, height: 950 });
   await page.getByRole("button", { name: "Open work navigation" }).click();

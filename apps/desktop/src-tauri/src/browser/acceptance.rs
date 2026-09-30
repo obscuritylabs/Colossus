@@ -267,6 +267,16 @@ async fn sessions(app: &tauri::AppHandle, address: &str, generation: u64) -> any
     )
     .await?;
     permissions(&other).await?;
+    #[cfg(windows)]
+    {
+        let probe = colossus_native_browser::probe_file_picker(&other).await?;
+        let result: serde_json::Value = serde_json::from_str(&probe)?;
+        anyhow::ensure!(
+            result["result"]["value"] == true,
+            "native file picker was not cancelled: {result}"
+        );
+        println!("PASS native file picker cancellation with user activation");
+    }
     viewport(app, &other).await?;
     guest_denial(app, address, &b, &other).await?;
     handoffs(app, &b, &other, address).await?;

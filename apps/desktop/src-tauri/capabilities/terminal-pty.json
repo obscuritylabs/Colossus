@@ -3,7 +3,7 @@
   "identifier": "terminal-pty",
   "description": "Only the dedicated local terminal WebView may control native-owned PTY sessions.",
   "local": true,
-  "windows": ["terminal"],
+  "webviews": ["terminal"],
   "permissions": [
     "allow-terminal-context",
     "allow-open-terminal",

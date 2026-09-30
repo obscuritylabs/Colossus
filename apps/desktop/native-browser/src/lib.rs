@@ -21,3 +21,6 @@ mod windows;
 pub use engine::{control, harden, inspect, is_active, open_external, release, share_session};
 pub use navigation::{NavigationPolicy, parse_address};
 pub use types::{BrowserError, BrowserEvent, EventSink, NavigationAction, PageState};
+
+#[cfg(all(windows, feature = "native-test-driver"))]
+pub use windows::probe_file_picker;

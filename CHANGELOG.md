@@ -8,6 +8,29 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-09-30
+
+### Added
+
+- A compact Tools menu and shared right pane for Files, Browser, Terminal,
+  Changes, Artifacts, thread details, and Aside. Tool switching preserves
+  conversation drafts, browser tabs, and local terminal sessions.
+- The integrated browser is enabled in normal Windows Desktop builds, with
+  isolated temporary sessions and native file-picker cancellation.
+
+### Fixed
+
+- Windows TUI windows now load their bundled document and assets correctly.
+  ConPTY children receive console streams even when Desktop starts with
+  redirected standard handles.
+- The local TUI opens beside the conversation with bounded native positioning,
+  workspace-scoped cleanup, and terminal-only PTY permissions.
+
+### Changed
+
+- Aligned workspace, bundled plugin, and SDK candidate metadata to `0.11.4`.
+
+
 ## [0.11.3] - 2026-09-29
 
 ### Added

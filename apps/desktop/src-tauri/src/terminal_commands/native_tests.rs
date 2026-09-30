@@ -214,3 +214,199 @@ async fn native_terminal_authenticated_tui_draws_through_conpty() {
         .expect("clean up test Desktop home");
     result.expect("authenticated Windows TUI rendered through ConPTY");
 }
+
+#[cfg(debug_assertions)]
+#[test]
+#[ignore = "requires Windows WebView2, bundled frontend and prepared debug sidecars"]
+fn native_terminal_pane_keeps_pty_and_rejects_main_authority() {
+    let profile = tempfile::tempdir().expect("isolated controller profile");
+    let mut context = crate::app_context::create();
+    context.config_mut().build.dev_url = None;
+    context.config_mut().app.windows[0].data_directory = Some(profile.path().to_owned());
+    let outcome = Arc::new(Mutex::new(None));
+    let result = outcome.clone();
+    let application = tauri::Builder::default()
+        .any_thread()
+        .manage(AppState::default())
+        .manage(pane::TerminalPaneState::default())
+        .invoke_handler(tauri::generate_handler![
+            terminal_context,
+            open_terminal,
+            write_terminal,
+            resize_terminal,
+            signal_terminal,
+            close_terminal,
+            pane::mount_terminal_pane,
+            pane::terminal_pane_viewport
+        ])
+        .setup(move |app| {
+            let app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let (_root, store, settings) = tui_fixture();
+                let state = app.state::<AppState>();
+                state
+                    .select_target(settings.selected_target_id.clone())
+                    .await;
+                let checked = async {
+                    crate::managed_runtime::start(&state, &store, &settings, false)
+                        .await
+                        .map_err(|e| e.message)?;
+                    let main = app.get_webview("main").ok_or("main view missing")?;
+                    assert!(
+                        terminal_context(main.clone(), app.state()).await.is_err(),
+                        "main acquired PTY authority"
+                    );
+                    let lease = pane::mount_terminal_pane(
+                        app.clone(),
+                        main.clone(),
+                        app.state(),
+                        app.state(),
+                        None,
+                        0,
+                    )
+                    .await
+                    .map_err(|e| e.message)?;
+                    let view = app
+                        .get_webview(TERMINAL_WEBVIEW)
+                        .ok_or("terminal child missing")?;
+                    assert_eq!(view.window().label(), "main");
+                    check_pane_viewport(&app, &main, &view, lease).await?;
+                    check_pane_remount(&app, main, lease).await?;
+                    state.select_target(None).await;
+                    assert!(
+                        !state
+                            .terminal_manager()
+                            .has_owner_sessions(TERMINAL_WEBVIEW)
+                            .unwrap(),
+                        "workspace change retained terminal authority"
+                    );
+                    Ok::<(), String>(())
+                }
+                .await;
+                state.close_all().await;
+                crate::uninstall::cleanup(store.home_root().expect("test home"))
+                    .expect("test cleanup");
+                *result.lock().expect("test result") = Some(checked);
+                app.exit(0);
+            });
+            Ok(())
+        })
+        .build(context)
+        .expect("native terminal pane test app");
+    application.run_return(|_, _| {});
+    outcome
+        .lock()
+        .expect("test result")
+        .take()
+        .expect("test finished")
+        .expect("native terminal pane");
+}
+
+#[cfg(debug_assertions)]
+async fn check_pane_viewport(
+    app: &AppHandle,
+    main: &Webview,
+    view: &Webview,
+    lease: u64,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        if state
+            .terminal_manager()
+            .has_owner_sessions(TERMINAL_WEBVIEW)
+            .map_err(|e| e.message().to_owned())?
+        {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let (send, receive) = tokio::sync::oneshot::channel();
+            let send = Mutex::new(Some(send));
+            view.eval_with_callback(
+                "JSON.stringify({url:location.href,text:document.body.innerText})",
+                move |value| {
+                    if let Some(send) = send.lock().unwrap().take() {
+                        let _ = send.send(value);
+                    }
+                },
+            )
+            .unwrap();
+            let diagnostic = tokio::time::timeout(Duration::from_secs(3), receive).await;
+            return Err(format!(
+                "terminal child did not open its authenticated PTY: {diagnostic:?}"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    main.window().hide().unwrap();
+    main.window().show().unwrap();
+    main.window().set_focus().unwrap();
+    main.set_focus().unwrap();
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let active = colossus_native_browser::is_active(main)
+        .await
+        .map_err(|e| e.to_string())?;
+    // Compact layout starts directly below the shared 48px header.
+    pane::terminal_pane_viewport(
+        app.clone(),
+        main.clone(),
+        app.state(),
+        app.state(),
+        serde_json::from_value(serde_json::json!({
+            "epoch": lease,
+            "rect": {"x": 0, "y": 48, "width": 700, "height": 500}
+        }))
+        .unwrap(),
+    )
+    .await
+    .map_err(|e| e.message)?;
+    assert_eq!(
+        app.state::<pane::TerminalPaneState>().visible_lease(),
+        active
+    );
+    if active {
+        assert!(
+            (view
+                .position()
+                .unwrap()
+                .to_logical::<f64>(main.window().scale_factor().unwrap())
+                .y
+                - 48.0)
+                .abs()
+                < 0.01
+        );
+    }
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+async fn check_pane_remount(app: &AppHandle, main: Webview, lease: u64) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let next =
+        pane::mount_terminal_pane(app.clone(), main.clone(), app.state(), app.state(), None, 0)
+            .await
+            .map_err(|e| e.message)?;
+    assert_ne!(lease, next);
+    assert_eq!(
+        app.webviews().len(),
+        2,
+        "switching tools created another terminal"
+    );
+    pane::terminal_pane_viewport(
+        app.clone(),
+        main,
+        app.state(),
+        app.state(),
+        serde_json::from_value(serde_json::json!({"epoch": lease, "rect": null})).unwrap(),
+    )
+    .await
+    .map_err(|e| e.message)?;
+    assert!(
+        state
+            .terminal_manager()
+            .has_owner_sessions(TERMINAL_WEBVIEW)
+            .unwrap(),
+        "switching tools closed the PTY"
+    );
+    Ok(())
+}

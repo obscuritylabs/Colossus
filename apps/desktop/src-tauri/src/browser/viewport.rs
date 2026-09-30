@@ -7,7 +7,7 @@ use crate::{dto::CommandErrorDto, state::AppState};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager as _};
 
-fn valid_rect(rect: BrowserRect, width: f64, height: f64) -> bool {
+pub(crate) fn valid_rect(rect: BrowserRect, width: f64, height: f64) -> bool {
     [rect.x, rect.y, rect.width, rect.height, width, height]
         .iter()
         .all(|v| v.is_finite())
@@ -105,6 +105,7 @@ pub(crate) fn handle_window_event(window: &tauri::Window, event: &tauri::WindowE
     }
     if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
         window.state::<AppState>().browser.hide_all();
+        crate::terminal_commands::pane::hide(window.app_handle(), false);
     } else if matches!(event, tauri::WindowEvent::Focused(false)) {
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn(async move {
@@ -116,6 +117,7 @@ pub(crate) fn handle_window_event(window: &tauri::Window, event: &tauri::WindowE
             };
             if !active {
                 app.state::<AppState>().browser.hide_all();
+                crate::terminal_commands::pane::hide(&app, false);
             }
         });
     }

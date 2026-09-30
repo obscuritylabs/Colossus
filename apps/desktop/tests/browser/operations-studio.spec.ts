@@ -29,7 +29,7 @@ test("minimum layout and capability-driven controls remain accessible", async ({
     page.getByRole("button", { name: "Open files panel" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: /Open artifacts panel, 3 artifacts/u }),
+    page.getByRole("button", { name: "Open tools", exact: true }),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Attach a file" })).toHaveCount(
     0,
@@ -591,11 +591,11 @@ test("light theme keeps session inspection surfaces readable", async ({
   ).toHaveCSS("background-color", "rgb(247, 249, 252)");
 
   const detailsTrigger = page.getByRole("button", {
-    name: /thread details$/u,
+    name: "Open tools",
+    exact: true,
   });
-  if ((await detailsTrigger.getAttribute("aria-expanded")) !== "true") {
-    await detailsTrigger.click();
-  }
+  await detailsTrigger.click();
+  await page.getByRole("menuitemradio", { name: /^Thread details/ }).click();
   const details = page.getByRole("complementary", {
     name: "Thread details",
   });
@@ -726,9 +726,8 @@ test("artifact, file, and workspace destination surfaces follow both themes", as
     .getByRole("button", { name: "Back to work", exact: true })
     .click();
 
-  await page
-    .getByRole("button", { name: /Open artifacts panel, 3 artifacts/u })
-    .click();
+  await page.getByRole("button", { name: "Open tools", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: /^Artifacts 3/ }).click();
   const artifactPanel = page.getByRole("complementary", {
     name: "Work artifacts",
   });
@@ -756,7 +755,7 @@ test("artifact, file, and workspace destination surfaces follow both themes", as
       ["critical", "serious"].includes(violation.impact ?? ""),
     ),
   ).toEqual([]);
-  await page.getByRole("button", { name: "Close artifacts drawer" }).click();
+  await page.getByRole("button", { name: "Close tool pane" }).click();
 
   await page.getByRole("button", { name: "Open files panel" }).click();
   const filePanel = page.locator(".workspace-files-drawer");
@@ -776,7 +775,7 @@ test("artifact, file, and workspace destination surfaces follow both themes", as
       ["critical", "serious"].includes(violation.impact ?? ""),
     ),
   ).toEqual([]);
-  await page.getByRole("button", { name: "Close files drawer" }).click();
+  await page.getByRole("button", { name: "Close tool pane" }).click();
 
   for (const [destination, selector, expectedBackground] of [
     ["Capabilities", ".overview-section", "rgb(255, 255, 255)"],
@@ -817,9 +816,8 @@ test("artifact, file, and workspace destination surfaces follow both themes", as
     .getByRole("complementary", { name: "Settings navigation" })
     .getByRole("button", { name: "Back to work", exact: true })
     .click();
-  await page
-    .getByRole("button", { name: /Open artifacts panel, 3 artifacts/u })
-    .click();
+  await page.getByRole("button", { name: "Open tools", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: /^Artifacts 3/ }).click();
   await expect(page.locator(".artifact-preview")).toHaveCSS(
     "background-color",
     "rgb(8, 18, 30)",
@@ -2059,7 +2057,7 @@ test("plan titles open the rendered plan and previews do not leak Markdown synta
 }) => {
   await page.goto("/?fixture=plan-workflow");
   await page
-    .getByRole("button", { name: "Close details drawer", exact: true })
+    .getByRole("button", { name: "Close tool pane", exact: true })
     .click();
   await page.getByRole("button", { name: "Plans", exact: true }).click();
 
@@ -2522,7 +2520,7 @@ test("right-side drawers trap focus, close with Escape, and restore focus", asyn
   const filesDialog = page.getByRole("dialog", { name: "Workspace files" });
   await expect(filesDialog).toBeVisible();
   await expect(
-    filesDialog.getByRole("button", { name: "Close files drawer" }),
+    filesDialog.getByRole("button", { name: "Close tool pane" }),
   ).toBeFocused();
 
   await page.keyboard.press("Shift+Tab");
@@ -2532,9 +2530,11 @@ test("right-side drawers trap focus, close with Escape, and restore focus", asyn
   await expect(filesTrigger).toBeFocused();
 
   const artifactsTrigger = page.getByRole("button", {
-    name: /Open artifacts panel, 3 artifacts/u,
+    name: "Open tools",
+    exact: true,
   });
   await artifactsTrigger.click();
+  await page.getByRole("menuitemradio", { name: /^Artifacts 3/ }).click();
   const artifactsDialog = page.getByRole("dialog", {
     name: "Artifact preview",
   });
@@ -2950,9 +2950,11 @@ test("Thread details lists released participants and returns focus on close", as
   page,
 }) => {
   const detailsTrigger = page.getByRole("button", {
-    name: "Open thread details",
+    name: "Open tools",
+    exact: true,
   });
   await detailsTrigger.click();
+  await page.getByRole("menuitemradio", { name: /^Thread details/ }).click();
 
   const details = page.getByRole("dialog", { name: "Thread details" });
   await expect(details).toBeVisible();
@@ -2962,7 +2964,7 @@ test("Thread details lists released participants and returns focus on close", as
   await expect(details).toContainText("Scribe");
   await expect(details).toContainText("bootstrap.rs");
 
-  await details.getByRole("button", { name: "Close details drawer" }).click();
+  await details.getByRole("button", { name: "Close tool pane" }).click();
   await expect(details).toHaveCount(0);
   await expect(detailsTrigger).toBeFocused();
 });

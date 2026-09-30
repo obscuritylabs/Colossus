@@ -1,3 +1,5 @@
+pub(crate) mod pane;
+
 use std::sync::Arc;
 
 use tauri::{

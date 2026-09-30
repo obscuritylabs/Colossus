@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 test.beforeEach(async ({ page }) => {
   await page.goto("/?fixture=plan-workflow");
   await page
-    .getByRole("button", { name: "Close details drawer", exact: true })
+    .getByRole("button", { name: "Close tool pane", exact: true })
     .click();
 });
 
@@ -15,7 +15,7 @@ test("revising a plan retires the prior draft's actions", async ({ page }) => {
   await prompt.press("Enter");
   await expect(cards).toHaveCount(2);
   await page
-    .getByRole("button", { name: "Close details drawer", exact: true })
+    .getByRole("button", { name: "Close tool pane", exact: true })
     .click();
   await expect(
     cards.first().getByRole("button", { name: "Run once" }),
@@ -36,7 +36,7 @@ for (const strategy of ["Run once", "Run as Goal"] as const) {
     }) => {
       await page.goto(`/?fixture=plan-workflow&planExecutionStatus=${status}`);
       await page
-        .getByRole("button", { name: "Close details drawer", exact: true })
+        .getByRole("button", { name: "Close tool pane", exact: true })
         .click();
       const cards = page.locator(".plan-result-card");
       await cards.getByRole("button", { name: strategy, exact: true }).click();
@@ -89,7 +89,7 @@ for (const strategy of ["Run once", "Run as Goal"] as const) {
       cards.getByRole("button", { name: "Revise in chat" }),
     ).toHaveCount(0);
     await expect(
-      page.getByRole("button", { name: "Close details drawer", exact: true }),
+      page.getByRole("button", { name: "Close tool pane", exact: true }),
     ).toHaveCount(0);
 
     await page.getByRole("button", { name: "Plans", exact: true }).click();

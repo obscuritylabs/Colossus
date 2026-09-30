@@ -4,8 +4,10 @@ import {
   IconFiles,
   IconArrowsMaximize,
   IconArrowsMinimize,
-  IconGlobe,
+  IconWorld,
   IconFolderOpen,
+  IconTerminal2,
+  IconGitCompare,
   IconLayoutSidebarRight,
   IconMenu2,
   IconMessageCirclePlus,
@@ -83,6 +85,12 @@ import type { SessionWorkspaceView } from "./SessionWorkspace";
 import { ThreadDetailsPanel } from "./ThreadDetailsPanel";
 import { GitIndicator, GitPane } from "./git/GitPane";
 import { useGit } from "./git/useGit";
+import {
+  ToolSwitcher,
+  type WorkTool,
+  type ToolOption,
+} from "./tools/ToolSwitcher";
+import { TerminalDock, type TerminalDockRequest } from "./tools/TerminalDock";
 import { useBrowser } from "./browser/useBrowser";
 import { BrowserLinkContext } from "./browser/BrowserLink";
 
@@ -97,6 +105,10 @@ interface WorkSurfaceProps {
   gitAvailable?: boolean;
   browserScope?: string | null;
   browserFixture?: boolean;
+  terminalSupported?: boolean;
+  terminalReady?: boolean;
+  terminalRequest?: TerminalDockRequest | null;
+  onTerminalSettings?: () => void;
   title: string;
   view: RunView | undefined;
   conversationViews: readonly RunView[];
@@ -212,6 +224,10 @@ export function WorkSurface({
   filesAvailable,
   browserScope = null,
   browserFixture = false,
+  terminalSupported = false,
+  terminalReady = false,
+  terminalRequest = null,
+  onTerminalSettings = () => undefined,
   onOpenWorkspaceFile,
   artifactsAvailable,
   asideView,
@@ -273,18 +289,13 @@ export function WorkSurface({
   const [compactLayout, setCompactLayout] = useState(
     () => window.matchMedia("(max-width: 980px)").matches,
   );
-  const [activeDrawer, setActiveDrawer] = useState<
-    | "files"
-    | "artifacts"
-    | "aside"
-    | "research"
-    | "details"
-    | "browser"
-    | "git"
-    | null
-  >(() =>
+  const [activeDrawer, setActiveDrawer] = useState<WorkTool | null>(() =>
     window.matchMedia("(min-width: 1200px)").matches ? "details" : null,
   );
+  const toolsTriggerRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (terminalRequest) setActiveDrawer("terminal");
+  }, [terminalRequest]);
   const [asideDraft, setAsideDraft] = useState<AsideDraft | null>(null);
   const [browserExpanded, setBrowserExpanded] = useState(false);
   const browser = useBrowser(
@@ -300,26 +311,33 @@ export function WorkSurface({
   const [savedAsideWidth, setSavedAsideWidth] = useState<number | null>(
     readStoredAsidePaneWidth,
   );
+  const [terminalPaneWidth, setTerminalPaneWidth] = useState<number | null>(
+    null,
+  );
   const [browserPaneWidth, setBrowserPaneWidth] = useState<number | null>(null);
   const [filesPaneWidth, setFilesPaneWidth] = useState<number | null>(null);
   const [filesExpanded, setFilesExpanded] = useState(false);
   const [gitPaneWidth, setGitPaneWidth] = useState<number | null>(null);
   const asidePaneWidth =
-    activeDrawer === "git"
-      ? gitPaneWidth
-      : activeDrawer === "files"
-        ? filesPaneWidth
-        : activeDrawer === "browser"
-          ? browserPaneWidth
-          : savedAsideWidth;
+    activeDrawer === "terminal"
+      ? terminalPaneWidth
+      : activeDrawer === "git"
+        ? gitPaneWidth
+        : activeDrawer === "files"
+          ? filesPaneWidth
+          : activeDrawer === "browser"
+            ? browserPaneWidth
+            : savedAsideWidth;
   const setAsidePaneWidth =
-    activeDrawer === "git"
-      ? setGitPaneWidth
-      : activeDrawer === "files"
-        ? setFilesPaneWidth
-        : activeDrawer === "browser"
-          ? setBrowserPaneWidth
-          : setSavedAsideWidth;
+    activeDrawer === "terminal"
+      ? setTerminalPaneWidth
+      : activeDrawer === "git"
+        ? setGitPaneWidth
+        : activeDrawer === "files"
+          ? setFilesPaneWidth
+          : activeDrawer === "browser"
+            ? setBrowserPaneWidth
+            : setSavedAsideWidth;
   const workLayoutRef = useRef<HTMLDivElement>(null);
   const feedScrollRef = useRef<HTMLDivElement>(null);
   const stableFeedPositionRef = useRef({ top: 0, left: 0 });
@@ -327,10 +345,6 @@ export function WorkSurface({
   const drawerRef = useRef<HTMLDivElement>(null);
   const drawerCloseRef = useRef<HTMLButtonElement>(null);
   const filesTriggerRef = useRef<HTMLButtonElement>(null);
-  const artifactTriggerRef = useRef<HTMLButtonElement>(null);
-  const asideTriggerRef = useRef<HTMLButtonElement>(null);
-  const researchTriggerRef = useRef<HTMLButtonElement>(null);
-  const detailsTriggerRef = useRef<HTMLButtonElement>(null);
   const lastDrawerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const workNavigationTriggerRef = useRef<HTMLButtonElement>(null);
   const previousWorkNavigationOpen = useRef(workNavigationOpen);
@@ -360,6 +374,7 @@ export function WorkSurface({
     activeDrawer === "files" ||
     activeDrawer === "git" ||
     activeDrawer === "browser" ||
+    activeDrawer === "terminal" ||
     activeDrawer === "aside" ||
     activeDrawer === "research" ||
     activeDrawer === "details";
@@ -504,7 +519,7 @@ export function WorkSurface({
       return;
     }
     onCloseWorkNavigation();
-    lastDrawerTriggerRef.current = detailsTriggerRef.current;
+    lastDrawerTriggerRef.current = toolsTriggerRef.current;
     onBackToThreadDetails();
     setSelectedPlanId(selection.plan.planId);
     setActiveDrawer("details");
@@ -746,32 +761,14 @@ export function WorkSurface({
     closeDrawer();
   }
 
-  function toggleDrawer(
-    drawer:
-      | "files"
-      | "artifacts"
-      | "aside"
-      | "research"
-      | "details"
-      | "browser"
-      | "git",
-  ) {
+  function toggleDrawer(drawer: WorkTool, switchOnly = false) {
     const trigger =
-      drawer === "git"
-        ? (gitTriggerRef.current?.querySelector("button") ?? null)
-        : drawer === "browser"
-          ? browserTriggerRef.current
-          : drawer === "files"
-            ? filesTriggerRef.current
-            : drawer === "artifacts"
-              ? artifactTriggerRef.current
-              : drawer === "aside"
-                ? asideTriggerRef.current
-                : drawer === "research"
-                  ? researchTriggerRef.current
-                  : detailsTriggerRef.current;
+      !switchOnly && document.activeElement instanceof HTMLButtonElement
+        ? document.activeElement
+        : toolsTriggerRef.current;
     lastDrawerTriggerRef.current = trigger;
     if (activeDrawer === drawer) {
+      if (switchOnly) return;
       if (drawer === "aside") {
         return;
       }
@@ -813,14 +810,14 @@ export function WorkSurface({
 
   function openResearchDrawer() {
     onCloseWorkNavigation();
-    lastDrawerTriggerRef.current = researchTriggerRef.current;
+    lastDrawerTriggerRef.current = toolsTriggerRef.current;
     setActiveDrawer("research");
   }
 
   function openParticipantInDetails(participant: AgentParticipant) {
     const feedPosition = stableFeedPositionRef.current;
     onCloseWorkNavigation();
-    lastDrawerTriggerRef.current = detailsTriggerRef.current;
+    lastDrawerTriggerRef.current = toolsTriggerRef.current;
     setSelectedPlanId(null);
     setSelectedSessionResource(null);
     setActiveDrawer("details");
@@ -830,7 +827,7 @@ export function WorkSurface({
 
   function openPlanInDetails(plan: SessionPlanReference) {
     onCloseWorkNavigation();
-    lastDrawerTriggerRef.current = detailsTriggerRef.current;
+    lastDrawerTriggerRef.current = toolsTriggerRef.current;
     onBackToThreadDetails();
     setSelectedSessionResource(null);
     setSelectedPlanId(plan.planId);
@@ -846,7 +843,7 @@ export function WorkSurface({
 
   function openArtifactFromResources(artifactId: string) {
     onCloseWorkNavigation();
-    lastDrawerTriggerRef.current = artifactTriggerRef.current;
+    lastDrawerTriggerRef.current = toolsTriggerRef.current;
     onSelectArtifact(artifactId);
     setActiveDrawer("artifacts");
   }
@@ -893,7 +890,7 @@ export function WorkSurface({
     const feedPosition = stableFeedPositionRef.current;
     onCloseWorkNavigation();
     onBackToThreadDetails();
-    lastDrawerTriggerRef.current = detailsTriggerRef.current;
+    lastDrawerTriggerRef.current = toolsTriggerRef.current;
     setSelectedPlanId(null);
     setSelectedSessionResource(resource);
     setActiveDrawer("details");
@@ -914,6 +911,7 @@ export function WorkSurface({
     const nextWidth = previewAsideWidth(width);
     if (
       activeDrawer !== "browser" &&
+      activeDrawer !== "terminal" &&
       activeDrawer !== "git" &&
       activeDrawer !== "files"
     )
@@ -944,6 +942,91 @@ export function WorkSurface({
       />
     </span>
   ) : null;
+  const toolOptions: ToolOption[] = [
+    ...(filesAvailable
+      ? [
+          {
+            id: "files" as const,
+            label: "Files",
+            description: "Browse workspace files and diffs",
+            icon: IconFiles,
+          },
+        ]
+      : []),
+    ...(browser.snapshot.available
+      ? [
+          {
+            id: "browser" as const,
+            label: "Browser",
+            description: "Websites and local previews",
+            icon: IconWorld,
+          },
+        ]
+      : []),
+    ...(terminalSupported
+      ? [
+          {
+            id: "terminal" as const,
+            label: "Terminal",
+            description: "Colossus TUI and local sessions",
+            icon: IconTerminal2,
+          },
+        ]
+      : []),
+    ...(git.available
+      ? [
+          {
+            id: "git" as const,
+            label: "Changes",
+            description: "Review workspace changes and history",
+            icon: IconGitCompare,
+          },
+        ]
+      : []),
+    ...(artifactsAvailable
+      ? [
+          {
+            id: "artifacts" as const,
+            label: "Artifacts",
+            description: "Outputs produced in this conversation",
+            icon: IconFolderOpen,
+            count: artifacts.length,
+          },
+        ]
+      : []),
+    ...(run
+      ? [
+          {
+            id: "details" as const,
+            label: "Thread details",
+            description: "Run status, participants, and resources",
+            icon: IconLayoutSidebarRight,
+          },
+          {
+            id: "aside" as const,
+            label: "Aside",
+            description: "Explore a question beside this thread",
+            icon: IconMessageCirclePlus,
+          },
+        ]
+      : []),
+    ...(researchDrawerAvailable
+      ? [
+          {
+            id: "research" as const,
+            label: "Research sources",
+            description: "References used in this research",
+            icon: IconBooks,
+          },
+        ]
+      : []),
+  ];
+  const expandableTool =
+    activeDrawer === "browser" ||
+    activeDrawer === "terminal" ||
+    activeDrawer === "files";
+  const toolExpanded =
+    activeDrawer === "files" ? filesExpanded : browserExpanded;
   const content = (
     <main
       className={`work-surface${view === undefined ? " is-new-work" : ""}`}
@@ -1000,103 +1083,59 @@ export function WorkSurface({
             <IconPlugConnected size={15} stroke={1.8} aria-hidden="true" />
             {connection.state === "connected" ? "Agent online" : "Disconnected"}
           </span>
-          {run !== undefined ? (
-            <button
-              ref={detailsTriggerRef}
-              className="button secondary compact thread-details-open-button"
-              type="button"
-              aria-label={`${activeDrawer === "details" ? "Close" : "Open"} thread details`}
-              aria-controls="work-side-drawer"
-              aria-expanded={activeDrawer === "details"}
-              onClick={() => toggleDrawer("details")}
-            >
-              <IconLayoutSidebarRight
-                size={15}
-                stroke={1.7}
-                aria-hidden="true"
-              />
-              <span className="compact-action-copy">Details</span>
-            </button>
-          ) : null}
-          {researchDrawerAvailable ? (
-            <button
-              ref={researchTriggerRef}
-              className="button secondary compact research-open-button"
-              type="button"
-              aria-label="Open Research sources"
-              aria-controls="work-side-drawer"
-              aria-expanded={activeDrawer === "research"}
-              onClick={() => toggleDrawer("research")}
-            >
-              <IconBooks size={15} stroke={1.7} aria-hidden="true" />
-              <span className="compact-action-copy">Sources</span>
-            </button>
-          ) : null}
-          {run !== undefined ? (
-            <button
-              ref={asideTriggerRef}
-              className="button secondary compact aside-open-button"
-              type="button"
-              aria-label="Open Aside"
-              aria-controls="work-side-drawer"
-              aria-expanded={activeDrawer === "aside"}
-              onClick={() => toggleDrawer("aside")}
-            >
-              <IconMessageCirclePlus
-                size={15}
-                stroke={1.7}
-                aria-hidden="true"
-              />
-              <span className="compact-action-copy">Aside</span>
-            </button>
-          ) : null}
-          {browser.snapshot.available ? (
-            <button
-              ref={browserTriggerRef}
-              className="button secondary compact"
-              type="button"
-              aria-label="Open browser"
-              aria-controls="work-side-drawer"
-              aria-expanded={activeDrawer === "browser"}
-              onClick={() => toggleDrawer("browser")}
-            >
-              <IconGlobe size={15} stroke={1.7} aria-hidden="true" />
-              <span className="compact-action-copy">Browser</span>
-            </button>
-          ) : null}
-          {filesAvailable ? (
-            <button
-              ref={filesTriggerRef}
-              className="button secondary compact files-open-button"
-              type="button"
-              aria-label={`${activeDrawer === "files" ? "Close" : "Open"} files panel`}
-              aria-controls="work-side-drawer"
-              aria-expanded={activeDrawer === "files"}
-              onClick={() => toggleDrawer("files")}
-            >
-              <IconFiles size={15} stroke={1.7} aria-hidden="true" />
-              <span className="compact-action-copy">Files</span>
-            </button>
-          ) : null}
-          {artifactsAvailable ? (
-            <button
-              ref={artifactTriggerRef}
-              className="button secondary compact artifact-open-button"
-              type="button"
-              aria-label={`${activeDrawer === "artifacts" ? "Close" : "Open"} artifacts panel, ${artifacts.length} ${
-                artifacts.length === 1 ? "artifact" : "artifacts"
-              }`}
-              aria-controls="work-side-drawer"
-              aria-expanded={activeDrawer === "artifacts"}
-              onClick={() => toggleDrawer("artifacts")}
-            >
-              <IconFolderOpen size={15} stroke={1.7} aria-hidden="true" />
-              <span className="compact-action-copy">Artifacts</span>
-              <span className="artifact-count" aria-hidden="true">
-                {artifacts.length}
-              </span>
-            </button>
-          ) : null}
+          <div className="work-tool-shortcuts" aria-label="Quick tools">
+            {filesAvailable ? (
+              <button
+                ref={filesTriggerRef}
+                type="button"
+                className="icon-button"
+                title="Files"
+                aria-label={
+                  activeDrawer === "files"
+                    ? "Close files panel"
+                    : "Open files panel"
+                }
+                aria-controls="work-side-drawer"
+                aria-expanded={activeDrawer === "files"}
+                onClick={() => toggleDrawer("files")}
+              >
+                <IconFiles size={18} aria-hidden="true" />
+              </button>
+            ) : null}
+            {browser.snapshot.available ? (
+              <button
+                ref={browserTriggerRef}
+                type="button"
+                className="icon-button"
+                title="Browser"
+                aria-label="Open browser"
+                aria-controls="work-side-drawer"
+                aria-expanded={activeDrawer === "browser"}
+                onClick={() => toggleDrawer("browser")}
+              >
+                <IconWorld size={18} aria-hidden="true" />
+              </button>
+            ) : null}
+            {terminalSupported ? (
+              <button
+                type="button"
+                className="icon-button"
+                title="Terminal"
+                aria-label="Open terminal"
+                aria-controls="work-side-drawer"
+                aria-expanded={activeDrawer === "terminal"}
+                onClick={() => toggleDrawer("terminal")}
+              >
+                <IconTerminal2 size={18} aria-hidden="true" />
+              </button>
+            ) : null}
+            <ToolSwitcher
+              options={toolOptions}
+              active={activeDrawer}
+              onSelect={(tool) => toggleDrawer(tool, true)}
+              triggerRef={toolsTriggerRef}
+            />
+          </div>
           {run !== undefined &&
           (run.status === "queued" ||
             run.status === "running" ||
@@ -1145,7 +1184,7 @@ export function WorkSurface({
 
       <div
         ref={workLayoutRef}
-        className={`work-layout${activeDrawer === "files" && filesExpanded ? " is-files-expanded" : ""}${activeDrawer !== null ? " is-work-drawer-open" : ""}${resizableDrawer ? " is-aside-open" : ""}${activeDrawer === "browser" ? " is-browser-open" : ""}${activeDrawer === "browser" && browserExpanded ? " is-browser-expanded" : ""}`}
+        className={`work-layout${activeDrawer === "files" && filesExpanded ? " is-files-expanded" : ""}${activeDrawer !== null ? " is-work-drawer-open" : ""}${resizableDrawer ? " is-aside-open" : ""}${activeDrawer === "browser" ? " is-browser-open" : ""}${(activeDrawer === "browser" || activeDrawer === "terminal") && browserExpanded ? " is-browser-expanded" : ""}`}
         style={
           asidePaneWidth === null
             ? undefined
@@ -1387,11 +1426,13 @@ export function WorkSurface({
                   ? "Resize files panel"
                   : activeDrawer === "browser"
                     ? "Resize browser pane"
-                    : activeDrawer === "aside"
-                      ? "Resize Aside conversation"
-                      : activeDrawer === "research"
-                        ? "Resize Research sources"
-                        : "Resize Thread details"
+                    : activeDrawer === "terminal"
+                      ? "Resize terminal pane"
+                      : activeDrawer === "aside"
+                        ? "Resize Aside conversation"
+                        : activeDrawer === "research"
+                          ? "Resize Research sources"
+                          : "Resize Thread details"
             }
             aria-orientation="vertical"
             aria-valuemin={MIN_ASIDE_PANE_WIDTH}
@@ -1463,6 +1504,7 @@ export function WorkSurface({
               }
               if (
                 activeDrawer !== "browser" &&
+                activeDrawer !== "terminal" &&
                 activeDrawer !== "git" &&
                 activeDrawer !== "files"
               )
@@ -1492,6 +1534,7 @@ export function WorkSurface({
         ) : null}
         {git.available ||
         browser.snapshot.available ||
+        terminalSupported ||
         filesAvailable ||
         artifactsAvailable ||
         run !== undefined ||
@@ -1509,24 +1552,76 @@ export function WorkSurface({
                 ? "Git panel"
                 : activeDrawer === "browser"
                   ? "Browser pane"
-                  : activeDrawer === "files"
-                    ? "Workspace files"
-                    : activeDrawer === "artifacts"
-                      ? "Artifact preview"
-                      : activeDrawer === "aside"
-                        ? "Aside conversation"
-                        : activeDrawer === "research"
-                          ? "Research sources"
-                          : activeDrawer === "details"
-                            ? "Thread details"
-                            : undefined
+                  : activeDrawer === "terminal"
+                    ? "Terminal pane"
+                    : activeDrawer === "files"
+                      ? "Workspace files"
+                      : activeDrawer === "artifacts"
+                        ? "Artifact preview"
+                        : activeDrawer === "aside"
+                          ? "Aside conversation"
+                          : activeDrawer === "research"
+                            ? "Research sources"
+                            : activeDrawer === "details"
+                              ? "Thread details"
+                              : undefined
             }
           >
+            {activeDrawer !== null ? (
+              <header className="work-tools-header">
+                <ToolSwitcher
+                  pane
+                  options={toolOptions}
+                  active={activeDrawer}
+                  onSelect={(tool) => toggleDrawer(tool, true)}
+                />
+                <div className="work-tools-actions">
+                  {expandableTool && !compactLayout ? (
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label={
+                        toolExpanded ? "Restore tool pane" : "Expand tool pane"
+                      }
+                      onClick={() =>
+                        activeDrawer === "files"
+                          ? setFilesExpanded((value) => !value)
+                          : setBrowserExpanded((value) => !value)
+                      }
+                    >
+                      {toolExpanded ? (
+                        <IconArrowsMinimize size={16} />
+                      ) : (
+                        <IconArrowsMaximize size={16} />
+                      )}
+                    </button>
+                  ) : null}
+                  <button
+                    ref={drawerCloseRef}
+                    type="button"
+                    className="icon-button"
+                    aria-label="Close tool pane"
+                    onClick={closeDrawer}
+                  >
+                    <IconX size={17} />
+                  </button>
+                </div>
+              </header>
+            ) : null}
+            {activeDrawer === "terminal" ? (
+              <TerminalDock
+                ready={terminalReady}
+                fixture={browserFixture}
+                scope={browserScope}
+                request={terminalRequest}
+                onSettings={onTerminalSettings}
+              />
+            ) : null}
             {activeDrawer === "git" ? (
               <GitPane
                 key={gitWorkspaceId}
                 git={git}
-                closeRef={drawerCloseRef}
+                closeRef={null}
                 onClose={closeDrawer}
                 onOpenFile={openWorkspaceSource}
                 onOpenDiff={openWorkspaceSource}
@@ -1542,40 +1637,12 @@ export function WorkSurface({
               >
                 <BrowserPane
                   controller={browser}
+                  docked
                   expanded={browserExpanded}
                   onExpand={() => setBrowserExpanded((expanded) => !expanded)}
                   onClose={closeDrawer}
                 />
               </Suspense>
-            ) : null}
-            {activeDrawer === "files" && !compactLayout ? (
-              <button
-                type="button"
-                className="icon-button files-expand-button"
-                aria-label={
-                  filesExpanded ? "Restore files panel" : "Expand files panel"
-                }
-                onClick={() => setFilesExpanded((v) => !v)}
-              >
-                {filesExpanded ? (
-                  <IconArrowsMinimize size={17} />
-                ) : (
-                  <IconArrowsMaximize size={17} />
-                )}
-              </button>
-            ) : null}
-            {activeDrawer !== "aside" &&
-            activeDrawer !== "browser" &&
-            activeDrawer !== "git" ? (
-              <button
-                ref={drawerCloseRef}
-                className="icon-button compact-drawer-close artifact-drawer-close"
-                type="button"
-                aria-label={`Close ${activeDrawer ?? "side"} drawer`}
-                onClick={closeDrawer}
-              >
-                <IconX size={19} stroke={1.8} aria-hidden="true" />
-              </button>
             ) : null}
             <div
               className="work-drawer-panel"

@@ -16,7 +16,10 @@ pub async fn harden(
     policy: NavigationPolicy,
     sink: EventSink,
 ) -> Result<(), BrowserError> {
-    dispatch(view, move |native| platform::harden(&native, policy, sink)).await
+    dispatch(view, move |native| platform::harden(&native, policy, sink)).await?;
+    #[cfg(windows)]
+    platform::restrict_file_picker(view).await?;
+    Ok(())
 }
 
 /// Apply one closed navigation operation on the `WebView`'s owning thread.
