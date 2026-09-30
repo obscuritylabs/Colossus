@@ -236,6 +236,20 @@ async fn native_setup_package_uses_runtime_yaml_validation_without_provider_requ
             assert_eq!(package.providers.len(), 5);
             assert_eq!(package.models.len(), 6);
             assert_eq!(package.roles["primary"], "engineering");
+            assert_eq!(settings.global_configuration.mcp_servers.len(), 1);
+            assert_eq!(settings.global_configuration.search_providers.len(), 1);
+            assert_eq!(settings.global_configuration.telemetry_profiles.len(), 1);
+            super::catalog::apply_defaults(&mut settings, &package).unwrap();
+            let exported = super::commands::export_current(&settings).unwrap();
+            let exported_bytes = archive::write(&exported).unwrap();
+            let exported_source = archive::read(&exported_bytes).unwrap();
+            let response = colossus_sdk::inspect_sidecar_configuration(
+                &bundle.sidecar,
+                configuration::inspection_yaml(&exported_source).unwrap(),
+            )
+            .await
+            .unwrap();
+            assert!(response.canonical_config.is_some());
             assert!(package.models.iter().any(
                 |model| model.profile == "engineering" && model.model == "company/engineering"
             ));
@@ -270,6 +284,27 @@ fn setup_package_ca_is_optional_and_exports_only_public_certificates() {
     params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
     let key = rcgen::KeyPair::generate().unwrap();
     let pem = params.self_signed(&key).unwrap().pem();
+    #[cfg(windows)]
+    let root = tempfile::tempdir_in(std::env::var_os("LOCALAPPDATA").unwrap()).unwrap();
+    #[cfg(not(windows))]
+    let root = tempfile::tempdir().unwrap();
+    let store = crate::desktop_settings::SettingsStore::open(
+        root.path().canonicalize().unwrap().join("desktop"),
+    )
+    .unwrap();
+    let settings = DesktopSettings {
+        additional_ca_bundle: Some(store.stage_ca_bundle_bytes(pem.as_bytes()).unwrap()),
+        ..DesktopSettings::default()
+    };
+    let mut global_export = super::commands::export_current(&settings).unwrap();
+    super::export::include_ca(&store, &settings, &mut global_export).unwrap();
+    assert_eq!(
+        archive::read(&archive::write(&global_export).unwrap())
+            .unwrap()
+            .ca_pem
+            .as_deref(),
+        Some(pem.as_str())
+    );
     let manifest = format!("{MANIFEST}caBundle: certificates/company.pem\n");
     let bytes = zip(&[
         ("manifest.yaml", manifest.as_bytes()),
@@ -458,6 +493,19 @@ async fn native_setup_package_validation_does_not_hide_invalid_model_fields() {
         assert!(response.canonical_config.is_none());
     }
     let mut source = archive::read(&bytes()).unwrap();
+    source.manifest.schema_version = 2;
+    source.config_yaml.push_str("desktop:\n  defaults:\n    fieldOverrides:\n      - fieldId: agent.maxTurns\n        value: invalid-number\n");
+    let response = colossus_sdk::inspect_sidecar_configuration(
+        &bundle.sidecar,
+        configuration::inspection_yaml(&source).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        response.canonical_config.is_none(),
+        "global defaults use runtime field validation"
+    );
+    let mut source = archive::read(&bytes()).unwrap();
     let presentation = source.manifest.providers.remove("company").unwrap();
     source
         .manifest
@@ -533,6 +581,7 @@ fn cancelled_setup_review_restores_saved_instructions_and_cannot_clear_a_newer_r
         package: replacement.clone(),
         previous_sha256: Some(original.sha256.clone()),
         certificate_fingerprints: Vec::new(),
+        global_revision: 1,
     });
     reviews.cancel(&original.sha256).unwrap();
     assert_eq!(

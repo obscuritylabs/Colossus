@@ -100,6 +100,7 @@ struct ManagedSpaceConfigurationDto {
     status_message: String,
     pending_global_revision: Option<u64>,
     configuration: SpaceConfigurationSetting,
+    effective_model_roles: BTreeMap<String, String>,
     effective_values: Vec<EffectiveValueDto>,
     effective_yaml: String,
 }
@@ -646,6 +647,7 @@ async fn snapshot(
             status_message,
             pending_global_revision: pending,
             configuration: space.configuration.clone(),
+            effective_model_roles: resolved.model_roles.clone(),
             effective_values: effective_values(settings, space, &resolved),
             effective_yaml: effective_yaml(space, &resolved)?,
         });

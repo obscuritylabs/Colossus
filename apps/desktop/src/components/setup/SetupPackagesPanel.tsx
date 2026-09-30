@@ -1,6 +1,7 @@
 import { Fragment, useRef, useState } from "react";
 import { useSetupPackages } from "./useSetupPackages";
 import { SetupReviewDialog } from "./SetupReviewDialog";
+import { SetupGlobalReview } from "./SetupGlobalReview";
 import { DropdownSelect } from "../DropdownSelect";
 import {
   IconFileImport,
@@ -25,6 +26,7 @@ import {
 import type { DesktopStatus } from "../../types";
 import {
   setupChanged,
+  setupContents,
   setupCredentialStatus,
   setupProviderReady,
 } from "../../setupPackages";
@@ -62,6 +64,7 @@ export function SetupPackagesPanel({
   const [notice, setNotice] = useState("");
   const [trust, setTrust] = useState(false);
   const [replace, setReplace] = useState(false);
+  const [applyDefaults, setApplyDefaults] = useState(false);
   const [replaceProfiles, setReplaceProfiles] = useState(false);
   const [credentials, setCredentials] = useState<
     { id: string; label: string }[]
@@ -107,6 +110,7 @@ export function SetupPackagesPanel({
       setReview(proposal);
       setTrust(false);
       setReplace(false);
+      setApplyDefaults(false);
       setOpen(true);
     });
   }
@@ -124,6 +128,7 @@ export function SetupPackagesPanel({
         sha256: review.sha256,
         trustCertificates: trust,
         replaceExisting: replace,
+        applyDefaults,
       });
       setReview(null);
       await refresh();
@@ -131,7 +136,7 @@ export function SetupPackagesPanel({
       await onStatusChange?.(trust ? await desktopStatus() : desktop);
       setOpen(false);
       setNotice(
-        "Providers and models added to your inventory. Add API keys whenever you are ready.",
+        "Setup imported. Your entries are available in settings; add credentials whenever you are ready.",
       );
     });
   }
@@ -486,14 +491,7 @@ export function SetupPackagesPanel({
               {item.name} <span>v{item.version}</span>
             </h2>
             {inventory ? (
-              <p>
-                {item.providers.length} providers ·{" "}
-                {item.providers.reduce(
-                  (count, provider) => count + provider.models.length,
-                  0,
-                )}{" "}
-                models
-              </p>
+              <p>{setupContents(item)}</p>
             ) : (
               <>
                 {instructions(item.descriptionMarkdown, item.id)}
@@ -501,16 +499,16 @@ export function SetupPackagesPanel({
               </>
             )}
             <div className="setup-package-footer">
-              {item.certificateFingerprints.length ? (
+              {
                 <button
                   type="button"
                   className="text-button"
                   disabled={disabled}
                   onClick={() => void inspect(item.id)}
                 >
-                  Review CA certificates
+                  Review setup
                 </button>
-              ) : null}
+              }
               <button
                 type="button"
                 className="text-button"
@@ -567,8 +565,8 @@ export function SetupPackagesPanel({
             <IconPackage size={18} /> Desktop setup file
           </strong>
           <p>
-            Import your organization’s providers, models, instructions, and
-            optional certificates.
+            Share providers, models, global defaults, MCP, search, telemetry,
+            and certificates.
           </p>
         </div>
         <button
@@ -597,21 +595,21 @@ export function SetupPackagesPanel({
                 : `View imported providers (${packages.reduce((n, p) => n + p.providers.length, 0)})`}
           </button>
         ) : null}
-        {desktop.provider.configured ? (
-          <button
-            className="text-button"
-            type="button"
-            disabled={disabled}
-            onClick={() =>
-              void perform(async () => {
-                if (await exportSetupPackage(null))
-                  setNotice("Workspace setup exported without credentials.");
-              })
-            }
-          >
-            Export workspace setup
-          </button>
-        ) : null}
+        <button
+          className="text-button"
+          type="button"
+          disabled={disabled}
+          onClick={() =>
+            void perform(async () => {
+              if (await exportSetupPackage(null))
+                setNotice(
+                  "Global setup exported. Stored secrets and workspace data are excluded.",
+                );
+            })
+          }
+        >
+          Export global setup
+        </button>
       </div>
       {error && !review && !(inventory && open) ? (
         <p className="page-error" role="alert">
@@ -624,24 +622,17 @@ export function SetupPackagesPanel({
           {packages.map((item) => (
             <div key={item.id}>
               <strong>{item.name}</strong>
-              <span>
-                {item.providers.length} providers ·{" "}
-                {item.providers.reduce(
-                  (n, provider) => n + provider.models.length,
-                  0,
-                )}{" "}
-                models imported
-              </span>
-              {item.certificateFingerprints.length ? (
+              <span>File includes {setupContents(item)}</span>
+              {
                 <button
                   type="button"
                   className="text-button"
                   disabled={disabled}
                   onClick={() => void inspect(item.id)}
                 >
-                  Review CA certificates
+                  Review setup
                 </button>
-              ) : null}
+              }
             </div>
           ))}
         </div>
@@ -655,8 +646,7 @@ export function SetupPackagesPanel({
           <div className="setup-package-review">
             <h2 id="setup-review-title">Review {review.name}</h2>
             <p>
-              Version {review.version} · {review.providers.length} providers ·{" "}
-              {review.providers.reduce((n, p) => n + p.models.length, 0)} models
+              Version {review.version} · {setupContents(review)}
             </p>
             {instructions(review.descriptionMarkdown, review.id)}
             {review.certificateFingerprints.length ? (
@@ -701,7 +691,13 @@ export function SetupPackagesPanel({
                 place.
               </p>
             )}
-            {providerTable(review, true)}
+            {review.providers.length ? providerTable(review, true) : null}
+            <SetupGlobalReview
+              settings={review.globalSettings}
+              applyDefaults={applyDefaults}
+              onApplyDefaults={setApplyDefaults}
+              disabled={disabled}
+            />
             {review.replacesVersion ? (
               <label className="setup-replace">
                 <input
@@ -721,7 +717,8 @@ export function SetupPackagesPanel({
               </p>
             ) : null}
             <p>
-              API keys are optional now. You can complete provider setup later.
+              Credentials are optional now. You can complete connection setup
+              later.
             </p>
             <div className="setup-package-footer">
               <button
@@ -738,7 +735,7 @@ export function SetupPackagesPanel({
                 disabled={disabled || (!!review.replacesVersion && !replace)}
                 onClick={() => void apply()}
               >
-                Import providers and models
+                Import setup
               </button>
             </div>
           </div>

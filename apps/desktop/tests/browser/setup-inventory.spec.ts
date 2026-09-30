@@ -191,9 +191,7 @@ test("import refreshes both provider and model inventory immediately without a k
   await page
     .getByRole("button", { name: "Import setup file", exact: true })
     .click();
-  await page
-    .getByRole("button", { name: "Import providers and models", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Import setup", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.locator(".catalog-inventory-row")).toHaveCount(5);
   await page.getByRole("button", { name: "Models", exact: true }).click();

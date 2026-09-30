@@ -32,7 +32,7 @@ fn resources_referenced_elsewhere(
         .collect()
 }
 
-fn retain_or_import<T: Clone + PartialEq>(
+pub(super) fn retain_or_import<T: Clone + PartialEq>(
     entries: &mut Vec<CatalogEntrySetting<T>>,
     previous_id: Option<&String>,
     previous_value: Option<&T>,
@@ -125,6 +125,14 @@ pub(super) fn import_catalog(
         )?;
         resources.insert(key, id);
     }
+    super::global_catalog::import(
+        &mut staged,
+        package,
+        previous,
+        &shared_resources,
+        &mut resources,
+        &mut changed,
+    )?;
     if !changed.is_empty() {
         bump_global_revision(&mut staged.global_configuration)?;
         advance_unaffected_spaces(&mut staged, previous_revision, &changed);
@@ -261,6 +269,7 @@ pub(crate) fn sync_configured_credentials(
 
 pub(super) fn validate_resources(package: &SavedSetupPackage) -> Result<(), CommandErrorDto> {
     if let Some(resources) = &package.catalog_resources {
+        let globals = super::globals::from_yaml(&package.config_yaml)?;
         let keys = package
             .providers
             .iter()
@@ -271,12 +280,36 @@ pub(super) fn validate_resources(package: &SavedSetupPackage) -> Result<(), Comm
                     .iter()
                     .map(|m| format!("model:{}", m.profile)),
             )
+            .chain(globals.resource_keys())
             .collect::<BTreeSet<_>>();
         if resources.keys().cloned().collect::<BTreeSet<_>>() != keys
             || resources.values().any(|id| Uuid::parse_str(id).is_err())
         {
             return Err(invalid("Saved setup catalog references are invalid."));
         }
+    }
+    Ok(())
+}
+
+/// Defaults are a reviewed snapshot. Existing spaces remain pinned until their
+/// normal configuration review, including native authority confirmation.
+pub(super) fn apply_defaults(
+    settings: &mut DesktopSettings,
+    package: &SavedSetupPackage,
+) -> Result<(), CommandErrorDto> {
+    let defaults = super::globals::from_yaml(&package.config_yaml)?
+        .defaults
+        .ok_or_else(|| invalid("This setup package does not contain global defaults."))?;
+    if settings.global_configuration.defaults.current() != Some(&defaults) {
+        bump_global_revision(&mut settings.global_configuration)?;
+        settings
+            .global_configuration
+            .defaults
+            .revisions
+            .last_mut()
+            .ok_or_else(|| invalid("Global defaults are unavailable."))?
+            .value = defaults;
+        validate_configuration(&settings.global_configuration, &settings.spaces)?;
     }
     Ok(())
 }

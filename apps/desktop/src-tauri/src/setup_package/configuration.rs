@@ -12,8 +12,8 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeSet;
 
-/// Limit the portable payload to connection/model declarations. Validation-only grants
-/// are derived for the existing runtime parser and are never persisted or applied.
+/// Inspect portable models and explicit defaults through the existing runtime parser.
+/// Derived validation-only network grants are never persisted or applied.
 pub(super) fn inspection_yaml(source: &PackageSource) -> Result<String, CommandErrorDto> {
     let mut value: Value = serde_saphyr::from_str(&source.config_yaml)
         .map_err(|_| invalid("config.yaml is invalid."))?;
@@ -22,17 +22,67 @@ pub(super) fn inspection_yaml(source: &PackageSource) -> Result<String, CommandE
         .ok_or_else(|| invalid("config.yaml must be a mapping."))?;
     if object
         .keys()
-        .any(|key| !["schemaVersion", "providers", "models"].contains(&key.as_str()))
+        .any(|key| !["schemaVersion", "providers", "models", "desktop"].contains(&key.as_str()))
     {
         return Err(invalid(
-            "Setup config supports schemaVersion, providers, and models only.",
+            "Setup config supports schemaVersion, providers, models, and desktop only.",
         ));
     }
+    let globals = super::globals::from_yaml(&source.config_yaml)?;
+    if source.manifest.schema_version == 1 && value.get("desktop").is_some() {
+        return Err(invalid(
+            "Desktop defaults and catalogs require setup schemaVersion 2.",
+        ));
+    }
+    globals.validate()?;
+    value
+        .as_object_mut()
+        .expect("checked mapping")
+        .remove("desktop");
+    let mut origins = provider_origins(&value, &source.manifest)?;
+    globals.apply_validation_defaults(&mut value)?;
+    if let Some(existing) = value["sandbox"].get("networkDestinations") {
+        for origin in existing
+            .as_array()
+            .ok_or_else(|| invalid("Network destinations must be a list of origins."))?
+        {
+            origins.insert(
+                origin
+                    .as_str()
+                    .ok_or_else(|| invalid("Network destinations must be strings."))?
+                    .to_owned(),
+            );
+        }
+    }
+    value["sandbox"]["networkDestinations"] = json!(origins);
+    value["storage"] = json!({"adapter":"ephemeral","path":"setup-validation.redb"});
+    // Provider-only packages are valid. A private echo route lets the canonical parser
+    // inspect their connections without inventing a remote model or making requests.
+    if value.get("models").is_none() || value["models"] == json!({"profiles":{},"roles":{}}) {
+        let mut validation_id = "__setup_validation".to_owned();
+        while source.manifest.providers.contains_key(&validation_id) {
+            validation_id.push('_');
+        }
+        value["providers"]["profiles"][&validation_id] = json!({"kind":"echo"});
+        value["models"] = json!({
+            "profiles": {&validation_id: {"providerProfile":validation_id, "model":"echo",
+                "contextWindowTokens":32768,"maxOutputTokens":4096,"capabilities":{"toolCalls":false,"streaming":false}}},
+            "roles":{"primary":validation_id}
+        });
+    }
+    serde_json::to_string(&value)
+        .map_err(|_| invalid("Setup configuration could not be inspected."))
+}
+
+fn provider_origins(
+    value: &Value,
+    manifest: &super::types::Manifest,
+) -> Result<BTreeSet<String>, CommandErrorDto> {
     let providers = value
         .pointer("/providers/profiles")
         .and_then(Value::as_object)
         .ok_or_else(|| invalid("Setup config needs provider profiles."))?;
-    if providers.keys().collect::<BTreeSet<_>>() != source.manifest.providers.keys().collect() {
+    if providers.keys().collect::<BTreeSet<_>>() != manifest.providers.keys().collect() {
         return Err(invalid(
             "Manifest provider IDs must exactly match config.yaml provider profiles.",
         ));
@@ -95,27 +145,10 @@ pub(super) fn inspection_yaml(source: &PackageSource) -> Result<String, CommandE
             );
         }
     }
-    value["sandbox"] = json!({"networkDestinations": origins});
-    value["storage"] = json!({"adapter":"ephemeral","path":"setup-validation.redb"});
-    // Provider-only packages are valid. A private echo route lets the canonical parser
-    // inspect their connections without inventing a remote model or making requests.
-    if value.get("models").is_none() || value["models"] == json!({"profiles":{},"roles":{}}) {
-        let mut validation_id = "__setup_validation".to_owned();
-        while source.manifest.providers.contains_key(&validation_id) {
-            validation_id.push('_');
-        }
-        value["providers"]["profiles"][&validation_id] = json!({"kind":"echo"});
-        value["models"] = json!({
-            "profiles": {&validation_id: {"providerProfile":validation_id, "model":"echo",
-                "contextWindowTokens":32768,"maxOutputTokens":4096,"capabilities":{"toolCalls":false,"streaming":false}}},
-            "roles":{"primary":validation_id}
-        });
-    }
-    serde_json::to_string(&value)
-        .map_err(|_| invalid("Setup configuration could not be inspected."))
+    Ok(origins)
 }
 
-fn valid_slot(reference: &str) -> bool {
+pub(super) fn valid_slot(reference: &str) -> bool {
     reference.strip_prefix("env:").is_some_and(|name| {
         !name.is_empty()
             && name.len() <= 128
@@ -215,6 +248,7 @@ pub(super) fn inspected(
         icons: source.icons,
         ca_pem: source.ca_pem,
         catalog_resources: None,
+        credential_bindings: std::collections::BTreeMap::new(),
         sha256: hex::encode(Sha256::digest(bytes)),
         providers,
         models,
@@ -233,6 +267,7 @@ pub(super) fn dto(
         sha256: package.sha256.clone(),
         description_markdown: package.manifest.description_markdown.clone(),
         roles: package.roles.clone(),
+        global_settings: super::globals::from_yaml(&package.config_yaml)?,
         certificate_fingerprints: package
             .ca_pem
             .as_deref()
@@ -328,6 +363,7 @@ pub(crate) fn validate_saved(packages: &[SavedSetupPackage]) -> Result<(), Comma
         }
         validate_saved_profiles(package)?;
         super::catalog::validate_resources(package)?;
+        super::global_catalog::validate_bindings(package)?;
         // Reuse the same package reader to enforce metadata, asset, and certificate bounds.
         let source = super::archive::read(&super::archive::write(package)?)?;
         inspection_yaml(&source)?;

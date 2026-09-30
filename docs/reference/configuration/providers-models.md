@@ -258,10 +258,41 @@ model metadata Colossus needs to shape requests safely:
 | `capabilities.toolCalls` | Whether Colossus may send tool definitions and structured tool history |
 | `capabilities.streaming` | Whether Colossus requests the provider's streaming transport |
 
-Colossus does not infer context size or capabilities from a model catalog. Set these
-fields from the provider's model documentation. `models doctor` exercises a request
-shaped by the configured values, but it cannot prove that a declared context-window
-number matches the provider's actual limit.
+Desktop can fill these fields from explicit model-catalog declarations when you select
+a discovered model. Review them before saving, and use the provider's documentation
+for missing values. Colossus does not infer limits or capabilities from a model name.
+`models doctor` exercises a request shaped by the configured values, but it cannot prove
+that a declared context-window number matches the provider's actual limit.
+
+### Model catalog metadata
+
+Custom Chat Completions and Responses connections use the same model-card normalizer.
+The `/models` response supplies a `data` array with each model's exact `id`. Supported
+metadata maps into these shared fields:
+
+| Normalized field | Accepted catalog fields, in priority order |
+| --- | --- |
+| `context_window_tokens` | `context_window_tokens`, `context_window`, `context_length`, `max_model_len`, then `top_provider.context_length` |
+| `max_output_tokens` | `max_output_tokens`, `max_completion_tokens`, then `top_provider.max_completion_tokens` |
+| `tool_calls` | `tool_calls`, `supports_tool_calls`, `tooling_support`; then the same keys inside `capabilities`; then `tools` in `supported_parameters` |
+| `image_inputs` | `image_inputs`, `supports_image_inputs`; then the same keys inside `capabilities`; then `image` in `input_modalities` or `architecture.input_modalities` |
+| `streaming` | `streaming`, `supports_streaming`; then the same keys inside `capabilities` |
+
+Token limits must be positive JSON integers no greater than 1,000,000,000. Capability
+flags must be JSON booleans. The first valid declaration wins; explicit `false` is
+preserved. Missing or malformed declarations remain unknown unless a supported
+alternative supplies a valid value. Unknown capability keys are ignored: for example,
+Azure's `capabilities.chat_completion` does not establish tool-call support.
+
+`max_tokens_field: "max_completion_tokens"` names a request parameter, not a token
+count. Discovery does not apply that hint automatically. Configure the provider's
+[`chatCompletionsOutputTokenParameter`](#chatcompletionsoutputtokenparameter) separately;
+the model's output ceiling still needs a numeric declaration or manual configuration.
+
+The model picker displays advertised ceilings. Its initial output reservation is capped
+at half the selected context window to leave room for input. Selecting a model with
+missing metadata uses editable setup defaults; these are not provider-reported limits.
+Loading the catalog alone does not modify saved model profiles or grant tool authority.
 
 ### Token budget calculation
 

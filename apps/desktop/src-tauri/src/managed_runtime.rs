@@ -837,7 +837,9 @@ fn managed_bootstrap(
 }
 
 #[allow(clippy::too_many_lines)]
-fn managed_runtime_config(resolved: &ResolvedSpaceConfiguration) -> ManagedRuntimeConfig {
+pub(crate) fn managed_runtime_config(
+    resolved: &ResolvedSpaceConfiguration,
+) -> ManagedRuntimeConfig {
     let (search_profiles, search_roles) = managed_search(resolved);
     ManagedRuntimeConfig {
         access_profile: access_profile(resolved.access_profile),

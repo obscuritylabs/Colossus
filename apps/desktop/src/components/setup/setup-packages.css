@@ -543,6 +543,64 @@ dialog.setup-import-dialog {
     transform: rotate(360deg);
   }
 }
+.setup-global-review {
+  display: grid;
+  gap: 16px;
+  margin-top: 20px;
+}
+.setup-global-group {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  min-width: 0;
+}
+.setup-global-group h3 {
+  margin: 0 0 12px;
+  font-size: var(--font-size-body);
+}
+.setup-global-group h3 span {
+  color: var(--muted);
+  margin-left: 6px;
+  font-weight: 400;
+}
+.setup-global-group p,
+.setup-global-review > p {
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+}
+.setup-global-resource + .setup-global-resource {
+  border-top: 1px solid var(--border);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+.setup-global-resource summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  cursor: pointer;
+}
+.setup-global-resource summary span {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.setup-global-resource pre {
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-body-sm);
+}
+.setup-global-fields > div {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) 2fr;
+  gap: 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.setup-global-fields dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
 @media (prefers-reduced-motion: reduce) {
   .setup-action-spinner {
     animation: none;

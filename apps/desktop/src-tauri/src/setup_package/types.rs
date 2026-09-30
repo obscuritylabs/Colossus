@@ -53,6 +53,9 @@ pub(crate) struct SavedSetupPackage {
     /// Missing only for packages saved before imports populated the global catalog.
     #[serde(default)]
     pub catalog_resources: Option<BTreeMap<String, String>>,
+    /// Portable credential slot to local, initially empty credential record.
+    #[serde(default)]
+    pub credential_bindings: BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -68,6 +71,7 @@ pub(crate) struct PackageDto {
     pub certificate_fingerprints: Vec<String>,
     pub existing_certificate_fingerprints: Vec<String>,
     pub replaces_version: Option<String>,
+    pub global_settings: super::globals::SetupGlobals,
 }
 
 #[derive(Serialize)]

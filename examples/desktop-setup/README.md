@@ -2,10 +2,11 @@
 
 Use this folder to try Desktop setup imports after installing a new build. It
 contains five sample providers and six models, with instructions and a recommended
-default. You can test import, provider selection, and model cards **without an API
+default, plus global limits, an MCP server, search, and telemetry. You can test import, provider selection, and model cards **without an API
 key or a running model server**.
 
-Requires Colossus Desktop **0.11.2 or later**. The remote endpoints use fictional
+Requires a Desktop build with **setup manifest version 2** support. Desktop 0.11.2
+supports version 1 provider/model packages only. The remote endpoints use fictional
 `example.com` addresses, and every model ID is a placeholder. The sample is ready
 for offline setup testing; customize it before testing a real conversation.
 
@@ -15,7 +16,7 @@ for offline setup testing; customize it before testing a real conversation.
 desktop-setup/
 ├── README.md                 # Packaging and manual checks
 ├── manifest.yaml             # Company name and provider instructions
-├── config.yaml               # Connections, model cards, and primary model
+├── config.yaml               # Connections, models, defaults, MCP, search, telemetry
 ├── manifest.schema.json      # Offline editor help; not part of the archive
 └── output/                   # Generated locally; ignored by Git
     └── company.colossus-setup
@@ -84,7 +85,10 @@ your application data to repeat these checks.
 | --- | --- |
 | Import `output/company.colossus-setup` | A review opens for **Company AI setup**, version **2**, with five providers and six models. |
 | Cancel the review | No new setup is saved and existing configuration stays unchanged. |
-| Import again and choose **Import providers and models** | All five providers and six models appear in the global inventory without requesting keys or contacting the sample providers. Four providers show **Needs API key**; Local Models shows **No key required**. |
+| Import again and choose **Import setup** | Five providers, six models, and the MCP, search, and telemetry entries appear on their global settings pages without requesting keys or contacting endpoints. Four providers show **Needs API key**; Local Models shows **No key required**. |
+| Review **Global defaults**, then select **Use included global defaults** before importing | New-workspace defaults include workspace isolation, disabled terminal, 25 turns, a 60-second effect timeout, and a 1 MiB output limit. Existing workspaces keep their settings. |
+| Open **Credentials** settings | The MCP and search token slots are missing until you enter them locally. |
+| Choose **Export global setup**, then import it in a disposable Desktop profile | Current global catalogs and defaults appear in review. Stored credentials and workspace data do not travel with the file. |
 | In the setup wizard, choose a disposable workspace folder and continue to **Provider** | All five imported providers appear; Company AI is recommended and preselected. |
 | Select each provider | Its endpoint, API format, timeout, and Markdown instructions appear. Skip **Add API key** for this offline check. |
 | Continue to **Model** with Company AI selected | Both company models appear; `company/engineering` is recommended and preselected. No **Load models** action is needed. |

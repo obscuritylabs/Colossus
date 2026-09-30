@@ -92,7 +92,7 @@ async function setup(
 }
 const importButton = (page: Page) =>
   page.getByRole("button", {
-    name: "Import providers and models",
+    name: "Import setup",
     exact: true,
   });
 const next = (page: Page) =>
@@ -145,6 +145,19 @@ test("import is offline, review is accessible, and Desktop stays focused on desk
     .click();
   const dialog = page.getByRole("dialog", { name: "Review Company AI setup" });
   await expect(dialog).toBeVisible();
+  const defaults = dialog.getByRole("checkbox", {
+    name: "Use included global defaults",
+  });
+  await expect(defaults).not.toBeChecked();
+  await expect(
+    dialog.getByRole("region", { name: "MCP servers", exact: true }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole("region", { name: "Search providers", exact: true }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole("region", { name: "Telemetry profiles", exact: true }),
+  ).toBeVisible();
   await expect(
     dialog.getByText("Version 2 · 5 providers · 6 models"),
   ).toBeVisible();
@@ -176,8 +189,16 @@ test("import is offline, review is accessible, and Desktop stays focused on desk
         .analyze()
     ).violations,
   ).toEqual([]);
+  await defaults.check();
+  await page.screenshot({
+    path: test.info().outputPath("setup-global-review.png"),
+  });
   await importButton(page).click();
-  await expect(page.getByText("5 providers · 6 models imported")).toBeVisible();
+  await expect(
+    page.getByText(
+      /File includes 5 providers · 6 models · global defaults.*telemetry profiles/,
+    ),
+  ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Choose workspace", exact: true }),
   ).toHaveCount(0);
@@ -195,6 +216,7 @@ test("import is offline, review is accessible, and Desktop stays focused on desk
     sha256: sample.sha256,
     trustCertificates: false,
     replaceExisting: false,
+    applyDefaults: true,
   });
   expect(
     history.some((c) =>
@@ -601,7 +623,11 @@ test("saved imports recover from startup contention without choosing builtin def
   page,
 }) => {
   await setup(page, { preloaded: true, busyCount: 4 });
-  await expect(page.getByText("5 providers · 6 models imported")).toBeVisible();
+  await expect(
+    page.getByText(
+      /File includes 5 providers · 6 models · global defaults.*telemetry profiles/,
+    ),
+  ).toBeVisible();
   await toProviders(page);
   await expect(
     page.getByRole("radio", { name: "Company AI", exact: true }),
