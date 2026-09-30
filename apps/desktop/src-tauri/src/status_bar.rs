@@ -60,13 +60,20 @@ pub(crate) enum BackgroundNotificationKind {
 #[cfg(any(target_os = "macos", windows))]
 #[derive(Default)]
 struct NotificationHistory {
-    delivered: VecDeque<(String, BackgroundNotificationKind)>,
+    delivered: VecDeque<(String, BackgroundNotificationKind, Instant)>,
     recent: VecDeque<Instant>,
 }
 
 #[cfg(any(target_os = "macos", windows))]
 impl NotificationHistory {
     fn can_send(&mut self, run_id: &str, kind: BackgroundNotificationKind, now: Instant) -> bool {
+        while self
+            .delivered
+            .front()
+            .is_some_and(|(_, _, sent)| now.duration_since(*sent) >= Duration::from_mins(1))
+        {
+            self.delivered.pop_front();
+        }
         while self
             .recent
             .front()
@@ -78,11 +85,11 @@ impl NotificationHistory {
             && !self
                 .delivered
                 .iter()
-                .any(|(sent_id, sent_kind)| sent_id == run_id && *sent_kind == kind)
+                .any(|(sent_id, sent_kind, _)| sent_id == run_id && *sent_kind == kind)
     }
 
     fn record_sent(&mut self, run_id: String, kind: BackgroundNotificationKind, now: Instant) {
-        self.delivered.push_back((run_id, kind));
+        self.delivered.push_back((run_id, kind, now));
         if self.delivered.len() > 256 {
             self.delivered.pop_front();
         }
@@ -429,6 +436,11 @@ mod tests {
         }
         assert!(!history.can_send("run-0", BackgroundNotificationKind::WorkCompleted, now));
         assert!(!history.can_send("run-3", BackgroundNotificationKind::WorkCompleted, now));
+        assert!(history.can_send(
+            "run-0",
+            BackgroundNotificationKind::WorkCompleted,
+            now + Duration::from_mins(1)
+        ));
         assert!(history.can_send(
             "run-3",
             BackgroundNotificationKind::WorkCompleted,
