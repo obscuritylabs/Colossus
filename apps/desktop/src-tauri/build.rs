@@ -120,6 +120,8 @@ const COMMANDS: &[&str] = &[
     "resize_terminal",
     "signal_terminal",
     "close_terminal",
+    "sync_status_bar_pins",
+    "notify_background",
 ];
 
 fn main() {
