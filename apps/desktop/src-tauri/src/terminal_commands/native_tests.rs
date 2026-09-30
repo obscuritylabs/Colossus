@@ -504,12 +504,14 @@ fn native_powershell_runs_commands_in_workspace_without_worker_authority() {
         .to_string_lossy()
         .trim_start_matches(r"\\?\")
         .replace('\'', "''");
+    // Encode a physical Enter with its virtual key and scan code. A bare CR
+    // makes ConPTY infer the key through the host keyboard layout, which is not
+    // reliable on headless Windows Server runners. This does not bypass the PTY.
+    let enter = "\x1b[13;28;13;1;0;1_\x1b[13;28;13;0;0;1_";
     let command = format!(
-        "if ((Get-Location).Path -ne '{expected}') {{ exit 71 }}; if (Test-Path Env:COLOSSUS_DESKTOP_TUI_AUTH_INPUT_HANDLE_V1) {{ exit 72 }}; if (Test-Path Env:COLOSSUS_DESKTOP_TUI_AUTH_OUTPUT_HANDLE_V1) {{ exit 73 }}; Write-Output ('SHELL_' + (20 + 22)); exit 0"
+        "if ((Get-Location).Path -ne '{expected}') {{ exit 71 }}; if (Test-Path Env:COLOSSUS_DESKTOP_TUI_AUTH_INPUT_HANDLE_V1) {{ exit 72 }}; if (Test-Path Env:COLOSSUS_DESKTOP_TUI_AUTH_OUTPUT_HANDLE_V1) {{ exit 73 }}; Write-Output ('SHELL_' + (20 + 22)); exit 0{enter}"
     );
-    // Interactive PowerShell configures console input during startup. Wait for
-    // its prompt, as a human would, rather than queueing Enter before PSReadLine
-    // has established its input mode (Windows Server can consume that early Enter).
+    // Wait for the interactive prompt before typing the user command.
     let prompt = format!(
         "PS {}>",
         workspace
@@ -518,7 +520,6 @@ fn native_powershell_runs_commands_in_workspace_without_worker_authority() {
             .trim_start_matches(r"\\?\")
     );
     let mut submitted = false;
-    let mut entered = false;
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let mut output = Vec::new();
     let result = loop {
@@ -532,7 +533,14 @@ fn native_powershell_runs_commands_in_workspace_without_worker_authority() {
                 // not answer a query twice.
                 let scan_from = output.len().saturating_sub(3);
                 output.extend_from_slice(&bytes);
-                answer_cursor_queries(&manager, &session, &output[scan_from..]);
+                for _ in output[scan_from..]
+                    .windows(4)
+                    .filter(|sequence| *sequence == b"\x1b[6n")
+                {
+                    manager
+                        .write(TERMINAL_WEBVIEW, &session, b"\x1b[1;1R")
+                        .unwrap();
+                }
                 if !submitted
                     && output
                         .windows(prompt.len())
@@ -542,11 +550,6 @@ fn native_powershell_runs_commands_in_workspace_without_worker_authority() {
                         .write(TERMINAL_WEBVIEW, &session, command.as_bytes())
                         .expect("write user command after the shell prompt");
                     submitted = true;
-                } else if submitted && !entered && shell_echo_contains(&output, b"exit 0") {
-                    // PSReadLine may still configure input after writing its prompt.
-                    // Its echo proves command entry is active before we press Enter.
-                    manager.write(TERMINAL_WEBVIEW, &session, b"\r").unwrap();
-                    entered = true;
                 }
             }
             Ok(TerminalEvent::Exited {
@@ -564,37 +567,8 @@ fn native_powershell_runs_commands_in_workspace_without_worker_authority() {
     manager.close_owner(TERMINAL_WEBVIEW);
     assert!(
         result.is_ok(),
-        "{result:?}; command submitted: {submitted}; Enter sent: {entered}; output: {}",
+        "{result:?}; command submitted: {submitted}; output: {}",
         String::from_utf8_lossy(&output)
     );
     assert!(!manager.has_owner_sessions(TERMINAL_WEBVIEW).unwrap());
-}
-
-#[cfg(debug_assertions)]
-fn answer_cursor_queries(manager: &crate::terminal::TerminalManager, session: &str, bytes: &[u8]) {
-    for _ in bytes.windows(4).filter(|sequence| *sequence == b"\x1b[6n") {
-        manager
-            .write(TERMINAL_WEBVIEW, session, b"\x1b[1;1R")
-            .unwrap();
-    }
-}
-
-#[cfg(debug_assertions)]
-fn shell_echo_contains(bytes: &[u8], expected: &[u8]) -> bool {
-    // PSReadLine colors command tokens separately. Ignore CSI display controls
-    // while observing the echo, including controls split across pipe reads.
-    let mut text = Vec::new();
-    let mut remaining = bytes;
-    while let Some((&byte, tail)) = remaining.split_first() {
-        if let Some(control) = remaining.strip_prefix(b"\x1b[") {
-            let Some(end) = control.iter().position(|byte| (b'@'..=b'~').contains(byte)) else {
-                break;
-            };
-            remaining = &control[end + 1..];
-        } else {
-            text.push(byte);
-            remaining = tail;
-        }
-    }
-    text.windows(expected.len()).any(|part| part == expected)
 }
