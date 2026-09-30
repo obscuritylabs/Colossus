@@ -504,12 +504,8 @@ fn native_powershell_runs_commands_in_workspace_without_worker_authority() {
         .to_string_lossy()
         .trim_start_matches(r"\\?\")
         .replace('\'', "''");
-    // Encode a physical Enter with its virtual key and scan code. A bare CR
-    // makes ConPTY infer the key through the host keyboard layout, which is not
-    // reliable on headless Windows Server runners. This does not bypass the PTY.
-    let enter = "\x1b[13;28;13;1;0;1_\x1b[13;28;13;0;0;1_";
     let command = format!(
-        "if ((Get-Location).Path -ne '{expected}') {{ exit 71 }}; if (Test-Path Env:COLOSSUS_DESKTOP_TUI_AUTH_INPUT_HANDLE_V1) {{ exit 72 }}; if (Test-Path Env:COLOSSUS_DESKTOP_TUI_AUTH_OUTPUT_HANDLE_V1) {{ exit 73 }}; Write-Output ('SHELL_' + (20 + 22)); exit 0{enter}"
+        "if ((Get-Location).Path -ne '{expected}') {{ exit 71 }}; if (Test-Path Env:COLOSSUS_DESKTOP_TUI_AUTH_INPUT_HANDLE_V1) {{ exit 72 }}; if (Test-Path Env:COLOSSUS_DESKTOP_TUI_AUTH_OUTPUT_HANDLE_V1) {{ exit 73 }}; Write-Output ('SHELL_' + (20 + 22)); exit 0\r"
     );
     // Wait for the interactive prompt before typing the user command.
     let prompt = format!(
@@ -519,8 +515,11 @@ fn native_powershell_runs_commands_in_workspace_without_worker_authority() {
             .to_string_lossy()
             .trim_start_matches(r"\\?\")
     );
-    let mut submitted = false;
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let mut submitted_at = None;
+    let started = std::time::Instant::now();
+    // Successful Windows Server CI runs have taken almost 30 seconds. Allow
+    // headroom for this real interactive shell while keeping the wait bounded.
+    let deadline = started + Duration::from_secs(90);
     let mut output = Vec::new();
     let result = loop {
         let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
@@ -541,7 +540,7 @@ fn native_powershell_runs_commands_in_workspace_without_worker_authority() {
                         .write(TERMINAL_WEBVIEW, &session, b"\x1b[1;1R")
                         .unwrap();
                 }
-                if !submitted
+                if submitted_at.is_none()
                     && output
                         .windows(prompt.len())
                         .any(|sequence| sequence == prompt.as_bytes())
@@ -549,7 +548,7 @@ fn native_powershell_runs_commands_in_workspace_without_worker_authority() {
                     manager
                         .write(TERMINAL_WEBVIEW, &session, command.as_bytes())
                         .expect("write user command after the shell prompt");
-                    submitted = true;
+                    submitted_at = Some(started.elapsed());
                 }
             }
             Ok(TerminalEvent::Exited {
@@ -567,7 +566,8 @@ fn native_powershell_runs_commands_in_workspace_without_worker_authority() {
     manager.close_owner(TERMINAL_WEBVIEW);
     assert!(
         result.is_ok(),
-        "{result:?}; command submitted: {submitted}; output: {}",
+        "{result:?}; elapsed: {:?}; command submitted at: {submitted_at:?}; output: {}",
+        started.elapsed(),
         String::from_utf8_lossy(&output)
     );
     assert!(!manager.has_owner_sessions(TERMINAL_WEBVIEW).unwrap());
