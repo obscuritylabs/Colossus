@@ -202,6 +202,79 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
 }
 
 #[test]
+fn r2_compiler_cache_writes_only_from_main_and_reads_only_in_prs() {
+    let warm = workflow("sccache-warm.yml");
+    let root = mapping(&warm, "R2 warmer");
+    let triggers = mapping(field(root, "on"), "R2 warm triggers");
+    let push = mapping(field(triggers, "push"), "R2 push trigger");
+    assert_eq!(
+        strings(field(push, "branches"), "R2 warm branches"),
+        ["main".to_owned()].into_iter().collect()
+    );
+    let warm_job = job(jobs(&warm), "warm");
+    assert!(
+        field(warm_job, "if")
+            .as_str()
+            .is_some_and(|guard| guard.contains("github.ref == 'refs/heads/main'")
+                && guard.contains("vars.SCCACHE_R2_ENABLED == 'true'"))
+    );
+    assert_eq!(
+        field(
+            mapping(field(warm_job, "environment"), "R2 write environment"),
+            "name"
+        )
+        .as_str(),
+        Some("sccache-r2-write")
+    );
+    let write_env = mapping(
+        field(named_step(warm_job, "Configure R2 compiler cache"), "env"),
+        "R2 write credentials",
+    );
+    assert_eq!(
+        field(write_env, "R2_ACCESS_KEY_ID").as_str(),
+        Some("${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}")
+    );
+    assert_eq!(
+        field(write_env, "R2_SECRET_ACCESS_KEY").as_str(),
+        Some("${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}")
+    );
+
+    let pr = workflow("pr.yml");
+    let premerge = workflow("premerge.yml");
+    for (workflow, names) in [
+        (&pr, &["sdk", "desktop"][..]),
+        (
+            &premerge,
+            &[
+                "linux-rust-integration",
+                "macos-native",
+                "windows-runtime",
+                "windows-desktop",
+                "fuzz",
+            ][..],
+        ),
+    ] {
+        for name in names {
+            let consumer = job(jobs(workflow), name);
+            let step = named_step(consumer, "Configure read-only R2 compiler cache");
+            assert_eq!(
+                field(step, "run").as_str(),
+                Some("./scripts/ci/configure-sccache-r2.sh read")
+            );
+            let env = mapping(field(step, "env"), "R2 read credentials");
+            assert_eq!(
+                field(env, "R2_ACCESS_KEY_ID").as_str(),
+                Some("${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}")
+            );
+            assert_eq!(
+                field(env, "R2_SECRET_ACCESS_KEY").as_str(),
+                Some("${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}")
+            );
+        }
+    }
+}
+
+#[test]
 fn pr_workflow_selects_only_the_required_validation_tier() {
     let workflow = workflow("pr.yml");
     let root = mapping(&workflow, "PR workflow");
