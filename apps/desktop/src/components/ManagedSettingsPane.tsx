@@ -2160,10 +2160,10 @@ export function ManagedSettingsPane({
     }
   }
 
-  async function testMcpServer(server: string) {
+  async function testMcpServer(resourceId: string) {
     if (!selectedSpace) return;
     const entry = snapshot.globalConfiguration.mcpServers.find(
-      (candidate) => currentValue(candidate).name === server,
+      (candidate) => candidate.id === resourceId,
     );
     if (
       !entry ||
@@ -2173,6 +2173,8 @@ export function ManagedSettingsPane({
       selectedSpace.status !== "active"
     )
       return;
+    const value = currentValue(entry);
+    const server = value.name;
     setMcpDiagnostics((current) => {
       const next = { ...current };
       delete next[server];
@@ -2184,9 +2186,7 @@ export function ManagedSettingsPane({
         : import.meta.env.DEV
           ? (await import("../dev/mcp-health-fixture")).buildMcpHealthFixture(
               server,
-              snapshot?.globalConfiguration.mcpServers
-                .map(currentValue)
-                .find((entry) => entry.name === server)?.transport ?? "stdio",
+              value.transport,
             )
           : {
               server,
@@ -4415,7 +4415,7 @@ export function SpaceSettingsBody({
   mcpOauthLogins: Record<string, ManagedMcpOAuthLogin>;
   mcpOauthCallbacks: Record<string, string>;
   onMcpOauthCallback: (server: string, value: string) => void;
-  onTestMcp: (server: string) => void;
+  onTestMcp: (resourceId: string) => void;
   onLoadMcpOAuthStatus: (server: string) => void;
   onLoginMcpOAuth: (server: string) => void;
   onCompleteMcpOAuth: (server: string) => void;
@@ -4528,7 +4528,7 @@ export function SpaceSettingsBody({
                         type="button"
                         disabled={busy || !!disabledReason}
                         title={disabledReason ?? "Test MCP connection"}
-                        onClick={() => onTestMcp(server.name)}
+                        onClick={() => onTestMcp(entry.id)}
                       >
                         <IconActivityHeartbeat size={15} />
                         Test

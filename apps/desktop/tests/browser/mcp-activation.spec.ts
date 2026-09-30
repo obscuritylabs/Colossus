@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 async function openMcp(
   page: Page,
-  mode: "new" | "updated" | "restarting" = "new",
+  mode: "new" | "updated" | "restarting" | "alternative" = "new",
 ) {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.emulateMedia({ colorScheme: "dark" });
@@ -38,6 +38,12 @@ async function openMcp(
       callbackPort: 8765,
       scopes: [],
     };
+    if (mode === "alternative") {
+      const alternative = structuredClone(entry);
+      alternative.id = "alternative-mcp";
+      alternative.label = "Other MCP option";
+      snapshot.globalConfiguration.mcpServers.unshift(alternative);
+    }
     if (mode !== "new") {
       space.configuration.catalogRevisions[`mcp:${entry.id}`] = {
         resourceId: entry.id,
@@ -235,5 +241,39 @@ test("a saved MCP connection cannot test while its workspace restarts", async ({
   ).toBeVisible();
   expect(await page.evaluate(() => (window as any).mcpActivationCalls)).toEqual(
     [],
+  );
+});
+
+test("tests the selected MCP resource when an earlier catalog alternative shares its server name", async ({
+  page,
+}) => {
+  const server = await openMcp(page, "alternative");
+  const alternative = page
+    .locator(".managed-mcp-resource")
+    .filter({ hasText: "Other MCP option" });
+  await expect(alternative.getByRole("switch")).not.toBeChecked();
+  await expect(
+    alternative.getByRole("button", { name: "Test", exact: true }),
+  ).toBeDisabled();
+  await expect(server.getByRole("switch")).toBeChecked();
+  await server.getByRole("button", { name: "Test", exact: true }).click();
+  await expect(
+    server.getByText("Connection healthy", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    alternative.getByText("Connection healthy", { exact: true }),
+  ).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).mcpActivationCalls)).toEqual(
+    [
+      {
+        command: "diagnose_managed_mcp_server",
+        args: {
+          request: {
+            spaceId: "fixture-managed-local",
+            server: "splunk-search",
+          },
+        },
+      },
+    ],
   );
 });
