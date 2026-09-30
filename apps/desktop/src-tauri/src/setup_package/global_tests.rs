@@ -100,9 +100,12 @@ fn globals_only_export_needs_no_workspace_or_provider() {
 fn imported_defaults_keep_existing_spaces_pinned_and_apply_to_new_spaces() {
     let first = tempfile::tempdir().unwrap();
     let second = tempfile::tempdir().unwrap();
+    // macOS temporary directories may be reached through the /var symlink.
+    let first_path = first.path().canonicalize().unwrap();
+    let second_path = second.path().canonicalize().unwrap();
     let mut settings = DesktopSettings::default();
     settings
-        .add_space(crate::desktop_settings::validate_workspace(first.path()).unwrap())
+        .add_space(crate::desktop_settings::validate_workspace(&first_path).unwrap())
         .unwrap();
     let mut package = package();
     catalog::import_catalog(&mut settings, &mut package, None).unwrap();
@@ -119,7 +122,7 @@ fn imported_defaults_keep_existing_spaces_pinned_and_apply_to_new_spaces() {
     .unwrap();
     assert!(old.field_overrides.is_empty());
     settings
-        .add_space(crate::desktop_settings::validate_workspace(second.path()).unwrap())
+        .add_space(crate::desktop_settings::validate_workspace(&second_path).unwrap())
         .unwrap();
     assert_eq!(
         settings.execution_boundary,
