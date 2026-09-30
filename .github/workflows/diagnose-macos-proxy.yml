@@ -18,12 +18,14 @@ jobs:
           toolchain: 1.96.0
       - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
       - run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
-      - name: Inspect runner networking tools
-        run: |
-          /usr/bin/curl --version
-          sw_vers
-      - name: Run unchanged native isolation assertions with connection diagnostics
+      - name: Run native isolation without warming curl
         run: cargo test --locked -p colossus-cli --test native_sandbox -- --nocapture
       - name: Inspect sandbox denials
         if: failure()
         run: sudo /usr/bin/log show --last 3m --style compact --predicate 'process == "sandboxd"' | tail -n 120
+      - name: Compare original test after warming curl
+        if: always()
+        run: |
+          /usr/bin/curl --version
+          git show 113c36af55c34b40cdd8a0dd03bf0f39e5261cba:crates/colossus-cli/tests/native_sandbox.rs > crates/colossus-cli/tests/native_sandbox.rs
+          cargo test --locked -p colossus-cli --test native_sandbox -- --nocapture
