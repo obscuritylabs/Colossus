@@ -94,6 +94,16 @@ jobs:
       - name: Activate shared compiler cache
         if: steps.sccache.outcome == 'success'
         run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Configure read-only R2 compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        env:
+          R2_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+          R2_REGION: ${{ secrets.SCCACHE_REGION }}
+          R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+        run: ./scripts/ci/configure-sccache-r2.sh read
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -140,6 +150,16 @@ jobs:
       - name: Activate shared compiler cache
         if: steps.sccache.outcome == 'success'
         run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Configure read-only R2 compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        env:
+          R2_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+          R2_REGION: ${{ secrets.SCCACHE_REGION }}
+          R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+        run: ./scripts/ci/configure-sccache-r2.sh read
       - name: Cache native sandbox target
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -372,6 +392,16 @@ jobs:
         if: steps.sccache.outcome == 'success'
         shell: bash
         run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Configure read-only R2 compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        env:
+          R2_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+          R2_REGION: ${{ secrets.SCCACHE_REGION }}
+          R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+        run: ./scripts/ci/configure-sccache-r2.sh read
       - name: Cache Windows runtime target
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -474,6 +504,16 @@ jobs:
         if: steps.sccache.outcome == 'success'
         shell: bash
         run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Configure read-only R2 compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        env:
+          R2_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+          R2_REGION: ${{ secrets.SCCACHE_REGION }}
+          R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+        run: ./scripts/ci/configure-sccache-r2.sh read
       - name: Cache standalone desktop target
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -604,6 +644,16 @@ jobs:
       - name: Activate shared compiler cache
         if: steps.sccache.outcome == 'success'
         run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Configure read-only R2 compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        env:
+          R2_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+          R2_REGION: ${{ secrets.SCCACHE_REGION }}
+          R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+        run: ./scripts/ci/configure-sccache-r2.sh read
       - name: Cache fuzz target
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:

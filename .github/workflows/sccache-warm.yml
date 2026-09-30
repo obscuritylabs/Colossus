@@ -1,0 +1,96 @@
+name: Warm R2 compiler cache
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - rust-toolchain.toml
+      - .cargo/config.toml
+      - .github/workflows/sccache-warm.yml
+      - .github/workflows/pr.yml
+      - .github/workflows/premerge.yml
+      - scripts/ci/configure-sccache-r2.sh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sccache-warm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  warm:
+    name: Warm R2 compiler cache (${{ matrix.os }})
+    if: github.ref == 'refs/heads/main' && vars.SCCACHE_R2_ENABLED == 'true'
+    environment:
+      name: sccache-r2-write
+      deployment: false
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    env:
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "false"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+          components: clippy
+      - name: Enable shared compiler cache
+        id: sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Configure R2 compiler cache
+        shell: bash
+        env:
+          R2_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+          R2_REGION: ${{ secrets.SCCACHE_REGION }}
+          R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
+        run: ./scripts/ci/configure-sccache-r2.sh write
+      - name: Activate shared compiler cache
+        shell: bash
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Use standalone Desktop target on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"CARGO_TARGET_DIR=$env:GITHUB_WORKSPACE\apps\desktop\src-tauri\target" >> $env:GITHUB_ENV'
+      - name: Warm Linux Rust dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked --workspace --lib --no-run
+      - name: Warm macOS native acceptance dependencies
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
+        run: |
+          ./scripts/prepare-desktop-binaries debug
+          cargo test --locked -p colossus-sidecar-protocol -p colossus-sidecar --no-run
+          cargo test --locked -p colossus-cli --test native_sandbox --no-run
+      - name: Warm Windows Desktop dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          COLOSSUS_DESKTOP_TEAM_ID: "UNSIGNED"
+          COLOSSUS_DESKTOP_RELEASE_CHANNEL: "development"
+        run: |
+          cargo xtask desktop prepare --profile debug --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
