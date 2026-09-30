@@ -665,7 +665,9 @@ picker and read into memory without filesystem extraction. The importer rejects
 traversal, duplicate/case-colliding names, links, unknown fields, unreferenced files,
 and unsupported versions. PNG icons are decoded under resource limits and re-encoded;
 Markdown uses the renderer's sanitized, image-free display. Rendering performs no
-remote fetch. Human-clicked HTTP(S) instruction links use the native system browser.
+remote fetch. HTTP(S) instruction links use the native system browser only after an
+operating-system confirmation displays the exact canonical destination. Saved Markdown,
+including renderer-authored provider descriptions, never authorizes that browser launch.
 The renderer receives bounded presentation DTOs, not raw YAML or PEM bytes.
 
 Provider/model YAML is inspected by the verified sidecar without constructing a
@@ -923,8 +925,14 @@ tool. Enabling local terminals for the first time requires a fixed native operat
 system confirmation that states this authority. On macOS, native code revalidates the
 persisted object-bound Managed Local workspace, validates the root-owned non-writable
 system `/bin/zsh`, and launches exactly `/bin/zsh -l` with a native-constructed cleared
-environment and that workspace. It receives no worker authentication and its commands,
-input, output, and effects do not pass through the Safety Kernel, remote journal, or
+environment and that workspace. Windows resolves the OS-installed Windows PowerShell
+through `GetSystemDirectoryW` instead of environment or PATH lookup and starts it with
+fixed `-NoLogo -NoProfile` arguments. It revalidates the bound executable and workspace,
+starts suspended, assigns the verified image to a kill-on-close Job Object, then
+resumes it. The shell inherits no handles or TUI authentication pipes. Its explicitly
+constructed environment retains the command search path without passing through
+arbitrary environment credentials. Neither shell receives worker authentication.
+Shell commands, input, output, and effects do not pass through the Safety Kernel, remote journal, or
 Colossus audit path. It remains available while the managed runtime is unavailable so
 the operator can inspect or repair the workspace directly. Consent is versioned;
 settings created for the earlier TUI-only feature cannot silently enable shell

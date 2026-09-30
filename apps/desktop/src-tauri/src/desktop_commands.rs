@@ -2743,7 +2743,7 @@ fn desktop_capabilities(
         tui: selected_managed && cfg!(any(target_os = "macos", target_os = "windows")),
         shell_terminal: managed_workspace_is_selected(settings)
             && workspace_available
-            && cfg!(target_os = "macos"),
+            && cfg!(any(target_os = "macos", target_os = "windows")),
         files: selected_managed
             && workspace_available
             && settings.access_profile != AccessProfileSetting::Minimal,

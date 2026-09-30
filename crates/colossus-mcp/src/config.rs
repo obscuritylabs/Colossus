@@ -1,4 +1,5 @@
 use super::*;
+use colossus_contracts::ToolNamePattern;
 
 /// Maximum MCP pages accepted from one configured server discovery.
 pub const MAX_MCP_PAGES: usize = 32;
@@ -120,7 +121,7 @@ pub struct McpServerConfig {
     /// Optional OAuth 2.1 authorization-code flow.
     #[serde(default)]
     pub oauth: Option<McpOAuthConfig>,
-    /// Exact tools that may be discovered or invoked, or the sole wildcard `*`.
+    /// Exact tool names or star patterns that may be discovered or invoked; `*` must stand alone.
     #[serde(default)]
     pub allowed_tools: Vec<String>,
     /// Configured research calls made for each research query.
@@ -353,6 +354,7 @@ pub(super) struct McpEffectInput {
 pub(super) enum ToolAllowlist {
     All,
     Explicit(BTreeSet<String>),
+    Patterns(Vec<ToolNamePattern>),
 }
 
 impl ToolAllowlist {
@@ -372,20 +374,32 @@ impl ToolAllowlist {
         }
         let mut explicit = BTreeSet::new();
         for tool in tools {
-            validate_name(tool, "tool")?;
+            ToolNamePattern::parse(tool).map_err(|error| {
+                McpError::Invalid(format!("server {server} allowedTools: {error}"))
+            })?;
             if !explicit.insert(tool.clone()) {
                 return Err(McpError::Invalid(format!(
                     "server {server} contains duplicate allowed tool {tool}"
                 )));
             }
         }
-        Ok(Self::Explicit(explicit))
+        if explicit.iter().any(|tool| tool.contains('*')) {
+            let patterns = explicit
+                .iter()
+                .map(|tool| ToolNamePattern::parse(tool))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| McpError::Invalid(error.to_string()))?;
+            Ok(Self::Patterns(patterns))
+        } else {
+            Ok(Self::Explicit(explicit))
+        }
     }
 
     pub(super) fn allows(&self, tool: &str) -> bool {
         match self {
             Self::All => true,
             Self::Explicit(tools) => tools.contains(tool),
+            Self::Patterns(patterns) => patterns.iter().any(|pattern| pattern.matches(tool)),
         }
     }
 
@@ -393,6 +407,10 @@ impl ToolAllowlist {
         match self {
             Self::All => vec![MCP_TOOL_WILDCARD.into()],
             Self::Explicit(tools) => tools.iter().cloned().collect(),
+            Self::Patterns(patterns) => patterns
+                .iter()
+                .map(|pattern| pattern.as_str().into())
+                .collect(),
         }
     }
 }

@@ -447,3 +447,128 @@ async fn check_stale_pane_request(
     assert_eq!(error.code, "terminal_workspace_changed");
     Ok(())
 }
+
+#[cfg(debug_assertions)]
+fn shell_fixture() -> (tempfile::TempDir, TerminalWorkspace) {
+    use crate::desktop_settings::revalidate_workspace;
+    let (root, store, settings) = tui_fixture();
+    let selected = settings.workspace.as_ref().expect("selected workspace");
+    let workspace = TerminalWorkspace {
+        id: selected.id.clone(),
+        display_name: selected.display_name.clone(),
+        workspace: revalidate_workspace(selected).expect("bound workspace"),
+        workspace_identity: selected.identity.clone().expect("identity"),
+        colossus_home: store.home_root().unwrap().to_owned(),
+        config: None,
+        worker_authentication: None,
+    };
+    (root, workspace)
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn native_powershell_runs_commands_in_workspace_without_worker_authority() {
+    use crate::terminal::TerminalManager;
+    let (_root, workspace) = shell_fixture();
+    let manager = TerminalManager::default();
+    let mut privileged = workspace.clone();
+    privileged.config = Some(workspace.workspace.join("unused.yaml"));
+    assert_eq!(
+        manager.open(
+            TERMINAL_WEBVIEW,
+            &privileged,
+            TerminalKind::Shell,
+            24,
+            80,
+            Arc::new(|_| true)
+        ),
+        Err(TerminalError::InvalidConfiguration)
+    );
+    let (send, receive) = std::sync::mpsc::sync_channel(256);
+    let session = manager
+        .open(
+            TERMINAL_WEBVIEW,
+            &workspace,
+            TerminalKind::Shell,
+            30,
+            140,
+            Arc::new(move |event| send.try_send(event).is_ok()),
+        )
+        .expect("real Windows PowerShell starts without a managed runtime or CLI");
+    manager
+        .resize(TERMINAL_WEBVIEW, &session, 40, 160)
+        .expect("resize shell");
+    // Construct markers in the shell, so echoed commands cannot satisfy assertions.
+    let expected = workspace
+        .workspace
+        .to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .replace('\'', "''");
+    let command = format!(
+        "if ((Get-Location).Path -ne '{expected}') {{ exit 71 }}; if (Test-Path Env:COLOSSUS_DESKTOP_TUI_AUTH_INPUT_HANDLE_V1) {{ exit 72 }}; if (Test-Path Env:COLOSSUS_DESKTOP_TUI_AUTH_OUTPUT_HANDLE_V1) {{ exit 73 }}; Write-Output ('SHELL_' + (20 + 22)); exit 0\r"
+    );
+    // Wait for the interactive prompt before typing the user command.
+    let prompt = format!(
+        "PS {}>",
+        workspace
+            .workspace
+            .to_string_lossy()
+            .trim_start_matches(r"\\?\")
+    );
+    let mut submitted_at = None;
+    let started = std::time::Instant::now();
+    // Successful Windows Server CI runs have taken almost 30 seconds. Allow
+    // headroom for this real interactive shell while keeping the wait bounded.
+    let deadline = started + Duration::from_secs(90);
+    let mut output = Vec::new();
+    let result = loop {
+        let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
+            break Err("PowerShell did not finish before the deadline".to_owned());
+        };
+        match receive.recv_timeout(remaining) {
+            Ok(TerminalEvent::Output { bytes, .. }) => {
+                // A real xterm answers cursor queries even when a query spans
+                // multiple pipe reads. Include the previous three bytes, but do
+                // not answer a query twice.
+                let scan_from = output.len().saturating_sub(3);
+                output.extend_from_slice(&bytes);
+                for _ in output[scan_from..]
+                    .windows(4)
+                    .filter(|sequence| *sequence == b"\x1b[6n")
+                {
+                    manager
+                        .write(TERMINAL_WEBVIEW, &session, b"\x1b[1;1R")
+                        .unwrap();
+                }
+                if submitted_at.is_none()
+                    && output
+                        .windows(prompt.len())
+                        .any(|sequence| sequence == prompt.as_bytes())
+                {
+                    manager
+                        .write(TERMINAL_WEBVIEW, &session, command.as_bytes())
+                        .expect("write user command after the shell prompt");
+                    submitted_at = Some(started.elapsed());
+                }
+            }
+            Ok(TerminalEvent::Exited {
+                exit_code: Some(0), ..
+            }) => {
+                break if String::from_utf8_lossy(&output).contains("SHELL_42") {
+                    Ok(())
+                } else {
+                    Err("PowerShell did not evaluate the user command".to_owned())
+                };
+            }
+            event => break Err(format!("PowerShell failed: {event:?}")),
+        }
+    };
+    manager.close_owner(TERMINAL_WEBVIEW);
+    assert!(
+        result.is_ok(),
+        "{result:?}; elapsed: {:?}; command submitted at: {submitted_at:?}; output: {}",
+        started.elapsed(),
+        String::from_utf8_lossy(&output)
+    );
+    assert!(!manager.has_owner_sessions(TERMINAL_WEBVIEW).unwrap());
+}

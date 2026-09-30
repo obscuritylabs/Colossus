@@ -343,7 +343,7 @@ explicitly, and its effective posture is reported by diagnostics and interactive
 
 ## Selection and bounds
 
-`allowedTools` is required for every server and accepts exactly one of these forms.
+`allowedTools` is required for every server and accepts exact names, star patterns, or the sole selector `"*"`.
 
 ### Explicit tool names
 
@@ -359,14 +359,39 @@ Tools published by the server but absent from this list are filtered out.
 Explicit selection is recommended for production because a server update cannot make a
 new tool callable until an operator reviews and adds its exact name.
 
+### Tool name patterns
+
+```yaml
+allowedTools:
+  - "get_*"
+  - "*_search"
+  - "echo"
+```
+
+`*` matches zero or more characters in the full server-published tool name. Matching is
+case-sensitive, so `get_*` matches `get_user` but not `Get_user` or `forget_user`.
+Patterns may be mixed with exact names. Entries must be unique and use 1–128 ASCII
+letters, digits, dots, underscores, hyphens, or stars. Dots are literal; regex, `?`,
+character classes, escaping, and consecutive stars are unsupported.
+
+Patterns select current and future matching tools from this server. A pattern with no
+matches is valid and exposes no tools by itself. It does not establish that matching
+tools are safe or read-only. The same schema, metadata, policy, approval, resource,
+and audit checks apply as for `"*"`.
+
+Desktop accepts one selector per line under **Allowed tools**. Save and apply the
+configuration, then use the workspace server's **Test** button and expand **Discovered
+tools** to see the tools allowed by the saved selectors. A zero count means the
+connection succeeded but none of the discovered tools matched.
+
 ### All discovered tools
 
 ```yaml
 allowedTools: ["*"]
 ```
 
-The wildcard must be the only entry. It cannot be mixed with names, and an empty list or
-duplicate explicit names is rejected.
+The wildcard must be the only entry. It cannot be mixed with names or patterns, and an empty list or
+duplicate selectors is rejected.
 
 Wildcard mode dynamically trusts every current and future valid tool published by that
 configured server. Colossus still validates tool-name uniqueness, schema validity,
@@ -380,9 +405,9 @@ using an isolating boundary, grant a
 credential, or approve `mcp.call`. Those remain separate trust boundaries; see
 [Access configuration](access.md#wildcard-boundary).
 
-Wildcard mode applies only to standalone server configuration. Agent Plugin MCP
-declarations require an explicit `plugins.mcpServers["PLUGIN/SERVER"]` overlay and
-explicit tool names.
+Agent Plugin MCP declarations still require an explicit operator-owned
+`plugins.mcpServers["PLUGIN/SERVER"]` overlay. That overlay accepts the same selectors;
+a portable plugin declaration alone cannot enable tools.
 
 ### Fresh schema binding
 
@@ -403,7 +428,7 @@ configured server, tool, bounded description and annotations, fresh schema hash,
 validated arguments. Descriptions and annotations are server-provided advisory hints;
 they are not authority or hard eligibility preconditions.
 
-Both explicit tool selection and `allowedTools: ["*"]` use the same review rule because
+Exact names, patterns, and `allowedTools: ["*"]` use the same review rule because
 the automatic proof binds one exact invocation. A change to the endpoint, server, tool,
 schema hash, or arguments invalidates that authority. Stdio and Streamable HTTP calls
 also share review eligibility, while retaining their separate process and network
@@ -536,7 +561,7 @@ or unexpectedly upgraded server; wildcard selection intentionally broadens that 
 | OAuth discovery is denied | Globally configure danger acknowledgement, or authorize every actual protected-resource, authorization, and token origin plus the client-secret environment name |
 | `auth status` is true but calls return unauthorized | Status checks local token presence only; log in again or review remote revocation/scopes |
 | OAuth login times out | Confirm the registered callback is the exact configured loopback URL, or use `--manual` |
-| A tool is absent from discovery | Add the exact name, or deliberately select `allowedTools: ["*"]` |
+| A tool is absent from discovery | Add the exact name or a matching star pattern; use `allowedTools: ["*"]` for all tools |
 | Wildcard configuration is rejected | `"*"` must be the sole entry and is not accepted in Agent Plugin declarations |
 | A call fails argument validation | Rediscover the live schema and send a JSON object matching it |
 | Discovery fails after a server update | Inspect invalid names, duplicate tools, schemas, descriptions, pagination, or limit overruns |

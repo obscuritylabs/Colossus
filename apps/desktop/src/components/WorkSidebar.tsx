@@ -641,11 +641,7 @@ export function WorkSidebar({
                   {capabilities.shellTerminal ? (
                     <button
                       type="button"
-                      disabled={
-                        actionsDisabled ||
-                        !terminalAvailable ||
-                        !terminalEnabled
-                      }
+                      disabled={actionsDisabled || !terminalEnabled}
                       onClick={onOpenShell}
                     >
                       <IconTerminal2
@@ -653,7 +649,7 @@ export function WorkSidebar({
                         stroke={1.8}
                         aria-hidden="true"
                       />
-                      Open local terminal
+                      Open Shell
                     </button>
                   ) : null}
                 </>

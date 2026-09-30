@@ -84,8 +84,10 @@ Permit-bound discovery and calls under acknowledged full access need neither dup
 grant; adding them does not constrain ambient authority. `allowedTools: ["*"]` is
 deliberately broad: every currently or subsequently published valid tool becomes
 eligible for normal schema validation, policy, approval, quarantine, and audit. An
-empty list, duplicate names, or a wildcard mixed with explicit names is rejected.
-Agent Plugin MCP declarations remain explicit-only. Set `allowStateless: true` only when
+empty list, duplicate selectors, or `"*"` mixed with other entries is rejected.
+Use patterns such as `"get_*"` or `"*_search"` to select a narrower set of current and
+future tools. See [tool name patterns](../reference/configuration/mcp.md#tool-name-patterns).
+Agent Plugin MCP declarations still require an explicit operator-owned overlay. Set `allowStateless: true` only when
 the reviewed remote server intentionally omits `Mcp-Session-Id`; omit it for stateful
 servers.
 

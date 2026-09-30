@@ -21,7 +21,7 @@ use std::{
     sync::Mutex,
 };
 use tauri::{AppHandle, State};
-use tauri_plugin_dialog::DialogExt as _;
+use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
 
 #[derive(Default)]
 pub(crate) struct SetupReviewState(pub(super) Mutex<Option<Review>>);
@@ -591,11 +591,13 @@ pub(crate) fn export_setup_package(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SetupLinkInput {
     id: String,
+    #[serde(default)]
+    provider_resource_id: Option<String>,
     url: String,
 }
 
-/// Instruction links are opened only on a human click and only when the exact address
-/// belongs to the saved/reviewed package. Guests receive no Desktop capabilities.
+/// Instruction text is untrusted, including locally authored provider descriptions.
+/// Opening a validated link always requires native consent for that exact destination.
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn open_setup_link(
     app: AppHandle,
@@ -606,30 +608,67 @@ pub(crate) async fn open_setup_link(
     use tauri::Manager as _;
     let _guard = connect_guard(&state)?;
     let settings = settings_store()?.load()?;
-    let package = reviews.instructions(&settings, &request.id)?;
-    let url =
-        url::Url::parse(&request.url).map_err(|_| invalid("The instruction link is invalid."))?;
-    if request.url.len() > 2048
-        || !matches!(url.scheme(), "https" | "http")
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || !(package.manifest.description_markdown.contains(&request.url)
+    let belongs_to_instructions = if let Some(id) = &request.provider_resource_id {
+        super::provider_presentation(&settings, id)
+            .is_some_and(|value| value.description_markdown.contains(&request.url))
+    } else {
+        let package = reviews.instructions(&settings, &request.id)?;
+        package.manifest.description_markdown.contains(&request.url)
             || package
                 .manifest
                 .providers
                 .values()
-                .any(|p| p.description_markdown.contains(&request.url)))
+                .any(|p| p.description_markdown.contains(&request.url))
+    };
+    let url = validated_instruction_url(&request.url, belongs_to_instructions)?;
+    let view = app
+        .get_webview("main")
+        .ok_or_else(|| invalid("The Desktop window is unavailable."))?;
+    // Membership in renderer-writable Markdown never authorizes an external effect.
+    // Display and open the same canonical URL; cancellation cannot reach the opener.
+    let destination = url.as_str().to_owned();
+    let approved = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .message(format!(
+                "Open this instruction link in your system browser?\n\n{destination}"
+            ))
+            .title("Open instruction link")
+            .kind(MessageDialogKind::Info)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Open link".into(),
+                "Cancel".into(),
+            ))
+            .blocking_show()
+    })
+    .await
+    .map_err(|_| invalid("The instruction link confirmation could not be opened."))?;
+    if !approved {
+        return Ok(());
+    }
+    colossus_native_browser::open_external(&view, url.as_str())
+        .await
+        .map_err(|_| invalid("The instruction link could not be opened."))
+}
+
+pub(super) fn validated_instruction_url(
+    value: &str,
+    belongs_to_instructions: bool,
+) -> Result<url::Url, CommandErrorDto> {
+    if value.len() > 2048 || value.chars().any(char::is_control) || !belongs_to_instructions {
+        return Err(invalid(
+            "Choose an HTTP(S) link from the setup instructions.",
+        ));
+    }
+    let url = url::Url::parse(value).map_err(|_| invalid("The instruction link is invalid."))?;
+    if !matches!(url.scheme(), "https" | "http")
+        || !url.username().is_empty()
+        || url.password().is_some()
     {
         return Err(invalid(
             "Choose an HTTP(S) link from the setup instructions.",
         ));
     }
-    let view = app
-        .get_webview("main")
-        .ok_or_else(|| invalid("The Desktop window is unavailable."))?;
-    colossus_native_browser::open_external(&view, &request.url)
-        .await
-        .map_err(|_| invalid("The instruction link could not be opened."))
+    Ok(url)
 }
 
 pub(super) fn export_current(

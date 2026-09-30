@@ -1984,7 +1984,7 @@ test("follow-ups can be queued, edited, deleted, and used to redirect active wor
   const prompt = page.getByLabel("Prompt", { exact: true });
   await expect(prompt).toBeEnabled();
   await expect(
-    page.getByRole("button", { name: "Add message to Next up" }),
+    page.getByRole("button", { name: "Stop response", exact: true }),
   ).toBeVisible();
 
   await prompt.fill("Check the Windows path too");

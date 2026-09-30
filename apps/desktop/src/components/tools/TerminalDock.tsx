@@ -163,7 +163,7 @@ export function TerminalDock({
           <p>
             {error ||
               (fixture
-                ? "The Colossus TUI opens here in the desktop app. Switch tools without closing your session."
+                ? "Open the Colossus TUI or a system shell here in the desktop app. Keep both in separate tabs and switch tools without closing your sessions."
                 : !ready
                   ? "Enable the local terminal in settings and connect a managed workspace to use the Colossus TUI."
                   : "Connecting to your workspace.")}

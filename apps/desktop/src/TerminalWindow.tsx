@@ -1,7 +1,6 @@
 import {
   IconAlertTriangle,
   IconPlayerStop,
-  IconPlus,
   IconRefresh,
   IconTerminal2,
   IconX,
@@ -32,6 +31,7 @@ import type {
   TerminalKind,
   TerminalPlanContext,
 } from "./types";
+import colossusMark from "./assets/colossus-mark.svg";
 import "@xterm/xterm/css/xterm.css";
 
 const MAX_TERMINAL_TABS = 8;
@@ -527,70 +527,73 @@ export default function TerminalWindow() {
   }, []);
 
   return (
-    <main className="terminal-window-shell">
+    <main
+      className="terminal-window-shell"
+      aria-label={`Terminal for ${workspaceName}`}
+    >
       <header className="terminal-window-header">
-        <div>
-          <span className="terminal-window-icon" aria-hidden="true">
-            <IconTerminal2 size={21} stroke={1.7} />
-          </span>
-          <div>
-            <strong>Colossus Terminal</strong>
-            <span>
-              {workspaceName} · local shell and authenticated TUI sessions
-            </span>
-          </div>
-        </div>
-        <div className="terminal-window-actions">
+        <nav className="terminal-tabs" aria-label="Terminal sessions">
+          {tabs.map((tab) => (
+            <div className="terminal-tab" key={tab.id}>
+              <button
+                type="button"
+                aria-current={activeTabId === tab.id ? "page" : undefined}
+                onClick={() => setActiveTabId(tab.id)}
+              >
+                {tab.title}
+              </button>
+              <button
+                className="terminal-tab-close"
+                type="button"
+                aria-label={`Close ${tab.title}`}
+                onClick={() => closeTab(tab.id)}
+              >
+                <IconX size={14} stroke={1.8} aria-hidden="true" />
+              </button>
+            </div>
+          ))}
+        </nav>
+        <div
+          className="terminal-window-actions"
+          role="group"
+          aria-label="New terminal"
+        >
           {shellEnabled ? (
             <button
-              className="button primary compact"
+              className="terminal-launch-button"
               type="button"
+              aria-label="New shell"
+              title="New shell"
               disabled={
                 workspaceId === null || tabs.length >= MAX_TERMINAL_TABS
               }
               onClick={() => addTab("shell")}
             >
-              <IconPlus size={15} stroke={1.8} aria-hidden="true" />
-              Shell
+              <IconTerminal2 size={17} stroke={1.8} aria-hidden="true" />
             </button>
           ) : null}
           {tuiEnabled ? (
             <button
-              className="button secondary compact"
+              className="terminal-launch-button"
               type="button"
+              aria-label="New Colossus TUI"
+              title="New Colossus TUI"
               disabled={
                 workspaceId === null || tabs.length >= MAX_TERMINAL_TABS
               }
               onClick={() => addTab("colossus_tui")}
             >
-              <IconPlus size={15} stroke={1.8} aria-hidden="true" />
-              Colossus TUI
+              <img
+                src={colossusMark}
+                width={18}
+                height={18}
+                alt=""
+                aria-hidden="true"
+              />
             </button>
           ) : null}
         </div>
       </header>
-
-      <nav className="terminal-tabs" aria-label="Terminal sessions">
-        {tabs.map((tab) => (
-          <div className="terminal-tab" key={tab.id}>
-            <button
-              type="button"
-              aria-current={activeTabId === tab.id ? "page" : undefined}
-              onClick={() => setActiveTabId(tab.id)}
-            >
-              {tab.title}
-            </button>
-            <button
-              className="terminal-tab-close"
-              type="button"
-              aria-label={`Close ${tab.title}`}
-              onClick={() => closeTab(tab.id)}
-            >
-              <IconX size={14} stroke={1.8} aria-hidden="true" />
-            </button>
-          </div>
-        ))}
-      </nav>
 
       {error !== "" ? (
         <section className="terminal-window-error" role="alert">

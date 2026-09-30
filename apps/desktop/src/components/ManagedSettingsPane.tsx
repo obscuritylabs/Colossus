@@ -125,6 +125,14 @@ import {
   selectCatalogModel,
 } from "../providerCatalog";
 import { ToastRegion, useToastQueue } from "./ToastRegion";
+import {
+  EMPTY_PRESENTATION,
+  MAX_PROVIDER_DESCRIPTION_BYTES,
+  ProviderInstructions,
+  ProviderPresentationEditor,
+  providerDescriptionBytes,
+} from "./ProviderPresentationEditor";
+import { setupChanged } from "../setupPackages";
 
 const CatalogInventory = lazy(() =>
   import("./CatalogInventory").then((module) => ({
@@ -237,6 +245,7 @@ export interface McpEditorDraft {
 }
 
 export interface ProviderEditorDraft {
+  presentation?: import("../types").ProviderPresentation;
   resourceId: string | null;
   label: string;
   profile: string;
@@ -417,7 +426,7 @@ const FIELD_DESCRIPTORS: ManagedFieldDescriptor[] = [
     "access.tools.include",
     "Access",
     "Included tools",
-    "Tool names explicitly added to the available tool set.",
+    "Exact tool names or * patterns, such as filesystem.*. Patterns match full names and are case-sensitive. Use * alone for all tools. Action permissions still apply.",
     "string_list",
     [],
   ),
@@ -425,7 +434,7 @@ const FIELD_DESCRIPTORS: ManagedFieldDescriptor[] = [
     "access.tools.exclude",
     "Access",
     "Excluded tools",
-    "Tool names removed even when another setting makes them available.",
+    "Exact tool names or * patterns removed after inclusion. Exclusions take precedence. Use shell.* to hide that family; * alone is not accepted.",
     "string_list",
     [],
   ),
@@ -2462,6 +2471,7 @@ export function ManagedSettingsPane({
       resourceId: providerEditor.resourceId,
       label: providerEditor.label,
       provider,
+      presentation: providerEditor.presentation ?? EMPTY_PRESENTATION,
     };
     const saved = await perform(
       () => upsertGlobalProvider(request),
@@ -2473,10 +2483,20 @@ export function ManagedSettingsPane({
             request.label,
             provider,
           );
+          const entry =
+            draft.globalConfiguration.providers.find(
+              (entry) => entry.id === request.resourceId,
+            ) ?? draft.globalConfiguration.providers.at(-1);
+          if (entry)
+            draft.providerPresentations = {
+              ...draft.providerPresentations,
+              [entry.id]: request.presentation,
+            };
         }),
       "Provider saved.",
     );
     if (saved) {
+      setupChanged();
       setProviderEditor((current) => (current === submitted ? null : current));
     }
   }
@@ -2493,6 +2513,7 @@ export function ManagedSettingsPane({
       kind === "model" ? "Model deleted." : "Provider deleted.",
     );
     if (!deleted) return;
+    if (kind === "provider") setupChanged();
     setCatalogDeletion(null);
     if (kind === "model" && modelEditor?.resourceId === request.resourceId)
       setModelEditor(null);
@@ -3836,6 +3857,8 @@ function GlobalSettingsBody({
                   candidate.timeoutMs === (provider.timeoutMs ?? null) &&
                   candidate.credentialId === (provider.credentialId ?? null),
               );
+            const presentation =
+              snapshot.providerPresentations?.[entry.id] ?? setup?.provider;
             const codex = provider.kind === "open_ai_codex";
             const models = activeModels.filter(
               (model) =>
@@ -3860,8 +3883,8 @@ function GlobalSettingsBody({
                 <ProviderIcon
                   provider={provider}
                   size={28}
-                  customIcon={setup?.provider.icon ?? null}
-                  customDarkIcon={setup?.provider.darkIcon ?? null}
+                  customIcon={presentation?.icon}
+                  customDarkIcon={presentation?.darkIcon}
                 />
               ),
               searchText: [
@@ -3883,7 +3906,8 @@ function GlobalSettingsBody({
                 </>
               ),
               usage: `${models.length} ${models.length === 1 ? "model" : "models"}`,
-              onEdit: () => setProviderEditor(providerDraft(entry)),
+              onEdit: () =>
+                setProviderEditor(providerDraft(entry, presentation)),
               onDelete: (trigger) =>
                 onDeleteCatalogEntry("provider", entry.id, trigger),
               details: (
@@ -3937,8 +3961,15 @@ function GlobalSettingsBody({
                       <p>No configured model uses this provider.</p>
                     )}
                   </div>
+                  {presentation?.descriptionMarkdown ? (
+                    <ProviderInstructions
+                      resourceId={entry.id}
+                      content={presentation.descriptionMarkdown}
+                    />
+                  ) : null}
                   {setup ? (
                     <ImportedProviderActions
+                      showInstructions={false}
                       item={setup.item}
                       provider={setup.provider}
                       desktop={desktop}
@@ -3954,6 +3985,7 @@ function GlobalSettingsBody({
         >
           {providerEditor ? (
             <ProviderEditor
+              key={providerEditor.resourceId ?? "new"}
               draft={providerEditor}
               credentials={global.credentials}
               busy={busy}
@@ -4503,7 +4535,7 @@ export function SpaceSettingsBody({
                       <strong>{entry.label}</strong>
                       <small>
                         {server.transport.replace("_", " ")} ·{" "}
-                        {server.allowedTools.length} allowed tools
+                        {server.allowedTools.length} tool selectors
                       </small>
                       {(enabled || pending) && disabledReason ? (
                         <small>{disabledReason}</small>
@@ -6687,7 +6719,7 @@ function TelemetryEditor({
 function ProviderEditor({
   draft,
   credentials,
-  busy,
+  busy: externalBusy,
   onChange,
   onCancel,
   onSave,
@@ -6699,6 +6731,12 @@ function ProviderEditor({
   onCancel: () => void;
   onSave: () => void;
 }) {
+  const [readingIcon, setReadingIcon] = useState(false);
+  const busy = externalBusy || readingIcon;
+  const presentation = draft.presentation ?? EMPTY_PRESENTATION;
+  const descriptionTooLarge =
+    providerDescriptionBytes(presentation.descriptionMarkdown) >
+    MAX_PROVIDER_DESCRIPTION_BYTES;
   const codex = draft.kind === "open_ai_codex";
   const adapterDescription =
     draft.kind === "openai_responses"
@@ -6715,7 +6753,7 @@ function ProviderEditor({
       aria-labelledby="provider-editor-heading"
       onSubmit={(event) => {
         event.preventDefault();
-        if (!busy) onSave();
+        if (!busy && !descriptionTooLarge) onSave();
       }}
     >
       <div className="provider-editor-heading">
@@ -6935,6 +6973,12 @@ function ProviderEditor({
           </label>
         </div>
       </section>
+      <ProviderPresentationEditor
+        value={presentation}
+        busy={busy}
+        onReading={setReadingIcon}
+        onChange={(presentation) => onChange({ ...draft, presentation })}
+      />
       <div className="mcp-editor-actions">
         <button
           className="button secondary"
@@ -6944,7 +6988,11 @@ function ProviderEditor({
         >
           Cancel
         </button>
-        <button className="button primary" type="submit" disabled={busy}>
+        <button
+          className="button primary"
+          type="submit"
+          disabled={busy || descriptionTooLarge}
+        >
           <IconCheck size={16} />
           {draft.resourceId ? "Save changes" : "Add provider"}
         </button>
@@ -7507,12 +7555,23 @@ export function McpEditor({
               rows={2}
               value={draft.allowedToolsText}
               placeholder={
-                "Use * for all tools, or enter one exact tool name per line"
+                "One name or pattern per line, e.g. get_* or *_search"
               }
               onChange={(event) =>
                 onChange({ ...draft, allowedToolsText: event.target.value })
               }
+              aria-describedby="mcp-tool-selectors-help"
             />
+            <small id="mcp-tool-selectors-help">
+              * matches zero or more characters. Names are case-sensitive; regex
+              and consecutive stars are unsupported. Use * alone for all tools.
+              Patterns also include future matching tools. Approval and sandbox
+              rules still apply.
+            </small>
+            <small>
+              Save, then test this server in an active workspace to see the
+              discovered tools allowed by these selectors.
+            </small>
           </label>
           {draft.transport === "stdio" ? (
             <CredentialBindingsEditor
@@ -7997,10 +8056,20 @@ export function managedTelemetry(
 
 export function providerDraft(
   entry: CatalogEntry<ManagedProviderCatalogValue>,
+  presentation?: import("../types").ProviderPresentation,
 ): ProviderEditorDraft {
   const provider = currentValue(entry);
   return {
     resourceId: entry.id,
+    ...(presentation
+      ? {
+          presentation: {
+            descriptionMarkdown: presentation.descriptionMarkdown,
+            icon: presentation.icon,
+            darkIcon: presentation.darkIcon,
+          },
+        }
+      : {}),
     label: entry.label,
     profile: provider.profile,
     kind: provider.kind,

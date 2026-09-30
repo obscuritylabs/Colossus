@@ -112,6 +112,15 @@ export function openSetupLink(id: string, url: string): Promise<void> {
   return call("open_setup_link", { request: { id, url } });
 }
 
+export function openProviderInstructionsLink(
+  resourceId: string,
+  url: string,
+): Promise<void> {
+  return call("open_setup_link", {
+    request: { id: "", providerResourceId: resourceId, url },
+  });
+}
+
 export function getProviderPresets(): Promise<ProviderPreset[]> {
   return call("get_provider_presets");
 }
@@ -573,6 +582,7 @@ export function upsertGlobalProvider(request: {
   resourceId: string | null;
   label: string;
   provider: ManagedProviderCatalogValue;
+  presentation?: import("./types").ProviderPresentation;
 }): Promise<ManagedSettingsSnapshot> {
   return call("upsert_global_provider", { request });
 }

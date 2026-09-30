@@ -1621,3 +1621,33 @@ test("release manifest writer uses final Windows executable names", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("instruction Markdown cannot authorize a native browser launch without OS consent", () => {
+  const commands = read("apps/desktop/src-tauri/src/setup_package/commands.rs");
+  const start = commands.indexOf("pub(crate) async fn open_setup_link(");
+  const end = commands.indexOf(
+    "pub(super) fn validated_instruction_url(",
+    start,
+  );
+  assert.ok(start >= 0 && end > start);
+  const command = commands.slice(start, end);
+  assert.match(
+    command,
+    /let url = validated_instruction_url\(&request\.url, belongs_to_instructions\)\?;/u,
+  );
+  assert.match(command, /let destination = url\.as_str\(\)\.to_owned\(\);/u);
+  assert.match(
+    command,
+    /let approved = tauri::async_runtime::spawn_blocking\(move \|\| \{\s*app\.dialog\(\)/u,
+  );
+  assert.match(command, /\{destination\}/u);
+  assert.match(command, /\.buttons\(MessageDialogButtons::OkCancelCustom\(/u);
+  assert.match(
+    command,
+    /\.blocking_show\(\)[\s\S]*?\.await[\s\S]*?\.map_err\([^;]*\)\?;\s*if !approved \{\s*return Ok\(\(\)\);\s*\}\s*colossus_native_browser::open_external\(&view, url\.as_str\(\)\)/u,
+  );
+  assert.equal(
+    command.match(/colossus_native_browser::open_external/g)?.length,
+    1,
+  );
+});

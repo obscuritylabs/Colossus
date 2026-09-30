@@ -132,42 +132,34 @@ pub(super) fn complete(
     package.config_yaml = serde_saphyr::to_string(&config)
         .map_err(|_| invalid("Configuration could not be exported."))?;
     package.manifest.schema_version = 2;
-    // Keep the instructions and packaged artwork associated with unchanged connections.
     for (i, provider) in package.providers.iter().enumerate() {
         let profile = &provider.connection.profile;
-        if let Some(source) = settings.setup_packages.iter().find(|source| {
-            source.providers.iter().any(|p| {
-                p.connection.profile == *profile
-                    && p.connection.kind == provider.connection.kind
-                    && p.connection.base_url == provider.connection.base_url
-            })
-        }) {
-            let mut presentation = source.manifest.providers[profile].clone();
-            for (theme, path) in [
-                ("light", &mut presentation.icon),
-                ("dark", &mut presentation.dark_icon),
+        if let Some(entry) = global
+            .providers
+            .iter()
+            .find(|entry| current(entry).is_some_and(|p| p.profile == *profile))
+        {
+            let value = super::provider_presentation(settings, &entry.id).unwrap_or_default();
+            let mut presentation = super::types::Presentation {
+                display_name: entry.label.clone(),
+                description_markdown: value.description_markdown,
+                icon: None,
+                dark_icon: None,
+            };
+            for (theme, data, path) in [
+                ("light", value.icon, &mut presentation.icon),
+                ("dark", value.dark_icon, &mut presentation.dark_icon),
             ] {
-                *path = path
-                    .as_ref()
-                    .and_then(|path| source.icons.get(path))
-                    .map(|data| {
-                        let target = format!("assets/provider-{i}-{theme}.png");
-                        package.icons.insert(target.clone(), data.clone());
-                        target
-                    });
+                if let Some(data) = data {
+                    let target = format!("assets/provider-{i}-{theme}.png");
+                    package.icons.insert(target.clone(), data);
+                    *path = Some(target);
+                }
             }
             package
                 .manifest
                 .providers
                 .insert(profile.clone(), presentation);
-        }
-        if let Some(entry) = global
-            .providers
-            .iter()
-            .find(|entry| current(entry).is_some_and(|p| p.profile == *profile))
-            && let Some(presentation) = package.manifest.providers.get_mut(profile)
-        {
-            presentation.display_name.clone_from(&entry.label);
         }
     }
     Ok(package)

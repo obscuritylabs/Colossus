@@ -680,7 +680,7 @@ pub struct ManagedMcpServerConfig {
     pub allow_stateless: bool,
     /// Optional OAuth client metadata.
     pub oauth: Option<ManagedMcpOAuthConfig>,
-    /// Exact allowed MCP tools or the sole wildcard `*`.
+    /// Exact allowed MCP tools or star patterns; `*` must stand alone.
     pub allowed_tools: Vec<String>,
     /// Research collection templates.
     pub research_tools: Vec<ManagedMcpResearchTool>,
@@ -704,7 +704,7 @@ impl ManagedMcpServerConfig {
             || self
                 .allowed_tools
                 .iter()
-                .any(|tool| tool != "*" && !valid_token(tool))
+                .any(|tool| colossus_contracts::ToolNamePattern::parse(tool).is_err())
             || (self.allowed_tools.iter().any(|tool| tool == "*") && self.allowed_tools.len() != 1)
             || self
                 .environment_credentials
@@ -2293,6 +2293,15 @@ mod tests {
             .get_mut("Authorization")
             .expect("credential header")
             .credential_id = "mcp-token".into();
+        runtime.mcp_servers[0].allowed_tools =
+            vec!["get_*".into(), "*_search".into(), "echo".into()];
+        runtime
+            .validate()
+            .expect("mixed exact and pattern MCP allowlist");
+        for invalid in ["get_?", "get_[ab]", "get_**", "^get_.*$"] {
+            runtime.mcp_servers[0].allowed_tools = vec![invalid.into()];
+            assert!(runtime.validate().is_err(), "{invalid}");
+        }
         runtime.mcp_servers[0].allowed_tools = vec!["*".into()];
         runtime.validate().expect("sole wildcard MCP allowlist");
         runtime.mcp_servers[0].allowed_tools = vec!["*".into(), "search".into()];

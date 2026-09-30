@@ -156,10 +156,16 @@ fn apply_catalog_deletion(
             .global_configuration
             .models
             .retain(|entry| entry.id != request.resource_id),
-        CatalogKind::Provider => settings
-            .global_configuration
-            .providers
-            .retain(|entry| entry.id != request.resource_id),
+        CatalogKind::Provider => {
+            settings
+                .global_configuration
+                .providers
+                .retain(|entry| entry.id != request.resource_id);
+            settings
+                .global_configuration
+                .provider_presentations
+                .remove(&request.resource_id);
+        }
     }
     advance_unaffected_spaces(settings, previous_revision, &BTreeSet::new());
     Ok(())

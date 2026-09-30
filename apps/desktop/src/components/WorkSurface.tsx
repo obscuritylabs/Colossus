@@ -12,7 +12,6 @@ import {
   IconMenu2,
   IconMessageCirclePlus,
   IconBooks,
-  IconPlayerStop,
   IconPlugConnected,
   IconRefresh,
   IconShieldLock,
@@ -115,7 +114,6 @@ interface WorkSurfaceProps {
   conversationViews: readonly RunView[];
   connection: ConnectionStatus;
   connecting: boolean;
-  cancelling: boolean;
   runLoadError: string;
   actionError: CommandError | null;
   participants: readonly AgentParticipant[];
@@ -156,7 +154,6 @@ interface WorkSurfaceProps {
   ) => Promise<SessionActivityPage>;
   workNavigationOpen: boolean;
   onConnect: () => void;
-  onCancel: () => void;
   onRespond: (
     interaction: Interaction,
     response: InteractionAnswer,
@@ -204,7 +201,6 @@ export function WorkSurface({
   conversationViews,
   connection,
   connecting,
-  cancelling,
   runLoadError,
   actionError,
   participants,
@@ -253,7 +249,6 @@ export function WorkSurface({
   }),
   workNavigationOpen,
   onConnect,
-  onCancel,
   onRespond,
   onResume,
   onSuggestion,
@@ -1140,20 +1135,6 @@ export function WorkSurface({
               triggerRef={toolsTriggerRef}
             />
           </div>
-          {run !== undefined &&
-          (run.status === "queued" ||
-            run.status === "running" ||
-            run.status === "waiting") ? (
-            <button
-              className="button secondary compact"
-              type="button"
-              disabled={cancelling}
-              onClick={onCancel}
-            >
-              <IconPlayerStop size={15} stroke={1.8} aria-hidden="true" />
-              {cancelling ? "Stopping…" : "Stop"}
-            </button>
-          ) : null}
         </div>
       </header>
 

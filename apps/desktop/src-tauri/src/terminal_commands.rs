@@ -347,7 +347,7 @@ fn require_terminal_document(state: &AppState) -> Result<(u64, u64), CommandErro
 }
 
 fn shell_terminal_workspace() -> Result<TerminalWorkspace, CommandErrorDto> {
-    if !cfg!(target_os = "macos") {
+    if !cfg!(any(target_os = "macos", target_os = "windows")) {
         return Err(CommandErrorDto::from_terminal(
             TerminalError::ProgramUnavailable,
         ));

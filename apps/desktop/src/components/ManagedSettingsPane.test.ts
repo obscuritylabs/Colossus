@@ -1160,7 +1160,7 @@ describe("ManagedSettingsPane", () => {
         callbackPort: 8787,
         scopes: ["read:tools", "execute:tools"],
       },
-      allowedTools: ["search", "read"],
+      allowedTools: ["get_*", "*_search", "read"],
       researchTools: [],
       timeoutMs: 45_000,
       maxOutputBytes: null,

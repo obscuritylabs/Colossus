@@ -58,6 +58,8 @@ function renderComposer(
       onDeleteQueuedMessage: vi.fn(),
       onRetryQueuedMessage: vi.fn(),
       onRedirect: vi.fn(),
+      onStop: vi.fn(),
+      onResumeQueue: vi.fn(),
       onSubmit: vi.fn(),
       ...overrides,
     }),
@@ -266,6 +268,40 @@ describe("WorkComposer permission mode", () => {
 });
 
 describe("WorkComposer follow-ups", () => {
+  it("shows Stop with an empty draft and keeps it independent of prompt validation", () => {
+    const empty = renderComposer(false, {
+      activeWorkRunning: true,
+      activeWorkRedirectable: true,
+    });
+    expect(empty).toContain('aria-label="Stop response"');
+    expect(empty).not.toContain('aria-label="Send prompt"');
+    const invalid = renderComposer(false, {
+      activeWorkRunning: true,
+      activeWorkRedirectable: true,
+      prompt: "Too large",
+      promptOverLimit: true,
+    });
+    const start = invalid.indexOf('aria-label="Stop response"');
+    expect(invalid.slice(start, invalid.indexOf(">", start))).not.toContain(
+      "disabled",
+    );
+    expect(renderComposer(false)).not.toContain('aria-label="Stop response"');
+  });
+
+  it("shows cancellation progress and prevents repeated Stop requests", () => {
+    const markup = renderComposer(false, {
+      activeWorkRunning: true,
+      activeWorkRedirectable: false,
+      stopping: true,
+    });
+    const start = markup.indexOf('aria-label="Stopping response"');
+    expect(start).toBeGreaterThan(-1);
+    expect(markup.slice(start, markup.indexOf(">", start))).toContain(
+      "disabled",
+    );
+    expect(markup).toContain('class="send-button is-stop is-stopping"');
+  });
+
   it("keeps the composer available and names queue and redirect actions while work runs", () => {
     const markup = renderComposer(false, {
       mode: "execute",
