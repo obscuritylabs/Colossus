@@ -449,10 +449,9 @@ async fn check_stale_pane_request(
 }
 
 #[cfg(debug_assertions)]
-#[test]
-fn native_powershell_runs_commands_in_workspace_without_worker_authority() {
-    use crate::{desktop_settings::revalidate_workspace, terminal::TerminalManager};
-    let (_root, store, settings) = tui_fixture();
+fn shell_fixture() -> (tempfile::TempDir, TerminalWorkspace) {
+    use crate::desktop_settings::revalidate_workspace;
+    let (root, store, settings) = tui_fixture();
     let selected = settings.workspace.as_ref().expect("selected workspace");
     let workspace = TerminalWorkspace {
         id: selected.id.clone(),
@@ -463,6 +462,14 @@ fn native_powershell_runs_commands_in_workspace_without_worker_authority() {
         config: None,
         worker_authentication: None,
     };
+    (root, workspace)
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn native_powershell_runs_commands_in_workspace_without_worker_authority() {
+    use crate::terminal::TerminalManager;
+    let (_root, workspace) = shell_fixture();
     let manager = TerminalManager::default();
     let mut privileged = workspace.clone();
     privileged.config = Some(workspace.workspace.join("unused.yaml"));
@@ -500,9 +507,17 @@ fn native_powershell_runs_commands_in_workspace_without_worker_authority() {
     let command = format!(
         "if ((Get-Location).Path -ne '{expected}') {{ exit 71 }}; if (Test-Path Env:COLOSSUS_DESKTOP_TUI_AUTH_INPUT_HANDLE_V1) {{ exit 72 }}; if (Test-Path Env:COLOSSUS_DESKTOP_TUI_AUTH_OUTPUT_HANDLE_V1) {{ exit 73 }}; Write-Output ('SHELL_' + (20 + 22)); exit 0\r"
     );
-    manager
-        .write(TERMINAL_WEBVIEW, &session, command.as_bytes())
-        .expect("write user command");
+    // Interactive PowerShell configures console input during startup. Wait for
+    // its prompt, as a human would, rather than queueing Enter before PSReadLine
+    // has established its input mode (Windows Server can consume that early Enter).
+    let prompt = format!(
+        "PS {}>",
+        workspace
+            .workspace
+            .to_string_lossy()
+            .trim_start_matches(r"\\?\")
+    );
+    let mut submitted = false;
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let mut output = Vec::new();
     let result = loop {
@@ -511,13 +526,29 @@ fn native_powershell_runs_commands_in_workspace_without_worker_authority() {
         };
         match receive.recv_timeout(remaining) {
             Ok(TerminalEvent::Output { bytes, .. }) => {
-                // A real xterm answers this cursor query during interactive startup.
-                if bytes.windows(4).any(|sequence| sequence == b"\x1b[6n") {
+                // A real xterm answers cursor queries even when a query spans
+                // multiple pipe reads. Include the previous three bytes, but do
+                // not answer a query twice.
+                let scan_from = output.len().saturating_sub(3);
+                output.extend_from_slice(&bytes);
+                for _ in output[scan_from..]
+                    .windows(4)
+                    .filter(|sequence| *sequence == b"\x1b[6n")
+                {
                     manager
                         .write(TERMINAL_WEBVIEW, &session, b"\x1b[1;1R")
                         .unwrap();
                 }
-                output.extend_from_slice(&bytes);
+                if !submitted
+                    && output
+                        .windows(prompt.len())
+                        .any(|sequence| sequence == prompt.as_bytes())
+                {
+                    manager
+                        .write(TERMINAL_WEBVIEW, &session, command.as_bytes())
+                        .expect("write user command after the shell prompt");
+                    submitted = true;
+                }
             }
             Ok(TerminalEvent::Exited {
                 exit_code: Some(0), ..
@@ -534,7 +565,7 @@ fn native_powershell_runs_commands_in_workspace_without_worker_authority() {
     manager.close_owner(TERMINAL_WEBVIEW);
     assert!(
         result.is_ok(),
-        "{result:?}; output: {}",
+        "{result:?}; command submitted: {submitted}; output: {}",
         String::from_utf8_lossy(&output)
     );
     assert!(!manager.has_owner_sessions(TERMINAL_WEBVIEW).unwrap());
