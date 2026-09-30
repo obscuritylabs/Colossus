@@ -64,6 +64,9 @@ rust-version = "1.96"
 license = "Apache-2.0"
 repository = "https://github.com/obscuritylabs/Colossus"
 
+[workspace.metadata.release]
+publish-sdks = false
+
 [workspace.dependencies]
 agent-client-protocol = "=2.2.0"
 colossus-bundled-plugins = { version = "=0.11.4", path = "crates/colossus-bundled-plugins" }

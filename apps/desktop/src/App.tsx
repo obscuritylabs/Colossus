@@ -4461,6 +4461,7 @@ export default function App() {
   const [terminalDockRequest, setTerminalDockRequest] = useState<
     import("./components/tools/TerminalDock").TerminalDockRequest | null
   >(null);
+  const terminalRequestSequence = useRef(0);
 
   useEffect(() => setTerminalDockRequest(null), [desktop.selectedTargetId]);
   const currentTerminalRequest = terminalRequestForScope(
@@ -4484,12 +4485,16 @@ export default function App() {
       setSurface("settings");
       return;
     }
-    setTerminalDockRequest((previous) => ({
+    terminalRequestSequence.current = Math.max(
+      Date.now(),
+      terminalRequestSequence.current + 1,
+    );
+    setTerminalDockRequest({
       scope: status.selectedTargetId,
       kind,
       planContext,
-      sequence: Math.max(Date.now(), (previous?.sequence ?? 0) + 1),
-    }));
+      sequence: terminalRequestSequence.current,
+    });
     setSurface("work");
   }
 
@@ -5113,6 +5118,7 @@ export default function App() {
                 : terminalAvailable || desktop.capabilities.shellTerminal)
           }
           terminalRequest={currentTerminalRequest}
+          onOpenGenericTerminal={() => setTerminalDockRequest(null)}
           onTerminalSettings={() => {
             setSettingsStartTab("runtime");
             setSurface("settings");

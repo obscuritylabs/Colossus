@@ -109,6 +109,7 @@ interface WorkSurfaceProps {
   terminalReady?: boolean;
   terminalRequest?: TerminalDockRequest | null;
   onTerminalSettings?: () => void;
+  onOpenGenericTerminal?: () => void;
   title: string;
   view: RunView | undefined;
   conversationViews: readonly RunView[];
@@ -228,6 +229,7 @@ export function WorkSurface({
   terminalReady = false,
   terminalRequest = null,
   onTerminalSettings = () => undefined,
+  onOpenGenericTerminal = () => undefined,
   onOpenWorkspaceFile,
   artifactsAvailable,
   asideView,
@@ -608,7 +610,8 @@ export function WorkSurface({
       (activeDrawer === "research" && !researchDrawerAvailable) ||
       (activeDrawer === "details" && run === undefined)
     ) {
-      setActiveDrawer(null);
+      // Do not close a new pane requested by another effect in this commit.
+      setActiveDrawer((current) => (current === activeDrawer ? null : current));
     }
   }, [
     activeDrawer,
@@ -762,6 +765,7 @@ export function WorkSurface({
   }
 
   function toggleDrawer(drawer: WorkTool, switchOnly = false) {
+    if (drawer === "terminal") onOpenGenericTerminal();
     const trigger =
       !switchOnly && document.activeElement instanceof HTMLButtonElement
         ? document.activeElement
