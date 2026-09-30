@@ -94,6 +94,11 @@ generation and tests, package construction, intrinsic package metadata, the cand
 manifest, and checksums. Signed Windows jobs are skipped because manual dispatch cannot
 enter the tag-scoped `release-signing` environment. Download the
 `colossus-sdk-release` Actions artifact if manual package inspection is needed.
+Manual validation uses the GitHub compiler cache. After tag validation, the six CLI
+jobs and stable SDK candidate read and write the shared R2 compiler cache when
+enabled. The `sccache-r2-write` environment must allow protected `v*` tags; see
+[CI/CD](ci-cd.md#rust-build-caches). The signed Windows Desktop job retains its
+signing environment, and the macOS Desktop build remains credential-free.
 
 ### Create and approve the release
 

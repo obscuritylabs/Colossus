@@ -1,19 +1,6 @@
 name: Warm R2 compiler cache
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - Cargo.toml
-      - Cargo.lock
-      - '**/Cargo.toml'
-      - '**/Cargo.lock'
-      - rust-toolchain.toml
-      - .cargo/config.toml
-      - .github/workflows/sccache-warm.yml
-      - .github/workflows/pr.yml
-      - .github/workflows/premerge.yml
-      - scripts/ci/configure-sccache-r2.sh
   workflow_dispatch:
 
 permissions:

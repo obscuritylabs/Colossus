@@ -164,6 +164,7 @@ jobs:
     timeout-minutes: 45
     environment: sdk-production
     env:
+      SCCACHE_GHA_ENABLED: "true"
       SDK_BASE_TAG: ${{ needs.validate.outputs.sdk_base_tag }}
       SOURCE_DATE_EPOCH: ${{ needs.validate.outputs.source_date_epoch }}
     permissions:
@@ -201,6 +202,26 @@ jobs:
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
         with:
           toolchain: 1.96.0
+
+      - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Configure read-only R2 compiler cache
+        if: vars.SCCACHE_R2_ENABLED == 'true' && steps.sccache.outcome == 'success'
+        shell: bash
+        env:
+          R2_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+          R2_REGION: ${{ secrets.SCCACHE_REGION }}
+          R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+        run: ./scripts/ci/configure-sccache-r2.sh read
+
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
 
       - name: Download the verified SDK candidate
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
