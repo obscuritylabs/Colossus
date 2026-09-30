@@ -15,6 +15,7 @@ import {
   automaticProviderTimeoutMs,
 } from "../providerTimeout";
 import { DropdownSelect } from "./DropdownSelect";
+import { ModelRoleRouting } from "./ModelRoleRouting";
 import { ProviderPresetSelect } from "./ProviderPresetSelect";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import {
@@ -24,26 +25,6 @@ import {
 } from "../providerCatalog";
 import { discoverManagedProviderModels } from "../api";
 import { requiresAdvancedModelSetup } from "../onboarding";
-
-const ROLES = [
-  "primary",
-  "risk_evaluator",
-  "context_summarizer",
-  "subagent_default",
-  "research_planner",
-  "research_worker",
-  "research_synthesizer",
-] as const;
-
-const ROLE_LABELS: Record<(typeof ROLES)[number], string> = {
-  primary: "Primary",
-  risk_evaluator: "Risk evaluator",
-  context_summarizer: "Context summarizer",
-  subagent_default: "Default subagent",
-  research_planner: "Research planner",
-  research_worker: "Research worker",
-  research_synthesizer: "Research synthesizer",
-};
 
 const REASONING_EFFORTS: readonly ReasoningEffort[] = [
   "none",
@@ -292,12 +273,7 @@ export function ModelConfigurationEditor({
       desktop.managedModelConfiguration.roles.primary ??
       initialModels(desktop)[0]?.profile ??
       "";
-    return Object.fromEntries(
-      ROLES.map((role) => [
-        role,
-        desktop.managedModelConfiguration.roles[role] ?? primary,
-      ]),
-    );
+    return { ...desktop.managedModelConfiguration.roles, primary };
   });
   const [accessProfile, setAccessProfile] = useState<
     ApplyManagedModelConfigurationRequest["accessProfile"]
@@ -353,7 +329,6 @@ export function ModelConfigurationEditor({
   }
 
   const providerProfiles = providers.map((provider) => provider.profile);
-  const modelProfiles = models.map((model) => model.profile);
   const requiresCodexAuth = providers.some(
     (provider) => provider.providerKind === "open_ai_codex",
   );
@@ -945,29 +920,14 @@ export function ModelConfigurationEditor({
         </button>
       ) : null}
 
+      <ModelRoleRouting
+        roles={roles}
+        models={models.map((model) => ({ ...model, label: model.profile }))}
+        disabled={busy}
+        onChange={setRoles}
+      />
       <fieldset className="provider-fields">
-        <legend>Models for each role</legend>
-        {ROLES.map((role) => (
-          <label key={role}>
-            <span>{ROLE_LABELS[role]}</span>
-            <DropdownSelect
-              value={roles[role] ?? roles.primary ?? ""}
-              disabled={busy}
-              onChange={(event) =>
-                setRoles((current) => ({
-                  ...current,
-                  [role]: event.target.value,
-                }))
-              }
-            >
-              {modelProfiles.map((profile) => (
-                <option key={profile} value={profile}>
-                  {profile}
-                </option>
-              ))}
-            </DropdownSelect>
-          </label>
-        ))}
+        <legend>Workspace access</legend>
         <label className="provider-wide-field">
           <span>Tool access</span>
           <DropdownSelect

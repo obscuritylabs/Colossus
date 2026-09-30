@@ -569,6 +569,7 @@ impl DesktopSettings {
             ));
         }
         let id = workspace.id.clone();
+        let defaults = self.global_configuration.defaults.current();
         self.spaces.push(WorkspaceProfile {
             id: id.clone(),
             display_name: workspace.display_name.clone(),
@@ -578,9 +579,15 @@ impl DesktopSettings {
             providers: self.providers.clone(),
             models: self.models.clone(),
             model_roles: self.model_roles.clone(),
-            access_profile: self.access_profile,
-            execution_boundary: self.execution_boundary,
-            terminal_enabled: self.terminal_enabled,
+            access_profile: defaults
+                .and_then(|d| d.access_profile)
+                .unwrap_or(self.access_profile),
+            execution_boundary: defaults
+                .and_then(|d| d.execution_boundary)
+                .unwrap_or(self.execution_boundary),
+            terminal_enabled: defaults
+                .and_then(|d| d.terminal_enabled)
+                .unwrap_or(self.terminal_enabled),
             configuration: SpaceConfigurationSetting {
                 accepted_global_revision: self.global_configuration.revision,
                 ..SpaceConfigurationSetting::default()

@@ -78,6 +78,7 @@ pub(super) struct Review {
     pub(super) package: SavedSetupPackage,
     pub(super) previous_sha256: Option<String>,
     pub(super) certificate_fingerprints: Vec<String>,
+    pub(super) global_revision: u64,
 }
 
 #[derive(Deserialize)]
@@ -93,6 +94,8 @@ pub(crate) struct ApplyPackageInput {
     sha256: String,
     trust_certificates: bool,
     replace_existing: bool,
+    #[serde(default)]
+    apply_defaults: bool,
 }
 
 #[derive(Deserialize)]
@@ -197,6 +200,7 @@ pub(crate) async fn inspect_setup_package(
             .find(|p| p.manifest.id == package.manifest.id)
             .map(|p| p.sha256.clone()),
         certificate_fingerprints: dto.existing_certificate_fingerprints.clone(),
+        global_revision: settings.global_configuration.revision,
         package,
     });
     Ok(Some(dto))
@@ -219,15 +223,21 @@ pub(crate) async fn apply_setup_package(
                 r.package.clone(),
                 r.previous_sha256.clone(),
                 r.certificate_fingerprints.clone(),
+                r.global_revision,
             )
         })
         .ok_or_else(|| invalid("Inspect a setup package before applying it."))?;
-    let (mut package, previous_sha256, fingerprints) = review;
+    let (mut package, previous_sha256, fingerprints, global_revision) = review;
     if package.sha256 != request.sha256 {
         return Err(invalid("The setup review changed. Inspect it again."));
     }
     let store = settings_store()?;
     let mut settings = store.load()?;
+    if request.apply_defaults && settings.global_configuration.revision != global_revision {
+        return Err(invalid(
+            "Global settings changed. Review the setup package again before applying defaults.",
+        ));
+    }
     let old = settings
         .setup_packages
         .iter()
@@ -245,6 +255,9 @@ pub(crate) async fn apply_setup_package(
     let old = old.cloned();
     let previous = settings.clone();
     catalog::import_catalog(&mut settings, &mut package, old.as_ref())?;
+    if request.apply_defaults {
+        catalog::apply_defaults(&mut settings, &package)?;
+    }
     settings
         .setup_packages
         .retain(|p| p.manifest.id != package.manifest.id);
@@ -531,7 +544,8 @@ pub(crate) fn export_setup_package(
     package_id: Option<String>,
 ) -> Result<bool, CommandErrorDto> {
     let _guard = connect_guard(&state)?;
-    let settings = settings_store()?.load()?;
+    let store = settings_store()?;
+    let settings = store.load()?;
     let package = if let Some(id) = package_id {
         settings
             .setup_packages
@@ -540,7 +554,9 @@ pub(crate) fn export_setup_package(
             .cloned()
             .ok_or_else(|| invalid("The setup package is unknown."))?
     } else {
-        export_current(&settings)?
+        let mut package = export_current(&settings)?;
+        super::export::include_ca(&store, &settings, &mut package)?;
+        package
     };
     let bytes = archive::write(&package)?;
     archive::read(&bytes)?;
@@ -621,15 +637,11 @@ pub(super) fn export_current(
 ) -> Result<SavedSetupPackage, CommandErrorDto> {
     use super::types::{Manifest, Presentation, SetupProvider};
     use serde_json::json;
-    if settings.providers.is_empty() {
-        return Err(invalid(
-            "Configure a workspace provider before exporting its setup.",
-        ));
-    }
+    let snapshot = super::export::snapshot(settings)?;
     let mut profiles = serde_json::Map::new();
     let mut presentation = BTreeMap::new();
     let mut providers = Vec::new();
-    for (i, provider) in settings.providers.iter().enumerate() {
+    for (i, provider) in snapshot.providers.iter().enumerate() {
         let slot = (provider.credential_required || provider.credential_id.is_some())
             .then(|| format!("env:COLOSSUS_PROVIDER_{}_TOKEN", i + 1));
         let kind = match provider.kind {
@@ -662,7 +674,7 @@ pub(super) fn export_current(
             credential_slot: slot,
         });
     }
-    let models = settings
+    let models = snapshot
         .models
         .iter()
         .map(|model| {
@@ -675,25 +687,29 @@ pub(super) fn export_current(
             Ok((model.profile.clone(), value))
         })
         .collect::<Result<BTreeMap<_, _>, CommandErrorDto>>()?;
-    let config = json!({"schemaVersion":3,"providers":{"profiles":profiles},"models":{"profiles":models,"roles":settings.model_roles}});
-    Ok(SavedSetupPackage {
-        manifest: Manifest {
-            schema_version: 1,
-            id: "desktop-setup".into(),
-            name: "Desktop setup".into(),
-            version: "1".into(),
-            description_markdown: String::new(),
-            providers: presentation,
-            ca_bundle: None,
+    let config = json!({"schemaVersion":3,"providers":{"profiles":profiles},"models":{"profiles":models,"roles":snapshot.model_roles}});
+    super::export::complete(
+        settings,
+        SavedSetupPackage {
+            manifest: Manifest {
+                schema_version: 1,
+                id: "desktop-setup".into(),
+                name: "Desktop setup".into(),
+                version: "1".into(),
+                description_markdown: String::new(),
+                providers: presentation,
+                ca_bundle: None,
+            },
+            config_yaml: serde_saphyr::to_string(&config)
+                .map_err(|_| invalid("Configuration could not be exported."))?,
+            sha256: String::new(),
+            providers,
+            models: snapshot.models,
+            roles: snapshot.model_roles,
+            icons: BTreeMap::new(),
+            ca_pem: None,
+            catalog_resources: None,
+            credential_bindings: BTreeMap::new(),
         },
-        config_yaml: serde_saphyr::to_string(&config)
-            .map_err(|_| invalid("Configuration could not be exported."))?,
-        sha256: String::new(),
-        providers,
-        models: settings.models.clone(),
-        roles: settings.model_roles.clone(),
-        icons: BTreeMap::new(),
-        ca_pem: None,
-        catalog_resources: None,
-    })
+    )
 }

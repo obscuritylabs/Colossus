@@ -408,6 +408,19 @@ function renderImport(
 }
 
 describe("ManagedSettingsPane", () => {
+  it("starts role editing from resolved legacy routes without overriding explicit workspace routes", () => {
+    const snapshot = buildManagedSettingsFixture(desktop());
+    const space = snapshot.spaces[0]!;
+    space.configuration.modelRoles = {};
+    space.effectiveModelRoles = {
+      primary: "primary",
+      research_planner: "planner",
+    };
+    expect(spaceDraft(space).modelRoles).toEqual(space.effectiveModelRoles);
+    space.configuration.modelRoles = { primary: "replacement" };
+    expect(spaceDraft(space).modelRoles).toEqual({ primary: "replacement" });
+  });
+
   it("builds a revisioned, renderer-safe snapshot from Desktop status", () => {
     const snapshot = buildManagedSettingsFixture(desktop());
 

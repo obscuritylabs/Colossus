@@ -2,6 +2,8 @@ import { SetupPackagesPanel } from "./setup/SetupPackagesPanel";
 import { useSetupPackages } from "./setup/useSetupPackages";
 import { ImportedProviderActions } from "./setup/ImportedProviderActions";
 import { SettingsFrame } from "./SettingsFrame";
+import { ModelRoleRouting } from "./ModelRoleRouting";
+import { RuntimeProfileRow } from "./RuntimeProfileRow";
 import {
   subscribeSettingsUpdates,
   syncSavedSettings,
@@ -1235,7 +1237,9 @@ export function spaceDraft(
           reference.resourceId.length > 0,
       )?.[1].resourceId ?? null,
     searchRoles: space.configuration.searchRoles,
-    modelRoles: space.configuration.modelRoles,
+    modelRoles: Object.keys(space.configuration.modelRoles).length
+      ? space.configuration.modelRoles
+      : space.effectiveModelRoles,
     credentialOverrides: space.configuration.credentialOverrides,
   };
 }
@@ -1246,6 +1250,17 @@ export function runtimeDiagnosticKey(
   profile: string,
 ): string {
   return JSON.stringify([spaceId, kind, profile]);
+}
+
+function workspaceCatalogRevision(
+  space: ManagedSpaceConfigurationSnapshot,
+  kind: "mcp" | "provider" | "model",
+  resourceId: string,
+): number | undefined {
+  return Object.entries(space.configuration.catalogRevisions).find(
+    ([name, reference]) =>
+      name.startsWith(`${kind}:`) && reference.resourceId === resourceId,
+  )?.[1].revision;
 }
 
 function isTauriRuntime(): boolean {
@@ -1467,6 +1482,7 @@ export function buildManagedSettingsFixture(
         fieldOverrides: [],
         import: null,
       },
+      effectiveModelRoles: desktop.managedModelConfiguration.roles,
       effectiveValues: [
         {
           fieldId: "access.profile",
@@ -1689,6 +1705,12 @@ export function ManagedSettingsPane({
   const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<
     Record<string, ManagedRuntimeDiagnostic>
   >({});
+  const [testingRuntimeProfile, setTestingRuntimeProfile] = useState<
+    string | null
+  >(null);
+  const [runtimeDiagnosticErrors, setRuntimeDiagnosticErrors] = useState<
+    Record<string, string>
+  >({});
   const [extensionInventory, setExtensionInventory] =
     useState<ManagedExtensionInventory | null>(null);
   const [extensionInventorySpaceId, setExtensionInventorySpaceId] =
@@ -1902,6 +1924,10 @@ export function ManagedSettingsPane({
 
   async function saveSpace() {
     if (!selectedSpace) return;
+    setMcpDiagnostics({});
+    setMcpOauthStatuses({});
+    setMcpOauthLogins({});
+    setMcpOauthCallbacks({});
     const request = {
       expectedGlobalRevision: snapshot.globalConfiguration.revision,
       spaceId: selectedSpace.id,
@@ -1936,6 +1962,7 @@ export function ManagedSettingsPane({
         target.configuration.credentialOverrides = space.credentialOverrides;
         target.configuration.searchRoles = space.searchRoles;
         target.configuration.modelRoles = space.modelRoles;
+        target.effectiveModelRoles = space.modelRoles;
         const retained = Object.entries(
           target.configuration.catalogRevisions,
         ).filter(
@@ -2016,6 +2043,10 @@ export function ManagedSettingsPane({
 
   async function applyPendingRevision() {
     if (!selectedSpace) return;
+    setMcpDiagnostics({});
+    setMcpOauthStatuses({});
+    setMcpOauthLogins({});
+    setMcpOauthCallbacks({});
     await perform(
       () => applySpaceConfiguration(selectedSpace.id),
       () => {
@@ -2131,6 +2162,17 @@ export function ManagedSettingsPane({
 
   async function testMcpServer(server: string) {
     if (!selectedSpace) return;
+    const entry = snapshot.globalConfiguration.mcpServers.find(
+      (candidate) => currentValue(candidate).name === server,
+    );
+    if (
+      !entry ||
+      !space.selectedMcp.includes(entry.id) ||
+      workspaceCatalogRevision(selectedSpace, "mcp", entry.id) !==
+        entry.currentRevision ||
+      selectedSpace.status !== "active"
+    )
+      return;
     setMcpDiagnostics((current) => {
       const next = { ...current };
       delete next[server];
@@ -2244,9 +2286,22 @@ export function ManagedSettingsPane({
     kind: "provider" | "model",
     profile: string,
   ) {
-    if (!selectedSpace) return;
+    if (!selectedSpace || !beginAction()) return;
     const spaceId = selectedSpace.id;
-    await runMcpDiagnostic(async () => {
+    setFailure("");
+    const key = runtimeDiagnosticKey(spaceId, kind, profile);
+    setTestingRuntimeProfile(key);
+    setRuntimeDiagnostics((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    setRuntimeDiagnosticErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    try {
       const diagnostic = isTauriRuntime()
         ? kind === "provider"
           ? await diagnoseManagedProvider(spaceId, profile)
@@ -2254,13 +2309,24 @@ export function ManagedSettingsPane({
         : fixtureRuntimeDiagnostic(kind, profile);
       setRuntimeDiagnostics((current) => ({
         ...current,
-        [runtimeDiagnosticKey(spaceId, kind, profile)]: diagnostic,
+        [key]: diagnostic,
       }));
       pushToast(
         `${profile} ${kind} diagnostic ${diagnostic.ready ? "passed" : "failed"}.`,
         diagnostic.ready ? "success" : "error",
       );
-    });
+    } catch (error: unknown) {
+      setRuntimeDiagnosticErrors((current) => ({
+        ...current,
+        [key]:
+          error instanceof Error
+            ? error.message
+            : `The ${kind} test could not complete. Retry the test.`,
+      }));
+    } finally {
+      setTestingRuntimeProfile(null);
+      endAction();
+    }
   }
 
   async function testSearchRole(role: "agent" | "research") {
@@ -2931,6 +2997,8 @@ export function ManagedSettingsPane({
               onCompleteMcpOAuth={completeMcpOAuth}
               onLogoutMcpOAuth={logoutMcpOAuth}
               runtimeDiagnostics={runtimeDiagnostics}
+              testingRuntimeProfile={testingRuntimeProfile}
+              runtimeDiagnosticErrors={runtimeDiagnosticErrors}
               onTestRuntimeProfile={testRuntimeProfile}
               onTestSearchRole={testSearchRole}
               onTestTelemetry={testTelemetry}
@@ -4322,6 +4390,8 @@ export function SpaceSettingsBody({
   onCompleteMcpOAuth,
   onLogoutMcpOAuth,
   runtimeDiagnostics,
+  testingRuntimeProfile = null,
+  runtimeDiagnosticErrors = {},
   onTestRuntimeProfile,
   onTestSearchRole,
   onTestTelemetry,
@@ -4351,6 +4421,8 @@ export function SpaceSettingsBody({
   onCompleteMcpOAuth: (server: string) => void;
   onLogoutMcpOAuth: (server: string) => void;
   runtimeDiagnostics: Record<string, ManagedRuntimeDiagnostic>;
+  testingRuntimeProfile?: string | null;
+  runtimeDiagnosticErrors?: Record<string, string>;
   onTestRuntimeProfile: (kind: "provider" | "model", profile: string) => void;
   onTestSearchRole: (role: "agent" | "research") => void;
   onTestTelemetry: (resourceId: string) => void;
@@ -4391,15 +4463,36 @@ export function SpaceSettingsBody({
               <p className="eyebrow">Global resources</p>
               <h3>MCP servers</h3>
             </div>
-            <span>{draft.selectedMcp.length} enabled</span>
+            <span>{draft.selectedMcp.length} selected</span>
           </div>
           <div className="managed-list mcp-selection-list">
             {snapshot.globalConfiguration.mcpServers.map((entry) => {
               const server = currentValue(entry);
               const enabled = draft.selectedMcp.includes(entry.id);
-              const diagnostic = mcpDiagnostics[server.name];
-              const oauthStatus = mcpOauthStatuses[server.name];
-              const oauthLogin = mcpOauthLogins[server.name];
+              const savedRevision = workspaceCatalogRevision(
+                selectedSpace,
+                "mcp",
+                entry.id,
+              );
+              const pending =
+                enabled !== (savedRevision !== undefined) ||
+                (enabled && savedRevision !== entry.currentRevision);
+              const disabledReason = pending
+                ? "Apply workspace changes to restart the runtime before testing."
+                : !enabled
+                  ? "Enable this server and apply workspace changes to test it."
+                  : selectedSpace.status !== "active"
+                    ? "Tests require an active workspace."
+                    : null;
+              const diagnostic = disabledReason
+                ? undefined
+                : mcpDiagnostics[server.name];
+              const oauthStatus = disabledReason
+                ? undefined
+                : mcpOauthStatuses[server.name];
+              const oauthLogin = disabledReason
+                ? undefined
+                : mcpOauthLogins[server.name];
               return (
                 <div className="managed-mcp-resource" key={entry.id}>
                   <div className="managed-list-row mcp-diagnostic-row">
@@ -4412,25 +4505,29 @@ export function SpaceSettingsBody({
                         {server.transport.replace("_", " ")} ·{" "}
                         {server.allowedTools.length} allowed tools
                       </small>
+                      {(enabled || pending) && disabledReason ? (
+                        <small>{disabledReason}</small>
+                      ) : null}
                     </div>
                     <span
-                      className={`status-chip ${diagnostic ? (diagnostic.healthy ? "tone-success" : "tone-danger") : enabled ? "tone-success" : "tone-neutral"}`}
+                      className={`status-chip ${pending ? "tone-neutral" : diagnostic ? (diagnostic.healthy ? "tone-success" : "tone-danger") : enabled ? "tone-success" : "tone-neutral"}`}
                     >
-                      {diagnostic?.healthy
-                        ? "Healthy"
-                        : diagnostic
-                          ? "Failed"
-                          : enabled
-                            ? "Enabled"
-                            : "Available"}
+                      {pending
+                        ? "Pending changes"
+                        : diagnostic?.healthy
+                          ? "Healthy"
+                          : diagnostic
+                            ? "Failed"
+                            : enabled
+                              ? "Enabled"
+                              : "Available"}
                     </span>
                     <div className="resource-actions">
                       <button
                         className="button secondary"
                         type="button"
-                        disabled={
-                          busy || !enabled || selectedSpace.status !== "active"
-                        }
+                        disabled={busy || !!disabledReason}
+                        title={disabledReason ?? "Test MCP connection"}
                         onClick={() => onTestMcp(server.name)}
                       >
                         <IconActivityHeartbeat size={15} />
@@ -4440,11 +4537,8 @@ export function SpaceSettingsBody({
                         <button
                           className="button secondary"
                           type="button"
-                          disabled={
-                            busy ||
-                            !enabled ||
-                            selectedSpace.status !== "active"
-                          }
+                          disabled={busy || !!disabledReason}
+                          title={disabledReason ?? "Check MCP OAuth status"}
                           onClick={() => onLoadMcpOAuthStatus(server.name)}
                         >
                           <IconKey size={15} />
@@ -4453,6 +4547,7 @@ export function SpaceSettingsBody({
                       ) : null}
                     </div>
                     <SwitchInput
+                      disabled={busy}
                       checked={enabled}
                       aria-label={`Enable ${entry.label}`}
                       onChange={(event) =>
@@ -4831,6 +4926,30 @@ export function SpaceSettingsBody({
     const selectedModels = snapshot.globalConfiguration.models.filter((entry) =>
       draft.selectedModels.includes(entry.id),
     );
+    function testState(
+      kind: "provider" | "model",
+      entry: { id: string; currentRevision: number },
+      profile: string,
+      selected: boolean,
+    ) {
+      const key = runtimeDiagnosticKey(selectedSpace.id, kind, profile);
+      const saved =
+        workspaceCatalogRevision(selectedSpace, kind, entry.id) ===
+        entry.currentRevision;
+      return {
+        testing: testingRuntimeProfile === key,
+        diagnostic: runtimeDiagnostics[key],
+        error: runtimeDiagnosticErrors[key],
+        disabledReason: !selected
+          ? "Select this connection and apply workspace changes to test it."
+          : !saved
+            ? "Apply workspace changes before testing."
+            : selectedSpace.status !== "active"
+              ? "Tests require an active workspace."
+              : null,
+        onTest: () => onTestRuntimeProfile(kind, profile),
+      };
+    }
     return (
       <section className="managed-settings-layout">
         <div className="managed-settings-body">
@@ -4849,20 +4968,17 @@ export function SpaceSettingsBody({
               const provider = currentValue(entry);
               const enabled = draft.selectedProviders.includes(entry.id);
               return (
-                <label className="managed-list-row" key={entry.id}>
-                  <span className="resource-icon">
-                    <IconCloud size={18} />
-                  </span>
-                  <div>
-                    <strong>{entry.label}</strong>
-                    <small>{provider.baseUrl}</small>
-                  </div>
-                  <span
-                    className={`status-chip ${enabled ? "tone-success" : "tone-neutral"}`}
-                  >
-                    {enabled ? "Selected" : "Global"}
-                  </span>
+                <RuntimeProfileRow
+                  key={entry.id}
+                  kind="provider"
+                  label={entry.label}
+                  subtitle={provider.baseUrl}
+                  selected={enabled}
+                  busy={busy}
+                  {...testState("provider", entry, provider.profile, enabled)}
+                >
                   <SwitchInput
+                    disabled={busy}
                     checked={enabled}
                     aria-label={`Select ${entry.label}`}
                     onChange={(event) => {
@@ -4905,7 +5021,7 @@ export function SpaceSettingsBody({
                       });
                     }}
                   />
-                </label>
+                </RuntimeProfileRow>
               );
             })}
             {snapshot.globalConfiguration.models.map((entry) => {
@@ -4918,23 +5034,22 @@ export function SpaceSettingsBody({
                 );
               const enabled = draft.selectedModels.includes(entry.id);
               return (
-                <label className="managed-list-row" key={entry.id}>
-                  <span className="resource-icon">
-                    <IconCpu size={18} />
-                  </span>
-                  <div>
-                    <strong>{entry.label}</strong>
-                    <small>
-                      {model.model} · {model.providerProfile}
-                    </small>
-                  </div>
-                  <span
-                    className={`status-chip ${enabled ? "tone-success" : "tone-neutral"}`}
-                  >
-                    {enabled ? "Selected" : `r${entry.currentRevision}`}
-                  </span>
+                <RuntimeProfileRow
+                  key={entry.id}
+                  kind="model"
+                  label={entry.label}
+                  subtitle={`${model.model} · ${model.providerProfile}`}
+                  selected={enabled}
+                  busy={busy}
+                  {...testState(
+                    "model",
+                    entry,
+                    model.profile,
+                    enabled && providerSelected,
+                  )}
+                >
                   <SwitchInput
-                    disabled={!providerSelected}
+                    disabled={busy || !providerSelected}
                     checked={enabled}
                     aria-label={`Select ${entry.label}`}
                     onChange={(event) => {
@@ -4950,90 +5065,19 @@ export function SpaceSettingsBody({
                       setDraft({ ...draft, selectedModels, modelRoles });
                     }}
                   />
-                </label>
+                </RuntimeProfileRow>
               );
             })}
           </div>
-          <div className="managed-diagnostic-actions">
-            {snapshot.globalConfiguration.providers
-              .filter((entry) => draft.selectedProviders.includes(entry.id))
-              .map((entry) => {
-                const profile = currentValue(entry).profile;
-                const diagnostic =
-                  runtimeDiagnostics[
-                    runtimeDiagnosticKey(selectedSpace.id, "provider", profile)
-                  ];
-                return (
-                  <div key={`provider:${entry.id}`}>
-                    <button
-                      className="button secondary"
-                      type="button"
-                      disabled={busy || selectedSpace.status !== "active"}
-                      onClick={() => onTestRuntimeProfile("provider", profile)}
-                    >
-                      <IconActivityHeartbeat size={15} />
-                      Test {entry.label}
-                    </button>
-                    {diagnostic ? (
-                      <DiagnosticResult value={diagnostic} />
-                    ) : null}
-                  </div>
-                );
-              })}
-            {selectedModels.map((entry) => {
-              const profile = currentValue(entry).profile;
-              const diagnostic =
-                runtimeDiagnostics[
-                  runtimeDiagnosticKey(selectedSpace.id, "model", profile)
-                ];
-              return (
-                <div key={`model:${entry.id}`}>
-                  <button
-                    className="button secondary"
-                    type="button"
-                    disabled={busy || selectedSpace.status !== "active"}
-                    onClick={() => onTestRuntimeProfile("model", profile)}
-                  >
-                    <IconCpu size={15} />
-                    Test {entry.label}
-                  </button>
-                  {diagnostic ? <DiagnosticResult value={diagnostic} /> : null}
-                </div>
-              );
-            })}
-          </div>
-          <div className="authority-control-grid search-route-grid">
-            {(
-              [
-                "primary",
-                "risk_evaluator",
-                "context_summarizer",
-                "subagent_default",
-              ] as const
-            ).map((role) => (
-              <label key={role}>
-                <span>{role.replaceAll("_", " ")}</span>
-                <DropdownSelect
-                  required={role === "primary"}
-                  value={draft.modelRoles[role] ?? ""}
-                  onChange={(event) => {
-                    const modelRoles = { ...draft.modelRoles };
-                    if (event.target.value)
-                      modelRoles[role] = event.target.value;
-                    else delete modelRoles[role];
-                    setDraft({ ...draft, modelRoles });
-                  }}
-                >
-                  <option value="">Inherit primary</option>
-                  {selectedModels.map((entry) => (
-                    <option key={entry.id} value={currentValue(entry).profile}>
-                      {entry.label}
-                    </option>
-                  ))}
-                </DropdownSelect>
-              </label>
-            ))}
-          </div>
+          <ModelRoleRouting
+            roles={draft.modelRoles}
+            models={selectedModels.map((entry) => ({
+              ...currentValue(entry),
+              label: entry.label,
+            }))}
+            disabled={busy}
+            onChange={(modelRoles) => setDraft({ ...draft, modelRoles })}
+          />
         </div>
       </section>
     );

@@ -1,6 +1,6 @@
 ---
 title: Desktop setup files
-description: Build and import an offline Desktop setup package with provider instructions, models, icons, and optional CA certificates.
+description: Share an offline Desktop setup with providers, models, global defaults, MCP, search, telemetry, and optional certificates.
 audience: user
 type: how-to
 ---
@@ -24,7 +24,7 @@ import are local: they do not fetch schemas, icons, models, or credentials.
 Choose **Import setup file** on the first Desktop setup page or under **Settings →
 Global → Providers** or **Desktop**. Review provider endpoints, model limits,
 capabilities, suggested roles, instructions, and certificate fingerprints before
-choosing **Import providers and models**. The review opens in a dialog; after import,
+choosing **Import setup**. The review opens in a dialog; after import,
 the Desktop page shows a compact provider/model count beside appearance settings.
 
 Import adds every provider and model to the normal global inventory without starting
@@ -47,7 +47,8 @@ for reuse with that imported provider. Cancelling leaves setup ready to retry.
 
 Other imported providers remain available for later selection. The selected provider
 and its models are added to the workspace; other providers' credentials are not
-required. Existing workspace configurations are never replaced by imported defaults.
+required. Existing workspace configurations retain their accepted defaults until
+their normal configuration update is reviewed and applied.
 For an already configured workspace, **Settings → Global → Providers** also offers
 **Use model in workspace** inside each provider’s expanded details, with explicit
 replacement for conflicting profile definitions. Key enrollment and workspace
@@ -127,9 +128,10 @@ dark mode. Without an icon, Desktop keeps its normal provider icon or fallback.
 ## Provider and model configuration
 
 `config.yaml` uses the existing schema-version-3 provider/model YAML semantics.
-Its supported top-level fields are `schemaVersion`, `providers`, and `models`.
-Workspace permissions, tools, storage, and network grants are configured through
-normal Desktop setup.
+Its supported top-level fields are `schemaVersion`, `providers`, `models`, and,
+with manifest version 2, `desktop`. The runtime schema version remains 3. Version 1
+packages remain supported. A version 2 package can use `providers: {profiles: {}}`
+and `providers: {}` in the manifest when it contains only global settings.
 
 Provider fields are `kind`, `baseUrl`, `credentialReference`, and `timeoutMs`.
 Use `open_ai_compatible`, `open_ai_responses`, or `open_ai_codex`. Model fields
@@ -144,6 +146,69 @@ Host credential IDs and literal secrets are rejected. Codex requires
 `credentialReference: codex:default`, omits `baseUrl`, and uses its existing
 account sign-in flow.
 
+## Global defaults, MCP, search, and telemetry
+
+Choose **Export global setup** after configuring your global settings. Export includes
+the current, unarchived provider, model, MCP, search, and telemetry definitions and
+the current global defaults. It excludes catalog history, workspace data, stored
+secrets, and machine credential IDs. Archived resources are omitted. Provider and
+model profile names must be unique for export; rename conflicting profiles first.
+Provider instructions and icons are retained for matching imported connections.
+Exporting a saved package instead preserves that package's original definitions.
+
+The optional `desktop` section reuses Desktop's typed settings. Each catalog item
+has a portable `id`, a display `label`, and a `configuration`. See the complete
+[company example](https://github.com/obscuritylabs/Colossus/tree/main/examples/desktop-setup)
+for MCP, search, and telemetry definitions.
+
+```yaml
+desktop:
+  defaults:
+    accessProfile: development
+    executionBoundary: workspace_isolated
+    terminalEnabled: false
+    fieldOverrides:
+      - fieldId: agent.maxTurns
+        value: 25
+      - fieldId: sandbox.timeoutMs
+        value: 60000
+  mcpServers: []
+  searchProviders: []
+  telemetryProfiles: []
+```
+
+Only Desktop-managed default fields are accepted; storage paths and other
+Desktop-owned runtime invariants cannot be overridden. Imported defaults are
+validated with the runtime YAML parser. **Use included global defaults** is an
+explicit choice in the review. It replaces the default snapshot for new workspaces;
+existing workspaces remain pinned until their normal update and authority review.
+Leaving it unchecked imports the catalogs while retaining your defaults.
+
+Advanced defaults for audit export, semantic memory, plugin registries, and plugin
+MCP overlays can be shared only without authentication settings. Import and export
+reject credential references in those overrides, including Docker registry
+authentication, because they cannot be bound to Desktop's portable credential slots.
+Configure that authentication locally, or use the MCP and search catalogs for
+connections that need portable credential placeholders.
+
+MCP, search, and telemetry entries appear on their normal global settings pages.
+Import does not start MCP commands, contact search endpoints, select these entries
+for existing workspaces, or enable telemetry export. Review command paths, tool
+allowlists, telemetry destinations, and limits before selecting an entry for a workspace.
+
+In portable MCP and search definitions, credential ID fields contain `env:NAME`
+placeholders, including `credentialId`, `environmentCredentials`, and OAuth
+`clientSecretCredentialId`. These are names for missing local credentials, not
+environment variables to read. Recipients fill them through **Credentials** settings.
+Literal MCP headers are converted to credential placeholders during export; their
+values never enter the archive. Use `credentialHeaders` in hand-authored packages.
+Do not embed tokens in command arguments, instructions, or other free text.
+
+Reimport preserves matching local bindings when the definitions using that slot have
+not changed. Changed definitions get fresh empty credential slots, so a package
+cannot reuse a stored secret at a different destination. User-edited catalog entries
+are preserved; replacement creates a separate entry when necessary.
+
 ## CA certificates
 
 A package can contain one PEM bundle of public CA certificates. The review shows its
@@ -155,7 +220,7 @@ provider. Import does not change the operating system trust store or subprocess
 TLS configuration. Applying trust while Managed Local is configured uses its existing
 restart/rollback behavior and rejects changes while managed work is active.
 
-Leaving trust unchecked still saves the setup package. **Review CA certificates**
+Leaving trust unchecked still saves the setup package. **Review setup**
 lets you apply them later. Removing a saved setup does not remove trusted
 certificates, credentials, or configured workspace resources.
 
@@ -179,8 +244,9 @@ Add the referenced image and PEM paths to that command. No Colossus-specific pac
 utility or network access is required.
 
 **Export setup file** reproduces a saved package without credential bindings.
-**Export workspace setup** creates provider/model YAML from the selected workspace,
-with portable placeholders for saved keys.
+**Export global setup** captures current global definitions, defaults, and the
+additional public CA bundle, with portable placeholders for stored credentials.
+The recipient reviews certificate trust separately before applying it.
 
 ## Expected result
 

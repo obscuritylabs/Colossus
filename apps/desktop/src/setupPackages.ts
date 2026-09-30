@@ -25,6 +25,37 @@ export interface SetupPackage {
   certificateFingerprints: string[];
   existingCertificateFingerprints: string[];
   replacesVersion: string | null;
+  globalSettings?: SetupGlobalSettings;
+}
+export interface SetupResource<T> {
+  id: string;
+  label: string;
+  configuration: T;
+}
+export interface SetupGlobalSettings {
+  defaults: import("./types").ManagedDefaultOverrides | null;
+  mcpServers: SetupResource<import("./types").ManagedMcpServer>[];
+  searchProviders: SetupResource<import("./types").ManagedSearchProvider>[];
+  telemetryProfiles: SetupResource<import("./types").ManagedTelemetryProfile>[];
+}
+export function setupContents(item: SetupPackage): string {
+  const global = item.globalSettings;
+  return [
+    item.providers.length ? `${item.providers.length} providers` : "",
+    item.providers.some((p) => p.models.length)
+      ? `${item.providers.reduce((n, p) => n + p.models.length, 0)} models`
+      : "",
+    global?.defaults ? "global defaults" : "",
+    global?.mcpServers.length ? `${global.mcpServers.length} MCP servers` : "",
+    global?.searchProviders.length
+      ? `${global.searchProviders.length} search providers`
+      : "",
+    global?.telemetryProfiles.length
+      ? `${global.telemetryProfiles.length} telemetry profiles`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 export const SETUP_CHANGED_EVENT = "colossus-setup-changed";
 export function setupChanged() {

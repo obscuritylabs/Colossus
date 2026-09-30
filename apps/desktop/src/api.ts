@@ -71,6 +71,7 @@ export function applySetupPackage(request: {
   sha256: string;
   trustCertificates: boolean;
   replaceExisting: boolean;
+  applyDefaults?: boolean;
 }): Promise<void> {
   return call("apply_setup_package", { request });
 }

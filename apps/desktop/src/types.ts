@@ -557,6 +557,7 @@ export interface ManagedSpaceConfigurationSnapshot {
   statusMessage: string;
   pendingGlobalRevision: number | null;
   configuration: ManagedSpaceConfiguration;
+  effectiveModelRoles: Record<string, string>;
   effectiveValues: ManagedEffectiveValue[];
   effectiveYaml: string;
 }

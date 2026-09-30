@@ -1,0 +1,42 @@
+.managed-profile-resource {
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+}
+.managed-profile-resource:last-child {
+  border-bottom: 0;
+}
+.managed-profile-resource .managed-list-row,
+.profile-diagnostic-detail {
+  border-bottom: 0;
+}
+.managed-profile-resource .managed-list-row small {
+  overflow-wrap: anywhere;
+}
+.profile-diagnostic-progress {
+  padding: 8px 14px;
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+}
+.profile-diagnostic-checks {
+  display: grid;
+  gap: 12px;
+  max-height: 240px;
+  padding: 12px;
+  margin: 0;
+  list-style: none;
+  overflow: auto;
+  background: var(--surface-control);
+  border-radius: 6px;
+}
+.profile-diagnostic-checks li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.profile-diagnostic-checks li > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.profile-diagnostic-checks p {
+  margin: 4px 0 0;
+}

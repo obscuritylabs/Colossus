@@ -156,7 +156,7 @@ fn source_from_members(
 }
 
 fn validate_manifest(manifest: &Manifest) -> Result<(), CommandErrorDto> {
-    if manifest.schema_version != 1 {
+    if !matches!(manifest.schema_version, 1 | 2) {
         return Err(invalid("This setup package version is unsupported."));
     }
     if !valid_id(&manifest.id)
@@ -165,7 +165,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), CommandErrorDto> {
         || manifest.version.is_empty()
         || manifest.version.len() > 64
         || manifest.description_markdown.len() > 16_384
-        || manifest.providers.is_empty()
+        || (manifest.schema_version == 1 && manifest.providers.is_empty())
         || manifest.providers.len() > 16
         || manifest.providers.iter().any(|(id, p)| {
             !valid_id(id)

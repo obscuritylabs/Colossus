@@ -103,6 +103,100 @@ fn explicit_unsupported_capabilities_and_custom_metadata_are_preserved() {
 }
 
 #[test]
+fn custom_gateway_cards_normalize_vllm_context_and_tooling_support() {
+    let models = normalize(json!({"data": [{
+        "id": "custom-chat", "max_model_len": 131_072,
+        "tooling_support": true, "max_tokens_field": "max_completion_tokens"
+    }]}));
+    let model = &models[0];
+    assert_eq!(model.context_window_tokens, Some(131_072));
+    assert_eq!(model.tool_calls, Some(true));
+    // A wire-parameter name does not advertise an output ceiling or other capabilities.
+    assert_eq!(model.max_output_tokens, None);
+    assert_eq!(model.image_inputs, None);
+    assert_eq!(model.streaming, None);
+}
+
+#[test]
+fn nested_capabilities_normalize_known_fields_and_preserve_false() {
+    for capabilities in [
+        json!({"tool_calls": true, "image_inputs": true, "streaming": false}),
+        json!({"supports_tool_calls": true, "supports_image_inputs": true, "supports_streaming": false}),
+        json!({"tooling_support": true, "image_inputs": true, "streaming": false}),
+    ] {
+        let models = normalize(json!({"data": [{
+            "id": "custom-responses", "context_window_tokens": 200_000,
+            "max_output_tokens": 32_000, "capabilities": capabilities
+        }]}));
+        let model = &models[0];
+        assert_eq!(model.context_window_tokens, Some(200_000));
+        assert_eq!(model.max_output_tokens, Some(32_000));
+        assert_eq!(model.tool_calls, Some(true));
+        assert_eq!(model.image_inputs, Some(true));
+        assert_eq!(model.streaming, Some(false));
+    }
+}
+
+#[test]
+fn explicit_capability_values_precede_nested_values_and_parameter_lists() {
+    let models = normalize(json!({"data": [{
+        "id": "conflicting", "tool_calls": false, "tooling_support": true,
+        "image_inputs": false, "streaming": false,
+        "capabilities": {"tool_calls": true, "image_inputs": true, "streaming": true},
+        "supported_parameters": ["tools"], "input_modalities": ["image"],
+        "context_window_tokens": 64_000, "context_window": 128_000, "max_model_len": 256_000
+    }]}));
+    let model = &models[0];
+    assert_eq!(model.context_window_tokens, Some(64_000));
+    assert_eq!(model.tool_calls, Some(false));
+    assert_eq!(model.image_inputs, Some(false));
+    assert_eq!(model.streaming, Some(false));
+
+    let nested = normalize(json!({"data": [{
+        "id": "nested", "capabilities": {"tooling_support": false, "image_inputs": false},
+        "supported_parameters": ["tools"], "input_modalities": ["image"]
+    }]}));
+    assert_eq!(nested[0].tool_calls, Some(false));
+    assert_eq!(nested[0].image_inputs, Some(false));
+}
+
+#[test]
+fn malformed_optional_capabilities_do_not_hide_valid_aliases() {
+    let models = normalize(json!({"data": [{
+        "id": "nullable", "tool_calls": null, "tooling_support": true,
+        "context_window_tokens": null, "context_window": "131072", "max_model_len": 131_072,
+        "max_output_tokens": 0, "max_completion_tokens": 16_384,
+        "image_inputs": "true", "streaming": 1,
+        "capabilities": {"image_inputs": false, "streaming": false}
+    }]}));
+    assert_eq!(models[0].tool_calls, Some(true));
+    assert_eq!(models[0].image_inputs, Some(false));
+    assert_eq!(models[0].streaming, Some(false));
+    assert_eq!(models[0].context_window_tokens, Some(131_072));
+    assert_eq!(models[0].max_output_tokens, Some(16_384));
+}
+
+#[test]
+fn unrelated_azure_capabilities_and_malformed_extensions_stay_unknown() {
+    for capabilities in [
+        json!({"chat_completion": true, "completion": true, "inference": true, "embeddings": false}),
+        json!({"tooling_support": "true", "image_inputs": 1, "streaming": {"enabled": true}}),
+        json!(["tool_calls", "image_inputs", "streaming"]),
+    ] {
+        let models = normalize(json!({"data": [{
+            "id": "unknown", "max_model_len": -1, "max_tokens_field": "max_completion_tokens",
+            "capabilities": capabilities
+        }]}));
+        let model = &models[0];
+        assert_eq!(model.context_window_tokens, None);
+        assert_eq!(model.max_output_tokens, None);
+        assert_eq!(model.tool_calls, None);
+        assert_eq!(model.image_inputs, None);
+        assert_eq!(model.streaming, None);
+    }
+}
+
+#[test]
 fn cards_bound_text_and_numbers_and_deduplicate_exact_ids() {
     let models = normalize(json!({"data": [
         {"id": "z"},

@@ -159,5 +159,90 @@
   },
   "certificateFingerprints": [],
   "existingCertificateFingerprints": [],
-  "replacesVersion": null
+  "replacesVersion": null,
+  "globalSettings": {
+    "defaults": {
+      "accessProfile": "development",
+      "executionBoundary": "workspace_isolated",
+      "terminalEnabled": false,
+      "fieldOverrides": [
+        {
+          "fieldId": "agent.maxTurns",
+          "value": 25
+        },
+        {
+          "fieldId": "sandbox.timeoutMs",
+          "value": 60000
+        },
+        {
+          "fieldId": "sandbox.maxOutputBytes",
+          "value": 1048576
+        }
+      ]
+    },
+    "mcpServers": [
+      {
+        "id": "company-docs",
+        "label": "Company documentation",
+        "configuration": {
+          "name": "company-docs",
+          "transport": "streamable_http",
+          "command": null,
+          "args": [],
+          "workingDirectory": null,
+          "environmentCredentials": {},
+          "url": "https://docs.example.com/mcp",
+          "headers": {},
+          "credentialHeaders": {
+            "Authorization": {
+              "scheme": "Bearer",
+              "credentialId": "env:COMPANY_DOCS_TOKEN"
+            }
+          },
+          "allowStateless": false,
+          "oauth": null,
+          "allowedTools": ["search", "read"],
+          "researchTools": [],
+          "timeoutMs": 30000,
+          "maxOutputBytes": 65536
+        }
+      }
+    ],
+    "searchProviders": [
+      {
+        "id": "company-search",
+        "label": "Company search",
+        "configuration": {
+          "profile": "company-search",
+          "kind": "searxng",
+          "endpoint": "https://search.example.com/search",
+          "credentialId": "env:COMPANY_SEARCH_TOKEN",
+          "authHeader": "X-Api-Key",
+          "timeoutMs": 30000
+        }
+      }
+    ],
+    "telemetryProfiles": [
+      {
+        "id": "company-telemetry",
+        "label": "Company telemetry",
+        "configuration": {
+          "name": "colossus-desktop",
+          "endpoint": "https://telemetry.example.com",
+          "protocol": "grpc",
+          "timeoutMs": 10000,
+          "tracesEnabled": true,
+          "traceSampleRatioMillionths": 100000,
+          "metricsEnabled": true,
+          "metricExportIntervalMs": 60000,
+          "logsOtlp": false,
+          "logsStdoutJson": false,
+          "journalPayloads": "disabled",
+          "acknowledgeSensitiveContent": false,
+          "acknowledgeInsecureTransport": false,
+          "resourceAttributes": {}
+        }
+      }
+    ]
+  }
 }
