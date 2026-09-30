@@ -591,6 +591,8 @@ pub(crate) fn export_setup_package(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SetupLinkInput {
     id: String,
+    #[serde(default)]
+    provider_resource_id: Option<String>,
     url: String,
 }
 
@@ -606,19 +608,25 @@ pub(crate) async fn open_setup_link(
     use tauri::Manager as _;
     let _guard = connect_guard(&state)?;
     let settings = settings_store()?.load()?;
-    let package = reviews.instructions(&settings, &request.id)?;
+    let belongs_to_instructions = if let Some(id) = &request.provider_resource_id {
+        super::provider_presentation(&settings, id)
+            .is_some_and(|value| value.description_markdown.contains(&request.url))
+    } else {
+        let package = reviews.instructions(&settings, &request.id)?;
+        package.manifest.description_markdown.contains(&request.url)
+            || package
+                .manifest
+                .providers
+                .values()
+                .any(|p| p.description_markdown.contains(&request.url))
+    };
     let url =
         url::Url::parse(&request.url).map_err(|_| invalid("The instruction link is invalid."))?;
     if request.url.len() > 2048
         || !matches!(url.scheme(), "https" | "http")
         || !url.username().is_empty()
         || url.password().is_some()
-        || !(package.manifest.description_markdown.contains(&request.url)
-            || package
-                .manifest
-                .providers
-                .values()
-                .any(|p| p.description_markdown.contains(&request.url)))
+        || !belongs_to_instructions
     {
         return Err(invalid(
             "Choose an HTTP(S) link from the setup instructions.",

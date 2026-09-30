@@ -60,6 +60,19 @@ models, credentials, and existing workspaces. Delete unwanted providers and mode
 from their normal inventory actions. Older saved setups are added to the inventory
 once when Desktop opens them; later inventory deletions stay deleted.
 
+### Add provider instructions and icons
+
+In **Settings > Global > Providers**, add or edit a provider and open **Advanced
+options**. Write a Markdown description or token-access instructions and use
+**Preview** to check the formatting. You can choose a PNG icon and an optional dark
+theme icon. Saved instructions appear in the provider's details; its custom icon
+appears wherever Desktop shows that provider.
+
+These presentation settings belong to Desktop's setup manifest. Saving them does
+not change model routing or restart a workspace. **Export global setup** includes
+your current instructions and embeds the PNGs for offline import. Clearing a field
+removes its custom value even if the provider originally came from a setup file.
+
 ## Package layout
 
 The archive has no enclosing directory:
@@ -153,7 +166,8 @@ the current, unarchived provider, model, MCP, search, and telemetry definitions 
 the current global defaults. It excludes catalog history, workspace data, stored
 secrets, and machine credential IDs. Archived resources are omitted. Provider and
 model profile names must be unique for export; rename conflicting profiles first.
-Provider instructions and icons are retained for matching imported connections.
+Provider instructions and icons include your saved edits, or the original details
+for matching imported connections when you have not customized them.
 Exporting a saved package instead preserves that package's original definitions.
 
 The optional `desktop` section reuses Desktop's typed settings. Each catalog item

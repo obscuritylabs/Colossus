@@ -120,6 +120,17 @@ function renderSidebar(
 }
 
 describe("WorkSidebar", () => {
+  it("keeps Shell available when the managed TUI is offline", () => {
+    const markup = renderSidebar({ terminalAvailable: false });
+    const buttons = markup.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
+    expect(
+      buttons.find((button) => button.includes("Open Shell")),
+    ).not.toContain("disabled");
+    expect(
+      buttons.find((button) => button.includes("Open Colossus TUI")),
+    ).toContain("disabled");
+  });
+
   it("shows workspace context once and uses the durable run title", () => {
     const markup = renderSidebar();
 

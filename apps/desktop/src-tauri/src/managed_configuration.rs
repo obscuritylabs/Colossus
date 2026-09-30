@@ -258,6 +258,9 @@ pub(crate) struct GlobalConfigurationSetting {
     pub(crate) revision: u64,
     #[serde(default)]
     pub(crate) providers: Vec<CatalogEntrySetting<ProviderSetting>>,
+    /// User-authored presentation overrides, keyed by stable catalog ID.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) provider_presentations: BTreeMap<String, crate::setup_package::ProviderPresentation>,
     #[serde(default)]
     pub(crate) models: Vec<CatalogEntrySetting<ModelSetting>>,
     #[serde(default)]
@@ -277,6 +280,7 @@ impl Default for GlobalConfigurationSetting {
         Self {
             revision: 1,
             providers: Vec::new(),
+            provider_presentations: BTreeMap::new(),
             models: Vec::new(),
             mcp_servers: Vec::new(),
             search_providers: Vec::new(),
@@ -620,6 +624,12 @@ pub(crate) fn validate_configuration(
         || global.credentials.len() > MAX_CATALOG_ENTRIES
     {
         return Err(configuration_error());
+    }
+    for (id, presentation) in &global.provider_presentations {
+        if !global.providers.iter().any(|entry| &entry.id == id) {
+            return Err(configuration_error());
+        }
+        presentation.clone().normalized()?;
     }
     validate_default_revisions(&global.defaults)?;
     validate_entries(&global.providers)?;

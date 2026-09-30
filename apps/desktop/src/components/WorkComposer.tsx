@@ -7,6 +7,7 @@ import {
   IconFolder,
   IconPaperclip,
   IconPlaylistAdd,
+  IconPlayerStopFilled,
   IconPlugConnected,
   IconRouteAltLeft,
   IconSend2,
@@ -101,6 +102,10 @@ interface WorkComposerProps {
   activeWorkRunning: boolean;
   activeWorkNeedsInput: boolean;
   activeWorkRedirectable: boolean;
+  stopping?: boolean;
+  queuePaused?: boolean;
+  onStop: () => void;
+  onResumeQueue: () => void;
   queuedMessages: readonly QueuedMessage[];
   attachmentsAvailable: boolean;
   attachments: readonly ArtifactReference[];
@@ -155,6 +160,10 @@ export function WorkComposer({
   activeWorkRunning,
   activeWorkNeedsInput,
   activeWorkRedirectable,
+  stopping = false,
+  queuePaused = false,
+  onStop,
+  onResumeQueue,
   queuedMessages,
   attachmentsAvailable,
   attachments,
@@ -559,6 +568,9 @@ export function WorkComposer({
         )}
         <NextUpQueue
           messages={queuedMessages}
+          paused={queuePaused}
+          resumeDisabled={!canCompose || activeWorkRunning || stopping}
+          onResume={onResumeQueue}
           onEdit={onEditQueuedMessage}
           onDelete={onDeleteQueuedMessage}
           onRetry={onRetryQueuedMessage}
@@ -759,7 +771,9 @@ export function WorkComposer({
                     ? "Queued messages wait until the required response is resolved. Redirect stops this response and sends your guidance next."
                     : "Enter adds to Next up. Redirect stops this response and sends your guidance next."
                   : queueing
-                    ? "New messages join Next up. Resolve or remove a failed item to continue in order."
+                    ? queuePaused
+                      ? "Next up is paused. Resume when you are ready; your draft and queued messages are kept."
+                      : "New messages join Next up. Resolve or remove a failed item to continue in order."
                     : mode === "plan"
                       ? planRevision === null
                         ? "Create a plan before making changes."
@@ -859,38 +873,60 @@ export function WorkComposer({
               Redirect
             </button>
           ) : null}
-          <button
-            className={`send-button${queueing && !slashCommandDraft ? " is-queue" : ""}`}
-            type="submit"
-            aria-label={
-              submitting
-                ? "Sending prompt"
-                : slashCommandDraft
-                  ? "Run command"
-                  : queueing
-                    ? "Add message to Next up"
-                    : "Send prompt"
-            }
-            disabled={
-              !canCompose ||
-              prompt.trim().length === 0 ||
-              promptOverLimit ||
-              (!slashCommandDraft &&
-                (roleMissing ||
-                  (mode === "research" && researchSources.length === 0)))
-            }
-          >
-            {submitting ? (
-              <span className="spinner" aria-hidden="true" />
-            ) : queueing && !slashCommandDraft ? (
-              <>
-                <IconPlaylistAdd size={18} stroke={1.9} aria-hidden="true" />
-                <span>Queue</span>
-              </>
-            ) : (
-              <IconSend2 size={19} stroke={2} aria-hidden="true" />
-            )}
-          </button>
+          {!activeWorkRunning || prompt.trim().length > 0 ? (
+            <button
+              className={`send-button${queueing && !slashCommandDraft ? " is-queue" : ""}`}
+              type="submit"
+              aria-label={
+                submitting
+                  ? "Sending prompt"
+                  : slashCommandDraft
+                    ? "Run command"
+                    : queueing
+                      ? "Add message to Next up"
+                      : "Send prompt"
+              }
+              disabled={
+                !canCompose ||
+                prompt.trim().length === 0 ||
+                promptOverLimit ||
+                (!slashCommandDraft &&
+                  (roleMissing ||
+                    (mode === "research" && researchSources.length === 0)))
+              }
+            >
+              {submitting ? (
+                <span className="spinner" aria-hidden="true" />
+              ) : queueing && !slashCommandDraft ? (
+                <>
+                  <IconPlaylistAdd size={18} stroke={1.9} aria-hidden="true" />
+                  <span>Queue</span>
+                </>
+              ) : (
+                <IconSend2 size={19} stroke={2} aria-hidden="true" />
+              )}
+            </button>
+          ) : null}
+          {activeWorkRunning ? (
+            <button
+              className={`send-button is-stop${stopping ? " is-stopping" : ""}`}
+              type="button"
+              aria-label={stopping ? "Stopping response" : "Stop response"}
+              title={
+                stopping
+                  ? "Waiting for the response to stop"
+                  : "Stop response and pause queued messages"
+              }
+              disabled={!canCompose || !activeWorkRedirectable || stopping}
+              onClick={onStop}
+            >
+              {stopping ? (
+                <span className="spinner" aria-hidden="true" />
+              ) : (
+                <IconPlayerStopFilled size={16} aria-hidden="true" />
+              )}
+            </button>
+          ) : null}
         </div>
       </div>
       {promptOverLimit ? (

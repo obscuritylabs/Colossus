@@ -3,7 +3,7 @@ use crate::{
     ActionClass, ActionDescriptor, ResolvedAction, ResolvedTool, ToolAvailability, ToolDescriptor,
     ToolPrerequisite, validate_config,
 };
-use colossus_contracts::ToolSpec;
+use colossus_contracts::{ToolNamePattern, ToolSpec};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Resolve trusted tools and actions through one profile.
@@ -84,9 +84,20 @@ pub fn resolve_access(
         .map(|action| (action.name.as_str(), (action.class, action.decision)))
         .collect::<BTreeMap<_, _>>();
 
-    let include_all = config.tools.include.iter().any(|name| name == "*");
     let includes = config.tools.include.iter().collect::<BTreeSet<_>>();
     let excludes = config.tools.exclude.iter().collect::<BTreeSet<_>>();
+    let patterns = |names: &[String]| -> Result<Vec<ToolNamePattern>, AccessError> {
+        names
+            .iter()
+            .filter(|name| name.contains('*'))
+            .map(|name| {
+                ToolNamePattern::parse(name)
+                    .map_err(|error| AccessError::Invalid(error.to_string()))
+            })
+            .collect()
+    };
+    let include_patterns = patterns(&config.tools.include)?;
+    let exclude_patterns = patterns(&config.tools.exclude)?;
     let known_tools = tool_specs
         .iter()
         .map(|spec| spec.name.as_str())
@@ -96,7 +107,7 @@ pub fn resolve_access(
         .include
         .iter()
         .chain(&config.tools.exclude)
-        .filter(|name| name.as_str() != "*")
+        .filter(|name| !name.contains('*'))
     {
         if !known_tools.contains(name.as_str()) {
             return Err(AccessError::Unclassified(name.clone()));
@@ -109,7 +120,13 @@ pub fn resolve_access(
             .get(&spec.name)
             .ok_or_else(|| AccessError::Unclassified(format!("tool {}", spec.name)))?;
         let exactly_included = includes.contains(&spec.name);
-        let explicitly_selected = include_all || exactly_included;
+        let matched_include = include_patterns
+            .iter()
+            .find(|pattern| pattern.matches(&spec.name));
+        let matched_exclude = exclude_patterns
+            .iter()
+            .find(|pattern| pattern.matches(&spec.name));
+        let explicitly_selected = matched_include.is_some() || exactly_included;
         let selected = match config.profile {
             AccessProfile::Minimal => spec.effect_action.is_none(),
             AccessProfile::Development | AccessProfile::AllowAll => true,
@@ -122,6 +139,11 @@ pub fn resolve_access(
             .copied();
         let (availability, reason) = if excludes.contains(&spec.name) {
             (ToolAvailability::Hidden, "explicit exclude".into())
+        } else if let Some(pattern) = matched_exclude {
+            (
+                ToolAvailability::Hidden,
+                format!("wildcard exclude: {}", pattern.as_str()),
+            )
         } else if !selected {
             (
                 ToolAvailability::Hidden,
@@ -141,8 +163,11 @@ pub fn resolve_access(
             )
         } else if exactly_included {
             (ToolAvailability::Active, "explicit include".into())
-        } else if include_all {
-            (ToolAvailability::Active, "wildcard include".into())
+        } else if let Some(pattern) = matched_include {
+            (
+                ToolAvailability::Active,
+                format!("wildcard include: {}", pattern.as_str()),
+            )
         } else {
             (ToolAvailability::Active, "profile selection".into())
         };

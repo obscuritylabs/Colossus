@@ -77,7 +77,7 @@ test("composer retains visible, accessible controls at narrow widths in both the
       ).toBeInViewport();
       await expect(
         composer.getByRole("button", {
-          name: "Add message to Next up",
+          name: "Stop response",
           exact: true,
         }),
       ).toBeInViewport();

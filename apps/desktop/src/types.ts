@@ -452,6 +452,12 @@ export interface ManagedExtensionInventory {
   workflows: ManagedWorkflowCatalogEntry[];
 }
 
+export interface ProviderPresentation {
+  descriptionMarkdown: string;
+  icon: string | null;
+  darkIcon: string | null;
+}
+
 export interface ManagedProviderCatalogValue {
   profile: string;
   kind: ProviderKind;
@@ -585,6 +591,7 @@ export interface ManagedLockedInvariant {
 }
 
 export interface ManagedSettingsSnapshot {
+  providerPresentations?: Record<string, ProviderPresentation>;
   globalConfiguration: ManagedGlobalConfiguration;
   credentialAvailability: Record<
     string,

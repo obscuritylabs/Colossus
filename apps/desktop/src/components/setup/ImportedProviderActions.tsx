@@ -26,7 +26,9 @@ export function ImportedProviderActions({
   credentials,
   busy,
   onChanged,
+  showInstructions = true,
 }: {
+  showInstructions?: boolean;
   item: SetupPackage;
   provider: SetupProvider;
   desktop: DesktopStatus;
@@ -74,17 +76,20 @@ export function ImportedProviderActions({
     >
       <h4>From {item.name}</h4>
       <BrowserLinkContext.Provider
-        value={(url) => {
-          void openSetupLink(item.id, url).catch((failure: unknown) =>
-            setError(
-              failure instanceof Error
-                ? failure.message
-                : "Could not open instructions.",
-            ),
+        value={(url, originalHref) => {
+          void openSetupLink(item.id, originalHref ?? url).catch(
+            (failure: unknown) =>
+              setError(
+                failure instanceof Error
+                  ? failure.message
+                  : "Could not open instructions.",
+              ),
           );
         }}
       >
-        <MarkdownContent content={provider.descriptionMarkdown} />
+        {showInstructions ? (
+          <MarkdownContent content={provider.descriptionMarkdown} />
+        ) : null}
       </BrowserLinkContext.Provider>
       {provider.credentialRequired ? (
         <div className="imported-provider-control">

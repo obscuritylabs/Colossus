@@ -29,7 +29,7 @@ Colossus resolves the effective tool surface in this order:
 | --- | --- |
 | Trusted catalog | Built-in tools plus configured integration operations and explicitly enabled plugin MCP tools |
 | Profile | Selects the baseline tools and built-in action decisions |
-| Tool overrides | Adds exact includes, then removes exact excludes |
+| Tool overrides | Adds matching includes, then removes matching excludes |
 | Prerequisites | Hides tools whose required declared-or-ambient filesystem, executable, network, search, UI, or MCP authority is absent |
 | Runtime mode | Plan Mode, Goal Mode, workflow lineage, and child scope may narrow the catalog further |
 | Effect authorization | Policy, approval, the Safety Kernel, a permit, sandbox obligations, quarantine, and post-effect policy govern each call |
@@ -75,7 +75,7 @@ after the baseline.
 | `minimal` | Tools without an effect action | Provider actions allowed; every other effect denied |
 | `development` | Every applicable trusted candidate tool | Provider, read, and Colossus local-state actions allowed; workspace mutation, execution, external network, and administration require approval |
 | `allow_all` | Every applicable trusted candidate tool | Every registered trusted action allowed |
-| `pinned` | Exact entries from `tools.include` only | `provider.echo` allowed; every other action denied |
+| `pinned` | Exact names or patterns from `tools.include` only | `provider.echo` allowed; every other action denied |
 
 “Applicable” means the tool's prerequisites are currently satisfied. A profile does not
 create those prerequisites.
@@ -124,7 +124,7 @@ when the blast radius must be smaller.
 
 `pinned` is deny-by-default on both dimensions:
 
-- Only named tool includes are selected.
+- Only tools selected by exact names or patterns in `tools.include` are selected.
 - Only `provider.echo` is allowed by the profile's action baseline.
 
 Selecting a tool does not allow its action. A practical pinned configuration therefore
@@ -171,18 +171,39 @@ decision for any selected tool.
 
 | Field | Meaning | Default |
 | --- | --- | --- |
-| `include` | Exact tools added to the profile selection, or `"*"` as the sole include selector | `[]` |
-| `exclude` | Exact tools removed after profile and include selection | `[]` |
+| `include` | Exact names or star patterns added to the profile selection; `"*"` must stand alone | `[]` |
+| `exclude` | Exact names or star patterns removed after profile and include selection | `[]` |
 
-### Exact selector rules
+### Selector rules
 
 - Entries must be nonempty and unique.
 - Every exact name must exist in the trusted runtime catalog.
-- The same exact tool cannot appear in both lists.
+- The same selector cannot appear in both lists; overlapping patterns are allowed.
 - `include: ["*"]` is valid, but `"*"` must be its only include entry.
 - `exclude` never accepts `"*"`.
-- Exact excludes may accompany `include: ["*"]` to express “all except these tools.”
-- Excludes win over profile selection and wildcard inclusion.
+- Exact or patterned excludes may accompany `include: ["*"]` to express “all except these tools.”
+- Excludes win over profile selection and exact or wildcard inclusion.
+
+Patterns use `*` for zero or more characters and match the entire name, case-sensitively.
+For example, `filesystem.*` selects the filesystem family, `get_*` selects names starting
+with `get_`, and `*_search` selects names ending in `_search`. A dot is literal.
+Patterns accept 1–128 ASCII letters, digits, dots, underscores, hyphens, and stars.
+Regex operators, `?`, character classes, escaping, and consecutive stars are unsupported.
+An unmatched pattern is valid and may match trusted tools registered later; unknown
+exact names still fail. `colossus config effective` shows the matching
+include or exclude pattern for each tool.
+
+```yaml
+access:
+  profile: pinned
+  tools:
+    include: ["filesystem.*", "git.*"]
+    exclude: ["*.write", "filesystem.replace"]
+```
+
+Use exact excludes only for names present in your runtime catalog. Tool selection does
+not grant an action, filesystem access, or network access. A name such as `get_*` is
+not proof that a tool is read-only.
 
 For example:
 
@@ -255,7 +276,8 @@ before referring to one of its dynamic tool names.
 ### Wildcard boundary
 
 `access.tools.include: ["*"]` automatically selects current and future trusted
-candidate tools registered in that runtime. This is intentionally broader than an
+candidate tools registered in that runtime. Narrower patterns such as `filesystem.*`
+also select future tools whose full names match. This is intentionally broader than an
 explicit list and should be reviewed after upgrades or extension changes.
 
 It is independent from similarly spelled wildcards:

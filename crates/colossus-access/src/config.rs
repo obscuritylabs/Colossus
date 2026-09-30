@@ -1,3 +1,4 @@
+use colossus_contracts::ToolNamePattern;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, fmt, str::FromStr};
 use thiserror::Error;
@@ -48,10 +49,10 @@ impl FromStr for AccessProfile {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolAccessConfig {
-    /// Exact tool names to expose in addition to profile selection.
+    /// Exact tool names or star patterns to expose in addition to profile selection.
     #[serde(default)]
     pub include: Vec<String>,
-    /// Exact tool names to remove from profile selection.
+    /// Exact tool names or star patterns removed after profile and include selection.
     #[serde(default)]
     pub exclude: Vec<String>,
 }
@@ -115,6 +116,13 @@ pub enum AccessError {
 pub fn validate_config(config: &AccessConfig, external_policy: bool) -> Result<(), AccessError> {
     validate_unique("access.tools.include", &config.tools.include)?;
     validate_unique("access.tools.exclude", &config.tools.exclude)?;
+    for name in config.tools.include.iter().chain(&config.tools.exclude) {
+        // Preserve existing exact extension names; only wildcard selectors use glob syntax.
+        if name.contains('*') {
+            ToolNamePattern::parse(name)
+                .map_err(|error| AccessError::Invalid(format!("access.tools: {error}")))?;
+        }
+    }
     for name in &config.tools.exclude {
         if name == "*" {
             return Err(AccessError::Invalid(
@@ -146,7 +154,7 @@ pub fn validate_config(config: &AccessConfig, external_policy: bool) -> Result<(
         .chain(&config.actions.require_approval)
         .chain(&config.actions.deny)
     {
-        if action == "*" {
+        if action.contains('*') {
             return Err(AccessError::Invalid(
                 "action wildcards are unsupported; use access.profile: allow_all".into(),
             ));

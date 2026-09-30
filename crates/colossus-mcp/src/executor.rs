@@ -1216,20 +1216,22 @@ pub(super) fn parse_tools_result(
         if schema_bytes.len() > 256 * 1024 {
             return Err(format!("MCP tool {name} schema exceeds its bound"));
         }
-        if matches!(&server.allowed_tools, ToolAllowlist::All)
-            && (tool
-                .title
+        if matches!(
+            &server.allowed_tools,
+            ToolAllowlist::All | ToolAllowlist::Patterns(_)
+        ) && (tool
+            .title
+            .as_ref()
+            .is_some_and(|value| value.len() > 8 * 1024)
+            || tool
+                .description
                 .as_ref()
-                .is_some_and(|value| value.len() > 8 * 1024)
-                || tool
-                    .description
-                    .as_ref()
-                    .is_some_and(|value| value.len() > 32 * 1024)
-                || tool
-                    .annotations
-                    .as_ref()
-                    .and_then(|annotations| annotations.title.as_ref())
-                    .is_some_and(|value| value.len() > 8 * 1024))
+                .is_some_and(|value| value.len() > 32 * 1024)
+            || tool
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.title.as_ref())
+                .is_some_and(|value| value.len() > 8 * 1024))
         {
             return Err(format!(
                 "MCP tool {name} title, description, or annotation title exceeds its bound"

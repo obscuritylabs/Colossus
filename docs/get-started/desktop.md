@@ -140,6 +140,16 @@ The key is not written to YAML, argv, environment variables, renderer state, log
 terminal sessions. Real model runs remain unavailable until this setup succeeds. Use
 the explicit offline self-test when you only need to validate local startup.
 
+### Stop a response or send a follow-up
+
+While Colossus works, the composer's send control becomes **Stop**, with a soft glow.
+Stop cancels the current response and pauses **Next up**. Your unsent draft and queued
+messages remain available; choose **Resume queue** when you want queued work to continue.
+The pause lasts for the current Desktop session, like the queued messages themselves.
+
+Type a follow-up to reveal **Queue** beside Stop. **Redirect** stops the current
+response and sends your guidance next without pausing the queue.
+
 ### Manage inherited configuration
 
 After upgrading to the credential-vault release, open **Settings → Global →
@@ -430,7 +440,8 @@ that require file uploads or device permissions. macOS browsing remains availabl
 only in preview builds.
 
 The dedicated terminal WebView can open the bundled Colossus TUI for the active managed
-workspace and, on macOS, one fixed local shell. Enabling this feature for the first time
+workspace and a regular system shell: Windows PowerShell on Windows or zsh on macOS.
+Enabling this feature for the first time
 requires a native operating-system confirmation. Consent recorded by an earlier
 TUI-only build does not silently enable shell authority. The terminal renderer cannot
 supply an executable, environment, absolute working directory, or arbitrary arguments.
@@ -439,7 +450,10 @@ renderer-initiated process spawning are disabled; manual copy and paste remain u
 actions.
 
 After enabling local terminals, **Terminal** opens the TUI in the right pane when
-Managed Local is ready. On macOS, it can open Shell while the managed runtime is
+Managed Local is ready. Use the **New shell** terminal icon in the tab bar to open a
+regular command prompt; the **New Colossus TUI** logo icon adds an agent terminal.
+Hover either icon to see its label. Each session opens in its own tab. Shell
+starts in the selected workspace and remains available while the managed runtime is
 unavailable. Explicit **Open Colossus TUI** and **Open Shell** actions select the
 requested terminal type in that pane.
 
@@ -455,14 +469,18 @@ TUI. The selection is client-scoped: it does not change the managed worker defau
 Desktop or other clients. TUI actions remain inside normal Colossus policy and audit.
 External targets never offer a TUI action.
 
-**Open Shell** is a privileged local-user convenience, not an agent tool. Native macOS
-code launches exactly the validated system `/bin/zsh -l` with a cleared,
-native-constructed environment and the selected workspace. It receives no worker
+**Open Shell** is a privileged local-user convenience, not an agent tool. Windows
+launches the OS-installed Windows PowerShell with `-NoLogo -NoProfile`; macOS launches
+the validated system `/bin/zsh -l`. Both use a cleared, native-constructed environment
+and the selected workspace. Windows keeps your command search path and uses its
+default module locations,
+but does not load PowerShell profile scripts automatically. It receives no worker
 authentication. It runs outside Colossus policy, approvals, journal, and audit. It can
 remain available while Managed Local is unavailable so an operator can inspect or
 repair the repository directly. Closing the tab, disabling the feature, closing the
-terminal window, or exiting Desktop requests best-effort process-group cleanup; macOS
-cannot guarantee cleanup after an arbitrary shell child deliberately detaches and
+terminal window, or exiting Desktop terminates the Windows process job and requests
+best-effort process-group cleanup on macOS. macOS cannot guarantee cleanup after an
+arbitrary shell child deliberately detaches and
 reparents itself.
 
 ## Inspect Git

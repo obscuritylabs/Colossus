@@ -41,12 +41,16 @@ export function ProviderIcon({
   presetId?: string;
   provider?: ProviderConnectionIdentity | null;
   size?: number;
-  customIcon?: string | null;
-  customDarkIcon?: string | null;
+  customIcon?: string | null | undefined;
+  customDarkIcon?: string | null | undefined;
 }) {
   const presentation = useSetupPresentation(provider);
-  const icon = safeSetupIcon(customIcon ?? presentation?.icon);
-  const darkIcon = safeSetupIcon(customDarkIcon ?? presentation?.darkIcon);
+  const icon = safeSetupIcon(
+    customIcon === undefined ? presentation?.icon : customIcon,
+  );
+  const darkIcon = safeSetupIcon(
+    customDarkIcon === undefined ? presentation?.darkIcon : customDarkIcon,
+  );
   const [failedIcon, setFailedIcon] = useState<string | null>(null);
   const brand =
     presetId === undefined
@@ -54,8 +58,8 @@ export function ProviderIcon({
       : providerPresetBrand(presetId);
   const [failedBrand, setFailedBrand] = useState<ProviderBrand | null>(null);
   const asset =
-    icon && icon !== failedIcon
-      ? { light: icon, dark: darkIcon }
+    (icon || darkIcon) && (icon ?? darkIcon) !== failedIcon
+      ? { light: icon ?? darkIcon!, dark: darkIcon }
       : brand && brand !== failedBrand
         ? assets[brand]
         : null;
@@ -77,7 +81,7 @@ export function ProviderIcon({
             draggable={false}
             onError={() => {
               setFailedBrand(brand);
-              if (icon) setFailedIcon(icon);
+              setFailedIcon(icon ?? darkIcon ?? null);
             }}
           />
           {asset.dark ? (
@@ -90,7 +94,7 @@ export function ProviderIcon({
               draggable={false}
               onError={() => {
                 setFailedBrand(brand);
-                if (icon) setFailedIcon(icon);
+                setFailedIcon(icon ?? darkIcon ?? null);
               }}
             />
           ) : null}

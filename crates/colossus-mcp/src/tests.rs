@@ -269,6 +269,10 @@ fn tool_wildcard_is_exclusive_and_empty_or_duplicate_lists_fail_closed() {
     assert_eq!(wildcard.summary(), vec!["*"]);
     assert!(ToolAllowlist::from_config("remote", &["*".into(), "search".into()]).is_err());
     assert!(ToolAllowlist::from_config("remote", &[]).is_err());
+    assert!(ToolAllowlist::from_config("remote", &["get_*".into(), "get_*".into()]).is_err());
+    for invalid in ["get_[ab]", "get_?", "get_**", "^get_.*$"] {
+        assert!(ToolAllowlist::from_config("remote", &[invalid.into()]).is_err());
+    }
     assert!(ToolAllowlist::from_config("remote", &["search".into(), "search".into()]).is_err());
 }
 
@@ -822,7 +826,37 @@ fn wildcard_releases_new_valid_tools_but_rejects_invalid_discovery_names() {
         }]
     }))
     .expect("tools");
-    assert!(parse_tools_result(oversized_description, &server).is_err());
+    assert!(parse_tools_result(oversized_description.clone(), &server).is_err());
+    let mut patterned = server;
+    patterned.allowed_tools = ToolAllowlist::from_config("remote", &["valid_*".into()]).unwrap();
+    assert!(parse_tools_result(oversized_description, &patterned).is_err());
+    patterned.allowed_tools = ToolAllowlist::from_config(
+        "remote",
+        &["get_*".into(), "*_search".into(), "echo".into()],
+    )
+    .unwrap();
+    let result = serde_json::from_value(json!({"tools": [
+        {"name": "get_user", "inputSchema": {"type": "object"}},
+        {"name": "get_future_tool", "inputSchema": {"type": "object"}},
+        {"name": "web_search", "inputSchema": {"type": "object"}},
+        {"name": "echo", "inputSchema": {"type": "object"}},
+        {"name": "delete_user", "inputSchema": {"type": "object"}},
+        {"name": "Get_user", "inputSchema": {"type": "object"}}
+    ]}))
+    .unwrap();
+    let page = parse_tools_result(result, &patterned).unwrap();
+    assert_eq!(
+        page.tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["echo", "get_future_tool", "get_user", "web_search"]
+    );
+    assert!(!patterned.allowed_tools.allows("delete_user"));
+    assert_eq!(
+        patterned.allowed_tools.summary(),
+        ["*_search", "echo", "get_*"]
+    );
 }
 
 #[test]
@@ -850,6 +884,7 @@ fn wildcard_and_explicit_discovery_preserve_bounded_risk_review_metadata() {
     for allowlist in [
         ToolAllowlist::All,
         ToolAllowlist::Explicit(BTreeSet::from(["echo".into()])),
+        ToolAllowlist::from_config("everything", &["ec*".into()]).expect("pattern"),
     ] {
         let mut server = base.clone();
         server.allowed_tools = allowlist;
@@ -1676,4 +1711,53 @@ async fn live_splunk_streamable_http_discovery() {
     .await
     .expect("Splunk discovery");
     assert!(matches!(result, RemoteOperationResult::Tools(_)));
+}
+
+#[test]
+fn pattern_allowlist_checks_invocations_and_preserves_schema_binding() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut server = remote_server("https://mcp.example.test/rpc");
+    server.allowed_tools = vec!["get_*".into()];
+    let executor = McpExecutor::new(
+        &McpConfig {
+            servers: BTreeMap::from([("remote".into(), server)]),
+            ..McpConfig::default()
+        },
+        workspace.path(),
+        "native",
+        Arc::new(McpEffectShapeExecutor {
+            reference: "unused",
+        }),
+    )
+    .unwrap();
+    let schema = json!({"type": "object", "properties": {"id": {"type": "string"}},
+        "required": ["id"], "additionalProperties": false});
+    let request = |tool: &str, arguments: Value, hash: String| {
+        executor.request(
+            Actor {
+                actor_type: ActorType::System,
+                id: "test".into(),
+            },
+            ExecutionContext::default(),
+            McpOperation::CallTool {
+                server: "remote".into(),
+                tool: tool.into(),
+                description: None,
+                annotations: None,
+                arguments,
+                input_schema: Box::new(schema.clone()),
+                schema_sha256: hash,
+            },
+        )
+    };
+    let hash = test_schema_sha256(&schema);
+    assert!(request("get_user", json!({"id":"1"}), hash.clone()).is_ok());
+    for denied in ["delete_user", "Get_user", "forget_user"] {
+        assert!(matches!(
+            request(denied, json!({"id":"1"}), hash.clone()),
+            Err(McpError::ToolDenied(_))
+        ));
+    }
+    assert!(request("get_user", json!({"id":1}), hash.clone()).is_err());
+    assert!(request("get_user", json!({"id":"1"}), "0".repeat(64)).is_err());
 }

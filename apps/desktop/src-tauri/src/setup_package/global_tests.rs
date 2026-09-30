@@ -337,3 +337,44 @@ fn credential_free_advanced_defaults_remain_portable_without_rewriting_user_stri
             .contains("host:literal-user-query")
     );
 }
+
+#[test]
+fn setup_export_import_preserves_tool_patterns_and_access_exclusions() {
+    let mut package = package();
+    let mut config: Value = serde_saphyr::from_str(&package.config_yaml).unwrap();
+    config["desktop"]["mcpServers"][0]["configuration"]["allowedTools"] =
+        json!(["get_*", "*_search", "echo"]);
+    config["desktop"]["defaults"]["fieldOverrides"] = json!([
+        {"fieldId":"access.tools.include", "value":["filesystem.*"]},
+        {"fieldId":"access.tools.exclude", "value":["*.write"]}
+    ]);
+    package.config_yaml = serde_saphyr::to_string(&config).unwrap();
+    let mut settings = DesktopSettings::default();
+    catalog::import_catalog(&mut settings, &mut package, None).unwrap();
+    catalog::apply_defaults(&mut settings, &package).unwrap();
+    let exported = commands::export_current(&settings).unwrap();
+    let bytes = archive::write(&exported).unwrap();
+    let imported = archive::read(&bytes).unwrap();
+    let globals = globals::from_yaml(&imported.config_yaml).unwrap();
+    let inspected: Value =
+        serde_json::from_str(&configuration::inspection_yaml(&imported).unwrap()).unwrap();
+    let saved = configuration::inspected(imported, &inspected, &bytes).unwrap();
+    configuration::validate_saved(&[saved]).unwrap();
+    assert_eq!(
+        globals.mcp_servers[0].configuration.allowed_tools,
+        ["get_*", "*_search", "echo"]
+    );
+    let fields = globals.defaults.unwrap().field_overrides;
+    assert!(
+        fields
+            .iter()
+            .any(|field| field.field_id == "access.tools.include"
+                && field.value == json!(["filesystem.*"]))
+    );
+    assert!(
+        fields
+            .iter()
+            .any(|field| field.field_id == "access.tools.exclude"
+                && field.value == json!(["*.write"]))
+    );
+}

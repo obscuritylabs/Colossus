@@ -147,8 +147,6 @@ pub(crate) fn spawn_verified_windows_tui(
     size: portable_pty::PtySize,
     colossus_home: &std::path::Path,
 ) -> Result<crate::terminal::SpawnedTerminal, TerminalError> {
-    use portable_pty::MasterPty as _;
-
     let arguments = arguments
         .iter()
         .map(|argument| argument.as_os_str().to_owned())
@@ -172,6 +170,59 @@ pub(crate) fn spawn_verified_windows_tui(
         authentication_input,
         authentication_output,
     } = spawned;
+    adapt_windows_conpty(
+        colossus_windows_native::SpawnedShellConpty {
+            control,
+            child,
+            input,
+            output,
+        },
+        size,
+        Some(TuiAuthenticationChannel {
+            reader: authentication_output,
+            writer: authentication_input,
+        }),
+    )
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn spawn_windows_shell(
+    workspace: &std::path::Path,
+    workspace_identity: colossus_windows_native::FileIdentity,
+    size: portable_pty::PtySize,
+    colossus_home: &std::path::Path,
+) -> Result<crate::terminal::SpawnedTerminal, TerminalError> {
+    let mut environment = minimal_windows_environment(colossus_home);
+    for name in ["PATHEXT", "COMSPEC"] {
+        if let Some(value) = std::env::var_os(name) {
+            environment.push((name.into(), value));
+        }
+    }
+    let spawned = colossus_windows_native::spawn_system_shell_conpty(
+        &environment,
+        workspace,
+        workspace_identity,
+        size.rows,
+        size.cols,
+    )
+    .map_err(|_| TerminalError::SpawnFailed)?;
+    adapt_windows_conpty(spawned, size, None)
+}
+
+#[cfg(target_os = "windows")]
+fn adapt_windows_conpty(
+    spawned: colossus_windows_native::SpawnedShellConpty,
+    size: portable_pty::PtySize,
+    authentication_channel: Option<TuiAuthenticationChannel>,
+) -> Result<crate::terminal::SpawnedTerminal, TerminalError> {
+    use portable_pty::MasterPty as _;
+
+    let colossus_windows_native::SpawnedShellConpty {
+        control,
+        child,
+        input,
+        output,
+    } = spawned;
     let master = WindowsConptyMaster {
         control: control.clone(),
         readable: output,
@@ -192,10 +243,7 @@ pub(crate) fn spawn_verified_windows_tui(
         writer,
         child: Box::new(child),
         process_tree,
-        authentication_channel: Some(TuiAuthenticationChannel {
-            reader: authentication_output,
-            writer: authentication_input,
-        }),
+        authentication_channel,
     })
 }
 

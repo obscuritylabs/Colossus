@@ -83,6 +83,7 @@ const LOCKED_INVARIANTS: &[(&str, &str, &str)] = &[
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ManagedSettingsSnapshotDto {
     global_configuration: GlobalConfigurationSetting,
+    provider_presentations: BTreeMap<String, crate::setup_package::ProviderPresentation>,
     credential_availability: BTreeMap<String, CredentialAvailability>,
     spaces: Vec<ManagedSpaceConfigurationDto>,
     field_descriptors: Vec<FieldDescriptorDto>,
@@ -173,6 +174,8 @@ pub(crate) struct UpsertGlobalProviderInput {
     resource_id: Option<String>,
     label: String,
     provider: ProviderSetting,
+    #[serde(default)]
+    presentation: Option<crate::setup_package::ProviderPresentation>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -654,6 +657,7 @@ async fn snapshot(
     }
     Ok(ManagedSettingsSnapshotDto {
         global_configuration: settings.global_configuration.clone(),
+        provider_presentations: crate::setup_package::provider_presentations(settings),
         credential_availability: DesktopCredentials::for_settings(state, &settings_store()?)?
             .availability(
                 settings
@@ -763,16 +767,42 @@ fn apply_provider_upsert(
     {
         return Err(unknown_credential("provider"));
     }
+    let presentation = request
+        .presentation
+        .map(crate::setup_package::ProviderPresentation::normalized)
+        .transpose()?;
     let previous_revision = settings.global_configuration.revision;
-    let resource_id = upsert_catalog_entry(
-        &mut settings.global_configuration.providers,
-        request.resource_id,
-        request.label,
-        request.provider,
-        "The provider is unknown.",
-    )?;
+    // Artwork and instructions do not change the runtime connection or its pinned revision.
+    let unchanged = settings
+        .global_configuration
+        .providers
+        .iter()
+        .position(|entry| {
+            Some(&entry.id) == request.resource_id.as_ref()
+                && current_value(entry) == Some(&request.provider)
+        });
+    let (resource_id, changed) = if let Some(index) = unchanged {
+        let entry = &mut settings.global_configuration.providers[index];
+        entry.label = request.label;
+        (entry.id.clone(), BTreeSet::new())
+    } else {
+        let id = upsert_catalog_entry(
+            &mut settings.global_configuration.providers,
+            request.resource_id,
+            request.label,
+            request.provider,
+            "The provider is unknown.",
+        )?;
+        (id.clone(), BTreeSet::from([id]))
+    };
+    if let Some(presentation) = presentation {
+        settings
+            .global_configuration
+            .provider_presentations
+            .insert(resource_id, presentation);
+    }
     bump_global_revision(&mut settings.global_configuration)?;
-    advance_unaffected_spaces(settings, previous_revision, &BTreeSet::from([resource_id]));
+    advance_unaffected_spaces(settings, previous_revision, &changed);
     Ok(())
 }
 
@@ -2621,11 +2651,85 @@ mod tests {
     }
 
     #[test]
+    fn provider_presentation_edits_do_not_change_runtime_revisions() {
+        let mut settings = settings();
+        apply_provider_upsert(
+            &mut settings,
+            UpsertGlobalProviderInput {
+                expected_revision: 1,
+                resource_id: None,
+                label: "Company".into(),
+                provider: provider("https://old.example.test/v1"),
+                presentation: None,
+            },
+        )
+        .unwrap();
+        let entry = settings.global_configuration.providers[0].clone();
+        settings.spaces[0].configuration.catalog_revisions.insert(
+            "provider:primary-provider".into(),
+            CatalogReferenceSetting {
+                resource_id: entry.id.clone(),
+                revision: 1,
+            },
+        );
+        settings.spaces[0].configuration.accepted_global_revision = 2;
+        let connection = current_value(&entry).unwrap().clone();
+        let presentation = crate::setup_package::ProviderPresentation {
+            description_markdown: "Request access from **IT**.".into(),
+            ..Default::default()
+        };
+        apply_provider_upsert(
+            &mut settings,
+            UpsertGlobalProviderInput {
+                expected_revision: 2,
+                resource_id: Some(entry.id.clone()),
+                label: "Company AI".into(),
+                provider: connection.clone(),
+                presentation: Some(presentation.clone()),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            settings.global_configuration.providers[0].current_revision,
+            1
+        );
+        assert_eq!(
+            settings.global_configuration.providers[0].revisions,
+            entry.revisions
+        );
+        assert_eq!(settings.spaces[0].configuration.accepted_global_revision, 3);
+        assert_eq!(
+            settings.global_configuration.provider_presentations[&entry.id],
+            presentation
+        );
+        let before = settings.clone();
+        let invalid = crate::setup_package::ProviderPresentation {
+            icon: Some("https://tracking.example.test/icon".into()),
+            ..Default::default()
+        };
+        assert!(
+            apply_provider_upsert(
+                &mut settings,
+                UpsertGlobalProviderInput {
+                    expected_revision: 3,
+                    resource_id: Some(entry.id),
+                    label: "Company AI".into(),
+                    provider: connection,
+                    presentation: Some(invalid),
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(settings, before);
+    }
+
+    #[test]
     fn provider_and_model_edits_stay_pending_until_the_space_applies_them() {
         let mut settings = settings();
         apply_provider_upsert(
             &mut settings,
             UpsertGlobalProviderInput {
+                presentation: None,
                 expected_revision: 1,
                 resource_id: None,
                 label: "Primary provider".into(),
@@ -2667,6 +2771,7 @@ mod tests {
         apply_provider_upsert(
             &mut settings,
             UpsertGlobalProviderInput {
+                presentation: None,
                 expected_revision: 3,
                 resource_id: Some(provider_id),
                 label: "Primary provider".into(),

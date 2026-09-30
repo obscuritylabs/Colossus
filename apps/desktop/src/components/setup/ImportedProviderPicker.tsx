@@ -179,14 +179,16 @@ export function ImportedProviderPicker({
             ) : null}
           </dl>
           <BrowserLinkContext.Provider
-            value={(url) => {
-              void openSetupLink(selected.package.id, url).catch(
-                (failure: unknown) =>
-                  setError(
-                    failure instanceof Error
-                      ? failure.message
-                      : "Could not open link.",
-                  ),
+            value={(url, originalHref) => {
+              void openSetupLink(
+                selected.package.id,
+                originalHref ?? url,
+              ).catch((failure: unknown) =>
+                setError(
+                  failure instanceof Error
+                    ? failure.message
+                    : "Could not open link.",
+                ),
               );
             }}
           >

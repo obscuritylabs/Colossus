@@ -26,6 +26,7 @@ mod research;
 mod sandbox;
 mod security;
 mod session;
+mod tool_pattern;
 mod work;
 mod workflow;
 
@@ -51,6 +52,7 @@ pub use research::*;
 pub use sandbox::*;
 pub use security::*;
 pub use session::*;
+pub use tool_pattern::*;
 pub use work::*;
 pub use workflow::*;
 

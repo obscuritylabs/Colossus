@@ -147,6 +147,15 @@ fn unused_model_then_provider_deletion_persists_and_preserves_other_entries_and_
     )
     .unwrap();
     let mut settings = settings();
+    for id in [PROVIDER, OTHER_PROVIDER] {
+        settings.global_configuration.provider_presentations.insert(
+            id.into(),
+            crate::setup_package::ProviderPresentation {
+                description_markdown: "Instructions".into(),
+                ..crate::setup_package::ProviderPresentation::default()
+            },
+        );
+    }
     let before = settings.global_configuration.clone();
     store.save(&settings).unwrap();
     apply_catalog_deletion(
@@ -165,6 +174,16 @@ fn unused_model_then_provider_deletion_persists_and_preserves_other_entries_and_
     store.save(&settings).unwrap();
     let loaded = store.load().unwrap();
     assert_eq!(loaded.global_configuration, settings.global_configuration);
+    assert!(
+        !loaded
+            .global_configuration
+            .provider_presentations
+            .contains_key(PROVIDER)
+    );
+    assert_eq!(
+        loaded.global_configuration.provider_presentations[OTHER_PROVIDER],
+        before.provider_presentations[OTHER_PROVIDER]
+    );
     assert_eq!(
         loaded.global_configuration.models,
         vec![before.models[1].clone()]

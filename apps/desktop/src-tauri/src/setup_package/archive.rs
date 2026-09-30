@@ -194,7 +194,7 @@ pub(super) fn validate_ca(
         .map_err(|_| invalid("The packaged CA certificates are invalid."))
 }
 
-fn normalize_png(bytes: &[u8]) -> Result<String, CommandErrorDto> {
+pub(super) fn normalize_png(bytes: &[u8]) -> Result<String, CommandErrorDto> {
     if bytes.len() > 64 * 1024 || bytes.len() < 24 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" {
         return Err(invalid(
             "Provider icons must be PNG files no larger than 64 KiB.",

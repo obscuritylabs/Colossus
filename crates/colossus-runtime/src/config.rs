@@ -382,7 +382,7 @@ pub struct PluginMcpServerConfig {
     pub credential_headers: BTreeMap<String, McpCredentialHeaderConfig>,
     /// Optional client-owned OAuth configuration.
     pub oauth: Option<McpOAuthConfig>,
-    /// Exact tools that may be exposed, or the sole wildcard `*`.
+    /// Exact tool names or star patterns that may be exposed; `*` must stand alone.
     pub allowed_tools: Vec<String>,
     /// Optional research-tool mappings for this server.
     pub research_tools: Vec<McpResearchToolConfig>,

@@ -65,8 +65,9 @@ const REHYPE_PLUGINS = [rehypeSanitize];
 
 // Remote images remain blocked. Links become explicit native-browser actions
 // only when a browser controller is available; never privileged-view navigation.
+// Preserve the validated spelling for native checks against saved instructions.
 const safeDestination: UrlTransform = (url, key) =>
-  key === "href" ? webLink(url) : null;
+  key === "href" && webLink(url) ? url : null;
 
 function BlockedImage({ alt }: Pick<ComponentPropsWithoutRef<"img">, "alt">) {
   return (

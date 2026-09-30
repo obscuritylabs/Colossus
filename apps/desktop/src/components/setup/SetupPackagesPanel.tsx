@@ -143,8 +143,8 @@ export function SetupPackagesPanel({
   function instructions(content: string, id: string) {
     return (
       <BrowserLinkContext.Provider
-        value={(url) => {
-          void perform(() => openSetupLink(id, url));
+        value={(url, originalHref) => {
+          void perform(() => openSetupLink(id, originalHref ?? url));
         }}
       >
         <MarkdownContent content={content} />

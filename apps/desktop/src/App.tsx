@@ -1061,6 +1061,29 @@ export default function App() {
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateMessage, setUpdateMessage] = useState("");
   const [cancelling, setCancelling] = useState(false);
+  const [pausedQueues, setPausedQueues] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const pausedQueuesRef = useRef<ReadonlySet<string>>(new Set());
+  function setThreadQueuePaused(
+    targetId: string,
+    sessionId: string,
+    paused: boolean,
+  ) {
+    const key = JSON.stringify([targetId, sessionId]);
+    const next = new Set(
+      [...pausedQueuesRef.current].filter((key) =>
+        queuedMessagesRef.current.some(
+          (message) =>
+            JSON.stringify([message.targetId, message.sessionId]) === key,
+        ),
+      ),
+    );
+    if (paused) next.add(key);
+    else next.delete(key);
+    pausedQueuesRef.current = next;
+    setPausedQueues(next);
+  }
   const [threadLifecycleBusySessionId, setThreadLifecycleBusySessionId] =
     useState<string | null>(null);
   const watchedRuns = useRef(new Map<string, symbol>());
@@ -2454,6 +2477,7 @@ export default function App() {
     }
 
     const sessionId = continuationView?.run.sessionId;
+    if (sessionId) setThreadQueuePaused(route.targetId, sessionId, false);
     const effectiveMode: RunMode = planRevision === null ? mode : "plan";
     if (effectiveMode === "research" && researchSources.length === 0) {
       setComposerError({
@@ -2694,7 +2718,7 @@ export default function App() {
       return;
     }
     setConversationFollowRequest((current) => current + 1);
-    if (!(await cancelActiveRun())) {
+    if (!(await cancelActiveRun(true))) {
       setComposerError({
         ...FALLBACK_ACTION_ERROR,
         code: "redirect_not_started",
@@ -2989,8 +3013,8 @@ export default function App() {
     }
   }
 
-  async function cancelActiveRun(): Promise<boolean> {
-    if (connectingRef.current) {
+  async function cancelActiveRun(keepQueueRunning = false): Promise<boolean> {
+    if (connectingRef.current || cancelRequest.current !== null) {
       return false;
     }
     const activeView =
@@ -3001,6 +3025,21 @@ export default function App() {
       return false;
     }
     const runId = activeView.run.runId;
+    const route = targetRoutes.current?.routeForRun(runId) ?? null;
+    if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
+      setActionError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "disconnected",
+        message: "The active run is no longer bound to this target.",
+      });
+      return false;
+    }
+    // Pause synchronously before cancellation can publish a terminal event.
+    setThreadQueuePaused(
+      route.targetId,
+      activeView.run.sessionId,
+      !keepQueueRunning,
+    );
     if (FIXTURE_MODE) {
       const now = new Date().toISOString();
       dispatch({
@@ -3020,15 +3059,6 @@ export default function App() {
       return true;
     }
 
-    const route = targetRoutes.current?.routeForRun(runId) ?? null;
-    if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
-      setActionError({
-        ...FALLBACK_ACTION_ERROR,
-        code: "disconnected",
-        message: "The active run is no longer bound to this target.",
-      });
-      return false;
-    }
     const attemptKey = `${route.targetId}:${runId}`;
     const fingerprint = operationFingerprint([route.targetId, runId, "cancel"]);
     const attempt = stableIdempotentAttempt(
@@ -4629,6 +4659,9 @@ export default function App() {
       connecting ||
       submitting ||
       queueDeliveryRef.current !== null ||
+      pausedQueuesRef.current.has(
+        JSON.stringify([activeRoute.targetId, activeRun.sessionId]),
+      ) ||
       targetRoutes.current?.isCurrent(activeRoute) !== true
     ) {
       return;
@@ -4647,6 +4680,7 @@ export default function App() {
     connecting,
     deliverQueuedMessage,
     queuedMessages,
+    pausedQueues,
     submitting,
   ]);
   const conversationViews = useMemo(
@@ -4910,6 +4944,30 @@ export default function App() {
       activeWorkRedirectable={
         activeRun !== undefined && isCancelable(activeRun.status) && !cancelling
       }
+      stopping={cancelling || activeRun?.status === "cancelling"}
+      queuePaused={
+        activeRun !== undefined &&
+        activeRoute !== null &&
+        pausedQueues.has(
+          JSON.stringify([activeRoute.targetId, activeRun.sessionId]),
+        )
+      }
+      onStop={() => void cancelActiveRun()}
+      onResumeQueue={() => {
+        if (
+          activeRun &&
+          activeRoute &&
+          !cancelling &&
+          isTerminalStatus(activeRun.status) &&
+          targetRoutes.current?.isCurrent(activeRoute)
+        ) {
+          setThreadQueuePaused(
+            activeRoute.targetId,
+            activeRun.sessionId,
+            false,
+          );
+        }
+      }}
       queuedMessages={activeQueuedMessages}
       attachmentsAvailable={desktop.capabilities.attachments}
       attachments={attachments}
@@ -5128,7 +5186,6 @@ export default function App() {
           conversationViews={conversationViews}
           connection={connection}
           connecting={connecting}
-          cancelling={cancelling}
           runLoadError={runLoadError}
           actionError={actionError}
           participants={participants}
@@ -5234,7 +5291,6 @@ export default function App() {
           }
           workNavigationOpen={workNavigationOpen}
           onConnect={() => void connect(desktop.selectedTargetId ?? undefined)}
-          onCancel={() => void cancelActiveRun()}
           onRespond={handleInteraction}
           onResume={() => {
             if (activeView !== undefined) {

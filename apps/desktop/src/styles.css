@@ -9614,69 +9614,64 @@ textarea {
 }
 
 .terminal-window-shell {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   width: 100%;
   height: 100dvh;
   min-width: 0;
   min-height: 0;
-  grid-template-rows: auto auto minmax(0, 1fr);
   overflow: hidden;
   background: var(--canvas);
 }
 
 .terminal-window-header {
   display: flex;
-  min-height: 68px;
+  flex: 0 0 40px;
+  min-width: 0;
   align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 12px 16px;
+  gap: 8px;
+  padding: 4px 6px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-muted);
+  background: var(--surface-header);
 }
 
-.terminal-window-header > div,
 .terminal-window-actions {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
-  gap: 10px;
+  gap: 3px;
 }
 
-.terminal-window-header strong,
-.terminal-window-header span {
-  display: block;
-}
-
-.terminal-window-header strong {
-  color: var(--text-strong);
-  font-size: 0.86rem;
-}
-
-.terminal-window-header span:not(.terminal-window-icon) {
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: var(--font-size-body-sm);
-}
-
-.terminal-window-icon {
+.terminal-launch-button {
   display: grid;
-  width: 39px;
-  height: 39px;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
   place-items: center;
-  border: 1px solid var(--accent-border);
-  border-radius: 9px;
-  background: var(--blue-soft);
-  color: var(--blue-strong);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.terminal-launch-button:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.terminal-launch-button img {
+  display: block;
 }
 
 .terminal-tabs {
   display: flex;
-  min-height: 38px;
+  flex: 1;
+  min-width: 0;
   gap: 3px;
-  padding: 5px 8px 0;
   overflow-x: auto;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-header);
+  scrollbar-width: thin;
 }
 
 .terminal-tab {
@@ -9684,8 +9679,7 @@ textarea {
   flex: 0 0 auto;
   align-items: center;
   border: 1px solid transparent;
-  border-bottom: 0;
-  border-radius: 7px 7px 0 0;
+  border-radius: 6px;
 }
 
 .terminal-tab:has(> button[aria-current="page"]) {
@@ -9727,6 +9721,7 @@ textarea {
 }
 
 .terminal-panes {
+  flex: 1;
   position: relative;
   overflow: hidden;
 }
@@ -13776,5 +13771,49 @@ textarea {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* A quiet activity cue; reduced-motion users retain a steady glow. */
+.send-button.is-stop {
+  border-color: var(--blue);
+  background: var(--surface-selected);
+  color: var(--blue-strong);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--blue) 10%, transparent),
+    0 0 13px color-mix(in srgb, var(--blue) 18%, transparent);
+  animation: composer-working-glow 4s ease-in-out infinite;
+}
+.send-button.is-stop:not(:disabled):hover {
+  background: var(--surface-selected-hover);
+}
+.send-button.is-stop.is-stopping {
+  animation: none;
+}
+.send-button.is-stop .spinner {
+  border-color: var(--border);
+  border-top-color: var(--blue-strong);
+}
+.next-up-paused {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+@keyframes composer-working-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--blue) 5%, transparent),
+      0 0 7px color-mix(in srgb, var(--blue) 9%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 4px color-mix(in srgb, var(--blue) 14%, transparent),
+      0 0 20px color-mix(in srgb, var(--blue) 28%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .send-button.is-stop {
+    animation: none;
   }
 }
