@@ -4,9 +4,17 @@ import { useEffect, useRef, useState } from "react";
 import type { TerminalKind, TerminalPlanContext } from "../../types";
 
 export interface TerminalDockRequest {
+  scope: string | null;
   kind: TerminalKind;
   planContext?: TerminalPlanContext | undefined;
   sequence: number;
+}
+
+export function terminalRequestForScope(
+  request: TerminalDockRequest | null,
+  scope: string | null,
+): TerminalDockRequest | null {
+  return request?.scope === scope ? request : null;
 }
 
 export function TerminalDock({
@@ -26,6 +34,7 @@ export function TerminalDock({
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
   const [loading, setLoading] = useState(true);
+  const currentRequest = terminalRequestForScope(request, scope);
   useEffect(() => {
     if (fixture || !ready) return;
     let disposed = false;
@@ -79,8 +88,11 @@ export function TerminalDock({
       }
     }
     void invoke<number>("mount_terminal_pane", {
-      request: request ? { kind: request.kind, ...request.planContext } : null,
-      requestSequence: request?.sequence ?? 0,
+      expectedScope: scope,
+      request: currentRequest
+        ? { kind: currentRequest.kind, ...currentRequest.planContext }
+        : null,
+      requestSequence: currentRequest?.sequence ?? 0,
     })
       .then((value) => {
         epoch = value;
@@ -130,7 +142,7 @@ export function TerminalDock({
           request: { epoch, rect: null },
         }).catch(() => {});
     };
-  }, [ready, fixture, scope, request, retry]);
+  }, [ready, fixture, scope, currentRequest, retry]);
   return (
     <section className="terminal-dock" ref={host} aria-label="Terminal pane">
       {!ready || fixture || loading || error ? (

@@ -11,6 +11,7 @@ import {
 } from "react";
 import type { CSSProperties, FormEvent, ReactNode } from "react";
 import { syncSavedSettings } from "./managed-settings-updates";
+import { terminalRequestForScope } from "./components/tools/TerminalDock";
 
 import {
   CommandFailure,
@@ -4462,6 +4463,10 @@ export default function App() {
   >(null);
 
   useEffect(() => setTerminalDockRequest(null), [desktop.selectedTargetId]);
+  const currentTerminalRequest = terminalRequestForScope(
+    terminalDockRequest,
+    desktop.selectedTargetId,
+  );
 
   async function handleOpenTerminal(
     kind: TerminalKind,
@@ -4480,6 +4485,7 @@ export default function App() {
       return;
     }
     setTerminalDockRequest((previous) => ({
+      scope: status.selectedTargetId,
       kind,
       planContext,
       sequence: Math.max(Date.now(), (previous?.sequence ?? 0) + 1),
@@ -5100,13 +5106,13 @@ export default function App() {
           }
           terminalReady={
             desktop.terminalEnabled &&
-            (terminalDockRequest?.kind === "shell"
+            (currentTerminalRequest?.kind === "shell"
               ? desktop.capabilities.shellTerminal
-              : terminalDockRequest?.kind === "colossus_tui"
+              : currentTerminalRequest?.kind === "colossus_tui"
                 ? terminalAvailable
                 : terminalAvailable || desktop.capabilities.shellTerminal)
           }
-          terminalRequest={terminalDockRequest}
+          terminalRequest={currentTerminalRequest}
           onTerminalSettings={() => {
             setSettingsStartTab("runtime");
             setSurface("settings");

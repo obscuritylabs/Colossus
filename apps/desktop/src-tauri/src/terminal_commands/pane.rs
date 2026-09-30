@@ -49,10 +49,19 @@ pub(crate) async fn mount_terminal_pane(
     pane: State<'_, TerminalPaneState>,
     request: Option<ShowTerminalInput>,
     request_sequence: u64,
+    expected_scope: Option<String>,
 ) -> Result<u64, CommandErrorDto> {
     require_controller(&caller)?;
     let _guard = state.lock_terminal_window().await;
     let _context = state.lock_terminal_context().await;
+    let scope = state.selected_target_id().await;
+    if expected_scope != scope {
+        return Err(CommandErrorDto::local_sanitized(
+            "terminal_workspace_changed",
+            "The workspace changed. Reopen the terminal in the current workspace.",
+            true,
+        ));
+    }
     if !state.terminal_enabled() {
         return Err(CommandErrorDto::from_terminal(TerminalError::Disabled));
     }
@@ -72,7 +81,6 @@ pub(crate) async fn mount_terminal_pane(
         TerminalKind::ColossusTui => {}
     }
     let (context, _, _) = state.terminal_workspace_context().await;
-    let scope = state.selected_target_id().await;
     let window = app.get_window("main").ok_or_else(unavailable)?;
     let existing = app.get_webview(TERMINAL_WEBVIEW);
     if existing

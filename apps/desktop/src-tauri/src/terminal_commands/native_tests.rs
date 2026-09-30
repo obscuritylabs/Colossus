@@ -256,6 +256,8 @@ fn native_terminal_pane_keeps_pty_and_rejects_main_authority() {
                         terminal_context(main.clone(), app.state()).await.is_err(),
                         "main acquired PTY authority"
                     );
+                    check_stale_pane_request(&app, &main, Some("old-workspace".into())).await?;
+                    assert!(app.get_webview(TERMINAL_WEBVIEW).is_none());
                     let lease = pane::mount_terminal_pane(
                         app.clone(),
                         main.clone(),
@@ -263,6 +265,7 @@ fn native_terminal_pane_keeps_pty_and_rejects_main_authority() {
                         app.state(),
                         None,
                         0,
+                        settings.selected_target_id.clone(),
                     )
                     .await
                     .map_err(|e| e.message)?;
@@ -271,8 +274,10 @@ fn native_terminal_pane_keeps_pty_and_rejects_main_authority() {
                         .ok_or("terminal child missing")?;
                     assert_eq!(view.window().label(), "main");
                     check_pane_viewport(&app, &main, &view, lease).await?;
-                    check_pane_remount(&app, main, lease).await?;
+                    check_pane_remount(&app, main.clone(), lease).await?;
                     state.select_target(None).await;
+                    check_stale_pane_request(&app, &main, settings.selected_target_id.clone())
+                        .await?;
                     assert!(
                         !state
                             .terminal_manager()
@@ -382,10 +387,17 @@ async fn check_pane_viewport(
 #[cfg(debug_assertions)]
 async fn check_pane_remount(app: &AppHandle, main: Webview, lease: u64) -> Result<(), String> {
     let state = app.state::<AppState>();
-    let next =
-        pane::mount_terminal_pane(app.clone(), main.clone(), app.state(), app.state(), None, 0)
-            .await
-            .map_err(|e| e.message)?;
+    let next = pane::mount_terminal_pane(
+        app.clone(),
+        main.clone(),
+        app.state(),
+        app.state(),
+        None,
+        0,
+        state.selected_target_id().await,
+    )
+    .await
+    .map_err(|e| e.message)?;
     assert_ne!(lease, next);
     assert_eq!(
         app.webviews().len(),
@@ -408,5 +420,30 @@ async fn check_pane_remount(app: &AppHandle, main: Webview, lease: u64) -> Resul
             .unwrap(),
         "switching tools closed the PTY"
     );
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+async fn check_stale_pane_request(
+    app: &AppHandle,
+    main: &Webview,
+    scope: Option<String>,
+) -> Result<(), String> {
+    let request = serde_json::from_value(serde_json::json!({
+        "kind": "colossus_tui", "sessionId": "session-A", "planId": "plan-A"
+    }))
+    .unwrap();
+    let error = pane::mount_terminal_pane(
+        app.clone(),
+        main.clone(),
+        app.state(),
+        app.state(),
+        Some(request),
+        42,
+        scope,
+    )
+    .await
+    .expect_err("stale workspace queued a terminal launch");
+    assert_eq!(error.code, "terminal_workspace_changed");
     Ok(())
 }

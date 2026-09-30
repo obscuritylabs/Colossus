@@ -54,3 +54,99 @@ test("compact terminal reserves native bounds and tool menus work with the keybo
   await expect(terminal).toHaveCount(0);
   await expect(tools).toBeFocused();
 });
+
+test("terminal scope changes cannot replay the previous workspace's plan", async ({
+  page,
+}) => {
+  await page.goto("/?fixture=operations-studio");
+  await expect(
+    page.getByRole("button", { name: "Open tools", exact: true }),
+  ).toBeVisible();
+  const mounts = await page.evaluate(async () => {
+    // Reuse the loaded renderer's React instances, including Vite's versioned
+    // module URLs, so this exercises the actual component's passive effects.
+    const moduleUrl = (filename: string) => {
+      const resource = performance
+        .getEntriesByType("resource")
+        .reverse()
+        .find((entry) => new URL(entry.name).pathname.endsWith(filename));
+      if (!resource) throw new Error(`Loaded module missing: ${filename}`);
+      return resource.name;
+    };
+    const { default: React } = await import(moduleUrl("/react.js"));
+    const { default: ReactDOM } = await import(
+      moduleUrl("/react-dom_client.js")
+    );
+    const modulePath = "/src/components/tools/TerminalDock.tsx";
+    const { TerminalDock } = await import(modulePath);
+    type Mount = {
+      expectedScope: string | null;
+      request: {
+        kind: string;
+        sessionId?: string;
+        planId?: string;
+      } | null;
+    };
+    const calls: Mount[] = [];
+    let mounted: (() => void) | undefined;
+    const host = window as unknown as { __TAURI_INTERNALS__?: unknown };
+    const previousBridge = host.__TAURI_INTERNALS__;
+    host.__TAURI_INTERNALS__ = {
+      invoke: async (command: string, args: Mount) => {
+        if (command !== "mount_terminal_pane") return undefined;
+        calls.push(args);
+        mounted?.();
+        return calls.length;
+      },
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = ReactDOM.createRoot(container);
+    const request = {
+      scope: "workspace-A",
+      kind: "colossus_tui",
+      planContext: { sessionId: "session-A", planId: "plan-A" },
+      sequence: 1,
+    };
+    const render = (scope: string, launch: typeof request | null) =>
+      new Promise<void>((resolve) => {
+        mounted = resolve;
+        root.render(
+          React.createElement(TerminalDock, {
+            ready: true,
+            fixture: false,
+            scope,
+            request: launch,
+            onSettings: () => undefined,
+          }),
+        );
+      });
+    try {
+      await render("workspace-A", request);
+      // A workspace change renders before the parent's cleanup effect clears
+      // its request. Deliberately keep A's request for B's first render.
+      await render("workspace-B", request);
+      return calls;
+    } finally {
+      root.unmount();
+      container.remove();
+      if (previousBridge === undefined) delete host.__TAURI_INTERNALS__;
+      else host.__TAURI_INTERNALS__ = previousBridge;
+    }
+  });
+  expect(mounts[0]).toMatchObject({
+    expectedScope: "workspace-A",
+    request: {
+      kind: "colossus_tui",
+      sessionId: "session-A",
+      planId: "plan-A",
+    },
+  });
+  expect(mounts.slice(1)).not.toHaveLength(0);
+  for (const mount of mounts.slice(1)) {
+    expect(mount).toMatchObject({
+      expectedScope: "workspace-B",
+      request: null,
+    });
+  }
+});
