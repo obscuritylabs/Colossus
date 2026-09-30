@@ -130,7 +130,7 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
             "Restore main Desktop acceptance build cache",
             "macos-desktop-acceptance",
             "apps/desktop/src-tauri -> target",
-            "macos-14",
+            "blacksmith-6vcpu-macos-15",
         ),
         (
             "macos-desktop-bundle",
@@ -139,7 +139,7 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
             "Restore main Desktop bundle build cache",
             "macos-desktop-bundle",
             "apps/desktop/src-tauri -> target",
-            "macos-14",
+            "blacksmith-6vcpu-macos-15",
         ),
     ] {
         let warm_job = job(jobs(&warm), warm_job);
