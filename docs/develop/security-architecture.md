@@ -665,7 +665,9 @@ picker and read into memory without filesystem extraction. The importer rejects
 traversal, duplicate/case-colliding names, links, unknown fields, unreferenced files,
 and unsupported versions. PNG icons are decoded under resource limits and re-encoded;
 Markdown uses the renderer's sanitized, image-free display. Rendering performs no
-remote fetch. Human-clicked HTTP(S) instruction links use the native system browser.
+remote fetch. HTTP(S) instruction links use the native system browser only after an
+operating-system confirmation displays the exact canonical destination. Saved Markdown,
+including renderer-authored provider descriptions, never authorizes that browser launch.
 The renderer receives bounded presentation DTOs, not raw YAML or PEM bytes.
 
 Provider/model YAML is inspected by the verified sidecar without constructing a

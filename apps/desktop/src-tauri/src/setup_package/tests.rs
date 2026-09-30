@@ -600,3 +600,29 @@ fn cancelled_setup_review_restores_saved_instructions_and_cannot_clear_a_newer_r
             .is_err()
     );
 }
+
+#[test]
+fn instruction_links_validate_and_canonicalize_the_destination_shown_for_native_consent() {
+    use super::commands::validated_instruction_url;
+    let url = validated_instruction_url("https://EXAMPLE.test", true).unwrap();
+    assert_eq!(url.as_str(), "https://example.test/");
+    assert!(validated_instruction_url("http://intranet.test/token", true).is_ok());
+    assert!(validated_instruction_url("https://example.test", false).is_err());
+    for invalid in [
+        "javascript:alert(1)",
+        "file:///C:/secret",
+        "https://user:password@example.test/token",
+        "https://user@example.test/token",
+        "https://example.test/\nOpen a different site",
+        "https://example.test/\t",
+    ] {
+        assert!(
+            validated_instruction_url(invalid, true).is_err(),
+            "{invalid}"
+        );
+    }
+    assert!(
+        validated_instruction_url(&format!("https://example.test/{}", "a".repeat(2048)), true)
+            .is_err()
+    );
+}
