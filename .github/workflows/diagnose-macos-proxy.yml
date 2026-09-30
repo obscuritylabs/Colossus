@@ -1,0 +1,29 @@
+name: Diagnose macOS proxy
+on:
+  push:
+    branches: [codex/diagnose-macos-proxy]
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: macos-14
+    timeout-minutes: 30
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.96.0
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
+      - run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Inspect runner networking tools
+        run: |
+          /usr/bin/curl --version
+          sw_vers
+      - name: Run unchanged native isolation assertions with connection diagnostics
+        run: cargo test --locked -p colossus-cli --test native_sandbox -- --nocapture
+      - name: Inspect sandbox denials
+        if: failure()
+        run: sudo /usr/bin/log show --last 3m --style compact --predicate 'process == "sandboxd"' | tail -n 120

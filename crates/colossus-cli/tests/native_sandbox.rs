@@ -647,6 +647,7 @@ sandbox:
                 "--fail",
                 "--silent",
                 "--show-error",
+                "--verbose",
                 "--retry",
                 "3",
                 "--retry-connrefused",
@@ -666,6 +667,15 @@ sandbox:
         );
         let result: Value =
             serde_json::from_slice(&allowed_network.stdout).expect("network result");
+        if result["success"] != true {
+            let diagnostic = BASE64
+                .decode(result["stderr_base64"].as_str().expect("stderr base64"))
+                .expect("decode stderr");
+            eprintln!(
+                "allowed origin: {origin}; curl diagnostics: {}",
+                String::from_utf8_lossy(&diagnostic)
+            );
+        }
         assert_eq!(
             result["success"], true,
             "allowed network command failed: {result}"
