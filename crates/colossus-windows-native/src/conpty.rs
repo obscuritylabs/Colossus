@@ -32,8 +32,8 @@ use windows_sys::Win32::{
             CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
             DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
             INFINITE, InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-            PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, STARTUPINFOEXW,
-            UpdateProcThreadAttribute, WaitForSingleObject,
+            PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
+            STARTUPINFOEXW, UpdateProcThreadAttribute, WaitForSingleObject,
         },
     },
 };
@@ -294,6 +294,10 @@ pub fn spawn_verified_conpty(
     let mut startup: STARTUPINFOEXW = unsafe { zeroed() };
     startup.StartupInfo.cb =
         u32::try_from(size_of::<STARTUPINFOEXW>()).expect("startup structure size fits u32");
+    // Suppress Windows' implicit copying of the parent's redirected standard
+    // handles. Null standard handles with STARTF_USESTDHANDLES let ConPTY supply
+    // the console handles; only the authentication pipes are inherited below.
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     startup.lpAttributeList = attributes.as_mut_ptr();
     let mut process_information: PROCESS_INFORMATION = unsafe { zeroed() };
     // SAFETY: every pointer references an initialized, bounded buffer for the duration
