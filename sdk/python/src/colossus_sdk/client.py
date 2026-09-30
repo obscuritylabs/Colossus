@@ -215,7 +215,7 @@ class ColossusClient:
             # Full command context plus the bounded envelope; sends stay unchanged.
             ("grpc.max_receive_message_length", 8 * 1024 * 1024),
             ("grpc.max_send_message_length", 4 * 1024 * 1024),
-            ("grpc.primary_user_agent", "colossus-python-sdk/0.11.2"),
+            ("grpc.primary_user_agent", "colossus-python-sdk/0.11.3"),
         ]
         channel = grpc.aio.secure_channel(
             descriptor.target,

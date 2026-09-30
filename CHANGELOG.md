@@ -8,6 +8,35 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-09-29
+
+### Added
+
+- Desktop setup packages can share global defaults, sandbox settings, limits, MCP
+  servers, search providers, and telemetry profiles. Export the current global
+  configuration with portable credential placeholders for offline onboarding.
+- Desktop model routing displays all seven roles with their responsibilities,
+  model-selection guidance, and the effective primary fallback.
+- Added macOS menu-bar and Windows system-tray controls for the Desktop lifecycle.
+
+### Changed
+
+- Model discovery recognizes additional context-window and capability fields from
+  compatible providers, including vLLM and Azure-style responses, while preserving
+  explicit unsupported capabilities.
+- Provider and model connection tests now appear beside their settings rows, with
+  progress, inline results, detailed failures, and retry.
+- Aligned workspace, bundled plugin, and SDK package metadata to `0.11.3`.
+
+### Fixed
+
+- MCP Test and OAuth actions remain unavailable until workspace selections are
+  applied and the runtime is active. Pending changes no longer appear enabled.
+- Imported setup providers remain available throughout onboarding, with clearer
+  workspace activation and optional credential enrollment.
+- Windows uninstall cleanup accepts an empty generated CLI home without removing
+  unrecognized or shared application data.
+
 ## [0.11.2] - 2026-09-28
 
 ### Added
