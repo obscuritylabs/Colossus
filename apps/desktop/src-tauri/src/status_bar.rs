@@ -243,7 +243,7 @@ pub(crate) fn setup(app: &mut App) -> tauri::Result<()> {
     {
         use tauri::tray::TrayIconBuilder;
 
-        let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
+        let icon = tray_icon()?;
         let menu = build_menu(app.handle(), &[], 0)?;
         TrayIconBuilder::with_id(TRAY_ID)
             .icon(icon)
@@ -262,6 +262,40 @@ pub(crate) fn setup(app: &mut App) -> tauri::Result<()> {
     #[cfg(not(any(target_os = "macos", windows)))]
     let _ = app;
     Ok(())
+}
+
+#[cfg(any(target_os = "macos", windows))]
+fn tray_icon() -> tauri::Result<tauri::image::Image<'static>> {
+    let source = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
+    #[cfg(target_os = "macos")]
+    {
+        // The branded app icon has an opaque navy tile. A macOS template icon
+        // must use the mark's alpha alone so the menu bar can tint it for each
+        // appearance instead of displaying the tile as a solid square.
+        const BACKGROUND_BLUE: u8 = 0x2f;
+        const MARK_BLUE: u16 = 0xeb;
+        let mut pixels = source.rgba().to_vec();
+        for pixel in pixels.chunks_exact_mut(4) {
+            let coverage = (u16::from(pixel[2].saturating_sub(BACKGROUND_BLUE)) * 255
+                / (MARK_BLUE - u16::from(BACKGROUND_BLUE)))
+            .min(255) as u8;
+            pixel[0] = 0;
+            pixel[1] = 0;
+            pixel[2] = 0;
+            pixel[3] = (u16::from(pixel[3]) * u16::from(coverage) / 255)
+                .try_into()
+                .expect("scaled alpha fits in a byte");
+        }
+        Ok(tauri::image::Image::new_owned(
+            pixels,
+            source.width(),
+            source.height(),
+        ))
+    }
+    #[cfg(windows)]
+    {
+        Ok(source)
+    }
 }
 
 pub(crate) fn handle_window_event(window: &Window, event: &WindowEvent) {
@@ -446,5 +480,16 @@ mod tests {
             BackgroundNotificationKind::WorkCompleted,
             now + Duration::from_mins(1)
         ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_template_icon_removes_the_opaque_tile_but_keeps_the_mark() {
+        let icon = tray_icon().expect("decode the bundled tray icon");
+        let alpha = |x: usize, y: usize| icon.rgba()[(y * icon.width() as usize + x) * 4 + 3];
+        assert_eq!(alpha(0, 0), 0);
+        assert_eq!(alpha(16, 2), 0);
+        assert!(alpha(6, 16) > 100);
+        assert!(alpha(16, 16) > 100);
     }
 }
