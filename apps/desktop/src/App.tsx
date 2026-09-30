@@ -42,7 +42,9 @@ import {
   searchWorkspaceFiles,
   getWorkspaceGitDiff,
   listRuns,
+  notifyBackground,
   onSpaceAttention,
+  onStatusBarAction,
   onSpaceStatusChanged,
   readArtifactContent,
   readWorkspaceFile,
@@ -61,9 +63,11 @@ import {
   setApprovalMode,
   setTerminalEnabled,
   showTerminalWindow,
+  syncStatusBarPins,
   archiveSpace,
   watchRun,
 } from "./api";
+import type { StatusBarAction } from "./api";
 import type { AgentParticipant } from "./components/AgentFlow";
 import type {
   ArtifactPreviewLine,
@@ -143,6 +147,11 @@ import {
   storeWorkSidebarWidth,
 } from "./sidebar-width";
 import { projectSpaceArchived, projectSpaceRestored } from "./space-lifecycle";
+import {
+  backgroundRunNotifications,
+  backgroundRunSnapshot,
+  selectStatusBarPins,
+} from "./status-bar";
 import {
   pinnedThreadIdsForSpace,
   readStoredThreadPins,
@@ -948,6 +957,21 @@ export default function App() {
       threadNameForWorkspace(storedThreadNames, spaceId, sessionId) ?? fallback,
     [storedThreadNames],
   );
+  const statusBarPins = useMemo(
+    () =>
+      selectStatusBarPins(
+        pinnedThreadIdsForSpace(storedThreadPins, desktop.selectedSpaceId),
+        chat.recentRuns,
+        (sessionId, fallback) =>
+          resolveThreadTitle(desktop.selectedSpaceId, sessionId, fallback),
+      ),
+    [
+      chat.recentRuns,
+      desktop.selectedSpaceId,
+      resolveThreadTitle,
+      storedThreadPins,
+    ],
+  );
   const [releaseChannel, setReleaseChannel] = useState(
     INITIAL_DESKTOP.releaseChannel,
   );
@@ -1066,6 +1090,45 @@ export default function App() {
   const cancelRequest = useRef<symbol | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const composerFormRef = useRef<HTMLFormElement>(null);
+  const statusBarPinsRef = useRef(statusBarPins);
+  const statusBarActionRef = useRef<(action: StatusBarAction) => void>(
+    () => {},
+  );
+  const lastStatusBarPinsRef = useRef("");
+  const previousBackgroundRunsRef = useRef(
+    backgroundRunSnapshot(chat.recentRuns),
+  );
+
+  useEffect(() => {
+    statusBarPinsRef.current = statusBarPins;
+    if (FIXTURE_MODE) {
+      return;
+    }
+    const serialized = JSON.stringify(statusBarPins);
+    if (lastStatusBarPinsRef.current === serialized) {
+      return;
+    }
+    lastStatusBarPinsRef.current = serialized;
+    void syncStatusBarPins(statusBarPins).catch(() => {
+      lastStatusBarPinsRef.current = "";
+    });
+  }, [statusBarPins]);
+
+  useEffect(() => {
+    const previous = previousBackgroundRunsRef.current;
+    previousBackgroundRunsRef.current = backgroundRunSnapshot(chat.recentRuns);
+    if (FIXTURE_MODE) {
+      return;
+    }
+    for (const { kind, runId } of backgroundRunNotifications(
+      previous,
+      chat.recentRuns,
+    )) {
+      void notifyBackground(kind, runId).catch(() => {
+        // The run remains visible in Colossus if OS notifications are unavailable.
+      });
+    }
+  }, [chat.recentRuns]);
 
   const commitQueuedMessages = useCallback(
     (messages: readonly QueuedMessage[]) => {
@@ -1922,6 +1985,49 @@ export default function App() {
     setAttachments([]);
     requestAnimationFrame(() => composerRef.current?.focus());
   }
+
+  statusBarActionRef.current = (action) => {
+    if (action.type === "new_work") {
+      newWork();
+    } else if (action.type === "open_run") {
+      if (!statusBarPinsRef.current.some((pin) => pin.runId === action.runId)) {
+        return;
+      }
+      const run = chatRef.current.recentRuns.find(
+        (candidate) => candidate.runId === action.runId,
+      );
+      if (run !== undefined) {
+        void openRun(run);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (FIXTURE_MODE) {
+      return;
+    }
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void onStatusBarAction((action) => {
+      if (!cancelled) {
+        statusBarActionRef.current(action);
+      }
+    })
+      .then((stop) => {
+        if (cancelled) {
+          stop();
+        } else {
+          unlisten = stop;
+        }
+      })
+      .catch(() => {
+        // The main window remains usable if the native menu is unavailable.
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   const performRunSubmission = useCallback(
     async (

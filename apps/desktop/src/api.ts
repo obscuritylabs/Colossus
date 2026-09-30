@@ -687,6 +687,38 @@ export function onSpaceAttention(
   );
 }
 
+export interface StatusBarPin {
+  runId: string;
+  title: string;
+}
+
+export type StatusBarAction =
+  { type: "new_work" } | { type: "open_run"; runId: string };
+
+export type BackgroundNotificationKind =
+  "needs_attention" | "work_completed" | "work_failed";
+
+export function syncStatusBarPins(
+  pins: readonly StatusBarPin[],
+): Promise<void> {
+  return call("sync_status_bar_pins", { pins });
+}
+
+export function onStatusBarAction(
+  handler: (action: StatusBarAction) => void,
+): Promise<UnlistenFn> {
+  return listen<StatusBarAction>("status-bar-action", (event) =>
+    handler(event.payload),
+  );
+}
+
+export function notifyBackground(
+  kind: BackgroundNotificationKind,
+  runId: string,
+): Promise<boolean> {
+  return call("notify_background", { kind, runId });
+}
+
 export function listWorkspaceDirectory(
   workspaceId: string,
   path = "",

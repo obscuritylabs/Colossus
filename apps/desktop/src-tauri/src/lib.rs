@@ -28,6 +28,7 @@ mod run_list;
 mod setup_package;
 mod space_search;
 mod state;
+mod status_bar;
 mod terminal;
 mod terminal_commands;
 mod terminal_process;
@@ -126,13 +127,18 @@ pub fn run() {
             terminal_protocol::respond(&context, &request)
         })
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build());
+    #[cfg(any(target_os = "macos", windows))]
+    let application = application.plugin(tauri_plugin_notification::init());
+    let application = application
         .manage(state::AppState::default())
+        .manage(status_bar::StatusBarState::default())
         .manage(setup_package::SetupReviewState::default())
         .manage(command_review::CommandReviewState::default())
         .manage(workspace_git::commands::GitState::default())
         .manage(workspace_search::SearchState::default())
         .setup(|app| {
+            status_bar::setup(app)?;
             browser::start_watchdog(app.handle().clone());
             Ok(())
         })
@@ -144,7 +150,10 @@ pub fn run() {
                 view.state::<state::AppState>().browser.controller_loading();
             }
         })
-        .on_window_event(browser::handle_window_event)
+        .on_window_event(|window, event| {
+            browser::handle_window_event(window, event);
+            status_bar::handle_window_event(window, event);
+        })
         .invoke_handler(tauri::generate_handler![
             browser_context,
             browser_command,
@@ -255,10 +264,22 @@ pub fn run() {
             resize_terminal,
             signal_terminal,
             close_terminal,
+            status_bar::sync_status_bar_pins,
+            status_bar::notify_background,
         ])
         .build(app_context::create())
         .expect("failed to build the Colossus desktop application");
     application.run(|app, event| {
+        #[cfg(target_os = "macos")]
+        if matches!(
+            event,
+            tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            }
+        ) {
+            status_bar::show_main_window(app);
+        }
         if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
             use tauri::Manager as _;
 
