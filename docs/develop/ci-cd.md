@@ -98,7 +98,9 @@ optional `sccache` compiler cache in GitHub read-only mode by default. When R2
 credentials are configured, those jobs read the R2 compiler cache instead. This
 preserves existing GitHub compiler cache reads until R2 is ready without flooding
 GitHub's per-repository cache upload limit.
-Release lanes continue using their existing `sccache` configuration.
+Tagged CLI release builds and the stable SDK candidate use R2 in read/write mode
+after release validation when R2 is enabled. Manual release validation retains the
+GitHub `sccache` backend. The stable SDK publisher reads R2.
 
 The optional R2 compiler cache covers the PR SDK and Desktop jobs and the five
 pre-merge jobs that already use `sccache`. A separate `Warm R2 compiler cache`
@@ -106,7 +108,9 @@ workflow writes from `main` on Linux, macOS, and Windows. It leaves the existing
 `rust-cache` dependency archives intact. PR and pre-merge jobs read R2 only; on
 forks or before credentials are configured, they keep their read-only GitHub
 compiler-cache fallback. R2 is not used by the macOS Desktop acceptance and bundle
-jobs, which restore the main branch's target archives, or by release jobs.
+jobs, which restore the main branch's target archives. The signed Windows Desktop
+release keeps its signing environment and GitHub compiler cache; the unsigned macOS
+Desktop release keeps its credential-free build path.
 
 To enable R2 for this repository:
 
@@ -118,22 +122,25 @@ To enable R2 for this repository:
    `SCCACHE_R2_READ_ACCESS_KEY_ID` and `SCCACHE_R2_READ_SECRET_ACCESS_KEY`.
    These are available to same-repository PR jobs, so the token must not grant
    object writes or access to another bucket. Fork PRs do not receive secrets.
-3. Create the GitHub Actions environment `sccache-r2-write` and restrict its
-   deployment branches to the selected branch `main`. Create a second R2 token
-   limited to this bucket with **Object Read & Write** access. Store that pair as
-   environment secrets `SCCACHE_R2_WRITE_ACCESS_KEY_ID` and
-   `SCCACHE_R2_WRITE_SECRET_ACCESS_KEY`. The write key is used only by the
-   `main` warm-up job.
+3. Restrict creation of `v*` release tags to repository administrators using the
+   release tag ruleset. Create the GitHub Actions environment `sccache-r2-write`
+   and allow only the selected branch `main` and selected tag pattern `v*`. Create
+   a second R2 token limited to this bucket with **Object Read & Write** access.
+   Store that pair as environment secrets `SCCACHE_R2_WRITE_ACCESS_KEY_ID` and
+   `SCCACHE_R2_WRITE_SECRET_ACCESS_KEY`. The write key is used by the manual
+   `main` warmer and validated tagged CLI and stable SDK builds.
 4. Set the repository variable `SCCACHE_R2_ENABLED` to `true`, then dispatch
    `Warm R2 compiler cache` on `main` once. The job fails on an incomplete or
    invalid endpoint, region, or write credential configuration.
 
-The warm-up workflow also runs when Rust dependency, toolchain, cache script, or
-consumer workflow files change on `main`. Check the warmer's `sccache stats` for
-cache writes and later PR/pre-merge job summaries for hits, misses, and errors.
-Compare completed run duration and runner usage against prior runs before attributing
-a speedup to R2: a cache hit alone does not prove a shorter critical path. R2 object
-storage and request usage can grow with the three-platform warmer.
+Run the R2 warmer manually on `main` after a dependency or toolchain change when
+repeated PR or pre-merge builds justify refilling the cache. It does not run on
+each main push. Existing R2 objects remain available to later jobs whose compiler
+inputs still match. Check the warmer's `sccache stats` for cache writes and later
+PR/pre-merge job summaries for hits, misses, and errors. Compare completed run
+duration and total runner usage against prior runs before attributing a net
+speedup to R2: a cache hit alone does not prove a shorter critical path. R2
+object storage and request usage can grow with each three-platform warm-up.
 
 To inspect the shared archives or fill a missing one:
 

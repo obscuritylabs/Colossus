@@ -202,14 +202,14 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
 }
 
 #[test]
-fn r2_compiler_cache_writes_only_from_main_and_reads_only_in_prs() {
+fn r2_compiler_cache_writes_only_from_protected_main_or_release_tags() {
     let warm = workflow("sccache-warm.yml");
     let root = mapping(&warm, "R2 warmer");
     let triggers = mapping(field(root, "on"), "R2 warm triggers");
-    let push = mapping(field(triggers, "push"), "R2 push trigger");
     assert_eq!(
-        strings(field(push, "branches"), "R2 warm branches"),
-        ["main".to_owned()].into_iter().collect()
+        triggers.keys().collect::<Vec<_>>(),
+        [&"workflow_dispatch"],
+        "R2 warming must not spend runner time on every matching main push"
     );
     let warm_job = job(jobs(&warm), "warm");
     assert!(
@@ -272,6 +272,53 @@ fn r2_compiler_cache_writes_only_from_main_and_reads_only_in_prs() {
             );
         }
     }
+
+    let release = workflow("release.yml");
+    for name in ["artifacts", "sdk_release"] {
+        let release_job = job(jobs(&release), name);
+        let environment = mapping(field(release_job, "environment"), "release R2 environment");
+        let environment_name = field(environment, "name")
+            .as_str()
+            .expect("conditional release R2 environment");
+        assert!(environment_name.contains("needs.validate.outputs.publish_draft == 'true'"));
+        assert!(environment_name.contains("vars.SCCACHE_R2_ENABLED == 'true'"));
+        assert!(environment_name.contains("sccache-r2-write"));
+        let write = named_step(
+            release_job,
+            "Configure R2 compiler cache for tagged release",
+        );
+        let condition = field(write, "if")
+            .as_str()
+            .expect("tagged release R2 condition");
+        assert!(condition.contains("needs.validate.outputs.publish_draft == 'true'"));
+        assert!(condition.contains("vars.SCCACHE_R2_ENABLED == 'true'"));
+        assert_eq!(
+            field(write, "run").as_str(),
+            Some("./scripts/ci/configure-sccache-r2.sh write")
+        );
+        let env = mapping(field(write, "env"), "release R2 write credentials");
+        assert_eq!(
+            field(env, "R2_ACCESS_KEY_ID").as_str(),
+            Some("${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}")
+        );
+        assert_eq!(
+            field(env, "R2_SECRET_ACCESS_KEY").as_str(),
+            Some("${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}")
+        );
+    }
+
+    let publisher = workflow("publish-sdk.yml");
+    let publish = job(jobs(&publisher), "publish");
+    let read = named_step(publish, "Configure read-only R2 compiler cache");
+    assert_eq!(
+        field(read, "run").as_str(),
+        Some("./scripts/ci/configure-sccache-r2.sh read")
+    );
+    let env = mapping(field(read, "env"), "SDK publication R2 read credentials");
+    assert_eq!(
+        field(env, "R2_ACCESS_KEY_ID").as_str(),
+        Some("${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}")
+    );
 }
 
 #[test]
