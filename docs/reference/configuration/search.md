@@ -8,8 +8,8 @@ type: reference
 # Search configuration
 
 `search` defines provider-neutral search connections and explicitly routes agent and
-research traffic. See [Research overview](../../use/research-search.md) and
-[Web search](../../use/web-search.md) for usage.
+research traffic. See [Search](../../use/web-search.md) for direct queries and
+[Deep research](../../use/deep-research.md) for a cited investigation.
 
 ```yaml
 search:

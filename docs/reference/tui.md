@@ -1,6 +1,6 @@
 ---
 title: TUI commands and keys
-description: Keyboard navigation, interaction behavior, and slash-command families in the Colossus terminal UI.
+description: Look up terminal UI keys, slash commands, and plan controls.
 audience: user
 type: reference
 icon: lucide/keyboard
@@ -8,260 +8,133 @@ icon: lucide/keyboard
 
 # TUI commands and keys
 
-Start with `colossus` or `colossus tui`. The default inline viewport commits every
-finalized transcript entry to native terminal scrollback immediately, so ordinary mouse
-selection, copy, search, and wheel scrolling keep working. The viewport expands while
-output is streaming, then collapses back to the sticky composer and status as soon as
-that output completes without inserting cleared live rows between transcript entries.
-Use `--alt-screen` for the application-owned full-screen
-transcript viewport; `--no-alt-screen` remains a compatibility alias for the default.
-
-Fresh empty sessions initially use that live viewport for the **Lab Console**: a responsive,
-non-durable welcome surface with the selected workspace, provider route, sandbox profile,
-approval mode, and readiness state plus shortcuts for `/plan`, `/resume`, and `/tools`. Its
-terminal-native `OL // COLOSSUS` lockup avoids protocol-dependent artwork; roomy terminals add
-the Obscurity Labs name and a restrained red left rail, while compact and monochrome layouts keep
-the same text identity. The start prompt asks **What do you want to work on?**. Runtime
-configuration occupies a `// RUNTIME` row, followed by a separate `// SESSION` section so
-persistence, readiness, and security warnings do not read as an unlabeled continuation of the
-model field. The console is
-never committed to native scrollback or canonical session history. The first submitted command
-or prompt dismisses it before normal output is rendered; restored sessions skip it entirely.
-Inline startup first moves the prior visible terminal into native scrollback, then draws from a
-clean viewport without purging the terminal's earlier history.
-
-The current directory or `-w, --workspace` selects repository context, relative-path
-anchoring, and state identity. It is also the resource boundary under workspace
-isolation, but not under acknowledged full access. Configuration and
-workspace-partitioned state follow the
-[Colossus home resolution contract](colossus-home.md). Every top-level interactive run
-also snapshots the bounded home and repository `AGENTS.md` instructions before its
-first provider turn.
-
-With `--approval-mode risk-auto`, successful low-risk reviews appear as non-blocking
-**Automatic approval review** transcript cards. They do not take focus from the composer
-or require a response.
-
-Evaluator outages and invalid assessments appear as non-blocking **Automatic approval
-review failed** cards before the explicit approval dock opens above the composer. These
-cards contain only a sanitized failure category, action, resource, and manual-fallback
-explanation.
-
-Security posture findings appear at startup as a non-durable **Security posture**
-warning card and remain visible as a warning count in the footer. Each finding is a primary
-risk line followed by a dim, concise recommendation. This includes an explicit
-`danger_full_access` sandbox backend even when its boundary acknowledgement is already
-configured. A quiet row separates startup guidance from the composer. The footer is a
-full-width contrasting status surface. `Obscurity Labs // COLOSSUS` leads the row, and an active security
-count remains a distinct warning-colored segment beside it. If both segments cannot fit, the
-footer retains `Obscurity Labs` and the full security count. The color-free theme uses the same
-bold text lockup without depending on the Obscurity Labs red.
-
-Effect approvals use a compact bottom-docked, focus-taking surface that keeps the
-current transcript visible and the composer draft preserved. **Summary** presents the
-released actor, action, resource, policy reason, and risk metadata as borderless rows so
-the decision context is visible without opening a nested table; long values wrap and
-remain scrollable. **Exact request** shows the bounded prepared request, with any
-65,536-character display truncation marked explicitly, and repeats the complete
-sanitized approval scope before confirmation.
-**Protections** explains request binding, one-use behavior, policy re-evaluation, and
-the enforcement layers that remain active. Section and decision controls use filled,
-theme-resolved surfaces so focus remains visible without implying approval. Inline mode
-renders this transient dock on a temporary terminal screen, so dismissing it restores
-native scrollback byte-for-byte.
+Enter `/help` in Colossus for the command list supported by your running version.
+Start with the [Terminal UI guide](../use/terminal-ui.md) if you are new to the
+interface. The default view uses your terminal's native scrollback; add the global
+`--alt-screen` flag to use the full-screen transcript view.
 
 ## Keys
 
+### Compose and navigate
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Send the prompt. |
+| `Shift-Enter` | Insert a newline if your terminal reports the modifier. |
+| `Ctrl-R` | Search earlier submitted prompts. |
+| `Up` / `Down` | Browse submitted prompts from the first composer line; Down past the newest restores your draft. |
+| `Tab` / `Right` | Accept a visible completion. |
+| `Up` / `Down` / `Shift-Tab` | Move through completion suggestions. |
+| Terminal scroll shortcuts | Read finalized output in the default inline view. |
+| `PageUp` / `PageDown` | Scroll the transcript in alternate-screen mode. |
+| `End` | Return to live output in alternate-screen mode. |
+| `Ctrl-C` | Exit when idle. During a run, request cancellation; press again to exit. |
+| `Ctrl-D` | Exit from an empty, idle composer. |
+
+If Shift-Enter submits instead of inserting a newline, enter `/multiline on` before
+writing. In that mode, Enter inserts a line and Ctrl-D submits a nonempty prompt.
+Ctrl-Enter and Alt-Enter also submit when your terminal reports them distinctly.
+`/multiline off` restores the default; `/multiline toggle` switches modes.
+
+Typing `/` at the start of a draft offers slash-command completion. Typing `@` at a
+skill token offers active plugin skills as `@PLUGIN/SKILL`. Esc closes suggestions.
+
+### Approvals and pickers
+
 | Key | Context | Action |
 | --- | --- | --- |
-| `Enter` | Composer | Submit the current turn |
-| `Shift-Enter` | Composer, on a terminal that reports the modifier | Insert a newline at the cursor without submitting or accepting completion |
-| `Enter` | `/multiline on` fallback mode | Insert a newline, or accept an explicitly selected completion |
-| `Ctrl-D` | Nonempty `/multiline on` composer | Submit the current turn |
-| `Ctrl-Enter` / `Alt-Enter` | `/multiline on` composer | Submit the current turn when the terminal reports these modifiers |
-| `Up` / `Down` | Composer | From the first composer line, `Up` enters submitted-input history. While browsing, `Up` / `Down` move through entries; `Down` past the newest restores the original draft and cursor. |
-| `Ctrl-R` | Composer | Search submitted-input history |
-| `Ctrl-C` | Idle TUI | Exit, including when a draft or non-running overlay is open |
-| `Ctrl-C` | Active run | Request cooperative cancellation; press again to exit |
-| `Ctrl-D` | Empty, idle composer | Exit |
-| Terminal scroll shortcuts | Native scrollback | Inspect finalized output using the terminal's normal bindings |
-| `PageUp` / `PageDown` | Alternate-screen transcript | Scroll retained output |
-| Mouse wheel | Transcript | Use native scrollback by default; scroll a few retained lines in alternate-screen mode |
-| `End` | Alternate-screen transcript | Return to live output |
-| `Esc` | Menu or overlay | Dismiss or fail closed, depending on the prompt |
-| `Up` / `Down` | Docked security decision | Select a decision without submitting it |
-| `A` / `D` | Effect approval | Select **Allow once** or **Deny**; Enter still confirms |
-| `A` / `D` | Sandbox boundary acknowledgement | Select acknowledge/enable or keep blocked; Enter still confirms |
-| `S` / `R` / `P` | Docked security decision | Inspect Summary, Exact request, or Protections |
-| `Tab` / `Shift-Tab` | Docked security decision | Move between detail sections |
-| `PageUp` / `PageDown` | Docked security decision | Scroll the active detail section |
-| `Enter` | Docked security decision | Confirm the explicitly selected decision; blank remains fail closed |
-| `Down` | Suggestions | Select the next item |
-| `Shift-Tab` / `Up` | Suggestions | Select the previous item |
-| `Tab` / `Right` | Suggestions | Accept the visible suggestion |
-| `Enter` | Explicitly selected suggestion | Accept the selection |
-| `/` | Session browser | Focus search; `Esc` leaves search before dismissing the browser |
-| `Up` / `Down` | Session browser | Move between matching sessions; the current session is marked and skipped |
-| `PageUp` / `PageDown` | Session browser | Scroll the selected session's recent-conversation preview |
-| `Enter` | Session browser | Resume the selected durable session |
-| `/` | Theme browser | Focus search; `Esc` leaves search before cancelling the browser |
-| `Up` / `Down` | Theme browser | Preview the previous or next matching theme without saving it |
-| `Enter` | Theme browser | Save the previewed theme |
-| `D` / `G` | Plan execution dock | Select Direct or Goal Mode; Enter still confirms |
-| `Enter` | Plan execution dock | Confirm the explicitly selected strategy; no strategy is preselected |
+| `Up` / `Down` | Approval dock | Select a decision without confirming it. |
+| `A` / `D` | Effect approval | Select Allow once or Deny. |
+| `S` / `R` / `P` | Approval dock | Show Summary, Exact request, or Protections. |
+| `Tab` / `Shift-Tab` | Approval dock | Move between detail sections. |
+| `PageUp` / `PageDown` | Approval dock | Scroll the active section. |
+| `Enter` | Approval dock | Confirm the selected decision; nothing is preselected. |
+| `Esc` | Approval dock | Dismiss and deny the request. |
+| `/` | Session or theme browser | Search. Esc leaves search before closing the browser. |
+| `Up` / `Down` | Session or theme browser | Select a session or preview a theme. |
+| `PageUp` / `PageDown` | Session browser | Scroll the selected conversation preview. |
+| `Enter` | Session or theme browser | Resume the session or save the selected theme. |
+| `Esc` | Theme browser | Cancel and restore the original theme. |
+| `D` / `G` | Plan execution dock | Select Direct or Goal Mode; Enter confirms. |
 
-The TUI requests enhanced keyboard reporting on Unix terminals. Some terminals or
-terminal multiplexers still send the same event for `Shift-Enter` and `Enter`;
-pressing `Shift-Enter` on those terminals submits. If your terminal does not report
-the modifier, run `/multiline on` before composing a multiline prompt. In that
-fallback mode, `Enter` inserts a newline or accepts a selected completion, and
-`Ctrl-D` submits a nonempty draft; `Ctrl-Enter` and `Alt-Enter` remain supported
-when reported distinctly.
-`/multiline off` restores the default `Enter` behavior, and `/multiline toggle`
-switches between them. The preference persists through `/tui save`.
-
-Typing `/` at the beginning of a draft opens slash-command completion. Typing `@` at a
-skill-token boundary opens completion for qualified active-plugin skills
-(`@PLUGIN/SKILL`). Suggestions are bounded and dismiss until the draft changes after
-`Esc`.
-
-The completion surface shows up to six suggestions in compact terminals. When at least
-96 columns and enough vertical space are available, it expands to 96 columns and up to
-12 suggestions while retaining transcript, composer, and footer context.
-
-In inline mode, the session and theme browsers open on a temporary alternate screen.
-Closing either restores the inline viewport and native terminal history byte-for-byte,
-so browser rows never become scrollback output. Theme navigation is a reversible live
-preview: `Esc` restores the original theme and only `Enter` saves the selection.
+The approval dock preserves the composer draft. Cancelling, timing out, or
+disconnecting does not grant approval. For the browser workflows, see
+[Sessions](../use/sessions.md) and [Theme](../use/theme.md).
 
 ## Commands
 
-The in-product `/help` command is generated from the current completion catalog and is
-the executable authority for available command families and required arguments in the
-current runtime.
+Slash commands run in the terminal UI; unknown commands are not sent to the model.
+Use `/help` for arguments and commands available in your installed version.
 
 | Family | Commands |
 | --- | --- |
 | Help and exit | `/help`, `/exit` |
-| Permissions | `/permissions [deny\|ask\|risk-auto\|full-access]` |
-| TUI preferences | `/tui prefs`, `/tui save`, `/tui reset` |
-| Themes | `/theme`, `/theme list`, `/theme preview`, `/theme validate`, `/theme scaffold`, `/theme reset` |
-| Activity | `/stream on`, `/stream raw`, `/stream off`, `/events compact`, `/events verbose`, `/events off`, `/reasoning on`, `/reasoning off` |
-| Composer and transcript | `/transcript comfortable`, `/transcript compact`, `/multiline on`, `/multiline off`, `/multiline toggle`, `/trace` |
 | Sessions | `/sessions`, `/session show`, `/session new`, `/session resume`, `/resume` |
-| Image attachments | `/attach PATH`, `/attachments`, `/detach INDEX`, `/detach all` |
-| Work | `/work`, `/tasks`, `/decisions`, `/plans`, `/goals`, `/goal`, `/goal resume GOAL_ID`, `/agents`, `/agents drain` |
-| Plan workflow | `/plan`, `/plan on`, `/plan off`, `/plan status`, `/plan new`, `/plan list`, `/plan use PLAN_ID`, `/plan show [PLAN_ID]`, `/plan approve`, `/plan discard`, `/plan execute [direct\|goal [ITERATIONS]]` |
-| Memory and research | `/memories`, `/memory search`, `/research`, `/research list` |
-| Telemetry | `/telemetry`, `/telemetry metrics` |
-| Agent Plugins | `/plugins`, `/plugins show`, `/plugin skills`, `/plugin active`, `/plugin use`, `/plugin clear`, `/plugin show`, `/plugin resources`, `/plugin read` |
-| Release distribution | `/bundle verify` |
-| Integrations and MCP | `/integrations`, `/integration show`, `/integration call`, `/integration disconnect`, `/mcp servers`, `/mcp tools`, `/mcp auth login SERVER`, `/mcp auth complete SERVER CALLBACK_URL`, `/mcp auth status SERVER`, `/mcp auth logout SERVER` |
+| Permissions | `/permissions [deny\|ask\|risk-auto\|full-access]` |
+| Tools and work | `/tools`, `/work`, `/tasks`, `/decisions`, `/plans`, `/goals`, `/goal`, `/goal resume GOAL_ID`, `/agents`, `/agents drain` |
+| Planning | `/plan`, `/plan on`, `/plan off`, `/plan status`, `/plan new`, `/plan list`, `/plan use PLAN_ID`, `/plan show [PLAN_ID]`, `/plan approve`, `/plan discard`, `/plan execute [direct\|goal [ITERATIONS]]` |
 | Context | `/context status`, `/context list`, `/context compact`, `/context restore` |
+| Memory and research | `/memories`, `/memory search`, `/research`, `/research list` |
+| Skills and plugins | `/plugins`, `/plugins show`, `/plugin skills`, `/plugin active`, `/plugin use`, `/plugin clear`, `/plugin show`, `/plugin resources`, `/plugin read` |
+| MCP and integrations | `/mcp servers`, `/mcp tools`, `/mcp auth login SERVER`, `/mcp auth complete SERVER CALLBACK_URL`, `/mcp auth status SERVER`, `/mcp auth logout SERVER`, `/integrations`, `/integration show`, `/integration call`, `/integration disconnect` |
+| Images | `/attach PATH`, `/attachments`, `/detach INDEX`, `/detach all` |
+| Theme | `/theme`, `/theme list`, `/theme preview`, `/theme validate`, `/theme scaffold`, `/theme reset` |
+| Display | `/stream on`, `/stream raw`, `/stream off`, `/events compact`, `/events verbose`, `/events off`, `/reasoning on`, `/reasoning off`, `/transcript comfortable`, `/transcript compact`, `/multiline on`, `/multiline off`, `/multiline toggle`, `/trace` |
+| Preferences | `/tui prefs`, `/tui save`, `/tui reset` |
+| Telemetry and diagnostics | `/telemetry`, `/telemetry metrics`, `/audit verify`, `/projection status`, `/models doctor [PROFILE]`, `/provider doctor [PROFILE]`, `/provider diagnostics on`, `/provider diagnostics off` |
 | Workflows | `/workflow list`, `/workflow status`; schedule `list`, `show`, `enable`, `disable`, `tick`; webhook `list`, `show`, `enable`, `disable`; subscription `list`, `show`, `enable`, `disable`, `tick` |
-| Diagnostics | `/audit verify`, `/projection status`, `/models doctor [PROFILE]`, `/provider doctor [PROFILE]`, `/provider diagnostics on`, `/provider diagnostics off`, `/tools` |
+| Bundles | `/bundle verify` |
 
-`/decisions` lists active key decisions across the selected workspace state; `/tasks`
-and `/plans` remain tied to the current session.
+`/decisions` lists active workspace decisions. `/tasks` and `/plans` show records in
+the current session. `/resume` without an ID opens a searchable browser; pass an
+exact session ID when you know it. `/research QUESTION` uses standard depth with
+repository, web, and MCP sources; use the CLI `research run` route to choose depth
+or sources explicitly.
 
-Use `/resume` or `/session resume` without an ID for the searchable master-detail
-browser; exact session IDs are accepted when deterministic selection matters. The
-browser keeps the running-command row, composer draft, and status footer visible while
-it is open.
-
-## Image attachments
-
-`/attach PATH` accepts an absolute path or a path relative to the active workspace;
-surround a path containing spaces with quotes. `/attachments` lists the pending images,
-and `/detach INDEX` or `/detach all` removes them. Execute and Plan modes accept images;
-Research mode rejects them locally. Pending images remain queued when validation or run
-start fails and clear after the submission is accepted.
-
-The composer shows up to three pending thumbnails and collapses the remainder into a
-`+N more` indicator. Submitted images retain content order and an adjacent filename,
-MIME, dimensions, size, and digest card. Default inline mode always renders deterministic
-half-block previews so native scrollback remains stable. `--alt-screen` uses Kitty,
-iTerm2, or Sixel when a capability query succeeds and falls back to half blocks.
+`/context status` shows the current session's model input budget and active
+snapshot. See [Context and snapshots](../use/sessions-context.md) to interpret it.
 
 ## Plan workflow
 
-The terminal starts in Execute mode. Plan mode and its selected plan are process-local:
-they are not presentation preferences and are not restored after a restart. The mode
-survives a session switch, but the selection is cleared so a plan from one session
-cannot become authority in another. The footer and composer title show the current mode,
-selected plan, status, and revision when space permits.
+The [Planning guide](../use/planning.md) shows the full Draft → approval → execution
+journey. These commands control Plan Mode and the selected plan in the current TUI
+process:
 
 | Command | Behavior |
 | --- | --- |
-| `/plan` | Toggle between Execute and Plan modes |
-| `/plan on` | Enter Plan mode |
-| `/plan off` | Return to Execute mode without clearing the selection |
-| `/plan status` | Show the process-local mode and selected-plan revision |
-| `/plan new` | Enter Plan mode and clear the selection without discarding the old plan |
-| `/plan list` | List plans in the current session |
-| `/plans` | Canonical current-session listing alias |
-| `/plan use PLAN_ID` | Select a same-session Draft or Approved plan and enter Plan mode |
-| `/plan show [PLAN_ID]` | Show the named plan, or the selected plan when the ID is omitted; showing a named plan does not select it |
-| `/plan approve` | Approve the selected Draft at its displayed revision, then open the Direct/Goal execution dock |
-| `/plan discard` | Discard the selected Draft or Approved plan at its displayed revision |
-| `/plan execute direct` | Atomically consume the selected Approved plan, then run it once |
-| `/plan execute goal [ITERATIONS]` | Atomically consume the selected Approved plan into Goal Mode; the default is 5 and the accepted range is 1–50 |
-| `/plan execute` | Open a contextual decision dock with plan revision, step/mutation counts, and Direct/Goal consequences; no strategy is preselected and Enter confirms it. Line mode uses choices 1, 2, and 3 |
-| `/goal resume GOAL_ID` | Continue the remaining budget of an Active goal in the current session |
+| `/plan new` | Enter Plan Mode with no plan selected; the next prompt creates a Draft. |
+| `/plan use PLAN_ID` | Select a Draft or Approved plan from the current session. |
+| `/plan show [PLAN_ID]` | Inspect the selected or named plan. |
+| `/plan status` | Show the mode and selected plan revision. |
+| `/plan approve` | Approve the selected Draft and open the execution choice. |
+| `/plan execute` | Choose Direct or Goal Mode; neither is preselected. |
+| `/plan execute direct` | Run the Approved plan once. |
+| `/plan execute goal [ITERATIONS]` | Run a bounded goal loop; default 5, range 1–50. |
+| `/plan discard` | Discard the selected Draft or Approved plan. |
+| `/plan off` | Return to Execute mode without discarding the selection. |
+| `/goal resume GOAL_ID` | Continue an Active goal with its remaining budget. |
 
-Submitting a prompt in Plan mode creates a new Draft when nothing is selected. With a
-selected Draft, the prompt refines that exact revision. Each completed planning turn
-opens a review dock with Keep refining, Approve, and Discard choices. The dock previews
-the structured Plan steps and clarifies that durable Tasks are separate records.
-Approving flows directly into the existing Direct/Goal execution dock. An Approved plan
-cannot be refined; use `/plan execute`, `/plan new`, `/plan discard`, or `/plan off`.
-Concurrent changes reject the stale revision. Reload the current record explicitly
-with `/plan use PLAN_ID` before retrying.
+`/plan` toggles Execute and Plan modes; `/plan on` enters Plan Mode. Mode and
+selection are local to the TUI process. They reset after restart, and switching
+sessions clears the selection. The plan record itself remains durable. Approval of
+a plan does not preapprove tools used during execution.
 
-Canceling the execution decision dock, or cancellation/failure before plan consumption,
-keeps the mode and selection. The dock preserves the composer draft and requires an
-explicit Direct or Goal selection before Enter can start execution. Once Direct
-execution or Goal handoff commits consumption, the terminal returns to Execute mode and
-clears the selection even if later work fails or is cancelled. The consumed plan and
-completed, cancelled, or failed evidence remain inspectable. A cancelled or failed Goal
-stays Active; `/goal resume GOAL_ID` uses only its remaining iteration budget.
+## Attachments and diagnostics
 
-`/events compact` shows only a short preview of raw `web.fetch`, `docs.fetch`, and
-`network.http` response bodies. Use `/events verbose` when inspecting the full released
-response is necessary. Verbose run-error cards also show a structured `HTTP status`
-field when an upstream provider returned a non-success response. Ordinary run errors
-remain body-free. `/models doctor [PROFILE]` issues a new representative tool-calling
-probe and displays its exact credential-free request plus at most 16 KiB of the redacted
-non-success response body. `/provider doctor [PROFILE]` does the same for provider
-catalog diagnostics.
+`/attach PATH` queues a supported image from an absolute path or one relative to
+the workspace; quote paths with spaces. `/attachments` lists pending images, and
+`/detach INDEX` or `/detach all` removes them. Execute and Plan modes accept images;
+Research mode does not. The model profile must enable
+[`imageInputs`](configuration/providers-models.md#capabilities).
 
-Doctor commands cannot reproduce a failure that occurs only on a later continuation.
-Run `/provider diagnostics on`, retry the failing TUI turn, and inspect the error card's
-response body, offered tool-name list, and exact provider-facing request. The setting
-lasts only for the current TUI process and applies to every provider turn until
-`/provider diagnostics off` or exit. The detailed evidence is not written to durable run
-history, but the request can contain user, session, and tool-result data; review it
-before sharing. Use `/events off` to hide successful tool results entirely.
+Use `/events compact` for shorter tool-result previews or `/events verbose` to
+inspect more released detail. `/models doctor [PROFILE]` and
+`/provider doctor [PROFILE]` run diagnostic probes. If a provider error only
+appears later in a conversation, `/provider diagnostics on` exposes the next
+provider-facing request in the error card until you turn it off or exit. That
+request may contain conversation content, so review it before sharing.
 
-`/research QUESTION` uses `standard` depth with the `repo`, `web`, and `mcp` lanes.
-Use the CLI `research run` route when depth or lane selection must be explicit.
-
-## Interaction contract
-
-- Input stays available during a run; up to eight future turns may queue.
-- Mode and lifecycle commands share that FIFO. Returned plan state is applied before the
-  next item starts, and the queue does not drain while the execution-choice overlay is
-  open.
-- A failure or cooperative cancellation pauses the queue for explicit confirmation.
-- Effect approval uses a focus-taking bottom dock; `user.ask` retains its one-use
-  overlay. Both preserve the draft.
-- Blank, cancelled, timed-out, disconnected, replayed, or malformed prompt answers fail
-  closed.
-- New output does not move an operator reading older content; the UI shows a new-item
-  count.
-- The transcript reflows on resize. Composer and footer remain pinned.
-- Terminal state, cursor, bracketed paste, raw mode, and screen ownership are restored
-  when the TUI exits.
-
-Non-TTY stdin selects a bounded line runner. It does not own terminal control and is
-appropriate for automation.
+While a run is active, the composer can queue up to eight future turns. A failure
+or cancellation pauses the queue for your decision. Finalized output remains in
+native scrollback by default; an active run does not move you away from older
+content you are reading.
