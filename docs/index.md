@@ -35,7 +35,8 @@ services you want to use.
     and includes the CLI.
 
     [Start on macOS :lucide-arrow-right:](get-started/desktop.md) ·
-    [Start on Windows](get-started/windows-desktop.md)
+    [Start on Windows](get-started/windows-desktop.md) ·
+    [Explore Desktop](desktop/index.md)
 
 </div>
 

@@ -50,9 +50,23 @@ nav = [
     ] },
   ] },
   { "Desktop" = [
-    { "macOS Desktop" = "get-started/desktop.md" },
-    { "Windows Desktop" = "get-started/windows-desktop.md" },
-    { "Desktop setup files" = "get-started/desktop-setup-files.md" },
+    { "Overview" = "desktop/index.md" },
+    { "Get started" = [
+      { "Start on macOS" = "get-started/desktop.md" },
+      { "Start on Windows" = "get-started/windows-desktop.md" },
+      { "Workspaces" = "desktop/workspaces.md" },
+    ] },
+    { "Work in Desktop" = [
+      { "Work and threads" = "desktop/work.md" },
+      { "Session views" = "desktop/session-views.md" },
+      { "Tools beside your work" = "desktop/tools.md" },
+    ] },
+    { "Configure and extend" = [
+      { "Capabilities and plugins" = "desktop/capabilities.md" },
+      { "Settings and access" = "desktop/settings.md" },
+      { "External targets" = "desktop/external-targets.md" },
+      { "Desktop setup files" = "get-started/desktop-setup-files.md" },
+    ] },
   ] },
   { "Use" = [
     { "Overview" = "use/index.md" },

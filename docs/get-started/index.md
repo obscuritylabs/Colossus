@@ -34,7 +34,8 @@ you are ready for a real task.
     the offline self-test before setting up a model provider.
 
     [macOS Desktop :lucide-arrow-right:](desktop.md) ·
-    [Windows Desktop](windows-desktop.md)
+    [Windows Desktop](windows-desktop.md) ·
+    [Explore Desktop](../desktop/index.md)
 
 </div>
 
