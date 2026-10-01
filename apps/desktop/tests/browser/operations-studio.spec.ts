@@ -306,7 +306,7 @@ test("security warning banners are opt-in and persist across reloads", async ({
   const openAppearance = async () => {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByRole("button", { name: "Global", exact: true }).click();
-    await page.getByRole("button", { name: "Desktop", exact: true }).click();
+    await page.getByRole("button", { name: "Appearance", exact: true }).click();
   };
   const toggle = page.getByRole("switch", { name: "Show security warnings" });
 
@@ -338,7 +338,9 @@ test("Desktop settings exposes diagnostics export through the native command", a
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Global", exact: true }).click();
-  await page.getByRole("button", { name: "Desktop", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Updates & diagnostics", exact: true })
+    .click();
   await page.evaluate(() => {
     const state = window as unknown as {
       diagnosticCommands: string[];
@@ -368,7 +370,7 @@ test("Desktop settings exposes diagnostics export through the native command", a
 test("appearance preferences are readable, consistent, and persistent", async ({
   page,
 }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(90_000);
   const globalTabs = [
     "Providers",
     "Models",
@@ -377,12 +379,17 @@ test("appearance preferences are readable, consistent, and persistent", async ({
     "Search",
     "Telemetry",
     "Defaults",
-    "Desktop",
+    "Appearance",
+    "Connections",
+    "Setup",
+    "Terminal",
+    "Certificates",
+    "Updates & diagnostics",
   ] as const;
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Global", exact: true }).click();
-  await page.getByRole("button", { name: "Desktop", exact: true }).click();
+  await page.getByRole("button", { name: "Appearance", exact: true }).click();
 
   const colorTheme = page.getByRole("combobox", {
     name: /Color theme/u,
@@ -416,9 +423,9 @@ test("appearance preferences are readable, consistent, and persistent", async ({
   for (const [tab, rowSelector] of [
     ["Providers", ".catalog-inventory-row"],
     ["Models", ".catalog-inventory-row"],
-    ["Credentials", ".credential-list .managed-list-row"],
-    ["Search", ".search-profile-row"],
-    ["Telemetry", ".telemetry-row"],
+    ["Credentials", ".catalog-inventory-row"],
+    ["Search", ".catalog-inventory-row"],
+    ["Telemetry", ".catalog-inventory-row"],
   ] as const) {
     await page.getByRole("button", { name: tab, exact: true }).click();
     const row = page.locator(rowSelector).first();
@@ -435,7 +442,7 @@ test("appearance preferences are readable, consistent, and persistent", async ({
     ).toEqual([]);
   }
 
-  await page.getByRole("button", { name: "Desktop", exact: true }).click();
+  await page.getByRole("button", { name: "Appearance", exact: true }).click();
   await colorTheme.click();
   await page
     .getByRole("listbox")
@@ -458,6 +465,7 @@ test("appearance preferences are readable, consistent, and persistent", async ({
     ).toEqual([]);
   }
 
+  await page.getByRole("button", { name: "Appearance", exact: true }).click();
   const textSize = page.getByRole("combobox", { name: /Text size/u });
   for (const [label, value, expectedRootSize] of [
     ["Compact", "compact", "15px"],
@@ -556,7 +564,7 @@ test("light theme keeps session inspection surfaces readable", async ({
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Global", exact: true }).click();
-  await page.getByRole("button", { name: "Desktop", exact: true }).click();
+  await page.getByRole("button", { name: "Appearance", exact: true }).click();
 
   const colorTheme = page.getByRole("combobox", { name: /Color theme/u });
   await colorTheme.click();
@@ -625,7 +633,7 @@ test("light theme keeps workspace shell surfaces readable", async ({
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Global", exact: true }).click();
-  await page.getByRole("button", { name: "Desktop", exact: true }).click();
+  await page.getByRole("button", { name: "Appearance", exact: true }).click();
 
   const colorTheme = page.getByRole("combobox", { name: /Color theme/u });
   await colorTheme.click();
@@ -713,7 +721,7 @@ test("artifact, file, and workspace destination surfaces follow both themes", as
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Global", exact: true }).click();
-  await page.getByRole("button", { name: "Desktop", exact: true }).click();
+  await page.getByRole("button", { name: "Appearance", exact: true }).click();
 
   const colorTheme = page.getByRole("combobox", { name: /Color theme/u });
   await colorTheme.click();
@@ -806,7 +814,7 @@ test("artifact, file, and workspace destination surfaces follow both themes", as
     .getByRole("button", { name: "Settings", exact: true })
     .click();
   await page.getByRole("button", { name: "Global", exact: true }).click();
-  await page.getByRole("button", { name: "Desktop", exact: true }).click();
+  await page.getByRole("button", { name: "Appearance", exact: true }).click();
   await colorTheme.click();
   await page
     .getByRole("listbox")
@@ -923,31 +931,28 @@ test("managed settings expose complete catalog editors without horizontal overfl
     page.getByRole("heading", { name: "Credentials", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText("Stored securely on this device", { exact: true }),
-  ).toBeVisible();
-  await expect(
     page.getByText(
       "Values are entered in a system dialog and are not shown again.",
       {
         exact: true,
       },
     ),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(
     page.getByRole("heading", { name: "Add credential", exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(page.locator('input[type="password"]')).toHaveCount(0);
   const githubCredential = page
-    .getByRole("listitem")
+    .getByRole("row")
     .filter({ hasText: "GitHub workspace token" });
   const documentationCredential = page
-    .getByRole("listitem")
+    .getByRole("row")
     .filter({ hasText: "Documentation API key" });
   await expect(
-    githubCredential.getByText("Used by 2", { exact: true }),
+    githubCredential.getByText("2 connections", { exact: true }),
   ).toBeVisible();
   await expect(
-    documentationCredential.getByText("Used by 3", { exact: true }),
+    documentationCredential.getByText("3 connections", { exact: true }),
   ).toBeVisible();
   const credentialsAccessibility = await new AxeBuilder({ page })
     .include(".credentials-settings")
@@ -963,16 +968,19 @@ test("managed settings expose complete catalog editors without horizontal overfl
     page.getByRole("heading", { name: "Search services", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText("Available by workspace", { exact: true }),
+    page.getByText(
+      "Saved search services. Enable each service in Workspace settings.",
+      { exact: true },
+    ),
   ).toBeVisible();
   const engineeringSearch = page
-    .getByRole("listitem")
+    .getByRole("row")
     .filter({ hasText: "Engineering search" });
   await expect(
-    engineeringSearch.getByText("Credential attached", { exact: true }),
+    engineeringSearch.getByText("Documentation API key", { exact: true }),
   ).toBeVisible();
   await expect(
-    engineeringSearch.getByText("Used by 1", { exact: true }),
+    engineeringSearch.getByText("1 workspace", { exact: true }),
   ).toBeVisible();
   await page
     .getByRole("button", { name: "Edit Engineering search", exact: true })
@@ -1017,14 +1025,14 @@ test("managed settings expose complete catalog editors without horizontal overfl
 
   await page.getByRole("button", { name: "Telemetry", exact: true }).click();
   await expect(
-    page.getByText("Review shared data", { exact: true }),
+    page.getByText("Manage collectors, exported signals, and audit content.", {
+      exact: true,
+    }),
   ).toBeVisible();
   const localCollector = page
-    .getByRole("listitem")
+    .getByRole("row")
     .filter({ hasText: "Local collector" });
-  await expect(
-    localCollector.getByText("OTLP gRPC", { exact: true }),
-  ).toBeVisible();
+  await expect(localCollector.getByText(/OTLP gRPC/u)).toBeVisible();
   await expect(
     localCollector.getByText("3 OTLP signals", { exact: true }),
   ).toBeVisible();
@@ -1032,7 +1040,7 @@ test("managed settings expose complete catalog editors without horizontal overfl
     localCollector.getByText("Metadata only", { exact: true }),
   ).toBeVisible();
   await expect(
-    localCollector.getByText("Used by 1", { exact: true }),
+    localCollector.getByText("1 workspace", { exact: true }),
   ).toBeVisible();
   await page
     .getByRole("button", { name: "Edit Local collector", exact: true })
@@ -1186,27 +1194,18 @@ test("managed settings expose complete catalog editors without horizontal overfl
     );
   expect(repeatedDescriptions).toBe(0);
 
-  await page.getByRole("button", { name: "Desktop", exact: true }).click();
+  await page.getByRole("button", { name: "Connections", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "Desktop settings", exact: true }),
+    page.getByRole("heading", { name: "Connections", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByText(
-      "Manage the workspace and local services that belong to this Desktop installation.",
+      "Manage your local workspace and connect to external runtimes.",
       { exact: true },
     ),
   ).toBeVisible();
   await expect(
-    page.getByText("Desktop-only controls", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Managed workspace", { exact: true }).first(),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "This Desktop", exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Saved runtimes", exact: true }),
+    page.getByRole("heading", { name: "External runtimes", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Configure runtime", exact: true }),
@@ -1235,10 +1234,56 @@ test("credential management stays secure, clear, and compact", async ({
   await page.getByRole("button", { name: "Global", exact: true }).click();
   await page.getByRole("button", { name: "Credentials", exact: true }).click();
 
-  await expect(
-    page.getByText("Stored securely on this device", { exact: true }),
-  ).toBeVisible();
   await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  const search = page.getByRole("textbox", {
+    name: "Search credentials",
+    exact: true,
+  });
+  await search.fill("no matching credential");
+  await expect(
+    page.getByText("No matching credentials", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Clear search", exact: true }).click();
+  await expect(search).toBeFocused();
+  await search.fill("bearer");
+  await expect(
+    page.getByRole("button", {
+      name: "Details for GitHub workspace token",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: "Details for Documentation API key",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  await page
+    .getByRole("button", {
+      name: "Connections for GitHub workspace token: 2 connections",
+      exact: true,
+    })
+    .click();
+  await expect(
+    page.getByRole("region", {
+      name: "Details for GitHub workspace token",
+      exact: true,
+    }),
+  ).toContainText("MCP server");
+  await page
+    .getByRole("button", { name: "Add credential", exact: true })
+    .click();
+  await expect(search).toHaveValue("");
+  await expect(
+    page.getByLabel("Display label", { exact: false }),
+  ).toBeFocused();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Add credential", exact: true }),
+  ).toBeFocused();
+  await page
+    .getByRole("button", { name: "Add credential", exact: true })
+    .click();
   await page
     .getByLabel("Display label", { exact: false })
     .fill("Splunk admin token");
@@ -1251,11 +1296,11 @@ test("credential management stays secure, clear, and compact", async ({
     .getByRole("option", { name: "Bearer token", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "Add credential", exact: true })
+    .getByRole("button", { name: "Continue to secure entry", exact: true })
     .click();
 
   const addedCredential = page
-    .getByRole("listitem")
+    .getByRole("row")
     .filter({ hasText: "Splunk admin token" });
   await expect(addedCredential).toBeVisible();
   await expect(
@@ -1265,6 +1310,28 @@ test("credential management stays secure, clear, and compact", async ({
     page.getByText("Credential stored securely.", { exact: true }),
   ).toBeVisible();
 
+  await expect(
+    page.getByRole("heading", { name: "Add credential", exact: true }),
+  ).toHaveCount(0);
+  await addedCredential
+    .getByRole("button", { name: "Rotate Splunk admin token", exact: true })
+    .click();
+  await expect(
+    page.getByText(
+      /Token replaced. The credential name and references are unchanged/,
+    ),
+  ).toBeVisible();
+  await expect(addedCredential).toHaveCount(1);
+  await addedCredential
+    .getByRole("button", {
+      name: "More actions for Splunk admin token",
+      exact: true,
+    })
+    .click();
+  await page
+    .getByRole("menuitem", { name: "Delete Splunk admin token", exact: true })
+    .click();
+  await expect(addedCredential).toHaveCount(0);
   const pane = page.locator(".managed-settings-shell");
   const bounds = await pane.evaluate((element) => ({
     clientWidth: element.clientWidth,
@@ -1284,10 +1351,34 @@ test("search services stay complete, clear, and compact", async ({ page }) => {
   await page.getByRole("button", { name: "Search", exact: true }).click();
 
   await expect(
-    page.getByText("Adding a service here does not enable it automatically.", {
+    page.getByText(
+      "Saved search services. Enable each service in Workspace settings.",
+      {
+        exact: true,
+      },
+    ),
+  ).toBeVisible();
+  const inventorySearch = page.getByRole("textbox", {
+    name: "Search services",
+    exact: true,
+  });
+  await inventorySearch.fill("does-not-exist");
+  await expect(
+    page.getByText("No matching search services", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Clear search", exact: true }).click();
+  await expect(inventorySearch).toBeFocused();
+  await inventorySearch.fill("engineering");
+  await expect(page.locator(".catalog-inventory-row")).toHaveCount(1);
+  await page.getByRole("button", { name: "Telemetry", exact: true }).click();
+  await expect(
+    page.getByRole("textbox", {
+      name: "Search telemetry connections",
       exact: true,
     }),
-  ).toBeVisible();
+  ).toHaveValue("");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(inventorySearch).toHaveValue("");
   await page
     .getByRole("button", { name: "Add search service", exact: true })
     .click();
@@ -1331,19 +1422,23 @@ test("search services stay complete, clear, and compact", async ({ page }) => {
     .getByRole("button", { name: "Add search service" })
     .click();
 
-  const addedProfile = page
-    .getByRole("listitem")
-    .filter({ hasText: "Web results" });
+  const addedProfile = page.getByRole("row").filter({ hasText: "Web results" });
   await expect(addedProfile).toBeVisible();
   await expect(
-    addedProfile.getByText("Credential attached", { exact: true }),
+    addedProfile.getByText("Documentation API key", { exact: true }),
   ).toBeVisible();
   await expect(
-    addedProfile.getByText("Not used", { exact: true }),
+    addedProfile.getByText("0 workspaces", { exact: true }),
   ).toBeVisible();
-  await expect(
-    addedProfile.getByText("45s · v1", { exact: true }),
-  ).toBeVisible();
+  await addedProfile
+    .getByRole("button", { name: "Details for Web results", exact: true })
+    .click();
+  const details = page.getByRole("region", {
+    name: "Details for Web results",
+    exact: true,
+  });
+  await expect(details.getByText("45s", { exact: true })).toBeVisible();
+  await expect(details.getByText("v1", { exact: true })).toBeVisible();
 
   const pane = page.locator(".managed-settings-shell");
   const bounds = await pane.evaluate((element) => ({
@@ -1415,7 +1510,12 @@ test("every settings tab fills the viewport and keeps actions anchored", async (
     "Search",
     "Telemetry",
     "Defaults",
-    "Desktop",
+    "Appearance",
+    "Connections",
+    "Setup",
+    "Terminal",
+    "Certificates",
+    "Updates & diagnostics",
   ]) {
     await sectionTabs.getByRole("button", { name: tab, exact: true }).click();
     const gaps = await measureGaps();
@@ -1687,10 +1787,9 @@ test("telemetry connections stay clear and compact", async ({ page }) => {
   await page.getByRole("button", { name: "Telemetry", exact: true }).click();
 
   await expect(
-    page.getByText(
-      "Full audit records can include prompts, responses, and tool input or output.",
-      { exact: true },
-    ),
+    page.getByText("Manage collectors, exported signals, and audit content.", {
+      exact: true,
+    }),
   ).toBeVisible();
   await page
     .getByRole("button", { name: "Add telemetry connection", exact: true })
@@ -1733,15 +1832,13 @@ test("telemetry connections stay clear and compact", async ({ page }) => {
     .click();
 
   const addedProfile = page
-    .getByRole("listitem")
+    .getByRole("row")
     .filter({ hasText: "Production observability" });
   await expect(addedProfile).toBeVisible();
   await expect(
     addedProfile.getByText("otel.example.test:4318", { exact: false }),
   ).toBeVisible();
-  await expect(
-    addedProfile.getByText("OTLP HTTP/protobuf", { exact: true }),
-  ).toBeVisible();
+  await expect(addedProfile.getByText(/OTLP HTTP\/protobuf/u)).toBeVisible();
   await expect(
     addedProfile.getByText("2 OTLP signals", { exact: true }),
   ).toBeVisible();
@@ -1749,11 +1846,20 @@ test("telemetry connections stay clear and compact", async ({ page }) => {
     addedProfile.getByText("Audit content off", { exact: true }),
   ).toBeVisible();
   await expect(
-    addedProfile.getByText("Not used", { exact: true }),
+    addedProfile.getByText("0 workspaces", { exact: true }),
   ).toBeVisible();
-  await expect(
-    addedProfile.getByText("15s · v1", { exact: true }),
-  ).toBeVisible();
+  await addedProfile
+    .getByRole("button", {
+      name: "Details for Production observability",
+      exact: true,
+    })
+    .click();
+  const details = page.getByRole("region", {
+    name: "Details for Production observability",
+    exact: true,
+  });
+  await expect(details.getByText("15s", { exact: true })).toBeVisible();
+  await expect(details.getByText("v1", { exact: true })).toBeVisible();
 
   const pane = page.locator(".managed-settings-shell");
   const bounds = await pane.evaluate((element) => ({
@@ -3059,4 +3165,102 @@ test("high-contrast mode preserves visible focus and controls", async ({
   });
   expect(focusStyle.outlineStyle).not.toBe("none");
   expect(focusStyle.outlineWidth).not.toBe("0px");
+});
+
+test("credential secure entry preserves its draft on failure and prevents duplicate submissions", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page.getByRole("button", { name: "Credentials", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Add credential", exact: true })
+    .click();
+  const editor = page.getByRole("form", {
+    name: "Add credential",
+    exact: true,
+  });
+  const label = editor.getByLabel("Display label", { exact: false });
+  await label.fill("Retry token");
+  await editor.getByRole("combobox", { name: /Credential type/ }).click();
+  await page
+    .getByRole("option", { name: "OAuth client secret", exact: true })
+    .click();
+  await page.evaluate(() => {
+    const state = window as unknown as {
+      __TAURI_INTERNALS__: unknown;
+      credentialRequests: { command: string; args: unknown }[];
+      rejectCredential: () => void;
+    };
+    state.credentialRequests = [];
+    state.__TAURI_INTERNALS__ = {
+      invoke: (command: string, args: unknown) => {
+        if (command === "list_setup_packages") return Promise.resolve([]);
+        state.credentialRequests.push({ command, args });
+        return new Promise((_resolve, reject) => {
+          state.rejectCredential = () =>
+            reject({
+              code: "cancelled",
+              retryable: true,
+              outcomeUnknown: false,
+              message: "Secure entry cancelled. Retry when ready.",
+              violations: [],
+            });
+        });
+      },
+    };
+  });
+  const submit = editor.getByRole("button", {
+    name: "Continue to secure entry",
+    exact: true,
+  });
+  await submit.click();
+  await expect(submit).toBeDisabled();
+  await expect(label).toBeDisabled();
+  await expect(
+    editor.getByRole("button", { name: "Cancel", exact: true }),
+  ).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(editor).toBeVisible();
+  expect(
+    await page.evaluate(
+      () =>
+        (window as unknown as { credentialRequests: unknown[] })
+          .credentialRequests,
+    ),
+  ).toEqual([
+    {
+      command: "create_managed_credential",
+      args: {
+        request: {
+          expectedRevision: 4,
+          label: "Retry token",
+          kind: "client_secret",
+        },
+        appearance: expect.any(Object),
+      },
+    },
+  ]);
+  await page.evaluate(() =>
+    (window as unknown as { rejectCredential: () => void }).rejectCredential(),
+  );
+  await expect(page.getByRole("alert")).toContainText("Secure entry cancelled");
+  await expect(label).toHaveValue("Retry token");
+  await expect(
+    editor.getByRole("combobox", { name: /Credential type/ }),
+  ).toContainText("OAuth client secret");
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  await page.evaluate(() => {
+    delete (window as unknown as { __TAURI_INTERNALS__?: unknown })
+      .__TAURI_INTERNALS__;
+  });
+  await submit.click();
+  await expect(editor).toHaveCount(0);
+  await expect(
+    page.getByRole("row").filter({ hasText: "Retry token" }),
+  ).toContainText("OAuth client secret");
+  await expect(
+    page.getByRole("button", { name: "Add credential", exact: true }),
+  ).toBeFocused();
 });

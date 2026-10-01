@@ -1,9 +1,11 @@
 import {
+  IconActivityHeartbeat,
   IconChevronRight,
   IconCloud,
   IconCpu,
   IconDots,
   IconInfoCircle,
+  IconKey,
   IconPlus,
   IconSearch,
   IconTrash,
@@ -29,9 +31,72 @@ export interface CatalogInventoryRow {
   connection: ReactNode;
   usage: string;
   details: ReactNode;
+  actionLabel?: string;
+  actionIcon?: ReactNode;
+  actionAriaLabel?: string;
+  mutationDisabled?: boolean;
   onEdit: () => void;
-  onDelete: (trigger: HTMLButtonElement) => void;
+  onDelete?: (trigger: HTMLButtonElement) => void;
 }
+
+const catalogKinds = {
+  model: {
+    title: "Models",
+    singular: "model",
+    plural: "models",
+    column: "Model",
+    description: "Choose and manage the models your workspaces use.",
+    connectionLabel: "Provider",
+    usageLabel: "Active workspaces",
+    Icon: IconCpu,
+    className: "models-settings",
+  },
+  provider: {
+    title: "Providers",
+    singular: "provider",
+    plural: "providers",
+    column: "Provider",
+    description: "Saved connections for your workspaces.",
+    connectionLabel: "Sign-in",
+    usageLabel: "Configured models",
+    Icon: IconCloud,
+    className: "providers-settings",
+  },
+  credential: {
+    title: "Credentials",
+    singular: "credential",
+    plural: "credentials",
+    column: "Credential",
+    description: "API keys, tokens, and client secrets for your connections.",
+    connectionLabel: "Status",
+    usageLabel: "Used by",
+    Icon: IconKey,
+    className: "credentials-settings",
+  },
+  search: {
+    title: "Search services",
+    singular: "search service",
+    plural: "search services",
+    column: "Service",
+    description:
+      "Saved search services. Enable each service in Workspace settings.",
+    connectionLabel: "Credential",
+    usageLabel: "Active workspaces",
+    Icon: IconSearch,
+    className: "search-settings",
+  },
+  telemetry: {
+    title: "Telemetry connections",
+    singular: "telemetry connection",
+    plural: "telemetry connections",
+    column: "Connection",
+    description: "Manage collectors, exported signals, and audit content.",
+    connectionLabel: "Exported data",
+    usageLabel: "Active workspaces",
+    Icon: IconActivityHeartbeat,
+    className: "telemetry-settings",
+  },
+} as const;
 
 /** Shared presentation only; catalog mutations remain with the settings owner. */
 export function CatalogInventory({
@@ -43,7 +108,7 @@ export function CatalogInventory({
   onAdd,
   children,
 }: {
-  kind: "model" | "provider";
+  kind: keyof typeof catalogKinds;
   summary: string;
   rows: CatalogInventoryRow[];
   busy: boolean;
@@ -55,38 +120,45 @@ export function CatalogInventory({
   const search = useRef<HTMLInputElement>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const id = useId();
-  const providers = kind === "provider";
-  const title = providers ? "Providers" : "Models";
-  const connectionLabel = providers ? "Sign-in" : "Provider";
-  const usageLabel = providers ? "Configured models" : "Active workspaces";
+  const {
+    title,
+    singular,
+    plural,
+    column,
+    description,
+    connectionLabel,
+    usageLabel,
+    Icon,
+    className,
+  } = catalogKinds[kind];
+  const searchLabel =
+    kind === "search" ? "Search services" : `Search ${plural}`;
   const needle = query.trim().toLocaleLowerCase();
   const visible = rows.filter((row) =>
     row.searchText.toLocaleLowerCase().includes(needle),
   );
-  const Icon = providers ? IconCloud : IconCpu;
 
   return (
     <section
-      className={`managed-settings-body ${kind}s-settings catalog-settings`}
+      className={`managed-settings-body ${className} catalog-settings`}
       aria-labelledby={`${id}-heading`}
     >
       <header className="catalog-heading">
         <div>
           <h3 id={`${id}-heading`}>{title}</h3>
-          <p>
-            {providers
-              ? "Saved connections for your workspaces."
-              : "Choose and manage the models your workspaces use."}
-          </p>
+          <p>{description}</p>
         </div>
         <button
           id={`add-${kind}`}
           className="button primary"
           type="button"
           disabled={busy || editing}
-          onClick={onAdd}
+          onClick={() => {
+            setQuery("");
+            onAdd();
+          }}
         >
-          <IconPlus size={16} aria-hidden="true" /> Add {kind}
+          <IconPlus size={16} aria-hidden="true" /> Add {singular}
         </button>
       </header>
       <p className="catalog-summary">{summary}</p>
@@ -95,8 +167,8 @@ export function CatalogInventory({
         <IconSearch size={18} aria-hidden="true" />
         <input
           ref={search}
-          aria-label={`Search ${kind}s`}
-          placeholder={`Search ${kind}s`}
+          aria-label={searchLabel}
+          placeholder={searchLabel}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
@@ -115,7 +187,7 @@ export function CatalogInventory({
         ) : null}
       </div>
       <div className="catalog-table-container">
-        <table className="catalog-table" aria-label={`Configured ${kind}s`}>
+        <table className="catalog-table" aria-label={`Configured ${plural}`}>
           <colgroup>
             <col className="catalog-name-column" />
             <col />
@@ -124,7 +196,7 @@ export function CatalogInventory({
           </colgroup>
           <thead>
             <tr>
-              <th scope="col">{providers ? "Provider" : "Model"}</th>
+              <th scope="col">{column}</th>
               <th scope="col">{connectionLabel}</th>
               <th scope="col">{usageLabel}</th>
               <th scope="col">
@@ -173,7 +245,7 @@ export function CatalogInventory({
                       <button
                         type="button"
                         className="catalog-text-button catalog-usage"
-                        aria-label={`${usageLabel} for ${row.label}: ${row.usage}`}
+                        aria-label={`${kind === "credential" ? "Connections" : usageLabel} for ${row.label}: ${row.usage}`}
                         aria-expanded={open}
                         aria-controls={detailsId}
                         onClick={toggle}
@@ -183,21 +255,33 @@ export function CatalogInventory({
                       </button>
                     </td>
                     <td className="catalog-row-actions">
-                      <button
-                        type="button"
-                        className="catalog-text-button"
-                        disabled={busy}
-                        aria-label={`Edit ${row.label}`}
-                        onClick={row.onEdit}
-                      >
-                        Edit
-                      </button>
-                      <CatalogActions
-                        label={row.label}
-                        busy={busy}
-                        onDetails={() => setExpanded(row.id)}
-                        onDelete={row.onDelete}
-                      />
+                      <div className="catalog-action-group">
+                        <button
+                          type="button"
+                          className={
+                            row.actionIcon
+                              ? "icon-button"
+                              : "catalog-text-button"
+                          }
+                          disabled={busy || row.mutationDisabled}
+                          aria-label={
+                            row.actionAriaLabel ?? `Edit ${row.label}`
+                          }
+                          title={row.actionAriaLabel ?? `Edit ${row.label}`}
+                          onClick={row.onEdit}
+                        >
+                          {row.actionIcon ?? row.actionLabel ?? "Edit"}
+                        </button>
+                        {row.onDelete ? (
+                          <CatalogActions
+                            label={row.label}
+                            busy={busy}
+                            deleteDisabled={row.mutationDisabled}
+                            onDetails={() => setExpanded(row.id)}
+                            onDelete={row.onDelete}
+                          />
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                   <tr
@@ -221,12 +305,12 @@ export function CatalogInventory({
               <tr>
                 <td colSpan={4} className="catalog-empty">
                   <strong>
-                    {rows.length ? `No matching ${kind}s` : `No ${kind}s yet`}
+                    {rows.length ? `No matching ${plural}` : `No ${plural} yet`}
                   </strong>
                   <p>
                     {rows.length
                       ? "Try a different name or clear your search."
-                      : `Add a ${kind} to get started.`}
+                      : `Add a ${singular} to get started.`}
                   </p>
                 </td>
               </tr>
@@ -234,10 +318,10 @@ export function CatalogInventory({
           </tbody>
         </table>
       </div>
-      <p className="catalog-hint" role="status">
+      <p className={needle ? "catalog-hint" : "sr-only"} role="status">
         {needle
-          ? `${visible.length} of ${rows.length} ${kind}s match your search.`
-          : `Select a ${kind} to view its ${providers ? "connection details and models" : "settings and workspace usage"}.`}
+          ? `${visible.length} of ${rows.length} ${plural} match your search.`
+          : ""}
       </p>
     </section>
   );
@@ -248,9 +332,11 @@ function CatalogActions({
   busy,
   onDetails,
   onDelete,
+  deleteDisabled,
 }: {
   label: string;
   busy: boolean;
+  deleteDisabled?: boolean | undefined;
   onDetails: () => void;
   onDelete: (trigger: HTMLButtonElement) => void;
 }) {
@@ -318,7 +404,9 @@ function CatalogActions({
               return;
             }
             const items = Array.from(
-              event.currentTarget.querySelectorAll<HTMLButtonElement>("button"),
+              event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                "button:not(:disabled)",
+              ),
             );
             const index = items.indexOf(
               document.activeElement as HTMLButtonElement,
@@ -355,7 +443,7 @@ function CatalogActions({
             role="menuitem"
             tabIndex={-1}
             className="catalog-delete-action"
-            disabled={busy}
+            disabled={busy || deleteDisabled}
             aria-label={`Delete ${label}`}
             onClick={() => {
               close();

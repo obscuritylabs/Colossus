@@ -2,6 +2,11 @@ use super::*;
 use colossus_windows_native::{create_private_directory, create_private_file};
 use std::os::windows::fs::OpenOptionsExt as _;
 
+// Windows Credential Manager can retain a deleted entry while another native
+// fixture writes to the store. Model uninstall's stopped-consumer precondition
+// and keep the exact deletion assertions by isolating the live store fixtures.
+static NATIVE_CREDENTIAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
     let parent = directories::BaseDirs::new()
         .unwrap()
@@ -285,6 +290,7 @@ fn cleanup_rejects_foreign_key_service_and_shared_cli_data_without_deletion() {
 #[test]
 #[ignore = "requires Windows Credential Manager; uses only generated disposable entries"]
 fn native_uninstall_removes_exact_owned_keys_and_preserves_unrelated_entries() {
+    let _native_store = NATIVE_CREDENTIAL_TEST_LOCK.lock().unwrap();
     let (_guard, home) = fixture();
     plugin_blob(&home, true);
     let id = uuid::Uuid::new_v4();
@@ -310,13 +316,15 @@ fn native_uninstall_removes_exact_owned_keys_and_preserves_unrelated_entries() {
     result.unwrap();
     assert!(preserved);
     for (service, account) in &plan.keys {
-        assert!(matches!(
-            store
-                .build(service, account, Some(&modifiers))
-                .unwrap()
-                .get_secret(),
-            Err(keyring_core::Error::NoEntry)
-        ));
+        let observed = store
+            .build(service, account, Some(&modifiers))
+            .unwrap()
+            .get_secret();
+        assert!(
+            matches!(observed, Err(keyring_core::Error::NoEntry)),
+            "credential deletion post-check: {:?}",
+            observed.map(|value| value.len())
+        );
     }
 }
 
@@ -327,6 +335,7 @@ fn native_uninstall_removes_the_saved_credential_vault_key() {
     use colossus_ports::{CredentialKey, CredentialVault as _};
     use redb::ReadableDatabase as _;
 
+    let _native_store = NATIVE_CREDENTIAL_TEST_LOCK.lock().unwrap();
     let (_guard, home) = fixture();
     plugin_blob(&home, true);
     let desktop = home.join("desktop");
@@ -374,12 +383,17 @@ fn native_uninstall_removes_the_saved_credential_vault_key() {
         .unwrap();
     assert!(entry.get_secret().is_ok());
     let result = cleanup(&home);
-    let removed = matches!(entry.get_secret(), Err(keyring_core::Error::NoEntry));
+    let observed = entry.get_secret();
+    let removed = matches!(observed, Err(keyring_core::Error::NoEntry));
     if !removed {
         entry.delete_credential().unwrap();
     }
     result.unwrap();
-    assert!(removed);
+    assert!(
+        removed,
+        "credential deletion post-check: {:?}",
+        observed.map(|value| value.len())
+    );
     assert!(!home.exists());
 }
 

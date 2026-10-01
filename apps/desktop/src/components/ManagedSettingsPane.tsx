@@ -28,7 +28,6 @@ import {
   IconNetwork,
   IconPlus,
   IconRefresh,
-  IconRoute,
   IconSearch,
   IconServer,
   IconShield,
@@ -147,6 +146,49 @@ const CatalogDeleteDialog = lazy(() =>
   })),
 );
 
+const DESKTOP_PAGES = [
+  {
+    id: "appearance",
+    label: "Appearance",
+    description: "Choose how Colossus looks on this device.",
+    keywords: "color theme light dark system text size security warnings",
+  },
+  {
+    id: "connections",
+    label: "Connections",
+    description:
+      "Manage your local workspace and connect to external runtimes.",
+    keywords: "workspace runtime managed local external restart",
+  },
+  {
+    id: "setup",
+    label: "Setup",
+    description: "Import a setup file or export your configuration to share.",
+    keywords: "setup file package manifest import export global defaults",
+  },
+  {
+    id: "terminal",
+    label: "Terminal",
+    description:
+      "Enable local terminals and open a system shell or the Colossus TUI.",
+    keywords: "shell powershell bash zsh tui terminal",
+  },
+  {
+    id: "certificates",
+    label: "Certificates",
+    description: "Manage additional trusted certificates for private services.",
+    keywords: "trusted certificates ca pem trust bundle",
+  },
+  {
+    id: "updates",
+    label: "Updates & diagnostics",
+    description:
+      "Check for Desktop updates and export diagnostics for support.",
+    keywords: "version release update channel diagnostics support export",
+  },
+] as const;
+type DesktopTab = (typeof DESKTOP_PAGES)[number]["id"];
+
 type SettingsScope = "global" | "space";
 type GlobalTab =
   | "providers"
@@ -157,7 +199,7 @@ type GlobalTab =
   | "search"
   | "telemetry"
   | "defaults"
-  | "desktop";
+  | DesktopTab;
 type SpaceTab =
   | "runtime"
   | "providers"
@@ -288,7 +330,11 @@ export interface TelemetryEditorDraft extends ManagedTelemetryProfile {
   resourceAttributesText: string;
 }
 
-const GLOBAL_TABS: ReadonlyArray<{ id: GlobalTab; label: string }> = [
+const GLOBAL_TABS: ReadonlyArray<{
+  id: GlobalTab;
+  label: string;
+  group?: string;
+}> = [
   { id: "providers", label: "Providers" },
   { id: "models", label: "Models" },
   { id: "credentials", label: "Credentials" },
@@ -297,7 +343,7 @@ const GLOBAL_TABS: ReadonlyArray<{ id: GlobalTab; label: string }> = [
   { id: "search", label: "Search" },
   { id: "telemetry", label: "Telemetry" },
   { id: "defaults", label: "Defaults" },
-  { id: "desktop", label: "Desktop" },
+  ...DESKTOP_PAGES.map(({ id, label }) => ({ id, label, group: "Desktop" })),
 ];
 
 const SPACE_TABS: ReadonlyArray<{ id: SpaceTab; label: string }> = [
@@ -1100,14 +1146,6 @@ function telemetryEndpointLabel(telemetry: ManagedTelemetryProfile): string {
   } catch {
     return "Invalid collector endpoint";
   }
-}
-
-function telemetrySignalCount(telemetry: ManagedTelemetryProfile): number {
-  return [
-    telemetry.tracesEnabled,
-    telemetry.metricsEnabled,
-    telemetry.logsOtlp,
-  ].filter(Boolean).length;
 }
 
 function telemetryJournalLabel(
@@ -2622,13 +2660,13 @@ export function ManagedSettingsPane({
   }
 
   async function createCredential() {
-    if (!credentialLabel.trim()) return;
+    if (busy || !credentialLabel.trim()) return false;
     const request = {
       expectedRevision: snapshot.globalConfiguration.revision,
       label: credentialLabel.trim(),
       kind: credentialKind,
     };
-    await perform(
+    const saved = await perform(
       () => createManagedCredential(request),
       () =>
         fixtureRevision((draft) => {
@@ -2644,7 +2682,8 @@ export function ManagedSettingsPane({
         }),
       "Credential stored securely.",
     );
-    setCredentialLabel("");
+    if (saved) setCredentialLabel("");
+    return saved;
   }
 
   async function rotateCredential(credentialId: string) {
@@ -2751,9 +2790,23 @@ export function ManagedSettingsPane({
     ].filter((item) =>
       `${item.title} ${item.meta}`.toLowerCase().includes(normalized),
     );
-    return [...fields, ...resources];
+    const desktopPages = DESKTOP_PAGES.filter((page) =>
+      `${page.label} ${page.description} ${page.keywords}`
+        .toLowerCase()
+        .includes(normalized),
+    ).map((page) => ({
+      id: page.id,
+      title: page.label,
+      meta: `Desktop · ${page.description}`,
+      scope: page.id,
+    }));
+    return [...fields, ...resources, ...desktopPages];
   }, [descriptors, query, snapshot]);
 
+  const desktopPage =
+    scope === "global"
+      ? DESKTOP_PAGES.find((page) => page.id === globalTab)
+      : undefined;
   const externalTargets = desktop.targets.filter(
     (target) => target.kind === "external_daemon",
   );
@@ -2811,27 +2864,14 @@ export function ManagedSettingsPane({
       }
     >
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />
-      {!query &&
-      scope === "global" &&
-      (globalTab === "providers" || globalTab === "desktop") ? (
-        <SetupPackagesPanel
-          desktop={desktop}
-          busy={busy}
-          onStatusChange={async () => {
-            setSnapshot(await getManagedConfiguration());
-            window.dispatchEvent(new Event("colossus-setup-refresh"));
-          }}
-          onChooseProvider={() => onConfigureManaged()}
-          compact={globalTab === "desktop"}
-          inventory
-        />
-      ) : null}
       {!query ? (
         <div className="settings-page-context">
           <p className="surface-breadcrumb">
-            {scope === "global"
-              ? "Global / Shared resources & defaults"
-              : `Workspace / ${selectedSpace?.name ?? "Select a workspace"}`}
+            {desktopPage
+              ? `Desktop / ${desktopPage.label}`
+              : scope === "global"
+                ? "Global / Shared resources & defaults"
+                : `Workspace / ${selectedSpace?.name ?? "Select a workspace"}`}
           </p>
           {scope === "space" && selectedSpace ? (
             <div className="settings-context-actions">
@@ -2940,7 +2980,7 @@ export function ManagedSettingsPane({
             setCredentialLabel={setCredentialLabel}
             credentialKind={credentialKind}
             setCredentialKind={setCredentialKind}
-            onCreateCredential={() => void createCredential()}
+            onCreateCredential={createCredential}
             onRotateCredential={(id) => void rotateCredential(id)}
             onReenterCredential={(id) => void reenterCredential(id)}
             onDeleteCredential={(id) => void removeCredential(id)}
@@ -2967,7 +3007,11 @@ export function ManagedSettingsPane({
             busy={busy}
             failure={failure}
             label="Save global changes"
-            savedMessage={globalUpdateMessage(snapshot)}
+            savedMessage={
+              desktopPage
+                ? "Desktop preferences apply on this device."
+                : globalUpdateMessage(snapshot)
+            }
             onDiscard={() => setDefaults(defaultsDraft(snapshot))}
             onApply={() => void saveDefaults()}
           />
@@ -3185,7 +3229,7 @@ function GlobalSettingsBody({
   setCredentialLabel: (label: string) => void;
   credentialKind: ManagedCredentialKind;
   setCredentialKind: (kind: ManagedCredentialKind) => void;
-  onCreateCredential: () => void;
+  onCreateCredential: () => Promise<boolean>;
   onRotateCredential: (id: string) => void;
   onReenterCredential: (id: string) => void;
   onDeleteCredential: (id: string) => void;
@@ -3208,6 +3252,18 @@ function GlobalSettingsBody({
   onExportDiagnostics: () => void;
 }) {
   const { packages: setupPackages } = useSetupPackages();
+  const [credentialEditor, setCredentialEditor] = useState(false);
+  const credentialInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (credentialEditor && tab === "credentials")
+      credentialInput.current?.focus();
+  }, [credentialEditor, tab]);
+  const closeCredentialEditor = () => {
+    setCredentialEditor(false);
+    requestAnimationFrame(() =>
+      document.getElementById("add-credential")?.focus(),
+    );
+  };
   const global = snapshot.globalConfiguration;
   if (tab === "plugins") {
     return (
@@ -3366,266 +3422,247 @@ function GlobalSettingsBody({
         managedCredentialConsumers(snapshot, credential.id),
       ]),
     );
-    const nativeCredentialCount = global.credentials.filter(
-      (credential) => credential.backend === "desktop",
-    ).length;
-    const referencedCredentialCount = [...credentialConsumers.values()].filter(
+    const referencedCount = [...credentialConsumers.values()].filter(
       (consumers) => consumers.length > 0,
     ).length;
+    const attentionCount = global.credentials.filter(
+      (credential) =>
+        snapshot.credentialAvailability[credential.id] !== "available",
+    ).length;
     return (
-      <section
-        className="managed-settings-body credentials-settings"
-        aria-labelledby="credentials-heading"
-      >
-        <div className="managed-section-heading">
-          <div>
-            <p className="eyebrow">Secure storage</p>
-            <h3 id="credentials-heading">Credentials</h3>
-            <p className="credentials-heading-copy">
-              Save API keys, tokens, and client secrets for providers, search,
-              and MCP servers.
-            </p>
-          </div>
-          <div
-            className="credential-security-note"
-            aria-label="Credential security"
-          >
-            <IconShield size={18} aria-hidden="true" />
-            <span>
-              <strong>Stored securely on this device</strong>
-              <small>
-                Values are entered in a system dialog and are not shown again.
-              </small>
-            </span>
-          </div>
-        </div>
-        <div
-          className="managed-metric-strip credentials-metric-strip"
-          aria-label="Credential summary"
-        >
-          <Metric
-            icon={<IconKey size={19} />}
-            value={global.credentials.length}
-            label="Saved credentials"
-          />
-          <Metric
-            icon={<IconShield size={19} />}
-            value={nativeCredentialCount}
-            label="Stored securely"
-          />
-          <Metric
-            icon={<IconNetwork size={19} />}
-            value={referencedCredentialCount}
-            label="In use"
-          />
-        </div>
-        <section
-          className="credential-create-card"
-          aria-labelledby="create-credential-heading"
-        >
-          <div className="credential-card-heading">
-            <span className="resource-icon">
-              <IconPlus size={18} aria-hidden="true" />
-            </span>
-            <div>
-              <h4 id="create-credential-heading">Add credential</h4>
-              <p>
-                Give the credential a name and choose how it will be used. A
-                secure system dialog asks for the value next.
-              </p>
-            </div>
-          </div>
-          <form
-            className="credential-create-row"
-            onSubmit={(event) => {
-              event.preventDefault();
-              onCreateCredential();
-            }}
-          >
-            <label>
-              <span>Display label</span>
-              <input
-                value={credentialLabel}
-                onChange={(event) => setCredentialLabel(event.target.value)}
-                placeholder="For example, GitHub workspace token"
-                aria-describedby="credential-label-help"
-                required
-              />
-              <small id="credential-label-help">
-                Use a name you will recognize when choosing a credential. Do not
-                enter the secret here.
-              </small>
-            </label>
-            <label>
-              <span>Credential type</span>
-              <DropdownSelect
-                value={credentialKind}
-                aria-describedby="credential-kind-help"
-                onChange={(event) =>
-                  setCredentialKind(event.target.value as ManagedCredentialKind)
-                }
-              >
-                <option value="api_key">API key</option>
-                <option value="bearer_token">Bearer token</option>
-                <option value="client_secret">OAuth client secret</option>
-                <option value="generic_secret">Generic secret</option>
-              </DropdownSelect>
-              <small id="credential-kind-help">
-                Helps integrations send the credential in the expected format.
-              </small>
-            </label>
-            <button
-              className="button primary"
-              type="submit"
-              disabled={busy || !credentialLabel.trim()}
-            >
-              <IconPlus size={16} aria-hidden="true" /> Add credential
-            </button>
-          </form>
-        </section>
-        <section
-          className="credential-inventory"
-          aria-labelledby="stored-credentials-heading"
-        >
-          <div className="credential-inventory-heading">
-            <div>
-              <h4 id="stored-credentials-heading">Stored credentials</h4>
-              <p>
-                Rotate replaces the token in this entry. Its name and references
-                stay the same; active workspaces refresh when idle.
-              </p>
-            </div>
-            <span
-              className="credential-count"
-              aria-label={`${global.credentials.length} credentials`}
-            >
-              {global.credentials.length}
-            </span>
-          </div>
-          <div className="managed-list credential-list" role="list">
-            {global.credentials.map((credential) => {
-              const consumers = credentialConsumers.get(credential.id) ?? [];
-              const availability =
-                snapshot.credentialAvailability[credential.id] ?? "unavailable";
-              const available = availability === "available";
-              const emptyImport = credential.createdAtMs === 0;
-              const missingAction = emptyImport
-                ? "Add token"
-                : "Re-enter token";
-              const status = {
-                available: { label: "Stored securely", guidance: "" },
-                missing: {
-                  label: emptyImport ? "Token needed" : "Re-entry required",
-                  guidance: emptyImport
-                    ? "Imported without a token. Add it to use this credential."
-                    : "Re-enter this token to restore existing configurations.",
-                },
-                locked: {
-                  label: "Storage locked",
-                  guidance:
-                    "Unlock your operating-system credential store, then retry.",
-                },
-                busy: {
-                  label: "Storage in use",
-                  guidance: "Close the other Colossus instance, then retry.",
-                },
-                key_missing: {
-                  label: "Encryption key missing",
-                  guidance:
-                    "The vault encryption key is missing. Existing data has been preserved.",
-                },
-                corrupt: {
-                  label: "Storage verification failed",
-                  guidance:
-                    "Credential storage could not be verified. Existing data has been preserved.",
-                },
-                unavailable: {
-                  label: "Storage unavailable",
-                  guidance:
-                    "Check the operating-system credential store, then retry.",
-                },
-              }[availability];
-              return (
-                <div
-                  className="managed-list-row"
-                  key={credential.id}
-                  role="listitem"
+      <Suspense fallback={<p role="status">Loading credentials…</p>}>
+        <CatalogInventory
+          key="credentials"
+          kind="credential"
+          busy={busy}
+          editing={credentialEditor}
+          summary={`${global.credentials.length} saved ${global.credentials.length === 1 ? "credential" : "credentials"} · ${referencedCount} in use${attentionCount ? ` · ${attentionCount} need attention` : ""}`}
+          onAdd={() => {
+            setCredentialLabel("");
+            setCredentialKind("api_key");
+            setCredentialEditor(true);
+          }}
+          rows={global.credentials.map((credential) => {
+            const consumers = credentialConsumers.get(credential.id) ?? [];
+            const availability =
+              snapshot.credentialAvailability[credential.id] ?? "unavailable";
+            const available = availability === "available";
+            const emptyImport = credential.createdAtMs === 0;
+            const missingAction = emptyImport ? "Add token" : "Re-enter token";
+            const status = {
+              available: { label: "Stored securely", guidance: "" },
+              missing: {
+                label: emptyImport ? "Token needed" : "Re-entry required",
+                guidance: emptyImport
+                  ? "Imported without a token. Add it to use this credential."
+                  : "Re-enter this token to restore existing configurations.",
+              },
+              locked: {
+                label: "Storage locked",
+                guidance:
+                  "Unlock your operating-system credential store, then retry.",
+              },
+              busy: {
+                label: "Storage in use",
+                guidance: "Close the other Colossus instance, then retry.",
+              },
+              key_missing: {
+                label: "Encryption key missing",
+                guidance:
+                  "The vault encryption key is missing. Existing data has been preserved.",
+              },
+              corrupt: {
+                label: "Storage verification failed",
+                guidance:
+                  "Credential storage could not be verified. Existing data has been preserved.",
+              },
+              unavailable: {
+                label: "Storage unavailable",
+                guidance:
+                  "Check the operating-system credential store, then retry.",
+              },
+            }[availability];
+
+            const action =
+              availability === "missing" ? missingAction : "Rotate";
+            return {
+              id: credential.id,
+              label: credential.label,
+              name: credential.label,
+              description: credentialKindLabel(credential.kind),
+              searchText: [
+                credential.label,
+                credentialKindLabel(credential.kind),
+                status.label,
+                ...consumers,
+              ].join(" "),
+              connection: (
+                <span
+                  className={`credential-status ${available ? "tone-success-text" : "tone-warning-text"}`}
                 >
-                  <span className="resource-icon">
-                    <IconKey size={18} aria-hidden="true" />
-                  </span>
+                  {available ? (
+                    <IconLock size={15} aria-hidden="true" />
+                  ) : (
+                    <IconAlertTriangle size={15} aria-hidden="true" />
+                  )}
+                  <span>{status.label}</span>
+                </span>
+              ),
+              usage: consumers.length
+                ? `${consumers.length} ${consumers.length === 1 ? "connection" : "connections"}`
+                : "Not referenced",
+              actionLabel: action,
+              actionIcon:
+                availability !== "missing" ? (
+                  <IconRefresh size={17} aria-hidden="true" />
+                ) : undefined,
+              actionAriaLabel: `${action}${availability === "missing" ? " for" : ""} ${credential.label}`,
+              mutationDisabled: availability !== "missing" && !available,
+              onEdit: () =>
+                availability === "missing"
+                  ? onReenterCredential(credential.id)
+                  : onRotateCredential(credential.id),
+              onDelete: () => onDeleteCredential(credential.id),
+              details: (
+                <>
                   <div>
-                    <strong>{credential.label}</strong>
-                    <small>
-                      {credentialKindLabel(credential.kind)} · Encrypted
-                      credential storage
-                    </small>
-                    {status.guidance ? <small>{status.guidance}</small> : null}
+                    <h4>Credential details</h4>
+                    <dl>
+                      <dt>Type</dt>
+                      <dd>{credentialKindLabel(credential.kind)}</dd>
+                      <dt>Status</dt>
+                      <dd>
+                        {status.label}
+                        {status.guidance ? (
+                          <small>{status.guidance}</small>
+                        ) : null}
+                      </dd>
+                    </dl>
+                    <p className="credential-rotation-note">
+                      Rotate replaces the token in this entry. Its name and
+                      references stay the same; active workspaces refresh when
+                      idle.
+                    </p>
                   </div>
-                  <div className="credential-row-meta">
-                    <span
-                      className={`status-chip${consumers.length ? " tone-success" : ""}`}
-                      title={
-                        consumers.length
-                          ? consumers.join("\n")
-                          : "No active configuration uses this credential."
-                      }
-                    >
-                      <IconNetwork size={13} aria-hidden="true" />
-                      {consumers.length
-                        ? `Used by ${consumers.length}`
-                        : "Not referenced"}
-                    </span>
-                    <span
-                      className={`status-chip${available ? " tone-success" : ""}`}
-                    >
-                      <IconLock size={13} aria-hidden="true" />
-                      {status.label}
-                    </span>
+                  <div>
+                    <h4>Used by</h4>
+                    {consumers.length ? (
+                      <ul>
+                        {consumers.map((consumer) => (
+                          <li key={consumer}>{consumer}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p>No active configuration uses this credential.</p>
+                    )}
                   </div>
-                  <div className="resource-actions">
-                    <button
-                      className="button secondary"
-                      type="button"
-                      disabled={
-                        busy || (availability !== "missing" && !available)
-                      }
-                      aria-label={`${availability === "missing" ? `${missingAction} for` : "Rotate"} ${credential.label}`}
-                      title={`${availability === "missing" ? `${missingAction} for` : "Rotate"} ${credential.label}`}
-                      onClick={() =>
-                        availability === "missing"
-                          ? onReenterCredential(credential.id)
-                          : onRotateCredential(credential.id)
-                      }
-                    >
-                      <IconRefresh size={15} aria-hidden="true" />{" "}
-                      {availability === "missing" ? missingAction : "Rotate"}
-                    </button>
-                    <button
-                      className="icon-button danger-icon-button"
-                      type="button"
-                      disabled={
-                        busy || (availability !== "missing" && !available)
-                      }
-                      aria-label={`Delete ${credential.label}`}
-                      title={`Delete ${credential.label}`}
-                      onClick={() => onDeleteCredential(credential.id)}
-                    >
-                      <IconTrash size={17} aria-hidden="true" />
-                    </button>
-                  </div>
+                </>
+              ),
+            };
+          })}
+        >
+          {credentialEditor ? (
+            <form
+              className="mcp-editor catalog-editor provider-editor credential-editor"
+              aria-labelledby="create-credential-heading"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                if (!busy && (await onCreateCredential()))
+                  closeCredentialEditor();
+              }}
+              onKeyDown={(event) => {
+                if (
+                  event.key === "Escape" &&
+                  !event.defaultPrevented &&
+                  !busy
+                ) {
+                  event.preventDefault();
+                  closeCredentialEditor();
+                }
+              }}
+            >
+              <div className="provider-editor-heading">
+                <span className="resource-icon">
+                  <IconKey size={18} aria-hidden="true" />
+                </span>
+                <div>
+                  <h4 id="create-credential-heading">Add credential</h4>
+                  <p>
+                    Name the credential and choose its type. Enter the value in
+                    the secure system dialog next.
+                  </p>
                 </div>
-              );
-            })}
-            {global.credentials.length === 0 ? (
-              <EmptySettings
-                icon={<IconKey size={24} />}
-                title="No credentials"
-              />
-            ) : null}
-          </div>
-        </section>
-      </section>
+                <button
+                  className="icon-button"
+                  type="button"
+                  aria-label="Close credential editor"
+                  disabled={busy}
+                  onClick={closeCredentialEditor}
+                >
+                  <IconX size={17} aria-hidden="true" />
+                </button>
+              </div>
+              <div className="provider-editor-section provider-editor-grid">
+                <label>
+                  <span>Display label</span>
+                  <input
+                    ref={credentialInput}
+                    disabled={busy}
+                    value={credentialLabel}
+                    onChange={(event) => setCredentialLabel(event.target.value)}
+                    placeholder="For example, GitHub workspace token"
+                    aria-describedby="credential-label-help"
+                    required
+                  />
+                  <small id="credential-label-help">
+                    Use a recognizable name. Do not enter the secret here.
+                  </small>
+                </label>
+                <label>
+                  <span>Credential type</span>
+                  <DropdownSelect
+                    disabled={busy}
+                    value={credentialKind}
+                    aria-describedby="credential-kind-help"
+                    onChange={(event) =>
+                      setCredentialKind(
+                        event.target.value as ManagedCredentialKind,
+                      )
+                    }
+                  >
+                    <option value="api_key">API key</option>
+                    <option value="bearer_token">Bearer token</option>
+                    <option value="client_secret">OAuth client secret</option>
+                    <option value="generic_secret">Generic secret</option>
+                  </DropdownSelect>
+                  <small id="credential-kind-help">
+                    Helps integrations send the credential in the expected
+                    format.
+                  </small>
+                </label>
+              </div>
+              <div className="mcp-editor-actions">
+                <button
+                  className="button secondary"
+                  type="button"
+                  disabled={busy}
+                  onClick={closeCredentialEditor}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="button primary"
+                  type="submit"
+                  disabled={busy || !credentialLabel.trim()}
+                >
+                  <IconLock size={16} aria-hidden="true" /> Continue to secure
+                  entry
+                </button>
+              </div>
+            </form>
+          ) : null}
+        </CatalogInventory>
+      </Suspense>
     );
   }
   if (tab === "defaults") {
@@ -4019,178 +4056,89 @@ function GlobalSettingsBody({
     const routedWorkspaceCount = new Set([...searchConsumers.values()].flat())
       .size;
     return (
-      <section
-        className="managed-settings-body search-settings"
-        aria-labelledby="search-profiles-heading"
-      >
-        <div className="managed-section-heading">
-          <div>
-            <p className="eyebrow">Web search</p>
-            <h3 id="search-profiles-heading">Search services</h3>
-            <p className="search-heading-copy">
-              Choose the search services Colossus can use and which workspaces
-              can access them.
-            </p>
-          </div>
-          <div
-            className="search-routing-note"
-            aria-label="Search workspace availability"
-          >
-            <IconRoute size={18} aria-hidden="true" />
-            <span>
-              <strong>Available by workspace</strong>
-              <small>
-                Adding a service here does not enable it automatically.
-              </small>
-            </span>
-          </div>
-        </div>
-        <div
-          className="managed-metric-strip search-metric-strip"
-          aria-label="Search service summary"
-        >
-          <Metric
-            icon={<IconSearch size={19} />}
-            value={activeSearchProfiles.length}
-            label="Search services"
-          />
-          <Metric
-            icon={<IconLock size={19} />}
-            value={authenticatedProfileCount}
-            label="Use credentials"
-          />
-          <Metric
-            icon={<IconNetwork size={19} />}
-            value={routedWorkspaceCount}
-            label="Workspaces using search"
-          />
-        </div>
-        <div className="search-profile-toolbar">
-          <div>
-            <h4>Configured search services</h4>
-            <p>Choose each service in the workspaces that need it.</p>
-          </div>
-          <button
-            className="button primary"
-            type="button"
-            disabled={Boolean(searchEditor)}
-            onClick={() => setSearchEditor({ ...EMPTY_SEARCH_DRAFT })}
-          >
-            <IconPlus size={16} aria-hidden="true" /> Add search service
-          </button>
-        </div>
-        {searchEditor ? (
-          <SearchEditor
-            draft={searchEditor}
-            credentials={global.credentials}
-            busy={busy}
-            onChange={setSearchEditor}
-            onCancel={() => setSearchEditor(null)}
-            onSave={onSaveSearch}
-          />
-        ) : null}
-        <section
-          className="search-profile-inventory"
-          aria-labelledby="configured-search-profiles-heading"
-        >
-          <div className="search-inventory-heading">
-            <div>
-              <h4 id="configured-search-profiles-heading">
-                Configured services
-              </h4>
-              <p>
-                See where each service connects, whether it uses a credential,
-                and which workspaces use it.
-              </p>
-            </div>
-            <span
-              className="credential-count"
-              aria-label={`${activeSearchProfiles.length} search services`}
-            >
-              {activeSearchProfiles.length}
-            </span>
-          </div>
-          <div className="managed-list search-profile-list" role="list">
-            {activeSearchProfiles.map((entry) => {
-              const search = currentValue(entry);
-              const credential = global.credentials.find(
-                (candidate) => candidate.id === search.credentialId,
-              );
-              const consumers = searchConsumers.get(entry.id) ?? [];
-              return (
-                <div
-                  className="managed-list-row search-profile-row"
-                  key={entry.id}
-                  role="listitem"
-                >
-                  <span className="resource-icon">
-                    <IconSearch size={18} aria-hidden="true" />
-                  </span>
+      <Suspense fallback={<p>Loading search services…</p>}>
+        <CatalogInventory
+          key="search"
+          kind="search"
+          summary={`${activeSearchProfiles.length} service${activeSearchProfiles.length === 1 ? "" : "s"} · ${authenticatedProfileCount} with credentials · Used in ${routedWorkspaceCount} workspace${routedWorkspaceCount === 1 ? "" : "s"}`}
+          busy={busy}
+          editing={Boolean(searchEditor)}
+          onAdd={() => setSearchEditor({ ...EMPTY_SEARCH_DRAFT })}
+          rows={activeSearchProfiles.map((entry) => {
+            const search = currentValue(entry);
+            const credential = global.credentials.find(
+              (candidate) => candidate.id === search.credentialId,
+            );
+            const consumers = searchConsumers.get(entry.id) ?? [];
+            return {
+              id: entry.id,
+              label: entry.label,
+              name: entry.label,
+              description: `${searchAdapterLabel(search.kind)} · ${search.endpoint}`,
+              searchText: [
+                entry.label,
+                search.profile,
+                searchAdapterLabel(search.kind),
+                search.endpoint,
+                credential?.label,
+                ...consumers,
+              ].join(" "),
+              connection: (
+                <>
+                  <IconLock size={15} aria-hidden="true" />
+                  {credential?.label ?? "No credential"}
+                </>
+              ),
+              usage: `${consumers.length} workspace${consumers.length === 1 ? "" : "s"}`,
+              onEdit: () => setSearchEditor(searchDraft(entry)),
+              details: (
+                <>
                   <div>
-                    <strong>{entry.label}</strong>
-                    <small>
-                      {entry.label === search.profile
-                        ? searchAdapterLabel(search.kind)
-                        : `${searchAdapterLabel(search.kind)} · ${search.profile}`}
-                    </small>
-                    <small
-                      className="search-profile-endpoint"
-                      title={search.endpoint}
-                    >
-                      {search.endpoint}
-                    </small>
+                    <h4>Connection details</h4>
+                    <dl>
+                      <dt>Profile ID</dt>
+                      <dd>{search.profile}</dd>
+                      <dt>Adapter</dt>
+                      <dd>{searchAdapterLabel(search.kind)}</dd>
+                      <dt>Endpoint</dt>
+                      <dd>{search.endpoint}</dd>
+                      <dt>Credential</dt>
+                      <dd>{credential?.label ?? "None"}</dd>
+                      <dt>Timeout</dt>
+                      <dd>{search.timeoutMs / 1_000}s</dd>
+                      <dt>Revision</dt>
+                      <dd>v{entry.currentRevision}</dd>
+                    </dl>
                   </div>
-                  <div className="search-row-meta">
-                    <span
-                      className={`status-chip${credential ? " tone-success" : ""}`}
-                      title={
-                        credential
-                          ? `Credential · ${credential.label}`
-                          : "No credential is attached to this search service."
-                      }
-                    >
-                      <IconLock size={13} aria-hidden="true" />
-                      {credential ? "Credential attached" : "No credential"}
-                    </span>
-                    <span
-                      className={`status-chip${consumers.length ? " tone-success" : ""}`}
-                      title={
-                        consumers.length
-                          ? consumers.join("\n")
-                          : "No active workspace uses this search service."
-                      }
-                    >
-                      <IconRoute size={13} aria-hidden="true" />
-                      {consumers.length
-                        ? `Used by ${consumers.length}`
-                        : "Not used"}
-                    </span>
-                    <span className="status-chip tone-neutral">
-                      {search.timeoutMs / 1_000}s · v{entry.currentRevision}
-                    </span>
+                  <div>
+                    <h4>Active workspaces</h4>
+                    {consumers.length ? (
+                      <ul>
+                        {consumers.map((consumer) => (
+                          <li key={consumer}>{consumer}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p>No active workspace uses this search service.</p>
+                    )}
                   </div>
-                  <div className="resource-actions">
-                    <button
-                      className="button secondary"
-                      type="button"
-                      aria-label={`Edit ${entry.label}`}
-                      onClick={() => setSearchEditor(searchDraft(entry))}
-                    >
-                      <IconEdit size={15} aria-hidden="true" /> Edit
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-            {activeSearchProfiles.length === 0 ? (
-              <EmptySettings
-                icon={<IconSearch size={24} />}
-                title="No search services"
-              />
-            ) : null}
-          </div>
-        </section>
-      </section>
+                </>
+              ),
+            };
+          })}
+        >
+          {searchEditor ? (
+            <SearchEditor
+              draft={searchEditor}
+              credentials={global.credentials}
+              busy={busy}
+              onChange={setSearchEditor}
+              onCancel={() => setSearchEditor(null)}
+              onSave={onSaveSearch}
+            />
+          ) : null}
+        </CatalogInventory>
+      </Suspense>
     );
   }
   if (tab === "telemetry") {
@@ -4206,183 +4154,141 @@ function GlobalSettingsBody({
     const routedWorkspaceCount = new Set(
       [...telemetryConsumers.values()].flat(),
     ).size;
-    const enabledSignalCount = activeTelemetryProfiles.reduce(
-      (total, entry) => total + telemetrySignalCount(currentValue(entry)),
-      0,
+    return (
+      <Suspense fallback={<p>Loading telemetry connections…</p>}>
+        <CatalogInventory
+          key="telemetry"
+          kind="telemetry"
+          summary={`${activeTelemetryProfiles.length} connection${activeTelemetryProfiles.length === 1 ? "" : "s"} · Used in ${routedWorkspaceCount} workspace${routedWorkspaceCount === 1 ? "" : "s"}`}
+          busy={busy}
+          editing={Boolean(telemetryEditor)}
+          onAdd={() => setTelemetryEditor({ ...EMPTY_TELEMETRY_DRAFT })}
+          rows={activeTelemetryProfiles.map((entry) => {
+            const telemetry = currentValue(entry);
+            const consumers = telemetryConsumers.get(entry.id) ?? [];
+            const signals = [
+              telemetry.tracesEnabled ? "Traces" : "",
+              telemetry.metricsEnabled ? "Metrics" : "",
+              telemetry.logsOtlp ? "Logs" : "",
+            ].filter(Boolean);
+            const signalCount = signals.length;
+            return {
+              id: entry.id,
+              label: entry.label,
+              name: entry.label,
+              description: `${telemetryEndpointLabel(telemetry)} · ${telemetryProtocolLabel(telemetry.protocol)}`,
+              searchText: [
+                entry.label,
+                telemetry.name,
+                telemetry.endpoint,
+                telemetryProtocolLabel(telemetry.protocol),
+                ...signals,
+                telemetryJournalLabel(telemetry.journalPayloads),
+                ...consumers,
+              ].join(" "),
+              connection: (
+                <span className="catalog-connection-copy">
+                  <span>
+                    {signalCount
+                      ? `${signalCount} OTLP signal${signalCount === 1 ? "" : "s"}`
+                      : "No OTLP signals"}
+                  </span>
+                  <small
+                    className={
+                      telemetry.journalPayloads === "full"
+                        ? "catalog-sensitive-content"
+                        : undefined
+                    }
+                  >
+                    {telemetryJournalLabel(telemetry.journalPayloads)}
+                  </small>
+                </span>
+              ),
+              usage: `${consumers.length} workspace${consumers.length === 1 ? "" : "s"}`,
+              onEdit: () => setTelemetryEditor(telemetryDraft(entry)),
+              details: (
+                <>
+                  <div>
+                    <h4>Connection details</h4>
+                    <dl>
+                      <dt>Service name</dt>
+                      <dd>{telemetry.name}</dd>
+                      <dt>Collector</dt>
+                      <dd>{telemetry.endpoint || "No OTLP collector"}</dd>
+                      <dt>Protocol</dt>
+                      <dd>{telemetryProtocolLabel(telemetry.protocol)}</dd>
+                      <dt>OTLP signals</dt>
+                      <dd>{signals.join(", ") || "None"}</dd>
+                      <dt>JSON stdout</dt>
+                      <dd>
+                        {telemetry.logsStdoutJson ? "Enabled" : "Disabled"}
+                      </dd>
+                      <dt>Audit content</dt>
+                      <dd>
+                        {telemetryJournalLabel(telemetry.journalPayloads)}
+                      </dd>
+                      <dt>Timeout</dt>
+                      <dd>{telemetry.timeoutMs / 1_000}s</dd>
+                      <dt>Revision</dt>
+                      <dd>v{entry.currentRevision}</dd>
+                    </dl>
+                  </div>
+                  <div>
+                    <h4>Active workspaces</h4>
+                    {consumers.length ? (
+                      <ul>
+                        {consumers.map((consumer) => (
+                          <li key={consumer}>{consumer}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p>No active workspace uses this telemetry connection.</p>
+                    )}
+                  </div>
+                </>
+              ),
+            };
+          })}
+        >
+          {telemetryEditor ? (
+            <TelemetryEditor
+              draft={telemetryEditor}
+              busy={busy}
+              onChange={setTelemetryEditor}
+              onSave={onSaveTelemetry}
+              onCancel={() => setTelemetryEditor(null)}
+            />
+          ) : null}
+        </CatalogInventory>
+      </Suspense>
     );
+  }
+  if (tab === "setup") {
+    const page = DESKTOP_PAGES.find((page) => page.id === tab)!;
     return (
       <section
-        className="managed-settings-body telemetry-settings"
-        aria-labelledby="telemetry-profiles-heading"
+        className="managed-settings-body desktop-settings"
+        aria-labelledby="desktop-setup-heading"
       >
         <div className="managed-section-heading">
           <div>
-            <p className="eyebrow">Monitoring and audit</p>
-            <h3 id="telemetry-profiles-heading">Telemetry connections</h3>
-            <p className="telemetry-heading-copy">
-              Send traces, metrics, and logs to your monitoring system, and
-              choose what audit information is included.
-            </p>
-          </div>
-          <div
-            className="telemetry-disclosure-note"
-            aria-label="Telemetry data warning"
-          >
-            <IconShield size={18} aria-hidden="true" />
-            <span>
-              <strong>Review shared data</strong>
-              <small>
-                Full audit records can include prompts, responses, and tool
-                input or output.
-              </small>
-            </span>
+            <h3 id="desktop-setup-heading">{page.label}</h3>
+            <p className="managed-heading-copy">{page.description}</p>
           </div>
         </div>
-        <div
-          className="managed-metric-strip telemetry-metric-strip"
-          aria-label="Telemetry summary"
-        >
-          <Metric
-            icon={<IconActivityHeartbeat size={19} />}
-            value={activeTelemetryProfiles.length}
-            label="Telemetry connections"
-          />
-          <Metric
-            icon={<IconRoute size={19} />}
-            value={routedWorkspaceCount}
-            label="Workspaces using telemetry"
-          />
-          <Metric
-            icon={<IconNetwork size={19} />}
-            value={enabledSignalCount}
-            label="Signals enabled"
-          />
-        </div>
-        <div className="telemetry-catalog-toolbar">
-          <div>
-            <h4>Configured connections</h4>
-            <p>See what each connection sends and which workspaces use it.</p>
-          </div>
-          <button
-            className="button primary"
-            type="button"
-            disabled={Boolean(telemetryEditor)}
-            onClick={() => setTelemetryEditor({ ...EMPTY_TELEMETRY_DRAFT })}
-          >
-            <IconPlus size={16} aria-hidden="true" />
-            Add telemetry connection
-          </button>
-        </div>
-        {telemetryEditor ? (
-          <TelemetryEditor
-            draft={telemetryEditor}
-            busy={busy}
-            onChange={setTelemetryEditor}
-            onSave={onSaveTelemetry}
-            onCancel={() => setTelemetryEditor(null)}
-          />
-        ) : null}
-        <section
-          className="telemetry-inventory"
-          aria-labelledby="configured-telemetry-heading"
-        >
-          <div className="telemetry-inventory-heading">
-            <div>
-              <h4 id="configured-telemetry-heading">Telemetry connections</h4>
-              <p>
-                Compare each destination, exported signals, and audit record
-                content.
-              </p>
-            </div>
-            <span
-              className="credential-count"
-              aria-label={`${activeTelemetryProfiles.length} telemetry connections`}
-            >
-              {activeTelemetryProfiles.length}
-            </span>
-          </div>
-          <div className="managed-list telemetry-list" role="list">
-            {activeTelemetryProfiles.map((entry) => {
-              const telemetry = currentValue(entry);
-              const consumers = telemetryConsumers.get(entry.id) ?? [];
-              const signalCount = telemetrySignalCount(telemetry);
-              return (
-                <div
-                  className="managed-list-row telemetry-row"
-                  key={entry.id}
-                  role="listitem"
-                >
-                  <span className="resource-icon">
-                    <IconActivityHeartbeat size={18} aria-hidden="true" />
-                  </span>
-                  <div>
-                    <strong>{entry.label}</strong>
-                    <small>
-                      {telemetryEndpointLabel(telemetry)} · {telemetry.name}
-                    </small>
-                  </div>
-                  <span className="status-chip tone-neutral telemetry-protocol-chip">
-                    {telemetryProtocolLabel(telemetry.protocol)}
-                  </span>
-                  <div className="telemetry-row-meta">
-                    <span
-                      className={`status-chip${signalCount ? " tone-success" : ""}`}
-                    >
-                      <IconActivityHeartbeat size={13} aria-hidden="true" />
-                      {signalCount
-                        ? `${signalCount} OTLP signal${signalCount === 1 ? "" : "s"}`
-                        : "No OTLP signals"}
-                    </span>
-                    <span
-                      className={`status-chip${telemetry.journalPayloads === "full" ? " tone-attention" : ""}`}
-                    >
-                      <IconShield size={13} aria-hidden="true" />
-                      {telemetryJournalLabel(telemetry.journalPayloads)}
-                    </span>
-                    <span
-                      className={`status-chip${consumers.length ? " tone-success" : ""}`}
-                      title={
-                        consumers.length
-                          ? consumers.join("\n")
-                          : "No active workspace uses this telemetry connection."
-                      }
-                    >
-                      <IconRoute size={13} aria-hidden="true" />
-                      {consumers.length
-                        ? `Used by ${consumers.length}`
-                        : "Not used"}
-                    </span>
-                    <span className="status-chip tone-neutral">
-                      {Math.round(telemetry.timeoutMs / 1_000)}s · v
-                      {entry.currentRevision}
-                    </span>
-                  </div>
-                  <div className="resource-actions">
-                    <button
-                      className="button secondary"
-                      type="button"
-                      aria-label={`Edit ${entry.label}`}
-                      onClick={() => setTelemetryEditor(telemetryDraft(entry))}
-                    >
-                      <IconEdit size={15} aria-hidden="true" /> Edit
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-            {activeTelemetryProfiles.length === 0 ? (
-              <EmptySettings
-                icon={<IconActivityHeartbeat size={24} />}
-                title="No telemetry connections"
-              />
-            ) : null}
-          </div>
-        </section>
+        <SetupPackagesPanel
+          desktop={desktop}
+          busy={busy}
+          onStatusChange={onSetupChange}
+          onChooseProvider={onConfigureManaged}
+          inventory
+        />
       </section>
     );
   }
   return (
     <DesktopSettings
+      section={tab}
       desktop={desktop}
       connecting={connecting}
       updateChecking={updateChecking}
@@ -8144,9 +8050,11 @@ function DesktopSettings(
   props: Omit<ManagedSettingsPaneProps, "desktop"> & {
     desktop: DesktopStatus;
     externalTargets: RuntimeTarget[];
+    section: DesktopTab;
   },
 ) {
   const {
+    section,
     desktop,
     connecting,
     updateChecking,
@@ -8162,9 +8070,8 @@ function DesktopSettings(
   const releaseChannelLabel = desktop.releaseChannel
     .replaceAll("_", " ")
     .replace(/^./, (character) => character.toUpperCase());
-  const terminalReadyCount = desktop.targets.filter(
-    (target) => target.terminalAvailable,
-  ).length;
+  if (section === "appearance") return <AppearanceSettings />;
+  const page = DESKTOP_PAGES.find((page) => page.id === section)!;
   return (
     <section
       className="managed-settings-body desktop-settings"
@@ -8172,343 +8079,309 @@ function DesktopSettings(
     >
       <div className="managed-section-heading">
         <div>
-          <p className="eyebrow">Desktop app</p>
-          <h3 id="desktop-settings-heading">Desktop settings</h3>
-          <p className="managed-heading-copy">
-            Manage the workspace and local services that belong to this Desktop
-            installation.
-          </p>
-        </div>
-        <div className="desktop-native-note" aria-label="Desktop-only controls">
-          <IconLock size={18} aria-hidden="true" />
-          <span>
-            <strong>Desktop-only controls</strong>
-            <small>
-              Workspace paths, trust settings, and terminal access stay in the
-              native app.
-            </small>
-          </span>
+          <h3 id="desktop-settings-heading">{page.label}</h3>
+          <p className="managed-heading-copy">{page.description}</p>
         </div>
       </div>
-      <div
-        className="managed-metric-strip desktop-metric-strip"
-        aria-label="Desktop summary"
-      >
-        <Metric
-          icon={<IconDatabase size={19} />}
-          value={desktop.workspace ? 1 : 0}
-          label="Managed workspace"
-        />
-        <Metric
-          icon={<IconNetwork size={19} />}
-          value={externalTargets.length}
-          label="External runtimes"
-        />
-        <Metric
-          icon={<IconTerminal2 size={19} />}
-          value={terminalReadyCount}
-          label="Terminal-ready runtimes"
-        />
-      </div>
-
-      <AppearanceSettings />
-
-      <section
-        className="desktop-control-panel"
-        aria-labelledby="desktop-control-panel-heading"
-      >
-        <div className="desktop-panel-heading">
-          <div>
-            <h4 id="desktop-control-panel-heading">This Desktop</h4>
-            <p>
-              Control the local workspace, application updates, trust store, and
-              terminal access.
-            </p>
-          </div>
-          <span
-            className={`status-chip${desktop.workspace ? " tone-success" : " tone-attention"}`}
-          >
-            {desktop.workspace ? "Workspace configured" : "Setup needed"}
-          </span>
-        </div>
+      <section className="desktop-control-panel" aria-label={page.label}>
         <div className="managed-list desktop-control-list" role="list">
-          <div className="managed-list-row desktop-control-row" role="listitem">
-            <span className="resource-icon">
-              <IconDatabase size={18} aria-hidden="true" />
-            </span>
-            <div>
-              <strong>
-                {desktop.workspace?.displayName ?? "Managed workspace"}
-              </strong>
-              <small>
-                {desktop.workspace?.displayPath ??
-                  "Choose the repository this Desktop installation manages."}
-              </small>
-            </div>
-            <span
-              className={`status-chip${desktop.managedState === "ready" ? " tone-success" : desktop.managedState === "failed" ? " tone-attention" : " tone-neutral"}`}
-            >
-              {managedStateLabel}
-            </span>
-            <div className="resource-actions">
-              <button
-                className="button secondary"
-                type="button"
-                disabled={connecting}
-                onClick={props.onChooseWorkspace}
-              >
-                Choose workspace
-              </button>
-              <button
-                className="button secondary"
-                type="button"
-                disabled={connecting || !desktop.workspace}
-                onClick={props.onConfigureManaged}
-              >
-                Configure runtime
-              </button>
-              <button
-                className="icon-button"
-                type="button"
-                aria-label="Restart Managed Local"
-                title="Restart Managed Local"
-                disabled={connecting || !desktop.workspace}
-                onClick={props.onRestartManaged}
-              >
-                <IconRefresh size={17} aria-hidden="true" />
-              </button>
-            </div>
-          </div>
-          <div className="managed-list-row desktop-control-row" role="listitem">
-            <span className="resource-icon">
-              <IconRefresh size={18} aria-hidden="true" />
-            </span>
-            <div>
-              <strong>Desktop updates</strong>
-              <small>
-                {updateMessage ||
-                  `Check for new builds from the ${releaseChannelLabel.toLowerCase()} channel.`}
-              </small>
-            </div>
-            <span
-              className={`status-chip${desktop.capabilities.updateAvailable ? " tone-attention" : " tone-neutral"}`}
-            >
-              {desktop.capabilities.updateAvailable
-                ? "Update available"
-                : `${releaseChannelLabel} channel`}
-            </span>
-            <div className="resource-actions">
-              <button
-                className="button secondary"
-                type="button"
-                disabled={updateChecking}
-                onClick={props.onCheckForUpdates}
-              >
-                {updateChecking ? "Checking…" : "Check for updates"}
-              </button>
-              {desktop.capabilities.updateAvailable ? (
-                <button
-                  className="button primary"
-                  type="button"
-                  onClick={props.onInstallUpdate}
-                >
-                  Install update
-                </button>
-              ) : null}
-            </div>
-          </div>
-          <div className="managed-list-row desktop-control-row" role="listitem">
-            <span className="resource-icon">
-              <IconShield size={18} aria-hidden="true" />
-            </span>
-            <div>
-              <strong>Trusted certificates</strong>
-              <small>
-                {desktop.additionalCaBundle.configured
-                  ? `${desktop.additionalCaBundle.certificateCount} additional certificate${desktop.additionalCaBundle.certificateCount === 1 ? "" : "s"} extend the system trust store.`
-                  : "Use the system trust store, or import a PEM bundle for private services."}
-              </small>
-            </div>
-            <span
-              className={`status-chip${desktop.additionalCaBundle.configured ? " tone-success" : " tone-neutral"}`}
-            >
-              {desktop.additionalCaBundle.configured
-                ? `${desktop.additionalCaBundle.certificateCount} imported`
-                : "System trust"}
-            </span>
-            <div className="resource-actions">
-              <button
-                className="button secondary"
-                type="button"
-                onClick={props.onImportCaBundle}
-              >
-                Import PEM
-              </button>
-              {desktop.additionalCaBundle.configured ? (
-                <button
-                  className="button secondary"
-                  type="button"
-                  onClick={props.onRemoveCaBundle}
-                >
-                  Remove bundle
-                </button>
-              ) : null}
-            </div>
-          </div>
-          <div className="managed-list-row desktop-control-row" role="listitem">
-            <span className="resource-icon">
-              <IconDownload size={18} aria-hidden="true" />
-            </span>
-            <div>
-              <strong>Diagnostics</strong>
-              <small>
-                Export sanitized runtime health and recent MCP checks for
-                support.
-              </small>
-            </div>
-            <span className="status-chip tone-neutral">Local support</span>
-            <div className="resource-actions">
-              <button
-                className="button secondary"
-                type="button"
-                onClick={props.onExportDiagnostics}
-              >
-                Export diagnostics
-              </button>
-            </div>
-          </div>
-          <div className="managed-list-row desktop-control-row" role="listitem">
-            <span className="resource-icon">
-              <IconTerminal2 size={18} aria-hidden="true" />
-            </span>
-            <div>
-              <strong>Local terminal</strong>
-              <small>
-                Open a shell or the Colossus TUI inside the managed workspace.
-              </small>
-            </div>
-            <span
-              className={`status-chip${desktop.terminalEnabled ? " tone-success" : " tone-neutral"}`}
-            >
-              {desktop.terminalEnabled ? "Enabled" : "Disabled"}
-            </span>
-            <div className="resource-actions desktop-terminal-actions">
-              <label className="compact-switch">
-                <input
-                  className="switch-input"
-                  type="checkbox"
-                  checked={desktop.terminalEnabled}
-                  disabled={!desktop.workspace || connecting}
-                  onChange={(event) =>
-                    props.onSetTerminalEnabled(event.target.checked)
-                  }
-                />
-                <span>
-                  {desktop.terminalEnabled ? "Enabled" : "Enable terminal"}
-                </span>
-              </label>
-              {desktop.capabilities.shellTerminal ? (
-                <button
-                  className="button secondary"
-                  type="button"
-                  disabled={!desktop.terminalEnabled}
-                  onClick={() => props.onOpenTerminal("shell")}
-                >
-                  Open Shell
-                </button>
-              ) : null}
-              {desktop.capabilities.tui ? (
-                <button
-                  className="button secondary"
-                  type="button"
-                  disabled={!desktop.terminalEnabled || !terminalAvailable}
-                  onClick={() => props.onOpenTerminal("colossus_tui")}
-                >
-                  Open Colossus TUI
-                </button>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <div className="desktop-target-toolbar">
-        <div>
-          <h4>External runtimes</h4>
-          <p>Connect to Colossus runtimes managed outside this Desktop app.</p>
-        </div>
-        <button
-          className="button primary"
-          type="button"
-          onClick={props.onAddExternalTarget}
-        >
-          <IconPlus size={15} aria-hidden="true" />
-          Add external runtime
-        </button>
-      </div>
-      <section
-        className="desktop-target-inventory"
-        aria-labelledby="desktop-target-inventory-heading"
-      >
-        <div className="desktop-panel-heading">
-          <div>
-            <h4 id="desktop-target-inventory-heading">Saved runtimes</h4>
-            <p>
-              Review connection state and remove runtimes you no longer use.
-            </p>
-          </div>
-          <span
-            className="credential-count"
-            aria-label={`${externalTargets.length} external runtimes`}
-          >
-            {externalTargets.length}
-          </span>
-        </div>
-        <div
-          className="managed-list desktop-target-list"
-          role={externalTargets.length > 0 ? "list" : undefined}
-        >
-          {externalTargets.map((target) => (
+          {section === "connections" ? (
             <div
-              className="managed-list-row desktop-target-row"
-              key={target.targetId}
+              className="managed-list-row desktop-control-row"
               role="listitem"
             >
               <span className="resource-icon">
-                <IconNetwork size={18} aria-hidden="true" />
+                <IconDatabase size={18} aria-hidden="true" />
               </span>
               <div>
-                <strong>{target.label}</strong>
-                <small>{target.message || "External Colossus runtime"}</small>
+                <strong>
+                  {desktop.workspace?.displayName ?? "Managed workspace"}
+                </strong>
+                <small>
+                  {desktop.workspace?.displayPath ??
+                    "Choose the repository this Desktop installation manages."}
+                </small>
               </div>
               <span
-                className={`status-chip${target.state === "ready" || target.state === "available" ? " tone-success" : target.state === "failed" || target.state === "unreachable" ? " tone-attention" : " tone-neutral"}`}
+                className={`status-chip${desktop.managedState === "ready" ? " tone-success" : desktop.managedState === "failed" ? " tone-attention" : " tone-neutral"}`}
               >
-                {target.state
-                  .replaceAll("_", " ")
-                  .replace(/^./, (character) => character.toUpperCase())}
+                {managedStateLabel}
               </span>
               <div className="resource-actions">
                 <button
-                  className="icon-button danger-icon-button"
+                  className="button secondary"
                   type="button"
-                  aria-label={`Remove ${target.label}`}
-                  title={`Remove ${target.label}`}
-                  onClick={() => props.onRemoveExternalTarget(target.targetId)}
+                  disabled={connecting}
+                  onClick={props.onChooseWorkspace}
                 >
-                  <IconTrash size={16} aria-hidden="true" />
+                  Choose workspace
+                </button>
+                <button
+                  className="button secondary"
+                  type="button"
+                  disabled={connecting || !desktop.workspace}
+                  onClick={props.onConfigureManaged}
+                >
+                  Configure runtime
+                </button>
+                <button
+                  className="icon-button"
+                  type="button"
+                  aria-label="Restart Managed Local"
+                  title="Restart Managed Local"
+                  disabled={connecting || !desktop.workspace}
+                  onClick={props.onRestartManaged}
+                >
+                  <IconRefresh size={17} aria-hidden="true" />
                 </button>
               </div>
             </div>
-          ))}
-          {externalTargets.length === 0 ? (
-            <EmptySettings
-              icon={<IconNetwork size={24} />}
-              title="No external runtimes"
-            />
+          ) : null}
+          {section === "updates" ? (
+            <div
+              className="managed-list-row desktop-control-row"
+              role="listitem"
+            >
+              <span className="resource-icon">
+                <IconRefresh size={18} aria-hidden="true" />
+              </span>
+              <div>
+                <strong>Desktop updates</strong>
+                <small>
+                  {updateMessage ||
+                    `Check for new builds from the ${releaseChannelLabel.toLowerCase()} channel.`}
+                </small>
+              </div>
+              <span
+                className={`status-chip${desktop.capabilities.updateAvailable ? " tone-attention" : " tone-neutral"}`}
+              >
+                {desktop.capabilities.updateAvailable
+                  ? "Update available"
+                  : `${releaseChannelLabel} channel`}
+              </span>
+              <div className="resource-actions">
+                <button
+                  className="button secondary"
+                  type="button"
+                  disabled={updateChecking}
+                  onClick={props.onCheckForUpdates}
+                >
+                  {updateChecking ? "Checking…" : "Check for updates"}
+                </button>
+                {desktop.capabilities.updateAvailable ? (
+                  <button
+                    className="button primary"
+                    type="button"
+                    onClick={props.onInstallUpdate}
+                  >
+                    Install update
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+          {section === "certificates" ? (
+            <div
+              className="managed-list-row desktop-control-row"
+              role="listitem"
+            >
+              <span className="resource-icon">
+                <IconShield size={18} aria-hidden="true" />
+              </span>
+              <div>
+                <strong>Trusted certificates</strong>
+                <small>
+                  {desktop.additionalCaBundle.configured
+                    ? `${desktop.additionalCaBundle.certificateCount} additional certificate${desktop.additionalCaBundle.certificateCount === 1 ? "" : "s"} extend the system trust store.`
+                    : "Use the system trust store, or import a PEM bundle for private services."}
+                </small>
+              </div>
+              <span
+                className={`status-chip${desktop.additionalCaBundle.configured ? " tone-success" : " tone-neutral"}`}
+              >
+                {desktop.additionalCaBundle.configured
+                  ? `${desktop.additionalCaBundle.certificateCount} imported`
+                  : "System trust"}
+              </span>
+              <div className="resource-actions">
+                <button
+                  className="button secondary"
+                  type="button"
+                  onClick={props.onImportCaBundle}
+                >
+                  Import PEM
+                </button>
+                {desktop.additionalCaBundle.configured ? (
+                  <button
+                    className="button secondary"
+                    type="button"
+                    onClick={props.onRemoveCaBundle}
+                  >
+                    Remove bundle
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+          {section === "updates" ? (
+            <div
+              className="managed-list-row desktop-control-row"
+              role="listitem"
+            >
+              <span className="resource-icon">
+                <IconDownload size={18} aria-hidden="true" />
+              </span>
+              <div>
+                <strong>Diagnostics</strong>
+                <small>
+                  Export sanitized runtime health and recent MCP checks for
+                  support.
+                </small>
+              </div>
+              <span className="status-chip tone-neutral">Local support</span>
+              <div className="resource-actions">
+                <button
+                  className="button secondary"
+                  type="button"
+                  onClick={props.onExportDiagnostics}
+                >
+                  Export diagnostics
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {section === "terminal" ? (
+            <div
+              className="managed-list-row desktop-control-row"
+              role="listitem"
+            >
+              <span className="resource-icon">
+                <IconTerminal2 size={18} aria-hidden="true" />
+              </span>
+              <div>
+                <strong>Local terminal</strong>
+                <small>
+                  Open a shell or the Colossus TUI inside the managed workspace.
+                </small>
+              </div>
+              <span
+                className={`status-chip${desktop.terminalEnabled ? " tone-success" : " tone-neutral"}`}
+              >
+                {desktop.terminalEnabled ? "Enabled" : "Disabled"}
+              </span>
+              <div className="resource-actions desktop-terminal-actions">
+                <label className="compact-switch">
+                  <input
+                    className="switch-input"
+                    type="checkbox"
+                    checked={desktop.terminalEnabled}
+                    disabled={!desktop.workspace || connecting}
+                    onChange={(event) =>
+                      props.onSetTerminalEnabled(event.target.checked)
+                    }
+                  />
+                  <span>
+                    {desktop.terminalEnabled ? "Enabled" : "Enable terminal"}
+                  </span>
+                </label>
+                {desktop.capabilities.shellTerminal ? (
+                  <button
+                    className="button secondary"
+                    type="button"
+                    disabled={!desktop.terminalEnabled}
+                    onClick={() => props.onOpenTerminal("shell")}
+                  >
+                    Open Shell
+                  </button>
+                ) : null}
+                {desktop.capabilities.tui ? (
+                  <button
+                    className="button secondary"
+                    type="button"
+                    disabled={!desktop.terminalEnabled || !terminalAvailable}
+                    onClick={() => props.onOpenTerminal("colossus_tui")}
+                  >
+                    Open Colossus TUI
+                  </button>
+                ) : null}
+              </div>
+            </div>
           ) : null}
         </div>
       </section>
+      {section === "connections" ? (
+        <>
+          <div className="desktop-target-toolbar">
+            <div>
+              <h4 id="desktop-target-inventory-heading">External runtimes</h4>
+              <p>
+                Connect to Colossus runtimes managed outside this Desktop app.
+              </p>
+            </div>
+            <button
+              className="button primary"
+              type="button"
+              onClick={props.onAddExternalTarget}
+            >
+              <IconPlus size={15} aria-hidden="true" />
+              Add external runtime
+            </button>
+          </div>
+          <section
+            className="desktop-target-inventory"
+            aria-labelledby="desktop-target-inventory-heading"
+          >
+            <div
+              className="managed-list desktop-target-list"
+              role={externalTargets.length > 0 ? "list" : undefined}
+            >
+              {externalTargets.map((target) => (
+                <div
+                  className="managed-list-row desktop-target-row"
+                  key={target.targetId}
+                  role="listitem"
+                >
+                  <span className="resource-icon">
+                    <IconNetwork size={18} aria-hidden="true" />
+                  </span>
+                  <div>
+                    <strong>{target.label}</strong>
+                    <small>
+                      {target.message || "External Colossus runtime"}
+                    </small>
+                  </div>
+                  <span
+                    className={`status-chip${target.state === "ready" || target.state === "available" ? " tone-success" : target.state === "failed" || target.state === "unreachable" ? " tone-attention" : " tone-neutral"}`}
+                  >
+                    {target.state
+                      .replaceAll("_", " ")
+                      .replace(/^./, (character) => character.toUpperCase())}
+                  </span>
+                  <div className="resource-actions">
+                    <button
+                      className="icon-button danger-icon-button"
+                      type="button"
+                      aria-label={`Remove ${target.label}`}
+                      title={`Remove ${target.label}`}
+                      onClick={() =>
+                        props.onRemoveExternalTarget(target.targetId)
+                      }
+                    >
+                      <IconTrash size={16} aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {externalTargets.length === 0 ? (
+                <EmptySettings
+                  icon={<IconNetwork size={24} />}
+                  title="No external runtimes"
+                />
+              ) : null}
+            </div>
+          </section>
+        </>
+      ) : null}
     </section>
   );
 }

@@ -163,23 +163,8 @@
 }
 
 .settings-scope-context {
-  position: relative;
   padding: 12px 0;
   border-bottom: 1px solid var(--border);
-}
-
-.settings-scope-context > p {
-  position: absolute;
-  inset: 12px 0 auto;
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--font-size-body-sm);
-  line-height: var(--line-height-body);
-}
-
-.settings-workspace-context.is-inactive {
-  visibility: hidden;
-  pointer-events: none;
 }
 
 .space-settings-context {
@@ -213,6 +198,16 @@
   border: 0;
 }
 
+/* Local app preferences are distinct from shared resources. */
+.settings-nav-heading {
+  margin: 12px 8px 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  font-weight: 600;
+}
+
 .managed-settings-tabs svg {
   flex: 0 0 auto;
 }
@@ -234,7 +229,7 @@
 
 .settings-page-context {
   display: flex;
-  min-height: 48px;
+  min-height: 36px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -271,6 +266,94 @@
   font-size: var(--font-size-heading);
 }
 
+/* Match catalog density across Global inventories and Workspace selections. */
+.settings-main
+  :is(
+    .managed-resource-row,
+    .managed-list-row,
+    .managed-field-row,
+    .model-role-row
+  ) {
+  min-height: 0;
+  padding: var(--settings-row-padding);
+  gap: 8px 10px;
+  font-size: var(--font-size-body-sm);
+}
+
+.settings-main .managed-resource-header {
+  min-height: 0;
+  padding: 8px 12px;
+  gap: 10px;
+  font-weight: 600;
+}
+
+.settings-main :is(.managed-resource-row, .managed-list-row) strong {
+  font-size: var(--font-size-body-sm);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.settings-main :is(.managed-resource-row, .managed-list-row) small {
+  margin-top: 2px;
+  line-height: 1.35;
+}
+
+.settings-main :is(.managed-resource-row, .managed-list-row) .resource-icon {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+}
+
+.settings-main
+  :is(.managed-resource-row, .managed-list-row)
+  .resource-icon
+  > svg {
+  width: 16px;
+  height: 16px;
+}
+
+.settings-main .resource-actions {
+  gap: 4px;
+}
+
+.settings-main .resource-actions .icon-button {
+  width: 28px;
+  height: 28px;
+  flex: none;
+}
+
+.settings-main
+  :is(.managed-resource-row, .managed-list-row, .managed-field-row)
+  .button {
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+.settings-main
+  :is(.managed-field-row, .authority-control-grid, .model-role-row)
+  .app-select {
+  height: 32px;
+  min-height: 32px;
+  font-size: var(--font-size-body-sm);
+}
+
+.settings-main
+  :is(.managed-field-row, .authority-control-grid, .model-role-row)
+  .app-select-trigger {
+  min-height: 30px;
+  padding: 4px 8px;
+}
+
+.settings-main .model-role-routing > header {
+  margin-bottom: 10px;
+}
+
+.settings-main .model-role-purpose p,
+.settings-main .model-role-selection small {
+  margin-top: 2px;
+  line-height: 1.35;
+}
+
 .settings-inheritance-note {
   margin: 0 0 12px;
   padding: var(--settings-row-padding);
@@ -295,7 +378,7 @@
   align-items: center;
   column-gap: 12px;
   row-gap: 3px;
-  min-height: 58px;
+  min-height: 0;
   padding: var(--settings-row-padding);
   border-bottom: 1px solid var(--border);
 }
@@ -304,7 +387,7 @@
 .settings-main .managed-field-row strong,
 .settings-main .appearance-control-copy strong {
   color: var(--text-strong);
-  font-size: var(--font-size-body);
+  font-size: var(--font-size-body-sm);
   font-weight: 600;
 }
 
@@ -521,40 +604,6 @@
     .managed-field-row:has(> input[type="checkbox"])
     > .source-badge {
     grid-column: 2 / 4;
-  }
-}
-
-/* Resource rows respond to the editor width, including the reserved sidebar. */
-@container (max-width: 900px) {
-  :is(.provider-row, .model-row, .telemetry-row, .search-profile-row),
-  .credential-list .managed-list-row {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-  }
-
-  :is(.provider-list, .model-list, .telemetry-list, .search-profile-list)
-    :is(
-      .provider-adapter-chip,
-      .provider-row-meta,
-      .model-capability-list,
-      .model-row-meta,
-      .telemetry-protocol-chip,
-      .telemetry-row-meta,
-      .search-row-meta
-    ) {
-    grid-column: 2;
-    flex-wrap: wrap;
-    justify-content: flex-start;
-  }
-
-  :is(.provider-list, .model-list, .telemetry-list, .search-profile-list)
-    .resource-actions {
-    grid-column: 3;
-    grid-row: 1 / span 3;
-  }
-
-  .credential-list :is(.credential-row-meta, .resource-actions) {
-    grid-column: 2 / -1;
-    justify-content: flex-start;
   }
 }
 
