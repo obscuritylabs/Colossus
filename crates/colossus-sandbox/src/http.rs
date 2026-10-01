@@ -535,6 +535,7 @@ pub(super) async fn proxy_connection(
     if method.eq_ignore_ascii_case("CONNECT") {
         let (host, port) = authority(target, 443)?;
         let origin = canonical_origin("https", &host, port)?;
+        validate_observed_origin(&origin)?;
         let Some(matched) =
             network_destination_match(allowed_origins, &origin).map_err(adapter_failure)?
         else {
@@ -587,6 +588,7 @@ pub(super) async fn proxy_connection(
         ));
     }
     let origin = url.origin().ascii_serialization();
+    validate_observed_origin(&origin)?;
     let Some(matched) =
         network_destination_match(allowed_origins, &origin).map_err(adapter_failure)?
     else {
@@ -646,6 +648,15 @@ pub(super) async fn proxy_connection(
     tokio::io::copy_bidirectional(&mut client, &mut upstream)
         .await
         .map_err(adapter_failure)?;
+    Ok(())
+}
+
+pub(super) fn validate_observed_origin(origin: &str) -> Result<(), ExecutionError> {
+    if serde_json::to_vec(origin).map_err(adapter_failure)?.len() > MAX_OBSERVED_ORIGIN_JSON_BYTES {
+        return Err(adapter_failure(
+            "proxy origin exceeds completion evidence bound",
+        ));
+    }
     Ok(())
 }
 

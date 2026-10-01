@@ -1,3 +1,5 @@
+import { lazy, Suspense } from "react";
+import { DesktopStartup } from "./components/DesktopStartup";
 import { createRoot } from "react-dom/client";
 import { SetupPresentationProvider } from "./SetupPresentation";
 
@@ -78,15 +80,16 @@ if (
     );
   });
 } else {
-  void import("./App").then(({ default: App }) => {
-    createRoot(root).render(
-      <AppearanceProvider initialPreference={initialAppearance}>
-        <AppErrorBoundary>
+  const App = lazy(() => import("./App"));
+  createRoot(root).render(
+    <AppearanceProvider initialPreference={initialAppearance}>
+      <AppErrorBoundary>
+        <Suspense fallback={<DesktopStartup />}>
           <SetupPresentationProvider>
             <App />
           </SetupPresentationProvider>
-        </AppErrorBoundary>
-      </AppearanceProvider>,
-    );
-  });
+        </Suspense>
+      </AppErrorBoundary>
+    </AppearanceProvider>,
+  );
 }

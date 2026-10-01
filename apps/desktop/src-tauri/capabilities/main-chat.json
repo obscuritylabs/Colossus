@@ -5,6 +5,8 @@
   "local": true,
   "webviews": ["main"],
   "permissions": [
+    "allow-remembered-command-count",
+    "allow-clear-remembered-commands",
     "allow-get-workspace-git-status",
     "allow-list-workspace-git-commits",
     "allow-get-workspace-git-commit",

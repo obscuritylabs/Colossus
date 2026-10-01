@@ -35,6 +35,16 @@ fn cleanup_removes_only_the_supplied_private_test_home_and_is_repeatable() {
     create_private_file(&home.join("AGENTS.md"), b"desktop data").unwrap();
     create_private_directory(&home.join("plugins")).unwrap();
     create_private_directory(&home.join("plugins/cli")).unwrap();
+    create_private_directory(&home.join("desktop")).unwrap();
+    create_private_file(&home.join("desktop/remembered-commands.json"), b"[]").unwrap();
+    create_private_file(
+        &home.join(format!(
+            "desktop/.remembered-commands.json.{}.tmp",
+            uuid::Uuid::new_v4()
+        )),
+        b"[]",
+    )
+    .unwrap();
     cleanup(&home).unwrap();
     cleanup(&home).unwrap();
     assert!(!home.exists());

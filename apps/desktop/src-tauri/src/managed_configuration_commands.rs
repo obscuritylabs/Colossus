@@ -6,6 +6,7 @@ use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKin
 use uuid::Uuid;
 
 pub(crate) mod catalog_deletion;
+mod credential_lifecycle;
 mod mcp_deletion;
 pub(crate) mod updates;
 
@@ -471,44 +472,15 @@ pub(crate) async fn rotate_managed_credential(
     let store = settings_store()?;
     let mut settings = store.load()?;
     ensure_global_revision(&settings, request.expected_revision)?;
-    let old = settings
-        .global_configuration
-        .credentials
-        .iter()
-        .find(|credential| credential.id == request.credential_id)
-        .cloned()
-        .ok_or_else(|| unknown_credential("credentialId"))?;
-    let new_id = Uuid::now_v7().to_string();
+    credential_lifecycle::prepare_rotation(&mut settings, &request.credential_id)?;
     let secret =
         provider_enrollment::request_managed_credential_secret(window, appearance.into()).await?;
     let credentials = DesktopCredentials::for_settings(&state, &store)?;
-    stage_credential_write(&store, &mut settings, &new_id)?;
-    credentials.write(&new_id, secret).await?;
-    settings
-        .global_configuration
-        .credentials
-        .push(CredentialMetadataSetting {
-            id: new_id.clone(),
-            label: old.label,
-            kind: old.kind,
-            backend: CredentialBackendSetting::Desktop,
-            created_at_ms: unix_time_millis(),
-        });
-    let affected_resources = rotate_current_resource_bindings(
-        &mut settings.global_configuration,
-        &request.credential_id,
-        &new_id,
-    )?;
-    let previous_revision = settings.global_configuration.revision;
-    bump_global_revision(&mut settings.global_configuration)?;
-    advance_unaffected_spaces(&mut settings, previous_revision, &affected_resources);
-    settings
-        .pending_provider_cleanup_ids
-        .retain(|id| id != &new_id);
-    if let Err(error) = store.save(&settings) {
-        credentials.delete(&new_id).await?;
-        return Err(error);
-    }
+    // Persist restart intent before replacing the secret. If the vault write fails,
+    // the previous token remains and the pending revision can be safely reconciled.
+    // Never delete this stable record on a later settings/snapshot failure.
+    store.save(&settings)?;
+    credentials.write(&request.credential_id, secret).await?;
     snapshot(state.inner(), &settings).await
 }
 
@@ -528,16 +500,7 @@ pub(crate) async fn delete_managed_credential(
         .find(|credential| credential.id == request.credential_id)
         .cloned()
         .ok_or_else(|| unknown_credential("credentialId"))?;
-    let dependents = credential_dependents(&settings, &credential.id);
-    if !dependents.is_empty() {
-        return Err(CommandErrorDto::invalid(
-            "credentialId",
-            &format!(
-                "The credential is still referenced by: {}.",
-                dependents.join(", ")
-            ),
-        ));
-    }
+    credential_lifecycle::prepare_deletion(&mut settings, &credential.id)?;
     if settings.pending_provider_cleanup_ids.len() >= MAX_PENDING_PROVIDER_CLEANUPS {
         return Err(CommandErrorDto::busy(
             "Pending credential cleanup must finish before another credential can be deleted.",
@@ -573,7 +536,7 @@ pub(crate) async fn reenter_managed_credential(
 ) -> Result<ManagedSettingsSnapshotDto, CommandErrorDto> {
     let _guard = connect_guard(&state)?;
     let store = settings_store()?;
-    let settings = store.load()?;
+    let mut settings = store.load()?;
     ensure_global_revision(&settings, request.expected_revision)?;
     if !settings
         .global_configuration
@@ -607,6 +570,8 @@ pub(crate) async fn reenter_managed_credential(
     }
     let secret =
         provider_enrollment::request_managed_credential_secret(window, appearance.into()).await?;
+    credential_lifecycle::prepare_rotation(&mut settings, &request.credential_id)?;
+    store.save(&settings)?;
     credentials.write(&request.credential_id, secret).await?;
     snapshot(state.inner(), &settings).await
 }
@@ -1329,66 +1294,6 @@ pub(crate) fn append_catalog_revision<T>(
     Ok(())
 }
 
-fn rotate_current_resource_bindings(
-    global: &mut GlobalConfigurationSetting,
-    old_id: &str,
-    new_id: &str,
-) -> Result<BTreeSet<String>, CommandErrorDto> {
-    let mut affected = BTreeSet::new();
-    for entry in &mut global.providers {
-        let Some(mut value) = current_value(entry).cloned() else {
-            continue;
-        };
-        if value.credential_id.as_deref() == Some(old_id) {
-            value.credential_id = Some(new_id.to_owned());
-            append_catalog_revision(entry, value)?;
-            affected.insert(entry.id.clone());
-        }
-    }
-    for entry in &mut global.search_providers {
-        let Some(mut value) = current_value(entry).cloned() else {
-            continue;
-        };
-        if value.credential_id.as_deref() == Some(old_id) {
-            value.credential_id = Some(new_id.to_owned());
-            append_catalog_revision(entry, value)?;
-            affected.insert(entry.id.clone());
-        }
-    }
-    for entry in &mut global.mcp_servers {
-        let Some(mut value) = current_value(entry).cloned() else {
-            continue;
-        };
-        let mut changed = false;
-        for credential in value.environment_credentials.values_mut() {
-            if credential == old_id {
-                new_id.clone_into(credential);
-                changed = true;
-            }
-        }
-        for header in value.credential_headers.values_mut() {
-            if header.credential_id == old_id {
-                new_id.clone_into(&mut header.credential_id);
-                changed = true;
-            }
-        }
-        if let Some(credential) = value
-            .oauth
-            .as_mut()
-            .and_then(|oauth| oauth.client_secret_credential_id.as_mut())
-            && credential == old_id
-        {
-            new_id.clone_into(credential);
-            changed = true;
-        }
-        if changed {
-            append_catalog_revision(entry, value)?;
-            affected.insert(entry.id.clone());
-        }
-    }
-    Ok(affected)
-}
-
 pub(crate) fn advance_unaffected_spaces(
     settings: &mut DesktopSettings,
     previous_global_revision: u64,
@@ -1409,15 +1314,6 @@ pub(crate) fn advance_unaffected_spaces(
 
 fn credential_dependents(settings: &DesktopSettings, credential_id: &str) -> Vec<String> {
     let mut dependents = BTreeSet::new();
-    for package in &settings.setup_packages {
-        if package
-            .providers
-            .iter()
-            .any(|p| p.connection.credential_id.as_deref() == Some(credential_id))
-        {
-            dependents.insert(format!("Setup package {}", package.manifest.name));
-        }
-    }
     for space in &settings.spaces {
         if space
             .configuration
@@ -1446,30 +1342,22 @@ fn credential_dependents(settings: &DesktopSettings, credential_id: &str) -> Vec
         }
     }
     for entry in &settings.global_configuration.providers {
-        if entry
-            .revisions
-            .iter()
-            .any(|revision| revision.value.credential_id.as_deref() == Some(credential_id))
+        if current_value(entry)
+            .is_some_and(|value| value.credential_id.as_deref() == Some(credential_id))
         {
-            dependents.insert(format!("Provider {} revision history", entry.label));
+            dependents.insert(format!("Provider {}", entry.label));
         }
     }
     for entry in &settings.global_configuration.search_providers {
-        if entry
-            .revisions
-            .iter()
-            .any(|revision| revision.value.credential_id.as_deref() == Some(credential_id))
+        if current_value(entry)
+            .is_some_and(|value| value.credential_id.as_deref() == Some(credential_id))
         {
-            dependents.insert(format!("Search profile {} revision history", entry.label));
+            dependents.insert(format!("Search profile {}", entry.label));
         }
     }
     for entry in &settings.global_configuration.mcp_servers {
-        if entry
-            .revisions
-            .iter()
-            .any(|revision| mcp_uses_credential(&revision.value, credential_id))
-        {
-            dependents.insert(format!("MCP server {} revision history", entry.label));
+        if current_value(entry).is_some_and(|value| mcp_uses_credential(value, credential_id)) {
+            dependents.insert(format!("MCP server {}", entry.label));
         }
     }
     dependents.into_iter().collect()
@@ -2385,7 +2273,7 @@ mod tests {
     }
 
     #[test]
-    fn credential_rotation_preserves_pinned_revisions_and_blocks_old_record_deletion() {
+    fn credential_rotation_keeps_identity_and_pinned_bindings_and_requests_refresh() {
         let mut settings = settings();
         settings.global_configuration.search_providers = vec![CatalogEntrySetting {
             id: "search-main".into(),
@@ -2412,22 +2300,29 @@ mod tests {
             },
         );
 
-        let affected = rotate_current_resource_bindings(
-            &mut settings.global_configuration,
-            "credential-old",
-            "credential-new",
-        )
-        .expect("rotation");
-        assert_eq!(affected, BTreeSet::from(["search-main".into()]));
+        settings
+            .global_configuration
+            .credentials
+            .push(CredentialMetadataSetting {
+                id: "credential-old".into(),
+                label: "Search token".into(),
+                kind: CredentialKindSetting::ApiKey,
+                backend: CredentialBackendSetting::Desktop,
+                created_at_ms: 1,
+            });
+        credential_lifecycle::prepare_rotation(&mut settings, "credential-old").unwrap();
+        assert_eq!(settings.global_configuration.credentials.len(), 1);
+        assert_eq!(
+            settings.global_configuration.credentials[0].id,
+            "credential-old"
+        );
+        assert_eq!(settings.global_configuration.revision, 2);
+        assert_eq!(settings.spaces[0].configuration.accepted_global_revision, 1);
         let entry = &settings.global_configuration.search_providers[0];
-        assert_eq!(entry.current_revision, 2);
+        assert_eq!(entry.current_revision, 1);
         assert_eq!(
             entry.revisions[0].value.credential_id.as_deref(),
             Some("credential-old")
-        );
-        assert_eq!(
-            entry.revisions[1].value.credential_id.as_deref(),
-            Some("credential-new")
         );
         assert!(
             credential_dependents(&settings, "credential-old")
@@ -2436,8 +2331,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn credential_dependents_include_unpinned_historical_catalog_revisions() {
+    fn credential_history_settings() -> DesktopSettings {
         let mut settings = settings();
         let mut old_provider = provider("https://old.example.test/v1");
         old_provider.credential_id = Some("credential-old".into());
@@ -2526,11 +2420,50 @@ mod tests {
             ],
         }];
 
-        let dependents = credential_dependents(&settings, "credential-old");
+        settings
+    }
 
-        assert!(dependents.contains(&"Provider Primary revision history".into()));
-        assert!(dependents.contains(&"Search profile Engineering revision history".into()));
-        assert!(dependents.contains(&"MCP server Docs revision history".into()));
+    #[test]
+    fn credential_deletion_prunes_only_unused_history_and_preserves_current_definitions() {
+        let mut settings = credential_history_settings();
+        // An old revision remains protected while any workspace pins it, including
+        // archived workspaces that can be restored later.
+        settings.spaces[0].configuration.catalog_revisions.insert(
+            "mcp:docs".into(),
+            CatalogReferenceSetting {
+                resource_id: "mcp-docs".into(),
+                revision: 1,
+            },
+        );
+        assert!(credential_lifecycle::prepare_deletion(&mut settings, "credential-old").is_err());
+        settings.spaces[0].archived = true;
+        assert!(credential_lifecycle::prepare_deletion(&mut settings, "credential-old").is_err());
+        assert_eq!(
+            settings.global_configuration.mcp_servers[0].revisions.len(),
+            2
+        );
+        settings.spaces[0].configuration.catalog_revisions.clear();
+        assert!(credential_lifecycle::prepare_deletion(&mut settings, "credential-new").is_err());
+        credential_lifecycle::prepare_deletion(&mut settings, "credential-old").unwrap();
+        assert_eq!(
+            settings.global_configuration.providers[0].revisions.len(),
+            1
+        );
+        assert_eq!(
+            settings.global_configuration.search_providers[0]
+                .revisions
+                .len(),
+            1
+        );
+        assert_eq!(
+            settings.global_configuration.mcp_servers[0].revisions.len(),
+            1
+        );
+        assert_eq!(
+            settings.global_configuration.mcp_servers[0].current_revision,
+            2
+        );
+        assert_eq!(credential_dependents(&settings, "credential-new").len(), 3);
         assert!(
             settings.spaces[0]
                 .configuration

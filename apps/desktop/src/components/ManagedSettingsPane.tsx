@@ -1,3 +1,4 @@
+import { RememberedCommands } from "./RememberedCommands";
 import { SetupPackagesPanel } from "./setup/SetupPackagesPanel";
 import { useSetupPackages } from "./setup/useSetupPackages";
 import { ImportedProviderActions } from "./setup/ImportedProviderActions";
@@ -916,26 +917,32 @@ export function managedCredentialConsumers(
   const global = snapshot.globalConfiguration;
 
   for (const entry of global.providers) {
-    if (!entry.archived && currentValue(entry).credentialId === credentialId) {
-      consumers.add(`Provider · ${entry.label}`);
+    if (currentValue(entry).credentialId === credentialId) {
+      consumers.add(
+        `Provider · ${entry.label}${entry.archived ? " (archived)" : ""}`,
+      );
     }
   }
   for (const entry of global.searchProviders) {
-    if (!entry.archived && currentValue(entry).credentialId === credentialId) {
-      consumers.add(`Search · ${entry.label}`);
+    if (currentValue(entry).credentialId === credentialId) {
+      consumers.add(
+        `Search · ${entry.label}${entry.archived ? " (archived)" : ""}`,
+      );
     }
   }
   for (const entry of global.mcpServers) {
-    if (entry.archived) continue;
     if (mcpUsesCredential(currentValue(entry), credentialId)) {
-      consumers.add(`MCP server · ${entry.label}`);
+      consumers.add(
+        `MCP server · ${entry.label}${entry.archived ? " (archived)" : ""}`,
+      );
     }
   }
   for (const space of snapshot.spaces) {
-    if (space.archived) continue;
-    const overrideUsesCredential = Object.values(
+    const overrideUsesCredential = Object.entries(
       space.configuration.credentialOverrides,
-    ).includes(credentialId);
+    ).some(
+      ([source, target]) => source === credentialId || target === credentialId,
+    );
     const pinnedRevisionUsesCredential = Object.entries(
       space.configuration.catalogRevisions,
     ).some(([catalogKey, reference]) =>
@@ -947,7 +954,9 @@ export function managedCredentialConsumers(
       ),
     );
     if (overrideUsesCredential || pinnedRevisionUsesCredential) {
-      consumers.add(`Workspace · ${space.name}`);
+      consumers.add(
+        `Workspace · ${space.name}${space.archived ? " (archived)" : ""}`,
+      );
     }
   }
 
@@ -2647,18 +2656,9 @@ export function ManagedSettingsPane({
         }),
       () =>
         fixtureRevision((draft) => {
-          const old = draft.globalConfiguration.credentials.find(
-            (credential) => credential.id === credentialId,
-          )!;
-          const id = crypto.randomUUID();
-          draft.globalConfiguration.credentials.push({
-            ...old,
-            id,
-            createdAtMs: Date.now(),
-          });
-          draft.credentialAvailability[id] = "available";
+          draft.credentialAvailability[credentialId] = "available";
         }),
-      "Credential rotated. Existing configurations keep using the previous value until updated.",
+      "Token replaced. The credential name and references are unchanged. Active workspaces refresh when idle.",
     );
   }
 
@@ -3491,8 +3491,8 @@ function GlobalSettingsBody({
             <div>
               <h4 id="stored-credentials-heading">Stored credentials</h4>
               <p>
-                Rotating saves a new value. Existing configurations keep using
-                the previous value until they are updated.
+                Rotate replaces the token in this entry. Its name and references
+                stay the same; active workspaces refresh when idle.
               </p>
             </div>
             <span
@@ -3508,12 +3508,17 @@ function GlobalSettingsBody({
               const availability =
                 snapshot.credentialAvailability[credential.id] ?? "unavailable";
               const available = availability === "available";
+              const emptyImport = credential.createdAtMs === 0;
+              const missingAction = emptyImport
+                ? "Add token"
+                : "Re-enter token";
               const status = {
                 available: { label: "Stored securely", guidance: "" },
                 missing: {
-                  label: "Re-entry required",
-                  guidance:
-                    "Re-enter this token to restore existing configurations.",
+                  label: emptyImport ? "Token needed" : "Re-entry required",
+                  guidance: emptyImport
+                    ? "Imported without a token. Add it to use this credential."
+                    : "Re-enter this token to restore existing configurations.",
                 },
                 locked: {
                   label: "Storage locked",
@@ -3585,8 +3590,8 @@ function GlobalSettingsBody({
                       disabled={
                         busy || (availability !== "missing" && !available)
                       }
-                      aria-label={`${availability === "missing" ? "Re-enter token for" : "Rotate"} ${credential.label}`}
-                      title={`${availability === "missing" ? "Re-enter token for" : "Rotate"} ${credential.label}`}
+                      aria-label={`${availability === "missing" ? `${missingAction} for` : "Rotate"} ${credential.label}`}
+                      title={`${availability === "missing" ? `${missingAction} for` : "Rotate"} ${credential.label}`}
                       onClick={() =>
                         availability === "missing"
                           ? onReenterCredential(credential.id)
@@ -3594,7 +3599,7 @@ function GlobalSettingsBody({
                       }
                     >
                       <IconRefresh size={15} aria-hidden="true" />{" "}
-                      {availability === "missing" ? "Re-enter token" : "Rotate"}
+                      {availability === "missing" ? missingAction : "Rotate"}
                     </button>
                     <button
                       className="icon-button danger-icon-button"
@@ -4932,6 +4937,12 @@ export function SpaceSettingsBody({
               setDraft({ ...draft, terminalEnabled: value })
             }
           />
+          {tab === "access" ? (
+            <RememberedCommands
+              key={selectedSpace.id}
+              spaceId={selectedSpace.id}
+            />
+          ) : null}
           {tab === "runtime" ? (
             <FieldGrid
               descriptors={descriptors.filter(

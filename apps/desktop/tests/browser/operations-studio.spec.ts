@@ -2568,7 +2568,7 @@ test("Workspace navigation and approvals are keyboard-operable", async ({
       name: "Apply the hardened bootstrap changes",
     }),
   ).toBeVisible();
-  const allow = page.getByRole("button", { name: "Allow once" });
+  const allow = page.getByRole("button", { name: "Review approval…" });
   await allow.focus();
   await page.keyboard.press("Enter");
   await expect(allow).toHaveCount(0);

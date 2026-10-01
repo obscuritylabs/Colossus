@@ -40,11 +40,16 @@ pub(super) fn owned_path(relative: &Path, directory: bool) -> bool {
         ["config.yaml" | "AGENTS.md"]
         | [
             "desktop",
-            "settings.json" | "thread-search.redb" | "credentials-v1.redb" | "credentials-v1.lock",
+            "settings.json"
+            | "remembered-commands.json"
+            | "thread-search.redb"
+            | "credentials-v1.redb"
+            | "credentials-v1.lock",
         ] => !directory,
         ["desktop", temporary]
             if temporary
                 .strip_prefix(".settings.json.")
+                .or_else(|| temporary.strip_prefix(".remembered-commands.json."))
                 .and_then(|name| name.strip_suffix(".tmp"))
                 .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) =>
         {

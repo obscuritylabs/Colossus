@@ -55,7 +55,7 @@ const MAX_TOOL_ACTIVITY_PREVIEW_BYTES: usize = 65_536;
 const MAX_SESSION_ACTIVITY_SCAN: usize = 1_024;
 const SESSION_ACTIVITY_READ_PAGE_SIZE: usize = 128;
 const MAX_SESSION_ACTIVITY_RESPONSE_BYTES: usize = 2 * 1_024 * 1_024;
-const TOOL_ACTIVITY_PREVIEW_TRUNCATION: &str = "\n… preview truncated";
+const TOOL_ACTIVITY_PREVIEW_TRUNCATION: &str = "\nâ€¦ preview truncated";
 const SUBAGENT_ACTIVITY_TOOL: &str = "agent.subagent_update";
 const MAX_SUBAGENT_ACTIVITY_TASK_BYTES: usize = 4 * 1024;
 
@@ -2034,7 +2034,7 @@ fn released_tool_input(call: &ToolCall) -> Option<String> {
 }
 
 fn released_tool_preview(result: &ToolResult) -> Option<String> {
-    if result.name == "shell.run" && result.exit_code == 0 {
+    if result.name == "shell.run" {
         return released_command_output(&result.output);
     }
     (result.exit_code == 0)
@@ -3192,7 +3192,7 @@ mod tests {
 
     #[test]
     fn public_preview_truncation_is_bounded_marked_and_utf8_safe() {
-        let output = serde_json::json!({"stdout": "é".repeat(MAX_TOOL_ACTIVITY_PREVIEW_BYTES),
+        let output = serde_json::json!({"stdout": "Ã©".repeat(MAX_TOOL_ACTIVITY_PREVIEW_BYTES),
             "resolved_argv": ["PRIVATE"], "invocation": {"command": "PRIVATE"}})
         .to_string();
         let update = public_event(RunEvent::ToolCompleted {
@@ -3236,6 +3236,11 @@ mod tests {
             exit_code: 0,
         };
         let preview = released_tool_preview(&result).unwrap();
+        let failed = ToolResult {
+            exit_code: 1,
+            ..result.clone()
+        };
+        assert_eq!(released_tool_preview(&failed), Some(preview.clone()));
         assert!(preview.contains("SAFE_OUTPUT"));
         assert!(!preview.contains("PRIVATE"));
         assert_eq!(
@@ -3264,6 +3269,48 @@ mod tests {
             "{\"invocation\":\"PRIVATE\"}",
         ] {
             assert_eq!(released_command_output(malformed), None);
+        }
+    }
+
+    #[test]
+    fn failed_shell_live_and_historical_previews_withhold_private_error_details() {
+        for category in [
+            "tool.denied",
+            "tool.outcome_unknown",
+            "invalid_arguments",
+            "validation_error",
+            "PRIVATE_CODE",
+        ] {
+            let output = serde_json::json!({"error": {"code": category, "message": "PRIVATE_POLICY_REASON_AND_COMMAND", "recoverable": false}}).to_string();
+            let update = public_event(RunEvent::ToolCompleted {
+                turn: 1,
+                result: ToolResult {
+                    call_id: "call".into(),
+                    name: "shell.run".into(),
+                    output: output.clone(),
+                    exit_code: 1,
+                },
+                duration_seconds: 0.1,
+                elapsed_seconds: 0.2,
+            });
+            let RunUpdateKind::ToolActivity { activity } = update else {
+                panic!("tool activity expected")
+            };
+            let preview = activity.preview.unwrap();
+            assert!(!preview.contains("PRIVATE"));
+            assert!(preview.contains("message"));
+            for historical_output in [output, preview] {
+                let projected: ProjectedSessionActivity = serde_json::from_value(serde_json::json!({
+                    "activity_id": "activity", "session_id": "session", "run_id": "run", "turn": 1,
+                    "lane": "tools", "kind": "tool", "title": "shell.run", "summary": "Failed shell.run",
+                    "actor": "tool", "status": "failed", "started_at": "2026-10-01T00:00:00Z",
+                    "completed_at": null, "duration_ms": null, "input": null,
+                    "result": {"format": "text", "value": historical_output},
+                    "attributes": {}, "source_event_types": [], "first_sequence": 1, "last_sequence": 2
+                })).unwrap();
+                let value = public_activity(&projected).unwrap().result.unwrap().value;
+                assert!(!value.contains("PRIVATE"));
+            }
         }
     }
 

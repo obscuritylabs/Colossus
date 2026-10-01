@@ -276,6 +276,11 @@ effect's audit record. Strict descendant containment requires native or OCI isol
 a Windows Job Object, or an asserted external host boundary that owns the complete
 process namespace/job.
 
+Process output caps include transport framing, completion status, and recorded proxy
+origins. Local commands retain output at the 1,024-byte minimum. Network-enabled
+sandboxes reserve additional space for their allowed origins; wildcard destinations
+require room for the bounded maximum origin list. A cap that cannot retain this evidence
+is rejected before launch, rather than losing a confirmed completion after execution.
 Agent Plugin scripts run only through ordinary process tools, and plugin MCP servers
 require explicit runtime enablement. Their signatures, trust state, portable declarations,
 and selected-root grants remain necessary under every boundary and never grant ambient
@@ -969,6 +974,12 @@ may unlink only the fixed descriptor and certificate leaves after revalidating t
 type, owner, mode, link count, device, and inode immediately before removal. Unsafe or
 replaced state is preserved and reported rather than traversed or recursively deleted.
 
+Managed Desktop starts each owned runtime in Risk Auto through an explicit native
+bootstrap flag. The flag is retained for supervised restarts and never accepted in
+managed YAML or public run requests. Other SDK hosts default to Ask. Evaluator review
+can satisfy eligible low-risk approval obligations without changing policy denials,
+tool ceilings, or sandbox boundaries.
+
 Managed Desktop approval authority is isolated from its ordinary run client. The
 primary credential has the four run/read/control/prompt scopes and never
 `approvals:respond`. A second same-application native broker credential has only that
@@ -978,14 +989,24 @@ the SDK routes only approval answers over the broker's separately authenticated 
 gRPC client. Unix and Windows share the same routing and read projection: only pending
 approval interactions with a response etag expose the native broker capability, reads
 stay on the primary client, and ordinary prompt answers never use the approval broker.
-Renderer approval input still requires the native operating-system
-confirmation before an allow response reaches this broker. Command approvals first use
-a separate native-owned read-only review window with a fixed local document and only
-two narrowly scoped review commands. The main renderer cannot supply its trusted text
-or acknowledge review through those commands. The native client fetches and revalidates
-the pending interaction before review, before OS confirmation, and after confirmation.
-Selection changes, stale bindings, cancellation, and expiry cannot submit an allow to
-the broker. Full command details remain available without weakening the OS confirmation.
+Approval decisions use a separate native-owned window with a fixed local document and
+only two narrowly scoped commands. That isolated WebView is the final consent surface;
+there is no additional OS effect-confirmation dialog. The main renderer can request a
+review but cannot supply trusted details or decide it. Native code fetches the pending
+interaction before review and revalidates after the decision. Selection changes, stale
+bindings, cancellation, closing the window during validation, and expiry cannot submit
+an allow to the broker. The isolated approval renderer is trusted to collect consent;
+this does not protect against compromise of that renderer or the native runtime.
+
+For unredacted Managed Local commands, **Always allow** stores a native-only fingerprint
+of the exact executable, argument vector, working directory, workspace directory identity,
+and configuration. It does not match prefixes or patterns. It remembers a command, not
+the contents of scripts/files it invokes or an immutable execution environment. The
+preference survives Desktop restarts, remains local to this computer, and is not included
+in setup exports. Workspace Access settings can clear it. Native watch/hydration rechecks
+each matching pending interaction and submits a fresh one-use answer through the same
+approval broker; normal policy re-evaluation, sandboxing, and audit still apply. Redacted,
+non-command, and External-target approvals remain one-time decisions.
 First-time non-Minimal access and every access-rank elevation, including
 Development-to-Allow-all, require a fixed native confirmation before the wider tool
 ceiling is persisted. Execution-boundary elevation is confirmed independently, including

@@ -850,6 +850,7 @@ fn managed_bootstrap(
     )?
     .with_expected_workspace_identity(workspace_identity)?
     .with_colossus_home(paths.colossus_home)?
+    .with_risk_auto_approvals()
     .with_approval_broker_grant(approval_broker_grant)?
     .with_host_credentials(host_credentials)?
     .with_worker_ipc_authentication(Secret::new(worker_authentication.to_vec())?)?;

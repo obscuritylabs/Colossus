@@ -8,6 +8,42 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.11.5] - 2026-10-01
+
+### Added
+
+- Desktop Stop pauses queued messages for Resume, with a slow activity glow.
+- Compact Shell and TUI controls, with a native system shell beside authenticated
+  Colossus sessions. Active shells exposes managed background output and Stop.
+- Tool access patterns such as `get_*` for built-in and MCP tool selections.
+- Native command review offers Allow once and Always allow for the exact command
+  and working directory in a workspace, with a control to clear remembered choices.
+- Provider presentation settings include custom icons and Markdown instructions
+  in portable Desktop setup packages.
+
+### Fixed
+
+- Managed shell commands retain interactive approval routing before detaching.
+  Initial waits honor their yield budget, and denied or failed launches no longer
+  appear successful. Terminal denials also finish their activity rows.
+- Small supported output budgets retain stdout and stderr. Managed command previews
+  include released output, status, exit codes, and truncation information.
+- Active shells distinguishes loading, unavailable, and empty states and discards
+  stale responses after workspace changes. Shell and TUI use the active native
+  workspace, clearing prior workspace context during selection changes.
+- Windows launches restore the original Desktop window instead of creating extra
+  tray instances. Startup shows a loading state before choosing setup or Work.
+- Credential export preserves readable names with empty import placeholders;
+  rotation retains credential identity, and unreferenced revision history no longer
+  prevents removal while active and pinned references remain protected.
+
+### Changed
+
+- Desktop-managed runtimes start in Risk Auto. Other SDK hosts retain Ask by default.
+- Completion notifications include the thread title and a bounded output snippet.
+- Aligned workspace, bundled plugin, and SDK candidate metadata to `0.11.5`.
+  This release publishes Core/Desktop only; SDK registry publishing remains disabled.
+
 ## [0.11.4] - 2026-09-30
 
 ### Added

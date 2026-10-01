@@ -514,6 +514,15 @@ pub(super) fn validate_process_spec(
             obligations.max_output_bytes
         )));
     }
+    let output_limit = spec
+        .max_output_bytes
+        .unwrap_or(obligations.max_output_bytes);
+    let metadata_reserve = process_result_reserve(obligations);
+    if output_limit < metadata_reserve as u64 {
+        return Err(adapter_failure(format!(
+            "process max_output_bytes {output_limit} cannot retain completion and network-origin evidence; at least {metadata_reserve} bytes are required"
+        )));
+    }
     if spec.environment.len() > 128 {
         return Err(adapter_failure("process environment exceeds entry bound"));
     }

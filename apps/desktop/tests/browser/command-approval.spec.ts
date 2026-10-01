@@ -27,7 +27,7 @@ test("command card exposes the full tail by keyboard without approving", async (
   await full.focus();
   await page.keyboard.press("End");
   await expect(
-    page.getByRole("button", { name: "Allow once", exact: true }),
+    page.getByRole("button", { name: "Review command…", exact: true }),
   ).toBeEnabled();
   await page.setViewportSize({ width: 880, height: 540 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(
@@ -41,8 +41,8 @@ test("command card exposes the full tail by keyboard without approving", async (
   ).toEqual([]);
 });
 
-for (const approved of [false, true]) {
-  test(`native review document forwards only its one-use identity: ${approved ? "continue" : "deny"}`, async ({
+for (const decision of ["deny", "allow_once", "always_allow"] as const) {
+  test(`native review document forwards only its one-use identity: ${decision}`, async ({
     page,
   }) => {
     await page.addInitScript(() => {
@@ -56,6 +56,7 @@ for (const approved of [false, true]) {
               return {
                 reviewId: "native-review-id",
                 target: "Managed Local — isolated workspace",
+                canRemember: true,
                 commandContext: {
                   justification: "Check the workspace build.",
                   executable: "/bin/sh",
@@ -100,8 +101,17 @@ for (const approved of [false, true]) {
     await expect(page.locator("script", { hasText: "plain text" })).toHaveCount(
       0,
     );
+    if (decision === "always_allow") {
+      await page.setViewportSize({ width: 900, height: 760 });
+      await page.screenshot({ path: "output/playwright/approval-choices.png" });
+    }
     const button = page.getByRole("button", {
-      name: approved ? "Continue to native confirmation" : "Deny",
+      name:
+        decision === "deny"
+          ? "Deny"
+          : decision === "always_allow"
+            ? "Always allow"
+            : "Allow once",
       exact: true,
     });
     await page.setViewportSize({ width: 420, height: 360 });
@@ -135,11 +145,11 @@ for (const approved of [false, true]) {
         { command: "command_review_context", args: {} },
         {
           command: "finish_command_review",
-          args: { reviewId: "native-review-id", approved },
+          args: { reviewId: "native-review-id", decision },
         },
       ]);
     await expect(
-      page.getByRole("button", { name: "Awaiting native confirmation…" }),
+      page.getByRole("button", { name: "Applying decision…" }),
     ).toBeDisabled();
   });
 }
@@ -158,7 +168,91 @@ test("stale native review fails closed without confirmation controls", async ({
   );
   await page.goto("/?surface=command-approval");
   await expect(page.getByRole("alert")).toContainText("no longer available");
+  await expect(page.getByRole("button", { name: "Allow once" })).toHaveCount(0);
+});
+
+for (const commandContext of [
+  null,
+  {
+    justification: "Check status",
+    executable: "tool",
+    arguments: ["[REDACTED]"],
+    workingDirectory: "/work",
+    redacted: true,
+  },
+]) {
+  test(`one-time-only review does not offer broad consent: ${commandContext ? "redacted" : "non-command"}`, async ({
+    page,
+  }) => {
+    await page.addInitScript(
+      (context) =>
+        Object.assign(window, {
+          __TAURI_INTERNALS__: {
+            invoke: async () => ({
+              reviewId: "review",
+              target: "Managed Local",
+              commandContext: context,
+              action: "network.http",
+              resource: "https://example.com",
+              reason: "Approval required",
+              canRemember: false,
+            }),
+          },
+        }),
+      commandContext,
+    );
+    await page.goto("/?surface=command-approval");
+    await expect(
+      page.getByRole("button", { name: "Allow once", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Always allow", exact: true }),
+    ).toHaveCount(0);
+    const scan = await new AxeBuilder({ page }).analyze();
+    expect(
+      scan.violations.filter((item) =>
+        ["critical", "serious"].includes(item.impact ?? ""),
+      ),
+    ).toEqual([]);
+  });
+}
+
+test("workspace Access settings clear remembered commands", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    let count = 3;
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string) => {
+          if (command === "remembered_command_count") return count;
+          if (command === "clear_remembered_commands") {
+            count = 0;
+            return;
+          }
+          if (command === "desktop_release_channel") return "development";
+          throw new Error("Unexpected native command");
+        },
+      },
+    });
+  });
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/?fixture=operations-studio");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Settings sections" })
+    .getByRole("button", { name: "Access", exact: true })
+    .click();
   await expect(
-    page.getByRole("button", { name: "Continue to native confirmation" }),
-  ).toHaveCount(0);
+    page.getByText("3 remembered commands", { exact: true }),
+  ).toBeVisible();
+  const clear = page.getByRole("button", {
+    name: "Clear remembered commands",
+    exact: true,
+  });
+  await clear.click();
+  await expect(
+    page.getByText("0 remembered commands", { exact: true }),
+  ).toBeVisible();
+  await expect(clear).toBeDisabled();
 });

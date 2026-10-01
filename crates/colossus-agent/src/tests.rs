@@ -1742,13 +1742,16 @@ async fn assert_terminal_tool_turn_is_settled(kind: TerminalToolKind, call_count
         Arc::clone(&sessions) as Arc<dyn SessionRepository>,
     );
 
+    let mut observer = RecordingRunObserver::default();
     let error = service
-        .run_in_session(
+        .run_in_session_with_skills_stream(
             "primary",
             "test",
             "run terminal tool",
             2,
             Some("terminal-session"),
+            &[],
+            &mut observer,
         )
         .await
         .expect_err("terminal tool error");
@@ -1767,6 +1770,29 @@ async fn assert_terminal_tool_turn_is_settled(kind: TerminalToolKind, call_count
         }
     }
     assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+    let completed = observer
+        .events
+        .iter()
+        .filter_map(|event| match &event.event {
+            RunEvent::ToolCompleted { result, .. } => Some(result),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        completed.len(),
+        1,
+        "terminal failures must finish their activity row"
+    );
+    assert_eq!(completed[0].call_id, "call-1");
+    assert_ne!(completed[0].exit_code, 0);
+    assert_eq!(
+        observer
+            .events
+            .iter()
+            .filter(|event| matches!(event.event, RunEvent::ToolCancelled { .. }))
+            .count(),
+        call_count - 1
+    );
 
     let durable = sessions
         .list_messages("terminal-session")

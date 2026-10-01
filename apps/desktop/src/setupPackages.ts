@@ -33,6 +33,13 @@ export interface SetupResource<T> {
   configuration: T;
 }
 export interface SetupGlobalSettings {
+  credentials?: Record<
+    string,
+    {
+      label: string;
+      kind: import("./types").ManagedCredentialMetadata["kind"];
+    }
+  >;
   defaults: import("./types").ManagedDefaultOverrides | null;
   mcpServers: SetupResource<import("./types").ManagedMcpServer>[];
   searchProviders: SetupResource<import("./types").ManagedSearchProvider>[];

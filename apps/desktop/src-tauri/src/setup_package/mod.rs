@@ -3,6 +3,7 @@ mod archive;
 mod catalog;
 mod commands;
 mod configuration;
+mod credential_metadata;
 mod export;
 mod global_catalog;
 mod globals;

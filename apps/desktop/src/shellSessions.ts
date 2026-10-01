@@ -64,7 +64,10 @@ export function useShellSessions(scope: string | null, fixture: boolean) {
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    if (!scope || fixture) return;
+    if (!scope || fixture) {
+      setState({ scope: null, sessions: [], error: null });
+      return;
+    }
     async function load() {
       try {
         let after: string | null = null;
@@ -98,5 +101,9 @@ export function useShellSessions(scope: string | null, fixture: boolean) {
     };
   }, [scope, fixture, revision]);
   const current = state.scope === scope ? state : { sessions: [], error: null };
-  return { ...current, refresh: () => refresh((value) => value + 1) };
+  return {
+    ...current,
+    loading: Boolean(scope && !fixture && state.scope !== scope),
+    refresh: () => refresh((value) => value + 1),
+  };
 }

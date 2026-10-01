@@ -1389,6 +1389,12 @@ pub struct BootstrapRequest {
     /// runtime state; the sidecar never migrates an existing journal in place.
     #[serde(default)]
     pub plaintext_journal_for_development: bool,
+    /// Start this owned runtime in Risk Auto instead of Ask, including supervised restarts.
+    ///
+    /// Only the trusted native host selects this bootstrap policy. It never enters
+    /// managed YAML or public run requests, and does not widen tool or sandbox authority.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub risk_auto_approvals: bool,
     /// Optional app-private PEM bundle copied and validated by the native host.
     ///
     /// This path travels only on the authenticated local bootstrap channel and is
@@ -1414,6 +1420,12 @@ pub struct BootstrapRequest {
     /// The encoded key is accepted only through the inherited sidecar bootstrap
     /// channel and is never written into the generated managed configuration.
     pub worker_ipc_authentication: Option<SecretString>,
+}
+
+// Preserve the wire shape for hosts retaining Ask; an older child must reject
+// an explicit Risk Auto request rather than silently launch with a different mode.
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 impl BootstrapRequest {
@@ -1521,6 +1533,7 @@ impl fmt::Debug for BootstrapRequest {
                 "plaintext_journal_for_development",
                 &self.plaintext_journal_for_development,
             )
+            .field("risk_auto_approvals", &self.risk_auto_approvals)
             .field("ca_bundle_configured", &self.ca_bundle_path.is_some())
             .field("codex_auth_configured", &self.codex_auth_path.is_some())
             .field("runtime", &self.runtime)
@@ -1974,6 +1987,7 @@ mod tests {
             colossus_home: None,
             suppress_automatic_agent_instructions: false,
             plaintext_journal_for_development: false,
+            risk_auto_approvals: false,
             ca_bundle_path: None,
             codex_auth_path: None,
             runtime: ManagedRuntimeConfig {
@@ -2405,6 +2419,33 @@ mod tests {
         assert!(
             !decoded.suppress_automatic_agent_instructions,
             "an omitted private flag must preserve normal AGENTS.md loading"
+        );
+    }
+
+    #[test]
+    fn risk_auto_approvals_require_explicit_native_bootstrap_opt_in() {
+        let mut request = request();
+        assert!(!request.risk_auto_approvals);
+        assert!(
+            serde_json::to_value(&request)
+                .expect("Ask request JSON")
+                .get("risk_auto_approvals")
+                .is_none()
+        );
+        request.risk_auto_approvals = true;
+        request.validate().expect("Risk Auto bootstrap");
+        let wire = serde_json::to_value(&request).expect("request JSON");
+        let decoded: BootstrapRequest = serde_json::from_value(wire.clone()).expect("request");
+        assert!(decoded.risk_auto_approvals);
+        let mut legacy = wire;
+        legacy
+            .as_object_mut()
+            .expect("request object")
+            .remove("risk_auto_approvals");
+        let decoded: BootstrapRequest = serde_json::from_value(legacy).expect("legacy request");
+        assert!(
+            !decoded.risk_auto_approvals,
+            "older native hosts retain Ask"
         );
     }
 

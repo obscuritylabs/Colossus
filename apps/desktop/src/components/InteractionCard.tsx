@@ -96,6 +96,11 @@ export function InteractionCard({
             {error}
           </p>
         )}
+        <p className="muted">
+          {content.commandContext
+            ? "Review the full command and choose Allow once or Always allow for this workspace."
+            : "Review the action details and approve or deny in one window."}
+        </p>
         <div className="interaction-actions">
           <button
             className="button secondary"
@@ -123,7 +128,11 @@ export function InteractionCard({
               })
             }
           >
-            {submitting ? "Sending…" : "Allow once"}
+            {submitting
+              ? "Awaiting confirmation…"
+              : content.commandContext
+                ? "Review command…"
+                : "Review approval…"}
           </button>
         </div>
       </section>

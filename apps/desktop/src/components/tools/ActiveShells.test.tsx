@@ -56,4 +56,22 @@ describe("managed shell output", () => {
     expect(markup).not.toContain("<script>");
     expect(markup).not.toContain("<a href=");
   });
+  it("does not report zero while shell discovery is loading or unavailable", () => {
+    for (const state of [
+      { loading: true, error: null, label: "Loading�" },
+      { loading: false, error: "Disconnected", label: "Unavailable" },
+    ]) {
+      const markup = renderToStaticMarkup(
+        createElement(ActiveShells, {
+          scope: "target",
+          sessions: [],
+          refresh: vi.fn(),
+          ...state,
+        }),
+      );
+      expect(markup).toContain(state.label);
+      expect(markup).not.toContain("Active shells � 0");
+      expect(markup).not.toContain("No tracked shells");
+    }
+  });
 });

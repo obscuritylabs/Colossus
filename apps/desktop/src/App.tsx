@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import type { CSSProperties, FormEvent, ReactNode } from "react";
+import { DesktopStartup } from "./components/DesktopStartup";
 import { syncSavedSettings } from "./managed-settings-updates";
 import { terminalRequestForScope } from "./components/tools/TerminalDock";
 
@@ -148,6 +149,7 @@ import {
 } from "./sidebar-width";
 import { projectSpaceArchived, projectSpaceRestored } from "./space-lifecycle";
 import {
+  backgroundNotificationContent,
   backgroundRunNotifications,
   backgroundRunSnapshot,
   selectStatusBarPins,
@@ -978,6 +980,10 @@ export default function App() {
   const [releaseMetadata, setReleaseMetadata] =
     useState<DesktopReleaseMetadata>(INITIAL_RELEASE_METADATA);
   const desktopRef = useRef(desktop);
+  const [startup, setStartup] = useState<"loading" | "ready" | "failed">(
+    FIXTURE_MODE ? "ready" : "loading",
+  );
+  const [startupAttempt, setStartupAttempt] = useState(0);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [surface, setSurface] = useState<WorkspaceSurface>("work");
   const [settingsStartTab, setSettingsStartTab] = useState<
@@ -1147,11 +1153,29 @@ export default function App() {
       previous,
       chat.recentRuns,
     )) {
-      void notifyBackground(kind, runId).catch(() => {
-        // The run remains visible in Colossus if OS notifications are unavailable.
-      });
+      const run = chat.recentRuns.find(
+        (candidate) => candidate.runId === runId,
+      );
+      if (run === undefined) continue;
+      const targetId = desktop.selectedTargetId;
+      void backgroundNotificationContent(
+        run,
+        resolveThreadTitle(desktop.selectedSpaceId, run.sessionId, run.title),
+        chat.views.get(runId)?.output ?? "",
+        () => getRun(targetId ?? "", { runId }),
+      )
+        .then((content) => notifyBackground(kind, runId, content))
+        .catch(() => {
+          // The run remains visible in Colossus if OS notifications are unavailable.
+        });
     }
-  }, [chat.recentRuns]);
+  }, [
+    chat.recentRuns,
+    chat.views,
+    desktop.selectedSpaceId,
+    desktop.selectedTargetId,
+    resolveThreadTitle,
+  ]);
 
   const commitQueuedMessages = useCallback(
     (messages: readonly QueuedMessage[]) => {
@@ -1642,6 +1666,7 @@ export default function App() {
       .then(async (status) => {
         if (!cancelled) {
           await acceptDesktopStatus(status, true);
+          if (!cancelled) setStartup("ready");
         }
       })
       .catch((error: unknown) => {
@@ -1649,6 +1674,7 @@ export default function App() {
           const failure = commandError(error);
           markConnectionFailure(failure);
           setActionError(failure);
+          setStartup("failed");
         }
       })
       .finally(() => {
@@ -1660,10 +1686,10 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [acceptDesktopStatus, markConnectionFailure]);
+  }, [acceptDesktopStatus, markConnectionFailure, startupAttempt]);
 
   useEffect(() => {
-    if (FIXTURE_MODE) {
+    if (FIXTURE_MODE || startup !== "ready") {
       return;
     }
     let cancelled = false;
@@ -1698,7 +1724,7 @@ export default function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [acceptDesktopStatus]);
+  }, [acceptDesktopStatus, startup]);
 
   useEffect(() => {
     const query = deferredWorkQuery.trim();
@@ -5014,6 +5040,25 @@ export default function App() {
       desktop.managedState,
       desktop.executionBoundary,
     );
+
+  // Placeholder settings are not evidence that this is a first-time install.
+  // Keep the neutral surface until initialization and the first work list settle.
+  if (startup !== "ready") {
+    return (
+      <DesktopStartup
+        error={
+          startup === "failed"
+            ? actionError?.message || "Your saved settings could not be loaded."
+            : undefined
+        }
+        onRetry={() => {
+          setActionError(null);
+          setStartup("loading");
+          setStartupAttempt((attempt) => attempt + 1);
+        }}
+      />
+    );
+  }
 
   return (
     <div

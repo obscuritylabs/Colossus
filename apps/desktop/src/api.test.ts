@@ -57,6 +57,7 @@ import {
   managedMcpOAuthStatus,
   listWorkspaceDirectory,
   listRuns,
+  notifyBackground,
   openTerminal,
   resizeTerminal,
   reenterManagedCredential,
@@ -99,6 +100,19 @@ describe("desktop API target routing", () => {
     tauri.invoke.mockReset();
     tauri.invoke.mockResolvedValue(undefined);
     tauri.channels.length = 0;
+  });
+
+  it("passes bounded notification content to the native notification command", async () => {
+    const content = {
+      threadTitle: "Deploy service",
+      outputPreview: "Deployment checks passed.",
+    };
+    await notifyBackground("work_completed", "run-1", content);
+    expect(tauri.invoke).toHaveBeenCalledWith("notify_background", {
+      kind: "work_completed",
+      runId: "run-1",
+      content,
+    });
   });
 
   it("passes the visible appearance to native credential entry without secret fields", async () => {

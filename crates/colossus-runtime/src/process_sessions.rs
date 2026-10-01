@@ -208,7 +208,7 @@ impl ProcessSessions {
         let instructions = active_instruction_snapshot();
         let plugins = active_plugin_catalog().unwrap_or_default();
         let boundary = colossus_policy::SandboxBoundaryScope::capture();
-        tokio::spawn(scope_run_snapshots(instructions, plugins, boundary.scope(async move {
+        let mut supervisor = Box::pin(scope_run_snapshots(instructions, plugins, boundary.scope(async move {
             let _lease = lease;
             let _isolated = isolated;
             let _unwind = SessionTaskGuard { session: Arc::clone(&job), active: Arc::clone(&active) };
@@ -234,7 +234,25 @@ impl ProcessSessions {
             job.done.store(true, Ordering::Release);
             job.changed.notify_waiters();
         })));
-        session.wait(0, wait_ms, RETAINED_OUTPUT).await
+        // Task-local public/interactive approval routing belongs to the caller.
+        // Resolve approval here; transfer only an authorized invocation to the
+        // detached supervisor. Yield time never expires an unanswered approval.
+        loop {
+            let notified = session.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if session.executing.load(Ordering::Acquire) {
+                tokio::spawn(supervisor);
+                break;
+            }
+            tokio::select! {
+                () = &mut supervisor => break,
+                () = notified => {}
+            }
+        }
+        session
+            .wait_for_snapshot(0, wait_ms, RETAINED_OUTPUT, true)
+            .await
     }
 
     fn authorized(
@@ -448,6 +466,7 @@ impl StreamingEffectExecutor for ManagedExecutor {
         // Once the adapter starts, await its authenticated cleanup result even
         // when cancellation races the first Started frame.
         self.session.executing.store(true, Ordering::Release);
+        self.session.changed.notify_waiters();
         let mut launch_observer = LaunchObserver {
             session: &self.session,
             inner: observer,
@@ -611,7 +630,7 @@ impl ManagedSession {
                     if uncertain {
                         "Process result or cleanup could not be confirmed through policy release"
                     } else {
-                        "Process was not launched: authorization, approval, or startup failed"
+                        launch_failure_reason(&error)
                     }
                     .into(),
                 );
@@ -628,20 +647,39 @@ impl ManagedSession {
         wait_ms: u64,
         limit: usize,
     ) -> Result<ProcessSessionSnapshot, ToolError> {
+        self.wait_for_snapshot(after, wait_ms, limit, false).await
+    }
+
+    async fn wait_for_snapshot(
+        &self,
+        after: u64,
+        wait_ms: u64,
+        limit: usize,
+        until_exit: bool,
+    ) -> Result<ProcessSessionSnapshot, ToolError> {
         if wait_ms > 30_000 || !(16_384..=RETAINED_OUTPUT).contains(&limit) {
             return Err(process_failure(
                 "wait must be 0..=30000 ms and output must be 16384..=65536 bytes",
             ));
         }
-        let notified = self.changed.notified();
-        tokio::pin!(notified);
-        notified.as_mut().enable();
-        let waiting = {
-            let current = state(self);
-            current.summary.output_sequence <= after && current.summary.status.is_active()
-        };
-        if waiting && wait_ms > 0 {
-            let _ = tokio::time::timeout(Duration::from_millis(wait_ms), notified).await;
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(wait_ms);
+        loop {
+            let notified = self.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let ready = {
+                let current = state(self);
+                !current.summary.status.is_active()
+                    || (!until_exit && current.summary.output_sequence > after)
+            };
+            if ready || wait_ms == 0 {
+                break;
+            }
+            // Launch waits through progress until exit or its original deadline.
+            // Read/wait consumers still wake for released output, but not Started.
+            if tokio::time::timeout_at(deadline, notified).await.is_err() {
+                break;
+            }
         }
         let current = state(self);
         if after > current.summary.output_sequence {
@@ -779,6 +817,21 @@ impl GatewayToolExecutor {
     }
 }
 
+fn launch_failure_reason(error: &GatewayError) -> &'static str {
+    match error {
+        GatewayError::Approval(_) => "Process was not launched: approval was denied",
+        GatewayError::Policy(_) => {
+            "Process was not launched: the policy or approval service failed"
+        }
+        GatewayError::Denied(_) | GatewayError::Safety(_) => {
+            "Process was not launched: blocked by policy or sandbox permissions"
+        }
+        GatewayError::Journal(_) => "Process was not launched: authorization could not be recorded",
+        GatewayError::Contract(_) => "Process was not launched: invalid process request",
+        _ => "Process was not launched: process startup failed",
+    }
+}
+
 struct SessionTaskGuard {
     session: Arc<ManagedSession>,
     active: Arc<AtomicUsize>,
@@ -787,9 +840,12 @@ impl Drop for SessionTaskGuard {
     fn drop(&mut self) {
         if !self.session.done.swap(true, Ordering::AcqRel) {
             self.session.control.cancel();
-            self.session.complete(Err(GatewayError::OutcomeUnknown(
-                "managed session task interrupted".into(),
-            )));
+            let error = if self.session.executing.load(Ordering::Acquire) {
+                GatewayError::OutcomeUnknown("managed session task interrupted".into())
+            } else {
+                GatewayError::Denied("managed session cancelled before launch".into())
+            };
+            self.session.complete(Err(error));
             self.active.fetch_sub(1, Ordering::AcqRel);
             self.session.changed.notify_waiters();
         }

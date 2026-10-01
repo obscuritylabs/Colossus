@@ -50,7 +50,7 @@ pub(super) fn import(
             settings
                 .global_configuration
                 .credentials
-                .push(globals::missing_credential(&slot, &id));
+                .push(super::credential_metadata::missing(&next, &slot, &id));
         }
         bindings.insert(slot, id);
     }

@@ -42,3 +42,13 @@
   gap: 1rem;
   background: var(--surface);
 }
+.command-review-target {
+  white-space: pre-wrap;
+}
+.command-review-scope {
+  color: var(--text-secondary);
+}
+
+.command-review-window .command-approval-scroll {
+  max-height: clamp(8rem, 30vh, 22rem);
+}

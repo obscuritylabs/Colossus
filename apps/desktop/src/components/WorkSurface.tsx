@@ -979,11 +979,19 @@ export function WorkSurface({
           {
             id: "shells" as const,
             label: "Active shells",
-            description: "Managed commands and background servers",
+            description: shells.error
+              ? "Shell sessions unavailable"
+              : shells.loading
+                ? "Loading shell sessions…"
+                : "Managed commands and background servers",
             icon: IconTerminal2,
-            count: shells.sessions.filter((session) =>
-              shellIsActive(session.status),
-            ).length,
+            ...(shells.loading || shells.error
+              ? {}
+              : {
+                  count: shells.sessions.filter((session) =>
+                    shellIsActive(session.status),
+                  ).length,
+                }),
           },
         ]
       : []),
@@ -1141,6 +1149,8 @@ export function WorkSurface({
               </button>
             ) : null}
             {browserScope &&
+            !shells.error &&
+            !shells.loading &&
             shells.sessions.some((session) => shellIsActive(session.status)) ? (
               <button
                 type="button"
@@ -1650,6 +1660,7 @@ export function WorkSurface({
                 scope={shellScope}
                 sessions={shells.sessions}
                 error={shells.error}
+                loading={shells.loading}
                 refresh={shells.refresh}
               />
             ) : null}

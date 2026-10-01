@@ -124,7 +124,13 @@ impl GatewayToolExecutor {
                     return Ok(ToolResult {
                         call_id: call.call_id,
                         name: call.name,
-                        exit_code: snapshot.session.exit_code.unwrap_or(0),
+                        exit_code: match snapshot.session.status {
+                            colossus_contracts::ProcessSessionStatus::Exited => {
+                                snapshot.session.exit_code.unwrap_or(1)
+                            }
+                            status if status.is_active() => 0,
+                            _ => 1,
+                        },
                         output: serde_json::to_string(&snapshot)
                             .map_err(|error| ToolError::Failed(error.to_string()))?,
                     });

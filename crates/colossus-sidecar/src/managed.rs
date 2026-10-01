@@ -290,10 +290,15 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     // for the complete worker lifetime. This prevents inode reuse while the runtime's
     // own retained descriptor and per-effect identity checks are active.
     let _workspace_binding = workspace;
+    let approval_mode = if request.risk_auto_approvals {
+        WorkerApprovalMode::RiskAuto
+    } else {
+        WorkerApprovalMode::Ask
+    };
     let server = if let Some(authentication) = worker_authentication {
         WorkerServer::open_with_mode_at_workspace_provider_credentials_codex_auth_and_authentication(
             &config,
-            WorkerApprovalMode::Ask,
+            approval_mode,
             runtime_options,
             provider_credentials,
             codex_auth,
@@ -302,7 +307,7 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     } else {
         WorkerServer::open_with_mode_at_workspace_and_provider_credentials_and_codex_auth(
             &config,
-            WorkerApprovalMode::Ask,
+            approval_mode,
             runtime_options,
             provider_credentials,
             codex_auth,

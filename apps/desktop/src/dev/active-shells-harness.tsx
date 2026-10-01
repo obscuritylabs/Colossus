@@ -25,7 +25,15 @@ export function mount(session: ShellSession) {
 
 function PollingHarness({ scope }: { scope: string | null }) {
   const shells = useShellSessions(scope, false);
-  return <output data-testid="shell-polling">{shells.sessions.length}</output>;
+  return (
+    <output
+      data-testid="shell-polling"
+      data-loading={shells.loading}
+      data-error={shells.error ?? ""}
+    >
+      {shells.sessions.length}
+    </output>
+  );
 }
 
 export function mountPolling() {
@@ -41,5 +49,23 @@ export function mountPolling() {
       root.unmount();
       host.remove();
     },
+  };
+}
+
+function LiveHarness({ scope }: { scope: string }) {
+  const shells = useShellSessions(scope, false);
+  return <ActiveShells {...shells} scope={scope} />;
+}
+
+export function mountLive(scope: string) {
+  const host = document.createElement("div");
+  host.style.cssText =
+    "position:fixed;inset:0;z-index:9999;background:var(--surface);overflow:auto";
+  document.body.append(host);
+  const root = createRoot(host);
+  root.render(<LiveHarness scope={scope} />);
+  return () => {
+    root.unmount();
+    host.remove();
   };
 }

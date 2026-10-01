@@ -12,11 +12,13 @@ export function ActiveShells({
   scope,
   sessions,
   error,
+  loading = false,
   refresh,
 }: {
   scope: string;
   sessions: ShellSession[];
   error: string | null;
+  loading?: boolean;
   refresh: () => void;
 }) {
   const [revision, retry] = useState(0);
@@ -115,7 +117,12 @@ export function ActiveShells({
       <div className="shells-toolbar">
         <strong>
           Active shells ·{" "}
-          {sessions.filter((session) => shellIsActive(session.status)).length}
+          {error
+            ? "Unavailable"
+            : loading
+              ? "Loading…"
+              : sessions.filter((session) => shellIsActive(session.status))
+                  .length}
         </strong>
         <button
           type="button"
@@ -135,7 +142,13 @@ export function ActiveShells({
       {error || localError ? <p role="alert">{error ?? localError}</p> : null}
       <div className="shells-list" aria-label="Managed shell sessions">
         {sessions.length === 0 ? (
-          <p>No tracked shells in this runtime.</p>
+          <p role="status">
+            {loading
+              ? "Loading shell sessions…"
+              : error
+                ? "The shell list could not be loaded."
+                : "No tracked shells in this runtime."}
+          </p>
         ) : (
           [...sessions]
             .sort(

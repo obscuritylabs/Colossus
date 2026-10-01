@@ -28,6 +28,9 @@ pub(crate) struct SetupResource<T> {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SetupGlobals {
+    /// Presentation only: tokens and machine-specific credential IDs are never portable.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub credentials: BTreeMap<String, super::credential_metadata::PortableCredential>,
     #[serde(default)]
     pub defaults: Option<DefaultOverridesSetting>,
     #[serde(default)]
@@ -136,6 +139,7 @@ impl SetupGlobals {
     pub(super) fn validate(&self) -> Result<(), CommandErrorDto> {
         validate_portable_defaults(self.defaults.as_ref())?;
         let slots = self.credential_slots();
+        super::credential_metadata::validate(&self.credentials, &slots)?;
         if slots.len() > 128 || slots.iter().any(|id| !valid_slot(id)) {
             return Err(invalid(
                 "Use env:NAME placeholders for portable MCP and search credentials.",

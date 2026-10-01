@@ -593,6 +593,8 @@ impl AppState {
             return;
         }
         *selected = target_id;
+        // Never expose the old workspace while the new target is activating.
+        self.terminal_workspace.write().await.take();
         self.browser.selection_changed(selected.clone());
         self.run_targets.write().await.clear();
         let epoch = self
@@ -1194,6 +1196,10 @@ impl AppState {
     #[cfg(test)]
     pub(crate) async fn approval_mode_change_guard(&self) -> RwLockWriteGuard<'_, ()> {
         self.approval_mode_run_guard.write().await
+    }
+
+    pub(crate) async fn approval_guard(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.approval_guard.lock().await
     }
 
     pub(crate) fn try_approval_guard(&self) -> Option<tokio::sync::MutexGuard<'_, ()>> {
@@ -1982,6 +1988,14 @@ mod tests {
             restarted.config,
             Some("/private/tmp/config-2.yaml".into()),
             "a new TUI must receive only the current runtime configuration"
+        );
+        state.begin_managed_lifecycle_for("space-other").await;
+        state.select_target(Some("space-other".into())).await;
+        let (_, workspace, selected_managed) = state.terminal_workspace_context().await;
+        assert!(selected_managed);
+        assert!(
+            workspace.is_none(),
+            "selection must clear the previous workspace before activation"
         );
     }
 
