@@ -1488,6 +1488,8 @@ impl AgentRunApi for RuntimeAgentRunApi {
         request: colossus_api::StopProcessSessionRequest,
     ) -> ApiResult<colossus_api::ProcessSessionSnapshot> {
         caller.require_scope(scopes::RUNS_CONTROL)?;
+        // Stop returns a snapshot containing retained released logs.
+        caller.require_scope(scopes::RUNS_READ)?;
         if Uuid::parse_str(&request.session_id).is_err() {
             return Err(ApiError::invalid(
                 ApiErrorReason::InvalidArgument,

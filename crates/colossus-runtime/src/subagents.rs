@@ -157,19 +157,25 @@ impl Runtime {
                     let inherited =
                         compose_plugins(&catalog.records, &base, &selections, &[], true)?
                             .instructions;
-                    Ok((snapshot, catalog, selections, inherited))
+                    let initiator = subagent_initiator(
+                        self.journal.as_ref(),
+                        &job.parent_run_id,
+                        &job.session_id,
+                    )?;
+                    Ok((snapshot, catalog, selections, inherited, initiator))
                 })();
-                let (snapshot, catalog, selections, inherited_instructions) = match prepared {
-                    Ok(prepared) => prepared,
-                    Err(error) => {
-                        let terminal: SubagentJob = serde_json::from_value(self.execute_work_operation(WorkOperation::SubagentStop {
+                let (snapshot, catalog, selections, inherited_instructions, initiator) =
+                    match prepared {
+                        Ok(prepared) => prepared,
+                        Err(error) => {
+                            let terminal: SubagentJob = serde_json::from_value(self.execute_work_operation(WorkOperation::SubagentStop {
                             id: job.id.clone(), status: SubagentStatus::Failed,
-                            error: bounded_tool_text(&format!("Captured plugin or instruction content is unavailable; start a new run. {error}"), 4096),
+                            error: bounded_tool_text(&format!("Captured delegation context is unavailable; start a new run. {error}"), 4096),
                         }).await?).map_err(|error| RuntimeError::Config(error.to_string()))?;
-                        self.emit_subagent_update(&terminal).await;
-                        continue;
-                    }
-                };
+                            self.emit_subagent_update(&terminal).await;
+                            continue;
+                        }
+                    };
                 set.spawn(
                     scope_run_snapshots(snapshot, catalog, async move {
                         let child_instructions = format!(
@@ -182,7 +188,7 @@ impl Runtime {
                             format!("{inherited_instructions}\n\n{child_instructions}")
                         };
                         let result = agent
-                            .run_subagent_with_skills(
+                            .run_subagent_with_skills_as(
                                 &job.role,
                                 &instructions,
                                 &job.task,
@@ -191,6 +197,7 @@ impl Runtime {
                                 &job.id,
                                 job.allowed_tools.as_deref(),
                                 &selections,
+                                initiator,
                             )
                             .await;
                         (job.id, result)
@@ -287,5 +294,90 @@ impl Runtime {
                 })
                 .await;
         }
+    }
+}
+
+fn subagent_initiator(
+    journal: &dyn EventJournal,
+    parent_run_id: &str,
+    session_id: &str,
+) -> Result<Actor, RuntimeError> {
+    // Only the trusted manual queue path creates this lineage; model delegation
+    // always carries the UUID of an already-started parent run.
+    if parent_run_id
+        .strip_prefix("manual-")
+        .is_some_and(|id| Uuid::parse_str(id).is_ok())
+    {
+        return Ok(terminal_actor());
+    }
+    // The first prepared request records the authenticated initiator before any
+    // delegate tool can execute. Read a bounded canonical prefix, so completed
+    // parents and explicitly requeued children retain the same owner.
+    journal
+        .read_stream_from(&format!("run:{parent_run_id}"), 0, 16)?
+        .into_iter()
+        .find(|event| {
+            event.event_type == "model.request.prepared.v1"
+                && event.context.run_id.as_deref() == Some(parent_run_id)
+                && event.context.session_id.as_deref() == Some(session_id)
+                && matches!(
+                    event.actor.actor_type,
+                    ActorType::Application | ActorType::User
+                )
+                && !event.actor.id.is_empty()
+        })
+        .map(|event| event.actor)
+        .ok_or_else(|| {
+            RuntimeError::Config("Delegated run has no canonical parent initiator.".into())
+        })
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    use colossus_testkit::InMemoryEventJournal;
+
+    #[test]
+    fn delegated_initiator_is_canonical_and_survives_parent_completion() {
+        let journal = InMemoryEventJournal::default();
+        let run = Uuid::now_v7().to_string();
+        assert!(subagent_initiator(&journal, &run, "chat").is_err());
+        let owner = Actor {
+            actor_type: ActorType::Application,
+            id: "app:owner".into(),
+        };
+        let context = ExecutionContext {
+            run_id: Some(run.clone()),
+            session_id: Some("chat".into()),
+            ..ExecutionContext::default()
+        };
+        for (version, event_type, actor) in [
+            (0, "model.request.prepared.v1", owner.clone()),
+            (1, "run.completed.v1", system_actor("test")),
+        ] {
+            journal
+                .append(NewEvent {
+                    stream_id: format!("run:{run}"),
+                    expected_stream_version: version,
+                    event_version: 1,
+                    classification: EventClassification::Domain,
+                    event_type: event_type.into(),
+                    actor,
+                    context: context.clone(),
+                    payload: json!({}),
+                })
+                .expect("parent evidence");
+        }
+        assert_eq!(
+            subagent_initiator(&journal, &run, "chat").expect("completed parent owner"),
+            owner
+        );
+        assert!(subagent_initiator(&journal, &run, "other-chat").is_err());
+        assert!(subagent_initiator(&journal, "manual-invalid", "chat").is_err());
+        assert_eq!(
+            subagent_initiator(&journal, &format!("manual-{}", Uuid::now_v7()), "chat")
+                .expect("trusted manual queue"),
+            terminal_actor()
+        );
     }
 }

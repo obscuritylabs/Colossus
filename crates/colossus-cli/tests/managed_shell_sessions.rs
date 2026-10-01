@@ -439,28 +439,7 @@ async fn background_survives_final_reply_and_later_turn_while_run_jobs_are_reape
         }
         requests
     });
-    let mut config = RuntimeConfig::offline_template(root.join("state.redb"));
-    config.use_ephemeral_storage();
-    config.sandbox = SandboxConfig {
-        helper_path: Some(env!("CARGO_BIN_EXE_colossus").into()),
-        max_concurrency: 4,
-        timeout_ms: 30000,
-        ..SandboxConfig::default()
-    };
-    config.memory.index_enabled = false;
-    config.workflows.repository = root.join("workflows");
-    config.workflows.user = root.join("user-workflows");
-    let mut value = serde_json::to_value(config).expect("config");
-    value["providers"] = json!({"profiles":{"test":{"kind":"open_ai_compatible","baseUrl":format!("{origin}/v1"),"credentialReference":null,"timeoutMs":10000}}});
-    value["models"] = json!({"profiles":{"test":{"providerProfile":"test","model":"test-model","contextWindowTokens":65536,"maxOutputTokens":4096,"capabilities":{"toolCalls":true,"streaming":true}}},"roles":{"primary":"test"}});
-    let config = RuntimeConfig::from_yaml(&value.to_string()).expect("valid config");
-    let runtime = Runtime::open_with_options(
-        &config,
-        Arc::new(DenyApproval),
-        None,
-        RuntimeOpenOptions::for_workspace(&root).expect("workspace"),
-    )
-    .expect("runtime");
+    let runtime = managed_runtime(&root, &origin);
     let first = runtime
         .run_model("primary", "Execute the requested test tool.", "start")
         .await
@@ -571,4 +550,197 @@ async fn background_survives_final_reply_and_later_turn_while_run_jobs_are_reape
         requests[3].to_string().contains(&background.id),
         "later turn must observe the same process identity"
     );
+}
+
+fn managed_runtime(root: &Path, origin: &str) -> Runtime {
+    let mut config = RuntimeConfig::offline_template(root.join("state.redb"));
+    config.use_ephemeral_storage();
+    config.sandbox = SandboxConfig {
+        helper_path: Some(env!("CARGO_BIN_EXE_colossus").into()),
+        max_concurrency: 4,
+        timeout_ms: 30000,
+        ..SandboxConfig::default()
+    };
+    config.memory.index_enabled = false;
+    config.workflows.repository = root.join("workflows");
+    config.workflows.user = root.join("user-workflows");
+    let mut value = serde_json::to_value(config).expect("config");
+    value["providers"] = json!({"profiles":{"test":{"kind":"open_ai_compatible","baseUrl":format!("{origin}/v1"),"credentialReference":null,"timeoutMs":10000}}});
+    value["models"] = json!({"profiles":{"test":{"providerProfile":"test","model":"test-model","contextWindowTokens":65536,"maxOutputTokens":4096,"capabilities":{"toolCalls":true,"streaming":true}}},"roles":{"primary":"test","subagent_default":"test"}});
+    let config = RuntimeConfig::from_yaml(&value.to_string()).expect("valid config");
+    Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(root).expect("workspace"),
+    )
+    .expect("runtime")
+}
+
+struct IgnoreRunEvents;
+#[async_trait]
+impl colossus_ports::RunEventObserver for IgnoreRunEvents {
+    async fn observe(
+        &mut self,
+        _: colossus_contracts::RunEventEnvelope,
+    ) -> Result<(), colossus_ports::ModelProviderError> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn delegated_background_shells_keep_application_ownership_after_parent_completion() {
+    let directory = tempfile::tempdir().expect("directory");
+    let root = directory.path().canonicalize().expect("workspace");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("provider");
+    let origin = format!("http://{}", listener.local_addr().expect("address"));
+    let provider = thread::spawn(move || {
+        listener.set_nonblocking(true).expect("nonblocking");
+        let mut parent_requests = 0;
+        let mut child_requests = 0;
+        for _ in 0..4 {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "provider request timed out");
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept: {error}"),
+                }
+            };
+            stream.set_nonblocking(false).expect("blocking");
+            let request = read_request(&mut stream);
+            let parent = request["tools"]
+                .as_array()
+                .expect("tools")
+                .iter()
+                .any(|tool| tool["function"]["name"] == "agent_delegate");
+            let response = if parent {
+                parent_requests += 1;
+                if parent_requests == 1 {
+                    tool(
+                        "agent_delegate",
+                        json!({"task":"start a delegated background shell"}),
+                    )
+                } else {
+                    final_answer()
+                }
+            } else {
+                child_requests += 1;
+                if child_requests % 2 == 1 {
+                    tool(
+                        "shell_run",
+                        json!({"command":"printf delegated-output; /bin/sleep 30","justification":"Verify delegated background ownership","lifetime":"workspace","yield_time_ms":10000,"timeout_ms":30000}),
+                    )
+                } else {
+                    final_answer()
+                }
+            };
+            write!(stream, "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}", response.len(), response).expect("response");
+        }
+        assert_eq!((parent_requests, child_requests), (2, 2));
+    });
+    let runtime = managed_runtime(&root, &origin);
+    let owner = Actor {
+        actor_type: ActorType::Application,
+        id: "app:delegated-shell-owner".into(),
+    };
+    runtime
+        .run_model_with_skills_stream_controlled_as(
+            "primary",
+            "Execute the requested test tool.",
+            "delegate",
+            Some(4),
+            None,
+            &[],
+            &[],
+            owner.clone(),
+            &mut IgnoreRunEvents,
+            &colossus_ports::RunControl::default(),
+        )
+        .await
+        .expect("application parent and delegated child");
+    let first = runtime
+        .list_process_sessions(owner.clone(), None)
+        .await
+        .expect("owned shells");
+    assert_eq!(
+        first.sessions.len(),
+        1,
+        "application must retain its child's shell"
+    );
+    let background = &first.sessions[0];
+    assert_eq!(background.owner, owner);
+    assert_eq!(background.status, ProcessSessionStatus::Running);
+    let child = background.subagent_id.as_deref().expect("child lineage");
+    assert!(
+        runtime
+            .list_process_sessions(actor(), None)
+            .await
+            .expect("terminal shells")
+            .sessions
+            .is_empty()
+    );
+    let foreign = Actor {
+        id: "app:other-shell-owner".into(),
+        ..owner.clone()
+    };
+    assert!(
+        runtime
+            .list_process_sessions(foreign.clone(), None)
+            .await
+            .expect("foreign shells")
+            .sessions
+            .is_empty()
+    );
+    assert!(
+        runtime
+            .stop_process_session(foreign, background.id.clone())
+            .await
+            .is_err()
+    );
+    let job = runtime.get_subagent(child).expect("job").expect("child");
+    assert_eq!(job.status, colossus_contracts::SubagentStatus::Completed);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let snapshot = runtime
+                .read_process_session(owner.clone(), background.id.clone(), 0, 100, 65536)
+                .await
+                .expect("owner can read live child output");
+            if snapshot
+                .chunks
+                .iter()
+                .any(|chunk| chunk.stdout.contains("delegated-output"))
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("child emits output before stop");
+    let sessions = first.sessions;
+    for session in &sessions {
+        assert_eq!(session.owner, owner);
+        runtime
+            .stop_process_session(owner.clone(), session.id.clone())
+            .await
+            .expect("owner can stop");
+    }
+    runtime.drain_process_sessions().await;
+    for session in sessions {
+        let snapshot = runtime
+            .read_process_session(owner.clone(), session.id, 0, 0, 65536)
+            .await
+            .expect("owner can read");
+        assert_eq!(snapshot.session.status, ProcessSessionStatus::Stopped);
+        assert!(
+            snapshot
+                .chunks
+                .iter()
+                .any(|chunk| chunk.stdout.contains("delegated-output"))
+        );
+    }
+    provider.join().expect("provider thread");
 }

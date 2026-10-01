@@ -26,6 +26,7 @@ pub struct ReadProcessSessionRequest {
     pub max_output_bytes: u32,
 }
 /// Stop is idempotent for an exact caller-owned process identity.
+/// Its log-bearing response requires both `runs:control` and `runs:read`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StopProcessSessionRequest {

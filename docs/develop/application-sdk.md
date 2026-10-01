@@ -170,9 +170,10 @@ into a capability-confused deputy.
 ## Managed shell inspection
 
 `AgentRunService` also exposes `ListProcessSessions`, `ReadProcessSession`, and
-`StopProcessSession`. Reads require `runs:read`; stop requires `runs:control` and an
-exact caller-owned opaque process identity. The same application cannot select another
-workspace through these requests. List/read/stop still pass through the runtime effect
+`StopProcessSession`. Reads require `runs:read`; stop requires both `runs:control`
+and `runs:read` because its response includes retained logs, plus an exact caller-owned
+opaque process identity. Delegated shells retain the parent application owner. The same
+application cannot select another workspace through these requests. List/read/stop still pass through the runtime effect
 gateway. `ReadProcessSession` supports an exclusive output cursor and a wait bounded to
 30 seconds, allowing finite polling and reconnect without resetting process deadlines.
 Discovery, log reads, and Stop use separate bounded admission pools, so a waiting read

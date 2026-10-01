@@ -8,11 +8,8 @@ pub(super) async fn inspection_and_control_require_current_scopes(runtime: Arc<R
     let service = service(runtime, RunAdmissionConfig::default());
     let read_only =
         caller_with_exact_scopes("app:shell-reader", "shell-reader", &[scopes::RUNS_READ]);
-    let no_read = caller_with_exact_scopes(
-        "app:shell-control",
-        "shell-control",
-        &[scopes::RUNS_CONTROL],
-    );
+    let no_read =
+        caller_with_exact_scopes("app:shell-reader", "shell-control", &[scopes::RUNS_CONTROL]);
     assert!(
         service
             .list_process_sessions(&read_only, ListProcessSessionsRequest { after: None })
@@ -48,6 +45,16 @@ pub(super) async fn inspection_and_control_require_current_scopes(runtime: Arc<R
         )
         .await
         .expect_err("read cannot stop");
+    assert_eq!(denied.reason, ApiErrorReason::ScopeDenied);
+    let denied = service
+        .stop_process_session(
+            &no_read,
+            StopProcessSessionRequest {
+                session_id: Uuid::now_v7().to_string(),
+            },
+        )
+        .await
+        .expect_err("control alone cannot read retained logs through Stop");
     assert_eq!(denied.reason, ApiErrorReason::ScopeDenied);
     for (wait_ms, max_output_bytes) in [(30001, 65536), (0, 65537), (0, 16383)] {
         let error = service
