@@ -10,6 +10,83 @@ use std::{
 
 pub(super) const MAX_PROCESS_FRAME_BYTES: usize = 32 * 1024;
 const OUTPUT_CHUNK_BYTES: usize = 4096;
+// Started + Completed metadata, including the longest built-in backend/status.
+// Output budgets include JSON/base64 framing, not just raw stdout/stderr.
+pub(super) const PROCESS_RESULT_RESERVE: usize = 512;
+
+pub(super) fn process_result_reserve(obligations: &PolicyObligations) -> usize {
+    if !matches!(
+        obligations.sandbox_backend.as_str(),
+        "native" | "windows_job" | "oci"
+    ) {
+        return PROCESS_RESULT_RESERVE;
+    }
+    // The parent adds native/Windows proxy origins; OCI adds them in the helper.
+    // Reserve their full bounded evidence before either path captures any logs.
+    let origins = if obligations
+        .network_destinations
+        .iter()
+        .any(|origin| origin == "*")
+    {
+        MAX_OBSERVED_ORIGINS * (MAX_OBSERVED_ORIGIN_JSON_BYTES + 1)
+    } else {
+        let mut sizes = obligations
+            .network_destinations
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|origin| {
+                serde_json::to_vec(origin)
+                    .map_or(usize::MAX, |bytes| bytes.len())
+                    .min(MAX_OBSERVED_ORIGIN_JSON_BYTES)
+                    .saturating_add(1)
+            })
+            .collect::<Vec<_>>();
+        sizes.sort_unstable_by(|a, b| b.cmp(a));
+        sizes.into_iter().take(MAX_OBSERVED_ORIGINS).sum()
+    };
+    PROCESS_RESULT_RESERVE + origins
+}
+
+pub(super) fn process_capture_limit(output_limit: usize, metadata_reserve: usize) -> usize {
+    // Two base64 fields can each add padding. Reserve before converting to raw bytes.
+    output_limit
+        .saturating_sub(metadata_reserve)
+        .saturating_sub(8)
+        / 4
+        * 3
+}
+
+fn bounded_output_frame(
+    mut frame: ProcessFrame,
+    budget: usize,
+) -> Result<Option<(Vec<u8>, bool)>, SandboxHelperError> {
+    let complete = serde_json::to_vec(&frame)?;
+    if complete.len() < budget {
+        return Ok(Some((complete, false)));
+    }
+    let ProcessFrame::Output {
+        stdout_base64,
+        stderr_base64,
+    } = &mut frame
+    else {
+        return Err(SandboxHelperError::Execution(
+            "expected output frame".into(),
+        ));
+    };
+    // Base64 groups are independently decodable. Keep a prefix even when the
+    // first frame is larger than a small requested budget.
+    let overhead = complete.len() - stdout_base64.len() - stderr_base64.len() + 1;
+    let mut available = budget.saturating_sub(overhead) / 4 * 4;
+    if available == 0 {
+        return Ok(None);
+    }
+    let stdout_len = stdout_base64.len().min(available);
+    stdout_base64.truncate(stdout_len);
+    available -= stdout_len;
+    stderr_base64.truncate(stderr_base64.len().min(available));
+    Ok(Some((serde_json::to_vec(&frame)?, true)))
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -39,7 +116,10 @@ pub(super) struct HelperControl {
 }
 
 impl HelperControl {
-    pub(super) fn new(mut input: impl Read + Send + 'static, output_limit: u64) -> Self {
+    pub(super) fn new(
+        mut input: impl Read + Send + 'static,
+        obligations: &PolicyObligations,
+    ) -> Self {
         let cancelled = Arc::new(AtomicBool::new(false));
         let signal = Arc::clone(&cancelled);
         thread::spawn(move || {
@@ -64,9 +144,9 @@ impl HelperControl {
             cancelled,
             truncated: AtomicBool::new(false),
             output_budget: Mutex::new(
-                usize::try_from(output_limit)
+                usize::try_from(obligations.max_output_bytes)
                     .unwrap_or(usize::MAX)
-                    .saturating_sub(4096),
+                    .saturating_sub(process_result_reserve(obligations)),
             ),
             sender: Some(sender),
             writer: Some(writer),
@@ -98,10 +178,16 @@ impl HelperControl {
                 .output_budget
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if self.is_truncated() || bytes.len() > *budget {
-                self.truncated.store(true, Ordering::Release);
+            if self.is_truncated() {
                 return Ok(());
             }
+            let Some((bounded, truncated)) = bounded_output_frame(frame, *budget)? else {
+                self.truncated.store(true, Ordering::Release);
+                return Ok(());
+            };
+            bytes = bounded;
+            bytes.push(b'\n');
+            self.truncated.store(truncated, Ordering::Release);
             *budget -= bytes.len();
             match sender.try_send(bytes) {
                 Ok(()) => {}
@@ -239,6 +325,178 @@ pub(super) fn relay_native_frames(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn accepted_small_budgets_retain_both_streams_and_bound_framing() {
+        for limit in [1024, 4096] {
+            let result = SandboxJobResult {
+                backend: "windows-appcontainer".into(),
+                exit_code: Some(i32::MIN),
+                success: false,
+                timed_out: false,
+                stopped: false,
+                resource_limit_exceeded: None,
+                output_truncated: true,
+                stdout_base64: String::new(),
+                stderr_base64: String::new(),
+                observed_origins: Vec::new(),
+            };
+            let metadata = serde_json::to_vec(&ProcessFrame::Started {
+                deadline_ms: u64::MAX,
+                timeout_ms: u64::MAX,
+                max_output_bytes: u64::MAX,
+            })
+            .unwrap()
+            .len()
+                + 1
+                + serde_json::to_vec(&ProcessFrame::Completed { result })
+                    .unwrap()
+                    .len()
+                + 1;
+            assert!(metadata <= PROCESS_RESULT_RESERVE);
+            let output = ProcessFrame::Output {
+                stdout_base64: BASE64.encode("out\n"),
+                stderr_base64: BASE64.encode("err\n"),
+            };
+            let (bytes, truncated) = bounded_output_frame(output, limit - PROCESS_RESULT_RESERVE)
+                .unwrap()
+                .unwrap();
+            assert!(!truncated);
+            assert!(metadata + bytes.len() < limit);
+            let ProcessFrame::Output {
+                stdout_base64,
+                stderr_base64,
+            } = serde_json::from_slice(&bytes).unwrap()
+            else {
+                panic!("output expected")
+            };
+            assert_eq!(BASE64.decode(stdout_base64).unwrap(), b"out\n");
+            assert_eq!(BASE64.decode(stderr_base64).unwrap(), b"err\n");
+            assert!(process_capture_limit(limit, PROCESS_RESULT_RESERVE) > 0);
+            let oversized = ProcessFrame::Output {
+                stdout_base64: BASE64.encode(vec![b'x'; 8192]),
+                stderr_base64: String::new(),
+            };
+            let (bytes, truncated) =
+                bounded_output_frame(oversized, limit - PROCESS_RESULT_RESERVE)
+                    .unwrap()
+                    .unwrap();
+            assert!(truncated);
+            assert!(metadata + bytes.len() < limit);
+            let ProcessFrame::Output { stdout_base64, .. } =
+                serde_json::from_slice(&bytes).unwrap()
+            else {
+                panic!("output expected")
+            };
+            let prefix = BASE64.decode(stdout_base64).unwrap();
+            assert!(!prefix.is_empty());
+            assert!(prefix.iter().all(|byte| *byte == b'x'));
+        }
+    }
+
+    #[test]
+    fn network_completion_evidence_fits_after_output_budget_is_filled() {
+        let exact_origins = (0..8)
+            .map(|i| format!("https://{}{i}.example.test", "a".repeat(40)))
+            .collect::<Vec<_>>();
+        let wildcard_origins = (0..MAX_OBSERVED_ORIGINS)
+            .map(|i| {
+                format!(
+                    "https://{}.{}.{}.{i:02}.test:65535",
+                    "a".repeat(63),
+                    "b".repeat(63),
+                    "c".repeat(63)
+                )
+            })
+            .collect::<Vec<_>>();
+        for backend in ["native", "windows_job", "oci"] {
+            for (destinations, observed, limit) in [
+                (exact_origins.clone(), exact_origins.clone(), 4096),
+                (vec!["*".into()], wildcard_origins.clone(), 65536),
+            ] {
+                let obligations = PolicyObligations {
+                    sandbox_backend: backend.into(),
+                    network_destinations: destinations,
+                    ..PolicyObligations::default()
+                };
+                let reserve = process_result_reserve(&obligations);
+                let mut result = SandboxJobResult {
+                    backend: backend.into(),
+                    exit_code: Some(i32::MIN),
+                    success: false,
+                    timed_out: false,
+                    stopped: true,
+                    resource_limit_exceeded: Some("process-count".into()),
+                    output_truncated: true,
+                    stdout_base64: String::new(),
+                    stderr_base64: String::new(),
+                    observed_origins: observed,
+                };
+                for origin in &result.observed_origins {
+                    validate_observed_origin(origin).unwrap();
+                }
+                let started = serde_json::to_vec(&ProcessFrame::Started {
+                    deadline_ms: u64::MAX,
+                    timeout_ms: u64::MAX,
+                    max_output_bytes: u64::MAX,
+                })
+                .unwrap()
+                .len()
+                    + 1;
+                let completed = serde_json::to_vec(&ProcessFrame::Completed {
+                    result: result.clone(),
+                })
+                .unwrap()
+                .len()
+                    + 1;
+                assert!(
+                    started + completed > PROCESS_RESULT_RESERVE,
+                    "fixture must expose the old fixed reserve"
+                );
+                assert!(started + completed <= reserve);
+                assert!(completed <= MAX_PROCESS_FRAME_BYTES);
+                let mut budget = limit - reserve;
+                let mut emitted = 0;
+                loop {
+                    let output = ProcessFrame::Output {
+                        stdout_base64: BASE64.encode(vec![b'x'; OUTPUT_CHUNK_BYTES]),
+                        stderr_base64: String::new(),
+                    };
+                    let Some((frame, truncated)) = bounded_output_frame(output, budget).unwrap()
+                    else {
+                        break;
+                    };
+                    assert!(frame.len() + 1 < MAX_PROCESS_FRAME_BYTES);
+                    emitted += frame.len() + 1;
+                    budget -= frame.len() + 1;
+                    if truncated {
+                        break;
+                    }
+                }
+                assert!(emitted > 64);
+                assert!(
+                    started + emitted + completed <= limit,
+                    "filled streamed output must retain the confirmed completion"
+                );
+                let captured = process_capture_limit(limit, reserve);
+                result.stdout_base64 = BASE64.encode(vec![b'x'; captured / 2]);
+                result.stderr_base64 = BASE64.encode(vec![b'y'; captured - captured / 2]);
+                assert!(
+                    serde_json::to_vec(&result).unwrap().len() <= limit,
+                    "sync output must retain every recorded origin too"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wildcard_origin_evidence_is_bounded_before_proxy_forwarding() {
+        assert!(validate_observed_origin("https://example.test:8443").is_ok());
+        assert!(validate_observed_origin(&format!("https://{}.test", "x".repeat(400))).is_err());
+        let maximum_reserve =
+            PROCESS_RESULT_RESERVE + MAX_OBSERVED_ORIGINS * (MAX_OBSERVED_ORIGIN_JSON_BYTES + 1);
+        assert!(maximum_reserve < MAX_PROCESS_FRAME_BYTES);
+    }
+
     #[test]
     fn proxy_credential_spanning_chunks_is_never_released() {
         let secret = "s".repeat(64);

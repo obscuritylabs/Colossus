@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { openWorkspaceWithPausedClock } from "./support/paused-workspace";
 
 async function openDiff(page: Page) {
   await page.getByRole("button", { name: /Open Git:/ }).click();
@@ -232,9 +233,10 @@ test("switching workspaces discards a pending diff and its tabs", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 950 });
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
-  await page.goto("/?fixture=operations-studio&diff=slow");
+  await openWorkspaceWithPausedClock(
+    page,
+    "/?fixture=operations-studio&diff=slow",
+  );
   await openDiff(page);
   await expect(
     page.getByText("Opening WorkSurface.tsx…", { exact: true }),

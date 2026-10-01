@@ -32,13 +32,18 @@ On macOS, Colossus places its icon in the menu bar. On Windows, it appears in th
 notification area. Closing the main window hides it while Colossus and its managed
 runtime keep running. Use **Open Colossus** to bring the window back, **New Work** to
 open a fresh composer, or choose a loaded pinned thread from the selected Workspace.
+On Windows, a single left-click on the tray icon restores the original window;
+right-click opens its menu. Launching Colossus again restores the running instance,
+including a hidden or minimized window, instead of creating another tray icon.
 To end the process and stop its managed runtime, choose **Shut Down Colossus**.
 
 When a running thread needs input, finishes, or stops with an error while the main
 window is hidden or unfocused, Colossus can show an operating-system notification.
-Notifications contain only a generic status message, not prompt or conversation
-content. The app suppresses duplicates and limits notification bursts. The operating
-system's notification settings control whether those messages appear.
+Notifications show the thread title and a short preview of its response or error.
+When no response is available, they show a status message. Previews use up to 240
+characters of released output, with common Markdown formatting removed. The app suppresses
+duplicates and limits notification bursts. The operating system's notification
+settings control whether those messages appear.
 
 ## Steps
 
@@ -155,7 +160,15 @@ response and sends your guidance next without pausing the queue.
 
 After upgrading to the credential-vault release, open **Settings → Global →
 Credentials** and choose **Re-enter token** for each missing credential. Re-entry
-preserves its ID and existing references; rotation creates a new credential revision.
+preserves its ID and existing references. **Rotate** replaces the token in the same
+named entry, keeping its type and every reference. Active workspaces refresh when
+idle; open terminal sessions can defer that refresh. An imported empty entry offers
+**Add token** instead.
+
+A credential can be deleted once no current definition or workspace-pinned revision
+uses it. This includes archived entries and workspaces that can be restored. Unused
+historical revisions referencing the deleted credential are removed; they do not
+permanently block deletion.
 MCP OAuth connections require a fresh sign-in. Non-secret settings remain, and old
 OS credential entries are left untouched rather than imported or deleted.
 
@@ -174,8 +187,9 @@ the workspace in that same sidebar. The heading, search, and content area stay i
 place when you change scope. **Back to work** returns to your conversation.
 
 Global resources are
-immutable revisioned definitions for providers, models, credentials, MCP servers,
-search, and telemetry. A Workspace pins the exact revisions it uses. Saved global updates
+immutable revisioned definitions for providers, models, MCP servers, search, and
+telemetry. Credentials keep a stable named identity when their tokens are replaced.
+A Workspace pins the exact configuration revisions it uses. Saved global updates
 apply automatically when the workspace is idle. Active runs keep their current configuration
 until they finish. Open terminal sessions also defer automatic restarts until closed;
 archived workspaces keep their pinned revisions until restored.
@@ -282,17 +296,29 @@ access or execution authority. Its
 primary credential has exactly the run and prompt scopes plus the reviewed built-in tool
 ceiling for that selection. That ceiling includes bounded, non-recursive delegation when
 `agent.delegate` is selected; it never creates undeclared tools or administrative authority.
-Approval responses use a separate native-only, tool-less credential after the operating-system
-confirmation. Neither credential grants administrative authority or bypasses Agent Plugin
+Approval responses use a separate native-only, tool-less credential after the dedicated
+approval window collects your decision. Neither credential grants administrative authority or bypasses Agent Plugin
 policy.
 
+For a command that needs approval, **Review command…** opens one dedicated window with
+the full command and working directory. Choose **Allow once**, **Always allow**, or
+**Deny** directly in that window. Closing it leaves the command unapproved.
+
+**Always allow** remembers the exact executable, arguments, and working directory in
+this local workspace. Changed commands, replaced workspace directories, and changed
+workspace configuration require a new decision. Redacted commands and External targets
+offer **Allow once** only. Remembered preferences survive app restarts, stay on this
+computer, and are excluded from setup exports. Clear them under **Settings → Workspace →
+Access → Clear remembered commands**. Policy denials and sandbox restrictions still apply.
+
 The permission selector beside the Work composer changes how Managed Local handles
-approval-required effects for subsequent work without restarting the runtime. **Deny**
-fails those effects closed, **Ask** pauses for the app's approval card, **Risk auto**
-allows eligible low-risk effects after evaluator review, and **Full access** satisfies
-approval obligations without asking. Moving to Risk auto or Full access requires an
+approval-required effects for subsequent work without restarting the runtime. Desktop
+starts Managed Local in **Risk auto**, which allows eligible low-risk effects after
+evaluator review. **Deny** fails approval-required effects closed, **Ask** pauses for
+the app's approval card, and **Full access** satisfies approval obligations without
+asking. Manually increasing the mode to Risk auto or Full access requires an
 operating-system confirmation, and the mode cannot change while a managed run is
-active. This runtime-local selection returns to Ask when Managed Local restarts. It
+active. This runtime-local selection returns to Risk auto when Managed Local restarts. It
 does not change policy decisions, tool authority, access profile, or execution boundaries,
 and it is unavailable for independently administered External targets.
 

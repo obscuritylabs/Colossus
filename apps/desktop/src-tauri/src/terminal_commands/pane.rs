@@ -76,7 +76,7 @@ pub(crate) async fn mount_terminal_pane(
             return Err(unavailable());
         }
         TerminalKind::Shell => {
-            shell_terminal_workspace()?;
+            shell_terminal_workspace(&state).await?;
         }
         TerminalKind::ColossusTui => {}
     }

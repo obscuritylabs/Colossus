@@ -16,6 +16,11 @@ pub use path::{
 };
 
 #[cfg(windows)]
+mod desktop_instance;
+#[cfg(windows)]
+pub use desktop_instance::DesktopLaunchGuard;
+
+#[cfg(windows)]
 mod conpty;
 #[cfg(windows)]
 mod process;

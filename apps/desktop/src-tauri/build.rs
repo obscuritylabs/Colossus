@@ -16,6 +16,8 @@ const COMMANDS: &[&str] = &[
     "browser_viewport",
     "command_review_context",
     "finish_command_review",
+    "remembered_command_count",
+    "clear_remembered_commands",
     "get_plugin_inventory",
     "resolve_plugin_selection",
     "read_plugin_preview",

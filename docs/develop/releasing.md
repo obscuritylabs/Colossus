@@ -79,7 +79,7 @@ Set `workspace.metadata.release.publish-sdks` in `Cargo.toml` for each release:
 publication. Both modes build and verify SDK candidate archives with aligned versions.
 The publisher reads this required boolean from the immutable release tag and blocks
 its privileged publication job when false, including manual recovery requests. Missing
-or malformed policy fails validation. Version 0.11.4 uses `false`.
+or malformed policy fails validation. Version 0.11.5 uses `false`.
 
 Regenerate the SDK input digest after changing package metadata, then run the
 completion gates:

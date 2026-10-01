@@ -3507,3 +3507,5 @@ mod tests {
         assert_eq!(store.load().expect("load bounded target set"), settings);
     }
 }
+
+mod command_allowances;

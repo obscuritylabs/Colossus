@@ -465,6 +465,7 @@ describe("ManagedSettingsPane", () => {
 
     snapshot.globalConfiguration.providers[0]!.archived = true;
     expect(managedCredentialConsumers(snapshot, credentialId)).toEqual([
+      "Provider · openapi (archived)",
       "Workspace · Colossus",
     ]);
   });

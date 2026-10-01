@@ -22,7 +22,7 @@ pub fn with_process_limits(
         });
         spec.input_schema["properties"]["max_output_bytes"] = json!({
             "type": "integer", "minimum": 1024, "maximum": output_limit,
-            "description": "Maximum captured output bytes; bounded by both the workspace sandbox and this tool."
+            "description": "Maximum released output bytes, including JSON/base64 framing; bounded by both the workspace sandbox and this tool."
         });
     }
     specs

@@ -50,7 +50,7 @@ pub(crate) async fn show_terminal_window(
             }
         }
         TerminalKind::Shell => {
-            shell_terminal_workspace()?;
+            shell_terminal_workspace(&state).await?;
         }
     }
 
@@ -159,7 +159,7 @@ pub(crate) async fn terminal_context(
     };
     let managed_ready = selected_managed && state.selected_managed_space_ready().await;
     let tui_workspace = managed_ready.then_some(workspace).flatten();
-    let shell_workspace = shell_terminal_workspace().ok();
+    let shell_workspace = shell_terminal_workspace(&state).await.ok();
     let terminal_enabled = state.terminal_enabled();
     let shell_enabled = terminal_enabled && shell_workspace.is_some();
     let tui_enabled = terminal_enabled && tui_workspace.is_some();
@@ -211,7 +211,7 @@ pub(crate) async fn open_terminal(
                     TerminalError::InvalidWorkspace,
                 ));
             }
-            let workspace = shell_terminal_workspace()?;
+            let workspace = shell_terminal_workspace(&state).await?;
             if workspace.id != request.workspace_id {
                 return Err(CommandErrorDto::from_terminal(
                     TerminalError::InvalidWorkspace,
@@ -233,9 +233,9 @@ pub(crate) async fn open_terminal(
     .map_err(CommandErrorDto::from_terminal)?;
     let kind_still_available = match kind {
         TerminalKind::ColossusTui => state.selected_managed_space_ready().await,
-        TerminalKind::Shell => {
-            shell_terminal_workspace().is_ok_and(|workspace| workspace.id == request.workspace_id)
-        }
+        TerminalKind::Shell => shell_terminal_workspace(&state)
+            .await
+            .is_ok_and(|workspace| workspace.id == request.workspace_id),
     };
     if !state.terminal_enabled()
         || state.terminal_document_authority().is_none()
@@ -346,16 +346,26 @@ fn require_terminal_document(state: &AppState) -> Result<(u64, u64), CommandErro
         .ok_or_else(|| CommandErrorDto::from_terminal(TerminalError::NotReady))
 }
 
-fn shell_terminal_workspace() -> Result<TerminalWorkspace, CommandErrorDto> {
+async fn shell_terminal_workspace(state: &AppState) -> Result<TerminalWorkspace, CommandErrorDto> {
     if !cfg!(any(target_os = "macos", target_os = "windows")) {
         return Err(CommandErrorDto::from_terminal(
             TerminalError::ProgramUnavailable,
         ));
     }
+    // Prefer the selected runtime's native workspace snapshot. Reading a different
+    // settings store here can otherwise give Shell and TUI different workspace IDs.
+    let (_, workspace, selected_managed) = state.terminal_workspace_context().await;
+    if selected_managed && let Some(mut workspace) = workspace {
+        // A normal shell never receives worker authority or TUI configuration.
+        workspace.worker_authentication = None;
+        workspace.config = None;
+        return Ok(workspace);
+    }
     let store = SettingsStore::open_application()?;
     let colossus_home = store.home_root()?.to_owned();
     let settings = store.load()?;
-    if settings.selected_target_id != settings.selected_space_id
+    if state.selected_target_id().await != settings.selected_target_id
+        || settings.selected_target_id != settings.selected_space_id
         || settings.selected_space_id.is_none()
     {
         return Err(CommandErrorDto::from_terminal(

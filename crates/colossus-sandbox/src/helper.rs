@@ -33,7 +33,7 @@ pub fn run_helper_stdio() -> Result<(), SandboxHelperError> {
     let job = signed.verify(&key)?;
     let control = job
         .streaming
-        .then(|| HelperControl::new(input, job.obligations.max_output_bytes));
+        .then(|| HelperControl::new(input, &job.obligations));
     let mut result = execute_sandbox_job(job, &key, control.as_ref())?;
     if let Some(control) = control {
         result.output_truncated |= control.is_truncated();
@@ -860,7 +860,8 @@ pub(super) fn supervise_windows_job(
         .take()
         .ok_or_else(|| SandboxHelperError::Execution("child stderr is absent".into()))?;
     let output_limit = usize::try_from(job.obligations.max_output_bytes).unwrap_or(usize::MAX);
-    let capture_limit = output_limit.saturating_sub(1024).saturating_mul(3) / 4;
+    let capture_limit =
+        process_capture_limit(output_limit, process_result_reserve(&job.obligations));
     let state = Arc::new(Mutex::new(CaptureState {
         remaining: capture_limit,
         ..CaptureState::default()

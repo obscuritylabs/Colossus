@@ -100,6 +100,7 @@ pub(super) fn complete(
 ) -> Result<SavedSetupPackage, CommandErrorDto> {
     let global = &settings.global_configuration;
     let mut portable = SetupGlobals {
+        credentials: BTreeMap::new(),
         defaults: global.defaults.current().cloned(),
         mcp_servers: resources(&global.mcp_servers, "mcp"),
         search_providers: resources(&global.search_providers, "search"),
@@ -107,9 +108,14 @@ pub(super) fn complete(
     };
     // Literal HTTP headers can contain authentication. Export requirements, never
     // their values; recipients fill the missing slots using the native secret dialog.
+    let mut literal_labels = BTreeMap::new();
     for resource in &mut portable.mcp_servers {
         let server = &mut resource.configuration;
         for (name, _) in std::mem::take(&mut server.headers) {
+            literal_labels.insert(
+                format!("literal:{}:{name}", resource.id),
+                format!("{} {name}", resource.label),
+            );
             server
                 .credential_headers
                 .entry(name.clone())
@@ -120,10 +126,24 @@ pub(super) fn complete(
         }
     }
     let mut slots = BTreeMap::new();
+    let mut metadata = BTreeMap::new();
     portable.map_credentials(|id| {
-        let next = format!("env:COLOSSUS_SETUP_SECRET_{}", slots.len() + 1);
-        slots.entry(id.to_owned()).or_insert(next).clone()
+        if let Some(slot) = slots.get(id) {
+            return String::clone(slot);
+        }
+        let credential = super::credential_metadata::for_export(
+            global
+                .credentials
+                .iter()
+                .find(|credential| credential.id == id),
+            literal_labels.get(id).map_or("Credential", String::as_str),
+        );
+        let slot = super::credential_metadata::unique_slot(&credential.label, &metadata);
+        metadata.insert(slot.clone(), credential);
+        slots.insert(id.to_owned(), slot.clone());
+        slot
     });
+    portable.credentials = metadata;
     portable.validate()?;
     let mut config: serde_json::Value = serde_saphyr::from_str(&package.config_yaml)
         .map_err(|_| invalid("Configuration could not be exported."))?;

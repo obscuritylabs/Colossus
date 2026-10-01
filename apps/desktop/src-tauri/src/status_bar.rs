@@ -14,6 +14,9 @@ use tauri::{App, AppHandle, State, Window, WindowEvent};
 
 use crate::dto::CommandErrorDto;
 
+mod notification_content;
+use notification_content::BackgroundNotificationContent;
+
 const MAX_PINS: usize = 10;
 const MAX_RUN_ID_BYTES: usize = 128;
 const MAX_TITLE_CHARACTERS: usize = 96;
@@ -169,7 +172,9 @@ pub(crate) fn notify_background(
     state: State<'_, StatusBarState>,
     kind: BackgroundNotificationKind,
     run_id: String,
+    content: BackgroundNotificationContent,
 ) -> Result<bool, CommandErrorDto> {
+    content.validate()?;
     if run_id.is_empty() || run_id.len() > MAX_RUN_ID_BYTES || run_id.chars().any(char::is_control)
     {
         return Err(CommandErrorDto::invalid(
@@ -194,19 +199,7 @@ pub(crate) fn notify_background(
         if !history.can_send(&run_id, kind, now) {
             return Ok(false);
         }
-        let (title, body) = match kind {
-            BackgroundNotificationKind::NeedsAttention => (
-                "Colossus needs your input",
-                "Open Colossus to review the waiting work.",
-            ),
-            BackgroundNotificationKind::WorkCompleted => {
-                ("Colossus work finished", "Open Colossus to see the result.")
-            }
-            BackgroundNotificationKind::WorkFailed => (
-                "Colossus work stopped",
-                "Open Colossus to review the result.",
-            ),
-        };
+        let (title, body) = content.presentation(kind);
         app.notification()
             .builder()
             .title(title)
@@ -224,7 +217,7 @@ pub(crate) fn notify_background(
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {
-        let _ = (app, state, kind, run_id);
+        let _ = (app, state, kind, run_id, content);
         Ok(false)
     }
 }
@@ -250,10 +243,10 @@ pub(crate) fn setup(app: &mut App) -> tauri::Result<()> {
             .icon_as_template(cfg!(target_os = "macos"))
             .tooltip("Colossus Desktop")
             .menu(&menu)
+            .show_menu_on_left_click(!cfg!(windows))
             .on_menu_event(|app, event| handle_menu_event(app, &event))
             .on_tray_icon_event(|tray, event| {
-                if cfg!(windows) && matches!(event, tauri::tray::TrayIconEvent::DoubleClick { .. })
-                {
+                if tray_event_opens_window(&event) {
                     show_main_window(tray.app_handle());
                 }
             })
@@ -262,6 +255,48 @@ pub(crate) fn setup(app: &mut App) -> tauri::Result<()> {
     #[cfg(not(any(target_os = "macos", windows)))]
     let _ = app;
     Ok(())
+}
+
+#[cfg(any(target_os = "macos", windows))]
+fn tray_event_opens_window(event: &tauri::tray::TrayIconEvent) -> bool {
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+    cfg!(windows)
+        && matches!(
+            event,
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } | TrayIconEvent::DoubleClick {
+                button: MouseButton::Left,
+                ..
+            }
+        )
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn only_left_tray_clicks_restore_the_window() {
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+    let click = |button, button_state| TrayIconEvent::Click {
+        id: TRAY_ID.into(),
+        position: tauri::PhysicalPosition::new(0.0, 0.0),
+        rect: tauri::Rect::default(),
+        button,
+        button_state,
+    };
+    assert!(tray_event_opens_window(&click(
+        MouseButton::Left,
+        MouseButtonState::Up
+    )));
+    assert!(!tray_event_opens_window(&click(
+        MouseButton::Left,
+        MouseButtonState::Down
+    )));
+    assert!(!tray_event_opens_window(&click(
+        MouseButton::Right,
+        MouseButtonState::Up
+    )));
 }
 
 #[cfg(any(target_os = "macos", windows))]

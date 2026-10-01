@@ -7,6 +7,7 @@ use colossus_sdk::{
     RespondInteractionRequest,
 };
 use serde::Serialize;
+use sha2::{Digest as _, Sha256};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +51,46 @@ pub(crate) async fn pending(
         .find(|interaction| interaction.interaction_id == request.interaction_id)
         .ok_or_else(unavailable)?;
     validate(interaction, request)
+}
+
+/// Exact command consent never compares redacted strings, display labels, or
+/// prefixes. Workspace/configuration binding belongs to the native consent store.
+pub(crate) fn command_key(approval: &ApprovalInteraction) -> Option<String> {
+    let context = approval.command_context.as_ref()?;
+    if approval.action != "process.execute" || context.redacted || context.validate().is_err() {
+        return None;
+    }
+    let bytes = serde_json::to_vec(&(
+        "colossus-command-consent-v1",
+        &context.executable,
+        &context.arguments,
+        &context.working_directory,
+    ))
+    .ok()?;
+    Some(hex::encode(Sha256::digest(bytes)))
+}
+
+/// A saved preference supplies consent, but never reuses an approval proof.
+/// Resolve a fresh authoritative interaction and consume its one-use binding.
+pub(crate) async fn answer_remembered(
+    client: &Colossus,
+    request: RespondInteractionRequest,
+    expected_key: &str,
+) -> ApiResult<Interaction> {
+    if !matches!(
+        &request.response,
+        InteractionAnswer::Approval { approved: true, .. }
+    ) {
+        return Err(unavailable());
+    }
+    let approval = pending(client, &request).await?;
+    if command_key(&approval).as_deref() != Some(expected_key) {
+        return Err(unavailable());
+    }
+    client
+        .respond_interaction(request)
+        .await
+        .map(|response| response.interaction)
 }
 
 async fn bounded_lookup<T>(

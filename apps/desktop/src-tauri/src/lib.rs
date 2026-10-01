@@ -13,6 +13,7 @@ mod connection;
 mod desktop_commands;
 mod desktop_credentials;
 mod desktop_dto;
+mod desktop_instance;
 mod desktop_settings;
 mod diagnostics;
 mod dto;
@@ -26,6 +27,7 @@ mod plugin_commands;
 mod plugin_selection;
 mod provider_catalog;
 mod provider_enrollment;
+mod remembered_approvals;
 mod run_list;
 mod setup_package;
 mod space_search;
@@ -88,6 +90,7 @@ use plugin_commands::{
 };
 use plugin_selection::resolve_plugin_selection;
 use provider_catalog::{discover_managed_provider_models, get_provider_presets};
+use remembered_approvals::{clear_remembered_commands, remembered_command_count};
 use setup_package::{
     apply_setup_package, cancel_setup_package_review, configure_setup_credential,
     export_setup_package, inspect_setup_package, list_setup_packages, open_setup_link,
@@ -118,11 +121,19 @@ pub fn run() {
     if let Some(code) = uninstall::run_if_requested() {
         std::process::exit(code);
     }
+    let context = app_context::create();
+    #[cfg(windows)]
+    let launch_guard =
+        colossus_windows_native::DesktopLaunchGuard::acquire(&context.config().identifier)
+            .expect("another Colossus launch did not finish");
     if let Err(error) = desktop_settings::SettingsStore::open_application() {
         eprintln!("Colossus Desktop could not start: {}", error.message);
         std::process::exit(1);
     }
-    let application = tauri::Builder::default()
+    let application = tauri::Builder::default();
+    #[cfg(windows)]
+    let application = application.plugin(desktop_instance::plugin());
+    let application = application
         .register_uri_scheme_protocol(command_review_protocol::SCHEME, |context, request| {
             command_review_protocol::respond(&context, &request)
         })
@@ -168,6 +179,8 @@ pub fn run() {
             browser_viewport,
             command_review_context,
             finish_command_review,
+            remembered_command_count,
+            clear_remembered_commands,
             get_plugin_inventory,
             resolve_plugin_selection,
             read_plugin_preview,
@@ -278,8 +291,10 @@ pub fn run() {
             status_bar::sync_status_bar_pins,
             status_bar::notify_background,
         ])
-        .build(app_context::create())
+        .build(context)
         .expect("failed to build the Colossus desktop application");
+    #[cfg(windows)]
+    drop(launch_guard);
     application.run(|app, event| {
         #[cfg(target_os = "macos")]
         if matches!(

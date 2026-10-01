@@ -647,6 +647,7 @@ sandbox:
                 "--fail",
                 "--silent",
                 "--show-error",
+                "--verbose",
                 "--retry",
                 "3",
                 "--retry-connrefused",
@@ -667,8 +668,14 @@ sandbox:
         let result: Value =
             serde_json::from_slice(&allowed_network.stdout).expect("network result");
         assert_eq!(
-            result["success"], true,
-            "allowed network command failed: {result}"
+            result["success"],
+            true,
+            "allowed network command failed: {result}; stderr: {}",
+            String::from_utf8_lossy(
+                &BASE64
+                    .decode(result["stderr_base64"].as_str().expect("stderr"))
+                    .expect("decoded stderr")
+            )
         );
         assert_eq!(result["exit_code"], 0);
         assert_eq!(result["output_truncated"], false);

@@ -31,14 +31,25 @@ fn context(run: &str, chat: &str) -> ExecutionContext {
     }
 }
 fn registry(journal: Arc<dyn EventJournal>, directory: &Path) -> ProcessSessions {
+    registry_with_approval(journal, directory, Arc::new(DenyApproval))
+}
+fn registry_with_approval(
+    journal: Arc<dyn EventJournal>,
+    directory: &Path,
+    approvals: Arc<dyn ApprovalProvider>,
+) -> ProcessSessions {
     let lease = Arc::new(
         workspace_lease::WorkspaceOwnershipLease::acquire_at(directory, &directory.join("leases"))
             .expect("lease"),
     );
     let gateway = Arc::new(EffectGateway::new(
         Arc::clone(&journal),
-        Arc::new(BuiltInPolicy::offline_default()),
-        Arc::new(DenyApproval),
+        Arc::new(
+            BuiltInPolicy::offline_default()
+                .with_sandbox("native", "test", false)
+                .with_action("shell.run", DecisionOutcome::RequireApproval),
+        ),
+        approvals,
         SafetyKernel::new(["shell.run".into()]),
         [3; 32],
     ));
@@ -285,4 +296,151 @@ async fn launch_evidence_precedes_policy_release_and_preserves_uncertainty() {
         state(&session).summary.status,
         ProcessSessionStatus::OutcomeUnknown
     );
+}
+
+#[tokio::test]
+async fn managed_approval_retains_caller_scope_and_does_not_yield_before_consent() {
+    tokio::task_local! { static CALLER: &'static str; }
+    struct ScopedApproval(Arc<AtomicBool>);
+    #[async_trait]
+    impl ApprovalProvider for ScopedApproval {
+        async fn request_approval(
+            &self,
+            _: &EffectRequest,
+            _: &str,
+            _: &colossus_contracts::PolicyDecision,
+            _: Option<&colossus_contracts::CommandApprovalContext>,
+        ) -> Result<Option<colossus_contracts::ApprovalProof>, colossus_ports::PolicyError>
+        {
+            assert_eq!(CALLER.try_with(|value| *value).ok(), Some("requesting-app"));
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            assert_eq!(CALLER.try_with(|value| *value).ok(), Some("requesting-app"));
+            self.0.store(true, Ordering::Release);
+            Ok(None)
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let answered = Arc::new(AtomicBool::new(false));
+    let registry = registry_with_approval(
+        Arc::new(InMemoryEventJournal::default()),
+        directory.path(),
+        Arc::new(ScopedApproval(Arc::clone(&answered))),
+    );
+    let context = context("run-1", "chat-1");
+    let mut request = effect_request(
+        summary(ProcessLifetime::Run).owner,
+        "shell.run",
+        "fixture-executable",
+        serde_json::to_value(tool_process_spec(
+            directory.path().to_path_buf(),
+            vec!["--check".into()],
+            BTreeMap::new(),
+            None,
+            None,
+        ))
+        .unwrap(),
+    );
+    request.capabilities = vec!["shell.run".into()];
+    request.context = context.clone();
+    request.command_intent = Some(colossus_contracts::CommandIntent {
+        justification: "Check approval routing".into(),
+    });
+    registry
+        .begin_run(&context, &request.actor, RunControl::default())
+        .unwrap();
+    let result = CALLER
+        .scope(
+            "requesting-app",
+            registry.launch(request, ProcessLifetime::Run, None, 0),
+        )
+        .await
+        .unwrap();
+    assert!(
+        answered.load(Ordering::Acquire),
+        "zero yield time must not escape a pending approval: {result:?}"
+    );
+    assert_eq!(result.session.status, ProcessSessionStatus::Failed);
+    assert_eq!(
+        result.session.reason.as_deref(),
+        Some("Process was not launched: approval was denied")
+    );
+    assert_eq!(registry.active.load(Ordering::Acquire), 0);
+    assert!(
+        registry
+            .registry()
+            .sessions
+            .values()
+            .all(|job| !job.executing.load(Ordering::Acquire))
+    );
+}
+
+#[test]
+fn launch_failure_categories_do_not_disclose_underlying_messages() {
+    for error in [
+        GatewayError::Approval("PRIVATE".into()),
+        GatewayError::Denied("PRIVATE".into()),
+        GatewayError::Execution("PRIVATE".into()),
+        GatewayError::Policy(colossus_ports::PolicyError::Unavailable("PRIVATE".into())),
+    ] {
+        assert!(!launch_failure_reason(&error).contains("PRIVATE"));
+    }
+    assert_ne!(
+        launch_failure_reason(&GatewayError::Approval(String::new())),
+        launch_failure_reason(&GatewayError::Execution(String::new()))
+    );
+}
+
+#[tokio::test]
+async fn wait_ignores_start_notifications_until_exit_or_original_deadline() {
+    let session = Arc::new(ManagedSession::new(
+        Arc::new(InMemoryEventJournal::default()),
+        context("run", "chat"),
+        summary(ProcessLifetime::Run),
+    ));
+    let changed = Arc::clone(&session);
+    let job = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        state(&changed).summary.status = ProcessSessionStatus::Running;
+        changed.changed.notify_waiters();
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        let mut current = state(&changed);
+        current.push(b"hello", b"bind failed", false);
+        current.summary.status = ProcessSessionStatus::Exited;
+        current.summary.exit_code = Some(1);
+        drop(current);
+        changed.changed.notify_waiters();
+    });
+    let snapshot = session
+        .wait_for_snapshot(0, 1000, RETAINED_OUTPUT, true)
+        .await
+        .unwrap();
+    assert_eq!(snapshot.session.exit_code, Some(1));
+    assert_eq!(snapshot.chunks[0].stderr, "bind failed");
+    job.await.unwrap();
+    state(&session).summary.status = ProcessSessionStatus::Running;
+    let snapshot = session.wait(0, 20, RETAINED_OUTPUT).await.unwrap();
+    assert_eq!(snapshot.session.status, ProcessSessionStatus::Running);
+}
+
+#[tokio::test]
+async fn subsequent_wait_returns_available_output_without_waiting_for_exit() {
+    let session = ManagedSession::new(
+        Arc::new(InMemoryEventJournal::default()),
+        context("run", "chat"),
+        summary(ProcessLifetime::Workspace),
+    );
+    {
+        let mut current = state(&session);
+        current.summary.status = ProcessSessionStatus::Running;
+        current.push(b"server ready", b"", false);
+    }
+    let snapshot = tokio::time::timeout(
+        Duration::from_millis(100),
+        session.wait(0, 1000, RETAINED_OUTPUT),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(snapshot.session.status, ProcessSessionStatus::Running);
+    assert_eq!(snapshot.chunks[0].stdout, "server ready");
 }

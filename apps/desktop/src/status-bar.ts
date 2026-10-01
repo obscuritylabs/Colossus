@@ -1,6 +1,10 @@
-import type { BackgroundNotificationKind, StatusBarPin } from "./api";
+import type {
+  BackgroundNotificationContent,
+  BackgroundNotificationKind,
+  StatusBarPin,
+} from "./api";
 import { safeDisplayLabel } from "./presenters";
-import type { Run } from "./types";
+import type { Run, RunDetails } from "./types";
 
 const MAX_STATUS_BAR_PINS = 10;
 
@@ -40,6 +44,50 @@ export function selectStatusBarPins(
       ];
     })
     .slice(0, MAX_STATUS_BAR_PINS);
+}
+
+/** Use released response text, never prompts, reasoning, or tool payloads. */
+export async function backgroundNotificationContent(
+  run: Run,
+  threadTitle: string,
+  viewOutput: string,
+  loadRun: () => Promise<RunDetails>,
+): Promise<BackgroundNotificationContent> {
+  let output =
+    run.terminal?.type === "failure"
+      ? run.terminal.failure.message
+      : run.terminal?.type === "result"
+        ? run.terminal.result.output || viewOutput
+        : viewOutput;
+  // Recent-run summaries deliberately omit response bodies. An evicted or unopened
+  // thread still needs its own result, rather than the currently selected thread's.
+  if (!output.trim() && run.status === "completed") {
+    try {
+      const details = await loadRun();
+      if (
+        details.run.runId === run.runId &&
+        details.run.terminal?.type === "result"
+      ) {
+        output = details.run.terminal.result.output;
+      }
+    } catch {
+      // A missing preview must not suppress the completion notification.
+    }
+  }
+  const preview = output
+    .slice(0, 8192)
+    .replace(/^\s*```[^\n]*$/gm, "")
+    .replace(/!?\[([^\]]+)\]\([^\n)]*\)/g, "$1")
+    .replace(/^\s{0,3}(?:#{1,6} |[-*+] |>[ ]?)/gm, "")
+    .replace(/[*`]/g, "");
+  return {
+    threadTitle: safeDisplayLabel(
+      threadTitle,
+      safeDisplayLabel(run.title, "Untitled work", 96),
+      96,
+    ),
+    outputPreview: safeDisplayLabel(preview, "", 240),
+  };
 }
 
 export interface BackgroundRunState {

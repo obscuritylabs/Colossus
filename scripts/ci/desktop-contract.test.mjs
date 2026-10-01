@@ -423,20 +423,10 @@ test("command review has isolated IPC and cannot authorize an effect without the
   );
   assert.doesNotMatch(review, /\.respond_interaction\(/u);
   const commands = read("apps/desktop/src-tauri/src/commands.rs");
-  assert.match(commands, /\.blocking_show\(\)/u);
-  assert.equal(
-    commands.match(/crate::command_review::revalidate_after_lookup\(/gu)
-      ?.length,
-    2,
-    "authoritative challenge must be revalidated before and after OS confirmation",
-  );
-  assert.equal(
-    commands.match(
-      /\.is_none_or\(crate::command_review::ReviewWindow::is_current\)/gu,
-    )?.length,
-    2,
-    "both refetches must retain the review-window cancellation guard",
-  );
+  const confirmation = commands.slice(commands.indexOf("async fn confirm_effect_approval("), commands.indexOf("fn native_dialog_field("));
+  assert.doesNotMatch(confirmation, /blocking_show/u);
+  assert.match(confirmation, /revalidate_after_lookup/u);
+  assert.match(confirmation, /window\.is_current\(\)/u);
   assert.match(
     review,
     /let observed = lookup\.await\?;\s*if observed != \*expected \|\| !still_current\(\)/u,
@@ -1434,7 +1424,7 @@ test("desktop browser acceptance covers the supported minimum layout", () => {
   assert.match(acceptance, /forcedColors: "active"/u);
   assert.match(acceptance, /Shift\+Tab/u);
   assert.match(acceptance, /page\.keyboard\.press\("Escape"\)/u);
-  assert.match(acceptance, /Allow once/u);
+  assert.match(acceptance, /Review approval…/u);
   assert.match(premerge, /npm run test:browser:install/u);
   assert.match(premerge, /npm run test:browser/u);
 });

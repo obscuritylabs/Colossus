@@ -103,7 +103,9 @@ test("released output reconnects, follows cursors, and confirms stop", async ({
       ),
     )
     .toBe(true);
-  await page.screenshot({ path: "/private/tmp/colossus-active-shells.png" });
+  await page.screenshot({
+    path: "output/playwright/colossus-active-shells.png",
+  });
   await panel.getByRole("button", { name: "Stop", exact: true }).click();
   await expect(panel.getByRole("button", { name: "Stopping…" })).toBeDisabled();
   await expect(panel.locator(".shells-detail strong")).toHaveText("stopped");
@@ -183,4 +185,92 @@ test("unsupported runtimes do not poll and removing support cancels polling", as
       window as unknown as { shellPolling: { unmount(): void } }
     ).shellPolling.unmount(),
   );
+});
+
+test("shell discovery distinguishes loading, unavailable, and an empty runtime across target switches", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const host = window as unknown as {
+      __TAURI_INTERNALS__: unknown;
+      requests: {
+        targetId: string;
+        resolve(value: unknown): void;
+        reject(error: Error): void;
+      }[];
+    };
+    host.requests = [];
+    host.__TAURI_INTERNALS__ = {
+      invoke: (command: string, args: { targetId: string }) => {
+        if (command === "list_setup_packages") return Promise.resolve([]);
+        if (command !== "list_shell_sessions") return Promise.resolve(null);
+        return new Promise((resolve, reject) =>
+          host.requests.push({ targetId: args.targetId, resolve, reject }),
+        );
+      },
+    };
+  });
+  await page.goto("/?fixture=operations-studio");
+  await page.clock.install();
+  await page.evaluate(async () => {
+    const path = "/src/dev/active-shells-harness.tsx";
+    const module = await import(/* @vite-ignore */ path);
+    const host = window as unknown as {
+      shellPolling: { setScope(scope: string | null): void };
+    };
+    host.shellPolling = module.mountPolling();
+    host.shellPolling.setScope("11111111-1111-4111-8111-111111111111");
+  });
+  const output = page.getByTestId("shell-polling");
+  await expect(output).toHaveAttribute("data-loading", "true");
+  await page.evaluate(() =>
+    (
+      window as unknown as { shellPolling: { setScope(scope: string): void } }
+    ).shellPolling.setScope("22222222-2222-4222-8222-222222222222"),
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as unknown as { requests: unknown[] }).requests.length,
+      ),
+    )
+    .toBe(2);
+  await page.evaluate(() => {
+    const requests = (
+      window as unknown as {
+        requests: {
+          resolve(value: unknown): void;
+          reject(error: Error): void;
+        }[];
+      }
+    ).requests;
+    requests[0].resolve({ sessions: [{ id: "stale" }], next_cursor: null });
+    requests[1].reject(new Error("runtime restarting"));
+  });
+  await expect(output).toHaveText("0");
+  await expect(output).toHaveAttribute("data-loading", "false");
+  await expect(output).toHaveAttribute("data-error", /unavailable/);
+  await page.clock.runFor(5000);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as unknown as { requests: unknown[] }).requests.length,
+      ),
+    )
+    .toBe(3);
+  await page.evaluate(() =>
+    (
+      window as unknown as { requests: { resolve(value: unknown): void }[] }
+    ).requests[2].resolve({ sessions: [], next_cursor: null }),
+  );
+  await expect(output).toHaveAttribute("data-error", "");
+  await expect(output).toHaveText("0");
+  await page.evaluate(() =>
+    (
+      window as unknown as {
+        shellPolling: { setScope(scope: string | null): void };
+      }
+    ).shellPolling.setScope(null),
+  );
+  await expect(output).toHaveAttribute("data-loading", "false");
 });

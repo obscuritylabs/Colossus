@@ -1218,6 +1218,12 @@ impl AgentService {
                                     }),
                                 )
                             })?;
+                            post_commit_events.push(RunEvent::ToolCompleted {
+                                turn,
+                                result: result.clone(),
+                                duration_seconds: tool_started.elapsed().as_secs_f64(),
+                                elapsed_seconds: started.elapsed().as_secs_f64(),
+                            });
                             tool_results.push(result);
                             for pending in calls.iter().skip(call_index.saturating_add(1)) {
                                 let skipped = unexecuted_tool_result(pending, &call.call_id, code);
@@ -1271,6 +1277,12 @@ impl AgentService {
                         let message = error.to_string();
                         let code = tool_error_code(&error);
                         let result = terminal_tool_error_result(&call, &error);
+                        post_commit_events.push(RunEvent::ToolCompleted {
+                            turn,
+                            result: result.clone(),
+                            duration_seconds: tool_started.elapsed().as_secs_f64(),
+                            elapsed_seconds: started.elapsed().as_secs_f64(),
+                        });
                         tool_results.push(result);
                         for pending in calls.iter().skip(call_index.saturating_add(1)) {
                             let skipped = unexecuted_tool_result(pending, &call.call_id, code);

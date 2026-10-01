@@ -17,6 +17,50 @@ body {
   color: var(--text);
 }
 
+.desktop-startup {
+  display: grid;
+  width: 100%;
+  min-height: 100%;
+  place-items: center;
+  padding: 24px;
+  background: var(--canvas);
+}
+
+.desktop-startup-content {
+  display: grid;
+  max-width: 420px;
+  justify-items: center;
+  gap: 16px;
+  text-align: center;
+}
+
+.desktop-startup-content h1 {
+  margin: 0;
+  font-size: var(--font-size-heading);
+}
+
+.desktop-startup-content p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+
+.desktop-startup-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--border);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .desktop-startup-spinner {
+    animation: none;
+  }
+}
+
 button,
 input,
 textarea {

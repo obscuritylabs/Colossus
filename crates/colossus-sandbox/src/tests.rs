@@ -765,6 +765,29 @@ fn oci_profile_applies_resource_and_privilege_limits_without_argv_secrets() {
         "allowed 1024..={} bytes",
         job.obligations.max_output_bytes
     )));
+    // Validate before launching: too little space for network evidence must not
+    // execute the command and later turn a confirmed exit into OutcomeUnknown.
+    let mut network_obligations = job.obligations.clone();
+    network_obligations.max_output_bytes = 65_536;
+    network_obligations.network_destinations = (0..8)
+        .map(|i| format!("https://{}{i}.example.test", "a".repeat(40)))
+        .collect();
+    let mut network_request = job.process.clone();
+    network_request.max_output_bytes = Some(1024);
+    let error = validate_process_spec(&network_request, "/usr/bin/example", &network_obligations)
+        .expect_err("small cap must preserve network evidence")
+        .to_string();
+    assert!(error.contains("completion and network-origin evidence"));
+    network_request.max_output_bytes = Some(4096);
+    validate_process_spec(&network_request, "/usr/bin/example", &network_obligations)
+        .expect("bounded exact origin list fits");
+    network_obligations.network_destinations = vec!["*".into()];
+    assert!(
+        validate_process_spec(&network_request, "/usr/bin/example", &network_obligations).is_err()
+    );
+    network_request.max_output_bytes = None;
+    validate_process_spec(&network_request, "/usr/bin/example", &network_obligations)
+        .expect("policy cap fits wildcard evidence");
     assert_eq!(
         oci_remove_arguments(docker_runtime.as_path(), "job").expect("Docker cleanup"),
         ["container", "rm", "--force", "job"]

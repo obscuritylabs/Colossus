@@ -1,9 +1,9 @@
-//! Native-owned read-only command review. Only the OS confirmation can authorize.
+//! Isolated native-owned approval surface. Its one-use decision is final consent.
 
 use std::sync::Mutex;
 
 use colossus_sdk::{ApprovalInteraction, RespondInteractionRequest};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager as _, State, Webview, WebviewWindowBuilder, WindowEvent};
 use tokio::sync::oneshot;
 
@@ -15,23 +15,34 @@ use crate::{
 
 pub(crate) const WINDOW: &str = "command-approval";
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ApprovalChoice {
+    #[default]
+    Deny,
+    AllowOnce,
+    AlwaysAllow,
+}
+
 #[derive(Default)]
 pub(crate) struct CommandReviewState(Mutex<Option<PendingReview>>);
 
 struct PendingReview {
     details: CommandReviewDto,
-    response: Option<oneshot::Sender<bool>>,
+    response: Option<oneshot::Sender<ApprovalChoice>>,
 }
 
 impl PendingReview {
-    fn finish(&mut self, review_id: &str, approved: bool) -> Result<(), CommandErrorDto> {
-        if self.details.review_id != review_id {
+    fn finish(&mut self, review_id: &str, decision: ApprovalChoice) -> Result<(), CommandErrorDto> {
+        if self.details.review_id != review_id
+            || (decision == ApprovalChoice::AlwaysAllow && !self.details.can_remember)
+        {
             return Err(unavailable());
         }
         self.response
             .take()
             .ok_or_else(unavailable)?
-            .send(approved)
+            .send(decision)
             .map_err(|_| unavailable())
     }
 }
@@ -41,7 +52,11 @@ impl PendingReview {
 pub(crate) struct CommandReviewDto {
     review_id: String,
     target: String,
-    command_context: CommandApprovalContextDto,
+    command_context: Option<CommandApprovalContextDto>,
+    action: String,
+    resource: String,
+    reason: String,
+    can_remember: bool,
 }
 
 pub(crate) struct ReviewWindow {
@@ -125,12 +140,12 @@ pub(crate) fn finish_command_review(
     caller: Webview,
     state: State<'_, CommandReviewState>,
     review_id: String,
-    approved: bool,
+    decision: ApprovalChoice,
 ) -> Result<(), CommandErrorDto> {
     require_review_document(&caller)?;
     let mut pending = state.0.lock().map_err(|_| unavailable())?;
     let pending = pending.as_mut().ok_or_else(unavailable)?;
-    pending.finish(&review_id, approved)
+    pending.finish(&review_id, decision)
 }
 
 /// Fetch the exact authoritative challenge; renderer text is never consumed.
@@ -157,7 +172,7 @@ pub(crate) async fn revalidate_after_lookup<T: PartialEq>(
     Ok(())
 }
 
-/// Return a guard keeping full command details visible through OS confirmation.
+/// Keep the review alive until the final authoritative challenge check completes.
 pub(crate) async fn review_command(
     app: &AppHandle,
     target: &TargetHandle,
@@ -165,9 +180,10 @@ pub(crate) async fn review_command(
     epoch: u64,
     request: &RespondInteractionRequest,
     approval: &ApprovalInteraction,
-) -> Result<Option<ReviewWindow>, CommandErrorDto> {
-    let context = approval.command_context.clone().ok_or_else(unavailable)?;
-    context.validate().map_err(|_| unavailable())?;
+) -> Result<(ReviewWindow, ApprovalChoice), CommandErrorDto> {
+    if let Some(context) = &approval.command_context {
+        context.validate().map_err(|_| unavailable())?;
+    }
     let review_id = uuid::Uuid::new_v4().to_string();
     let (sender, receiver) = oneshot::channel();
     let state = app.state::<CommandReviewState>();
@@ -180,7 +196,13 @@ pub(crate) async fn review_command(
             details: CommandReviewDto {
                 review_id: review_id.clone(),
                 target: target_consent_description(&target.consent)?,
-                command_context: context.into(),
+                command_context: approval.command_context.clone().map(Into::into),
+                action: crate::commands::native_dialog_field(&approval.action, 4096)?,
+                resource: crate::commands::native_dialog_field(&approval.resource, 4096)?,
+                reason: crate::commands::native_dialog_field(&approval.reason, 4096)?,
+                can_remember: crate::remembered_approvals::can_remember(
+                    target, target_id, approval,
+                ),
             },
             response: Some(sender),
         });
@@ -194,7 +216,7 @@ pub(crate) async fn review_command(
             // Match the application's exact local IPC origin on Windows.
             .use_https_scheme(false)
             .on_navigation(crate::command_review_protocol::navigation_allowed)
-            .title("Review Colossus command")
+            .title("Colossus approval")
             .inner_size(900.0, 700.0)
             .min_inner_size(420.0, 360.0)
             .center()
@@ -223,30 +245,30 @@ pub(crate) async fn review_command(
     let invalidated = async {
         let _ = selection.changed().await;
     };
-    Ok(review_decision(
+    let decision = review_decision(
         receiver,
         invalidated,
         refresh,
         std::time::Duration::from_mins(5),
     )
-    .await?
-    .then_some(guard))
+    .await?;
+    Ok((guard, decision))
 }
 
 // Poll refetch separately: a stalled target must not prevent closure, target
 // changes, user response, or the overall review deadline from cancelling it.
 async fn review_decision(
-    receiver: oneshot::Receiver<bool>,
+    receiver: oneshot::Receiver<ApprovalChoice>,
     invalidated: impl std::future::Future<Output = ()>,
     refresh: impl std::future::Future<Output = Result<(), CommandErrorDto>>,
     deadline: std::time::Duration,
-) -> Result<bool, CommandErrorDto> {
+) -> Result<ApprovalChoice, CommandErrorDto> {
     tokio::select! {
         biased;
         () = invalidated => Err(unavailable()),
-        () = tokio::time::sleep(deadline) => Ok(false),
+        () = tokio::time::sleep(deadline) => Ok(ApprovalChoice::Deny),
         result = refresh => { result?; Err(unavailable()) },
-        answer = receiver => Ok(answer.unwrap_or(false)),
+        answer = receiver => Ok(answer.unwrap_or_default()),
     }
 }
 
@@ -288,7 +310,7 @@ mod tests {
                 }
             };
             if cause == "allow" {
-                sender.send(true).unwrap();
+                sender.send(ApprovalChoice::AllowOnce).unwrap();
             } else if cause == "close" {
                 drop(sender);
             }
@@ -305,27 +327,33 @@ mod tests {
             .expect("stalled refresh blocked review cancellation");
             match cause {
                 "selection" => assert!(answer.is_err()),
-                "allow" => assert!(answer.unwrap()),
-                _ => assert!(!answer.unwrap()),
+                "allow" => assert_eq!(answer.unwrap(), ApprovalChoice::AllowOnce),
+                _ => assert_eq!(answer.unwrap(), ApprovalChoice::Deny),
             }
         }
     }
 
-    fn review() -> (PendingReview, oneshot::Receiver<bool>) {
+    fn review() -> (PendingReview, oneshot::Receiver<ApprovalChoice>) {
         let (sender, receiver) = oneshot::channel();
         (
             PendingReview {
                 details: CommandReviewDto {
                     review_id: "one-use-review".into(),
                     target: "Managed Local".into(),
-                    command_context: colossus_sdk::CommandApprovalContext {
-                        justification: "Check the build.".into(),
-                        executable: "build".into(),
-                        arguments: vec![],
-                        working_directory: "/work".into(),
-                        redacted: false,
-                    }
-                    .into(),
+                    command_context: Some(
+                        colossus_sdk::CommandApprovalContext {
+                            justification: "Check the build.".into(),
+                            executable: "build".into(),
+                            arguments: vec![],
+                            working_directory: "/work".into(),
+                            redacted: false,
+                        }
+                        .into(),
+                    ),
+                    action: "process.execute".into(),
+                    resource: "configured executable".into(),
+                    reason: "Approval required".into(),
+                    can_remember: true,
                 },
                 response: Some(sender),
             },
@@ -334,8 +362,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ineligible_review_cannot_create_a_remembered_allowance() {
+        let (mut pending, mut receiver) = review();
+        pending.details.can_remember = false;
+        assert!(
+            pending
+                .finish("one-use-review", ApprovalChoice::AlwaysAllow)
+                .is_err()
+        );
+        assert_eq!(
+            receiver.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        );
+        pending
+            .finish("one-use-review", ApprovalChoice::AllowOnce)
+            .unwrap();
+        assert_eq!(receiver.await.unwrap(), ApprovalChoice::AllowOnce);
+    }
+
+    #[tokio::test]
     async fn review_acknowledgement_is_one_use_and_closing_cancels_it() {
-        for approved in [true, false] {
+        for approved in [
+            ApprovalChoice::AllowOnce,
+            ApprovalChoice::Deny,
+            ApprovalChoice::AlwaysAllow,
+        ] {
             let (mut pending, mut receiver) = review();
             assert!(pending.finish("stale-review", approved).is_err());
             assert_eq!(
@@ -351,3 +402,6 @@ mod tests {
         assert!(receiver.await.is_err());
     }
 }
+
+#[cfg(all(test, windows))]
+mod native_tests;

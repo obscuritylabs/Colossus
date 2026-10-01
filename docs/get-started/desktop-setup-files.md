@@ -215,6 +215,24 @@ In portable MCP and search definitions, credential ID fields contain `env:NAME`
 placeholders, including `credentialId`, `environmentCredentials`, and OAuth
 `clientSecretCredentialId`. These are names for missing local credentials, not
 environment variables to read. Recipients fill them through **Credentials** settings.
+Exports preserve each referenced credential's original name and type in the optional
+`desktop.credentials` mapping. Import creates empty local entries with those names
+and types, and **Add token** fills the existing entry. Shared references within a
+package share one entry; identical names alone never select an existing token.
+
+```yaml
+desktop:
+  credentials:
+    env:DOCS_TOKEN:
+      label: Company documentation token
+      kind: bearer_token
+```
+
+Each metadata key must be a slot referenced by an included MCP or search definition.
+Names are limited to 96 UTF-8 bytes. Supported kinds are `api_key`, `bearer_token`,
+`client_secret`, and `generic_secret`. Packages without metadata still import using
+the placeholder name and `generic_secret`. Neither token values nor local credential
+IDs are exported.
 Literal MCP headers are converted to credential placeholders during export; their
 values never enter the archive. Use `credentialHeaders` in hand-authored packages.
 Do not embed tokens in command arguments, instructions, or other free text.

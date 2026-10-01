@@ -15,6 +15,13 @@ export function getWorkspaceGitDiff(
   });
 }
 
+export function rememberedCommandCount(spaceId: string): Promise<number> {
+  return call("remembered_command_count", { spaceId });
+}
+export function clearRememberedCommands(spaceId: string): Promise<void> {
+  return call("clear_remembered_commands", { spaceId });
+}
+
 export interface WorkspaceSearchResults {
   paths: string[];
   truncated: boolean;
@@ -722,11 +729,17 @@ export function onStatusBarAction(
   );
 }
 
+export interface BackgroundNotificationContent {
+  threadTitle: string;
+  outputPreview: string;
+}
+
 export function notifyBackground(
   kind: BackgroundNotificationKind,
   runId: string,
+  content: BackgroundNotificationContent,
 ): Promise<boolean> {
-  return call("notify_background", { kind, runId });
+  return call("notify_background", { kind, runId, content });
 }
 
 export function listWorkspaceDirectory(

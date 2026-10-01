@@ -378,3 +378,57 @@ fn setup_export_import_preserves_tool_patterns_and_access_exclusions() {
                 && field.value == json!(["*.write"]))
     );
 }
+
+#[test]
+fn credential_roundtrip_keeps_names_types_and_shared_references_but_no_tokens() {
+    use crate::managed_configuration::CredentialKindSetting;
+    let mut package = package();
+    let mut sender = DesktopSettings::default();
+    catalog::import_catalog(&mut sender, &mut package, None).unwrap();
+    for credential in &mut sender.global_configuration.credentials {
+        credential.label = "Company token 🔑".into();
+        credential.kind = CredentialKindSetting::BearerToken;
+    }
+    // The same credential used in two header fields remains one empty entry.
+    let server = &mut sender.global_configuration.mcp_servers[0].revisions[0].value;
+    let shared = server.credential_headers["Authorization"].clone();
+    server
+        .credential_headers
+        .insert("X-Shared-Token".into(), shared);
+    let exported = commands::export_current(&sender).unwrap();
+    assert!(!exported.config_yaml.contains("COLOSSUS_SETUP_SECRET"));
+    let globals = globals::from_yaml(&exported.config_yaml).unwrap();
+    assert_eq!(globals.credentials.len(), 2);
+    assert!(
+        globals
+            .credentials
+            .values()
+            .all(|c| c.label == "Company token 🔑" && c.kind == CredentialKindSetting::BearerToken)
+    );
+    let bytes = archive::write(&exported).unwrap();
+    let source = archive::read(&bytes).unwrap();
+    let canonical =
+        serde_json::from_str(&configuration::inspection_yaml(&source).unwrap()).unwrap();
+    let mut imported = configuration::inspected(source, &canonical, &bytes).unwrap();
+    let mut recipient = DesktopSettings::default();
+    catalog::import_catalog(&mut recipient, &mut imported, None).unwrap();
+    assert_eq!(recipient.global_configuration.credentials.len(), 2);
+    for credential in &recipient.global_configuration.credentials {
+        assert_eq!(credential.label, "Company token 🔑");
+        assert_eq!(credential.kind, CredentialKindSetting::BearerToken);
+        assert_eq!(credential.created_at_ms, 0);
+        assert!(
+            !sender
+                .global_configuration
+                .credentials
+                .iter()
+                .any(|old| old.id == credential.id)
+        );
+    }
+    let server = &recipient.global_configuration.mcp_servers[0].revisions[0].value;
+    assert_eq!(
+        server.credential_headers["Authorization"].credential_id,
+        server.credential_headers["X-Shared-Token"].credential_id
+    );
+    configuration::validate_saved(&[imported]).unwrap();
+}

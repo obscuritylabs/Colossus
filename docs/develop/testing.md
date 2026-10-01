@@ -162,6 +162,16 @@ checks the import review, explicit trust/replacement choices, deferred credentia
 Markdown isolation, and imported provider selection. Native file pickers and vault
 entry dialogs still require on-screen acceptance.
 
+### Windows single-instance acceptance
+
+The operator-owned Windows Desktop acceptance tier runs
+`cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib desktop_instance::native_tests::native_single_instance_restores_original_window -- --ignored --exact`.
+It requires WebView2 and an interactive desktop. It uses a temporary browser profile
+and a unique application identifier, starts a real second process, and verifies that
+the process exits successfully while the original hidden or minimized window is
+restored. It never opens the installed application's settings or credential vault.
+The ordinary Windows unit suite covers startup serialization and tray click routing.
+
 ### Desktop embedded browser preview
 
 From `apps/desktop`, run `npm run test:browser-native` to build and exercise the
@@ -261,9 +271,15 @@ From `apps/desktop`, `npm run test:approval-runtime` builds a feature-gated acce
 example and the real sidecar. It drives the production review component through the
 production native approval adapter, authenticated worker, and separate approval broker.
 Allow, deny, and cancellation use fresh private homes with a credential-free local
-provider. The test substitutes only the human OS-dialog decision; pending-interaction
+provider. The test supplies only the human decision in the isolated review document; pending-interaction
 refetch, authorization, policy, permits, and process execution remain real. No test bridge
-is linked into production. The macOS and Windows pre-merge lanes run this tier with no
+is linked into production. Both foreground and managed commands cover Allow once,
+remembered exact-command approval, denial, and cancellation. The same tier runs real
+stdout/stderr at 1,024- and 4,096-byte limits, successful and nonzero exits, and a Windows
+loopback server on a dynamically assigned port. The server must survive a later turn,
+reappear after UI reconnect, expose its released logs, and stop from Active shells with
+its listener closed. A disposable occupied port separately proves visible startup
+failure without touching existing listeners. The macOS and Windows pre-merge lanes run this tier with no
 scenario retries. Screenshots are in `apps/desktop/output/playwright`, with browser traces
 retained on failure. Mocked browser tests separately cover keyboard operation, compact
 layouts, accessibility, redaction, full details, and stale review state.
@@ -293,9 +309,19 @@ external-binary staging must never overwrite the freshly compiled CLI or sidecar
 with a previously staged binary. Relative target paths resolve from the repository.
 
 Native on-screen smoke testing must additionally verify that the isolated command review
-window opens, external navigation is blocked, closing it invalidates review, and final
-OS confirmation identifies the target, reason, and review binding without presenting a
-truncated command as complete. Browser acceptance does not substitute for this check.
+window opens, external navigation is blocked, closing it invalidates review, and its
+Allow once / Always allow / Deny buttons are the final decision without another OS dialog.
+Verify the full command and working directory remain readable. Browser acceptance does
+not substitute for this check. Native remembered-command tests cover exact matching,
+workspace identity, redacted-command rejection, persistence across reopen, and clearing.
+
+On Windows, the operator-driven
+`cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib command_review::native_tests::native_review_buttons_and_close -- --ignored --exact --nocapture`
+opens three isolated WebView2 review windows. Follow each window's fixture instruction:
+Allow once, Always allow, then close the window. The test uses the shipped custom
+protocol, verifies blocked external navigation and native decision delivery, and never
+executes a command or touches user settings. Build the renderer first and set
+`TAURI_CONFIG` to `{"build":{"devUrl":null}}` for bundled assets.
 
 ### Desktop plugin runtime acceptance
 
