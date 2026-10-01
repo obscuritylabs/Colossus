@@ -8,16 +8,18 @@ fn fixture() -> (
     ApprovalInteraction,
 ) {
     let root = tempfile::tempdir().unwrap();
+    // macOS temporary roots may use /var, a symlink to /private/var.
+    let workspace_path = std::fs::canonicalize(root.path()).unwrap();
     let mut settings = DesktopSettings::default();
     let id = settings
-        .add_space(validate_workspace(root.path()).unwrap())
+        .add_space(validate_workspace(&workspace_path).unwrap())
         .unwrap();
     let approval = ApprovalInteraction {
         command_context: Some(colossus_sdk::CommandApprovalContext {
             justification: "Check the build".into(),
             executable: "build-tool".into(),
             arguments: vec!["--check".into(), "two  spaces".into()],
-            working_directory: root.path().to_string_lossy().into_owned(),
+            working_directory: workspace_path.to_string_lossy().into_owned(),
             redacted: false,
         }),
         action: "process.execute".into(),
