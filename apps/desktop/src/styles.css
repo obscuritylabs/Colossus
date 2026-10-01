@@ -11615,9 +11615,7 @@ textarea {
   gap: 12px;
   margin-bottom: 20px;
 }
-
 .authority-control-grid label,
-.credential-create-row label,
 .mcp-editor label {
   display: grid;
   min-width: 0;
@@ -11631,10 +11629,7 @@ textarea {
   font-size: var(--font-size-caption);
   line-height: 1.4;
 }
-
 .authority-control-grid .app-select,
-.credential-create-row input,
-.credential-create-row .app-select,
 .mcp-editor input,
 .mcp-editor .app-select,
 .managed-field-row input[type="number"],
@@ -11651,18 +11646,14 @@ textarea {
   color: var(--text);
   font-size: var(--font-size-body);
 }
-
 .authority-control-grid .app-select,
-.credential-create-row .app-select,
 .mcp-editor .app-select,
 .managed-field-row .app-select,
 .space-settings-context .app-select {
   height: 36px;
   padding: 0;
 }
-
 .authority-control-grid .app-select-trigger,
-.credential-create-row .app-select-trigger,
 .mcp-editor .app-select-trigger,
 .managed-field-row .app-select-trigger,
 .space-settings-context .app-select-trigger {
@@ -12092,116 +12083,6 @@ textarea {
   background: var(--surface-panel);
 }
 
-.credentials-heading-copy {
-  max-width: 560px;
-  margin: 6px 0 0;
-  color: var(--muted);
-  font-size: var(--font-size-body-sm);
-  line-height: 1.45;
-}
-
-.credential-security-note {
-  display: flex;
-  max-width: 360px;
-  align-items: center;
-  gap: 9px;
-  padding: 9px 11px;
-  border: 1px solid var(--green-border);
-  border-radius: 7px;
-  background: var(--green-soft);
-  color: var(--green-text);
-}
-
-.credential-security-note > svg {
-  flex: 0 0 auto;
-}
-
-.credential-security-note strong,
-.credential-security-note small {
-  display: block;
-}
-
-.credential-security-note strong {
-  color: var(--text-strong);
-  font-size: var(--font-size-body-sm);
-}
-
-.credential-security-note small {
-  margin-top: 2px;
-  color: var(--text);
-  font-size: var(--font-size-caption);
-  line-height: 1.35;
-}
-
-.credentials-metric-strip {
-  margin-bottom: 16px;
-}
-
-.credential-create-card,
-.credential-inventory {
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface-inset);
-}
-
-.credential-create-card {
-  padding: 16px;
-  margin-bottom: 16px;
-}
-
-.credential-card-heading,
-.credential-inventory-heading {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-}
-
-.credential-card-heading {
-  margin-bottom: 15px;
-}
-
-.credential-card-heading h4,
-.credential-inventory-heading h4 {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: var(--font-size-heading-sm);
-}
-
-.credential-card-heading p,
-.credential-inventory-heading p {
-  margin: 4px 0 0;
-  color: var(--muted);
-  font-size: var(--font-size-caption);
-  line-height: 1.45;
-}
-
-.credential-create-row {
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(150px, 0.6fr) auto;
-  gap: 12px;
-  align-items: start;
-}
-
-.credential-create-row label > small {
-  color: var(--faint);
-  font-size: var(--font-size-caption);
-  line-height: 1.35;
-}
-
-.credential-create-row > .button {
-  min-height: 36px;
-  margin-top: 19px;
-  white-space: nowrap;
-}
-
-.credential-inventory-heading {
-  justify-content: space-between;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-panel);
-}
-
 .credential-count {
   display: grid;
   min-width: 30px;
@@ -12215,149 +12096,22 @@ textarea {
   font-weight: 700;
 }
 
-.credential-list {
-  border: 0;
-  border-radius: 0;
-}
-
-.credential-list .managed-list-row {
-  min-height: 66px;
-}
-
-.credential-row-meta {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 7px;
-}
-
-.credential-row-meta .status-chip {
-  white-space: nowrap;
-}
-
-.search-heading-copy {
-  max-width: 600px;
-  margin: 6px 0 0;
-  color: var(--muted);
-  font-size: var(--font-size-body-sm);
-  line-height: 1.45;
-}
-
-.search-routing-note {
-  display: flex;
-  max-width: 340px;
-  align-items: center;
-  gap: 9px;
-  padding: 9px 11px;
-  border: 1px solid var(--accent-border);
-  border-radius: 7px;
-  background: var(--blue-soft);
-  color: var(--blue-strong);
-}
-
-.search-routing-note > svg {
-  flex: 0 0 auto;
-}
-
-.search-routing-note strong,
-.search-routing-note small {
-  display: block;
-}
-
-.search-routing-note strong {
-  color: var(--text-strong);
-  font-size: var(--font-size-body-sm);
-}
-
-.search-routing-note small {
-  margin-top: 2px;
-  color: var(--text);
-  font-size: var(--font-size-caption);
-  line-height: 1.35;
-}
-
-.search-metric-strip {
-  margin-bottom: 16px;
-}
-
-.search-profile-toolbar,
-.search-inventory-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.search-profile-toolbar {
-  margin-bottom: 12px;
-}
-
-.search-profile-toolbar h4,
-.search-inventory-heading h4,
 .search-editor-heading h4,
 .search-editor-section-heading h5 {
   margin: 0;
   color: var(--text-strong);
 }
 
-.search-profile-toolbar h4,
-.search-inventory-heading h4,
 .search-editor-heading h4 {
   font-size: var(--font-size-heading-sm);
 }
 
-.search-profile-toolbar p,
-.search-inventory-heading p,
 .search-editor-heading p,
 .search-editor-section-heading p {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: var(--font-size-caption);
   line-height: 1.45;
-}
-
-.search-profile-toolbar > .button {
-  flex: 0 0 auto;
-}
-
-.search-profile-inventory {
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface-inset);
-}
-
-.search-inventory-heading {
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-panel);
-}
-
-.search-profile-list {
-  border: 0;
-  border-radius: 0;
-}
-
-.search-profile-row {
-  min-height: 76px;
-}
-
-.search-profile-endpoint {
-  overflow: hidden;
-  max-width: 640px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.search-row-meta {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 7px;
-}
-
-.search-row-meta .status-chip {
-  white-space: nowrap;
 }
 
 .search-editor {
@@ -12751,128 +12505,22 @@ textarea {
   background: var(--surface-panel);
 }
 
-.telemetry-heading-copy {
-  max-width: 620px;
-  margin: 6px 0 0;
-  color: var(--muted);
-  font-size: var(--font-size-body-sm);
-  line-height: 1.45;
-}
-
-.telemetry-disclosure-note {
-  display: flex;
-  max-width: 370px;
-  align-items: center;
-  gap: 9px;
-  padding: 9px 11px;
-  border: 1px solid var(--amber-border);
-  border-radius: 7px;
-  background: var(--amber-soft);
-  color: var(--amber-text);
-}
-
-.telemetry-disclosure-note > svg {
-  flex: 0 0 auto;
-}
-
-.telemetry-disclosure-note strong,
-.telemetry-disclosure-note small {
-  display: block;
-}
-
-.telemetry-disclosure-note strong {
-  color: var(--text-strong);
-  font-size: var(--font-size-body-sm);
-}
-
-.telemetry-disclosure-note small {
-  margin-top: 2px;
-  color: var(--text);
-  font-size: var(--font-size-caption);
-  line-height: 1.35;
-}
-
-.telemetry-metric-strip {
-  margin-bottom: 16px;
-}
-
-.telemetry-catalog-toolbar,
-.telemetry-inventory-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.telemetry-catalog-toolbar {
-  margin-bottom: 12px;
-}
-
-.telemetry-catalog-toolbar h4,
-.telemetry-inventory-heading h4,
 .telemetry-editor-heading h4,
 .telemetry-editor-section-heading h5 {
   margin: 0;
   color: var(--text-strong);
 }
 
-.telemetry-catalog-toolbar h4,
-.telemetry-inventory-heading h4,
 .telemetry-editor-heading h4 {
   font-size: var(--font-size-heading-sm);
 }
 
-.telemetry-catalog-toolbar p,
-.telemetry-inventory-heading p,
 .telemetry-editor-heading p,
 .telemetry-editor-section-heading p {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: var(--font-size-caption);
   line-height: 1.45;
-}
-
-.telemetry-catalog-toolbar > .button {
-  flex: 0 0 auto;
-}
-
-.telemetry-inventory {
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface-inset);
-}
-
-.telemetry-inventory-heading {
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-panel);
-}
-
-.telemetry-list {
-  border: 0;
-  border-radius: 0;
-}
-
-.telemetry-row {
-  min-height: 84px;
-  grid-template-columns: auto minmax(180px, 1fr) auto minmax(390px, auto) auto;
-}
-
-.telemetry-protocol-chip {
-  justify-self: start;
-}
-
-.telemetry-row-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.telemetry-row-meta .status-chip {
-  white-space: nowrap;
 }
 
 .telemetry-editor {
@@ -13078,43 +12726,6 @@ textarea {
   font-size: var(--font-size-caption);
 }
 
-.desktop-native-note {
-  display: flex;
-  max-width: 360px;
-  align-items: center;
-  gap: 9px;
-  padding: 9px 11px;
-  border: 1px solid var(--accent-border);
-  border-radius: 7px;
-  background: var(--blue-soft);
-  color: var(--blue-strong);
-}
-
-.desktop-native-note > svg {
-  flex: 0 0 auto;
-}
-
-.desktop-native-note strong,
-.desktop-native-note small {
-  display: block;
-}
-
-.desktop-native-note strong {
-  color: var(--text-strong);
-  font-size: var(--font-size-body);
-}
-
-.desktop-native-note small {
-  margin-top: 2px;
-  color: var(--text);
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-body);
-}
-
-.desktop-metric-strip {
-  margin-bottom: 16px;
-}
-
 .appearance-settings-card,
 .desktop-control-panel,
 .desktop-target-inventory {
@@ -13127,10 +12738,6 @@ textarea {
 .appearance-settings-card,
 .desktop-control-panel {
   margin-bottom: 18px;
-}
-
-.appearance-settings-heading {
-  border-bottom: 1px solid var(--border);
 }
 
 .appearance-control-grid {
@@ -13200,7 +12807,6 @@ textarea {
   font-size: var(--font-size-control);
 }
 
-.desktop-panel-heading,
 .desktop-target-toolbar {
   display: flex;
   align-items: center;
@@ -13208,24 +12814,16 @@ textarea {
   gap: 16px;
 }
 
-.desktop-panel-heading {
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-panel);
-}
-
 .desktop-target-toolbar {
   margin-bottom: 12px;
 }
 
-.desktop-panel-heading h4,
 .desktop-target-toolbar h4 {
   margin: 0;
   color: var(--text-strong);
   font-size: var(--font-size-heading-sm);
 }
 
-.desktop-panel-heading p,
 .desktop-target-toolbar p {
   margin: 4px 0 0;
   color: var(--muted);
@@ -13233,8 +12831,6 @@ textarea {
   line-height: var(--line-height-body);
 }
 
-.desktop-panel-heading > .status-chip,
-.desktop-panel-heading > .credential-count,
 .desktop-target-toolbar > .button {
   flex: 0 0 auto;
 }
@@ -13501,19 +13097,10 @@ textarea {
   .appearance-control-grid .app-select {
     grid-column: 1 / -1;
   }
-
   .managed-metric-strip,
   .authority-control-grid,
-  .credential-create-row,
   .mcp-editor {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .credentials-settings .credentials-metric-strip,
-  .search-settings .search-metric-strip,
-  .telemetry-settings .telemetry-metric-strip,
-  .desktop-settings .desktop-metric-strip {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .credentials-settings .managed-section-heading {
@@ -13529,16 +13116,7 @@ textarea {
     align-items: flex-start;
     flex-direction: column;
   }
-
-  .credential-security-note {
-    width: 100%;
-    max-width: none;
-  }
-
-  .search-routing-note,
-  .provider-security-note,
-  .telemetry-disclosure-note,
-  .desktop-native-note {
+  .provider-security-note {
     width: 100%;
     max-width: none;
   }
@@ -13568,51 +13146,6 @@ textarea {
   .model-editor-heading,
   .telemetry-editor-heading {
     padding-left: 56px;
-  }
-
-  .credential-create-row > .button {
-    width: 100%;
-    margin-top: 0;
-  }
-
-  .credential-list .managed-list-row {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-  }
-
-  .search-profile-row {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-  }
-
-  .telemetry-row {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-  }
-
-  .credential-list .credential-row-meta,
-  .credential-list .resource-actions {
-    grid-column: 2 / -1;
-    justify-content: flex-start;
-  }
-
-  .search-profile-list .search-row-meta {
-    grid-column: 2 / 3;
-    flex-wrap: wrap;
-    justify-content: flex-start;
-  }
-
-  .search-profile-list .resource-actions {
-    grid-column: 3;
-  }
-
-  .telemetry-list .telemetry-protocol-chip,
-  .telemetry-list .telemetry-row-meta {
-    grid-column: 2 / 3;
-    flex-wrap: wrap;
-    justify-content: flex-start;
-  }
-
-  .telemetry-list .resource-actions {
-    grid-column: 3;
-    grid-row: 1 / span 3;
   }
 
   .mcp-editor-heading,
@@ -13712,20 +13245,6 @@ textarea {
     justify-content: flex-start;
   }
 
-  .credentials-settings .credential-list .resource-actions {
-    grid-column: 2 / -1;
-  }
-
-  .search-settings .search-profile-list .resource-actions {
-    grid-column: 3;
-  }
-
-  .telemetry-settings .telemetry-list .resource-actions {
-    grid-column: 3;
-    grid-row: 1 / span 3;
-    justify-content: flex-end;
-  }
-
   .locked-invariant-list {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -13741,27 +13260,10 @@ textarea {
 }
 
 @media (max-width: 520px) {
-  .credentials-settings .credentials-metric-strip,
-  .search-settings .search-metric-strip,
-  .telemetry-settings .telemetry-metric-strip,
-  .desktop-settings .desktop-metric-strip {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .credential-row-meta {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .search-profile-toolbar,
-  .telemetry-catalog-toolbar,
   .desktop-target-toolbar {
     align-items: stretch;
     flex-direction: column;
   }
-
-  .search-profile-toolbar > .button,
-  .telemetry-catalog-toolbar > .button,
   .desktop-target-toolbar > .button {
     width: 100%;
   }
@@ -13775,28 +13277,6 @@ textarea {
   .desktop-target-row > .status-chip,
   .desktop-control-row > .resource-actions,
   .desktop-target-row > .resource-actions {
-    grid-column: 2 / -1;
-    grid-row: auto;
-    justify-content: flex-start;
-  }
-
-  .search-profile-row {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .telemetry-row {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .search-profile-list .search-row-meta,
-  .search-settings .search-profile-list .resource-actions {
-    grid-column: 2 / -1;
-    justify-content: flex-start;
-  }
-
-  .telemetry-list .telemetry-protocol-chip,
-  .telemetry-list .telemetry-row-meta,
-  .telemetry-settings .telemetry-list .resource-actions {
     grid-column: 2 / -1;
     grid-row: auto;
     justify-content: flex-start;

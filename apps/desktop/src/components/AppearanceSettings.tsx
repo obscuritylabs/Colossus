@@ -32,13 +32,13 @@ export function AppearanceSettings() {
 
   return (
     <section
-      className="appearance-settings-card"
+      className="managed-settings-body desktop-settings"
       aria-labelledby="appearance-settings-heading"
     >
-      <div className="desktop-panel-heading appearance-settings-heading">
+      <div className="managed-section-heading">
         <div>
-          <h4 id="appearance-settings-heading">Appearance</h4>
-          <p>
+          <h3 id="appearance-settings-heading">Appearance</h3>
+          <p className="managed-heading-copy">
             Choose how Colossus looks on this device. Changes apply immediately
             and stay local to this Desktop installation.
           </p>
@@ -47,74 +47,76 @@ export function AppearanceSettings() {
           {resolvedColorTheme === "dark" ? "Dark palette" : "Light palette"}
         </span>
       </div>
-      <div className="appearance-control-grid">
-        <label htmlFor="appearance-color-theme">
-          <span className="appearance-control-icon">
-            <IconPalette size={18} aria-hidden="true" />
-          </span>
-          <span className="appearance-control-copy">
-            <strong>Color theme</strong>
-            <small id="appearance-color-theme-help">
-              {COLOR_THEME_COPY[colorTheme]}
+      <div className="appearance-settings-card">
+        <div className="appearance-control-grid">
+          <label htmlFor="appearance-color-theme">
+            <span className="appearance-control-icon">
+              <IconPalette size={18} aria-hidden="true" />
+            </span>
+            <span className="appearance-control-copy">
+              <strong>Color theme</strong>
+              <small id="appearance-color-theme-help">
+                {COLOR_THEME_COPY[colorTheme]}
+              </small>
+            </span>
+            <DropdownSelect
+              id="appearance-color-theme"
+              value={colorTheme}
+              aria-describedby="appearance-color-theme-help"
+              onChange={(event) =>
+                setColorTheme(event.target.value as ColorThemePreference)
+              }
+            >
+              <option value="system">System</option>
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </DropdownSelect>
+          </label>
+          <label htmlFor="appearance-text-size">
+            <span className="appearance-control-icon">
+              <IconTypography size={18} aria-hidden="true" />
+            </span>
+            <span className="appearance-control-copy">
+              <strong>Text size</strong>
+              <small id="appearance-text-size-help">
+                {TEXT_SIZE_COPY[textSize]}
+              </small>
+            </span>
+            <DropdownSelect
+              id="appearance-text-size"
+              value={textSize}
+              aria-describedby="appearance-text-size-help"
+              onChange={(event) =>
+                setTextSize(event.target.value as TextSizePreference)
+              }
+            >
+              <option value="compact">Compact</option>
+              <option value="comfortable">Comfortable</option>
+              <option value="large">Large</option>
+            </DropdownSelect>
+          </label>
+        </div>
+        <label className="compact-switch appearance-security-warnings">
+          <input
+            className="switch-input"
+            type="checkbox"
+            role="switch"
+            checked={showSecurityWarnings}
+            aria-labelledby="appearance-security-warnings-label"
+            aria-describedby="appearance-security-warnings-help"
+            onChange={(event) => setShowSecurityWarnings(event.target.checked)}
+          />
+          <span>
+            <strong id="appearance-security-warnings-label">
+              Show security warnings
+            </strong>
+            <small id="appearance-security-warnings-help">
+              Show Developer Preview and Full access banners at the top of the
+              app. Off by default.
             </small>
           </span>
-          <DropdownSelect
-            id="appearance-color-theme"
-            value={colorTheme}
-            aria-describedby="appearance-color-theme-help"
-            onChange={(event) =>
-              setColorTheme(event.target.value as ColorThemePreference)
-            }
-          >
-            <option value="system">System</option>
-            <option value="dark">Dark</option>
-            <option value="light">Light</option>
-          </DropdownSelect>
-        </label>
-        <label htmlFor="appearance-text-size">
-          <span className="appearance-control-icon">
-            <IconTypography size={18} aria-hidden="true" />
-          </span>
-          <span className="appearance-control-copy">
-            <strong>Text size</strong>
-            <small id="appearance-text-size-help">
-              {TEXT_SIZE_COPY[textSize]}
-            </small>
-          </span>
-          <DropdownSelect
-            id="appearance-text-size"
-            value={textSize}
-            aria-describedby="appearance-text-size-help"
-            onChange={(event) =>
-              setTextSize(event.target.value as TextSizePreference)
-            }
-          >
-            <option value="compact">Compact</option>
-            <option value="comfortable">Comfortable</option>
-            <option value="large">Large</option>
-          </DropdownSelect>
         </label>
       </div>
-      <label className="compact-switch appearance-security-warnings">
-        <input
-          className="switch-input"
-          type="checkbox"
-          role="switch"
-          checked={showSecurityWarnings}
-          aria-labelledby="appearance-security-warnings-label"
-          aria-describedby="appearance-security-warnings-help"
-          onChange={(event) => setShowSecurityWarnings(event.target.checked)}
-        />
-        <span>
-          <strong id="appearance-security-warnings-label">
-            Show security warnings
-          </strong>
-          <small id="appearance-security-warnings-help">
-            Show Developer Preview and Full access banners at the top of the
-            app. Off by default.
-          </small>
-        </span>
-      </label>
     </section>
   );
 }

@@ -5,7 +5,11 @@ import {
   IconBox,
   IconCloud,
   IconCpu,
-  IconDeviceDesktop,
+  IconCertificate,
+  IconNetwork,
+  IconPalette,
+  IconRefresh,
+  IconTerminal2,
   IconFileCode,
   IconFlask,
   IconFolder,
@@ -17,7 +21,7 @@ import {
   IconWorld,
   IconX,
 } from "@tabler/icons-react";
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import colossusMark from "../assets/colossus-mark.svg";
 
 const sectionIcons = {
@@ -35,7 +39,12 @@ const sectionIcons = {
   advanced: IconAdjustments,
   effective: IconFileCode,
   defaults: IconAdjustments,
-  desktop: IconDeviceDesktop,
+  appearance: IconPalette,
+  connections: IconNetwork,
+  setup: IconBox,
+  terminal: IconTerminal2,
+  certificates: IconCertificate,
+  updates: IconRefresh,
 };
 
 export function SettingsFrame({
@@ -54,7 +63,7 @@ export function SettingsFrame({
   onScopeChange: (scope: "global" | "space") => void;
   query: string;
   onQueryChange: (query: string) => void;
-  tabs: ReadonlyArray<{ id: string; label: string }>;
+  tabs: ReadonlyArray<{ id: string; label: string; group?: string }>;
   activeTab: string;
   onTabChange: (tab: string) => void;
   workspaceContext: ReactNode;
@@ -130,39 +139,34 @@ export function SettingsFrame({
                 </span>
               </button>
             </div>
-            <div className="settings-scope-context">
-              <div
-                className={`settings-workspace-context${scope === "global" ? " is-inactive" : ""}`}
-                inert={scope === "global"}
-                aria-hidden={scope === "global"}
-              >
-                {workspaceContext}
-              </div>
-              {scope === "global" ? (
-                <p>Manage shared resources and defaults for your workspaces.</p>
-              ) : null}
-            </div>
+            {scope === "space" ? (
+              <div className="settings-scope-context">{workspaceContext}</div>
+            ) : null}
             <nav
               className="managed-settings-tabs"
               aria-label="Settings sections"
             >
-              {tabs.map((tab) => {
+              {tabs.map((tab, index) => {
                 const Icon =
                   sectionIcons[tab.id as keyof typeof sectionIcons] ??
                   IconSettings;
                 return (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    className="sidebar-nav-item"
-                    aria-current={
-                      !query && activeTab === tab.id ? "page" : undefined
-                    }
-                    onClick={() => onTabChange(tab.id)}
-                  >
-                    <Icon size={17} stroke={1.7} aria-hidden="true" />
-                    {tab.label}
-                  </button>
+                  <Fragment key={tab.id}>
+                    {tab.group && tab.group !== tabs[index - 1]?.group ? (
+                      <h3 className="settings-nav-heading">{tab.group}</h3>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="sidebar-nav-item"
+                      aria-current={
+                        !query && activeTab === tab.id ? "page" : undefined
+                      }
+                      onClick={() => onTabChange(tab.id)}
+                    >
+                      <Icon size={17} stroke={1.7} aria-hidden="true" />
+                      {tab.label}
+                    </button>
+                  </Fragment>
                 );
               })}
             </nav>

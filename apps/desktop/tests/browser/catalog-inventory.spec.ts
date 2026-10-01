@@ -88,13 +88,20 @@ for (const [tab, kind, label] of [
 test("inventory rows reflow without clipped actions in both themes", async ({
   page,
 }) => {
+  test.setTimeout(90_000);
   for (const theme of ["Light", "Dark"] as const) {
-    await page.getByRole("button", { name: "Desktop", exact: true }).click();
+    await page.getByRole("button", { name: "Appearance", exact: true }).click();
     await page.getByRole("combobox", { name: /^Color theme/u }).click();
     await page.getByRole("option", { name: theme, exact: true }).click();
     for (const width of [1440, 700, 480]) {
       await page.setViewportSize({ width, height: 950 });
-      for (const tab of ["Providers", "Models"] as const) {
+      for (const tab of [
+        "Providers",
+        "Models",
+        "Credentials",
+        "Search",
+        "Telemetry",
+      ] as const) {
         await page.getByRole("button", { name: tab, exact: true }).click();
         const inventory = page.locator(".catalog-settings");
         const table = inventory.getByRole("table");
@@ -104,14 +111,53 @@ test("inventory rows reflow without clipped actions in both themes", async ({
           scroll: element.scrollWidth,
         }));
         expect(bounds.scroll).toBeLessThanOrEqual(bounds.client + 1);
-        const trigger = inventory.getByRole("button", {
-          name: /More actions for/u,
-        });
-        await expect(trigger).toBeInViewport();
-        await trigger.click();
-        const menuBounds = (await inventory.getByRole("menu").boundingBox())!;
-        expect(menuBounds.x).toBeGreaterThanOrEqual(0);
-        expect(menuBounds.x + menuBounds.width).toBeLessThanOrEqual(width);
+        const actionGroup = inventory.locator(".catalog-action-group").first();
+        const action = (await actionGroup
+          .getByRole("button")
+          .nth(0)
+          .boundingBox())!;
+        const hasMenu = tab !== "Search" && tab !== "Telemetry";
+        if (hasMenu) {
+          const menuTrigger = (await actionGroup
+            .getByRole("button")
+            .nth(1)
+            .boundingBox())!;
+          expect(
+            Math.abs(
+              action.y +
+                action.height / 2 -
+                menuTrigger.y -
+                menuTrigger.height / 2,
+            ),
+          ).toBeLessThanOrEqual(1);
+          expect(menuTrigger.x).toBeGreaterThanOrEqual(action.x + action.width);
+        }
+        if (width === 1440) {
+          const row = (await inventory
+            .locator(".catalog-inventory-row")
+            .first()
+            .boundingBox())!;
+          expect(row.height).toBeLessThanOrEqual(64);
+          expect(
+            Math.abs(action.y + action.height / 2 - row.y - row.height / 2),
+          ).toBeLessThanOrEqual(1);
+        }
+        if (hasMenu) {
+          const trigger = inventory
+            .getByRole("button", { name: /More actions for/u })
+            .first();
+          await expect(trigger).toBeInViewport();
+          await trigger.click();
+          const menuBounds = (await inventory.getByRole("menu").boundingBox())!;
+          expect(menuBounds.x).toBeGreaterThanOrEqual(0);
+          expect(menuBounds.x + menuBounds.width).toBeLessThanOrEqual(width);
+        } else {
+          await expect(actionGroup.getByRole("button")).toBeInViewport();
+          await inventory.locator(".catalog-name").first().click();
+          await expect(
+            inventory.locator(".catalog-details:visible"),
+          ).toContainText("Active workspaces");
+        }
         const accessibility = await new AxeBuilder({ page })
           .include(".catalog-settings")
           .analyze();
@@ -121,9 +167,8 @@ test("inventory rows reflow without clipped actions in both themes", async ({
           ),
         ).toEqual([]);
         await page.keyboard.press("Escape");
-        await inventory
-          .getByRole("heading", { name: tab, exact: true })
-          .click();
+        if (!hasMenu) await inventory.locator(".catalog-name").first().click();
+        await inventory.getByRole("heading", { level: 3 }).click();
         await inventory.screenshot({
           path: `output/playwright/inventory-${tab.toLowerCase()}-${theme.toLowerCase()}-${width}.png`,
         });
@@ -206,7 +251,7 @@ test("provider branding follows the connection in both inventories and the model
   ).toHaveText("Team gateway");
 
   for (const theme of ["Light", "Dark"] as const) {
-    await page.getByRole("button", { name: "Desktop", exact: true }).click();
+    await page.getByRole("button", { name: "Appearance", exact: true }).click();
     await page.getByRole("combobox", { name: /^Color theme/u }).click();
     await page.getByRole("option", { name: theme, exact: true }).click();
     for (const tab of ["Providers", "Models"] as const) {

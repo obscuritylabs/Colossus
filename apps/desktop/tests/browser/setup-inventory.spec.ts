@@ -93,6 +93,7 @@ async function openInventory(page: Page, imported = true) {
             populate();
             return null;
           }
+          if (command === "export_setup_package") return true;
           if (command === "desktop_status") return {};
           if (command === "configure_setup_credential") {
             await new Promise<void>((resolve) => {
@@ -160,12 +161,30 @@ test("every imported connection is in the normal inventory and setup management 
   await expect(rows.filter({ hasText: "Local Models" })).toContainText(
     "No key required",
   );
+  await expect(rows.first()).toBeInViewport();
+  await expect(page.locator(".setup-packages")).toHaveCount(0);
+  await page.getByRole("button", { name: "Setup", exact: true }).click();
   expect(
     await page
       .locator(".setup-packages")
       .evaluate((el) => el.getBoundingClientRect().height),
   ).toBeLessThan(170);
-  await expect(rows.first()).toBeInViewport();
+  await page
+    .getByRole("button", { name: "Export global setup", exact: true })
+    .click();
+  await expect(
+    page
+      .getByRole("region", { name: "Desktop setup files", exact: true })
+      .getByRole("status"),
+  ).toContainText("Global setup exported.");
+  const exported = await page.evaluate(() =>
+    (window as any).setupInventory.calls.filter(
+      (call: any) => call.command === "export_setup_package",
+    ),
+  );
+  expect(exported).toEqual([
+    { command: "export_setup_package", args: { packageId: null } },
+  ]);
   await page.getByRole("button", { name: "Manage setup files (1)" }).click();
   const dialog = page.getByRole("dialog", { name: "Setup files" });
   await expect(dialog).toBeVisible();
@@ -188,11 +207,13 @@ test("import refreshes both provider and model inventory immediately without a k
   page,
 }) => {
   await openInventory(page, false);
+  await page.getByRole("button", { name: "Setup", exact: true }).click();
   await page
     .getByRole("button", { name: "Import setup file", exact: true })
     .click();
   await page.getByRole("button", { name: "Import setup", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: "Providers", exact: true }).click();
   await expect(page.locator(".catalog-inventory-row")).toHaveCount(5);
   await page.getByRole("button", { name: "Models", exact: true }).click();
   await expect(page.locator(".catalog-inventory-row")).toHaveCount(6);
