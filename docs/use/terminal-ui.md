@@ -3,6 +3,7 @@ title: Terminal UI
 description: Work in Colossus's responsive terminal interface with durable sessions, approvals, completion, and safe cancellation.
 audience: user
 type: how-to
+icon: lucide/terminal
 ---
 
 # Terminal UI
@@ -128,6 +129,14 @@ Enter these commands in the composer:
 ```
 
 Unknown slash commands remain in the terminal parser and are not sent to the model.
+Use `/tools` to inspect the active catalog; see [Tools](tools.md) for how to read it.
+Use [Skills and plugins](skills-plugins.md) to choose an Agent Skill for a message or
+conversation. Use [MCP servers](mcp-servers.md) to inspect external tool servers.
+For the Draft-to-Goal workflow, see [Planning](planning.md).
+For source-backed questions in the terminal, see [Research](research.md).
+Use [Memories](memories.md) to save and find reusable context.
+Use [Decisions](decisions.md) to record a binding workspace choice.
+Use `/theme` to preview and change the terminal appearance; see [Theme](theme.md).
 
 ### 3. Plan before executing
 
@@ -247,5 +256,6 @@ and `/audit verify` to confirm the active session and journal.
 
 ## Next step
 
-Learn how to [resume sessions and manage context](sessions-context.md). Exact slash
-commands and keys live in [TUI commands and keys](../reference/tui.md).
+Learn how to [find and resume sessions](sessions.md) or
+[manage context snapshots](sessions-context.md). Exact slash commands and keys live
+in [TUI commands and keys](../reference/tui.md).

@@ -3,6 +3,7 @@ title: Core concepts
 description: Understand runs, sessions, tools, authorization, durable state, and extensions before expanding Colossus access.
 audience: user
 type: concept
+icon: lucide/shield-check
 ---
 
 # Core concepts

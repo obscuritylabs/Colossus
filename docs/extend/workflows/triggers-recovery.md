@@ -3,6 +3,7 @@ title: Triggers and recovery
 description: Trigger exact workflow definitions from schedules, authenticated webhooks, or repository events and recover without unsafe replay.
 audience: developer
 type: how-to
+icon: lucide/refresh-cw
 ---
 
 # Triggers and recovery

@@ -1,92 +1,124 @@
 ---
 title: Memories
-description: Store, retrieve, and retire durable non-secret context with explicit scope and lifecycle.
+description: Save useful context, find it later, and replace or retire stale guidance.
 audience: user
 type: how-to
+icon: lucide/brain
 ---
 
 # Memories
 
-## Goal
+Memories keep useful, non-secret context available for later work: a preference, a
+repository convention, or a fact you do not want to repeat in every prompt. Colossus
+offers relevant active memories to the model as **background context**. They do not
+override instructions or policy. For a binding workspace commitment, use a
+[key decision](decisions.md) instead.
 
-Create a repository-scoped constraint, retrieve it by meaning, and retire it without
-deleting audit history.
+## Save something worth remembering
 
-## Prerequisites
+In the terminal UI, ask Colossus to save a specific fact and say how widely it
+should apply:
 
-- An initialized configuration and canonical state.
-- The repository or session identifier for a scoped memory.
-- Text that contains no credential, token, private key, or other secret value.
+> Save this as a repository-scoped memory: release notes need a compatibility section.
 
-## Steps
+If `memory.create` is available and authorized, Colossus can save it with the current
+repository identity. Check the resulting record rather than assuming a conversational
+acknowledgement saved it:
 
-### 1. Create a scoped memory
-
-```bash
-colossus --config .colossus/config.yaml memories create \
-  "This repository requires warnings-as-errors linting" \
-  --scope repository --scope-id REPOSITORY_ID --kind constraint \
-  --rationale "Recorded project convention"
+```text
+/memories
 ```
 
-Use `global` only for broadly applicable preferences. Session and repository scopes
-require `--scope-id`.
+The list shows active memories. Each record has an ID, text, kind, scope, and status.
+Keep memory text short and factual. Do not store credentials, tokens, or private keys
+in it.
 
-### 2. Retrieve canonical candidates
+### Choose a scope
 
-```bash
-colossus --config .colossus/config.yaml memories search "linting" \
-  --repository REPOSITORY_ID
-colossus --config .colossus/config.yaml memories show MEMORY_ID
-```
+| Scope | Use it for |
+| --- | --- |
+| Session | Context relevant to this conversation only. |
+| Repository | A convention to reuse while working in this repository. |
+| Global | A broad preference across sessions in the selected Colossus state. |
 
-The journal owns status, scope, expiry, and content. Search indexes return candidates;
-Colossus reloads and re-filters canonical records before release.
-
-### 3. Replace or retire stale guidance
-
-```bash
-colossus --config .colossus/config.yaml memories supersede MEMORY_ID \
-  "This repository runs warnings-as-errors linting in CI" \
-  --rationale "Clarified when the rule applies"
-```
-
-Or archive it:
+For a precise session-scoped record, use the CLI. Get the session ID with
+`/session show` or `colossus sessions list`:
 
 ```bash
-colossus --config .colossus/config.yaml memories archive MEMORY_ID
+colossus memories create \
+  "Prefer release notes with a compatibility section." \
+  --scope session --scope-id SESSION_ID --kind preference
 ```
 
-### 4. Check index health
+The CLI defaults to `global` when `--scope` is omitted, so set the scope deliberately.
+Session and repository scopes require an exact `--scope-id`.
+
+## Find a memory later
+
+Search by a phrase in the terminal:
+
+```text
+/memory search release notes
+```
+
+This search uses the current session and global scopes. For a repository-scoped
+record, use its repository ID with the CLI; `/memories` or `memories show` displays
+the ID on an existing record:
 
 ```bash
-colossus --config .colossus/config.yaml memories index status
+colossus memories search "release notes" --repository REPOSITORY_ID
+colossus memories show MEMORY_ID
 ```
 
-`sync` retries queued index work. `rebuild` recreates disposable search state from the
-canonical journal.
+Colossus also retrieves relevant in-scope memories for later model turns. Search
+indexes find candidates; the canonical journal determines whether a record is still
+active, unexpired, and in scope before it is released.
 
-## Expected result
+## Correct or retire stale guidance
 
-Active, in-scope memory is available as non-instructional background for later turns.
-Superseded and archived records remain auditable but no longer steer new work.
+Replace an active memory when its meaning changes:
 
-## Verification
+```bash
+colossus memories supersede MEMORY_ID \
+  "Release notes need compatibility notes only for breaking changes." \
+  --rationale "Narrowed the convention"
+```
 
-Run the same scoped search after superseding or archiving. Confirm that only the current
-active record is released and that `memories show` preserves lineage.
+The replacement is a new active record linked to the old one. To stop using a memory
+without replacing it, archive it:
 
-## Failure path
+```bash
+colossus memories archive MEMORY_ID
+```
 
-- **No result appears:** verify scope, status, expiry, and repository identity.
-- **Index is unavailable:** canonical records remain intact; sync or rebuild the
-  disposable index.
-- **A memory contains a secret:** rotate the credential, archive the memory, and follow
-  your incident process. Memory text is not a secret store.
-- **Two memories conflict:** supersede the outdated record so active context has one
-  owner.
+Superseded and archived records remain in the journal for inspection, but no longer
+enter new model context. Use `colossus memories show MEMORY_ID` to inspect the exact
+record and its lineage.
 
-## Next step
+If search misses a record, check its scope, status, and expiry first. Then run
+`colossus memories index status`. The index is disposable; its `sync` and `rebuild`
+commands can restore search from the canonical journal. See
+[Memory configuration](../reference/configuration/context-memory-research.md#memory-configuration)
+for index behavior and bounds.
 
-Use [Deep research](deep-research.md) for source-backed evidence that should
-remain attached to a research run instead of general memory.
+## What's next?
+
+<div class="grid cards" markdown>
+
+-   :lucide-scale:{ .lg .middle } **Decisions**
+
+    ---
+
+    Record a binding choice that should guide future turns.
+
+    [Manage durable work :lucide-arrow-right:](decisions.md)
+
+-   :lucide-layers:{ .lg .middle } **Context and snapshots**
+
+    ---
+
+    Inspect what a long conversation keeps in its working context.
+
+    [Explore context :lucide-arrow-right:](sessions-context.md)
+
+</div>

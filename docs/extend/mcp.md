@@ -3,6 +3,7 @@ title: MCP
 description: Configure stdio or Streamable HTTP MCP servers through Colossus's policy boundary.
 audience: operator
 type: how-to
+icon: lucide/network
 ---
 
 # MCP

@@ -3,6 +3,7 @@ title: Desktop setup files
 description: Share an offline Desktop setup with providers, models, global defaults, MCP, search, telemetry, and optional certificates.
 audience: user
 type: how-to
+icon: lucide/file-cog
 ---
 
 # Desktop setup files

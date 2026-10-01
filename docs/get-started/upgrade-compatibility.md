@@ -3,6 +3,7 @@ title: Upgrade and compatibility
 description: Upgrade Colossus safely, refresh configuration deliberately, and understand the Rust cutover boundary.
 audience: operator
 type: how-to
+icon: lucide/refresh-cw
 ---
 
 # Upgrade and compatibility

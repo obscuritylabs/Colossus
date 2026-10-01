@@ -204,11 +204,14 @@ the nixpkgs input changes, and run `nix flake check` before merging the package 
 Package definitions in the release-preparation commit therefore continue to identify
 the latest already-published stable release; never guess the next release's hashes.
 
-After the public distribution jobs pass, update the root README and install guide only
-if the final commands differ from the reviewed bootstrap contract. Confirm that the
-README's `latest/download` commands, the review-before-running flow, the exact-version
-flags, `colossus update`, Nix ownership, manual archive verification, and uninstall
-guidance all remain represented before closing a distribution epic.
+After the public distribution jobs pass, update the root README,
+[CLI installation guide](../get-started/install.md),
+[installation options](../get-started/install-options.md), and
+[installation lifecycle](../get-started/cli-installation-lifecycle.md) only if the final
+commands differ from the reviewed bootstrap contract. Confirm that the README's
+`latest/download` commands, the review-before-running flow, exact-version flags,
+`colossus update`, Nix ownership, manual archive verification, and uninstall guidance
+all remain represented before closing a distribution epic.
 
 ## Failure path
 

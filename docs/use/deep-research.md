@@ -65,9 +65,8 @@ Colossus then plans bounded queries, collects released repository evidence, extr
 source-backed claims, and synthesizes a cited report. A fresh session is created when
 `--session` is omitted.
 
-The terminal UI exposes a fixed research route. Use the CLI when you need explicit depth
-or lane control; the exact TUI contract is in
-[TUI commands and keys](../reference/tui.md#commands).
+The terminal UI exposes a fixed research route. See [Research](research.md) for its
+interactive workflow; use the CLI when you need explicit depth or lane control.
 
 ### 3. Add web or MCP evidence deliberately
 

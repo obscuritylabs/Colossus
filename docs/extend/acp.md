@@ -3,6 +3,7 @@ title: ACP editor setup
 description: Launch Colossus as a local ACP v1 agent from an editor.
 audience: developer
 type: how-to
+icon: lucide/code
 ---
 
 # ACP editor setup

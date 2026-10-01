@@ -3,6 +3,7 @@ title: Your first workflow
 description: Create, validate, register, and run a deterministic Colossus workflow with no external effects.
 audience: developer
 type: tutorial
+icon: lucide/play
 ---
 
 # Your first workflow

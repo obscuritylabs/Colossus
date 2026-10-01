@@ -3,6 +3,7 @@ title: Windows Desktop
 description: Install, verify, operate, diagnose, and remove signed Windows x64 Desktop releases.
 audience: user
 type: how-to
+icon: lucide/monitor-down
 ---
 
 # Windows Desktop
