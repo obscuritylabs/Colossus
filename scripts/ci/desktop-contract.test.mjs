@@ -825,6 +825,18 @@ test("Managed Local trusted tool ceiling exactly matches declared built-ins", ()
     ...builtinSource.matchAll(/name: "([a-z][a-z0-9_.-]+)"\.into\(\)/gu),
   ].map((match) => match[1]);
   assert.ok(builtinNames.length > 0);
+  assert.match(
+    builtinSource,
+    /specs\.extend\(super::process_sessions::session_specs\(\)\)/u,
+  );
+  const sessionDeclarations = read(
+    "crates/colossus-tools/src/process_sessions.rs",
+  ).match(/fn session_specs\(\)[^{]*\{\s*\[(?<names>[^\]]+)\]\s*\.into_iter\(\)/u);
+  assert.notEqual(sessionDeclarations, null);
+  builtinNames.push(
+    ...[...sessionDeclarations.groups.names.matchAll(/"([a-z][a-z0-9_.-]+)"/gu)]
+      .map((match) => match[1]),
+  );
 
   const runtimeSource = read("apps/desktop/src-tauri/src/managed_runtime.rs");
   const grantStart = runtimeSource.indexOf("const TRUSTED_BUILTIN_TOOL_GRANT");
