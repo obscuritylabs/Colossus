@@ -3,6 +3,7 @@ title: CLI reference
 description: Global options, every public command route, defaults, and machine-output contracts.
 audience: developer
 type: reference
+icon: lucide/list
 ---
 
 # CLI reference

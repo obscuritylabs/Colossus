@@ -44,8 +44,12 @@ Zensical route.
     ---
     ```
 
-4. For tutorials and how-tos, include **Goal**, **Prerequisites**, **Steps**,
-   **Expected result**, **Verification**, **Failure path**, and **Next step**.
+4. Structure tutorials and how-tos around the reader's task. Put the first useful
+   action near the top, and use headings that name the work or decision. Include
+   prerequisites, expected outcomes, verification, recovery advice, and next steps
+   where they help the reader; do not require those as fixed headings. Avoid repeating
+   the introduction in a separate **Goal** section or adding boilerplate to simple
+   procedures.
 
 5. Put installed-binary commands in user and operator pages. Keep Cargo, source
    launchers, and repository verification commands in Develop.

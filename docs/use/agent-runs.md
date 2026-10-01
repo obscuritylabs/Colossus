@@ -3,6 +3,7 @@ title: Agent runs
 description: Run bounded Colossus agent turns interactively or as stable machine-readable output.
 audience: user
 type: how-to
+icon: lucide/play
 ---
 
 # Agent runs
@@ -150,4 +151,4 @@ Confirm that the session and run appear and the journal verifies.
 ## Next step
 
 Use the [Terminal UI](terminal-ui.md) for live approvals and queued turns, or
-[Sessions and context](sessions-context.md) to manage durable history.
+[Sessions](sessions.md) to continue a conversation later.

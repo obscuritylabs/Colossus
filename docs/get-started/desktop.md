@@ -3,6 +3,7 @@ title: Colossus Desktop
 description: Start with the managed local runtime, connect a provider, and understand external targets and local terminals.
 audience: user
 type: how-to
+icon: lucide/monitor
 ---
 
 # Colossus Desktop

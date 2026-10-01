@@ -3,6 +3,7 @@ title: Agent Plugins
 description: Validate, distribute, trust, install, and run Agent Plugins over OCI.
 audience: operator
 type: guide
+icon: lucide/puzzle
 ---
 
 # Agent Plugins

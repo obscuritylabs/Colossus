@@ -35,4 +35,4 @@ Use this section when you need an exact name, field, default, limit, or wire sha
 - [Glossary](glossary.md)
 
 Operator recipes live under [Administer and secure](../admin/index.md). Tutorials for
-workflows and extensions live under [Automate and extend](../extend/index.md).
+workflows and extensions live under [Extend Colossus](../extend/index.md).

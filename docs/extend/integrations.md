@@ -3,6 +3,7 @@ title: Integrations
 description: Connect a supported service or import OpenAPI operations without exposing credentials to the model.
 audience: operator
 type: how-to
+icon: lucide/plug
 ---
 
 # Integrations

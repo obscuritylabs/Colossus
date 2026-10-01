@@ -1,52 +1,59 @@
 ---
-title: Get started
-description: Choose the shortest path from installation to a useful, policy-bounded Colossus repository run.
+title: First run roadmap
+description: Move from an offline proof to a connected model and a first repository task.
 audience: user
 type: concept
+icon: lucide/route
 ---
 
-# Get started
+# First run roadmap
 
-You can prove that Colossus works without a network connection or model credential, then
-connect a provider when you are ready. A first run uses the deterministic `echo`
-provider and stores canonical state in the selected repository's isolated partition
-under the owner-private Colossus home.
+Start without a credential or network connection. The first run proves that the
+runtime, workspace state, and audit journal work locally. Add a model route when
+you are ready for a real task.
 
-## The shortest path
+## Pick an interface
 
-Choose the [macOS desktop app](desktop.md) for a folder-first, zero-terminal Managed
-Local setup. Choose the native interface path when you want direct CLI, TUI, daemon, or
-server administration:
+<div class="grid cards" markdown>
 
-1. [Install the native binary](install.md).
-2. [Complete the five-minute offline quickstart](quickstart.md).
-3. [Connect a model](connect-model.md).
-4. [Run a bounded repository task](first-repository-task.md).
+-   :lucide-terminal:{ .lg .middle } **CLI and terminal UI**
 
-## What you will have
+    ---
 
-After this journey you will have:
+    Install the native binary, initialize a workspace, and run the built-in offline
+    provider. Continue into an interactive terminal session or a scripted command.
 
-- one strict user-level YAML configuration, or a repository-local replacement;
-- canonical state isolated by workspace beneath the Colossus home;
-- a verified offline agent run;
-- an optional network model route whose credential remains an environment reference;
-- an explicit repository sandbox root; and
-- enough context to understand approvals before allowing a mutation.
+    [Install the CLI :lucide-arrow-right:](install.md) ·
+    [Run the quickstart](quickstart.md)
 
-The [Colossus home reference](../reference/colossus-home.md) explains the directory
-layout, configuration precedence, and automatic `AGENTS.md` instruction snapshot.
+-   :lucide-monitor:{ .lg .middle } **Desktop**
 
-## Before you grant access
+    ---
 
-Three settings answer different questions:
+    Choose a folder in the app and let Managed Local start its bundled runtime. Use
+    the offline self-test before setting up a model provider.
 
-- **Access** selects which tools the model can see and the default action decision.
-- **Policy and approval** decide whether an exact request is allowed, denied, or needs
-  your confirmation.
-- **Sandbox grants** constrain the roots, executables, environment names, and network
-  origins an authorized effect can actually use.
+    [macOS Desktop :lucide-arrow-right:](desktop.md) ·
+    [Windows Desktop](windows-desktop.md)
 
-None of these settings bypasses the others. Read [Core concepts](core-concepts.md) for
-the full mental model or [Access and approvals](../admin/access-and-approvals.md) before
-granting broader capabilities.
+</div>
+
+## Move from proof to a task
+
+1. **Verify the runtime offline.** Use the [five-minute CLI quickstart](quickstart.md)
+   or Desktop's offline self-test. No model credential is needed for this check.
+2. **Connect a model.** Choose a [CLI provider route](connect-model.md), or add a
+   provider during Desktop setup.
+3. **Explore a repository.** Run the [first repository task](first-repository-task.md)
+   and check the files behind the answer.
+
+Colossus keeps CLI and Desktop workspace state in separate partitions. The
+[Colossus home reference](../reference/colossus-home.md) explains where state lives
+and how configuration is selected.
+
+## Before you grant more access
+
+Access selects visible tools, policy and approvals govern exact requests, and the
+execution boundary controls the resources an authorized effect can reach. See
+[Core concepts](core-concepts.md) for how they fit together, and inspect your active
+configuration before allowing file changes or process execution.

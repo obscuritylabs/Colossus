@@ -1,102 +1,87 @@
 ---
 title: First repository task
-description: Give Colossus read-only access to one repository and complete a verifiable inspection task.
+description: Explore a repository with Colossus and check the files behind its answer.
 audience: user
 type: tutorial
+icon: lucide/folder-search
 ---
 
 # First repository task
 
-## Goal
+With a [model connected](connect-model.md), ask Colossus to map a repository before
+giving it a change to make. This first task should leave you with a short explanation
+of the codebase, file paths you can inspect, and an idea for what to do next.
 
-Let Colossus inspect one repository without granting workspace writes, process execution,
-or arbitrary network access.
+## 1. Open your repository
 
-## Prerequisites
-
-- A connected model. See [Connect a model](connect-model.md).
-- A local source repository.
-- The absolute path to the repository.
-- A Colossus configuration initialized with
-  `--sandbox-profile offline-default`; this tutorial intentionally does not use the
-  writable development preset.
-
-## Steps
-
-### 1. Add one read-only filesystem root
-
-Initialize from the repository, then add its canonical absolute path:
+Open a terminal in the root of the repository you want to inspect, then run:
 
 ```bash
-colossus -w /absolute/path/to/repository \
-  config init --local \
-  --sandbox-profile offline-default
+colossus models route primary
+git status --short
 ```
 
-In `.colossus/config.yaml`:
+The model route should name the provider and model you selected, rather than `echo`.
+If it does not, follow [Connect a model](connect-model.md) for this workspace. Keep the
+Git status output so you can compare it after the task; existing changes are fine.
 
-```yaml
-sandbox:
-  filesystem:
-    - root: /absolute/path/to/repository
-      mode: read
-```
+## 2. Ask Colossus to explore
 
-Merge this field with the existing sandbox configuration. Keep write roots,
-executables, and unrelated network origins absent.
+Choose the interface you prefer:
 
-### 2. Check the effective tool surface
+=== "Terminal UI"
 
-```bash
-colossus -w /absolute/path/to/repository \
-  config effective
-```
+    ```bash
+    colossus tui
+    ```
 
-Confirm that repository and filesystem read tools are active, while write and execution
-capabilities remain unavailable or approval-gated without matching grants.
+    Enter this request in the conversation:
 
-### 3. Select the repository explicitly
+    > Map this repository. Cite files for its main components and tests. Suggest one
+    > small first task. Do not edit files.
 
-```bash
-colossus -w /absolute/path/to/repository \
-  run \
-  "Map this repository. Name its three most important components and cite the files that support your answer. Do not change anything."
-```
+=== "One-shot CLI"
 
-`--workspace` selects the active canonical workspace independently of the caller's
-current directory. It never expands the configured sandbox root.
+    ```bash
+    colossus run "Map this repo. Cite files and tests. Suggest a first task. No edits."
+    ```
 
-## Expected result
+Colossus should describe the main components, point to the test entry points, and
+support its findings with paths in your repository. If the answer is too broad, ask it
+to inspect the cited files and name the exact functions or modules behind its claims.
 
-Colossus returns a concise repository map with file-backed evidence. No workspace file
-changes, process launches, or additional network destinations are authorized.
+## 3. Check the result
 
-## Verification
-
-Check the repository and the audit trail:
+Open a few of the cited files to confirm the map. Then compare the repository status
+with the output you saved before the task:
 
 ```bash
 git status --short
-colossus -w /absolute/path/to/repository \
-  audit show --limit 20
 ```
 
-The Git status should match its state before the task. Audit evidence should show the
-provider and read lifecycle without a filesystem mutation.
+The status should be unchanged because the request asked for inspection only. The
+active [access and approval settings](../admin/access-and-approvals.md) and
+[sandbox](../admin/sandbox.md) still govern tool authority; choose an isolated
+workspace profile if you want that boundary for later tasks.
 
-## Failure path
+## What's next?
 
-- **Repository tools are hidden:** verify the absolute read root with
-  `config effective`.
-- **Path is outside the workspace:** pass the intended repository with `--workspace`
-  and confirm the explicit root is canonical.
-- **The model asks to run Git:** this tutorial intentionally grants no executable.
-  Ask it to use repository-context and filesystem read tools instead.
-- **The answer lacks evidence:** ask for exact file paths and a bounded second pass.
-- **A mutation is requested:** deny it and follow
-  [Access and approvals](../admin/access-and-approvals.md) before adding a write grant.
+<div class="grid cards" markdown>
 
-## Next step
+-   :lucide-play:{ .lg .middle } **Make a change**
 
-Open [Agent runs](../use/agent-runs.md) for one-shot work or
-[Terminal UI](../use/terminal-ui.md) for an ongoing interactive session.
+    ---
+
+    Give Colossus a specific edit and a test to run, then review the result.
+
+    [Run an agent task :lucide-arrow-right:](../use/agent-runs.md)
+
+-   :lucide-messages-square:{ .lg .middle } **Return to this work**
+
+    ---
+
+    Find the conversation and continue it later in the terminal UI or CLI.
+
+    [Use sessions :lucide-arrow-right:](../use/sessions.md)
+
+</div>

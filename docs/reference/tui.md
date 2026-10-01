@@ -3,6 +3,7 @@ title: TUI commands and keys
 description: Keyboard navigation, interaction behavior, and slash-command families in the Colossus terminal UI.
 audience: user
 type: reference
+icon: lucide/keyboard
 ---
 
 # TUI commands and keys

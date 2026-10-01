@@ -14,20 +14,45 @@ edit_uri = "https://github.com/obscuritylabs/Colossus/edit/main/docs/"
 extra_css = ["stylesheets/extra.css"]
 extra_javascript = ["assets/vendor/mermaid-11.15.0.min.js"]
 nav = [
-  { "Home" = "index.md" },
   { "Get started" = [
-    { "Overview" = "get-started/index.md" },
-    { "Install" = "get-started/install.md" },
-    { "Colossus Desktop" = "get-started/desktop.md" },
-    { "Desktop setup files" = "get-started/desktop-setup-files.md" },
-    { "Windows Desktop preview" = "get-started/windows-desktop.md" },
-    { "Five-minute quickstart" = "get-started/quickstart.md" },
-    { "Connect a model" = "get-started/connect-model.md" },
-    { "First repository task" = "get-started/first-repository-task.md" },
+    { "Start here" = "index.md" },
+    { "First run roadmap" = "get-started/index.md" },
     { "Core concepts" = "get-started/core-concepts.md" },
     { "Upgrade and compatibility" = "get-started/upgrade-compatibility.md" },
   ] },
-  { "Use Colossus" = [
+  { "CLI" = [
+    { "Getting started" = [
+      { "Install" = "get-started/install.md" },
+      { "Five-minute quickstart" = "get-started/quickstart.md" },
+      { "Connect a model" = "get-started/connect-model.md" },
+      { "First repository task" = "get-started/first-repository-task.md" },
+    ] },
+    { "Work in the terminal" = [
+      { "Agent runs" = "use/agent-runs.md" },
+      { "Terminal UI" = "use/terminal-ui.md" },
+      { "Sessions" = "use/sessions.md" },
+      { "Planning" = "use/planning.md" },
+      { "Research" = "use/research.md" },
+      { "Memories" = "use/memories.md" },
+      { "Decisions" = "use/decisions.md" },
+      { "Tools" = "use/tools.md" },
+      { "Skills and plugins" = "use/skills-plugins.md" },
+      { "MCP servers" = "use/mcp-servers.md" },
+      { "Theme" = "use/theme.md" },
+    ] },
+    { "CLI reference" = [
+      { "Installation options" = "get-started/install-options.md" },
+      { "Update and remove" = "get-started/cli-installation-lifecycle.md" },
+      { "Commands and flags" = "reference/cli.md" },
+      { "TUI commands and keys" = "reference/tui.md" },
+    ] },
+  ] },
+  { "Desktop" = [
+    { "macOS Desktop" = "get-started/desktop.md" },
+    { "Windows Desktop" = "get-started/windows-desktop.md" },
+    { "Desktop setup files" = "get-started/desktop-setup-files.md" },
+  ] },
+  { "Use" = [
     { "Overview" = "use/index.md" },
     { "Connect providers" = [
       { "Choose a provider" = "use/providers/index.md" },
@@ -37,26 +62,31 @@ nav = [
       { "Local models" = "use/providers/local-models.md" },
       { "Other OpenAI-compatible endpoints" = "use/providers/openai-compatible.md" },
     ] },
-    { "Agent runs" = "use/agent-runs.md" },
-    { "Terminal UI" = "use/terminal-ui.md" },
-    { "Sessions and context" = "use/sessions-context.md" },
+    { "Context and snapshots" = "use/sessions-context.md" },
     { "Tasks, decisions, and plans" = "use/tasks-decisions-plans.md" },
     { "Goals and subagents" = "use/goals-subagents.md" },
-    { "Memories" = "use/memories.md" },
     { "Research overview" = "use/research-search.md" },
     { "Deep research" = "use/deep-research.md" },
     { "Web search" = "use/web-search.md" },
   ] },
-  { "Automate & extend" = [
+  { "Extend" = [
     { "Overview" = "extend/index.md" },
-    { "First workflow" = "extend/workflows/first-workflow.md" },
-    { "Workflow authoring" = "extend/workflows/authoring.md" },
-    { "Triggers and recovery" = "extend/workflows/triggers-recovery.md" },
-    { "Agent Plugins" = "extend/plugins.md" },
-    { "Integrations" = "extend/integrations.md" },
-    { "MCP" = "extend/mcp.md" },
+    { "Workflows" = [
+      { "First workflow" = "extend/workflows/first-workflow.md" },
+      { "Workflow authoring" = "extend/workflows/authoring.md" },
+      { "Triggers and recovery" = "extend/workflows/triggers-recovery.md" },
+    ] },
+    { "Tools and editors" = [
+      { "Agent Plugins" = "extend/plugins.md" },
+      { "Integrations" = "extend/integrations.md" },
+      { "MCP" = "extend/mcp.md" },
+      { "ACP editor setup" = "extend/acp.md" },
+    ] },
+    { "Appearance" = [
+      { "Author a theme" = "extend/author-theme.md" },
+    ] },
   ] },
-  { "Administer & secure" = [
+  { "Admin" = [
     { "Overview" = "admin/index.md" },
     { "Configuration recipes" = "admin/configuration.md" },
     { "Providers and routing" = "admin/providers-routing.md" },
@@ -71,8 +101,6 @@ nav = [
   { "Reference" = [
     { "Overview" = "reference/index.md" },
     { "Colossus home" = "reference/colossus-home.md" },
-    { "CLI" = "reference/cli.md" },
-    { "TUI commands and keys" = "reference/tui.md" },
     { "Configuration schema" = [
       { "Overview" = "reference/configuration.md" },
       { "Access" = "reference/configuration/access.md" },
@@ -148,6 +176,7 @@ features = [
   "navigation.instant",
   "navigation.instant.progress",
   "navigation.path",
+  "navigation.sections",
   "navigation.tabs",
   "navigation.tabs.sticky",
   "navigation.top",

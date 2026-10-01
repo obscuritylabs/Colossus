@@ -19,7 +19,8 @@ for model work, but they own different state and lifecycles:
 Context snapshots do not delete transcript messages. Memory indexes do not own memory
 lifecycle state. Research evidence is not automatically promoted into general memory.
 
-For user workflows, see [Sessions and context](../../use/sessions-context.md),
+For user workflows, see [Sessions](../../use/sessions.md) and
+[Context and snapshots](../../use/sessions-context.md),
 [Memories](../../use/memories.md), and [Deep research](../../use/deep-research.md).
 
 ## Choose a starting point

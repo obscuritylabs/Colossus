@@ -31,7 +31,14 @@ access method:
 | --- | --- |
 | Run one prompt or produce JSON for automation | [Agent runs](agent-runs.md) |
 | Work interactively with approvals and live output | [Terminal UI](terminal-ui.md) |
-| Resume a conversation or manage model context | [Sessions and context](sessions-context.md) |
+| Resume a conversation | [Sessions](sessions.md) |
+| Plan a change and run it through bounded iterations | [Planning](planning.md) |
+| Investigate a question in the terminal | [Research](research.md) |
+| Record a commitment for later work | [Decisions](decisions.md) |
+| See the tools available in this workspace | [Tools](tools.md) |
+| Choose Agent Skills and inspect plugins | [Skills and plugins](skills-plugins.md) |
+| Discover configured external tool servers | [MCP servers](mcp-servers.md) |
+| Manage model context and snapshots | [Context and snapshots](sessions-context.md) |
 | Capture commitments and approve execution | [Tasks, decisions, and plans](tasks-decisions-plans.md) |
 | Iterate on an objective or delegate bounded work | [Goals and subagents](goals-subagents.md) |
 | Preserve reusable non-secret context | [Memories](memories.md) |
