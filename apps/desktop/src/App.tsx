@@ -5163,7 +5163,9 @@ export default function App() {
           gitWorkspaceId={desktop.workspace?.workspaceId ?? null}
           gitAvailable={desktop.capabilities.files}
           browserScope={desktop.selectedTargetId}
-          processSessionsAvailable={desktop.capabilities.processSessions === true}
+          processSessionsAvailable={
+            desktop.capabilities.processSessions === true
+          }
           browserFixture={FIXTURE_MODE}
           terminalSupported={
             desktop.capabilities.tui || desktop.capabilities.shellTerminal
