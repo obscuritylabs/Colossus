@@ -55,7 +55,7 @@ const MAX_TOOL_ACTIVITY_PREVIEW_BYTES: usize = 65_536;
 const MAX_SESSION_ACTIVITY_SCAN: usize = 1_024;
 const SESSION_ACTIVITY_READ_PAGE_SIZE: usize = 128;
 const MAX_SESSION_ACTIVITY_RESPONSE_BYTES: usize = 2 * 1_024 * 1_024;
-const TOOL_ACTIVITY_PREVIEW_TRUNCATION: &str = "\nâ€¦ preview truncated";
+const TOOL_ACTIVITY_PREVIEW_TRUNCATION: &str = "\n… preview truncated";
 const SUBAGENT_ACTIVITY_TOOL: &str = "agent.subagent_update";
 const MAX_SUBAGENT_ACTIVITY_TASK_BYTES: usize = 4 * 1024;
 
@@ -3155,7 +3155,7 @@ mod tests {
             parsed["job"]["final_output"]
                 .as_str()
                 .expect("output")
-                .ends_with(TOOL_ACTIVITY_PREVIEW_TRUNCATION)
+                .ends_with("\n\u{2026} preview truncated")
         );
     }
 
@@ -3192,7 +3192,7 @@ mod tests {
 
     #[test]
     fn public_preview_truncation_is_bounded_marked_and_utf8_safe() {
-        let output = serde_json::json!({"stdout": "Ã©".repeat(MAX_TOOL_ACTIVITY_PREVIEW_BYTES),
+        let output = serde_json::json!({"stdout": "é".repeat(MAX_TOOL_ACTIVITY_PREVIEW_BYTES),
             "resolved_argv": ["PRIVATE"], "invocation": {"command": "PRIVATE"}})
         .to_string();
         let update = public_event(RunEvent::ToolCompleted {
@@ -3218,7 +3218,7 @@ mod tests {
             parsed["stdout"]
                 .as_str()
                 .unwrap()
-                .ends_with(TOOL_ACTIVITY_PREVIEW_TRUNCATION)
+                .ends_with("\n\u{2026} preview truncated")
         );
         assert_eq!(released_command_output(&preview), Some(preview.clone()));
         assert!(preview.is_char_boundary(preview.len()));

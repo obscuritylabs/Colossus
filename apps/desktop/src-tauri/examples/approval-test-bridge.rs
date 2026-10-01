@@ -306,9 +306,10 @@ async fn repeat_command(
     let key = remembered_key.ok_or_else(|| anyhow::anyhow!("no remembered command"))?;
     let repeated = start_run(client, instance).await?;
     let repeated_id = repeated.run_id.clone();
-    let approved = approval_adapter::answer_remembered(client, repeated, key)
+    let resolved = approval_adapter::answer_remembered(client, repeated, key)
         .await
-        .is_ok();
+        .ok();
+    let approved = resolved.is_some();
     if !approved {
         client
             .cancel_run(CancelRunRequest {
@@ -318,7 +319,10 @@ async fn repeat_command(
             .await?;
     }
     let activity = released_activity(client, &repeated_id).await?;
-    Ok(json!({"approved": approved, "result": activity}))
+    Ok(json!({"approved": approved, "result": activity,
+        "resolvedInteractionStatus": resolved.as_ref().map(|interaction| format!("{:?}", interaction.status)),
+        "respondableByCaller": resolved.as_ref().is_some_and(|interaction| interaction.respondable_by_caller),
+    }))
 }
 
 async fn released_activity(client: &Colossus, run_id: &str) -> anyhow::Result<Value> {

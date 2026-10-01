@@ -336,12 +336,16 @@ for (const invocation of ["foreground", "managed"] as const) {
         if (outcome === "always") {
           const repeated = (await invoke("repeat_command")) as {
             approved: boolean;
+            resolvedInteractionStatus: string | null;
+            respondableByCaller: boolean;
             result: {
               terminal: { status: string };
               activity: { state: string }[];
             };
           };
           expect(repeated.approved).toBe(true);
+          expect(repeated.resolvedInteractionStatus).toBe("Answered");
+          expect(repeated.respondableByCaller).toBe(false);
           expect(repeated.result.terminal.status).toBe("Completed");
           expect(
             repeated.result.activity.filter(

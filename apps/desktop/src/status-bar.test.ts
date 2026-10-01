@@ -47,6 +47,48 @@ describe("status bar presentation", () => {
     expect(pins).toEqual([{ runId: "run-2", title: "Saved: Latest work" }]);
   });
 
+  it("does not notify or offer review when native consent already answered the streamed approval", () => {
+    const initial = run();
+    const state = chatReducer(
+      chatReducer(initialChatState, { type: "upsert_run", run: initial }),
+      {
+        type: "ingest_update",
+        update: {
+          runId: initial.runId,
+          sequence: 1,
+          createdAt: initial.updatedAt,
+          update: {
+            type: "interaction",
+            interaction: {
+              interactionId: "remembered",
+              runId: initial.runId,
+              kind: "approval",
+              status: "answered",
+              createdAt: initial.updatedAt,
+              expiresAt: initial.updatedAt,
+              respondableByCaller: false,
+              etag: "resolved",
+              content: {
+                type: "approval",
+                action: "process.execute",
+                resource: "configured executable",
+                reason: "Approval required",
+                risk: null,
+                requestHash: "binding",
+              },
+            },
+          },
+        },
+      },
+    );
+    const view = state.views.get(initial.runId)!;
+    expect(view.pendingInteractions).toEqual([]);
+    expect(view.run.pendingInteractionCount).toBe(0);
+    expect(
+      backgroundRunNotifications(backgroundRunSnapshot([initial]), [view.run]),
+    ).toEqual([]);
+  });
+
   it("only reports live transitions, never already finished work on startup", () => {
     const completed = run({ status: "completed" });
     expect(backgroundRunNotifications(new Map(), [completed])).toEqual([]);

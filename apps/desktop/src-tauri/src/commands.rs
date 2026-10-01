@@ -584,13 +584,14 @@ pub(crate) async fn watch_run(
                     return Err(error);
                 }
                 match item {
-                    Some(Ok(update)) => {
-                        if let colossus_sdk::RunUpdateKind::Interaction(interaction) = &update.update
+                    Some(Ok(mut update)) => {
+                        if let colossus_sdk::RunUpdateKind::Interaction(interaction) = &mut update.update
                             && let Ok(selected) = crate::commands::target(&state, &target_id).await
-                            && selected.epoch() == epoch {
-                            let _ = crate::remembered_approvals::apply_saved(
+                            && selected.epoch() == epoch
+                            && let Some(resolved) = crate::remembered_approvals::apply_saved(
                                 &state, &selected.target, &target_id, interaction,
-                            ).await;
+                            ).await {
+                            *interaction = resolved;
                         }
                         send_event(&on_event, WatchEventDto::Update { update: Box::new(update.into()) })?;
                     },
