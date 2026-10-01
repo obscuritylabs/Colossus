@@ -55,10 +55,11 @@ search Confluence. An MCP tool call still goes through normal schema validation,
 policy, approval, and audit. Seeing a server or tool in a list does not guarantee
 that a specific call will be authorized.
 
-For an exact manual call, `/mcp call SERVER TOOL JSON` accepts the discovered tool
-name and a JSON argument object. Inspect `/mcp tools SERVER` first to learn the
-required arguments. The equivalent shell commands are `colossus mcp servers`,
-`colossus mcp tools --server SERVER`, and `colossus mcp call SERVER TOOL JSON`.
+For an exact manual call, leave the TUI and use the shell command
+`colossus mcp call SERVER TOOL JSON`. `TOOL` is a discovered tool name, and `JSON`
+is an argument object that matches its schema. Inspect `/mcp tools SERVER` first,
+or run `colossus mcp tools --server SERVER` from the shell. The shell also has
+`colossus mcp servers` for the configuration inventory.
 
 ## What's next?
 
