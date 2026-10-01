@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { openWorkspaceWithPausedClock } from "./support/paused-workspace";
 
 test("Git shows the branch, grouped changes and history without losing a draft", async ({
   page,
@@ -235,10 +236,11 @@ test("slow refresh keeps the composer usable and shows progress", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 950 });
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  await page.goto("/?fixture=operations-studio&git=slow");
+  await openWorkspaceWithPausedClock(
+    page,
+    "/?fixture=operations-studio&git=slow",
+  );
   const indicator = page.getByRole("button", { name: /Open Git:/ });
   await expect(indicator.locator(".git-spinner")).toHaveCSS(
     "animation-name",
@@ -266,9 +268,10 @@ test("background refresh keeps the branch steady, then applies new status", asyn
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 950 });
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
-  await page.goto("/?fixture=operations-studio&git=slow");
+  await openWorkspaceWithPausedClock(
+    page,
+    "/?fixture=operations-studio&git=slow",
+  );
   await page.getByRole("button", { name: /Open Git:/ }).click();
   await page.clock.runFor(1500);
   const indicator = page.getByRole("button", { name: /Open Git:/ });
@@ -313,9 +316,10 @@ test("returning to a workspace restores its cached branch while refreshing", asy
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 950 });
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
-  await page.goto("/?fixture=operations-studio&git=slow");
+  await openWorkspaceWithPausedClock(
+    page,
+    "/?fixture=operations-studio&git=slow",
+  );
   const indicator = page.getByRole("button", { name: /Open Git:/ });
   await indicator.click();
   await expect(
@@ -342,9 +346,10 @@ test("returning to a workspace restores its cached branch while refreshing", asy
 test("failed background refresh retains the branch and reports the error", async ({
   page,
 }) => {
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
-  await page.goto("/?fixture=operations-studio&git=slow");
+  await openWorkspaceWithPausedClock(
+    page,
+    "/?fixture=operations-studio&git=slow",
+  );
   await page.getByRole("button", { name: /Open Git:/ }).click();
   await page.clock.runFor(1500);
   const indicator = page.getByRole("button", { name: /Open Git:/ });
@@ -432,9 +437,10 @@ test("workspace switching discards an old pending Git refresh", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 950 });
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
-  await page.goto("/?fixture=operations-studio&git=switch");
+  await openWorkspaceWithPausedClock(
+    page,
+    "/?fixture=operations-studio&git=switch",
+  );
   await page.getByRole("button", { name: /Open Git:/ }).click();
   await expect(
     page.getByRole("region", { name: "Workspace Git", exact: true }),
