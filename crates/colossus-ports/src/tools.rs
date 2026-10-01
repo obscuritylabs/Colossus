@@ -26,3 +26,19 @@ pub trait UserPromptProvider: Send + Sync {
     /// Present one bounded question and return the user's bounded answer.
     async fn prompt(&self, request: UserPromptRequest) -> Result<UserPromptResponse, ToolError>;
 }
+
+/// Ownership boundary for effects that outlive an individual tool call.
+#[async_trait]
+pub trait AgentRunLifecycle: Send + Sync {
+    /// Register provenance before any tool can launch a managed process.
+    fn begin_run(
+        &self,
+        context: &ExecutionContext,
+        initiator: &Actor,
+        control: RunControl,
+    ) -> Result<(), ToolError>;
+    /// Signal cleanup synchronously, including when a run future is dropped.
+    fn cancel_run(&self, run_id: &str);
+    /// Finish run ownership and await cleanup of run-owned or unlaunched jobs.
+    async fn finish_run(&self, run_id: &str);
+}

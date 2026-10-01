@@ -1317,3 +1317,56 @@ fn legacy_projection_is_derived_and_does_not_mutate_source_messages() {
     );
     assert_eq!(projected[1].tool_call_id.as_deref(), Some("legacy-call"));
 }
+
+#[test]
+fn shell_catalog_tracks_workspace_limits_and_keeps_other_tools_unchanged() {
+    for timeout_ms in [30_000, 900_000, 3_600_000] {
+        for output_limit in [8_192, 4 * 1024 * 1024] {
+            let specs = with_process_limits(builtin_specs(), timeout_ms, output_limit);
+            let registry = StaticToolRegistry::new(specs).expect("workspace catalog");
+            let shell = registry
+                .list_specs()
+                .into_iter()
+                .find(|spec| spec.name == "shell.run")
+                .expect("shell");
+            assert_eq!(
+                shell.input_schema["properties"]["timeout_ms"]["maximum"],
+                timeout_ms
+            );
+            assert_eq!(
+                shell.input_schema["properties"]["timeout_ms"]["default"],
+                timeout_ms
+            );
+            let output_max = output_limit.min(1024 * 1024);
+            let call = |timeout, output| ToolCall {
+                call_id: "bounds".into(),
+                name: "shell.run".into(),
+                arguments: json!({"argv": ["echo", "ready"], "justification": "Check shell limits.",
+                    "timeout_ms": timeout, "max_output_bytes": output}),
+            };
+            assert!(registry.validate(&call(timeout_ms, output_max)).is_ok());
+            assert!(
+                registry
+                    .validate(&call(timeout_ms + 1, output_max))
+                    .is_err()
+            );
+            assert!(
+                registry
+                    .validate(&call(timeout_ms, output_max + 1))
+                    .is_err()
+            );
+            assert!(registry.validate(&call(0, output_max)).is_err());
+            assert!(registry.validate(&call(timeout_ms, 1023)).is_err());
+            let echo = registry
+                .list_specs()
+                .into_iter()
+                .find(|spec| spec.name == "echo")
+                .unwrap();
+            let original = builtin_specs()
+                .into_iter()
+                .find(|spec| spec.name == "echo")
+                .unwrap();
+            assert_eq!(echo.input_schema, original.input_schema);
+        }
+    }
+}

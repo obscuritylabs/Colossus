@@ -48,6 +48,7 @@ mod plugin_registry_effects;
 mod plugin_registry_tests;
 mod prelude;
 mod presentation_work_effects;
+mod process_sessions;
 mod provider_gateway;
 mod provider_setup;
 mod repository_tools;
@@ -66,6 +67,8 @@ mod trace_tools;
 mod work;
 mod workflows_research;
 mod workspace;
+use process_sessions::ProcessSessions;
+
 mod workspace_binding;
 mod workspace_lease;
 

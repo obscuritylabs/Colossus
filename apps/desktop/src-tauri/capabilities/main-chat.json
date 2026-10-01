@@ -109,6 +109,9 @@
     "allow-check-desktop-update",
     "allow-install-desktop-update",
     "allow-sync-status-bar-pins",
-    "allow-notify-background"
+    "allow-notify-background",
+    "allow-list-shell-sessions",
+    "allow-read-shell-session",
+    "allow-stop-shell-session"
   ]
 }

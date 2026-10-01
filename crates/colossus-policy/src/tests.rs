@@ -924,6 +924,26 @@ async fn direct_process_backends_require_the_exact_session_acknowledgement() {
             .await
             .expect("direct process cwd does not require an unenforced filesystem declaration");
         assert_eq!(executor.calls.load(Ordering::Acquire), 2);
+        gate.revoke_session_acknowledgement("session-1");
+        let scope =
+            with_sandbox_boundary_acknowledgement(Some(INTERACTIVE_CAPABILITY.into()), async {
+                crate::SandboxBoundaryScope::capture()
+            })
+            .await;
+        scope
+            .clone()
+            .scope(gateway.execute(request(), &executor))
+            .await
+            .expect("trusted continuation retains its exact scope");
+        gate.revoke_interactive_client_acknowledgement(INTERACTIVE_CAPABILITY);
+        assert!(
+            scope
+                .scope(gateway.execute(request(), &executor))
+                .await
+                .is_err(),
+            "captured scope must respect revocation"
+        );
+        assert_eq!(executor.calls.load(Ordering::Acquire), 3);
     }
 }
 
@@ -2957,4 +2977,9 @@ fn remote_opa_requires_disclosure_https_pinned_trust_and_mtls() {
         super::OpaPolicy::new(config),
         Err(colossus_ports::PolicyError::InvalidDecision(_))
     ));
+}
+
+#[test]
+fn default_effect_timeout_allows_fifteen_minutes() {
+    assert_eq!(super::default_obligations().timeout_ms, 900_000);
 }

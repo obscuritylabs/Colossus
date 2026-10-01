@@ -167,6 +167,26 @@ and enforce resource scope again inside each command. Do not add generic “run 
 “read path,” “call URL,” or “invoke SDK method” commands; those would turn the WebView
 into a capability-confused deputy.
 
+## Managed shell inspection
+
+`AgentRunService` also exposes `ListProcessSessions`, `ReadProcessSession`, and
+`StopProcessSession`. Reads require `runs:read`; stop requires `runs:control` and an
+exact caller-owned opaque process identity. The same application cannot select another
+workspace through these requests. List/read/stop still pass through the runtime effect
+gateway. `ReadProcessSession` supports an exclusive output cursor and a wait bounded to
+30 seconds, allowing finite polling and reconnect without resetting process deadlines.
+Discovery, log reads, and Stop use separate bounded admission pools, so a waiting read
+cannot consume Stop capacity. Clients must still respect pagination rate limits.
+The Rust SDK exposes corresponding methods for both embedded and gRPC backends;
+generated TypeScript, Python, and Go service bindings expose the same typed messages.
+
+Desktop uses the narrow `list_shell_sessions`, `read_shell_session`, and
+`stop_shell_session` commands. A native selected-target lease prevents target changes
+from racing an in-flight operation. Listing binds process identities to that selection;
+read and stop require the binding again. The renderer receives bounded released logs
+and safe metadata, never a PID, environment, or supervisor handle. A managed runtime
+with an active shell is busy for idle-eviction purposes even after its agent run ends.
+
 ## Managed Local bootstrap and lifecycle
 
 Managed hosts carry an explicit `ManagedExecutionBoundary` independently from access

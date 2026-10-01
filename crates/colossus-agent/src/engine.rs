@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 impl AgentService {
     #[allow(clippy::too_many_arguments)]
@@ -37,7 +38,7 @@ impl AgentService {
         prompt: &ModelContent,
         max_turns: u16,
         requested_session_id: Option<&str>,
-        scope: RunScope<'_>,
+        mut scope: RunScope<'_>,
         initiator: Actor,
         released_observer: Option<&mut dyn RunEventObserver>,
         control: Option<&RunControl>,
@@ -77,19 +78,39 @@ impl AgentService {
         if let Some(subagent_id) = scope.subagent_id {
             span.record("colossus.subagent.id", subagent_id);
         }
-        self.run_with_lineage_inner(
-            role,
-            instructions,
-            prompt,
-            max_turns,
-            requested_session_id,
-            scope,
-            initiator,
-            released_observer,
-            control,
-        )
-        .instrument(span)
-        .await
+        let owned_run_id = scope
+            .requested_run_id
+            .map(str::to_owned)
+            .unwrap_or_else(|| Uuid::now_v7().to_string());
+        scope.requested_run_id = Some(&owned_run_id);
+        let owns_run = AtomicBool::new(false);
+        let guard = RunOwnershipGuard {
+            owns_run: &owns_run,
+            lifecycle: self.lifecycle.as_deref(),
+            run_id: &owned_run_id,
+        };
+        let result = self
+            .run_with_lineage_inner(
+                role,
+                instructions,
+                prompt,
+                max_turns,
+                requested_session_id,
+                scope,
+                initiator,
+                released_observer,
+                control,
+                &owns_run,
+            )
+            .instrument(span)
+            .await;
+        if owns_run.load(Ordering::Acquire)
+            && let Some(lifecycle) = &self.lifecycle
+        {
+            lifecycle.finish_run(&owned_run_id).await;
+        }
+        drop(guard);
+        result
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -104,6 +125,7 @@ impl AgentService {
         initiator: Actor,
         mut released_observer: Option<&mut dyn RunEventObserver>,
         control: Option<&RunControl>,
+        owns_run: &AtomicBool,
     ) -> Result<AgentRunResult, AgentError> {
         let mut agent_observation = colossus_observability::AgentObservation::start(role);
         if role.is_empty() || initiator.id.is_empty() || !(1..=MAX_TURNS).contains(&max_turns) {
@@ -225,6 +247,10 @@ impl AgentService {
             }),
             ..ExecutionContext::default()
         };
+        if let Some(lifecycle) = &self.lifecycle {
+            lifecycle.begin_run(&context, &initiator, control.cloned().unwrap_or_default())?;
+            owns_run.store(true, Ordering::Release);
+        }
         if let Some(pending) = self.sessions.pending_tool_turn(&session_id)? {
             return Err(AgentError::SessionIntegrity {
                 session_id: session_id.clone(),
@@ -1661,4 +1687,19 @@ async fn emit_run_event(
             .await?;
     }
     Ok(())
+}
+
+struct RunOwnershipGuard<'a> {
+    owns_run: &'a AtomicBool,
+    lifecycle: Option<&'a dyn colossus_ports::AgentRunLifecycle>,
+    run_id: &'a str,
+}
+impl Drop for RunOwnershipGuard<'_> {
+    fn drop(&mut self) {
+        if self.owns_run.load(Ordering::Acquire)
+            && let Some(lifecycle) = self.lifecycle
+        {
+            lifecycle.cancel_run(self.run_id);
+        }
+    }
 }

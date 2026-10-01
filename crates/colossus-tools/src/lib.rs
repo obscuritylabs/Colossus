@@ -9,6 +9,10 @@ use thiserror::Error;
 mod builtin;
 pub use builtin::*;
 
+mod process_limits;
+mod process_sessions;
+pub use process_limits::with_process_limits;
+
 mod registry;
 pub use registry::*;
 

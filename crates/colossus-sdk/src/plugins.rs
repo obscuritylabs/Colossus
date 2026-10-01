@@ -52,7 +52,7 @@ impl ContextBoundPluginClient {
 #[async_trait]
 impl PluginClient for ContextBoundPluginClient {
     async fn list(&self) -> ApiResult<Vec<PluginInventoryEntry>> {
-        self.api.plugins(&self.caller).await
+        self.api.plugins(&self.caller, false).await
     }
     async fn skill(&self, id: &str, digest: &str) -> ApiResult<PluginSkillContent> {
         self.api.skill(&self.caller, id, digest).await

@@ -112,6 +112,10 @@ const TRUSTED_BUILTIN_TOOL_GRANT: &[&str] = &[
     "repo.references",
     "repo.symbol_search",
     "shell.run",
+    "shell.wait",
+    "shell.read",
+    "shell.list",
+    "shell.stop",
     "plugin.list",
     "plugin.inspect",
     "plugin.skill.read",
@@ -279,6 +283,31 @@ async fn ensure_managed_capacity(
 pub(crate) async fn managed_target_has_active_work(
     client: &Colossus,
 ) -> Result<bool, CommandErrorDto> {
+    if client.capabilities().contains("process_sessions.v1") {
+        let mut after = None;
+        for _ in 0..3 {
+            let page = client
+                .list_process_sessions(colossus_sdk::ListProcessSessionsRequest { after })
+                .await
+                .map_err(CommandErrorDto::from_api)?;
+            if page
+                .sessions
+                .iter()
+                .any(|session| session.status.is_active())
+            {
+                return Ok(true);
+            }
+            after = page.next_cursor;
+            if after.is_none() {
+                break;
+            }
+            // Respect the shell discovery admission rate while inspecting all pages.
+            tokio::time::sleep(std::time::Duration::from_millis(550)).await;
+        }
+        if after.is_some() {
+            return Ok(true);
+        }
+    }
     let mut page_token = String::new();
     let mut seen_tokens = BTreeSet::new();
     for _ in 0..MAX_ACTIVE_RUN_PAGES {
@@ -1362,6 +1391,10 @@ mod tests {
             "agent.delegate",
             "filesystem.read",
             "shell.run",
+            "shell.wait",
+            "shell.read",
+            "shell.list",
+            "shell.stop",
             "plugin.skill.read",
             "mcp.call",
             "mcp.search",

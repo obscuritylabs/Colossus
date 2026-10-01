@@ -6,6 +6,8 @@ mod codex_auth;
 mod command_review;
 mod command_review_protocol;
 mod commands;
+mod process_session_commands;
+use process_session_commands::{list_shell_sessions, read_shell_session, stop_shell_session};
 mod configuration_import;
 mod connection;
 mod desktop_commands;
@@ -249,6 +251,9 @@ pub fn run() {
             read_artifact_content,
             get_run,
             list_runs,
+            list_shell_sessions,
+            read_shell_session,
+            stop_shell_session,
             list_session_activity,
             list_asides,
             watch_run,

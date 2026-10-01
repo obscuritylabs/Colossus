@@ -145,6 +145,79 @@ impl AgentRunServiceAdapter {
 
 #[tonic::async_trait]
 impl AgentRunService for AgentRunServiceAdapter {
+    async fn list_process_sessions(
+        &self,
+        request: Request<colossus_api_proto::v1alpha1::ListProcessSessionsRequest>,
+    ) -> Result<Response<colossus_api_proto::v1alpha1::ListProcessSessionsResponse>, Status> {
+        let caller = caller_context(&request)?.clone();
+        let response = self
+            .api
+            .list_process_sessions(
+                &caller,
+                colossus_api::ListProcessSessionsRequest {
+                    after: request.into_inner().after,
+                },
+            )
+            .await
+            .map_err(api_status)?;
+        Ok(Response::new(
+            colossus_api_proto::v1alpha1::ListProcessSessionsResponse {
+                sessions: response
+                    .sessions
+                    .into_iter()
+                    .map(super::process_sessions::summary_to_proto)
+                    .collect(),
+                next_cursor: response.next_cursor,
+            },
+        ))
+    }
+    async fn read_process_session(
+        &self,
+        request: Request<colossus_api_proto::v1alpha1::ReadProcessSessionRequest>,
+    ) -> Result<Response<colossus_api_proto::v1alpha1::ReadProcessSessionResponse>, Status> {
+        let caller = caller_context(&request)?.clone();
+        let request = request.into_inner();
+        let response = self
+            .api
+            .read_process_session(
+                &caller,
+                colossus_api::ReadProcessSessionRequest {
+                    session_id: request.session_id,
+                    after_sequence: request.after_sequence,
+                    wait_ms: request.wait_ms,
+                    max_output_bytes: request.max_output_bytes,
+                },
+            )
+            .await
+            .map_err(api_status)?;
+        Ok(Response::new(
+            colossus_api_proto::v1alpha1::ReadProcessSessionResponse {
+                snapshot: Some(super::process_sessions::snapshot_to_proto(response)),
+            },
+        ))
+    }
+    async fn stop_process_session(
+        &self,
+        request: Request<colossus_api_proto::v1alpha1::StopProcessSessionRequest>,
+    ) -> Result<Response<colossus_api_proto::v1alpha1::StopProcessSessionResponse>, Status> {
+        let caller = caller_context(&request)?.clone();
+        let response = self
+            .api
+            .stop_process_session(
+                &caller,
+                colossus_api::StopProcessSessionRequest {
+                    session_id: request.into_inner().session_id,
+                },
+            )
+            .await
+            .map_err(api_status)?;
+        Ok(Response::new(
+            colossus_api_proto::v1alpha1::StopProcessSessionResponse {
+                snapshot: Some(super::process_sessions::snapshot_to_proto(response)),
+            },
+        ))
+    }
+
     async fn create_run(
         &self,
         request: Request<CreateRunRequest>,

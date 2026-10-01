@@ -61,6 +61,20 @@ available only when no valid worker endpoint owns the instance. Ephemeral redb h
 writer lease and intentionally provides no recovery across process exit; it is for
 fresh one-shot runs, not durable workers or retryable effects.
 
+### Managed shell sessions
+
+`process-session:<id>` streams record safe ownership and lifecycle metadata. The latest
+`process-session-catalog` event indexes at most 256 retained sessions; startup reads
+that bounded index and individual canonical tails. Running or starting sessions become
+`interrupted` on recovery, with no successful exit code, PID adoption, or automatic
+command replay. Released logs are retained only in a bounded runtime buffer; the
+session read API reports a gap after restart. Quarantined output never enters this
+read model.
+
+A runtime task owns the supervisor, isolated directory, and workspace lease through
+cleanup. Run completion stops run-owned and unlaunched sessions; explicitly launched
+workspace sessions remain supervised until their original deadline or runtime shutdown.
+
 ## Recovery states
 
 | Condition | Required behavior |

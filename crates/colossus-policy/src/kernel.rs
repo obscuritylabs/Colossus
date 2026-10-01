@@ -261,6 +261,28 @@ where
         .await
 }
 
+/// Opaque trusted-runtime continuation of an already attached boundary scope.
+/// It is not serializable and cannot be supplied through a tool or public request.
+#[derive(Clone)]
+pub struct SandboxBoundaryScope {
+    acknowledgement: Option<String>,
+}
+impl SandboxBoundaryScope {
+    /// Capture the current operation for one explicitly managed runtime task.
+    pub fn capture() -> Self {
+        Self {
+            acknowledgement: ACTIVE_SANDBOX_BOUNDARY_ACKNOWLEDGEMENT
+                .try_with(Clone::clone)
+                .ok()
+                .flatten(),
+        }
+    }
+    /// Preserve the captured scope while the original gate continues to validate it.
+    pub async fn scope<F: Future>(self, future: F) -> F::Output {
+        with_sandbox_boundary_acknowledgement(self.acknowledgement, future).await
+    }
+}
+
 #[derive(Clone)]
 struct ScopedSandboxBoundaryAcknowledgement {
     session_id: String,

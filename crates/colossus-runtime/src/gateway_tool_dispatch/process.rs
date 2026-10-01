@@ -85,6 +85,50 @@ impl GatewayToolExecutor {
                     );
                     Some(isolated)
                 };
+                if call.arguments.get("yield_time_ms").is_some()
+                    || call.arguments.get("lifetime").is_some()
+                {
+                    let lifetime = optional_tool_value(&call, "lifetime")?
+                        .unwrap_or(colossus_contracts::ProcessLifetime::Run);
+                    let mut spec = tool_process_spec(
+                        cwd,
+                        args,
+                        environment,
+                        optional_tool_u64(&call, "timeout_ms")?,
+                        optional_tool_u64(&call, "max_output_bytes")?,
+                    );
+                    spec.lifetime = Some(lifetime);
+                    let mut request = effect_request(
+                        model_actor(&call, &context),
+                        "shell.run",
+                        executable.display().to_string(),
+                        serde_json::to_value(spec)
+                            .map_err(|error| ToolError::Failed(error.to_string()))?,
+                    );
+                    request.capabilities = vec!["shell.run".into()];
+                    request.command_intent = Some(command_intent(&call)?);
+                    request.context = context;
+                    let snapshot = self
+                        .process_sessions
+                        .as_ref()
+                        .ok_or_else(|| {
+                            ToolError::Failed("managed shell sessions are unavailable".into())
+                        })?
+                        .launch(
+                            request,
+                            lifetime,
+                            _isolated,
+                            optional_tool_u64(&call, "yield_time_ms")?.unwrap_or(10_000),
+                        )
+                        .await?;
+                    return Ok(ToolResult {
+                        call_id: call.call_id,
+                        name: call.name,
+                        exit_code: snapshot.session.exit_code.unwrap_or(0),
+                        output: serde_json::to_string(&snapshot)
+                            .map_err(|error| ToolError::Failed(error.to_string()))?,
+                    });
+                }
                 let process = self
                     .execute_process_tool(
                         &call,

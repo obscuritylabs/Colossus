@@ -63,7 +63,11 @@ pub(super) fn compose_access_policy(
         model_network_tools,
         interactive,
     } = inputs;
-    let mut candidate_tool_specs = builtin_specs();
+    let mut candidate_tool_specs = colossus_tools::with_process_limits(
+        builtin_specs(),
+        config.sandbox.timeout_ms,
+        config.sandbox.max_output_bytes,
+    );
     let mut tool_descriptors = candidate_tool_specs
         .iter()
         .map(|spec| builtin_tool_descriptor(&spec.name))

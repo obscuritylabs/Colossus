@@ -122,6 +122,7 @@ impl SystemService for SystemServiceAdapter {
             ("agent_runs.create", scopes::RUNS_EXECUTE),
             ("agent_runs.read", scopes::RUNS_READ),
             (SESSION_ACTIVITY_CAPABILITY, scopes::RUNS_READ),
+            ("process_sessions.v1", scopes::RUNS_READ),
             ("agent_runs.cancel", scopes::RUNS_CONTROL),
             ("prompts.respond", scopes::PROMPTS_RESPOND),
             ("approvals.respond", scopes::APPROVALS_RESPOND),

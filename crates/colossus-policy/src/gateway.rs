@@ -166,7 +166,7 @@ impl QuarantinedEffectObserver for GatewayStreamSink<'_> {
         self.total_bytes = self.total_bytes.saturating_add(result.bytes.len());
         if self.total_bytes > limit {
             let failure = StreamSinkFailure::Unknown(
-                "streamed provider output exceeds the cumulative permitted bound".into(),
+                "streamed effect output exceeds the cumulative permitted bound".into(),
             );
             let error = failure.execution_error();
             self.failure = Some(failure);

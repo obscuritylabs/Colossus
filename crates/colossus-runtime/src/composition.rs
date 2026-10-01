@@ -127,6 +127,7 @@ pub struct Runtime {
     pub(super) access: AccessResolution,
     pub(super) filesystem_executor: Arc<dyn EffectExecutor>,
     pub(super) process_executor: Arc<dyn EffectExecutor>,
+    pub(super) process_sessions: Arc<ProcessSessions>,
     pub(super) http_executor: Arc<HttpExecutor>,
     pub(super) sandbox_executor_config: SandboxExecutorConfig,
     pub(super) sandbox_backend: String,
@@ -141,7 +142,7 @@ pub struct Runtime {
     pub(super) workflows: Arc<WorkflowService>,
     // Declared last so every runtime service is dropped before workspace ownership
     // is released to another effect-capable runtime.
-    pub(super) _workspace_lease: workspace_lease::WorkspaceOwnershipLease,
+    pub(super) _workspace_lease: Arc<workspace_lease::WorkspaceOwnershipLease>,
 }
 
 impl Runtime {
@@ -293,6 +294,7 @@ impl Runtime {
                 )
             },
         )?;
+        let workspace_lease = Arc::new(workspace_lease);
         let workspace_identity = workspace_lease.identity();
         workspace_identity.revalidate()?;
         let development_sandbox = derive_development_sandbox(config, &workspace)?;
@@ -806,10 +808,18 @@ impl Runtime {
             service: Arc::clone(&context),
             tool_definitions: colossus_tools::model_definitions(tool_registry.as_ref()),
         });
+        let process_sessions = Arc::new(ProcessSessions::open(
+            Arc::clone(&journal),
+            Arc::clone(&gateway),
+            raw_process_executor,
+            Arc::clone(&workspace_lease),
+            config.sandbox.max_concurrency,
+        )?);
         let gateway_tool_executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
             gateway: Arc::clone(&gateway),
             filesystem: Arc::clone(&filesystem_executor),
             process: Some(Arc::clone(&process_executor)),
+            process_sessions: Some(Arc::clone(&process_sessions)),
             http: Arc::clone(&http_executor),
             work: Some(Arc::clone(&work_executor)),
             memory: Some(Arc::clone(&memory_executor)),
@@ -883,7 +893,10 @@ impl Runtime {
                 Arc::clone(&sessions),
             )
             .with_context_preparer(Arc::clone(&context) as Arc<dyn ContextPreparer>)
-            .with_run_provenance(Arc::new(CatalogRunProvenance)),
+            .with_run_provenance(Arc::new(CatalogRunProvenance))
+            .with_run_lifecycle(
+                Arc::clone(&process_sessions) as Arc<dyn colossus_ports::AgentRunLifecycle>
+            ),
         );
         let workflow_repository: Arc<dyn WorkflowRepository> =
             Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
@@ -960,6 +973,7 @@ impl Runtime {
             access,
             filesystem_executor,
             process_executor,
+            process_sessions,
             http_executor,
             sandbox_executor_config,
             sandbox_backend: config.sandbox.backend.clone(),

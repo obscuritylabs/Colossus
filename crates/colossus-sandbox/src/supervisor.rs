@@ -52,7 +52,11 @@ pub(super) fn supervise_native_inner_process(
     job: &SandboxJob,
     backend: String,
     encoded_job: &[u8],
+    control: Option<&HelperControl>,
 ) -> Result<SandboxJobResult, SandboxHelperError> {
+    if let Some(result) = prelaunch_terminal(job, control) {
+        return Ok(result);
+    }
     let mut child = command
         .group_spawn()
         .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
@@ -62,7 +66,13 @@ pub(super) fn supervise_native_inner_process(
         .take()
         .ok_or_else(|| SandboxHelperError::Execution("native inner stdin is absent".into()))?;
     stdin.write_all(encoded_job)?;
-    drop(stdin);
+    if job.streaming {
+        stdin.write_all(b"\n")?;
+    }
+    let mut input = Some(stdin);
+    if !job.streaming {
+        drop(input.take());
+    }
     let stdout = child
         .inner()
         .stdout
@@ -81,11 +91,34 @@ pub(super) fn supervise_native_inner_process(
     let stdout_handle = capture(stdout, Arc::clone(&state), CaptureStream::Stdout);
     let stderr_handle = capture(stderr, Arc::clone(&state), CaptureStream::Stderr);
     let started = Instant::now();
-    let timeout = Duration::from_millis(job.timeout_ms);
+    let timeout = Duration::from_millis(job.remaining_timeout_ms());
     let mut system = System::new();
     let root_pid = SystemPid::from_u32(child.id());
     let mut target_pid = None;
+    let mut frame_offset = 0;
+    let mut terminal = None;
+    let mut stream_error = None;
+    let mut stop_started = None;
     let (status, timed_out, resource_limit_exceeded) = loop {
+        if let Some(control) = control {
+            let captured = state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Err(error) =
+                relay_native_frames(&captured.stdout, &mut frame_offset, &mut terminal, control)
+            {
+                stream_error = Some(error);
+            }
+            if control.is_cancelled() || stream_error.is_some() {
+                drop(input.take());
+                let stopped_at = stop_started.get_or_insert_with(Instant::now);
+                if stopped_at.elapsed() >= Duration::from_millis(100) {
+                    terminate_process_tree(&mut system, root_pid);
+                    let _ = child.kill();
+                    break (child.wait()?, false, None);
+                }
+            }
+        }
         if let Some(status) = child.try_wait()? {
             let _ = child.kill();
             break (status, false, None);
@@ -134,12 +167,17 @@ pub(super) fn supervise_native_inner_process(
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let stderr = native_helper_diagnostics(&state.stderr)?;
     let stderr = redact_proxy_credential(&stderr, job.proxy_credential.as_deref());
-    if timed_out || resource_limit_exceeded.is_some() {
+    if let Some(error) = stream_error {
+        return Err(error);
+    }
+    let stopped = control.is_some_and(HelperControl::is_cancelled);
+    if timed_out || stopped || resource_limit_exceeded.is_some() {
         return Ok(SandboxJobResult {
             backend,
-            exit_code: status.code(),
+            exit_code: None,
             success: false,
             timed_out,
+            stopped,
             resource_limit_exceeded,
             output_truncated: state.truncated,
             stdout_base64: String::new(),
@@ -163,14 +201,30 @@ pub(super) fn supervise_native_inner_process(
             "native inner helper emitted unexpected diagnostics".into(),
         ));
     }
-    serde_json::from_slice(&state.stdout).map_err(SandboxHelperError::from)
+    if let Some(control) = control {
+        relay_native_frames(&state.stdout, &mut frame_offset, &mut terminal, control)?;
+        if frame_offset != state.stdout.len() {
+            return Err(SandboxHelperError::Execution(
+                "native inner stream ended with an incomplete frame".into(),
+            ));
+        }
+        terminal.ok_or_else(|| {
+            SandboxHelperError::Execution("native inner stream has no terminal frame".into())
+        })
+    } else {
+        serde_json::from_slice(&state.stdout).map_err(SandboxHelperError::from)
+    }
 }
 
 pub(super) fn supervise(
     command: &mut Command,
     job: &SandboxJob,
     backend: String,
+    control: Option<&HelperControl>,
 ) -> Result<SandboxJobResult, SandboxHelperError> {
+    if let Some(result) = prelaunch_terminal(job, control) {
+        return Ok(result);
+    }
     let mut child = command
         .group_spawn()
         .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
@@ -216,10 +270,35 @@ pub(super) fn supervise(
         drop(stdin.take());
     }
     let started = Instant::now();
-    let timeout = Duration::from_millis(job.timeout_ms);
+    let timeout = Duration::from_millis(job.remaining_timeout_ms());
     let mut system = System::new();
     let root_pid = SystemPid::from_u32(child.id());
+    let mut output_cursor = OutputCursor::default();
+    let mut stream_error = control.and_then(|control| {
+        control
+            .emit(ProcessFrame::Started {
+                deadline_ms: u64::try_from(job.deadline_unix_ms.unwrap_or_default())
+                    .unwrap_or_default(),
+                timeout_ms: job.remaining_timeout_ms(),
+                max_output_bytes: job.obligations.max_output_bytes,
+            })
+            .err()
+    });
     let (status, timed_out, resource_limit_exceeded) = loop {
+        if let Some(control) = control {
+            let captured = state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if stream_error.is_none() {
+                stream_error = output_cursor
+                    .emit(&captured, control, job.proxy_credential.as_deref(), false)
+                    .err();
+            }
+            if control.is_cancelled() || stream_error.is_some() {
+                let _ = child.kill();
+                break (child.wait()?, false, None);
+            }
+        }
         if let Some(status) = child.try_wait()? {
             // The group/job can outlive its leader when an executable backgrounds work.
             // Always terminate remaining descendants before returning a terminal result.
@@ -275,13 +354,24 @@ pub(super) fn supervise(
     let state = state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(error) = stream_error {
+        return Err(error);
+    }
+    if let Some(control) = control {
+        while !output_cursor.exhausted(&state) {
+            output_cursor.emit(&state, control, job.proxy_credential.as_deref(), true)?;
+        }
+    }
     let stdout = redact_proxy_credential(&state.stdout, job.proxy_credential.as_deref());
     let stderr = redact_proxy_credential(&state.stderr, job.proxy_credential.as_deref());
     Ok(SandboxJobResult {
         backend,
         exit_code: status.code(),
-        success: status.success() && !timed_out,
+        success: status.success()
+            && !timed_out
+            && !control.is_some_and(HelperControl::is_cancelled),
         timed_out,
+        stopped: control.is_some_and(HelperControl::is_cancelled),
         resource_limit_exceeded,
         output_truncated: state.truncated,
         stdout_base64: BASE64.encode(stdout),

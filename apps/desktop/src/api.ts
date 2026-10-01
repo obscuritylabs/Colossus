@@ -951,3 +951,23 @@ export function signalTerminal(
 export function closeTerminal(sessionId: string): Promise<void> {
   return call("close_terminal", { request: { sessionId } });
 }
+
+export function listShellSessions(
+  targetId: string,
+  after: string | null,
+): Promise<import("./shellSessions").ShellPage> {
+  return call("list_shell_sessions", { targetId, after });
+}
+export function readShellSession(
+  targetId: string,
+  sessionId: string,
+  afterSequence: number,
+): Promise<import("./shellSessions").ShellSnapshot> {
+  return call("read_shell_session", { targetId, sessionId, afterSequence });
+}
+export function stopShellSession(
+  targetId: string,
+  sessionId: string,
+): Promise<import("./shellSessions").ShellSnapshot> {
+  return call("stop_shell_session", { targetId, sessionId });
+}

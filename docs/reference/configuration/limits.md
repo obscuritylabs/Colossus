@@ -241,7 +241,7 @@ deliberately detached descendants. These are the default values; see
 
 | Field | Meaning | Constraint | Default |
 | --- | --- | --- | ---: |
-| `sandbox.timeoutMs` | Supervised effect wall time, including attached-group cleanup; isolating backends confirm whole-tree cleanup | Positive, with backend minimums | `30000` |
+| `sandbox.timeoutMs` | Supervised effect wall time, including attached-group cleanup; isolating backends confirm whole-tree cleanup | Positive, with backend minimums | `900000` |
 | `sandbox.maxOutputBytes` | Request, result, and captured-output ceiling in bytes | At least `1024` | `4194304` |
 | `sandbox.maxProcesses` | Process-tree count where supported | Positive | `16` |
 | `sandbox.maxMemoryBytes` | Process-tree memory in bytes where supported | Positive | `1073741824` |
@@ -282,7 +282,7 @@ Common timeout fields apply at different boundaries:
 | --- | --- | --- |
 | `providers.profiles.*.timeoutMs` | One catalog request, or connection/read inactivity during streaming generation | Optional positive override; defaults to `300000` remotely and `900000` on loopback |
 | `providers.profiles.*.generationTimeoutMs` | Hard wall time for one streaming generation | At least `timeoutMs`; defaults to the larger of `timeoutMs` and `1200000` remotely or `3600000` on loopback |
-| `sandbox.timeoutMs` | One permit-bearing effect and cleanup | `30000`; backend minimums apply |
+| `sandbox.timeoutMs` | One permit-bearing effect and cleanup | `900000`; backend minimums apply |
 | `mcp.servers.*.timeoutMs` | One MCP operation | When present, positive and no greater than sandbox timeout |
 | Search or semantic-memory `timeoutMs` | One adapter request | Positive; see the owning page |
 | `storage.postgres.statementTimeoutMs` | One PostgreSQL statement and lock acquisition | `30000`; `100..=300000` |
@@ -310,7 +310,7 @@ for adapter-specific limits.
 | `memory.retrievalLimit` | `1..=100` | `6` |
 | `research.maxSources` | `1..=100` | `20` |
 | `research.maxWorkers` | `1..=16` | `4` |
-| `sandbox.timeoutMs` | Positive, plus backend minimum | `30000` |
+| `sandbox.timeoutMs` | Positive, plus backend minimum | `900000` |
 | `sandbox.maxOutputBytes` | At least `1024` | `4194304` |
 | `sandbox.maxProcesses` | Positive | `16` |
 | `sandbox.maxMemoryBytes` | Positive | `1073741824` |

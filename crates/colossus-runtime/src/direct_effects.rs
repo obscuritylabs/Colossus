@@ -217,6 +217,7 @@ impl Runtime {
         };
         let cwd = fs::canonicalize(workspace_absolute_path(&self.workspace, cwd.as_ref()))?;
         let spec = ProcessSpec {
+            lifetime: None,
             cwd,
             args,
             environment,

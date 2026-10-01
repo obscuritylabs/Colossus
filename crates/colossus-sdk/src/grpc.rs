@@ -542,6 +542,92 @@ fn cancel_watch_on_close(
 
 #[async_trait]
 impl AgentRunClient for GrpcAgentRunClient {
+    async fn list_process_sessions(
+        &self,
+        request: crate::ListProcessSessionsRequest,
+    ) -> ApiResult<crate::ProcessSessionPage> {
+        if let Some(after) = request.after.as_deref() {
+            validate_identifier(after)?;
+        }
+        let request = self
+            .request(proto::ListProcessSessionsRequest {
+                after: request.after,
+            })
+            .await?;
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            self.client().list_process_sessions(request),
+        )
+        .await
+        .map_err(|_| {
+            read_error_from_status(Status::deadline_exceeded("shell list deadline elapsed"))
+        })?
+        .map_err(read_error_from_status)?
+        .into_inner();
+        if response.sessions.len() > 100 {
+            return Err(protocol_error());
+        }
+        Ok(crate::ProcessSessionPage {
+            sessions: response
+                .sessions
+                .into_iter()
+                .map(process_summary_from_proto)
+                .collect::<ApiResult<_>>()?,
+            next_cursor: response.next_cursor,
+        })
+    }
+    async fn read_process_session(
+        &self,
+        request: crate::ReadProcessSessionRequest,
+    ) -> ApiResult<crate::ProcessSessionSnapshot> {
+        validate_identifier(&request.session_id)?;
+        if request.wait_ms > 30000 || !(16384..=65536).contains(&request.max_output_bytes) {
+            return Err(protocol_error());
+        }
+        let transport_timeout = Duration::from_millis(request.wait_ms.saturating_add(5000));
+        let request = self
+            .request(proto::ReadProcessSessionRequest {
+                session_id: request.session_id,
+                after_sequence: request.after_sequence,
+                wait_ms: request.wait_ms,
+                max_output_bytes: request.max_output_bytes,
+            })
+            .await?;
+        let response = tokio::time::timeout(
+            transport_timeout,
+            self.client().read_process_session(request),
+        )
+        .await
+        .map_err(|_| {
+            read_error_from_status(Status::deadline_exceeded("shell read deadline elapsed"))
+        })?
+        .map_err(read_error_from_status)?
+        .into_inner();
+        process_snapshot_from_proto(required(response.snapshot)?)
+    }
+    async fn stop_process_session(
+        &self,
+        request: crate::StopProcessSessionRequest,
+    ) -> ApiResult<crate::ProcessSessionSnapshot> {
+        validate_identifier(&request.session_id)?;
+        let request = self
+            .request(proto::StopProcessSessionRequest {
+                session_id: request.session_id,
+            })
+            .await?;
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            self.client().stop_process_session(request),
+        )
+        .await
+        .map_err(|_| {
+            api_error_from_status(Status::deadline_exceeded("shell stop deadline elapsed"))
+        })?
+        .map_err(api_error_from_status)?
+        .into_inner();
+        process_snapshot_from_proto(required(response.snapshot)?)
+    }
+
     async fn create_run(&self, request: CreateRunRequest) -> ApiResult<CreateRunResponse> {
         if !request.plugin_skill_ids.is_empty()
             && !self
@@ -2059,6 +2145,99 @@ fn protocol_error() -> ApiError {
     }
 }
 
+fn process_summary_from_proto(
+    value: proto::ProcessSession,
+) -> ApiResult<crate::ProcessSessionSummary> {
+    validate_identifier(&value.id)?;
+    validate_identifier(&value.run_id)?;
+    validate_identifier(&value.session_id)?;
+    if value.command.len() > 65536
+        || value.cwd.len() > 16384
+        || value
+            .reason
+            .as_ref()
+            .is_some_and(|reason| reason.len() > 4096)
+    {
+        return Err(protocol_error());
+    }
+    Ok(crate::ProcessSessionSummary {
+        id: value.id,
+        session_id: value.session_id,
+        run_id: value.run_id,
+        subagent_id: value.subagent_id,
+        command: value.command,
+        cwd: value.cwd,
+        created_at_ms: value.created_at_ms,
+        deadline_ms: value.deadline_ms,
+        exit_code: value.exit_code,
+        reason: value.reason,
+        truncated: value.truncated,
+        output_sequence: value.output_sequence,
+        owner: colossus_api::ProcessOwner {
+            actor_type: colossus_api::ProcessOwnerType::Application,
+            id: value.owner_id,
+        },
+        lifetime: match value.lifetime.as_str() {
+            "run" => crate::ProcessLifetime::Run,
+            "workspace" => crate::ProcessLifetime::Workspace,
+            _ => return Err(protocol_error()),
+        },
+        status: match value.status.as_str() {
+            "starting" => crate::ProcessSessionStatus::Starting,
+            "running" => crate::ProcessSessionStatus::Running,
+            "stopping" => crate::ProcessSessionStatus::Stopping,
+            "exited" => crate::ProcessSessionStatus::Exited,
+            "stopped" => crate::ProcessSessionStatus::Stopped,
+            "timed_out" => crate::ProcessSessionStatus::TimedOut,
+            "failed" => crate::ProcessSessionStatus::Failed,
+            "interrupted" => crate::ProcessSessionStatus::Interrupted,
+            "outcome_unknown" => crate::ProcessSessionStatus::OutcomeUnknown,
+            _ => return Err(protocol_error()),
+        },
+    })
+}
+fn process_snapshot_from_proto(
+    value: proto::ProcessSessionSnapshot,
+) -> ApiResult<crate::ProcessSessionSnapshot> {
+    if value.chunks.len() > 256
+        || value
+            .chunks
+            .iter()
+            .map(|chunk| chunk.stdout.len() + chunk.stderr.len())
+            .sum::<usize>()
+            > 65536
+    {
+        return Err(protocol_error());
+    }
+    let session = process_summary_from_proto(required(value.session)?)?;
+    if value.next_sequence > session.output_sequence
+        || value
+            .chunks
+            .windows(2)
+            .any(|pair| pair[0].sequence >= pair[1].sequence)
+        || value
+            .chunks
+            .last()
+            .is_some_and(|chunk| chunk.sequence != value.next_sequence)
+    {
+        return Err(protocol_error());
+    }
+    Ok(crate::ProcessSessionSnapshot {
+        session,
+        chunks: value
+            .chunks
+            .into_iter()
+            .map(|chunk| crate::ProcessOutputChunk {
+                sequence: chunk.sequence,
+                stdout: chunk.stdout,
+                stderr: chunk.stderr,
+            })
+            .collect(),
+        next_sequence: value.next_sequence,
+        gap: value.gap,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2195,6 +2374,42 @@ mod tests {
 
     #[async_trait]
     impl CoreAgentRunApi for ReadApi {
+        async fn list_process_sessions(
+            &self,
+            caller: &CallerContext,
+            _request: crate::ListProcessSessionsRequest,
+        ) -> ApiResult<crate::ProcessSessionPage> {
+            caller.require_scope(RUNS_READ)?;
+            Ok(crate::ProcessSessionPage {
+                sessions: vec![shell_fixture("019f7d38-649a-7580-a30f-01157b719c2b")],
+                next_cursor: None,
+            })
+        }
+        async fn read_process_session(
+            &self,
+            caller: &CallerContext,
+            request: crate::ReadProcessSessionRequest,
+        ) -> ApiResult<crate::ProcessSessionSnapshot> {
+            caller.require_scope(RUNS_READ)?;
+            Ok(crate::ProcessSessionSnapshot {
+                session: shell_fixture(&request.session_id),
+                chunks: vec![crate::ProcessOutputChunk {
+                    sequence: 2,
+                    stdout: "released output".into(),
+                    stderr: String::new(),
+                }],
+                next_sequence: 2,
+                gap: request.after_sequence == 0,
+            })
+        }
+        async fn stop_process_session(
+            &self,
+            caller: &CallerContext,
+            _request: crate::StopProcessSessionRequest,
+        ) -> ApiResult<crate::ProcessSessionSnapshot> {
+            caller.require_scope(colossus_api::scopes::RUNS_CONTROL)?;
+            unreachable!("read-only bearer cannot stop a process")
+        }
         async fn create_run(
             &self,
             _caller: &CallerContext,
@@ -2241,6 +2456,29 @@ mod tests {
             _request: CoreRespondInteractionRequest,
         ) -> ApiResult<CoreInteraction> {
             unreachable!("test calls only get_run")
+        }
+    }
+
+    fn shell_fixture(id: &str) -> crate::ProcessSessionSummary {
+        crate::ProcessSessionSummary {
+            id: id.into(),
+            session_id: "chat-1".into(),
+            run_id: "run-1".into(),
+            owner: colossus_api::ProcessOwner {
+                actor_type: colossus_api::ProcessOwnerType::Application,
+                id: "app:rust-sdk-test".into(),
+            },
+            subagent_id: None,
+            lifetime: crate::ProcessLifetime::Workspace,
+            status: crate::ProcessSessionStatus::Running,
+            command: "dev server".into(),
+            cwd: "/workspace".into(),
+            created_at_ms: 100,
+            deadline_ms: Some(900100),
+            exit_code: None,
+            reason: None,
+            truncated: true,
+            output_sequence: 2,
         }
     }
 
@@ -2721,6 +2959,34 @@ mod tests {
             .await
             .expect("authenticated get");
         assert_eq!(response.run.run_id, "run-1");
+        assert!(backend.capabilities().contains("process_sessions.v1"));
+        let shells = backend
+            .agent_runs()
+            .list_process_sessions(crate::ListProcessSessionsRequest { after: None })
+            .await
+            .expect("authenticated process discovery");
+        let id = shells.sessions[0].id.clone();
+        let snapshot = backend
+            .agent_runs()
+            .read_process_session(crate::ReadProcessSessionRequest {
+                session_id: id.clone(),
+                after_sequence: 0,
+                wait_ms: 0,
+                max_output_bytes: 65536,
+            })
+            .await
+            .expect("typed released logs");
+        assert_eq!(snapshot.session, shells.sessions[0]);
+        assert_eq!(snapshot.chunks[0].stdout, "released output");
+        assert!(snapshot.gap);
+        assert_eq!(snapshot.next_sequence, 2);
+        let error = backend
+            .agent_runs()
+            .stop_process_session(crate::StopProcessSessionRequest { session_id: id })
+            .await
+            .expect_err("read-only credential cannot stop");
+        assert_eq!(error.code, colossus_api::ApiErrorCode::PermissionDenied);
+
         assert!(backend.capabilities().contains("artifacts.read"));
         assert!(backend.capabilities().contains("artifacts.upload"));
         let artifact = backend

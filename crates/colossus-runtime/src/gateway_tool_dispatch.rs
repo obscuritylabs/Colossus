@@ -24,6 +24,9 @@ impl ToolExecutor for GatewayToolExecutor {
             "git.status" | "git.diff" | "git.show" | "repo.map" | "repo.symbol_search"
             | "repo.references" | "repo.file_summary" | "patch.preview" | "patch.apply"
             | "patch.reverse" => Box::pin(self.execute_repository(call, context)).await,
+            "shell.wait" | "shell.read" | "shell.list" | "shell.stop" => {
+                Box::pin(self.execute_process_session(call, context)).await
+            }
             "shell.run" => Box::pin(self.execute_process(call, context)).await,
             "task.create"
             | "task.update"
