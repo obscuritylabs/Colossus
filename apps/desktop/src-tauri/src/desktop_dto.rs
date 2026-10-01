@@ -343,6 +343,7 @@ pub(crate) struct DesktopCapabilitiesDto {
     pub(crate) plugin_skill_selection: bool,
     pub(crate) tui: bool,
     pub(crate) shell_terminal: bool,
+    pub(crate) process_sessions: bool,
     pub(crate) files: bool,
     pub(crate) artifacts: bool,
     pub(crate) plan_continuation: bool,

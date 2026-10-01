@@ -61,6 +61,7 @@ impl PluginRegistryEffectExecutor {
                     fs::canonicalize(executable).map_err(failed)?
                 };
                 let spec = ProcessSpec {
+                    lifetime: None,
                     cwd: self.workspace.clone(),
                     args: vec!["get".into()],
                     environment: BTreeMap::new(),

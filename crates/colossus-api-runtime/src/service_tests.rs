@@ -42,6 +42,7 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 mod plan_interaction;
+mod process_sessions;
 
 struct RuntimeFixture {
     runtime: Arc<Runtime>,
@@ -1501,6 +1502,10 @@ fn runtime_service_conformance() {
         .build()
         .expect("test runtime")
         .block_on(async {
+            process_sessions::inspection_and_control_require_current_scopes(Arc::clone(
+                &fixture.runtime,
+            ))
+            .await;
             concurrent_exact_create_key_executes_the_provider_once(Arc::clone(&fixture.runtime))
                 .await;
             cancellation_before_the_spawned_task_runs_is_terminal_at_turn_zero(Arc::clone(

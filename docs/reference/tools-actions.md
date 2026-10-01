@@ -82,6 +82,64 @@ The model-visible tool description includes the host operating system before the
 agent's first command. It is a hint for native execution; a configured OCI container
 may use a different OS, and command syntax still depends on the selected shell.
 
+`timeout_ms` is an execution deadline, including supervised cleanup. Its model-visible
+maximum follows the selected workspace's `sandbox.timeoutMs`, which defaults to fifteen
+minutes. Omission uses the policy ceiling; an explicit request may narrow it. The
+`max_output_bytes` argument is bounded by both the sandbox and the tool's 1 MiB ceiling.
+A stricter request-time policy remains authoritative. See
+[Sandbox resource limits](configuration/sandbox.md#resource-limits).
+
+### Managed shell sessions
+
+Set `yield_time_ms` to return a tracked process handle after a short wait. The default
+wait is 10 seconds when `lifetime` is supplied; each wait is limited to 30 seconds.
+Commands without either field retain synchronous behavior.
+
+```json
+{"command":"cargo test","justification":"Verify the requested changes.","yield_time_ms":1000,"lifetime":"run"}
+```
+
+Use `lifetime: "workspace"` explicitly for a development server or other process that
+must continue across later conversation turns. Keep the server in the foreground
+inside its managed session. Shell `&` or `nohup` does not create a managed lifetime.
+Wait until the response reports `running` before ending the initiating turn; a launch
+still awaiting authorization or startup is cancelled when that run ends.
+
+```json
+{"command":"npm run dev -- --host 127.0.0.1","justification":"Serve the requested local preview.","yield_time_ms":1000,"lifetime":"workspace"}
+```
+
+| Tool | Behavior |
+| --- | --- |
+| `shell.wait` | Takes `session_id`, an optional exclusive `after_sequence`, and `yield_time_ms` from 0 to 30000. Returns on output, status change, or the wait bound. |
+| `shell.read` | Reads current state and new released output immediately. |
+| `shell.list` | Lists up to 100 sessions belonging to this application, conversation, and agent lineage; use `after` to continue. |
+| `shell.stop` | Idempotently requests stop. `stopping` is not proof of termination; read or wait for a terminal state. |
+
+Reads and waits accept `max_output_bytes` from 16384 to 65536. Responses contain
+`session`, ordered `chunks`, `next_sequence`, and `gap`; pass `next_sequence` as the
+next `after_sequence`. Status distinguishes `starting`, `running`, `stopping`,
+`exited`, `stopped`, `timed_out`, `failed`, `interrupted`, and `outcome_unknown`.
+Only a confirmed exit code can establish command success. Output may be truncated by
+the policy ceiling or the 64 KiB/256-chunk retained log window. Restart discards the
+in-memory logs and reports a gap.
+
+Run-owned sessions are stopped when their run finishes, fails, or is cancelled.
+Workspace sessions survive turns after reaching `running`, until they exit, are
+stopped, reach the original execution deadline, or their runtime shuts down. Neither
+background lifetime nor waiting raises `sandbox.timeoutMs`. Increase that explicit
+workspace ceiling for servers that need more than the default fifteen minutes.
+Managed sessions reserve concurrency through cleanup. `sandbox.maxConcurrency` limits
+each actor/run independently and defaults to one. A separate workspace capacity of
+32 active sessions bounds total resource use across runs and applications.
+
+Desktop's **Active shells** tool shows the selected runtime's released logs, status,
+origin, and deadline, with search, follow, copy, and Stop. Active shells retain their
+Managed Local runtime when switching workspaces. Quitting Desktop stops Managed Local
+shells; disconnecting from an External target leaves that runtime in charge. This is
+a log viewer, with no interactive stdin or PTY authority. Network and listener
+permissions remain those of the selected sandbox; background lifetime adds none.
+
 `shell.run` accepts exactly one invocation form:
 
 ```json

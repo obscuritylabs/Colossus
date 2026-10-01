@@ -28,22 +28,22 @@ pub fn run_helper_stdio() -> Result<(), SandboxHelperError> {
         .map_err(|error| SandboxHelperError::InvalidJob(error.to_string()))?
         .try_into()
         .map_err(|_| SandboxHelperError::InvalidJob("helper key length is invalid".into()))?;
-    let mut input = std::io::stdin().take(
-        u64::try_from(MAX_JOB_BYTES)
-            .unwrap_or(u64::MAX)
-            .saturating_add(1),
-    );
-    let mut bytes = Vec::new();
-    input.read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_JOB_BYTES {
-        return Err(SandboxHelperError::InvalidJob(
-            "helper input exceeds IPC bound".into(),
-        ));
-    }
+    let (bytes, input) = read_helper_job()?;
     let signed: SignedSandboxJob = serde_json::from_slice(&bytes)?;
     let job = signed.verify(&key)?;
-    let result = execute_sandbox_job(job, &key)?;
-    serde_json::to_writer(std::io::stdout(), &result)?;
+    let control = job
+        .streaming
+        .then(|| HelperControl::new(input, job.obligations.max_output_bytes));
+    let mut result = execute_sandbox_job(job, &key, control.as_ref())?;
+    if let Some(control) = control {
+        result.output_truncated |= control.is_truncated();
+        result.stdout_base64.clear();
+        result.stderr_base64.clear();
+        control.emit(ProcessFrame::Completed { result })?;
+        control.finish()?;
+    } else {
+        serde_json::to_writer(std::io::stdout(), &result)?;
+    }
     Ok(())
 }
 
@@ -72,6 +72,8 @@ pub(super) struct SandboxJobResult {
     pub(super) exit_code: Option<i32>,
     pub(super) success: bool,
     pub(super) timed_out: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) stopped: bool,
     pub(super) resource_limit_exceeded: Option<String>,
     pub(super) output_truncated: bool,
     pub(super) stdout_base64: String,
@@ -83,10 +85,14 @@ pub(super) struct SandboxJobResult {
 pub(super) fn execute_sandbox_job(
     job: SandboxJob,
     key: &[u8; 32],
+    control: Option<&HelperControl>,
 ) -> Result<SandboxJobResult, SandboxHelperError> {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let _ = key;
     let backend = job.obligations.sandbox_backend.clone();
+    if let Some(result) = prelaunch_terminal(&job, control) {
+        return Ok(result);
+    }
     #[cfg(target_os = "windows")]
     if backend == "oci" {
         return Err(SandboxHelperError::Setup(
@@ -96,7 +102,7 @@ pub(super) fn execute_sandbox_job(
     if backend == "windows_job" {
         #[cfg(target_os = "windows")]
         {
-            return supervise_windows_job(&job, backend);
+            return supervise_windows_job(&job, backend, control);
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -107,7 +113,7 @@ pub(super) fn execute_sandbox_job(
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     if backend == "native" && std::env::var_os(NATIVE_INNER_VARIABLE).is_none() {
-        return supervise_native_inner(&job, backend, key);
+        return supervise_native_inner(&job, backend, key, control);
     }
     let mut oci_network = if backend == "oci" && !job.obligations.network_destinations.is_empty() {
         Some(OciNetworkResources::start(&job)?)
@@ -133,7 +139,7 @@ pub(super) fn execute_sandbox_job(
             )));
         }
     };
-    let mut result = supervise(&mut command, &job, backend.clone());
+    let mut result = supervise(&mut command, &job, backend.clone(), control);
     if let Some(network) = oci_network.as_mut() {
         if let Ok(result) = result.as_mut() {
             result.observed_origins = network.observed_origins()?;
@@ -159,6 +165,7 @@ pub(super) fn supervise_native_inner(
     job: &SandboxJob,
     backend: String,
     key: &[u8; 32],
+    control: Option<&HelperControl>,
 ) -> Result<SandboxJobResult, SandboxHelperError> {
     let signed = SignedSandboxJob::sign(job.clone(), key)
         .map_err(|error| SandboxHelperError::InvalidJob(error.to_string()))?;
@@ -179,7 +186,7 @@ pub(super) fn supervise_native_inner(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    supervise_native_inner_process(&mut command, job, backend, &encoded)
+    supervise_native_inner_process(&mut command, job, backend, &encoded, control)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -669,6 +676,7 @@ impl Drop for WindowsProtectedAclGuard {
 pub(super) fn supervise_windows_job(
     job: &SandboxJob,
     backend: String,
+    control: Option<&HelperControl>,
 ) -> Result<SandboxJobResult, SandboxHelperError> {
     let networked = !job.obligations.network_destinations.is_empty();
     if networked != job.proxy_port.is_some() || networked != job.proxy_credential.is_some() {
@@ -838,6 +846,9 @@ pub(super) fn supervise_windows_job(
             })
             .transpose()?,
     };
+    if let Some(result) = prelaunch_terminal(job, control) {
+        return Ok(result);
+    }
     let mut child = colossus_windows_process::spawn(&request)
         .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
     let stdout = child
@@ -876,10 +887,37 @@ pub(super) fn supervise_windows_job(
         drop(stdin.take());
     }
     let started = Instant::now();
-    let timeout = Duration::from_millis(job.timeout_ms);
+    let timeout = Duration::from_millis(job.remaining_timeout_ms());
     let mut timed_out = false;
     let mut resource_limit_exceeded = None;
+    let mut output_cursor = OutputCursor::default();
+    let mut stream_error = control.and_then(|control| {
+        control
+            .emit(ProcessFrame::Started {
+                deadline_ms: u64::try_from(job.deadline_unix_ms.unwrap_or_default())
+                    .unwrap_or_default(),
+                timeout_ms: job.remaining_timeout_ms(),
+                max_output_bytes: job.obligations.max_output_bytes,
+            })
+            .err()
+    });
     let exit_code = loop {
+        if let Some(control) = control {
+            let captured = state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if stream_error.is_none() {
+                stream_error = output_cursor
+                    .emit(&captured, control, job.proxy_credential.as_deref(), false)
+                    .err();
+            }
+            if control.is_cancelled() || stream_error.is_some() {
+                child
+                    .terminate(0xC000_013A)
+                    .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
+                break wait_for_windows_termination(&child)?;
+            }
+        }
         if let Some(code) = child
             .wait_timeout(Duration::from_millis(10))
             .map_err(|error| SandboxHelperError::Execution(error.to_string()))?
@@ -926,13 +964,25 @@ pub(super) fn supervise_windows_job(
     let state = state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(error) = stream_error {
+        return Err(error);
+    }
+    if let Some(control) = control {
+        while !output_cursor.exhausted(&state) {
+            output_cursor.emit(&state, control, job.proxy_credential.as_deref(), true)?;
+        }
+    }
     let stdout = redact_proxy_credential(&state.stdout, job.proxy_credential.as_deref());
     let stderr = redact_proxy_credential(&state.stderr, job.proxy_credential.as_deref());
     let result = SandboxJobResult {
         backend,
         exit_code: Some(i32::from_ne_bytes(exit_code.to_ne_bytes())),
-        success: exit_code == 0 && !timed_out && resource_limit_exceeded.is_none(),
+        success: exit_code == 0
+            && !timed_out
+            && resource_limit_exceeded.is_none()
+            && !control.is_some_and(HelperControl::is_cancelled),
         timed_out,
+        stopped: control.is_some_and(HelperControl::is_cancelled),
         resource_limit_exceeded,
         output_truncated: state.truncated,
         stdout_base64: BASE64.encode(stdout),
@@ -1021,6 +1071,26 @@ pub(super) fn native_runtime_paths() -> Vec<&'static Path> {
     .into_iter()
     .map(Path::new)
     .collect()
+}
+
+pub(super) fn prelaunch_terminal(
+    job: &SandboxJob,
+    control: Option<&HelperControl>,
+) -> Option<SandboxJobResult> {
+    let stopped = control.is_some_and(HelperControl::is_cancelled);
+    let timed_out = job.remaining_timeout_ms() == 0;
+    (stopped || timed_out).then(|| SandboxJobResult {
+        backend: job.obligations.sandbox_backend.clone(),
+        exit_code: None,
+        success: false,
+        timed_out,
+        stopped,
+        resource_limit_exceeded: None,
+        output_truncated: false,
+        stdout_base64: String::new(),
+        stderr_base64: String::new(),
+        observed_origins: Vec::new(),
+    })
 }
 
 #[cfg(all(test, target_os = "linux"))]

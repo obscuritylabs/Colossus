@@ -13,7 +13,7 @@ pub(super) fn default_obligations() -> PolicyObligations {
         network_destinations: Vec::new(),
         allowed_environment: Vec::new(),
         allow_sandbox_downgrade: false,
-        timeout_ms: 30_000,
+        timeout_ms: colossus_contracts::DEFAULT_SANDBOX_TIMEOUT_MS,
         max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
         max_processes: 1,
         max_memory_bytes: DEFAULT_MAX_MEMORY_BYTES,

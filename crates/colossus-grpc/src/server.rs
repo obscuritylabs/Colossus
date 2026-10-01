@@ -59,7 +59,9 @@ const MAX_CONCURRENT_TLS_HANDSHAKES: usize = 32;
 const MAX_PENDING_ACCEPT_RESET_STREAMS: usize = 128;
 const MAX_LOCAL_ERROR_RESET_STREAMS: usize = 128;
 pub(crate) const MAX_CONNECTION_AGE: Duration = Duration::from_secs(15 * 60);
-pub(crate) const MAX_REQUEST_SETUP_DURATION: Duration = Duration::from_secs(30);
+// A quiet process read may wait 30 seconds; reserve five seconds for decoding,
+// authentication, policy admission, and response delivery around that wait.
+pub(crate) const MAX_REQUEST_SETUP_DURATION: Duration = Duration::from_secs(35);
 const MAX_CONNECTION_AGE_GRACE: Duration = Duration::from_secs(15);
 
 struct LimitedConnection {

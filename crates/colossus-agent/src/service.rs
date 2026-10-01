@@ -8,6 +8,7 @@ pub struct AgentService {
     pub(super) executor: Arc<dyn ToolExecutor>,
     pub(super) sessions: Arc<dyn SessionRepository>,
     pub(super) context_preparer: Option<Arc<dyn ContextPreparer>>,
+    pub(super) lifecycle: Option<Arc<dyn colossus_ports::AgentRunLifecycle>>,
     pub(super) provenance: Option<Arc<dyn colossus_ports::RunProvenanceProvider>>,
 }
 
@@ -28,6 +29,7 @@ impl AgentService {
             sessions,
             context_preparer: None,
             provenance: None,
+            lifecycle: None,
         }
     }
 
@@ -44,6 +46,16 @@ impl AgentService {
         provider: Arc<dyn colossus_ports::RunProvenanceProvider>,
     ) -> Self {
         self.provenance = Some(provider);
+        self
+    }
+
+    /// Attach runtime ownership for managed tool sessions.
+    #[must_use]
+    pub fn with_run_lifecycle(
+        mut self,
+        lifecycle: Arc<dyn colossus_ports::AgentRunLifecycle>,
+    ) -> Self {
+        self.lifecycle = Some(lifecycle);
         self
     }
 
@@ -751,6 +763,35 @@ impl AgentService {
         allowed_tools: Option<&[String]>,
         active_skills: &[String],
     ) -> Result<AgentRunResult, AgentError> {
+        self.run_subagent_with_skills_as(
+            role,
+            instructions,
+            task,
+            max_turns,
+            child_session_id,
+            subagent_id,
+            allowed_tools,
+            active_skills,
+            terminal_actor(),
+        )
+        .await
+    }
+
+    /// Execute a delegated child for its parent's immutable authenticated initiator.
+    /// The trusted scheduler must resolve this actor from canonical parent-run evidence.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_subagent_with_skills_as(
+        &self,
+        role: &str,
+        instructions: &str,
+        task: &str,
+        max_turns: u16,
+        child_session_id: &str,
+        subagent_id: &str,
+        allowed_tools: Option<&[String]>,
+        active_skills: &[String],
+        initiator: Actor,
+    ) -> Result<AgentRunResult, AgentError> {
         self.run_with_lineage(
             role,
             instructions,
@@ -763,7 +804,7 @@ impl AgentService {
                 active_skills,
                 ..RunScope::default()
             },
-            terminal_actor(),
+            initiator,
             None,
             None,
         )

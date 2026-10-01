@@ -12,6 +12,7 @@ export type WorkTool =
   | "artifacts"
   | "browser"
   | "terminal"
+  | "shells"
   | "git"
   | "details"
   | "aside"

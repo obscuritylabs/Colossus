@@ -1,5 +1,8 @@
 use super::*;
 
+/// Default sandbox execution ceiling: fifteen minutes, including supervised cleanup.
+pub const DEFAULT_SANDBOX_TIMEOUT_MS: u64 = 15 * 60 * 1000;
+
 /// Resource authority carried by a policy decision.
 ///
 /// This is intentionally distinct from filesystem roots and network destination

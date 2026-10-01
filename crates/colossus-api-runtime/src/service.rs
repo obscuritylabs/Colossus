@@ -137,6 +137,9 @@ pub struct RuntimeAgentRunApi {
     execution: Arc<Mutex<ExecutionRegistry>>,
     watches: Arc<WatchAdmission>,
     lists: Arc<ListAdmission>,
+    shell_queries: Arc<ListAdmission>,
+    shell_reads: Arc<ListAdmission>,
+    shell_controls: Arc<ListAdmission>,
     active_changed: Arc<tokio::sync::Notify>,
     recovery: Arc<Mutex<()>>,
     pending_recoveries: Arc<Mutex<BTreeMap<String, CallerContext>>>,
@@ -215,6 +218,9 @@ impl RuntimeAgentRunApi {
     ) -> Self {
         let watches = WatchAdmission::new(&admission);
         let lists = ListAdmission::new(&admission);
+        let shell_queries = ListAdmission::new(&admission);
+        let shell_reads = ListAdmission::new(&admission);
+        let shell_controls = ListAdmission::new(&admission);
         Self {
             artifacts: Arc::new(EventSourcedArtifactApi::new(runtime.journal())),
             runtime,
@@ -227,6 +233,9 @@ impl RuntimeAgentRunApi {
             })),
             watches,
             lists,
+            shell_queries,
+            shell_reads,
+            shell_controls,
             active_changed: Arc::new(tokio::sync::Notify::new()),
             recovery: Arc::new(Mutex::new(())),
             pending_recoveries: Arc::new(Mutex::new(BTreeMap::new())),
@@ -1384,6 +1393,7 @@ impl RuntimeAgentRunApi {
 
     /// Cooperatively stop active public runs and unblock their interactions.
     pub fn request_shutdown(&self) {
+        self.runtime.stop_process_sessions();
         let active = lock(&self.execution)
             .active
             .iter()
@@ -1399,6 +1409,7 @@ impl RuntimeAgentRunApi {
     pub async fn shutdown_and_wait(&self, timeout: std::time::Duration) -> bool {
         self.request_shutdown();
         tokio::time::timeout(timeout, async {
+            self.runtime.drain_process_sessions().await;
             loop {
                 let notified = self.active_changed.notified();
                 if lock(&self.execution).active.is_empty() {
@@ -1414,6 +1425,88 @@ impl RuntimeAgentRunApi {
 
 #[async_trait]
 impl AgentRunApi for RuntimeAgentRunApi {
+    async fn list_process_sessions(
+        &self,
+        caller: &CallerContext,
+        request: colossus_api::ListProcessSessionsRequest,
+    ) -> ApiResult<colossus_api::ProcessSessionPage> {
+        caller.require_scope(scopes::RUNS_READ)?;
+        if request
+            .after
+            .as_ref()
+            .is_some_and(|id| Uuid::parse_str(id).is_err())
+        {
+            return Err(ApiError::invalid(
+                ApiErrorReason::InvalidArgument,
+                "request",
+                "Use a valid session UUID, wait_ms from 0 through 30000, and max_output_bytes from 16384 through 65536.",
+            ));
+        }
+        let _permit = self
+            .shell_queries
+            .acquire(caller.principal().application_id())
+            .map_err(|AdmissionLimitReached| capacity_error(caller))?;
+        self.runtime
+            .list_process_sessions(caller.actor(), request.after)
+            .await
+            .map_err(|_| process_session_error())
+    }
+    async fn read_process_session(
+        &self,
+        caller: &CallerContext,
+        request: colossus_api::ReadProcessSessionRequest,
+    ) -> ApiResult<colossus_api::ProcessSessionSnapshot> {
+        caller.require_scope(scopes::RUNS_READ)?;
+        if Uuid::parse_str(&request.session_id).is_err()
+            || request.wait_ms > 30000
+            || !(16384..=65536).contains(&request.max_output_bytes)
+        {
+            return Err(ApiError::invalid(
+                ApiErrorReason::InvalidArgument,
+                "request",
+                "Use a valid session UUID, wait_ms from 0 through 30000, and max_output_bytes from 16384 through 65536.",
+            ));
+        }
+        let _permit = self
+            .shell_reads
+            .acquire(caller.principal().application_id())
+            .map_err(|AdmissionLimitReached| capacity_error(caller))?;
+        self.runtime
+            .read_process_session(
+                caller.actor(),
+                request.session_id,
+                request.after_sequence,
+                request.wait_ms,
+                request.max_output_bytes as usize,
+            )
+            .await
+            .map_err(|_| process_session_error())
+    }
+    async fn stop_process_session(
+        &self,
+        caller: &CallerContext,
+        request: colossus_api::StopProcessSessionRequest,
+    ) -> ApiResult<colossus_api::ProcessSessionSnapshot> {
+        caller.require_scope(scopes::RUNS_CONTROL)?;
+        // Stop returns a snapshot containing retained released logs.
+        caller.require_scope(scopes::RUNS_READ)?;
+        if Uuid::parse_str(&request.session_id).is_err() {
+            return Err(ApiError::invalid(
+                ApiErrorReason::InvalidArgument,
+                "request",
+                "Use a valid session UUID, wait_ms from 0 through 30000, and max_output_bytes from 16384 through 65536.",
+            ));
+        }
+        let _permit = self
+            .shell_controls
+            .acquire(caller.principal().application_id())
+            .map_err(|AdmissionLimitReached| capacity_error(caller))?;
+        self.runtime
+            .stop_process_session(caller.actor(), request.session_id)
+            .await
+            .map_err(|_| process_session_error())
+    }
+
     async fn create_run(
         &self,
         caller: &CallerContext,
@@ -2786,6 +2879,13 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn process_session_error() -> ApiError {
+    ApiError::failed_precondition(
+        ApiErrorReason::InvalidRunTransition,
+        "The shell session request is invalid, unavailable, or not authorized.",
+    )
 }
 
 #[cfg(test)]

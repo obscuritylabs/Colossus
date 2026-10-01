@@ -10,6 +10,7 @@ mod artifacts;
 mod error;
 mod identity;
 mod plugins;
+mod process_sessions;
 mod repository;
 mod runs;
 mod validation;
@@ -28,6 +29,7 @@ pub use identity::{
     scopes,
 };
 pub use plugins::*;
+pub use process_sessions::*;
 pub use repository::{EventSourcedRunRepository, RunRepository};
 pub use runs::{
     AgentRunApi, ApprovalRisk, ArchiveThreadRequest, CancelRunRequest, ContentPart,

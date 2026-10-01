@@ -14,6 +14,12 @@ fn host_os_name() -> &'static str {
 
 /// Return every supported built-in tool specification.
 pub fn builtin_specs() -> Vec<ToolSpec> {
+    let mut specs = core_builtin_specs();
+    specs.extend(super::process_sessions::session_specs());
+    specs
+}
+
+fn core_builtin_specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: "echo".into(),
@@ -331,7 +337,7 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "shell.run".into(),
             description: format!(
-                "Run a non-interactive process inside the selected workspace; provide exactly one of command or argv. An acknowledged danger_full_access backend instead permits ambient host executables, environment, working directories, filesystem access, and network access. Host OS: {}. Verify OS in containers.",
+                "Run a non-interactive process. Set yield_time_ms (normally 1000) to return a tracked session and use shell.wait/read/stop. A running session is not a successful command. Lifetime run is cleaned up when this run ends; explicitly choose workspace for a server that must survive later turns. Wait until a workspace session is running before ending the turn; pending launches are cancelled. Both lifetimes keep the original sandbox deadline. Run inside the selected workspace; provide exactly one of command or argv. An acknowledged danger_full_access backend instead permits ambient host executables, environment, working directories, filesystem access, and network access. Host OS: {}. Verify OS in containers.",
                 host_os_name()
             ),
             input_schema: object_schema_with(
@@ -358,7 +364,9 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
                         "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
                         "additionalProperties": {"type": "string", "maxLength": 65536}
                     },
-                    "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 300000},
+                    "yield_time_ms": {"type": "integer", "minimum": 0, "maximum": 30000, "description": "Return a handle after this wait; does not change the execution deadline."},
+                    "lifetime": {"type": "string", "enum": ["run", "workspace"], "default": "run"},
+                    "timeout_ms": {"type": "integer", "minimum": 1, "maximum": colossus_contracts::DEFAULT_SANDBOX_TIMEOUT_MS},
                     "max_output_bytes": {"type": "integer", "minimum": 1024, "maximum": 1048576}
                 }),
                 &["justification"],

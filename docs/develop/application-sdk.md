@@ -167,6 +167,28 @@ and enforce resource scope again inside each command. Do not add generic “run 
 “read path,” “call URL,” or “invoke SDK method” commands; those would turn the WebView
 into a capability-confused deputy.
 
+## Managed shell inspection
+
+`AgentRunService` also exposes `ListProcessSessions`, `ReadProcessSession`, and
+`StopProcessSession`. Reads require `runs:read`; stop requires both `runs:control`
+and `runs:read` because its response includes retained logs, plus an exact caller-owned
+opaque process identity. Delegated shells retain the parent application owner. The same
+application cannot select another workspace through these requests. List/read/stop still pass through the runtime effect
+gateway. `ReadProcessSession` supports an exclusive output cursor and a wait bounded to
+30 seconds, allowing finite polling and reconnect without resetting process deadlines.
+The server request deadline is 35 seconds to leave transport and policy headroom.
+Discovery, log reads, and Stop use separate bounded admission pools, so a waiting read
+cannot consume Stop capacity. Clients must still respect pagination rate limits.
+The Rust SDK exposes corresponding methods for both embedded and gRPC backends;
+generated TypeScript, Python, and Go service bindings expose the same typed messages.
+
+Desktop uses the narrow `list_shell_sessions`, `read_shell_session`, and
+`stop_shell_session` commands. A native selected-target lease prevents target changes
+from racing an in-flight operation. Listing binds process identities to that selection;
+read and stop require the binding again. The renderer receives bounded released logs
+and safe metadata, never a PID, environment, or supervisor handle. A managed runtime
+with an active shell is busy for idle-eviction purposes even after its agent run ends.
+
 ## Managed Local bootstrap and lifecycle
 
 Managed hosts carry an explicit `ManagedExecutionBoundary` independently from access
@@ -466,7 +488,7 @@ directory. Never compute the expected pin by rereading `endpoint.json` or
 The initial server also bounds each TLS handshake to five seconds, accepts at most 128
 simultaneous connections, permits at most 80 concurrent request setups globally and
 per connection, permits 128 HTTP/2 streams per connection, expires connections after
-15 minutes, limits each request decode and handler setup to 30 seconds, limits HTTP/2
+15 minutes, limits each unary request and streaming-handler setup to 35 seconds, limits HTTP/2
 headers to 16 KiB, limits decoded request messages to 2 MiB, and limits encoded
 responses to 8 MiB. The response budget includes a sanitized command context of up to
 4 MiB plus its envelope; command, effect, and request limits remain unchanged. Only

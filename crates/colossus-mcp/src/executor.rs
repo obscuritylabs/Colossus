@@ -1679,6 +1679,7 @@ impl EffectExecutor for McpExecutor {
         }
         let protocol = protocol_input(&input.operation)?;
         let process = ProcessSpec {
+            lifetime: None,
             cwd: server
                 .cwd
                 .clone()

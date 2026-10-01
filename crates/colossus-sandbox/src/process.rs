@@ -1,9 +1,11 @@
 use super::*;
 
 /// Permit-bound process executor using an authenticated one-shot helper.
+#[derive(Clone)]
 pub struct SandboxProcessExecutor {
     config: SandboxExecutorConfig,
     job_key: [u8; 32],
+    pub(super) control: ProcessControl,
 }
 
 pub(super) struct OciCancellationGuard {
@@ -97,7 +99,20 @@ pub(super) fn oci_remove_arguments(runtime: &Path, name: &str) -> Option<Vec<Str
 impl SandboxProcessExecutor {
     /// Construct a process executor with a private IPC authentication key.
     pub fn new(config: SandboxExecutorConfig, job_key: [u8; 32]) -> Self {
-        Self { config, job_key }
+        Self {
+            config,
+            job_key,
+            control: ProcessControl::default(),
+        }
+    }
+
+    /// Bind one managed invocation to an independent stop signal.
+    pub fn controlled(&self, control: ProcessControl) -> Self {
+        Self {
+            config: self.config.clone(),
+            job_key: self.job_key,
+            control,
+        }
     }
 }
 
@@ -148,6 +163,33 @@ impl EffectExecutor for SandboxProcessExecutor {
         request: &EffectRequest,
         permit: ExecutionPermit,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        self.execute_inner(request, permit, None).await
+    }
+}
+
+#[async_trait]
+impl StreamingEffectExecutor for SandboxProcessExecutor {
+    async fn execute_stream(
+        &self,
+        request: &EffectRequest,
+        permit: ExecutionPermit,
+        observer: &mut dyn QuarantinedEffectObserver,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        self.execute_inner(request, permit, Some(observer)).await
+    }
+}
+
+impl SandboxProcessExecutor {
+    async fn execute_inner(
+        &self,
+        request: &EffectRequest,
+        permit: ExecutionPermit,
+        observer: Option<&mut dyn QuarantinedEffectObserver>,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        let started = Instant::now();
+        if self.control.is_cancelled() {
+            return Err(adapter_failure("process was stopped before launch"));
+        }
         if !is_sandbox_process_action(&request.action) {
             return Err(adapter_failure("process executor received another action"));
         }
@@ -234,13 +276,22 @@ impl EffectExecutor for SandboxProcessExecutor {
                 "networked process execution currently requires the native proxy-only backend",
             ));
         };
-        let helper_budget = sandbox_helper_budget(permit.obligations(), effective_timeout_ms);
+        let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let helper_budget = sandbox_helper_budget(permit.obligations(), effective_timeout_ms)
+            .saturating_sub(elapsed);
+        if helper_budget == 0 || self.control.is_cancelled() {
+            return Err(adapter_failure(
+                "process launch deadline expired or stop requested",
+            ));
+        }
+        let streaming = observer.is_some();
         let mut job_obligations = permit.obligations().clone();
         job_obligations.timeout_ms = effective_timeout_ms;
         job_obligations.max_output_bytes = effective_output_bytes;
         let temporary_root = sandbox_temporary_root(&job_obligations.sandbox_backend)?;
         let job = SandboxJob {
-            schema_version: 2,
+            schema_version: if streaming { 3 } else { 2 },
+            streaming,
             job_id: Uuid::now_v7().to_string(),
             request_id: request.request_id.clone(),
             request_hash: permit.request_hash().into(),
@@ -251,6 +302,10 @@ impl EffectExecutor for SandboxProcessExecutor {
             process: spec,
             obligations: job_obligations,
             timeout_ms: helper_budget,
+            deadline_unix_ms: streaming.then(|| {
+                OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000
+                    + i128::from(helper_budget)
+            }),
             proxy_port: proxy.as_ref().map(AllowlistProxy::port),
             proxy_credential,
             oci_runtime: self.config.oci_runtime.clone(),
@@ -275,7 +330,7 @@ impl EffectExecutor for SandboxProcessExecutor {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true);
+            .kill_on_drop(!streaming);
         #[cfg(target_os = "windows")]
         for name in ["SystemRoot", "WINDIR", "USERPROFILE", "LOCALAPPDATA"] {
             if let Some(value) = std::env::var_os(name) {
@@ -288,6 +343,31 @@ impl EffectExecutor for SandboxProcessExecutor {
             .take()
             .ok_or_else(|| adapter_failure("sandbox helper stdin is absent"))?;
         stdin.write_all(&encoded).await.map_err(adapter_failure)?;
+        if let Some(observer) = observer {
+            stdin.write_all(b"\n").await.map_err(adapter_failure)?;
+            let result = self
+                .read_stream(
+                    child,
+                    stdin,
+                    observer,
+                    proxy.as_ref(),
+                    effective_output_bytes,
+                )
+                .await;
+            if is_oci
+                && !ensure_oci_resources_absent_async(
+                    self.config.oci_runtime.as_deref(),
+                    &resources,
+                )
+                .await
+            {
+                return Err(ExecutionError::OutcomeUnknown(
+                    "managed process OCI cleanup could not be confirmed".into(),
+                ));
+            }
+            cleanup_guard.disarm();
+            return result;
+        }
         drop(stdin);
         let output = match child.wait_with_output().await {
             Ok(output) => output,
@@ -418,16 +498,21 @@ pub(super) fn validate_process_spec(
             "process argv exceeds bounds or contains NUL",
         ));
     }
-    if spec
-        .timeout_ms
-        .is_some_and(|timeout| timeout == 0 || timeout > obligations.timeout_ms)
-        || spec
-            .max_output_bytes
-            .is_some_and(|limit| limit < 1024 || limit > obligations.max_output_bytes)
+    if let Some(timeout) = spec.timeout_ms
+        && (timeout == 0 || timeout > obligations.timeout_ms)
     {
-        return Err(adapter_failure(
-            "requested process timeout or output cap exceeds policy bounds",
-        ));
+        return Err(adapter_failure(format!(
+            "requested process timeout_ms {timeout} is outside policy bounds: allowed 1..={} ms",
+            obligations.timeout_ms
+        )));
+    }
+    if let Some(limit) = spec.max_output_bytes
+        && (limit < 1024 || limit > obligations.max_output_bytes)
+    {
+        return Err(adapter_failure(format!(
+            "requested process max_output_bytes {limit} is outside policy bounds: allowed 1024..={} bytes",
+            obligations.max_output_bytes
+        )));
     }
     if spec.environment.len() > 128 {
         return Err(adapter_failure("process environment exceeds entry bound"));
@@ -589,6 +674,8 @@ pub(super) fn normalize_path_arguments(
 #[serde(deny_unknown_fields)]
 pub(super) struct SandboxJob {
     pub(super) schema_version: u16,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) streaming: bool,
     pub(super) job_id: String,
     pub(super) request_id: String,
     pub(super) request_hash: String,
@@ -599,6 +686,8 @@ pub(super) struct SandboxJob {
     pub(super) process: ProcessSpec,
     pub(super) obligations: PolicyObligations,
     pub(super) timeout_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) deadline_unix_ms: Option<i128>,
     pub(super) proxy_port: Option<u16>,
     pub(super) proxy_credential: Option<String>,
     pub(super) oci_runtime: Option<PathBuf>,
@@ -653,7 +742,8 @@ impl SignedSandboxJob {
             .map_err(|error| SandboxHelperError::InvalidJob(error.to_string()))?;
         mac.verify_slice(&tag)
             .map_err(|_| SandboxHelperError::InvalidJob("job authentication failed".into()))?;
-        if self.job.schema_version != 2
+        if self.job.schema_version != if self.job.streaming { 3 } else { 2 }
+            || self.job.streaming != self.job.deadline_unix_ms.is_some()
             || Uuid::parse_str(&self.job.job_id).is_err()
             || self.job.request_id.is_empty()
             || self.job.request_hash.is_empty()
@@ -682,5 +772,18 @@ impl SignedSandboxJob {
             return Err(SandboxHelperError::InvalidJob("job permit expired".into()));
         }
         Ok(self.job)
+    }
+}
+
+impl SandboxJob {
+    pub(super) fn remaining_timeout_ms(&self) -> u64 {
+        self.deadline_unix_ms.map_or(self.timeout_ms, |deadline| {
+            u64::try_from(
+                deadline
+                    .saturating_sub(OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000),
+            )
+            .unwrap_or(0)
+            .min(self.timeout_ms)
+        })
     }
 }

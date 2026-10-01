@@ -12,6 +12,7 @@ mod auth;
 mod endpoint;
 mod extensions;
 mod journal_credentials;
+mod process_sessions;
 mod request_guard;
 mod server;
 mod status;

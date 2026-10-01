@@ -19,6 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	AgentRunService_ListProcessSessions_FullMethodName = "/colossus.api.v1alpha1.AgentRunService/ListProcessSessions"
+	AgentRunService_ReadProcessSession_FullMethodName  = "/colossus.api.v1alpha1.AgentRunService/ReadProcessSession"
+	AgentRunService_StopProcessSession_FullMethodName  = "/colossus.api.v1alpha1.AgentRunService/StopProcessSession"
 	AgentRunService_CreateRun_FullMethodName           = "/colossus.api.v1alpha1.AgentRunService/CreateRun"
 	AgentRunService_GetRun_FullMethodName              = "/colossus.api.v1alpha1.AgentRunService/GetRun"
 	AgentRunService_ListRuns_FullMethodName            = "/colossus.api.v1alpha1.AgentRunService/ListRuns"
@@ -36,6 +39,12 @@ const (
 //
 // AgentRunService manages durable asynchronous runs and one-use interactions.
 type AgentRunServiceClient interface {
+	// ListProcessSessions discovers caller-owned managed shells in this runtime.
+	ListProcessSessions(ctx context.Context, in *ListProcessSessionsRequest, opts ...grpc.CallOption) (*ListProcessSessionsResponse, error)
+	// ReadProcessSession reads released logs, with a bounded optional wait.
+	ReadProcessSession(ctx context.Context, in *ReadProcessSessionRequest, opts ...grpc.CallOption) (*ReadProcessSessionResponse, error)
+	// StopProcessSession requests idempotent stop of an exact caller-owned shell.
+	StopProcessSession(ctx context.Context, in *StopProcessSessionRequest, opts ...grpc.CallOption) (*StopProcessSessionResponse, error)
 	// CreateRun durably allocates a run before execution begins.
 	CreateRun(ctx context.Context, in *CreateRunRequest, opts ...grpc.CallOption) (*CreateRunResponse, error)
 	// GetRun reconstructs one run and its terminal outcome, when present.
@@ -62,6 +71,36 @@ type agentRunServiceClient struct {
 
 func NewAgentRunServiceClient(cc grpc.ClientConnInterface) AgentRunServiceClient {
 	return &agentRunServiceClient{cc}
+}
+
+func (c *agentRunServiceClient) ListProcessSessions(ctx context.Context, in *ListProcessSessionsRequest, opts ...grpc.CallOption) (*ListProcessSessionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListProcessSessionsResponse)
+	err := c.cc.Invoke(ctx, AgentRunService_ListProcessSessions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentRunServiceClient) ReadProcessSession(ctx context.Context, in *ReadProcessSessionRequest, opts ...grpc.CallOption) (*ReadProcessSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadProcessSessionResponse)
+	err := c.cc.Invoke(ctx, AgentRunService_ReadProcessSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentRunServiceClient) StopProcessSession(ctx context.Context, in *StopProcessSessionRequest, opts ...grpc.CallOption) (*StopProcessSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StopProcessSessionResponse)
+	err := c.cc.Invoke(ctx, AgentRunService_StopProcessSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *agentRunServiceClient) CreateRun(ctx context.Context, in *CreateRunRequest, opts ...grpc.CallOption) (*CreateRunResponse, error) {
@@ -169,6 +208,12 @@ func (c *agentRunServiceClient) RespondInteraction(ctx context.Context, in *Resp
 //
 // AgentRunService manages durable asynchronous runs and one-use interactions.
 type AgentRunServiceServer interface {
+	// ListProcessSessions discovers caller-owned managed shells in this runtime.
+	ListProcessSessions(context.Context, *ListProcessSessionsRequest) (*ListProcessSessionsResponse, error)
+	// ReadProcessSession reads released logs, with a bounded optional wait.
+	ReadProcessSession(context.Context, *ReadProcessSessionRequest) (*ReadProcessSessionResponse, error)
+	// StopProcessSession requests idempotent stop of an exact caller-owned shell.
+	StopProcessSession(context.Context, *StopProcessSessionRequest) (*StopProcessSessionResponse, error)
 	// CreateRun durably allocates a run before execution begins.
 	CreateRun(context.Context, *CreateRunRequest) (*CreateRunResponse, error)
 	// GetRun reconstructs one run and its terminal outcome, when present.
@@ -197,6 +242,15 @@ type AgentRunServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedAgentRunServiceServer struct{}
 
+func (UnimplementedAgentRunServiceServer) ListProcessSessions(context.Context, *ListProcessSessionsRequest) (*ListProcessSessionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListProcessSessions not implemented")
+}
+func (UnimplementedAgentRunServiceServer) ReadProcessSession(context.Context, *ReadProcessSessionRequest) (*ReadProcessSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadProcessSession not implemented")
+}
+func (UnimplementedAgentRunServiceServer) StopProcessSession(context.Context, *StopProcessSessionRequest) (*StopProcessSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method StopProcessSession not implemented")
+}
 func (UnimplementedAgentRunServiceServer) CreateRun(context.Context, *CreateRunRequest) (*CreateRunResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateRun not implemented")
 }
@@ -243,6 +297,60 @@ func RegisterAgentRunServiceServer(s grpc.ServiceRegistrar, srv AgentRunServiceS
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&AgentRunService_ServiceDesc, srv)
+}
+
+func _AgentRunService_ListProcessSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListProcessSessionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentRunServiceServer).ListProcessSessions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentRunService_ListProcessSessions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentRunServiceServer).ListProcessSessions(ctx, req.(*ListProcessSessionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentRunService_ReadProcessSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadProcessSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentRunServiceServer).ReadProcessSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentRunService_ReadProcessSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentRunServiceServer).ReadProcessSession(ctx, req.(*ReadProcessSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentRunService_StopProcessSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StopProcessSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentRunServiceServer).StopProcessSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentRunService_StopProcessSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentRunServiceServer).StopProcessSession(ctx, req.(*StopProcessSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _AgentRunService_CreateRun_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -407,6 +515,18 @@ var AgentRunService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "colossus.api.v1alpha1.AgentRunService",
 	HandlerType: (*AgentRunServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ListProcessSessions",
+			Handler:    _AgentRunService_ListProcessSessions_Handler,
+		},
+		{
+			MethodName: "ReadProcessSession",
+			Handler:    _AgentRunService_ReadProcessSession_Handler,
+		},
+		{
+			MethodName: "StopProcessSession",
+			Handler:    _AgentRunService_StopProcessSession_Handler,
+		},
 		{
 			MethodName: "CreateRun",
 			Handler:    _AgentRunService_CreateRun_Handler,

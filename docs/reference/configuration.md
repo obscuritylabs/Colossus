@@ -168,7 +168,7 @@ sandbox:
   executables: []
   environment: []
   networkDestinations: []
-  timeoutMs: 30000
+  timeoutMs: 900000
   maxOutputBytes: 4194304
   maxProcesses: 16
   maxMemoryBytes: 1073741824

@@ -202,6 +202,7 @@ pub(super) fn tool_process_spec(
     max_output_bytes: Option<u64>,
 ) -> ProcessSpec {
     ProcessSpec {
+        lifetime: None,
         cwd,
         args,
         environment,

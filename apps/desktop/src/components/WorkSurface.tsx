@@ -29,6 +29,9 @@ import {
 } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
+import { ActiveShells } from "./tools/ActiveShells";
+import { useShellSessions, shellIsActive } from "../shellSessions";
+
 import colossusMark from "../assets/colossus-mark.svg";
 import {
   MAX_ASIDE_PANE_WIDTH,
@@ -103,6 +106,7 @@ interface WorkSurfaceProps {
   gitWorkspaceId?: string | null;
   gitAvailable?: boolean;
   browserScope?: string | null;
+  processSessionsAvailable?: boolean;
   browserFixture?: boolean;
   terminalSupported?: boolean;
   terminalReady?: boolean;
@@ -220,6 +224,7 @@ export function WorkSurface({
   filesPanel,
   filesAvailable,
   browserScope = null,
+  processSessionsAvailable = false,
   browserFixture = false,
   terminalSupported = false,
   terminalReady = false,
@@ -367,7 +372,14 @@ export function WorkSurface({
   const parentSessionId = run?.sessionId ?? null;
   const researchDrawerAvailable = run?.mode === "research";
   const researchOutput = view?.output ?? "";
+  const shellScope = processSessionsAvailable ? browserScope : null;
+  const shells = useShellSessions(shellScope, browserFixture);
+  useEffect(() => {
+    if (!shellScope)
+      setActiveDrawer((current) => (current === "shells" ? null : current));
+  }, [shellScope]);
   const resizableDrawer =
+    activeDrawer === "shells" ||
     activeDrawer === "files" ||
     activeDrawer === "git" ||
     activeDrawer === "browser" ||
@@ -962,6 +974,19 @@ export function WorkSurface({
           },
         ]
       : []),
+    ...(shellScope
+      ? [
+          {
+            id: "shells" as const,
+            label: "Active shells",
+            description: "Managed commands and background servers",
+            icon: IconTerminal2,
+            count: shells.sessions.filter((session) =>
+              shellIsActive(session.status),
+            ).length,
+          },
+        ]
+      : []),
     ...(terminalSupported
       ? [
           {
@@ -1113,6 +1138,27 @@ export function WorkSurface({
                 onClick={() => toggleDrawer("browser")}
               >
                 <IconWorld size={18} aria-hidden="true" />
+              </button>
+            ) : null}
+            {browserScope &&
+            shells.sessions.some((session) => shellIsActive(session.status)) ? (
+              <button
+                type="button"
+                className="icon-button"
+                title="Active shells"
+                aria-label={`Open active shells (${shells.sessions.filter((session) => shellIsActive(session.status)).length})`}
+                aria-expanded={activeDrawer === "shells"}
+                aria-controls="work-side-drawer"
+                onClick={() => toggleDrawer("shells")}
+              >
+                <IconTerminal2 size={16} aria-hidden="true" />
+                <span className="tool-count">
+                  {
+                    shells.sessions.filter((session) =>
+                      shellIsActive(session.status),
+                    ).length
+                  }
+                </span>
               </button>
             ) : null}
             {terminalSupported ? (
@@ -1405,19 +1451,21 @@ export function WorkSurface({
             className="aside-resize-handle"
             role="separator"
             aria-label={
-              activeDrawer === "git"
-                ? "Resize Git panel"
-                : activeDrawer === "files"
-                  ? "Resize files panel"
-                  : activeDrawer === "browser"
-                    ? "Resize browser pane"
-                    : activeDrawer === "terminal"
-                      ? "Resize terminal pane"
-                      : activeDrawer === "aside"
-                        ? "Resize Aside conversation"
-                        : activeDrawer === "research"
-                          ? "Resize Research sources"
-                          : "Resize Thread details"
+              activeDrawer === "shells"
+                ? "Resize Active shells panel"
+                : activeDrawer === "git"
+                  ? "Resize Git panel"
+                  : activeDrawer === "files"
+                    ? "Resize files panel"
+                    : activeDrawer === "browser"
+                      ? "Resize browser pane"
+                      : activeDrawer === "terminal"
+                        ? "Resize terminal pane"
+                        : activeDrawer === "aside"
+                          ? "Resize Aside conversation"
+                          : activeDrawer === "research"
+                            ? "Resize Research sources"
+                            : "Resize Thread details"
             }
             aria-orientation="vertical"
             aria-valuemin={MIN_ASIDE_PANE_WIDTH}
@@ -1520,6 +1568,7 @@ export function WorkSurface({
         {git.available ||
         browser.snapshot.available ||
         terminalSupported ||
+        shellScope !== null ||
         filesAvailable ||
         artifactsAvailable ||
         run !== undefined ||
@@ -1533,23 +1582,25 @@ export function WorkSurface({
               activeDrawer !== null && compactLayout ? true : undefined
             }
             aria-label={
-              activeDrawer === "git"
-                ? "Git panel"
-                : activeDrawer === "browser"
-                  ? "Browser pane"
-                  : activeDrawer === "terminal"
-                    ? "Terminal pane"
-                    : activeDrawer === "files"
-                      ? "Workspace files"
-                      : activeDrawer === "artifacts"
-                        ? "Artifact preview"
-                        : activeDrawer === "aside"
-                          ? "Aside conversation"
-                          : activeDrawer === "research"
-                            ? "Research sources"
-                            : activeDrawer === "details"
-                              ? "Thread details"
-                              : undefined
+              activeDrawer === "shells"
+                ? "Active shells"
+                : activeDrawer === "git"
+                  ? "Git panel"
+                  : activeDrawer === "browser"
+                    ? "Browser pane"
+                    : activeDrawer === "terminal"
+                      ? "Terminal pane"
+                      : activeDrawer === "files"
+                        ? "Workspace files"
+                        : activeDrawer === "artifacts"
+                          ? "Artifact preview"
+                          : activeDrawer === "aside"
+                            ? "Aside conversation"
+                            : activeDrawer === "research"
+                              ? "Research sources"
+                              : activeDrawer === "details"
+                                ? "Thread details"
+                                : undefined
             }
           >
             {activeDrawer !== null ? (
@@ -1592,6 +1643,15 @@ export function WorkSurface({
                   </button>
                 </div>
               </header>
+            ) : null}
+            {activeDrawer === "shells" && shellScope ? (
+              <ActiveShells
+                key={shellScope}
+                scope={shellScope}
+                sessions={shells.sessions}
+                error={shells.error}
+                refresh={shells.refresh}
+              />
             ) : null}
             {activeDrawer === "terminal" ? (
               <TerminalDock

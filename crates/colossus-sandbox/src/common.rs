@@ -58,6 +58,9 @@ pub enum ProcessStdinCompletion {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessSpec {
+    /// Managed invocation lifetime, included in the authorized request hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifetime: Option<colossus_contracts::ProcessLifetime>,
     /// Absolute working directory.
     pub cwd: PathBuf,
     /// Literal argv entries; no shell parsing occurs.

@@ -34,6 +34,37 @@ pub enum BackendKind {
 /// context before exposing this interface.
 #[async_trait]
 pub trait AgentRunClient: Send + Sync {
+    /// List caller-owned managed shells.
+    async fn list_process_sessions(
+        &self,
+        _request: crate::ListProcessSessionsRequest,
+    ) -> ApiResult<crate::ProcessSessionPage> {
+        Err(crate::ApiError::failed_precondition(
+            crate::ApiErrorReason::InvalidRunTransition,
+            "managed shell sessions are unavailable",
+        ))
+    }
+    /// Read or wait for released shell output.
+    async fn read_process_session(
+        &self,
+        _request: crate::ReadProcessSessionRequest,
+    ) -> ApiResult<crate::ProcessSessionSnapshot> {
+        Err(crate::ApiError::failed_precondition(
+            crate::ApiErrorReason::InvalidRunTransition,
+            "managed shell sessions are unavailable",
+        ))
+    }
+    /// Idempotently request stop of one caller-owned shell.
+    async fn stop_process_session(
+        &self,
+        _request: crate::StopProcessSessionRequest,
+    ) -> ApiResult<crate::ProcessSessionSnapshot> {
+        Err(crate::ApiError::failed_precondition(
+            crate::ApiErrorReason::InvalidRunTransition,
+            "managed shell sessions are unavailable",
+        ))
+    }
+
     /// Create one durable run idempotently.
     async fn create_run(&self, request: CreateRunRequest) -> ApiResult<CreateRunResponse>;
 
@@ -144,6 +175,25 @@ impl fmt::Debug for ContextBoundAgentRunClient {
 #[async_trait]
 #[cfg(feature = "embedded")]
 impl AgentRunClient for ContextBoundAgentRunClient {
+    async fn list_process_sessions(
+        &self,
+        request: crate::ListProcessSessionsRequest,
+    ) -> ApiResult<crate::ProcessSessionPage> {
+        self.api.list_process_sessions(&self.caller, request).await
+    }
+    async fn read_process_session(
+        &self,
+        request: crate::ReadProcessSessionRequest,
+    ) -> ApiResult<crate::ProcessSessionSnapshot> {
+        self.api.read_process_session(&self.caller, request).await
+    }
+    async fn stop_process_session(
+        &self,
+        request: crate::StopProcessSessionRequest,
+    ) -> ApiResult<crate::ProcessSessionSnapshot> {
+        self.api.stop_process_session(&self.caller, request).await
+    }
+
     async fn create_run(&self, request: CreateRunRequest) -> ApiResult<CreateRunResponse> {
         let response = self
             .api

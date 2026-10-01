@@ -3929,6 +3929,7 @@ async fn agent_filesystem_tool_executes_only_through_the_gateway() {
         [5_u8; 32],
     ));
     let executor = GatewayToolExecutor {
+        process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
         process: None,
@@ -3998,6 +3999,7 @@ async fn agent_list_and_search_tools_return_only_workspace_relative_results() {
         [5_u8; 32],
     ));
     let executor = GatewayToolExecutor {
+        process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
         process: None,
@@ -4100,6 +4102,7 @@ async fn agent_mutations_require_approval_and_return_audited_diff_visibility() {
         [7_u8; 32],
     ));
     let denied_executor = GatewayToolExecutor {
+        process_sessions: None,
         gateway: denied_gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
         process: None,
@@ -4148,6 +4151,7 @@ async fn agent_mutations_require_approval_and_return_audited_diff_visibility() {
         [8_u8; 32],
     ));
     let allowed_executor = GatewayToolExecutor {
+        process_sessions: None,
         gateway: allowed_gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
         process: None,
@@ -4273,6 +4277,7 @@ async fn model_work_tools_keep_tasks_session_confined_and_decisions_workspace_wi
         [10_u8; 32],
     ));
     let executor = GatewayToolExecutor {
+        process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
         process: None,
@@ -4493,6 +4498,7 @@ async fn subprocess_content_denied_post_effect_never_reaches_the_tool_caller() {
         [54_u8; 32],
     ));
     let executor = GatewayToolExecutor {
+        process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
         process: Some(Arc::new(PrivateOutputProcess)),
@@ -4694,6 +4700,7 @@ async fn model_memory_tools_are_durable_scoped_and_post_gated() {
         [12_u8; 32],
     ));
     let executor = GatewayToolExecutor {
+        process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
         process: None,
@@ -4909,6 +4916,7 @@ async fn model_plans_are_session_confined_and_approval_obligated() {
         [14_u8; 32],
     ));
     let executor = GatewayToolExecutor {
+        process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
         process: None,
@@ -5038,6 +5046,7 @@ async fn model_subagent_tools_inject_lineage_scope_results_and_deny_recursion() 
         policy = policy.with_action(action, DecisionOutcome::Allow);
     }
     let executor = GatewayToolExecutor {
+        process_sessions: None,
         gateway: Arc::new(colossus_policy::EffectGateway::new(
             Arc::clone(&journal),
             Arc::new(policy),
@@ -5536,6 +5545,7 @@ async fn decision_created_by_one_model_turn_binds_the_next_turn_context() {
         [11_u8; 32],
     ));
     let executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
+        process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
         process: None,
@@ -5688,6 +5698,7 @@ async fn memory_created_by_one_model_turn_is_retrieved_for_the_next_turn() {
         [13_u8; 32],
     ));
     let executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
+        process_sessions: None,
         gateway: Arc::clone(&gateway),
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
         process: None,
@@ -5858,6 +5869,7 @@ async fn goal_update_is_bound_to_active_goal_context_and_stops_future_updates() 
         [15_u8; 32],
     ));
     let executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
+        process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
         process: None,
@@ -6082,6 +6094,7 @@ async fn model_patch_tools_preview_apply_and_reverse_exact_text_under_policy() {
         [46_u8; 32],
     ));
     let executor = GatewayToolExecutor {
+        process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
         process: None,
@@ -6451,6 +6464,7 @@ async fn repository_context_tools_are_permit_bound_bounded_and_workspace_confine
         [44_u8; 32],
     ));
     let executor = GatewayToolExecutor {
+        process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
         process: None,
@@ -6664,6 +6678,7 @@ async fn ambient_structured_filesystem_and_repository_tools_accept_external_cont
         [45_u8; 32],
     ));
     let executor = GatewayToolExecutor {
+        process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
         process: None,
@@ -6844,6 +6859,7 @@ async fn danger_full_access_shell_needs_no_process_resource_configuration() {
     ));
     let recorded = Arc::new(Mutex::new(None));
     let executor = GatewayToolExecutor {
+        process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
         process: Some(Arc::new(RecordingProcessExecutor {
@@ -6925,6 +6941,7 @@ async fn danger_full_access_withholds_host_resolution_until_acknowledgement() {
     ));
     let recorded = Arc::new(Mutex::new(None));
     let executor = GatewayToolExecutor {
+        process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
         process: Some(Arc::new(RecordingProcessExecutor {
@@ -7009,6 +7026,7 @@ async fn git_and_shell_tools_keep_distinct_policy_and_nonzero_exit_semantics() {
     ));
     let actions = Arc::new(Mutex::new(Vec::new()));
     let executor = GatewayToolExecutor {
+        process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
         process: Some(Arc::new(FakeProcessExecutor {
@@ -7090,4 +7108,80 @@ async fn git_and_shell_tools_keep_distinct_policy_and_nonzero_exit_semantics() {
         .collect::<Vec<_>>();
     assert!(names.contains(&"approval.granted.v1".into()));
     assert!(names.contains(&"effect.release_requested.v1".into()));
+}
+
+#[test]
+fn sandbox_defaults_allow_fifteen_minutes_and_preserve_explicit_limits() {
+    assert_eq!(super::SandboxConfig::default().timeout_ms, 900_000);
+    for section in ["", "sandbox: {}\n"] {
+        let yaml = format!("schemaVersion: 3\nstorage:\n  path: state.redb\n{section}");
+        let config = RuntimeConfig::from_yaml(&yaml).expect("default sandbox");
+        assert_eq!(config.sandbox.timeout_ms, 900_000);
+        let expanded = config.to_resolved_yaml().expect("expanded configuration");
+        assert_eq!(
+            RuntimeConfig::from_yaml(&expanded)
+                .unwrap()
+                .sandbox
+                .timeout_ms,
+            900_000
+        );
+    }
+    let explicit = RuntimeConfig::from_yaml(
+        "schemaVersion: 3\nstorage:\n  path: state.redb\nsandbox:\n  timeoutMs: 30000\n",
+    )
+    .expect("explicit timeout");
+    assert_eq!(explicit.sandbox.timeout_ms, 30_000);
+}
+
+#[test]
+fn runtime_shell_catalog_uses_the_selected_workspace_resource_limits() {
+    for (timeout_ms, max_output_bytes) in [
+        (30_000, 8192),
+        (900_000, 4 * 1024 * 1024),
+        (3_600_000, 8192),
+    ] {
+        let workspace = tempdir().expect("workspace");
+        let mut config = RuntimeConfig::offline_template(workspace.path().join("state.redb"));
+        config.sandbox.timeout_ms = timeout_ms;
+        config.sandbox.max_output_bytes = max_output_bytes;
+        config.sandbox.executables =
+            vec![std::env::current_exe().expect("catalog executable grant")];
+        let runtime = Runtime::open_with_options(
+            &config,
+            Arc::new(DenyApproval),
+            None,
+            RuntimeOpenOptions::for_workspace(workspace.path()).expect("workspace options"),
+        )
+        .expect("runtime");
+        let output_max = max_output_bytes.min(1024 * 1024);
+        let call = ToolCall {
+            call_id: "workspace-bound-timeout".into(),
+            name: "shell.run".into(),
+            arguments: json!({"command": "echo ready", "justification": "Check configured shell limits.",
+                "timeout_ms": timeout_ms, "max_output_bytes": output_max}),
+        };
+        let spec = runtime
+            .tools
+            .validate(&call)
+            .expect("configured ceiling is accepted");
+        let offered = colossus_tools::model_definitions(runtime.tools.as_ref())
+            .into_iter()
+            .find(|definition| definition.name == "shell.run")
+            .expect("model shell definition");
+        assert_eq!(offered.input_schema, spec.input_schema);
+        assert_eq!(
+            offered.input_schema["properties"]["timeout_ms"]["maximum"],
+            timeout_ms
+        );
+        assert_eq!(
+            offered.input_schema["properties"]["max_output_bytes"]["maximum"],
+            output_max
+        );
+        let mut over = call.clone();
+        over.arguments["timeout_ms"] = json!(timeout_ms + 1);
+        assert!(matches!(
+            runtime.tools.validate(&over),
+            Err(colossus_ports::ToolError::InvalidArguments { .. })
+        ));
+    }
 }

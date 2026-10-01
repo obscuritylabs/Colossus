@@ -610,7 +610,7 @@ impl Default for SandboxConfig {
             executables: Vec::new(),
             environment: Vec::new(),
             network_destinations: Vec::new(),
-            timeout_ms: 30_000,
+            timeout_ms: default_sandbox_timeout_ms(),
             max_output_bytes: default_sandbox_max_output_bytes(),
             max_processes: 16,
             max_memory_bytes: default_sandbox_max_memory_bytes(),
@@ -721,7 +721,7 @@ fn default_sandbox_profile() -> String {
 }
 
 const fn default_sandbox_timeout_ms() -> u64 {
-    30_000
+    colossus_contracts::DEFAULT_SANDBOX_TIMEOUT_MS
 }
 
 const fn default_sandbox_max_output_bytes() -> u64 {

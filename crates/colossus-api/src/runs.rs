@@ -1565,6 +1565,42 @@ pub trait RunExecutor: Send + Sync {
 /// Public run application service implemented by embedded and remote backends.
 #[async_trait]
 pub trait AgentRunApi: Send + Sync {
+    /// List caller-owned managed shells.
+    async fn list_process_sessions(
+        &self,
+        _caller: &CallerContext,
+        _request: crate::ListProcessSessionsRequest,
+    ) -> ApiResult<crate::ProcessSessionPage> {
+        Err(ApiError::failed_precondition(
+            ApiErrorReason::InvalidRunTransition,
+            "managed shell sessions are unavailable",
+        ))
+    }
+
+    /// Read or wait for released shell output.
+    async fn read_process_session(
+        &self,
+        _caller: &CallerContext,
+        _request: crate::ReadProcessSessionRequest,
+    ) -> ApiResult<crate::ProcessSessionSnapshot> {
+        Err(ApiError::failed_precondition(
+            ApiErrorReason::InvalidRunTransition,
+            "managed shell sessions are unavailable",
+        ))
+    }
+
+    /// Idempotently request stop of one caller-owned shell.
+    async fn stop_process_session(
+        &self,
+        _caller: &CallerContext,
+        _request: crate::StopProcessSessionRequest,
+    ) -> ApiResult<crate::ProcessSessionSnapshot> {
+        Err(ApiError::failed_precondition(
+            ApiErrorReason::InvalidRunTransition,
+            "managed shell sessions are unavailable",
+        ))
+    }
+
     /// Atomically accept one idempotent run before execution begins.
     async fn create_run(
         &self,

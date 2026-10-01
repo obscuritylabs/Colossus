@@ -52,7 +52,7 @@ sandbox:
   executables: []
   environment: []
   networkDestinations: []
-  timeoutMs: 30000
+  timeoutMs: 900000
   maxOutputBytes: 4194304
   maxProcesses: 16
   maxMemoryBytes: 1073741824
@@ -348,6 +348,17 @@ tool request may narrow them but cannot widen them.
 | `maxMemoryBytes` | Maximum process-tree memory in bytes where supported; resident memory is summed once per process; must be positive |
 | `maxConcurrency` | Maximum concurrent effects per actor/run; must be positive |
 
+The default execution ceiling is fifteen minutes (`900000` milliseconds). Omitting
+`shell.run.timeout_ms` uses the authorized policy ceiling. An explicit workspace value
+continues to win, including an existing `timeoutMs: 30000`; upgrading does not rewrite
+that configuration. This is an execution deadline, not a polling or UI refresh interval.
+
+The model-visible `shell.run` schema advertises the configured timeout ceiling and the
+smaller of `sandbox.maxOutputBytes` and the tool's 1 MiB output bound. There is no separate
+five-minute shell schema ceiling. Request-time policy, including OPA, can impose tighter
+limits; the process adapter enforces those obligations and identifies the rejected field,
+requested value, and allowed range before starting the command.
+
 Minimum `timeoutMs` values are 5,000 for OCI, 10,000 for networked OCI, and 10,000 for
 `windows_job`. Native execution has no additional configured minimum. Increasing
 `maxConcurrency` can multiply the effective process and memory demand, so raise it only
@@ -464,7 +475,7 @@ sandbox:
     - API_TOKEN
   networkDestinations:
     - https://api.example.com
-  timeoutMs: 30000
+  timeoutMs: 900000
   maxOutputBytes: 4194304
   maxProcesses: 16
   maxMemoryBytes: 536870912
@@ -501,3 +512,8 @@ resolving credentials. `sandbox doctor` verifies whether the selected backend ca
 enforce the configured isolation on the current host.
 
 Return to the [configuration overview](../configuration.md).
+
+Managed shell sessions use the same execution ceiling, including helper startup and
+cleanup. Their separate yield interval controls how quickly a tool returns a handle;
+reads and waits do not extend execution. See [Managed shell sessions](../tools-actions.md#managed-shell-sessions)
+for ownership, output retention, and Desktop behavior.

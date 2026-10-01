@@ -27,6 +27,7 @@ pub fn builtin_tool_descriptor(name: &str) -> Result<ToolDescriptor, AccessError
                 ToolPrerequisite::GitExecutable,
             ],
         ),
+        "shell.wait" | "shell.read" | "shell.list" | "shell.stop" => simple_tool("process"),
         "shell.run" => ("process", vec![ToolPrerequisite::AnyExecutable]),
         "repo.map" | "repo.symbol_search" | "repo.references" | "repo.file_summary" => {
             ("repository", vec![ToolPrerequisite::FilesystemRead])
@@ -110,6 +111,8 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "context.show",
             "context.snapshots",
             "patch.preview",
+            "shell.read",
+            "shell.list",
             "task.list",
             "decision.list",
             "plan.show",
@@ -135,6 +138,7 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
         &mut descriptors,
         ActionClass::LocalState,
         &[
+            "shell.stop",
             "context.compact",
             "context.restore",
             "presentation.preferences.update",

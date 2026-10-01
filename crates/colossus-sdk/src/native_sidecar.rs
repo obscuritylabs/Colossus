@@ -1251,6 +1251,39 @@ impl ArtifactClient for SwitchingArtifactClient {
 
 #[async_trait]
 impl AgentRunClient for SwitchingAgentRunClient {
+    async fn list_process_sessions(
+        &self,
+        request: crate::ListProcessSessionsRequest,
+    ) -> ApiResult<crate::ProcessSessionPage> {
+        self.current()
+            .await?
+            .primary
+            .list_process_sessions(request)
+            .await
+    }
+
+    async fn read_process_session(
+        &self,
+        request: crate::ReadProcessSessionRequest,
+    ) -> ApiResult<crate::ProcessSessionSnapshot> {
+        self.current()
+            .await?
+            .primary
+            .read_process_session(request)
+            .await
+    }
+
+    async fn stop_process_session(
+        &self,
+        request: crate::StopProcessSessionRequest,
+    ) -> ApiResult<crate::ProcessSessionSnapshot> {
+        self.current()
+            .await?
+            .primary
+            .stop_process_session(request)
+            .await
+    }
+
     async fn create_run(&self, request: CreateRunRequest) -> ApiResult<CreateRunResponse> {
         self.current().await?.primary.create_run(request).await
     }
@@ -2491,6 +2524,36 @@ mod tests {
 
     #[async_trait]
     impl AgentRunClient for RoutingAgentRuns {
+        async fn list_process_sessions(
+            &self,
+            _request: crate::ListProcessSessionsRequest,
+        ) -> ApiResult<crate::ProcessSessionPage> {
+            Err(ApiError::permission_denied(
+                ApiErrorReason::ScopeDenied,
+                self.0,
+            ))
+        }
+
+        async fn read_process_session(
+            &self,
+            _request: crate::ReadProcessSessionRequest,
+        ) -> ApiResult<crate::ProcessSessionSnapshot> {
+            Err(ApiError::permission_denied(
+                ApiErrorReason::ScopeDenied,
+                self.0,
+            ))
+        }
+
+        async fn stop_process_session(
+            &self,
+            _request: crate::StopProcessSessionRequest,
+        ) -> ApiResult<crate::ProcessSessionSnapshot> {
+            Err(ApiError::permission_denied(
+                ApiErrorReason::ScopeDenied,
+                self.0,
+            ))
+        }
+
         async fn create_run(&self, _request: CreateRunRequest) -> ApiResult<CreateRunResponse> {
             unreachable!("run operation is not exercised")
         }
@@ -3216,6 +3279,55 @@ mod tests {
             .expect_err("mock response");
         assert_eq!(error.reason, ApiErrorReason::ScopeDenied);
         assert_eq!(error.message, "primary");
+    }
+
+    #[tokio::test]
+    async fn shell_operations_follow_primary_transport_replacement_and_close() {
+        let client = SwitchingAgentRunClient::new(AgentRunTransports {
+            primary: Arc::new(RoutingAgentRuns("original-primary")),
+            approval_broker: Some(Arc::new(RoutingAgentRuns("approval-broker"))),
+        });
+        for expected in ["original-primary", "replacement-primary", "closed"] {
+            if expected == "replacement-primary" {
+                client
+                    .replace(AgentRunTransports {
+                        primary: Arc::new(RoutingAgentRuns(expected)),
+                        approval_broker: Some(Arc::new(RoutingAgentRuns("approval-broker"))),
+                    })
+                    .await;
+            } else if expected == "closed" {
+                client.release().await;
+            }
+            let errors = [
+                client
+                    .list_process_sessions(crate::ListProcessSessionsRequest { after: None })
+                    .await
+                    .expect_err("routed list"),
+                client
+                    .read_process_session(crate::ReadProcessSessionRequest {
+                        session_id: "shell".into(),
+                        after_sequence: 7,
+                        wait_ms: 0,
+                        max_output_bytes: 65536,
+                    })
+                    .await
+                    .expect_err("routed read"),
+                client
+                    .stop_process_session(crate::StopProcessSessionRequest {
+                        session_id: "shell".into(),
+                    })
+                    .await
+                    .expect_err("routed stop"),
+            ];
+            for error in errors {
+                if expected == "closed" {
+                    assert_eq!(error.code, ApiErrorCode::Unavailable);
+                } else {
+                    assert_eq!(error.reason, ApiErrorReason::ScopeDenied);
+                    assert_eq!(error.message, expected);
+                }
+            }
+        }
     }
 
     #[test]

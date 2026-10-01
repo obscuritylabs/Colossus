@@ -156,6 +156,18 @@ pub fn command_approval_context(
     }
     // An argument-level replacement may not have passed through `project`.
     redacted |= argument_redacted;
+    let justification = if request
+        .content
+        .get("lifetime")
+        .and_then(serde_json::Value::as_str)
+        == Some("workspace")
+    {
+        format!(
+            "{justification} [Background process: continues across turns until stopped, its deadline, or runtime shutdown.]"
+        )
+    } else {
+        justification
+    };
     let context = CommandApprovalContext {
         justification,
         executable,

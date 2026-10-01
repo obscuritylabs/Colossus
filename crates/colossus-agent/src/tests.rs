@@ -3016,3 +3016,37 @@ async fn explicit_diagnostics_capture_a_post_tool_failure_without_persisting_the
             .all(|event| !format!("{event:?}").contains("mid-run-private-diagnostic"))
     );
 }
+
+struct RejectRunOwnership(AtomicUsize);
+#[async_trait]
+impl colossus_ports::AgentRunLifecycle for RejectRunOwnership {
+    fn begin_run(
+        &self,
+        _context: &ExecutionContext,
+        _initiator: &Actor,
+        _control: RunControl,
+    ) -> Result<(), ToolError> {
+        Err(ToolError::Failed("duplicate active run".into()))
+    }
+    fn cancel_run(&self, _run_id: &str) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+    async fn finish_run(&self, _run_id: &str) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+#[tokio::test]
+async fn rejected_run_registration_never_cancels_another_owners_sessions() {
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let lifecycle = Arc::new(RejectRunOwnership(AtomicUsize::new(0)));
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::new(ScriptedProvider::new(vec![])),
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::new(EchoTools),
+        Arc::new(EventSourcedSessionRepository::new(journal)),
+    )
+    .with_run_lifecycle(lifecycle.clone());
+    assert!(service.run("primary", "test", "test", 1).await.is_err());
+    assert_eq!(lifecycle.0.load(Ordering::SeqCst), 0);
+}

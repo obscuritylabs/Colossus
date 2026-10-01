@@ -121,3 +121,9 @@ pub use types::{
 
 #[cfg(test)]
 mod tests;
+
+pub use colossus_api::{
+    ListProcessSessionsRequest, ProcessLifetime, ProcessOutputChunk, ProcessSessionPage,
+    ProcessSessionSnapshot, ProcessSessionStatus, ProcessSessionSummary, ReadProcessSessionRequest,
+    StopProcessSessionRequest,
+};

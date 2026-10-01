@@ -506,6 +506,27 @@ struct WindowsAgentRuns {
 
 #[async_trait]
 impl AgentRunClient for WindowsAgentRuns {
+    async fn list_process_sessions(
+        &self,
+        request: crate::ListProcessSessionsRequest,
+    ) -> ApiResult<crate::ProcessSessionPage> {
+        self.transports.primary.list_process_sessions(request).await
+    }
+
+    async fn read_process_session(
+        &self,
+        request: crate::ReadProcessSessionRequest,
+    ) -> ApiResult<crate::ProcessSessionSnapshot> {
+        self.transports.primary.read_process_session(request).await
+    }
+
+    async fn stop_process_session(
+        &self,
+        request: crate::StopProcessSessionRequest,
+    ) -> ApiResult<crate::ProcessSessionSnapshot> {
+        self.transports.primary.stop_process_session(request).await
+    }
+
     async fn create_run(&self, request: CreateRunRequest) -> ApiResult<CreateRunResponse> {
         self.transports.primary.create_run(request).await
     }

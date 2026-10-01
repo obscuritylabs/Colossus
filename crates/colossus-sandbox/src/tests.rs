@@ -207,6 +207,8 @@ fn proxy_environment_overrides_both_unix_spellings() {
 fn authenticated_helper_job_rejects_tampering_and_expiry() {
     let job = SandboxJob {
         schema_version: 2,
+        streaming: false,
+        deadline_unix_ms: None,
         job_id: "018f0f9b-7b6e-7cc0-8000-000000000001".into(),
         request_id: "request".into(),
         request_hash: "hash".into(),
@@ -215,6 +217,7 @@ fn authenticated_helper_job_rejects_tampering_and_expiry() {
         permit_expires_at_unix_ms: i128::MAX,
         executable: PathBuf::from("/bin/echo"),
         process: super::ProcessSpec {
+            lifetime: None,
             cwd: PathBuf::from("/tmp"),
             args: Vec::new(),
             environment: BTreeMap::new(),
@@ -270,6 +273,7 @@ fn authenticated_helper_job_rejects_tampering_and_expiry() {
 fn process_stdin_completion_is_additive_strict_and_mcp_only() {
     let directory = tempdir().expect("directory");
     let mut process = super::ProcessSpec {
+        lifetime: None,
         cwd: directory.path().into(),
         args: Vec::new(),
         environment: BTreeMap::new(),
@@ -422,6 +426,8 @@ fn explicit_direct_backends_execute_without_the_native_kernel_sandbox() {
     for backend in ["external", "danger_full_access"] {
         let job = SandboxJob {
             schema_version: 2,
+            streaming: false,
+            deadline_unix_ms: None,
             job_id: format!("direct-{backend}"),
             request_id: "request".into(),
             request_hash: "hash".into(),
@@ -430,6 +436,7 @@ fn explicit_direct_backends_execute_without_the_native_kernel_sandbox() {
             permit_expires_at_unix_ms: i128::MAX,
             executable: PathBuf::from("/bin/echo"),
             process: super::ProcessSpec {
+                lifetime: None,
                 cwd: PathBuf::from("/tmp"),
                 args: vec!["direct".into()],
                 environment: BTreeMap::new(),
@@ -457,7 +464,7 @@ fn explicit_direct_backends_execute_without_the_native_kernel_sandbox() {
             oci_proxy_image: None,
             temporary_root: None,
         };
-        let result = execute_sandbox_job(job, &[7_u8; 32]).expect("direct execution");
+        let result = execute_sandbox_job(job, &[7_u8; 32], None).expect("direct execution");
         assert_eq!(result.backend, backend);
         assert!(result.success);
         assert_eq!(
@@ -487,6 +494,7 @@ fn direct_backends_do_not_claim_filesystem_confinement_for_cwd_or_argv() {
             ..PolicyObligations::default()
         };
         let mut process = ProcessSpec {
+            lifetime: None,
             cwd: cwd.path().into(),
             args: vec!["/path/outside/declared/filesystem".into()],
             environment: BTreeMap::new(),
@@ -513,6 +521,7 @@ fn danger_full_access_requires_no_process_resource_allowlists() {
         .canonicalize()
         .expect("canonical executable");
     let process = ProcessSpec {
+        lifetime: None,
         cwd: cwd.path().into(),
         args: Vec::new(),
         environment: BTreeMap::from([("UNDECLARED_ENVIRONMENT".into(), "available".into())]),
@@ -708,6 +717,8 @@ fn oci_profile_applies_resource_and_privilege_limits_without_argv_secrets() {
         });
     obligations.allowed_environment.push("TOKEN".into());
     let job = SandboxJob {
+        streaming: false,
+        deadline_unix_ms: None,
         schema_version: 1,
         job_id: "018f0f9b-7b6e-7cc0-8000-000000000002".into(),
         request_id: "request".into(),
@@ -717,6 +728,7 @@ fn oci_profile_applies_resource_and_privilege_limits_without_argv_secrets() {
         permit_expires_at_unix_ms: i128::MAX,
         executable: PathBuf::from("/usr/bin/example"),
         process: super::ProcessSpec {
+            lifetime: None,
             cwd: directory.path().into(),
             args: vec!["check".into()],
             environment: BTreeMap::from([("TOKEN".into(), "secret-value".into())]),
@@ -738,14 +750,21 @@ fn oci_profile_applies_resource_and_privilege_limits_without_argv_secrets() {
         .expect("exact OCI image executable");
     let mut oversized_request = job.process.clone();
     oversized_request.timeout_ms = Some(job.obligations.timeout_ms.saturating_add(1));
-    assert!(
-        validate_process_spec(&oversized_request, "/usr/bin/example", &job.obligations,).is_err()
-    );
+    let error = validate_process_spec(&oversized_request, "/usr/bin/example", &job.obligations)
+        .expect_err("timeout above policy ceiling")
+        .to_string();
+    assert!(error.contains("timeout_ms"));
+    assert!(error.contains(&format!("allowed 1..={} ms", job.obligations.timeout_ms)));
     oversized_request.timeout_ms = None;
     oversized_request.max_output_bytes = Some(job.obligations.max_output_bytes.saturating_add(1));
-    assert!(
-        validate_process_spec(&oversized_request, "/usr/bin/example", &job.obligations,).is_err()
-    );
+    let error = validate_process_spec(&oversized_request, "/usr/bin/example", &job.obligations)
+        .expect_err("output above policy ceiling")
+        .to_string();
+    assert!(error.contains("max_output_bytes"));
+    assert!(error.contains(&format!(
+        "allowed 1024..={} bytes",
+        job.obligations.max_output_bytes
+    )));
     assert_eq!(
         oci_remove_arguments(docker_runtime.as_path(), "job").expect("Docker cleanup"),
         ["container", "rm", "--force", "job"]
