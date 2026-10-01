@@ -1,138 +1,145 @@
 ---
 title: Deep research
-description: Produce a durable, cited report from repository, web, and configured MCP evidence.
+description: Investigate a question with bounded evidence collection and inspect the resulting cited report.
 audience: user
 type: how-to
+icon: lucide/book-open
 ---
 
 # Deep research
 
-## Goal
+Deep research turns a question into a durable report with a trail back to its
+evidence. Colossus plans bounded queries, collects sources from the lanes you select,
+extracts source-backed claims, and saves the report, progress, and limitations in a
+research run. Use it when an answer needs more than one search result or must remain
+inspectable after the session ends.
 
-Turn a research question into a durable report whose sources, claims, progress, and
-limitations remain available after the run ends.
+## Run a focused investigation
 
-## Prerequisites
-
-- For repository evidence, a readable repository root.
-- For web evidence, an operator-configured `research` search role.
-- For MCP evidence, an explicitly configured and allowed research tool.
-
-Operators own model and search setup in
-[Providers and routing](../admin/providers-routing.md). MCP setup lives in
-[MCP](../extend/mcp.md).
-
-## Steps
-
-### 1. Choose the depth and evidence lanes
-
-Depth controls how broadly Colossus plans:
-
-| Depth | Use it for |
-| --- | --- |
-| `quick` | A narrow question or fast first pass |
-| `standard` | Most repository investigations |
-| `deep` | A broader question that needs several evidence angles |
-
-Choose one or more explicit lanes with `--source`:
-
-- `repo` searches the active repository through read-only effects.
-- `web` uses the configured `research` search role.
-- `mcp` calls configured MCP research tools.
-
-Explicit lanes make the run reproducible. Exact depth budgets, defaults, and bounds
-remain in the [CLI reference](../reference/cli.md#important-defaults-and-bounds) and
-[Context, memory, and research configuration](../reference/configuration/context-memory-research.md).
-
-A capable model route improves planning, claim extraction, and synthesis. When a
-research model step is unavailable or returns invalid output, Colossus records the
-fallback and continues deterministically.
-
-### 2. Start with repository evidence
+Start with repository evidence when the question is about the code or its docs:
 
 ```bash
-colossus --config .colossus/config.yaml --approval-mode ask \
-  research run \
-  "How does effect authorization work?" \
+colossus -w /absolute/path/to/repository --approval-mode ask \
+  research run "How does effect authorization work in this repository?" \
   --source repo --depth standard
 ```
 
-The `development` access profile conservatively classifies `research.run` as
-approval-required even when only the repository lane is selected. The global
-`--approval-mode ask` option lets the noninteractive command request that approval.
+The result includes a **research run ID**, a **session ID**, and the report. Without
+`--session SESSION_ID`, Colossus creates a new session for the run. Add that option
+when the investigation belongs to an existing conversation. The one-shot command
+uses `--approval-mode ask` so an approval obligation can be answered in the attached
+terminal; policy can still deny an effect.
 
-Colossus then plans bounded queries, collects released repository evidence, extracts
-source-backed claims, and synthesizes a cited report. A fresh session is created when
-`--session` is omitted.
+In the Terminal UI, `/research QUESTION` starts a run in the current session. That
+route uses standard depth and requests repository, web, and MCP lanes. See
+[Research in the terminal](research.md) for its mode and commands. Use the CLI when
+you want to choose the depth or evidence lanes yourself.
 
-The terminal UI exposes a fixed research route. See [Research](research.md) for its
-interactive workflow; use the CLI when you need explicit depth or lane control.
+## Choose the depth and evidence
 
-### 3. Add web or MCP evidence deliberately
+| Depth | Good starting point |
+| --- | --- |
+| `quick` | A narrow question or a first pass. |
+| `standard` | A focused investigation across a few queries. |
+| `deep` | A broader question that needs more angles. |
 
-After an operator configures the required route, add only the lanes the question needs:
+Select only the evidence lanes the question needs:
+
+| Lane | What Colossus collects | What must be available |
+| --- | --- | --- |
+| `repo` | Bounded, read-only evidence from the selected workspace. | Access to that repository. |
+| `web` | Normalized results and snippets from planned searches; it does not fetch full pages. | A configured `research` search route. |
+| `mcp` | Results from explicitly configured MCP research tools. | Allowed research templates and tools. |
+
+For example, compare repository behavior with published information using two lanes:
 
 ```bash
-colossus --config .colossus/config.yaml --approval-mode ask \
-  research run \
-  "Compare the repository design with its published security claims" \
+colossus -w /absolute/path/to/repository --approval-mode ask \
+  research run "How does the implementation compare with its published security claims?" \
   --source repo,web --depth deep
 ```
 
-Configuration selects every backend; neither the model nor the question chooses a
-provider. Colossus bounds planned queries and collected results. Selected web and MCP
-effects must pass access, policy, any approval obligations, and sandbox checks before
-dispatch.
+The CLI defaults to all three lanes if `--source` is omitted. Each planned query and
+selected lane is a potential collection attempt. The default `maxWorkers` budget is
+four attempts for the whole run, so a broad question across all three lanes may leave
+some attempts **skipped**. Depth expands the query plan; it does not override that
+budget. See [research limits and evidence lanes](../reference/configuration/context-memory-research.md#research-configuration)
+for the exact bounds and setup, [Search](web-search.md) for the web route, and
+[MCP research templates](../reference/configuration/mcp.md#research-templates) for
+MCP setup.
 
-For a direct route check before a research run, use
-[Web search](web-search.md).
+## Follow the report back to its sources
 
-### 4. Inspect the durable record
+List runs, then use the ID from the listing to inspect one report and its evidence:
 
 ```bash
-colossus --config .colossus/config.yaml research list
-colossus --config .colossus/config.yaml research show RESEARCH_RUN_ID
-colossus --config .colossus/config.yaml research sources RESEARCH_RUN_ID
-colossus --config .colossus/config.yaml research claims RESEARCH_RUN_ID
+colossus -w /absolute/path/to/repository research list
+colossus -w /absolute/path/to/repository research show RESEARCH_RUN_ID
+colossus -w /absolute/path/to/repository research sources RESEARCH_RUN_ID
+colossus -w /absolute/path/to/repository research claims RESEARCH_RUN_ID
 ```
 
-`research show` includes the selected lanes, planned queries, progress, limitations,
-report, and terminal status. Sources use stable citation labels such as `R1`; extracted
-claims point back to those labels. The final report is also appended to the owning
-session as an assistant message.
+`research show` contains the question, depth, requested lanes, status, planned
+queries, per-lane outcomes, progress, limitations, and final Markdown report.
+`research sources` shows the released evidence, each with a stable label such as
+`R1`, its origin, and the query that found it. `research claims` ties extracted
+statements to those labels. A shortened report might read:
 
-## Expected result
+```markdown
+## Findings
 
-The run completes with a cited Markdown report and canonical source and claim records.
-An unavailable, denied, failed, or budget-skipped collection attempt is recorded as a
-limitation while Colossus continues with released evidence.
+- The runtime checks authority before an effect reaches an adapter [R1].
 
-## Verification
+## Sources
 
-Open `research sources` and `research claims`. Confirm that every material report claim
-uses a released source label and that `research show` carries any incomplete lane into
-the limitations. Restart Colossus and show the run again to confirm the record remains
-available.
+- [R1] Security architecture — docs/develop/security-architecture.md
+```
 
-## Failure path
+The label `[R1]` lets you find the underlying source; it is traceability, not a
+guarantee that the source is correct. Review the source itself before relying on
+a consequential claim. The completed report is also appended to its session
+conversation.
 
-- **The run is denied before collection:** review `research.run` in
-  [Access and approvals](../admin/access-and-approvals.md); approval cannot override a
-  deny.
-- **Repository collection releases no sources:** confirm Colossus started in the intended
-  repository and that its read grant includes that root.
-- **A selected web lane is disabled:** configure the exact `research` search role; search
-  roles do not fall back to one another.
-- **A selected MCP lane is disabled:** configure at least one MCP research template and
-  its exact tool allowlist.
-- **A collection attempt is skipped:** narrow the depth or lane set, or ask an operator
-  to review the configured research bounds.
-- **A process stops mid-run:** the run becomes `interrupted` at recovery and is not
-  retried automatically. Inspect its recorded effects before starting a deliberate new
-  run.
+## Read incomplete results carefully
 
-## Next step
+A run can finish with a useful report even when one lane was unavailable, denied,
+failed, or skipped by a bound. Check **limitations** and the per-lane outcomes in
+`research show` before treating the report as a complete answer. In particular, web
+evidence contains search snippets; follow a source URL separately when its full
+context matters.
 
-Use [Web search](web-search.md) when you need normalized search results without a durable
-research workflow. Preserve reusable, non-secret conclusions separately with
-[Memories](memories.md).
+| If you see | Check next |
+| --- | --- |
+| No repository sources | Confirm `-w` points to the intended repository and its read access is allowed. |
+| Web or MCP lane disabled | Configure the exact research route or MCP template; a question cannot select a backend or grant access. |
+| Denied lane | Review access, approval, and sandbox settings; approval cannot override a policy denial. |
+| Skipped lane | Narrow the question or lane set, or review the configured worker and source bounds. |
+| Interrupted status | Inspect the saved progress and any external effects before deliberately starting a new run. |
+
+An interrupted run is preserved after process recovery and is **not automatically
+retried or resumed**. Model-assisted planning, claim extraction, and synthesis can
+also fall back to deterministic behavior when unavailable or invalid; `progress`
+records those fallbacks. Each collection effect still passes the normal access,
+approval, policy, and sandbox checks.
+
+## What's next?
+
+<div class="grid cards" markdown>
+
+-   :lucide-search:{ .lg .middle } **Search**
+
+    ---
+
+    Run one direct web query when you need results and snippets without a research run.
+
+    [Explore search :lucide-arrow-right:](web-search.md)
+
+-   :lucide-terminal:{ .lg .middle } **Research in the terminal**
+
+    ---
+
+    Ask a question with `/research` and find its run from the Terminal UI.
+
+    [Use Research Mode :lucide-arrow-right:](research.md)
+
+</div>

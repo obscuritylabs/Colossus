@@ -27,10 +27,12 @@ nav = [
       { "Connect a model" = "get-started/connect-model.md" },
       { "First repository task" = "get-started/first-repository-task.md" },
     ] },
-    { "Work in the terminal" = [
+    { "Work with the CLI" = [
       { "Agent runs" = "use/agent-runs.md" },
       { "Terminal UI" = "use/terminal-ui.md" },
+      { "ACP in editors" = "extend/acp.md" },
       { "Sessions" = "use/sessions.md" },
+      { "Context" = "use/sessions-context.md" },
       { "Planning" = "use/planning.md" },
       { "Research" = "use/research.md" },
       { "Memories" = "use/memories.md" },
@@ -54,7 +56,7 @@ nav = [
   ] },
   { "Use" = [
     { "Overview" = "use/index.md" },
-    { "Connect providers" = [
+    { "Connect a model" = [
       { "Choose a provider" = "use/providers/index.md" },
       { "Codex or ChatGPT subscription" = "use/providers/codex-chatgpt.md" },
       { "OpenAI API" = "use/providers/openai-api.md" },
@@ -62,12 +64,14 @@ nav = [
       { "Local models" = "use/providers/local-models.md" },
       { "Other OpenAI-compatible endpoints" = "use/providers/openai-compatible.md" },
     ] },
-    { "Context and snapshots" = "use/sessions-context.md" },
-    { "Tasks, decisions, and plans" = "use/tasks-decisions-plans.md" },
-    { "Goals and subagents" = "use/goals-subagents.md" },
-    { "Research overview" = "use/research-search.md" },
-    { "Deep research" = "use/deep-research.md" },
-    { "Web search" = "use/web-search.md" },
+    { "Keep work moving" = [
+      { "Tasks, decisions, and plans" = "use/tasks-decisions-plans.md" },
+      { "Goals and subagents" = "use/goals-subagents.md" },
+    ] },
+    { "Find information" = [
+      { "Search" = "use/web-search.md" },
+      { "Deep research" = "use/deep-research.md" },
+    ] },
   ] },
   { "Extend" = [
     { "Overview" = "extend/index.md" },
@@ -80,7 +84,6 @@ nav = [
       { "Agent Plugins" = "extend/plugins.md" },
       { "Integrations" = "extend/integrations.md" },
       { "MCP" = "extend/mcp.md" },
-      { "ACP editor setup" = "extend/acp.md" },
     ] },
     { "Appearance" = [
       { "Author a theme" = "extend/author-theme.md" },

@@ -1,176 +1,161 @@
 ---
-title: Web search
-description: Run a one-shot provider-neutral web search through an operator-configured route.
+title: Search
+description: Run web search, read normalized results, and understand the agent and research routes.
 audience: user
 type: how-to
+icon: lucide/search
 ---
 
-# Web search
+# Search
 
-## Goal
+Search gives Colossus ranked web results and snippets through a configured search
+provider. You can issue one query from the CLI, let an agent use the `web.search`
+tool, or use search as the web evidence lane of a research run. The provider is
+chosen in configuration, so a prompt cannot switch the destination or credential.
 
-Run one explicit web search, receive normalized result metadata, and understand when to
-use the `agent` or `research` route. A direct search does not create a durable research
-run, extract claims, or synthesize a cited report.
+## Run a direct search
 
-## Prerequisites
-
-- An operator-configured `search.roles.agent` or `search.roles.research` route.
-- Under an isolating boundary, the search profile's exact HTTPS origin (or exact
-  loopback HTTP origin) in `sandbox.networkDestinations`.
-- The profile's environment-backed credential when its backend requires one.
-- Permission to perform the `web.search` action. Under the development access profile,
-  a noninteractive command needs `--approval-mode ask` to prompt instead of failing
-  closed.
-
-Operators can complete these prerequisites in
-[Providers and routing](../admin/providers-routing.md#configure-search-routing).
-
-## Steps
-
-### 1. Inspect safe profile metadata
+In a configured workspace, inspect the available search profiles:
 
 ```bash
-colossus --config .colossus/config.yaml search profiles
+colossus -w /absolute/path/to/repository search profiles
 ```
 
-This command shows profile names, adapter kinds, endpoints, credential references, and
-timeouts. It does not resolve credential values or open a network connection. Review
-`search.roles` with `config show` when you need to confirm which profile a role names:
+The listing shows profile names, adapters, endpoints, and credential references,
+without exposing credential values. From the same workspace, use `config show` to
+check which profile the `agent` and `research` roles name.
+
+Then run a bounded query. This example asks for five results on the `agent` route
+and selects JSON so the result shape is explicit:
 
 ```bash
-colossus --config .colossus/config.yaml config show
+colossus -w /absolute/path/to/repository \
+  --output json --approval-mode ask \
+  search query "Colossus release notes" --role agent --limit 5
 ```
 
-### 2. Choose a logical role
+The default role for `search query` is `agent`, and the default limit is 10;
+the maximum is 20. A search route, any required credential, tool access, and
+network authority must already be configured. One-shot commands default to
+`deny` for outstanding approval requests; `ask` prompts in an attached terminal.
+See [Search configuration](../reference/configuration/search.md)
+for the profile fields and [Access and approvals](../admin/access-and-approvals.md)
+for the approval modes.
 
-Use `agent` for the model-facing `web.search` tool path. Use `research` to exercise the
-route reserved for a durable research run's web-evidence lane. The two roles are
-configured independently and never fall back to each other.
+## Read the result
 
-A direct CLI query may select either role. Selecting `research` here still performs only
-one search; it does not start deep research.
-
-### 3. Run a one-shot search
-
-```bash
-colossus --config .colossus/config.yaml \
-  --output json \
-  --approval-mode ask \
-  search query \
-  "provider-neutral search" \
-  --role agent \
-  --limit 5
-```
-
-Set the role and limit explicitly when a reproducible diagnostic matters. Exact defaults
-and accepted bounds live in the
-[CLI reference](../reference/cli.md#important-defaults-and-bounds). Colossus sends the
-query through the selected profile, policy gateway, request-bound declared or ambient
-network-authority check, quarantine, and post-effect release decision.
-
-### 4. Read the normalized response
-
-The JSON root is an object, not a provider-specific result array:
+A search returns one provider-neutral object. This is an illustrative response:
 
 ```json
 {
-  "query": "provider-neutral search",
+  "query": "Colossus release notes",
   "count": 1,
   "results": [
     {
       "rank": 1,
-      "title": "Example result",
-      "url": "https://example.com/result",
-      "snippet": "A bounded provider-supplied snippet.",
+      "title": "Example release page",
+      "url": "https://example.com/releases",
+      "snippet": "A short excerpt supplied by the search provider.",
       "source": "example-engine"
     }
   ]
 }
 ```
 
-Every result has a one-based `rank`, `title`, credential-free HTTP(S) `url`, and
-`snippet`. `source` is nullable. Colossus discards unsafe URLs and returns normalized
-fields rather than the backend's raw response envelope.
+`count` is the number of returned results. Each result has a one-based `rank`, a
+`title`, an HTTP(S) `url` without embedded userinfo credentials, and a bounded
+`snippet`. `source` may be `null`; it is provider metadata, not a verified
+citation. Colossus drops results with invalid or unsafe URLs and normalizes
+provider fields before releasing them.
 
-### 5. Fetch a result only when needed
-
-Search returns result metadata and snippets; it does not retrieve the selected page.
-Fetching an exact URL is a separate `web.fetch` or `network.http` effect with its own
-authorization and network-origin requirements. For a direct CLI fetch, use the
-separately approved network command:
+A snippet helps you choose what to inspect next. Search does not fetch the page
+body. Fetching a selected URL is a separate authorized effect, for example:
 
 ```bash
-colossus --config .colossus/config.yaml \
-  --approval-mode ask \
-  network get https://example.com/result
+colossus -w /absolute/path/to/repository \
+  --approval-mode ask network get https://example.com/releases
 ```
 
-## Search routing
+## Choose the right search path
 
-<div class="diagram-scroll diagram-scroll--wide" markdown tabindex="0" role="region" aria-label="Search routing diagram">
+| Path | What happens | Route |
+| --- | --- | --- |
+| `colossus search query` | Runs one explicit query and returns normalized results. | `agent` by default; `--role research` is also available. |
+| Agent `web.search` tool | Lets a model request a search during a task when the tool is available. | `agent` |
+| Research web lane | Searches planned queries and retains released evidence in a durable, cited report. | `research` |
+
+The `agent` and `research` routes can use different profiles and do not fall back
+to one another. Selecting `--role research` for a direct query still returns only
+search results; it does not start a research run. In the Terminal UI, you can ask an
+agent to find information; when `web.search` is available, the agent may call it.
+Use the direct CLI command when you need a specific query and limit. Use
+[Deep research](deep-research.md)
+when you need planned queries, source records, claims, limitations, and a report.
+For repository files, inspect the available [filesystem and repository tools](tools.md).
+
+## How search reaches a provider
+
+An operator maps each logical route to a named search profile. The profile selects
+either a SearXNG JSON endpoint or SerpAPI. Before a query leaves the workspace,
+Colossus checks the `web.search` action, any approval obligation, and the
+configured network authority. It then adapts the provider response into the
+same `query` / `count` / `results` shape for both backends.
+
+<div class="diagram-scroll" markdown tabindex="0" role="region" aria-label="Search route and provider diagram">
 
 ```mermaid
-flowchart LR
-    A["Agent tool<br/>web.search"] --> R["Logical role<br/>agent"]
-    D["Research web lane"] --> S["Logical role<br/>research"]
-    R --> P1["Agent search profile"]
-    S --> P2["Research search profile"]
-    P1 --> G["Policy + resource authority"]
-    P2 --> G
-    G --> B{"Configured backend"}
-    B --> X["SearXNG"]
-    B --> Y["SerpAPI"]
-    X --> N["Normalized results"]
-    Y --> N
+flowchart TB
+    A["Direct query or agent tool"] --> AR["agent route"]
+    R["Research web lane"] --> RR["research route"]
+    AR --> AP["Selected profile"]
+    RR --> RP["Selected profile"]
+    AP --> G["Access, approval, and network checks"]
+    RP --> G
+    G --> B["SearXNG or SerpAPI"]
+    B --> N["Normalized results"]
 ```
 
 </div>
 
-Reading the diagram without color: the agent tool and research web lane resolve distinct
-logical roles. Each role names one operator-configured profile. Both profiles cross the
-same policy and request-bound resource-authority check before their backend results are
-normalized. Isolation uses declared exact origins; acknowledged full access uses
-ambient HTTP(S) authority.
+Reading the diagram without color: a direct or agent search uses the `agent`
+route unless the direct command explicitly selects `research`. A research run's
+web lane uses the `research` route. Each route resolves a configured profile,
+passes the same effect checks, and returns normalized results. Under an isolating
+sandbox, the provider's exact origin must be allowed. See
+[Providers and routing](../admin/providers-routing.md#configure-search-routing)
+for setup choices.
 
-## Expected result
+## If search is unavailable
 
-The command returns one `SearchResponse` object containing the original query, a bounded
-count, and normalized ranked results. It does not create a session, research run,
-canonical research sources, extracted claims, or a synthesized report.
+| Symptom | What to check |
+| --- | --- |
+| No search route | Run `search profiles` and inspect `search.roles` with `config show`; configure the exact `agent` or `research` route. |
+| Approval or policy denial | Review the action and approval mode. Approval cannot reverse a policy denial. |
+| Origin blocked | Under isolation, allow the profile's exact scheme, host, and port. |
+| Credential missing | Set the environment variable referenced by the profile; keep its value out of YAML. |
+| Results lack page detail | Fetch the chosen URL separately after authorizing that effect. |
 
-## Verification
+A transport failure after dispatch can leave provider usage uncertain. Inspect the
+provider's state before retrying a query that could consume quota.
 
-Confirm that:
+## What's next?
 
-- `search profiles` shows the intended safe profile metadata.
-- `config show` maps the selected logical role to that profile.
-- `count` equals the number of objects in `results`.
-- Every returned URL uses HTTP or HTTPS and contains no embedded credentials.
-- A fetched page body appears only after a separately authorized fetch.
+<div class="grid cards" markdown>
 
-## Failure path
+-   :lucide-book-open:{ .lg .middle } **Deep research**
 
-- **Role is unavailable:** configure the exact `agent` or `research` mapping; there is no
-  cross-role fallback.
-- **Origin is denied under isolation:** add the profile's exact scheme, host, and
-  effective port to `sandbox.networkDestinations`.
-- **Approval is unavailable:** run from a terminal with `--approval-mode ask`, or ask an
-  operator to grant the action through the configured policy.
-- **Credential is unavailable:** set the environment variable named by the profile's
-  credential reference. Colossus does not accept an inline secret.
-- **Outcome is unknown:** a transport failure after dispatch may have consumed provider
-  quota. Inspect provider state or billing before retrying.
-- **The result lacks page detail:** authorize and fetch the chosen exact URL separately;
-  search intentionally returns metadata and snippets only.
+    ---
 
-## Next step
+    Build a durable, cited report from repository, web, or MCP evidence.
 
-Use [Deep research](deep-research.md) when you need a durable multi-query run with
-repository, web, or MCP evidence, stable source labels, claims, limitations, and a cited
-report. Operators can change routes in
-[Providers and routing](../admin/providers-routing.md#configure-search-routing).
-Exhaustive fields and bounds remain in
-[Search configuration](../reference/configuration/search.md).
-Version-specific notes live in
-[Upgrade and compatibility](../get-started/upgrade-compatibility.md).
+    [Investigate a question :lucide-arrow-right:](deep-research.md)
+
+-   :lucide-settings:{ .lg .middle } **Search configuration**
+
+    ---
+
+    Review exact profile, route, credential, and network settings.
+
+    [Configure search :lucide-arrow-right:](../reference/configuration/search.md)
+
+</div>

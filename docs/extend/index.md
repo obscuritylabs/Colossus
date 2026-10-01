@@ -77,7 +77,7 @@ or file you can make your own.
 
     [Configure MCP :lucide-arrow-right:](mcp.md)
 
--   :lucide-code:{ .lg .middle } **ACP editor setup**
+-   :lucide-code:{ .lg .middle } **ACP in editors**
 
     ---
 

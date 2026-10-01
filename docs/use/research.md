@@ -106,12 +106,12 @@ investigation workflow.
 
     [Explore deep research :lucide-arrow-right:](deep-research.md)
 
--   :lucide-search:{ .lg .middle } **Web search**
+-   :lucide-search:{ .lg .middle } **Search**
 
     ---
 
     Run one direct search when you need results and snippets without a research run.
 
-    [Run a web search :lucide-arrow-right:](web-search.md)
+    [Explore search :lucide-arrow-right:](web-search.md)
 
 </div>
