@@ -813,7 +813,6 @@ impl Runtime {
             Arc::clone(&gateway),
             raw_process_executor,
             Arc::clone(&workspace_lease),
-            config.sandbox.max_concurrency,
         )?);
         let gateway_tool_executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
             gateway: Arc::clone(&gateway),

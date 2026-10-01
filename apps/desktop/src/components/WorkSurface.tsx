@@ -106,6 +106,7 @@ interface WorkSurfaceProps {
   gitWorkspaceId?: string | null;
   gitAvailable?: boolean;
   browserScope?: string | null;
+  processSessionsAvailable?: boolean;
   browserFixture?: boolean;
   terminalSupported?: boolean;
   terminalReady?: boolean;
@@ -223,6 +224,7 @@ export function WorkSurface({
   filesPanel,
   filesAvailable,
   browserScope = null,
+  processSessionsAvailable = false,
   browserFixture = false,
   terminalSupported = false,
   terminalReady = false,
@@ -370,7 +372,12 @@ export function WorkSurface({
   const parentSessionId = run?.sessionId ?? null;
   const researchDrawerAvailable = run?.mode === "research";
   const researchOutput = view?.output ?? "";
-  const shells = useShellSessions(browserScope, browserFixture);
+  const shellScope = processSessionsAvailable ? browserScope : null;
+  const shells = useShellSessions(shellScope, browserFixture);
+  useEffect(() => {
+    if (!shellScope)
+      setActiveDrawer((current) => (current === "shells" ? null : current));
+  }, [shellScope]);
   const resizableDrawer =
     activeDrawer === "shells" ||
     activeDrawer === "files" ||
@@ -967,7 +974,7 @@ export function WorkSurface({
           },
         ]
       : []),
-    ...(browserScope
+    ...(shellScope
       ? [
           {
             id: "shells" as const,
@@ -1561,7 +1568,7 @@ export function WorkSurface({
         {git.available ||
         browser.snapshot.available ||
         terminalSupported ||
-        browserScope !== null ||
+        shellScope !== null ||
         filesAvailable ||
         artifactsAvailable ||
         run !== undefined ||
@@ -1637,10 +1644,10 @@ export function WorkSurface({
                 </div>
               </header>
             ) : null}
-            {activeDrawer === "shells" && browserScope ? (
+            {activeDrawer === "shells" && shellScope ? (
               <ActiveShells
-                key={browserScope}
-                scope={browserScope}
+                key={shellScope}
+                scope={shellScope}
                 sessions={shells.sessions}
                 error={shells.error}
                 refresh={shells.refresh}

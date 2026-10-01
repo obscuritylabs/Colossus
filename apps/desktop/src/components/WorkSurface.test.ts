@@ -13,6 +13,7 @@ function renderSurface(
   activityComparisonEnabled = false,
   withRun = activityComparisonEnabled,
   runMode: Run["mode"] = "execute",
+  processSessionsAvailable?: boolean,
 ): string {
   const comparisonRun: Run = {
     runId: "comparison-run",
@@ -97,6 +98,10 @@ function renderSurface(
         composer: () => createElement("div"),
         filesPanel: createElement("div", null, "Workspace file explorer"),
         filesAvailable: capabilities.files,
+        browserScope: "external-runtime",
+        ...(processSessionsAvailable === undefined
+          ? {}
+          : { processSessionsAvailable }),
         onOpenWorkspaceFile: vi.fn(),
         artifactsAvailable: capabilities.artifacts,
         asideView: undefined,
@@ -136,6 +141,15 @@ function renderSurface(
 }
 
 describe("WorkSurface side panels", () => {
+  it("offers Active shells only when the runtime advertises process sessions", () => {
+    expect(renderSurface([])).not.toContain("Active shells");
+    expect(
+      renderSurface([], undefined, false, false, "execute", false),
+    ).not.toContain("Active shells");
+    expect(
+      renderSurface([], undefined, false, false, "execute", true),
+    ).toContain("Active shells");
+  });
   it("offers released Research citations in the resizable side panel", () => {
     const markup = renderSurface([], undefined, false, true, "research");
 

@@ -55,7 +55,6 @@ fn registry(journal: Arc<dyn EventJournal>, directory: &Path) -> ProcessSessions
             [4; 32],
         )),
         lease,
-        4,
     )
     .expect("registry")
 }
@@ -225,5 +224,65 @@ fn restart_records_interruption_without_adopting_a_process_or_replaying_a_comman
             .expect("events")
             .len(),
         2
+    );
+}
+
+#[test]
+fn known_startup_failure_and_unconfirmed_execution_have_distinct_states() {
+    for (error, expected) in [
+        (
+            GatewayError::Execution("invalid process spec".into()),
+            ProcessSessionStatus::Failed,
+        ),
+        (
+            GatewayError::OutcomeUnknown("helper channel lost".into()),
+            ProcessSessionStatus::OutcomeUnknown,
+        ),
+    ] {
+        let session = ManagedSession::new(
+            Arc::new(InMemoryEventJournal::default()),
+            context("run-1", "chat-1"),
+            summary(ProcessLifetime::Run),
+        );
+        session.executing.store(true, Ordering::Release);
+        session.complete(Err(error));
+        assert_eq!(state(&session).summary.status, expected);
+    }
+}
+
+#[tokio::test]
+async fn launch_evidence_precedes_policy_release_and_preserves_uncertainty() {
+    struct Reject;
+    #[async_trait]
+    impl QuarantinedEffectObserver for Reject {
+        async fn observe(&mut self, _: QuarantinedEffectResult) -> Result<(), ExecutionError> {
+            Err(ExecutionError::Failed("release denied".into()))
+        }
+    }
+    let session = ManagedSession::new(
+        Arc::new(InMemoryEventJournal::default()),
+        context("run-1", "chat-1"),
+        summary(ProcessLifetime::Run),
+    );
+    let mut reject = Reject;
+    let mut observer = LaunchObserver {
+        session: &session,
+        inner: &mut reject,
+    };
+    assert!(
+        observer
+            .observe(QuarantinedEffectResult {
+                bytes: br#"{"kind":"started","deadline_ms":1234}"#.to_vec(),
+                media_type: "application/json".into(),
+                effect_succeeded: true,
+            })
+            .await
+            .is_err()
+    );
+    assert!(session.launched.load(Ordering::Acquire));
+    session.complete(Err(GatewayError::Denied("release denied".into())));
+    assert_eq!(
+        state(&session).summary.status,
+        ProcessSessionStatus::OutcomeUnknown
     );
 }

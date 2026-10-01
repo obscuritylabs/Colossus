@@ -2740,6 +2740,7 @@ fn desktop_capabilities(
         delegation: advertised.contains("agent_runs.delegation"),
         plugins: advertised.contains("plugins.discovery"),
         plugin_skill_selection: advertised.contains("plugins.skill_selection"),
+        process_sessions: advertised.contains("process_sessions.v1"),
         tui: selected_managed && cfg!(any(target_os = "macos", target_os = "windows")),
         shell_terminal: managed_workspace_is_selected(settings)
             && workspace_available

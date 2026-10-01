@@ -12,14 +12,17 @@ use std::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+mod concurrency;
 mod output;
 mod persistence;
 mod public;
 #[cfg(test)]
 mod tests;
+use concurrency::ConcurrencyScopes;
 use output::LogDecoder;
 
 const RETAINED_SESSIONS: usize = 256;
+const MAX_ACTIVE_SESSIONS: usize = 32;
 const RETAINED_OUTPUT: usize = 64 * 1024;
 const CATALOG_STREAM: &str = "process-session-catalog";
 
@@ -29,7 +32,7 @@ pub(super) struct ProcessSessions {
     executor: Arc<SandboxProcessExecutor>,
     identity: workspace_lease::WorkspaceIdentity,
     lease: Arc<workspace_lease::WorkspaceOwnershipLease>,
-    max_concurrent: usize,
+    scoped_active: Arc<ConcurrencyScopes>,
     active: Arc<AtomicUsize>,
     registry: StdMutex<Registry>,
 }
@@ -53,6 +56,7 @@ struct ManagedSession {
     changed: tokio::sync::Notify,
     done: AtomicBool,
     launched: AtomicBool,
+    executing: AtomicBool,
 }
 struct SessionState {
     summary: ProcessSessionSummary,
@@ -89,7 +93,6 @@ impl ProcessSessions {
         gateway: Arc<EffectGateway>,
         executor: Arc<SandboxProcessExecutor>,
         lease: Arc<workspace_lease::WorkspaceOwnershipLease>,
-        max_concurrent: u32,
     ) -> Result<Self, StoreError> {
         let registry = persistence::recover(&journal)?;
         Ok(Self {
@@ -98,7 +101,7 @@ impl ProcessSessions {
             executor,
             identity: lease.identity(),
             lease,
-            max_concurrent: usize::try_from(max_concurrent).unwrap_or(32).min(32),
+            scoped_active: Arc::new(ConcurrencyScopes::default()),
             active: Arc::new(AtomicUsize::new(0)),
             registry: StdMutex::new(registry),
         })
@@ -144,9 +147,9 @@ impl ProcessSessions {
                     "managed shell provenance mismatch".into(),
                 ));
             }
-            if self.active.load(Ordering::Acquire) >= self.max_concurrent {
+            if self.active.load(Ordering::Acquire) >= MAX_ACTIVE_SESSIONS {
                 return Err(process_failure(
-                    "managed shell concurrency limit reached; stop or await an existing session",
+                    "workspace managed shell capacity reached; stop or await an existing session",
                 ));
             }
             while registry.sessions.len() >= RETAINED_SESSIONS {
@@ -196,7 +199,7 @@ impl ProcessSessions {
             inner: self.executor.controlled(session.control.clone()),
             identity: self.identity.clone(),
             session: Arc::clone(&session),
-            active: Arc::clone(&self.active),
+            scoped_active: Arc::clone(&self.scoped_active),
         };
         let gateway = Arc::clone(&self.gateway);
         let job = Arc::clone(&session);
@@ -218,7 +221,7 @@ impl ProcessSessions {
                         let current = state(&job);
                         if owner.control.is_cancelled() && (current.summary.lifetime == ProcessLifetime::Run || current.summary.status == ProcessSessionStatus::Starting) { job.control.cancel(); }
                         drop(current);
-                        if job.control.is_cancelled() && !job.launched.load(Ordering::Acquire) {
+                        if job.control.is_cancelled() && !job.executing.load(Ordering::Acquire) {
                             break Err(GatewayError::Denied("managed shell stopped before launch".into()));
                         }
                     }
@@ -421,7 +424,7 @@ struct ManagedExecutor {
     inner: SandboxProcessExecutor,
     identity: workspace_lease::WorkspaceIdentity,
     session: Arc<ManagedSession>,
-    active: Arc<AtomicUsize>,
+    scoped_active: Arc<ConcurrencyScopes>,
 }
 #[async_trait]
 impl StreamingEffectExecutor for ManagedExecutor {
@@ -439,13 +442,37 @@ impl StreamingEffectExecutor for ManagedExecutor {
                 "managed process stopped before launch".into(),
             ));
         }
-        if self.active.load(Ordering::Acquire) > permit.obligations().max_concurrency as usize {
-            return Err(ExecutionError::Failed(
-                "managed process exceeds policy concurrency limit".into(),
-            ));
+        let _scope = self
+            .scoped_active
+            .acquire(request, permit.obligations().max_concurrency)?;
+        // Once the adapter starts, await its authenticated cleanup result even
+        // when cancellation races the first Started frame.
+        self.session.executing.store(true, Ordering::Release);
+        let mut launch_observer = LaunchObserver {
+            session: &self.session,
+            inner: observer,
+        };
+        self.inner
+            .execute_stream(request, permit, &mut launch_observer)
+            .await
+    }
+}
+
+// Remember authenticated launch evidence before release policy. A denied Started
+// frame must not make an already-spawned process look like a pre-launch failure.
+struct LaunchObserver<'a> {
+    session: &'a ManagedSession,
+    inner: &'a mut dyn QuarantinedEffectObserver,
+}
+#[async_trait]
+impl QuarantinedEffectObserver for LaunchObserver<'_> {
+    async fn observe(&mut self, chunk: QuarantinedEffectResult) -> Result<(), ExecutionError> {
+        let frame: Value = serde_json::from_slice(&chunk.bytes)
+            .map_err(|_| ExecutionError::OutcomeUnknown("invalid process frame".into()))?;
+        if frame["kind"] == "started" {
+            self.session.launched.store(true, Ordering::Release);
         }
-        self.session.launched.store(true, Ordering::Release);
-        self.inner.execute_stream(request, permit, observer).await
+        self.inner.observe(chunk).await
     }
 }
 
@@ -528,6 +555,7 @@ impl ManagedSession {
             changed: tokio::sync::Notify::new(),
             done: AtomicBool::new(false),
             launched: AtomicBool::new(false),
+            executing: AtomicBool::new(false),
         }
     }
     fn stop(&self) {
@@ -569,8 +597,10 @@ impl ManagedSession {
                     current.summary.status = ProcessSessionStatus::OutcomeUnknown;
                 }
             }
-            Err(_) => {
-                current.summary.status = if self.launched.load(Ordering::Acquire) {
+            Err(error) => {
+                let uncertain = self.launched.load(Ordering::Acquire)
+                    || matches!(error, GatewayError::OutcomeUnknown(_));
+                current.summary.status = if uncertain {
                     ProcessSessionStatus::OutcomeUnknown
                 } else if self.control.is_cancelled() {
                     ProcessSessionStatus::Stopped
@@ -578,7 +608,7 @@ impl ManagedSession {
                     ProcessSessionStatus::Failed
                 };
                 current.summary.reason = Some(
-                    if self.launched.load(Ordering::Acquire) {
+                    if uncertain {
                         "Process result or cleanup could not be confirmed through policy release"
                     } else {
                         "Process was not launched: authorization, approval, or startup failed"

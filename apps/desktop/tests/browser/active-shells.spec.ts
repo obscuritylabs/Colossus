@@ -121,3 +121,66 @@ test("released output reconnects, follows cursors, and confirms stop", async ({
     ),
   ).toBe(calls);
 });
+
+test("unsupported runtimes do not poll and removing support cancels polling", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const host = window as unknown as {
+      __TAURI_INTERNALS__: unknown;
+      shellListCalls: number;
+    };
+    host.shellListCalls = 0;
+    host.__TAURI_INTERNALS__ = {
+      invoke: async (command: string) => {
+        if (command === "list_setup_packages") return [];
+        if (command === "list_shell_sessions") {
+          host.shellListCalls++;
+          return { sessions: [], next_cursor: null };
+        }
+        return null;
+      },
+    };
+  });
+  await page.goto("/?fixture=operations-studio");
+  await page.clock.install();
+  await page.evaluate(async () => {
+    const path = "/src/dev/active-shells-harness.tsx";
+    const module = await import(/* @vite-ignore */ path);
+    (window as unknown as { shellPolling: unknown }).shellPolling =
+      module.mountPolling();
+  });
+  await expect(page.getByTestId("shell-polling")).toHaveText("0");
+  const count = () =>
+    page.evaluate(
+      () => (window as unknown as { shellListCalls: number }).shellListCalls,
+    );
+  await page.clock.runFor(6000);
+  expect(await count()).toBe(0);
+  await page.evaluate(() =>
+    (
+      window as unknown as {
+        shellPolling: { setScope(scope: string | null): void };
+      }
+    ).shellPolling.setScope("supported-runtime"),
+  );
+  await expect.poll(count).toBe(1);
+  await page.clock.runFor(5000);
+  await expect.poll(count).toBe(2);
+  await page.evaluate(() =>
+    (
+      window as unknown as {
+        shellPolling: { setScope(scope: string | null): void };
+      }
+    ).shellPolling.setScope(null),
+  );
+  await page.clock.runFor(100);
+  const stoppedCount = await count();
+  await page.clock.runFor(10000);
+  expect(await count()).toBe(stoppedCount);
+  await page.evaluate(() =>
+    (
+      window as unknown as { shellPolling: { unmount(): void } }
+    ).shellPolling.unmount(),
+  );
+});

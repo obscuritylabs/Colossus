@@ -129,8 +129,9 @@ Workspace sessions survive turns after reaching `running`, until they exit, are
 stopped, reach the original execution deadline, or their runtime shuts down. Neither
 background lifetime nor waiting raises `sandbox.timeoutMs`. Increase that explicit
 workspace ceiling for servers that need more than the default fifteen minutes.
-Managed sessions reserve concurrency through cleanup, bounded by the workspace's
-`sandbox.maxConcurrency` and a runtime ceiling of 32; the default concurrency is one.
+Managed sessions reserve concurrency through cleanup. `sandbox.maxConcurrency` limits
+each actor/run independently and defaults to one. A separate workspace capacity of
+32 active sessions bounds total resource use across runs and applications.
 
 Desktop's **Active shells** tool shows the selected runtime's released logs, status,
 origin, and deadline, with search, follow, copy, and Stop. Active shells retain their

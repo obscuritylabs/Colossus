@@ -557,7 +557,7 @@ fn managed_runtime(root: &Path, origin: &str) -> Runtime {
     config.use_ephemeral_storage();
     config.sandbox = SandboxConfig {
         helper_path: Some(env!("CARGO_BIN_EXE_colossus").into()),
-        max_concurrency: 4,
+        max_concurrency: 1,
         timeout_ms: 30000,
         ..SandboxConfig::default()
     };

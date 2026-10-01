@@ -253,6 +253,7 @@ export interface DesktopCapabilities {
   pluginSkillSelection?: boolean;
   tui: boolean;
   shellTerminal: boolean;
+  processSessions?: boolean;
   files: boolean;
   artifacts: boolean;
   planContinuation: boolean;
