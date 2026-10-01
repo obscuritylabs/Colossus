@@ -2391,13 +2391,21 @@ mod tests {
             request: crate::ReadProcessSessionRequest,
         ) -> ApiResult<crate::ProcessSessionSnapshot> {
             caller.require_scope(RUNS_READ)?;
+            // Include transport-visible setup overhead around a quiet maximum wait.
+            if request.wait_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(request.wait_ms + 100)).await;
+            }
             Ok(crate::ProcessSessionSnapshot {
                 session: shell_fixture(&request.session_id),
-                chunks: vec![crate::ProcessOutputChunk {
-                    sequence: 2,
-                    stdout: "released output".into(),
-                    stderr: String::new(),
-                }],
+                chunks: if request.after_sequence < 2 {
+                    vec![crate::ProcessOutputChunk {
+                        sequence: 2,
+                        stdout: "released output".into(),
+                        stderr: String::new(),
+                    }]
+                } else {
+                    Vec::new()
+                },
                 next_sequence: 2,
                 gap: request.after_sequence == 0,
             })
@@ -2980,6 +2988,21 @@ mod tests {
         assert_eq!(snapshot.chunks[0].stdout, "released output");
         assert!(snapshot.gap);
         assert_eq!(snapshot.next_sequence, 2);
+        let started = std::time::Instant::now();
+        let quiet = backend
+            .agent_runs()
+            .read_process_session(crate::ReadProcessSessionRequest {
+                session_id: id.clone(),
+                after_sequence: snapshot.next_sequence,
+                wait_ms: 30000,
+                max_output_bytes: 65536,
+            })
+            .await
+            .expect("maximum quiet read returns through the real server deadline");
+        assert!(started.elapsed() >= Duration::from_secs(30));
+        assert_eq!(quiet.session.status, crate::ProcessSessionStatus::Running);
+        assert!(quiet.chunks.is_empty());
+        assert_eq!(quiet.next_sequence, snapshot.next_sequence);
         let error = backend
             .agent_runs()
             .stop_process_session(crate::StopProcessSessionRequest { session_id: id })
