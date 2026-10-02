@@ -87,6 +87,12 @@ import type { AsideDraft } from "./components/AsidePanel";
 import { ReleaseChannelBanner } from "./components/ReleaseChannelBanner";
 import type { WorkspaceSurface } from "./components/ProductRail";
 import { WorkComposer } from "./components/WorkComposer";
+import {
+  composerDraft,
+  editComposerDraft,
+  expandComposerDraft,
+  pasteIntoComposerDraft,
+} from "./composer-paste";
 import { WorkSidebar } from "./components/WorkSidebar";
 import { ToastRegion, useToastQueue } from "./components/ToastRegion";
 import type {
@@ -412,7 +418,7 @@ const INITIAL_DESKTOP: DesktopStatus = {
   accessProfile: FIXTURE_MODE ? "allow_all" : "minimal",
   executionBoundary: FIXTURE_MODE ? "full_access" : "offline_isolated",
   approvalMode: "ask",
-  terminalEnabled: false,
+  terminalEnabled: FIXTURE_MODE,
   additionalCaBundle: {
     configured: false,
     certificateCount: 0,
@@ -1029,7 +1035,10 @@ export default function App() {
   const [listBusy, setListBusy] = useState(false);
   const [listError, setListError] = useState("");
   const [runLoadError, setRunLoadError] = useState("");
-  const [prompt, setPrompt] = useState("");
+  const [draft, setDraft] = useState(composerDraft);
+  const prompt = draft.display;
+  const expandedPrompt = expandComposerDraft(draft);
+  const setPrompt = (value: string) => setDraft(composerDraft(value));
   const completionSkills = usePluginSkills(
     desktop.selectedTargetId,
     desktop.capabilities.pluginSkillSelection === true,
@@ -2225,12 +2234,12 @@ export default function App() {
     route: TargetRoute,
     placement: QueuePlacement,
   ): Promise<QueuedMessage | null> {
-    const cleanPrompt = prompt.trim();
+    const cleanPrompt = expandedPrompt.trim();
     const cleanRole = role.trim();
     if (
       cleanPrompt.length === 0 ||
       cleanRole.length === 0 ||
-      !isPromptWithinByteLimit(prompt) ||
+      !isPromptWithinByteLimit(expandedPrompt) ||
       (mode === "research" && researchSources.length === 0)
     ) {
       return null;
@@ -2441,7 +2450,7 @@ export default function App() {
 
   async function submitRun(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const cleanPrompt = prompt.trim();
+    const cleanPrompt = expandedPrompt.trim();
     const slashCommand = parseDesktopSlashCommand(cleanPrompt);
     if (slashCommand.type === "invalid") {
       setSlashCommandError(slashCommand.message);
@@ -2462,7 +2471,7 @@ export default function App() {
       cleanPrompt.length === 0 ||
       cleanRole.length === 0 ||
       connection.state !== "connected" ||
-      !isPromptWithinByteLimit(prompt)
+      !isPromptWithinByteLimit(expandedPrompt)
     ) {
       return;
     }
@@ -3579,7 +3588,7 @@ export default function App() {
       if (FIXTURE_MODE) {
         setDesktop((current) => ({
           ...current,
-          terminalEnabled: false,
+          terminalEnabled: true,
           provider: {
             configured: true,
             kind: request.providerKind,
@@ -4786,7 +4795,7 @@ export default function App() {
     !approvalModeChanging;
   const continuation =
     activeRun !== undefined && isTerminalStatus(activeRun.status);
-  const promptBytes = utf8ByteLength(prompt);
+  const promptBytes = utf8ByteLength(expandedPrompt);
   const promptOverLimit = promptBytes > MAX_PROMPT_BYTES;
   const views = useMemo(() => Array.from(chat.views.values()), [chat.views]);
   const selectedArtifacts = useMemo(
@@ -5043,10 +5052,17 @@ export default function App() {
       attachments={attachments}
       attachmentBusy={attachmentBusy}
       error={composerError}
-      onPromptChange={(nextPrompt) => {
-        setPrompt(nextPrompt);
+      onPromptChange={(nextPrompt, intent) => {
+        setDraft((current) => editComposerDraft(current, nextPrompt, intent));
         setComposerError(null);
       }}
+      onPromptPaste={(text, start, end) => {
+        const next = pasteIntoComposerDraft(draft, text, start, end);
+        setDraft(next.draft);
+        setComposerError(null);
+        return next.cursor;
+      }}
+      condensedPasteCount={draft.pastes.length}
       onRoleChange={setRole}
       onMaxTurnsChange={(turns) => setMaxTurns(clampMaxTurns(turns))}
       onModeChange={(nextMode) => {
@@ -5260,6 +5276,7 @@ export default function App() {
           terminalSupported={
             desktop.capabilities.tui || desktop.capabilities.shellTerminal
           }
+          shellTerminalAvailable={desktop.capabilities.shellTerminal}
           terminalReady={
             desktop.terminalEnabled &&
             (currentTerminalRequest?.kind === "shell"

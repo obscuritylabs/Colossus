@@ -655,19 +655,15 @@
   .managed-settings-header {
     gap: 12px;
   }
+}
 
-  .settings-brand > strong {
-    display: none;
-  }
-
-  .managed-settings-header h2 {
-    margin: 0;
-    padding: 0;
-    border: 0;
-  }
-
+@media (max-width: 760px) {
   .settings-frame-layout {
-    grid-template-columns: 224px minmax(0, 1fr);
+    grid-template-columns: 200px minmax(0, 1fr);
+  }
+
+  .managed-scope-switch small {
+    display: none;
   }
 }
 
@@ -692,10 +688,6 @@
 
   .settings-sidebar {
     padding: 12px 8px;
-  }
-
-  .managed-scope-switch button > svg {
-    display: none;
   }
 
   .managed-settings-actions {

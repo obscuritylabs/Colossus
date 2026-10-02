@@ -16,13 +16,15 @@ Open **Settings** from the left navigation or type `/settings` in Work. The dedi
 
 Global settings hold reusable providers, models, credentials, MCP servers, search services, telemetry connections, defaults, and Desktop preferences. Each workspace selects and overrides the resources it needs. A workspace setting shows whether its value is **Built In**, inherited from **Global**, or overridden for that workspace. Choose **Inherit** to remove an override instead of copying a current value.
 
-| Global section | Workspace section | What you change |
-| --- | --- | --- |
-| Providers, Models, Credentials | Providers | Available model connections and the model this workspace uses. |
-| MCP, Plugins | MCP, Plugins | Shared definitions and the servers or plugin capabilities enabled here. |
-| Search, Telemetry | Search, Telemetry, Research | Services, routing, and policy for this workspace. |
-| Defaults | Runtime, Access, Sandbox, Advanced | Default limits and workspace-specific behavior. |
-| Desktop | Effective YAML | App preferences and a sanitized view of the workspace's accepted configuration. |
+Under **Global → Desktop**, **Appearance** sets the color theme and text size and shows a live palette preview. Choose **Light colors** or **Dark colors** to edit each theme's accent, background, surface, and icon colors separately. Icon colors apply to navigation and common tool icons; status and warning icons retain their semantic colors. The active theme changes immediately; the other palette appears in the preview and takes effect when that theme becomes active, including when **System** follows your operating system. Background, surface, and icon choices must keep content readable. **Reset light colors** and **Reset dark colors** restore the corresponding default palette. **Git** controls automatic refresh and whether Changes or History opens first. Turning off automatic refresh leaves the Git pane's manual Refresh action available. **Browser** sets an optional full HTTP or HTTPS address for new tabs; leave it blank to open an empty tab. **Terminal** has one local terminal switch and a default session choice. New workspaces default to enabled; first use still requires native shell consent. These view preferences stay on this device. The Browser page is available in Settings even if the current build does not offer the native Browser pane.
+
+| Global section                 | Workspace section                  | What you change                                                                 |
+| ------------------------------ | ---------------------------------- | ------------------------------------------------------------------------------- |
+| Providers, Models, Credentials | Providers                          | Available model connections and the model this workspace uses.                  |
+| MCP, Plugins                   | MCP, Plugins                       | Shared definitions and the servers or plugin capabilities enabled here.         |
+| Search, Telemetry              | Search, Telemetry, Research        | Services, routing, and policy for this workspace.                               |
+| Defaults                       | Runtime, Access, Sandbox, Advanced | Default limits and workspace-specific behavior.                                 |
+| Desktop                        | Effective YAML                     | App preferences and a sanitized view of the workspace's accepted configuration. |
 
 Use **Search all settings** when you know a setting's name but not its category. Workspace **Import config** inspects a repository's `.colossus/config.yaml` and proposes Desktop resources and overrides for review; it does not rewrite that file. Same-name conflicts require an explicit choice. Secret references must be mapped to Desktop credentials.
 
@@ -49,12 +51,12 @@ The selected folder is the working context even under Full access; it is not aut
 
 The permission selector beside the Work composer controls approval-required effects for subsequent Managed Local work:
 
-| Mode | Behavior |
-| --- | --- |
-| **Deny** | Rejects effects that require an approval. |
-| **Ask** | Shows an approval card so you can decide. |
-| **Risk auto** | Allows eligible low-risk effects after evaluation. |
-| **Full access** | Satisfies approval obligations without asking. |
+| Mode            | Behavior                                           |
+| --------------- | -------------------------------------------------- |
+| **Deny**        | Rejects effects that require an approval.          |
+| **Ask**         | Shows an approval card so you can decide.          |
+| **Risk auto**   | Allows eligible low-risk effects after evaluation. |
+| **Full access** | Satisfies approval obligations without asking.     |
 
 Managed Local starts in **Risk auto**. Manually increasing approval authority to Risk auto or Full access requires native operating-system confirmation. You cannot change it during an active managed run. It returns to **Risk auto** after Managed Local restarts. This mode does not change policy decisions, the tool ceiling, the access profile, or the execution boundary. External targets are administered independently and do not expose this local selector.
 

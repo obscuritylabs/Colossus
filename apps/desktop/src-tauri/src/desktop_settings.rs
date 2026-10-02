@@ -395,7 +395,7 @@ impl Default for DesktopSettings {
             client_identity: None,
             access_profile: AccessProfileSetting::AllowAll,
             execution_boundary: ExecutionBoundarySetting::FullAccess,
-            terminal_enabled: false,
+            terminal_enabled: true,
             local_terminal_consent_version: 0,
             selected_target_id: None,
             external_targets: Vec::new(),
@@ -2274,10 +2274,11 @@ mod tests {
 
     #[test]
     fn legacy_tui_consent_cannot_silently_enable_local_shell_authority() {
-        let mut settings = DesktopSettings {
-            terminal_enabled: true,
-            ..DesktopSettings::default()
-        };
+        let mut settings = DesktopSettings::default();
+        assert!(
+            settings.terminal_enabled,
+            "new workspaces default to terminal access"
+        );
         assert!(
             !settings.local_terminal_enabled(),
             "a settings record without the versioned native warning is not shell consent"

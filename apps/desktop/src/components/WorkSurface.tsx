@@ -109,6 +109,7 @@ interface WorkSurfaceProps {
   processSessionsAvailable?: boolean;
   browserFixture?: boolean;
   terminalSupported?: boolean;
+  shellTerminalAvailable?: boolean;
   terminalReady?: boolean;
   terminalRequest?: TerminalDockRequest | null;
   onTerminalSettings?: () => void;
@@ -227,6 +228,7 @@ export function WorkSurface({
   processSessionsAvailable = false,
   browserFixture = false,
   terminalSupported = false,
+  shellTerminalAvailable = false,
   terminalReady = false,
   terminalRequest = null,
   onTerminalSettings = () => undefined,
@@ -1667,6 +1669,7 @@ export function WorkSurface({
             {activeDrawer === "terminal" ? (
               <TerminalDock
                 ready={terminalReady}
+                shellAvailable={shellTerminalAvailable}
                 fixture={browserFixture}
                 scope={browserScope}
                 request={terminalRequest}

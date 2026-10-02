@@ -14,6 +14,7 @@ import {
   storeHostAppearancePreference,
   subscribeToAppearancePreference,
 } from "./appearance";
+import { DEFAULT_THEME_PALETTES } from "./palette";
 
 describe("appearance preferences", () => {
   it("captures only the rendered native-dialog theme and text size", () => {
@@ -61,6 +62,7 @@ describe("appearance preferences", () => {
       colorTheme: "dark",
       textSize: "large",
       showSecurityWarnings: false,
+      palettes: DEFAULT_THEME_PALETTES,
     });
     for (const value of [false, null, "true", 1]) {
       expect(
@@ -82,15 +84,20 @@ describe("appearance preferences", () => {
       colorTheme: "dark",
       textSize: "large",
       showSecurityWarnings: true,
+      palettes: DEFAULT_THEME_PALETTES,
     });
 
-    expect(values.get(APPEARANCE_STORAGE_KEY)).toBe(
-      '{"colorTheme":"dark","textSize":"large","showSecurityWarnings":true}',
-    );
+    expect(JSON.parse(values.get(APPEARANCE_STORAGE_KEY)!)).toEqual({
+      colorTheme: "dark",
+      textSize: "large",
+      showSecurityWarnings: true,
+      palettes: DEFAULT_THEME_PALETTES,
+    });
     expect(readAppearancePreference(storage)).toEqual({
       colorTheme: "dark",
       textSize: "large",
       showSecurityWarnings: true,
+      palettes: DEFAULT_THEME_PALETTES,
     });
   });
 
@@ -189,9 +196,19 @@ describe("appearance preferences", () => {
 
   it("resolves system color and applies all root state attributes", () => {
     const attributes = new Map<string, string>();
+    const properties = new Map<string, string>();
     const root = {
       setAttribute: (name: string, value: string) =>
         attributes.set(name, value),
+      style: {
+        setProperty: (name: string, value: string) =>
+          properties.set(name, value),
+        removeProperty: (name: string) => {
+          const previous = properties.get(name) ?? "";
+          properties.delete(name);
+          return previous;
+        },
+      },
     };
 
     expect(resolveColorTheme("system", true)).toBe("dark");
@@ -210,5 +227,21 @@ describe("appearance preferences", () => {
       "data-theme-preference": "system",
       "data-text-size": "large",
     });
+    expect(properties.size).toBe(0);
+
+    applyAppearance(
+      root,
+      {
+        ...DEFAULT_APPEARANCE,
+        palettes: {
+          ...DEFAULT_THEME_PALETTES,
+          light: { ...DEFAULT_THEME_PALETTES.light, accent: "#c04b61" },
+        },
+      },
+      false,
+    );
+    expect(properties.get("--blue")).toBe("#c04b61");
+    applyAppearance(root, DEFAULT_APPEARANCE, false);
+    expect(properties.size).toBe(0);
   });
 });

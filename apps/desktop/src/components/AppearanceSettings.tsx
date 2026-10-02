@@ -1,10 +1,13 @@
-import { IconPalette, IconTypography } from "@tabler/icons-react";
+import { IconPalette, IconRefresh, IconTypography } from "@tabler/icons-react";
+import { useState, type CSSProperties } from "react";
 
 import type {
   ColorThemePreference,
   TextSizePreference,
 } from "../theme/appearance";
 import { useAppearance } from "../theme/AppearanceProvider";
+import { isDefaultPalette, paletteCssVariables } from "../theme/palette";
+import type { PaletteColor, PaletteTheme } from "../theme/palette";
 import { DropdownSelect } from "./DropdownSelect";
 
 const COLOR_THEME_COPY: Record<ColorThemePreference, string> = {
@@ -19,6 +22,21 @@ const TEXT_SIZE_COPY: Record<TextSizePreference, string> = {
   large: "Increase text and controls for easier reading.",
 };
 
+const PALETTE_COLORS: ReadonlyArray<{
+  slot: PaletteColor;
+  label: string;
+  description: string;
+}> = [
+  { slot: "accent", label: "Accent", description: "Buttons and selections" },
+  {
+    slot: "background",
+    label: "Background",
+    description: "Main workspace and canvas",
+  },
+  { slot: "surface", label: "Surface", description: "Cards and controls" },
+  { slot: "icon", label: "Icons", description: "Navigation and tool icons" },
+];
+
 export function AppearanceSettings() {
   const {
     colorTheme,
@@ -28,7 +46,19 @@ export function AppearanceSettings() {
     textSize,
     showSecurityWarnings,
     setShowSecurityWarnings,
+    palettes,
+    setPaletteColor,
+    resetPalette,
   } = useAppearance();
+  const [editedTheme, setEditedTheme] =
+    useState<PaletteTheme>(resolvedColorTheme);
+  const [paletteError, setPaletteError] = useState<string | null>(null);
+  const palette = palettes[editedTheme];
+  const previewStyle = {
+    ...paletteCssVariables(editedTheme, palette),
+    "--text": editedTheme === "dark" ? "#e8eff8" : "#25364a",
+    "--muted": editedTheme === "dark" ? "#91a2b8" : "#52657a",
+  } as CSSProperties;
 
   return (
     <section
@@ -95,6 +125,103 @@ export function AppearanceSettings() {
               <option value="large">Large</option>
             </DropdownSelect>
           </label>
+        </div>
+        <div className="appearance-palette-editor">
+          <div className="appearance-palette-heading">
+            <div>
+              <h4>Theme colors</h4>
+              <p>
+                Edit light and dark colors separately. The active theme updates
+                immediately; the other palette is ready when you switch.
+              </p>
+            </div>
+            <div
+              className="appearance-palette-tabs"
+              role="group"
+              aria-label="Palette to edit"
+            >
+              {(["light", "dark"] as const).map((theme) => (
+                <button
+                  key={theme}
+                  type="button"
+                  aria-pressed={editedTheme === theme}
+                  onClick={() => {
+                    setEditedTheme(theme);
+                    setPaletteError(null);
+                  }}
+                >
+                  {theme === "light" ? "Light colors" : "Dark colors"}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="appearance-palette-colors">
+            {PALETTE_COLORS.map(({ slot, label, description }) => (
+              <label key={slot} className="appearance-palette-color">
+                <span>
+                  <strong>{label}</strong>
+                  <small>{description}</small>
+                </span>
+                <input
+                  type="color"
+                  aria-label={`${editedTheme === "dark" ? "Dark" : "Light"} ${label.toLowerCase()} color`}
+                  value={palette[slot]}
+                  onChange={(event) => {
+                    const accepted = setPaletteColor(
+                      editedTheme,
+                      slot,
+                      event.target.value,
+                    );
+                    setPaletteError(
+                      accepted
+                        ? null
+                        : slot === "icon"
+                          ? "Choose an icon color that stands out on the background and surface."
+                          : `Choose a ${editedTheme === "dark" ? "darker" : "lighter"} ${label.toLowerCase()} color so text and icons stay readable.`,
+                    );
+                  }}
+                />
+                <code>{palette[slot]}</code>
+              </label>
+            ))}
+          </div>
+          <div className="appearance-palette-footer">
+            <p role="status" aria-live="polite">
+              {paletteError ??
+                "Background, surface, and icon colors keep content readable."}
+            </p>
+            <button
+              type="button"
+              className="button secondary compact"
+              disabled={isDefaultPalette(editedTheme, palette)}
+              onClick={() => {
+                resetPalette(editedTheme);
+                setPaletteError(null);
+              }}
+            >
+              <IconRefresh size={16} aria-hidden="true" />
+              Reset {editedTheme} colors
+            </button>
+          </div>
+        </div>
+        <div
+          className="appearance-theme-preview"
+          data-preview-theme={editedTheme}
+          aria-label={`${editedTheme} theme preview`}
+          style={previewStyle}
+        >
+          <div className="appearance-preview-rail" aria-hidden="true">
+            <span />
+            <span className="appearance-preview-icon">
+              <IconPalette size={14} stroke={1.8} />
+            </span>
+            <span />
+          </div>
+          <div className="appearance-preview-content">
+            <strong>Theme preview</strong>
+            <span>Workspace · Your next idea starts here</span>
+            <i aria-hidden="true" />
+          </div>
         </div>
         <label className="compact-switch appearance-security-warnings">
           <input
