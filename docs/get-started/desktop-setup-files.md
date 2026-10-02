@@ -8,19 +8,17 @@ icon: lucide/file-cog
 
 # Desktop setup files
 
-## Goal
-
 A Desktop setup file is a ZIP archive named `NAME.colossus-setup`. Build it inside
 your environment and transfer the single file to each computer. Inspection and
 import are local: they do not fetch schemas, icons, models, or credentials.
 
-## Prerequisites
+## Before you import
 
 - Colossus Desktop installed on the receiving computer.
 - Your organization's provider endpoints, supported model settings, and token instructions.
 - A ZIP utility in the environment where you prepare the package.
 
-## Steps
+## Import a setup file
 
 Choose **Import setup file** on the first Desktop setup page or under **Settings →
 Global → Providers** or **Desktop**. Review provider endpoints, model limits,
@@ -233,6 +231,7 @@ Names are limited to 96 UTF-8 bytes. Supported kinds are `api_key`, `bearer_toke
 `client_secret`, and `generic_secret`. Packages without metadata still import using
 the placeholder name and `generic_secret`. Neither token values nor local credential
 IDs are exported.
+
 Literal MCP headers are converted to credential placeholders during export; their
 values never enter the archive. Use `credentialHeaders` in hand-authored packages.
 Do not embed tokens in command arguments, instructions, or other free text.
@@ -281,20 +280,20 @@ utility or network access is required.
 additional public CA bundle, with portable placeholders for stored credentials.
 The recipient reviews certificate trust separately before applying it.
 
-## Expected result
+## What changes after import
 
 One portable file makes your providers and model details available throughout Desktop
 setup. Each workspace activates only its chosen provider; other imported providers
 remain available without requiring their credentials.
 
-## Verification
+## Check the import
 
 Import the package into a fresh Desktop profile. Review all provider endpoints and
 model details, then choose a workspace and confirm the recommended provider and model.
 Confirm token instructions display correctly and CA trust starts unchecked. Add a key
 when ready and use **Save and start** to configure the selected provider.
 
-## Failure path
+## If import is rejected
 
 Packages support up to 16 providers and 64 models. Desktop retains at most four
 setup packages. The compressed archive is limited to 2 MiB, expanded content to
@@ -308,7 +307,7 @@ A model whose profile ID already has a different workspace definition needs expl
 replacement or a distinct ID in the setup file.
 
 
-## Next step
+## Continue in Desktop
 
 Share the reviewed setup file with your users. Continue with
 [Desktop setup](desktop.md) to configure workspaces and begin a conversation.

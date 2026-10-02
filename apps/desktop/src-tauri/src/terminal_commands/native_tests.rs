@@ -84,7 +84,14 @@ async fn check_document(window: &tauri::WebviewWindow) -> Result<(), String> {
             },
         ).map_err(|error| error.to_string())?;
         let value = receive.await.map_err(|error| error.to_string())?;
-        let encoded: String = serde_json::from_str(&value).map_err(|error| error.to_string())?;
+        // WebView2 can answer an evaluation during navigation with null. The
+        // document has not finished loading yet, so let the outer timeout own it.
+        let encoded: Option<String> =
+            serde_json::from_str(&value).map_err(|error| error.to_string())?;
+        let Some(encoded) = encoded else {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        };
         let state: serde_json::Value =
             serde_json::from_str(&encoded).map_err(|error| error.to_string())?;
         if state["rendered"] == true && state["connected"] == true {
