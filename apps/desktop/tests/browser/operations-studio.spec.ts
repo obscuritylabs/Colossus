@@ -367,6 +367,32 @@ test("Desktop settings exposes diagnostics export through the native command", a
     .toEqual(["export_diagnostics"]);
 });
 
+test("Desktop certificate settings explain and expose PEM pair import", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page.getByRole("button", { name: "Certificates", exact: true }).click();
+  await expect(
+    page.getByText("Client certificate", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Import PEM pair" }),
+  ).toBeEnabled();
+  await expect(
+    page.getByText(/key stays in native credential storage/u),
+  ).toBeVisible();
+  const accessibility = await new AxeBuilder({ page })
+    .include(".managed-settings-body")
+    .analyze();
+  expect(
+    accessibility.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+});
+
 test("appearance preferences are readable, consistent, and persistent", async ({
   page,
 }) => {

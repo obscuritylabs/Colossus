@@ -809,7 +809,7 @@ async fn prepare_managed_bootstrap(
             .home_root()
             .map_err(|error| (error, RuntimeFailureCodeDto::Permission))?,
     };
-    let bootstrap = managed_bootstrap(
+    let mut bootstrap = managed_bootstrap(
         workspace,
         workspace_identity,
         &resolved,
@@ -819,6 +819,13 @@ async fn prepare_managed_bootstrap(
         &paths,
     )
     .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
+    if let Some(identity) = settings.client_identity.as_ref() {
+        let (certificate, key) = credentials
+            .read_client_identity(&identity.identity_id, &identity.leaf_fingerprint_sha256)
+            .await
+            .map_err(|error| (error, RuntimeFailureCodeDto::Permission))?;
+        bootstrap = bootstrap.with_client_identity(certificate, key);
+    }
     Ok(PreparedManagedBootstrap {
         bootstrap,
         worker_authentication,

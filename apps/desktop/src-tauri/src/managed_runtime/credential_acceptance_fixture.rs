@@ -1,10 +1,20 @@
-//! Loopback-only HTTP fixture. It never prints headers, request bodies, or tokens.
+//! Loopback-only mTLS fixture. It never prints headers, request bodies, or tokens.
 
 use super::{HostSecret, Value, json};
+use rcgen::{
+    BasicConstraints, CertificateParams, CertifiedIssuer, ExtendedKeyUsagePurpose, IsCa, KeyPair,
+};
+use rustls::{
+    RootCertStore, ServerConfig, ServerConnection, StreamOwned,
+    pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
+    server::WebPkiClientVerifier,
+};
 use std::{
     collections::BTreeMap,
+    fs,
     io::{Read as _, Write as _},
     net::{TcpListener, TcpStream},
+    path::Path,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -44,9 +54,55 @@ pub(super) struct Server {
 }
 
 impl Server {
-    pub fn start() -> Self {
+    pub fn start(root: &Path) -> Self {
+        let mut ca_params =
+            CertificateParams::new(vec!["Colossus Desktop test CA".into()]).unwrap();
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let ca = CertifiedIssuer::self_signed(ca_params, KeyPair::generate().unwrap()).unwrap();
+        let mut server_params = CertificateParams::new(vec!["localhost".into()]).unwrap();
+        server_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        let server_key = KeyPair::generate().unwrap();
+        let server_cert = server_params.signed_by(&server_key, &ca).unwrap();
+        let mut client_params =
+            CertificateParams::new(vec!["Colossus Desktop client".into()]).unwrap();
+        client_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+        let client_key = KeyPair::generate().unwrap();
+        let client_cert = client_params.signed_by(&client_key, &ca).unwrap();
+        fs::write(root.join("ca.pem"), ca.pem()).unwrap();
+        fs::write(root.join("client.pem"), client_cert.pem()).unwrap();
+        #[cfg(windows)]
+        colossus_windows_native::create_private_file(
+            &root.join("client-key.pem"),
+            client_key.serialize_pem().as_bytes(),
+        )
+        .unwrap();
+        #[cfg(target_os = "macos")]
+        fs::write(root.join("client-key.pem"), client_key.serialize_pem()).unwrap();
+        let mut trusted_clients = RootCertStore::empty();
+        trusted_clients.add(ca.der().clone()).unwrap();
+        let verifier = WebPkiClientVerifier::builder_with_provider(
+            Arc::new(trusted_clients),
+            Arc::new(rustls::crypto::ring::default_provider()),
+        )
+        .build()
+        .unwrap();
+        let tls =
+            ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_client_cert_verifier(verifier)
+                .with_single_cert(
+                    vec![server_cert.der().clone()],
+                    PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key.serialize_der())),
+                )
+                .unwrap();
+        let tls = Arc::new(tls);
+        let expected_leaf = client_cert.der().clone();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let origin = format!(
+            "https://localhost:{}",
+            listener.local_addr().unwrap().port()
+        );
         listener.set_nonblocking(true).unwrap();
         let evidence = Arc::new(Mutex::new(BTreeMap::new()));
         let stop = Arc::new(AtomicBool::new(false));
@@ -55,7 +111,22 @@ impl Server {
         let thread = thread::spawn(move || {
             while !thread_stop.load(Ordering::Relaxed) {
                 match listener.accept() {
-                    Ok((mut stream, _)) => serve(&mut stream, &thread_evidence),
+                    Ok((socket, _)) => {
+                        socket.set_nonblocking(false).unwrap();
+                        socket
+                            .set_read_timeout(Some(Duration::from_secs(10)))
+                            .unwrap();
+                        let mut stream = StreamOwned::new(
+                            ServerConnection::new(Arc::clone(&tls)).unwrap(),
+                            socket,
+                        );
+                        serve(&mut stream, &thread_evidence);
+                        assert_eq!(
+                            stream.conn.peer_certificates().unwrap()[0],
+                            expected_leaf,
+                            "managed request used the imported client leaf"
+                        );
+                    }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
                     }
@@ -107,12 +178,9 @@ impl Drop for Server {
     }
 }
 
-fn request(stream: &mut TcpStream) -> (String, String, usize, Value) {
-    // Windows accepted sockets can inherit the listener's nonblocking mode.
-    stream.set_nonblocking(false).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
+fn request(
+    stream: &mut StreamOwned<ServerConnection, TcpStream>,
+) -> (String, String, usize, Value) {
     let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(128 * 1024 + 1024 * 1024));
     let header_end = loop {
         let mut chunk = [0; 4096];
@@ -175,7 +243,10 @@ fn request(stream: &mut TcpStream) -> (String, String, usize, Value) {
     (method, path, size, body)
 }
 
-fn serve(stream: &mut TcpStream, evidence: &Mutex<BTreeMap<usize, Evidence>>) {
+fn serve(
+    stream: &mut StreamOwned<ServerConnection, TcpStream>,
+    evidence: &Mutex<BTreeMap<usize, Evidence>>,
+) {
     let (method, path, size, body) = request(stream);
     let mut all = evidence.lock().unwrap();
     let evidence = all.entry(size).or_default();
@@ -221,6 +292,7 @@ fn serve(stream: &mut TcpStream, evidence: &Mutex<BTreeMap<usize, Evidence>>) {
     stream
         .write_all(response.as_bytes())
         .expect("fixture response");
+    stream.flush().expect("flush TLS response");
 }
 
 fn completion(body: &Value, evidence: &mut Evidence) -> Value {

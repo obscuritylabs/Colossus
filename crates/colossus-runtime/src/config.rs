@@ -71,6 +71,10 @@ pub struct RuntimeConfig {
 pub struct NetworkConfig {
     /// Optional PEM CA bundle added to the built-in public trust roots.
     pub ca_bundle_path: Option<PathBuf>,
+    /// PEM client certificate chain, paired with `clientKeyPath` for outbound mTLS.
+    pub client_certificate_path: Option<PathBuf>,
+    /// PEM private key for the outbound client certificate.
+    pub client_key_path: Option<PathBuf>,
 }
 
 /// Durable audit evidence export configuration.
@@ -1012,6 +1016,23 @@ impl RuntimeConfig {
         {
             return Err(RuntimeError::Config(
                 "network.caBundlePath must be a nonempty file path".into(),
+            ));
+        }
+        if config.network.client_certificate_path.is_some()
+            != config.network.client_key_path.is_some()
+            || config
+                .network
+                .client_certificate_path
+                .as_ref()
+                .is_some_and(|path| path.as_os_str().is_empty())
+            || config
+                .network
+                .client_key_path
+                .as_ref()
+                .is_some_and(|path| path.as_os_str().is_empty())
+        {
+            return Err(RuntimeError::Config(
+                "network.clientCertificatePath and network.clientKeyPath must be nonempty and configured together".into(),
             ));
         }
         if !matches!(

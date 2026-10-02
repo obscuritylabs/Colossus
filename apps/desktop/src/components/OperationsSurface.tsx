@@ -62,6 +62,8 @@ interface OperationsSurfaceProps {
   onInstallUpdate: () => void;
   onImportCaBundle: () => void;
   onRemoveCaBundle: () => void;
+  onImportClientIdentity: () => void;
+  onRemoveClientIdentity: () => void;
 }
 
 function SurfaceHeader({
@@ -537,6 +539,8 @@ function SettingsView({
   updateMessage,
   onImportCaBundle,
   onRemoveCaBundle,
+  onImportClientIdentity,
+  onRemoveClientIdentity,
 }: Pick<
   OperationsSurfaceProps,
   | "initialSettingsTab"
@@ -560,6 +564,8 @@ function SettingsView({
   | "updateMessage"
   | "onImportCaBundle"
   | "onRemoveCaBundle"
+  | "onImportClientIdentity"
+  | "onRemoveClientIdentity"
 >) {
   const localTarget = desktop.targets.find(
     (target) => target.kind === "managed_local",
@@ -604,6 +610,8 @@ function SettingsView({
           onInstallUpdate={onInstallUpdate}
           onImportCaBundle={onImportCaBundle}
           onRemoveCaBundle={onRemoveCaBundle}
+          onImportClientIdentity={onImportClientIdentity}
+          onRemoveClientIdentity={onRemoveClientIdentity}
           onExportDiagnostics={onExportDiagnostics}
         />
         <section className="settings-card">
@@ -1044,6 +1052,8 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
           updateMessage={props.updateMessage}
           onImportCaBundle={props.onImportCaBundle}
           onRemoveCaBundle={props.onRemoveCaBundle}
+          onImportClientIdentity={props.onImportClientIdentity}
+          onRemoveClientIdentity={props.onRemoveClientIdentity}
         />
       ) : null}
     </main>

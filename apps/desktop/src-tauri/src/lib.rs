@@ -63,9 +63,10 @@ use desktop_commands::{
     add_external_target, apply_managed_model_configuration, archive_space, choose_workspace,
     configure_managed_runtime, connect_colossus, connection_status, create_space,
     desktop_release_channel, desktop_status, get_session_map, get_thread_delegate,
-    import_ca_bundle, initialize_desktop, list_spaces, remove_ca_bundle, remove_external_target,
-    rename_space, restart_managed_runtime, restore_space, run_managed_self_test,
-    search_space_threads, select_space, select_target, set_approval_mode, set_terminal_enabled,
+    import_ca_bundle, import_client_identity, initialize_desktop, list_spaces, remove_ca_bundle,
+    remove_client_identity, remove_external_target, rename_space, restart_managed_runtime,
+    restore_space, run_managed_self_test, search_space_threads, select_space, select_target,
+    set_approval_mode, set_terminal_enabled,
 };
 use diagnostics::{desktop_release_metadata, export_diagnostics};
 use managed_configuration_commands::catalog_deletion::{
@@ -206,7 +207,9 @@ pub fn run() {
             codex_auth_login,
             codex_auth_logout,
             import_ca_bundle,
+            import_client_identity,
             remove_ca_bundle,
+            remove_client_identity,
             add_external_target,
             remove_external_target,
             choose_workspace,

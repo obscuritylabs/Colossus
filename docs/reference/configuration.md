@@ -71,6 +71,8 @@ storage:
     kind: none
 network:
   caBundlePath: null
+  clientCertificatePath: null
+  clientKeyPath: null
 audit:
   exporter:
     kind: disabled

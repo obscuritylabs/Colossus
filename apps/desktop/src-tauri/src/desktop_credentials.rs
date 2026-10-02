@@ -4,8 +4,9 @@ use colossus_contracts::{CredentialError, HostSecret, VaultRecord};
 use colossus_credentials::PlatformCredentialVault;
 use colossus_home::ConfinedRoot;
 use colossus_ports::{CredentialKey, CredentialVault};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use zeroize::Zeroizing;
 
 use crate::{desktop_settings::SettingsStore, dto::CommandErrorDto, state::AppState};
 
@@ -43,6 +44,74 @@ impl CredentialAvailability {
 }
 
 impl DesktopCredentials {
+    /// Store a validated PEM identity in the native vault under an opaque ID.
+    pub(crate) async fn write_client_identity(
+        self: &Arc<Self>,
+        id: &str,
+        certificate: &[u8],
+        key_pem: &[u8],
+    ) -> Result<(), CommandErrorDto> {
+        #[derive(Serialize)]
+        struct Material<'a> {
+            certificate: &'a str,
+            key: &'a str,
+        }
+        let certificate = std::str::from_utf8(certificate).map_err(|_| unavailable())?;
+        let key_pem = std::str::from_utf8(key_pem).map_err(|_| unavailable())?;
+        let encoded = Zeroizing::new(
+            serde_json::to_string(&Material {
+                certificate,
+                key: key_pem,
+            })
+            .map_err(|_| unavailable())?,
+        );
+        let record = VaultRecord::new(encoded.as_bytes().to_vec()).map_err(credential_error)?;
+        let key = key(id)?;
+        let store = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            store.vault.write(&key, &record).map_err(credential_error)
+        })
+        .await
+        .map_err(|_| unavailable())?
+    }
+
+    /// Read certificate and key from the vault without exposing them to the renderer.
+    pub(crate) async fn read_client_identity(
+        self: &Arc<Self>,
+        id: &str,
+        expected_fingerprint: &str,
+    ) -> Result<(HostSecret, HostSecret), CommandErrorDto> {
+        #[derive(Deserialize)]
+        struct Material {
+            certificate: Zeroizing<String>,
+            key: Zeroizing<String>,
+        }
+        let key = key(id)?;
+        let store = Arc::clone(self);
+        let record = tokio::task::spawn_blocking(move || {
+            store
+                .vault
+                .read(&key)
+                .map_err(credential_error)?
+                .ok_or_else(missing_client_identity)
+        })
+        .await
+        .map_err(|_| unavailable())??;
+        let material: Material =
+            serde_json::from_slice(record.expose()).map_err(|_| unavailable())?;
+        let identity = colossus_network::ClientIdentity::from_pem_pair(
+            material.certificate.as_bytes(),
+            material.key.as_bytes(),
+        )
+        .map_err(|_| unavailable())?;
+        if identity.leaf_fingerprint_sha256() != expected_fingerprint {
+            return Err(unavailable());
+        }
+        Ok((
+            HostSecret::new(material.certificate.to_string()).map_err(credential_error)?,
+            HostSecret::new(material.key.to_string()).map_err(credential_error)?,
+        ))
+    }
     #[cfg(all(test, any(windows, target_os = "macos")))]
     pub(crate) fn with_test_key_store(
         settings: &SettingsStore,
@@ -223,6 +292,14 @@ fn missing() -> CommandErrorDto {
     )
 }
 
+fn missing_client_identity() -> CommandErrorDto {
+    CommandErrorDto::local_sanitized(
+        "client_identity_missing",
+        "The client certificate is unavailable. Import the PEM certificate and key again.",
+        false,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,6 +328,43 @@ mod tests {
             self.0.lock().unwrap().remove(key);
             Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn client_identity_round_trips_only_through_native_vault() {
+        let store = Arc::new(DesktopCredentials {
+            root: PathBuf::new(),
+            vault: Arc::new(MemoryVault::default()),
+        });
+        let issued = rcgen::generate_simple_self_signed(vec!["client".into()]).unwrap();
+        let certificate = issued.cert.pem();
+        let key = issued.signing_key.serialize_pem();
+        let identity =
+            colossus_network::ClientIdentity::from_pem_pair(certificate.as_bytes(), key.as_bytes())
+                .unwrap();
+        store
+            .write_client_identity("tls-test", certificate.as_bytes(), key.as_bytes())
+            .await
+            .unwrap();
+        let (loaded_certificate, loaded_key) = store
+            .read_client_identity("tls-test", identity.leaf_fingerprint_sha256())
+            .await
+            .unwrap();
+        assert_eq!(loaded_certificate.expose(), certificate);
+        assert_eq!(loaded_key.expose(), key);
+        assert!(
+            store
+                .read_client_identity("tls-test", &"0".repeat(64))
+                .await
+                .is_err()
+        );
+        store.delete("tls-test").await.unwrap();
+        assert!(
+            store
+                .read_client_identity("tls-test", identity.leaf_fingerprint_sha256())
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

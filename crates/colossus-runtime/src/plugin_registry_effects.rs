@@ -23,6 +23,7 @@ pub(super) struct PluginRegistryEffectExecutor {
     process: Arc<dyn EffectExecutor>,
     workspace: PathBuf,
     oci: bool,
+    client_identity: Option<colossus_network::ClientIdentity>,
 }
 
 impl PluginRegistryEffectExecutor {
@@ -33,6 +34,7 @@ impl PluginRegistryEffectExecutor {
         process: Arc<dyn EffectExecutor>,
         workspace: PathBuf,
         oci: bool,
+        client_identity: Option<colossus_network::ClientIdentity>,
     ) -> Self {
         Self {
             profile,
@@ -41,6 +43,7 @@ impl PluginRegistryEffectExecutor {
             process,
             workspace,
             oci,
+            client_identity,
         }
     }
 
@@ -119,7 +122,9 @@ impl EffectExecutor for PluginRegistryEffectExecutor {
             plugin_management::enforce_management_path(&path, false, &permit)?;
         }
         let credential = self.credential(request).await?;
-        let client = PluginRegistryClient::new(self.profile.clone(), credential).map_err(failed)?;
+        let client = PluginRegistryClient::new(self.profile.clone(), credential)
+            .map_err(failed)?
+            .with_client_identity(self.client_identity.clone());
         let transfer = match operation {
             PluginRegistryOperation::Pull { reference, output } => client
                 .pull(&reference, Path::new(&output))

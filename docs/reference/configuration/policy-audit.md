@@ -38,9 +38,11 @@ policy:
   timeout_ms: 5000
 ```
 
-Remote deployments require a client identity path and either the adapter-specific CA
-path or `network.caBundlePath`. The disclosure acknowledgements are explicit because
-OPA receives bounded logical request content after hard-secret replacement. With OPA,
+Remote deployments require `policy.identity_pem_path` or the shared
+`network.clientCertificatePath` and `network.clientKeyPath` pair, plus either the
+adapter-specific CA path or `network.caBundlePath`. The disclosure acknowledgements
+are explicit because OPA receives bounded logical request content after hard-secret
+replacement. With OPA,
 all built-in access action override lists must be empty.
 
 OPA returns the complete `PolicyDecision`, including

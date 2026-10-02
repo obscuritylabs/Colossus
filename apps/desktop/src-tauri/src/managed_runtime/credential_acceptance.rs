@@ -36,7 +36,7 @@ fn native_vault_restarts_reach_managed_sidecar_mcp() {
     let private = PrivateAcceptanceRoot::new();
     // The sandbox may grant workspace traversal; it must not own the vault's parent.
     let workspace = PrivateAcceptanceRoot::new();
-    let server = fixture::Server::start();
+    let server = fixture::Server::start(&private.0);
     run_child(
         &private.0,
         &workspace.0,
@@ -119,6 +119,25 @@ async fn native_backend_process_child() {
             .write(CREDENTIAL_ID, fixture::token(8192))
             .await
             .unwrap();
+        let certificate_path = root.join("client.pem");
+        let key_path = root.join("client-key.pem");
+        let certificate =
+            crate::desktop_settings::read_ca_bundle_source(&certificate_path).unwrap();
+        let key = crate::desktop_settings::read_client_key_source(&key_path).unwrap();
+        let identity = colossus_network::ClientIdentity::from_pem_pair(&certificate, &key).unwrap();
+        let identity_id = Uuid::now_v7().to_string();
+        credentials
+            .write_client_identity(&identity_id, &certificate, &key)
+            .await
+            .unwrap();
+        let mut current = settings.load().unwrap();
+        current.client_identity = Some(crate::desktop_settings::ClientIdentitySetting {
+            identity_id,
+            leaf_fingerprint_sha256: identity.leaf_fingerprint_sha256().to_owned(),
+        });
+        settings.save(&current).unwrap();
+        std::fs::remove_file(certificate_path).unwrap();
+        std::fs::remove_file(key_path).unwrap();
         return;
     }
     let size = phase.parse::<usize>().expect("bounded acceptance size");
@@ -151,7 +170,8 @@ async fn native_backend_process_child() {
         .prepare_directory(Path::new("runtime-home"))
         .unwrap();
     let worker_key = [0x63; 32];
-    let bootstrap = managed_bootstrap(
+    let ca_path = root.join("ca.pem");
+    let mut bootstrap = managed_bootstrap(
         &workspace.path,
         workspace.identity.unwrap(),
         &resolved,
@@ -159,12 +179,18 @@ async fn native_backend_process_child() {
         approval_broker_grant().unwrap(),
         &worker_key,
         &ManagedBootstrapPaths {
-            ca_bundle: None,
+            ca_bundle: Some(&ca_path),
             codex_auth: None,
             colossus_home: &home,
         },
     )
     .unwrap();
+    let identity = settings.load().unwrap().client_identity.unwrap();
+    let (certificate, key) = credentials
+        .read_client_identity(&identity.identity_id, &identity.leaf_fingerprint_sha256)
+        .await
+        .unwrap();
+    bootstrap = bootstrap.with_client_identity(certificate, key);
     let executable = sidecar_executable();
     let mut file = std::fs::File::open(&executable).unwrap();
     let mut digest = Sha256::new();
@@ -453,6 +479,12 @@ fn assert_no_plaintext_files(root: &Path) {
                         .windows(fixture::PREFIX.len())
                         .any(|window| window == fixture::PREFIX.as_bytes()),
                     "synthetic credential persisted outside authenticated encryption"
+                );
+                assert!(
+                    !previous
+                        .windows(b"BEGIN PRIVATE KEY".len())
+                        .any(|window| window == b"BEGIN PRIVATE KEY"),
+                    "client private key persisted outside authenticated encryption"
                 );
                 let keep = previous.len().saturating_sub(fixture::PREFIX.len());
                 previous.drain(..keep);

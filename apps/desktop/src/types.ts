@@ -232,6 +232,7 @@ export interface DesktopStatus {
   approvalMode: ApprovalMode;
   terminalEnabled: boolean;
   additionalCaBundle: CaBundleStatus;
+  clientIdentity: ClientIdentityStatus;
   capabilities: DesktopCapabilities;
 }
 
@@ -244,6 +245,11 @@ export interface CaBundleStatus {
   configured: boolean;
   certificateCount: number;
   fingerprintsSha256: string[];
+}
+
+export interface ClientIdentityStatus {
+  configured: boolean;
+  leafFingerprintSha256: string | null;
 }
 
 export interface DesktopCapabilities {

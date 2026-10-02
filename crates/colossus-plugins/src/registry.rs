@@ -165,7 +165,7 @@ impl RegistryReference {
 }
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use colossus_network::{AdditionalRootCertificates, pinned_reqwest_client};
+use colossus_network::{AdditionalRootCertificates, ClientIdentity, pinned_reqwest_client};
 use colossus_ports::CredentialResolver;
 use futures::StreamExt as _;
 use reqwest::{Method, Response, StatusCode, header};
@@ -492,6 +492,7 @@ pub struct PluginRegistryClient {
     credential: RegistryCredential,
     timeout_ms: u64,
     clients: tokio::sync::Mutex<BTreeMap<String, reqwest::Client>>,
+    client_identity: Option<ClientIdentity>,
 }
 
 impl PluginRegistryClient {
@@ -507,7 +508,15 @@ impl PluginRegistryClient {
             credential,
             timeout_ms: REGISTRY_TIMEOUT_MS,
             clients: tokio::sync::Mutex::new(BTreeMap::new()),
+            client_identity: None,
         })
+    }
+
+    /// Present one app-owned TLS identity to permitted registry and token origins.
+    #[must_use]
+    pub fn with_client_identity(mut self, identity: Option<ClientIdentity>) -> Self {
+        self.client_identity = identity;
+        self
     }
 
     /// Override the bounded end-to-end request timeout.
@@ -1223,10 +1232,14 @@ impl PluginRegistryClient {
         } else {
             self.profile.blob_redirect_ca_bundle_paths.get(&origin)
         };
-        path.map_or_else(
+        let roots = path.map_or_else(
             || Ok(AdditionalRootCertificates::default()),
             |path| AdditionalRootCertificates::from_pem_bundle_path(path).map_err(adapter),
-        )
+        )?;
+        Ok(match &self.client_identity {
+            Some(identity) => roots.with_client_identity(identity.clone()),
+            None => roots,
+        })
     }
 }
 

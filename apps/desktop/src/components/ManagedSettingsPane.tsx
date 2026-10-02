@@ -231,6 +231,8 @@ interface ManagedSettingsPaneProps {
   onInstallUpdate: () => void;
   onImportCaBundle: () => void;
   onRemoveCaBundle: () => void;
+  onImportClientIdentity: () => void;
+  onRemoveClientIdentity: () => void;
   onExportDiagnostics: () => void;
 }
 
@@ -1664,6 +1666,8 @@ export function ManagedSettingsPane({
   onInstallUpdate,
   onImportCaBundle,
   onRemoveCaBundle,
+  onImportClientIdentity,
+  onRemoveClientIdentity,
   onExportDiagnostics,
 }: ManagedSettingsPaneProps) {
   const initial = useMemo(
@@ -3000,6 +3004,8 @@ export function ManagedSettingsPane({
             onInstallUpdate={onInstallUpdate}
             onImportCaBundle={onImportCaBundle}
             onRemoveCaBundle={onRemoveCaBundle}
+            onImportClientIdentity={onImportClientIdentity}
+            onRemoveClientIdentity={onRemoveClientIdentity}
             onExportDiagnostics={onExportDiagnostics}
           />
           <SettingsActionBar
@@ -3193,6 +3199,8 @@ function GlobalSettingsBody({
   onInstallUpdate,
   onImportCaBundle,
   onRemoveCaBundle,
+  onImportClientIdentity,
+  onRemoveClientIdentity,
   onExportDiagnostics,
 }: {
   onSetupChange: () => Promise<void>;
@@ -3249,6 +3257,8 @@ function GlobalSettingsBody({
   onInstallUpdate: () => void;
   onImportCaBundle: () => void;
   onRemoveCaBundle: () => void;
+  onImportClientIdentity: () => void;
+  onRemoveClientIdentity: () => void;
   onExportDiagnostics: () => void;
 }) {
   const { packages: setupPackages } = useSetupPackages();
@@ -4305,6 +4315,8 @@ function GlobalSettingsBody({
       onInstallUpdate={onInstallUpdate}
       onImportCaBundle={onImportCaBundle}
       onRemoveCaBundle={onRemoveCaBundle}
+      onImportClientIdentity={onImportClientIdentity}
+      onRemoveClientIdentity={onRemoveClientIdentity}
       onExportDiagnostics={onExportDiagnostics}
     />
   );
@@ -8181,47 +8193,96 @@ function DesktopSettings(
             </div>
           ) : null}
           {section === "certificates" ? (
-            <div
-              className="managed-list-row desktop-control-row"
-              role="listitem"
-            >
-              <span className="resource-icon">
-                <IconShield size={18} aria-hidden="true" />
-              </span>
-              <div>
-                <strong>Trusted certificates</strong>
-                <small>
-                  {desktop.additionalCaBundle.configured
-                    ? `${desktop.additionalCaBundle.certificateCount} additional certificate${desktop.additionalCaBundle.certificateCount === 1 ? "" : "s"} extend the system trust store.`
-                    : "Use the system trust store, or import a PEM bundle for private services."}
-                </small>
-              </div>
-              <span
-                className={`status-chip${desktop.additionalCaBundle.configured ? " tone-success" : " tone-neutral"}`}
+            <>
+              <div
+                className="managed-list-row desktop-control-row"
+                role="listitem"
               >
-                {desktop.additionalCaBundle.configured
-                  ? `${desktop.additionalCaBundle.certificateCount} imported`
-                  : "System trust"}
-              </span>
-              <div className="resource-actions">
-                <button
-                  className="button secondary"
-                  type="button"
-                  onClick={props.onImportCaBundle}
+                <span className="resource-icon">
+                  <IconShield size={18} aria-hidden="true" />
+                </span>
+                <div>
+                  <strong>Trusted certificates</strong>
+                  <small>
+                    {desktop.additionalCaBundle.configured
+                      ? `${desktop.additionalCaBundle.certificateCount} additional certificate${desktop.additionalCaBundle.certificateCount === 1 ? "" : "s"} extend the system trust store.`
+                      : "Use the system trust store, or import a PEM bundle for private services."}
+                  </small>
+                </div>
+                <span
+                  className={`status-chip${desktop.additionalCaBundle.configured ? " tone-success" : " tone-neutral"}`}
                 >
-                  Import PEM
-                </button>
-                {desktop.additionalCaBundle.configured ? (
+                  {desktop.additionalCaBundle.configured
+                    ? `${desktop.additionalCaBundle.certificateCount} imported`
+                    : "System trust"}
+                </span>
+                <div className="resource-actions">
                   <button
                     className="button secondary"
                     type="button"
-                    onClick={props.onRemoveCaBundle}
+                    onClick={props.onImportCaBundle}
                   >
-                    Remove bundle
+                    Import PEM
                   </button>
-                ) : null}
+                  {desktop.additionalCaBundle.configured ? (
+                    <button
+                      className="button secondary"
+                      type="button"
+                      onClick={props.onRemoveCaBundle}
+                    >
+                      Remove bundle
+                    </button>
+                  ) : null}
+                </div>
               </div>
-            </div>
+              <div
+                className="managed-list-row desktop-control-row"
+                role="listitem"
+              >
+                <span className="resource-icon">
+                  <IconShield size={18} aria-hidden="true" />
+                </span>
+                <div>
+                  <strong>Client certificate</strong>
+                  <small>
+                    Present a PEM certificate and matching private key when an
+                    authorized TLS server requests client authentication. The
+                    key stays in native credential storage.
+                  </small>
+                  {desktop.clientIdentity.configured ? (
+                    <small>
+                      Leaf SHA-256:{" "}
+                      {desktop.clientIdentity.leafFingerprintSha256}
+                    </small>
+                  ) : null}
+                </div>
+                <span
+                  className={`status-chip${desktop.clientIdentity.configured ? " tone-success" : " tone-neutral"}`}
+                >
+                  {desktop.clientIdentity.configured ? "Imported" : "None"}
+                </span>
+                <div className="resource-actions">
+                  <button
+                    className="button secondary"
+                    type="button"
+                    onClick={props.onImportClientIdentity}
+                  >
+                    {desktop.clientIdentity.configured
+                      ? "Replace PEM pair"
+                      : "Import PEM pair"}
+                  </button>
+                  {desktop.clientIdentity.configured ? (
+                    <button
+                      className="button secondary"
+                      type="button"
+                      onClick={props.onRemoveClientIdentity}
+                    >
+                      Remove identity
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            </>
           ) : null}
           {section === "updates" ? (
             <div

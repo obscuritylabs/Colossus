@@ -484,6 +484,13 @@ outbound clients. It is loaded once at runtime startup and never sourced from am
 proxy or TLS environment variables. Adapter-specific OPA and PostgreSQL CA policies
 remain exclusive overrides, and public API clients continue to verify their separately
 provisioned leaf pin. Sandboxed and MCP child processes retain independent TLS stacks.
+One separately configured PEM client certificate and matching key may be offered by
+Colossus-owned outbound TLS clients when a permitted server requests mTLS. Desktop
+holds the imported pair in its native encrypted credential vault and transfers it
+through private sidecar bootstrap IPC; the renderer, model, runtime YAML, and normal
+diagnostics receive no private key. Remote OPA may override that identity explicitly.
+The Desktop updater uses CA trust but omits the client identity because its signed
+package downloads may redirect to another HTTPS origin.
 
 `risk-auto` is deliberately narrow: only model or child-agent `shell.run`, `web.search`,
 bodyless `network.http` GET, and configured top-level `mcp.call` effects without workflow
