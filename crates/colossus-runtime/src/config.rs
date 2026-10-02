@@ -354,6 +354,7 @@ pub struct PluginsConfig {
     /// Exact denylist applied after `include`.
     pub exclude: Vec<String>,
     /// Reusable supply-chain trust policies.
+    #[serde(deserialize_with = "deserialize_plugin_trust_profiles")]
     pub trust_profiles: BTreeMap<String, PluginTrustProfile>,
     /// Exact-origin OCI registry profiles.
     pub registries: BTreeMap<String, PluginRegistryProfile>,
@@ -367,26 +368,77 @@ impl Default for PluginsConfig {
             enabled: true,
             include: Vec::new(),
             exclude: Vec::new(),
-            trust_profiles: BTreeMap::from([
-                ("default".into(), PluginTrustProfile::default()),
-                ("obscuritylabs".into(), PluginTrustProfile {
-                    identities: vec![colossus_plugins::SigstoreIdentity {
-                        issuer: "https://token.actions.githubusercontent.com".into(),
-                        subject: "https://github.com/obscuritylabs/colossus-plugins/.github/workflows/plugins.yml@refs/heads/main".into(),
-                    }],
-                    ..PluginTrustProfile::default()
-                }),
-            ]),
-            registries: BTreeMap::from([("obscuritylabs".into(), PluginRegistryProfile {
-                origin: "https://ghcr.io".into(),
-                trust_profile: "obscuritylabs".into(),
-                token_origins: vec!["https://ghcr.io".into()],
-                blob_redirect_origins: vec!["https://pkg-containers.githubusercontent.com".into()],
-                ..PluginRegistryProfile::default()
-            })]),
+            trust_profiles: default_plugin_trust_profiles(),
+            registries: default_plugin_registries(),
             mcp_servers: BTreeMap::new(),
         }
     }
+}
+
+fn default_plugin_trust_profiles() -> BTreeMap<String, PluginTrustProfile> {
+    BTreeMap::from([
+        ("default".into(), PluginTrustProfile::default()),
+        (
+            "obscuritylabs".into(),
+            PluginTrustProfile {
+                identities: vec![colossus_plugins::SigstoreIdentity {
+                    issuer: "https://token.actions.githubusercontent.com".into(),
+                    subject: "https://github.com/obscuritylabs/colossus-plugins/.github/workflows/plugins.yml@refs/heads/main".into(),
+                }],
+                ..PluginTrustProfile::default()
+            },
+        ),
+    ])
+}
+
+fn default_plugin_registries() -> BTreeMap<String, PluginRegistryProfile> {
+    BTreeMap::from([(
+        "obscuritylabs".into(),
+        PluginRegistryProfile {
+            origin: "https://ghcr.io".into(),
+            trust_profile: "obscuritylabs".into(),
+            token_origins: vec!["https://ghcr.io".into()],
+            blob_redirect_origins: vec!["https://pkg-containers.githubusercontent.com".into()],
+            ..PluginRegistryProfile::default()
+        },
+    )])
+}
+
+fn deserialize_plugin_trust_profiles<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, PluginTrustProfile>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut profiles = default_plugin_trust_profiles();
+    let configured = BTreeMap::<String, PluginTrustProfile>::deserialize(deserializer)?;
+    if configured
+        .get("obscuritylabs")
+        .is_some_and(|profile| profiles.get("obscuritylabs") != Some(profile))
+    {
+        return Err(serde::de::Error::custom(
+            "plugins.trustProfiles.obscuritylabs is a reserved built-in signing identity",
+        ));
+    }
+    profiles.extend(configured);
+    Ok(profiles)
+}
+
+pub(super) fn validate_builtin_plugin_trust_identity(
+    config: &PluginsConfig,
+) -> Result<(), RuntimeError> {
+    if config
+        .trust_profiles
+        .get("obscuritylabs")
+        .is_some_and(|profile| {
+            default_plugin_trust_profiles().get("obscuritylabs") != Some(profile)
+        })
+    {
+        return Err(RuntimeError::Config(
+            "plugins.trustProfiles.obscuritylabs is a reserved built-in signing identity".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Workspace authority overlay for one canonical `<plugin>/<server>` MCP identity.
@@ -1599,6 +1651,7 @@ impl RuntimeConfig {
 }
 
 fn validate_plugins_config(config: &PluginsConfig) -> Result<(), RuntimeError> {
+    validate_builtin_plugin_trust_identity(config)?;
     fn valid_name(value: &str) -> bool {
         !value.is_empty()
             && value.len() <= 128
