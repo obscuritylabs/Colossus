@@ -22,6 +22,98 @@ fn operator_dispatch_future_fits_a_normal_worker_stack() {
 }
 
 #[test]
+fn installed_plugin_stdio_status_matches_runtime_component_validation() {
+    let temporary = private_tempdir();
+    let root = temporary.path().canonicalize().expect("root");
+    let source = root.join("fixture");
+    fs::create_dir_all(source.join("bin")).expect("plugin directory");
+    fs::write(source.join("plugin.json"), r#"{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"fixture","version":"1.0.0","description":"MCP fixture"}"#)
+        .expect("plugin manifest");
+    fs::write(source.join("mcp.json"), r#"{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"mail":{"type":"stdio","command":"./bin/server.exe","cwd":"${PLUGIN_ROOT}"}}}"#)
+        .expect("MCP declaration");
+    fs::write(source.join("bin/server.exe"), b"fixture executable").expect("server fixture");
+    let store = Arc::new(PluginStore::new(root.join("home")).expect("plugin store"));
+    let installed = store
+        .install_directory(&source, terminal_actor())
+        .expect("install");
+    store
+        .enable("fixture", &installed.digest, true, terminal_actor())
+        .expect("enable");
+    let configuration = Arc::new(PluginsConfig {
+        mcp_servers: BTreeMap::from([(
+            "fixture/mail".into(),
+            PluginMcpServerConfig {
+                enabled: true,
+                allowed_tools: vec!["echo".into()],
+                ..PluginMcpServerConfig::default()
+            },
+        )]),
+        ..PluginsConfig::default()
+    });
+    let catalog = PluginCatalogSource {
+        store: Some(store),
+        configuration,
+        standalone_mcp: McpConfig::default(),
+        sandbox: SandboxConfig::platform_isolating(),
+        workspace: root.join("workspace"),
+        mcp_template: std::sync::OnceLock::new(),
+    };
+    let inventory = catalog.live_inventory().expect("live inventory");
+    let entry = inventory
+        .iter()
+        .find(|entry| entry.manifest.name == "fixture")
+        .expect("fixture");
+    assert_eq!(entry.mcp_servers[0].status, "Configured");
+    assert!(entry.diagnostics.is_empty(), "{:?}", entry.diagnostics);
+    let snapshot = catalog.capture().expect("runtime snapshot");
+    assert!(
+        snapshot
+            .records
+            .iter()
+            .any(|record| record.installation.manifest.name == "fixture"
+                && record.diagnostics.is_empty())
+    );
+
+    let mut broken = (*catalog.configuration).clone();
+    broken
+        .mcp_servers
+        .get_mut("fixture/mail")
+        .expect("overlay")
+        .allowed_tools
+        .clear();
+    let catalog = PluginCatalogSource {
+        configuration: Arc::new(broken),
+        ..catalog
+    };
+    let inventory = catalog.live_inventory().expect("invalid inventory");
+    let entry = inventory
+        .iter()
+        .find(|entry| entry.manifest.name == "fixture")
+        .expect("fixture");
+    assert_eq!(
+        entry.mcp_servers[0].status,
+        "Invalid component configuration; see diagnostics"
+    );
+    assert!(
+        entry
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "mcp_configuration_unavailable")
+    );
+    let snapshot = catalog.capture().expect("invalid runtime snapshot");
+    assert!(
+        snapshot
+            .records
+            .iter()
+            .find(|record| record.installation.manifest.name == "fixture")
+            .expect("fixture record")
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "mcp_configuration_unavailable")
+    );
+}
+
+#[test]
 fn core_instruction_preview_runs_on_a_standard_worker_thread() {
     let temporary = private_tempdir();
     let root = temporary.path().canonicalize().expect("root");

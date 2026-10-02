@@ -27,11 +27,15 @@ function failure(error: unknown): string {
 
 export function PluginsSurface({
   targetId,
+  spaceId,
+  onConfigureConnection,
   supported,
   selections = [],
   onUseSkill,
 }: {
   targetId: string | null;
+  spaceId?: string | null;
+  onConfigureConnection?: (() => void) | undefined;
   supported: boolean;
   selections?: readonly string[] | undefined;
   onUseSkill?: ((id: string) => void) | undefined;
@@ -342,6 +346,9 @@ export function PluginsSurface({
             key={plugin.digest}
             plugin={plugin}
             targetId={targetId}
+            spaceId={spaceId ?? null}
+            onConfigureConnection={onConfigureConnection}
+            onConnectionChanged={() => void refresh()}
             managementAvailable={inventory?.managementAvailable === true}
             selections={selections}
             onUseSkill={onUseSkill}

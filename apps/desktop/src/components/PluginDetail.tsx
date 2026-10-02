@@ -14,6 +14,9 @@ function failure(error: unknown): string {
 export function PluginDetail({
   plugin,
   targetId,
+  spaceId,
+  onConfigureConnection,
+  onConnectionChanged,
   managementAvailable,
   selections,
   onUseSkill,
@@ -22,6 +25,9 @@ export function PluginDetail({
 }: {
   plugin: PluginEntry;
   targetId: string;
+  spaceId: string | null;
+  onConfigureConnection?: (() => void) | undefined;
+  onConnectionChanged?: (() => void) | undefined;
   managementAvailable: boolean;
   selections: readonly string[];
   onUseSkill: ((id: string) => void) | undefined;
@@ -127,11 +133,13 @@ export function PluginDetail({
               <strong>{server.id}</strong> · {server.transport} ·{" "}
               {server.status}
             </p>
-            {managementAvailable && (
+            {managementAvailable && spaceId && (
               <PluginMcpControls
-                targetId={targetId}
+                spaceId={spaceId}
                 server={server.id}
-                enabled={plugin.available && server.enabled}
+                enabled={server.enabled}
+                pluginActive={plugin.available}
+                onChanged={onConnectionChanged}
                 http={
                   server.transport === "http" ||
                   server.transport === "streamable-http" ||
@@ -142,6 +150,17 @@ export function PluginDetail({
           </div>
         ))
       )}
+      {managementAvailable &&
+        plugin.mcp_servers.length > 0 &&
+        onConfigureConnection && (
+          <button
+            type="button"
+            className="button secondary"
+            onClick={onConfigureConnection}
+          >
+            Configure plugin connections
+          </button>
+        )}
       <p>
         Enable individual MCP servers explicitly in plugin settings. Credential
         configuration does not enable them.

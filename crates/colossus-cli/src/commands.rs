@@ -63,6 +63,7 @@ pub(super) enum Command {
     /// Inspect metadata-only persisted run telemetry.
     Telemetry(TelemetryCommand),
     /// Validate, distribute, and lifecycle-manage Agent Plugins over OCI.
+    #[command(alias = "plugin")]
     Plugins(PluginsCommand),
     /// Build, verify, and install signed offline release bundles.
     Bundle(BundleCommand),

@@ -3,8 +3,7 @@
 use super::*;
 
 struct PluginInventoryExecutor {
-    store: Option<Arc<PluginStore>>,
-    configuration: Arc<PluginsConfig>,
+    catalog: Arc<PluginCatalogSource>,
 }
 
 #[async_trait]
@@ -23,13 +22,9 @@ impl EffectExecutor for PluginInventoryExecutor {
             ));
         }
         let inventory = self
-            .store
-            .as_ref()
-            .map(|store| store.inventory())
-            .transpose()
-            .map_err(|error| ExecutionError::Failed(error.to_string()))?
-            .unwrap_or_default();
-        let inventory = narrow_plugin_inventory(inventory, &self.configuration);
+            .catalog
+            .live_inventory()
+            .map_err(|error| ExecutionError::Failed(error.to_string()))?;
         Ok(QuarantinedEffectResult {
             media_type: "application/json".into(),
             bytes: serde_json::to_vec(&inventory)
@@ -53,8 +48,7 @@ impl Runtime {
         let executor = WorkspaceBoundEffectExecutor::new(
             self._workspace_lease.identity(),
             Arc::new(PluginInventoryExecutor {
-                store: self.plugin_store.clone(),
-                configuration: Arc::clone(&self.plugin_configuration),
+                catalog: Arc::clone(&self.plugin_catalog),
             }),
         );
         let released = self.gateway.execute(request, &executor).await?;

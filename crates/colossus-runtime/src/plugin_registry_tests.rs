@@ -7,6 +7,42 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 const SECRET: &str = "runtime-registry-fixture-secret";
 
+#[test]
+fn default_oci_profile_pins_obscurity_labs_signing_identity() {
+    let defaults = PluginsConfig::default();
+    let registry = defaults
+        .registries
+        .get("obscuritylabs")
+        .expect("built-in registry");
+    assert_eq!(registry.origin, "https://ghcr.io");
+    assert_eq!(registry.trust_profile, "obscuritylabs");
+    assert!(matches!(registry.auth, RegistryAuthConfig::Anonymous));
+    let trust = defaults
+        .trust_profiles
+        .get("obscuritylabs")
+        .expect("built-in trust");
+    assert_eq!(trust.mode, colossus_plugins::PluginTrustMode::Required);
+    assert_eq!(trust.identities.len(), 1);
+    assert_eq!(
+        trust.identities[0].issuer,
+        "https://token.actions.githubusercontent.com"
+    );
+    assert_eq!(
+        trust.identities[0].subject,
+        "https://github.com/obscuritylabs/colossus-plugins/.github/workflows/plugins.yml@refs/heads/main"
+    );
+    let temporary = crate::test_support::private_tempdir();
+    let runtime = open(temporary.path(), defaults);
+    assert_eq!(runtime.plugin_registry_for_reference(
+        "ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:0.1.0-alpha.3.ci.3.1-windows-amd64"
+    ).expect("one matching profile"), "obscuritylabs");
+    assert!(
+        runtime
+            .plugin_registry_for_reference("registry.example/team/plugin:v1")
+            .is_err()
+    );
+}
+
 struct DenyHelperRelease(BuiltInPolicy);
 
 #[async_trait]

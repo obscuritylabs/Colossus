@@ -42,6 +42,15 @@ Desktop's **Plugins** surface lists installed candidates, availability, source, 
 trust, component diagnostics, skills and MCP servers. Managed Local owns lifecycle
 operations and native import/export dialogs. External targets provide authorized
 discovery and bounded previews when they advertise support; they are not managed locally.
+Choose **Install → OCI registry**, paste an `oci://` reference, and continue. When one
+configured registry profile matches the host, Desktop selects it automatically. The
+registry options let you choose a named profile when several match. Local directories
+and OCI layout imports remain available in the source selector.
+After installation, open the candidate and select **Activate this digest**. For an
+installed MCP server, **Enable all plugin tools** applies a Workspace overlay and restarts
+Managed Local after preflight. This wildcard also covers tools added by later versions;
+use **Configure plugin connections** to narrow the tool list or add credentials.
+**Test connection** checks the applied server after the restart.
 Public API clients can request unavailable metadata with `include_disabled`; instruction
 and resource reads still require the plugin to be available in the workspace. An empty
 kind filter or `EXTENSION_KIND_UNSPECIFIED` includes Agent Plugins.
@@ -144,6 +153,23 @@ a read/execute grant.
 
 ## Validate, package, and install
 
+On a fresh configuration, the built-in GHCR profile and its required Sigstore signing
+identity are ready for a published Obscurity Labs plugin:
+
+```bash
+colossus plugin install oci://ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:0.1.0-alpha.3.ci.3.1-windows-amd64
+colossus plugins list
+colossus plugins enable outlook-classic --digest sha256:6ca3c7a1e753e39c85b1345feda29cac368137a67918b03fed31a8300059bced
+```
+
+The install resolves the tag once and records the verified manifest digest. Check the
+reported digest before activation. A different registry needs a configured exact-origin
+profile; pass `--registry NAME` when more than one profile matches its origin.
+The Outlook Classic alpha.3 server uses legacy COM and cannot attach to Outlook from
+the `windows_job` AppContainer. Installation and activation do not make its mail tools
+usable there; the managed user-session companion tracked in [issue #246](https://github.com/obscuritylabs/Colossus/issues/246)
+is required for that connection.
+
 ```bash
 colossus plugins validate ./example-plugin
 colossus plugins package ./example-plugin --output ./example-plugin.oci
@@ -176,6 +202,10 @@ at startup and no ambient Docker credentials are used unless `auth.kind: docker`
 selected explicitly. Bearer/basic values remain credential references. Docker helpers
 require an exact configured executable and run through the normal process permit and audit
 boundary.
+The built-in `obscuritylabs` profile allows anonymous pulls from `https://ghcr.io` and
+requires a keyless Sigstore certificate issued by GitHub Actions for the exact
+`obscuritylabs/colossus-plugins` main-branch plugin workflow. It does not trust every
+artifact on GHCR. Explicit workspace configuration can replace or remove this profile.
 Docker configuration is opened only inside an authorized registry transfer, and its file
 must be covered by that transfer's permit. Denied transfers do not inspect credentials.
 
@@ -198,8 +228,10 @@ colossus plugins install --reference registry.example/acme/review@sha256:DIGEST 
   --registry production
 ```
 
-Cosign signatures and attestations remain standard OCI 1.1 referrers. Colossus does not
-invent a signing envelope.
+Cosign signatures and attestations remain standard OCI referrers. Pulls also read the
+OCI referrers tag fallback when a registry does not serve the referrers API, verifying
+each attached manifest's digest and exact subject before checking its signature.
+Colossus does not invent a signing envelope.
 
 ## MCP enablement and data
 

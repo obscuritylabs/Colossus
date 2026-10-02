@@ -5,22 +5,28 @@ import {
   beginManagedMcpOAuth,
   completeManagedMcpOAuth,
   diagnoseManagedMcpServer,
+  getManagedConfiguration,
   logoutManagedMcpOAuth,
   managedMcpOAuthStatus,
+  saveSpaceConfiguration,
 } from "../api";
 import type { ManagedMcpOAuthLogin, ManagedMcpOAuthStatus } from "../types";
+import { pluginConnectionRequest } from "../pluginConnection";
 
-/** Explicit diagnostics and OAuth only; this component cannot enable a server. */
 export function PluginMcpControls({
-  targetId,
+  spaceId,
   server,
   enabled,
+  pluginActive,
   http,
+  onChanged,
 }: {
-  targetId: string;
+  spaceId: string;
   server: string;
   enabled: boolean;
+  pluginActive: boolean;
   http: boolean;
+  onChanged?: (() => void) | undefined;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -32,7 +38,7 @@ export function PluginMcpControls({
   const [login, setLogin] = useState<ManagedMcpOAuthLogin | null>(null);
   const [callback, setCallback] = useState("");
   async function run(operation: () => Promise<void>) {
-    if (busy || !enabled) return;
+    if (busy || !enabled || !pluginActive) return;
     setBusy(true);
     setError("");
     try {
@@ -47,17 +53,51 @@ export function PluginMcpControls({
       setBusy(false);
     }
   }
+  async function setEnabled(next: boolean) {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const snapshot = await getManagedConfiguration();
+      const request = pluginConnectionRequest(snapshot, spaceId, server, next);
+      await saveSpaceConfiguration(request);
+      setDiagnostic(null);
+      setStatus(null);
+      setMessage(
+        next
+          ? "Connection enabled. Test it after the runtime restarts."
+          : "Connection disabled for this workspace.",
+      );
+      onChanged?.();
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Could not update this plugin connection.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <div role="group" aria-label={`${server} connection`}>
       <div className="plugin-actions">
         <button
           className="button secondary"
-          disabled={busy || !enabled}
+          disabled={busy || !pluginActive}
+          onClick={() => void setEnabled(!enabled)}
+        >
+          {enabled ? "Disable connection" : "Enable all plugin tools"}
+        </button>
+        <button
+          className="button secondary"
+          disabled={busy || !enabled || !pluginActive}
           onClick={() =>
             void run(async () => {
               setDiagnostic(null);
               setMessage("");
-              const result = await diagnoseManagedMcpServer(targetId, server);
+              const result = await diagnoseManagedMcpServer(spaceId, server);
               setDiagnostic(result);
               setMessage(
                 result.healthy
@@ -72,10 +112,10 @@ export function PluginMcpControls({
         {http && (
           <button
             className="button secondary"
-            disabled={busy || !enabled}
+            disabled={busy || !enabled || !pluginActive}
             onClick={() =>
               void run(async () => {
-                setStatus(await managedMcpOAuthStatus(targetId, server));
+                setStatus(await managedMcpOAuthStatus(spaceId, server));
               })
             }
           >
@@ -83,12 +123,18 @@ export function PluginMcpControls({
           </button>
         )}
       </div>
-      {!enabled && (
+      {!pluginActive ? (
         <small>
-          Enable and apply this server explicitly in plugin settings first.
+          Activate this plugin digest before configuring its connection.
         </small>
-      )}
-      {busy && <p role="status">Checking MCP connection…</p>}
+      ) : !enabled ? (
+        <small>
+          A new connection permits every tool from this plugin, including tools
+          added by a later update. Configure an exact tool list in plugin
+          settings for narrower access.
+        </small>
+      ) : null}
+      {busy && <p role="status">Updating or checking MCP connection…</p>}
       {diagnostic ? (
         <McpHealthDetails diagnostic={diagnostic} />
       ) : (
@@ -107,14 +153,14 @@ export function PluginMcpControls({
       {status?.configured && (
         <button
           className="button secondary"
-          disabled={busy || !enabled}
+          disabled={busy || !enabled || !pluginActive}
           onClick={() =>
             void run(async () => {
               if (status.authenticated) {
-                setStatus(await logoutManagedMcpOAuth(targetId, server));
+                setStatus(await logoutManagedMcpOAuth(spaceId, server));
                 setLogin(null);
               } else {
-                setLogin(await beginManagedMcpOAuth(targetId, server));
+                setLogin(await beginManagedMcpOAuth(spaceId, server));
               }
             })
           }
@@ -139,16 +185,16 @@ export function PluginMcpControls({
               value={callback}
               placeholder={login.callbackUrl}
               onChange={(event) => setCallback(event.target.value)}
-              disabled={busy || !enabled}
+              disabled={busy || !enabled || !pluginActive}
             />
           </label>
           <button
             className="button primary"
-            disabled={busy || !enabled || !callback.trim()}
+            disabled={busy || !enabled || !pluginActive || !callback.trim()}
             onClick={() =>
               void run(async () => {
                 setStatus(
-                  await completeManagedMcpOAuth(targetId, server, callback),
+                  await completeManagedMcpOAuth(spaceId, server, callback),
                 );
                 setLogin(null);
                 setCallback("");

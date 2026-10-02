@@ -26,15 +26,18 @@ pub(super) enum PluginsAction {
         #[arg(long, default_value = "default")]
         trust_profile: String,
     },
-    /// Install exactly one source as disabled.
+    /// Install exactly one source as disabled. Use `oci://HOST/REPOSITORY:TAG` for a configured registry.
     Install {
-        #[arg(long, conflicts_with_all = ["reference", "layout", "archive"], required_unless_present_any = ["reference", "layout", "archive"])]
+        /// OCI registry reference, for example `oci://ghcr.io/obscuritylabs/plugin:v1`.
+        #[arg(conflicts_with_all = ["directory", "reference", "layout", "archive"])]
+        source: Option<String>,
+        #[arg(long, conflicts_with_all = ["source", "reference", "layout", "archive"])]
         directory: Option<PathBuf>,
-        #[arg(long, conflicts_with_all = ["directory", "layout", "archive"])]
+        #[arg(long, conflicts_with_all = ["source", "directory", "layout", "archive"])]
         reference: Option<String>,
-        #[arg(long, conflicts_with_all = ["directory", "reference", "archive"])]
+        #[arg(long, conflicts_with_all = ["source", "directory", "reference", "archive"])]
         layout: Option<PathBuf>,
-        #[arg(long, conflicts_with_all = ["directory", "reference", "layout"])]
+        #[arg(long, conflicts_with_all = ["source", "directory", "reference", "layout"])]
         archive: Option<PathBuf>,
         /// Required when an OCI layout contains multiple plugin manifests.
         #[arg(long)]

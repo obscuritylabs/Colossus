@@ -21,6 +21,7 @@ impl PluginsAction {
                 trust_profile: trust_profile.clone(),
             },
             Self::Install {
+                source,
                 directory,
                 reference,
                 layout,
@@ -29,10 +30,21 @@ impl PluginsAction {
                 registry,
                 trust_profile,
             } => {
-                if reference.is_none() && registry.is_some() {
-                    return Err("--registry requires --reference".into());
+                if reference.is_none() && source.is_none() && registry.is_some() {
+                    return Err("--registry requires an OCI reference".into());
                 }
-                let source = if let Some(path) = directory {
+                let source = if let Some(value) = source {
+                    if digest.is_some() {
+                        return Err("pin the OCI reference with @sha256:DIGEST".into());
+                    }
+                    let reference = value
+                        .strip_prefix("oci://")
+                        .ok_or("positional plugin sources must start with oci://")?;
+                    Source::Reference {
+                        registry: registry.clone().unwrap_or_default(),
+                        reference: reference.into(),
+                    }
+                } else if let Some(path) = directory {
                     if digest.is_some() {
                         return Err(
                             "--digest selects an OCI candidate, not a source directory".into()
@@ -56,7 +68,7 @@ impl PluginsAction {
                         return Err("pin the registry reference with @sha256:DIGEST".into());
                     }
                     Source::Reference {
-                        registry: registry.clone().ok_or("--reference requires --registry")?,
+                        registry: registry.clone().unwrap_or_default(),
                         reference: reference.clone(),
                     }
                 } else {

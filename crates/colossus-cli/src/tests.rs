@@ -757,6 +757,48 @@ fn config_init_from_requires_development_mode() {
 }
 
 #[test]
+fn plugin_install_accepts_one_oci_reference_without_registry_flags() {
+    assert!(matches!(
+        Cli::try_parse_from([
+            "colossus",
+            "plugin",
+            "install",
+            "oci://ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:v1",
+        ])
+        .expect("singular plugin alias")
+        .command,
+        Command::Plugins(_)
+    ));
+    let parsed = Cli::try_parse_from([
+        "colossus", "plugins", "install",
+        "oci://ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:0.1.0-alpha.3.ci.3.1-windows-amd64",
+    ]).expect("OCI install syntax");
+    let Command::Plugins(PluginsCommand { command: action }) = parsed.command else {
+        panic!("plugin install command");
+    };
+    let request = action.request().expect("typed request");
+    assert!(matches!(request,
+        colossus_contracts::PluginManagementRequest::Install {
+            source: colossus_contracts::PluginInstallSource::Reference { registry, reference },
+            trust_profile,
+        } if registry.is_empty()
+            && reference == "ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:0.1.0-alpha.3.ci.3.1-windows-amd64"
+            && trust_profile == "default"
+    ));
+    let invalid = Cli::try_parse_from([
+        "colossus",
+        "plugins",
+        "install",
+        "https://ghcr.io/example/plugin:v1",
+    ])
+    .expect("a positional string is parsed before request validation");
+    let Command::Plugins(PluginsCommand { command: action }) = invalid.command else {
+        panic!("plugin install command");
+    };
+    assert!(action.request().is_err());
+}
+
+#[test]
 fn config_init_local_conflicts_with_an_explicit_config() {
     let parsed = Cli::try_parse_from([
         "colossus",

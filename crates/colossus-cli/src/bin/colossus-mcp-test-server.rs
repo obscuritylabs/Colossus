@@ -50,6 +50,10 @@ fn handle_request(request: &Value) -> Result<(), Box<dyn std::error::Error>> {
                             "properties": {},
                             "additionalProperties": false
                         }
+                    }, {
+                        "name": "plugin_paths",
+                        "description": "Return runtime-bound plugin root and data paths.",
+                        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false}
                     }]
                 })
             } else {
@@ -102,6 +106,14 @@ fn handle_request(request: &Value) -> Result<(), Box<dyn std::error::Error>> {
                 }),
                 Some("secret") => json!({
                     "content": [{"type": "text", "text": secret}],
+                    "isError": false
+                }),
+                Some("plugin_paths") => json!({
+                    "content": [{"type": "text", "text": "plugin paths available"}],
+                    "structuredContent": {
+                        "root": std::env::var("PLUGIN_ROOT").unwrap_or_default(),
+                        "data": std::env::var("PLUGIN_DATA").unwrap_or_default()
+                    },
                     "isError": false
                 }),
                 _ => {

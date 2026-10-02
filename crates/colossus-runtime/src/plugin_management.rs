@@ -6,6 +6,7 @@ use colossus_contracts::{PluginInstallSource, PluginManagementRequest, PluginOri
 struct PluginManagementExecutor {
     store: Option<Arc<PluginStore>>,
     configuration: Arc<PluginsConfig>,
+    catalog: Arc<PluginCatalogSource>,
 }
 
 impl PluginManagementExecutor {
@@ -30,18 +31,14 @@ impl PluginManagementExecutor {
     ) -> Result<Value, ExecutionError> {
         use PluginManagementRequest as Op;
         let value = match operation {
-            Op::Inventory => serde_json::to_value(super::plugin_catalog::narrow_plugin_inventory(
-                self.store()?.inventory().map_err(failed)?,
-                &self.configuration,
-            )),
+            Op::Inventory => serde_json::to_value(self.catalog.live_inventory().map_err(failed)?),
             Op::Show { name } => serde_json::to_value(
-                super::plugin_catalog::narrow_plugin_inventory(
-                    self.store()?.inventory().map_err(failed)?,
-                    &self.configuration,
-                )
-                .into_iter()
-                .filter(|plugin| plugin.manifest.name == name)
-                .collect::<Vec<_>>(),
+                self.catalog
+                    .live_inventory()
+                    .map_err(failed)?
+                    .into_iter()
+                    .filter(|plugin| plugin.manifest.name == name)
+                    .collect::<Vec<_>>(),
             ),
             Op::SkillRead { skill_id, digest }
             | Op::ResourceList { skill_id, digest }
@@ -465,6 +462,9 @@ impl Runtime {
                     },
                 trust_profile,
             } => {
+                if registry.is_empty() {
+                    *registry = self.plugin_registry_for_reference(reference)?;
+                }
                 let enforced = &self.plugin_registry_profile(registry)?.trust_profile;
                 if trust_profile != "default" && trust_profile != enforced {
                     return Err(RuntimeError::Config(format!(
@@ -505,6 +505,7 @@ impl Runtime {
             Arc::new(PluginManagementExecutor {
                 store: self.plugin_store.clone(),
                 configuration: Arc::clone(&self.plugin_configuration),
+                catalog: Arc::clone(&self.plugin_catalog),
             }),
         );
         let released = self.gateway.execute(request, &executor).await?;

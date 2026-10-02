@@ -566,6 +566,90 @@ fn ambient_validation_keeps_exact_mcp_declarations_but_omits_duplicate_sandbox_g
     );
 }
 
+#[test]
+fn plugin_stdio_accepts_only_runtime_bound_root_and_data_environment() {
+    let temporary = tempfile::tempdir().expect("plugin roots");
+    let root = temporary.path().join("content");
+    let data = temporary.path().join("data");
+    std::fs::create_dir_all(root.join("bin")).expect("content");
+    std::fs::create_dir_all(&data).expect("data");
+    let mut server = remote_server("http://127.0.0.1:8787/mcp");
+    server.transport = McpTransportKind::Stdio;
+    server.url = None;
+    server.command = root.join("bin/server.exe");
+    server.working_directory = Some(root.clone());
+    server.effect_action_prefix = Some(colossus_contracts::plugin_mcp_action_prefix(
+        "fixture", "mail",
+    ));
+    server.provenance = Some(json!({"plugin":"fixture"}));
+    server.literal_environment = BTreeMap::from([
+        ("PLUGIN_ROOT".into(), root.display().to_string()),
+        ("PLUGIN_DATA".into(), data.display().to_string()),
+    ]);
+    let mut config = McpConfig {
+        oauth_credential_store: McpOAuthCredentialStoreKind::Auto,
+        servers: BTreeMap::from([("fixture/mail".into(), server)]),
+    };
+    let validate = |config: &McpConfig| {
+        validate_config(
+            config,
+            &root,
+            validation_context(ResourceAuthority::Ambient, &[]),
+        )
+    };
+    validate(&config).expect("runtime-owned plugin paths");
+
+    let server = config.servers.get_mut("fixture/mail").expect("server");
+    server
+        .environment
+        .insert("PLUGIN_ROOT".into(), "env:ATTACK".into());
+    assert!(
+        validate(&config).is_err(),
+        "credential overlay cannot replace a root"
+    );
+    config
+        .servers
+        .get_mut("fixture/mail")
+        .expect("server")
+        .environment
+        .clear();
+    config
+        .servers
+        .get_mut("fixture/mail")
+        .expect("server")
+        .literal_environment
+        .insert("plugin_data".into(), data.display().to_string());
+    assert!(
+        validate(&config).is_err(),
+        "Windows environment names are case insensitive"
+    );
+    config
+        .servers
+        .get_mut("fixture/mail")
+        .expect("server")
+        .literal_environment
+        .remove("plugin_data");
+    config
+        .servers
+        .get_mut("fixture/mail")
+        .expect("server")
+        .literal_environment
+        .insert("PLUGIN_ROOT".into(), data.display().to_string());
+    assert!(
+        validate(&config).is_err(),
+        "command must remain under the trusted root"
+    );
+    let server = config.servers.get_mut("fixture/mail").expect("server");
+    server
+        .literal_environment
+        .insert("PLUGIN_ROOT".into(), root.display().to_string());
+    server.effect_action_prefix = None;
+    assert!(
+        validate(&config).is_err(),
+        "unbound values cannot be accepted"
+    );
+}
+
 struct McpEffectShapeExecutor {
     reference: &'static str,
 }

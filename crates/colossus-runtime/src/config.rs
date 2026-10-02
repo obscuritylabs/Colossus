@@ -367,8 +367,23 @@ impl Default for PluginsConfig {
             enabled: true,
             include: Vec::new(),
             exclude: Vec::new(),
-            trust_profiles: BTreeMap::from([("default".into(), PluginTrustProfile::default())]),
-            registries: BTreeMap::new(),
+            trust_profiles: BTreeMap::from([
+                ("default".into(), PluginTrustProfile::default()),
+                ("obscuritylabs".into(), PluginTrustProfile {
+                    identities: vec![colossus_plugins::SigstoreIdentity {
+                        issuer: "https://token.actions.githubusercontent.com".into(),
+                        subject: "https://github.com/obscuritylabs/colossus-plugins/.github/workflows/plugins.yml@refs/heads/main".into(),
+                    }],
+                    ..PluginTrustProfile::default()
+                }),
+            ]),
+            registries: BTreeMap::from([("obscuritylabs".into(), PluginRegistryProfile {
+                origin: "https://ghcr.io".into(),
+                trust_profile: "obscuritylabs".into(),
+                token_origins: vec!["https://ghcr.io".into()],
+                blob_redirect_origins: vec!["https://pkg-containers.githubusercontent.com".into()],
+                ..PluginRegistryProfile::default()
+            })]),
             mcp_servers: BTreeMap::new(),
         }
     }
@@ -1700,7 +1715,9 @@ fn validate_plugins_config(config: &PluginsConfig) -> Result<(), RuntimeError> {
             )));
         }
         if server.environment.keys().any(|name| {
-            !valid_environment_name(name) || matches!(name.as_str(), "PLUGIN_ROOT" | "PLUGIN_DATA")
+            !valid_environment_name(name)
+                || name.eq_ignore_ascii_case("PLUGIN_ROOT")
+                || name.eq_ignore_ascii_case("PLUGIN_DATA")
         }) {
             return Err(RuntimeError::Config(format!(
                 "plugins.mcpServers.{id}.environment contains an invalid or reserved variable"
