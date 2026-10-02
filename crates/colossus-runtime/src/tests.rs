@@ -8,13 +8,14 @@ use super::{
     MAX_FILE_SUMMARY_OUTPUT_BYTES, MemoryEffectExecutor, MemoryEmbeddingConfig, MemoryOperation,
     ModelCapabilities, ModelProfileConfig, PresentationEffectExecutor, PresentationOperation,
     ProviderProfileConfig, REMOTE_PROVIDER_GENERATION_TIMEOUT_MS, REMOTE_PROVIDER_TIMEOUT_MS,
-    ReasoningEffort, Runtime, RuntimeConfig, RuntimeError, RuntimeOpenOptions, SearchConfig,
-    SearchProfileConfig, SemanticMemoryConfig, StorageAdapter, TraceToolExecutor,
-    WorkEffectExecutor, WorkOperation, configure_shell_environment, derive_development_sandbox,
-    goal_objective_from_plan, model_resource_path, model_workspace_path, plan_mode_instructions,
-    provider_profile, push_bounded_mcp_discovery_tool, recover_interrupted_subagents,
-    recover_unknown_effects, redacted_risk_metadata, reject_reserved_shell_environment,
-    reject_shell_startup_profiles, shell_command_arguments, terminal_actor,
+    ReasoningEffort, RepositoryEffectExecutor, Runtime, RuntimeConfig, RuntimeError,
+    RuntimeOpenOptions, SearchConfig, SearchProfileConfig, SemanticMemoryConfig, StorageAdapter,
+    TraceToolExecutor, WorkEffectExecutor, WorkOperation, configure_shell_environment,
+    derive_development_sandbox, goal_objective_from_plan, model_resource_path,
+    model_workspace_path, plan_mode_instructions, provider_profile,
+    push_bounded_mcp_discovery_tool, recover_interrupted_subagents, recover_unknown_effects,
+    redacted_risk_metadata, reject_reserved_shell_environment, reject_shell_startup_profiles,
+    shell_command_arguments, terminal_actor,
 };
 use crate::test_support::private_tempdir;
 use colossus_contracts::{
@@ -6412,6 +6413,76 @@ async fn tool_search_returns_only_ranked_active_catalog_entries() {
 }
 
 #[tokio::test]
+async fn tool_search_discovers_content_and_path_search_from_ripgrep_requests() {
+    let registry: Arc<dyn colossus_ports::ToolRegistry> = Arc::new(
+        colossus_tools::StaticToolRegistry::builtins(&[
+            "tool.search".into(),
+            "filesystem.search".into(),
+            "repo.map".into(),
+            "repo.symbol_search".into(),
+            "shell.run".into(),
+        ])
+        .expect("catalog"),
+    );
+    let executor = DiscoverableToolExecutor {
+        registry,
+        inner: Arc::new(UnusedToolExecutor),
+    };
+    let result = executor
+        .execute(
+            ToolCall {
+                call_id: "search-rg".into(),
+                name: "tool.search".into(),
+                arguments: json!({"query": "rg"}),
+            },
+            ExecutionContext {
+                offered_tools: vec![
+                    "tool.search".into(),
+                    "filesystem.search".into(),
+                    "repo.map".into(),
+                    "repo.symbol_search".into(),
+                    "shell.run".into(),
+                ],
+                ..ExecutionContext::default()
+            },
+        )
+        .await
+        .expect("tool search");
+    let output: Value = serde_json::from_str(&result.output).expect("search JSON");
+    let names = output["tools"]
+        .as_array()
+        .expect("matching tools")
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"filesystem.search"));
+    assert!(names.contains(&"shell.run"));
+
+    let paths = executor
+        .execute(
+            ToolCall {
+                call_id: "search-rg-files".into(),
+                name: "tool.search".into(),
+                arguments: json!({"query": "rg --files"}),
+            },
+            ExecutionContext {
+                offered_tools: vec![
+                    "tool.search".into(),
+                    "filesystem.search".into(),
+                    "repo.map".into(),
+                    "repo.symbol_search".into(),
+                    "shell.run".into(),
+                ],
+                ..ExecutionContext::default()
+            },
+        )
+        .await
+        .expect("path tool search");
+    let paths: Value = serde_json::from_str(&paths.output).expect("path search JSON");
+    assert_eq!(paths["tools"][0]["name"], "repo.map");
+}
+
+#[tokio::test]
 async fn tool_search_never_discovers_tools_outside_the_model_visible_ceiling() {
     let registry: Arc<dyn colossus_ports::ToolRegistry> = Arc::new(
         colossus_tools::StaticToolRegistry::builtins(&[
@@ -6663,10 +6734,57 @@ async fn repository_context_tools_are_permit_bound_bounded_and_workspace_confine
     assert!(event_types.contains(&"effect.release_requested.v1".into()));
 }
 
+#[test]
+fn scoped_repository_walk_does_not_read_ancestor_ignore_rules() {
+    let workspace = tempdir().expect("workspace");
+    let source = workspace.path().join("src");
+    fs::create_dir_all(workspace.path().join(".git")).expect("Git marker");
+    fs::create_dir_all(&source).expect("source directory");
+    fs::write(workspace.path().join(".gitignore"), "src/parent.rs\n")
+        .expect("ancestor ignore rules");
+    fs::write(source.join(".gitignore"), "local.rs\n").expect("local ignore rules");
+    fs::write(source.join("parent.rs"), "visible with narrow grant\n")
+        .expect("parent-ignored source");
+    fs::write(source.join("local.rs"), "ignored within grant\n").expect("locally ignored source");
+    let repository = RepositoryEffectExecutor {
+        workspace: fs::canonicalize(workspace.path()).expect("canonical workspace"),
+    };
+    let root = fs::canonicalize(&source).expect("canonical source");
+
+    let (files, truncated) = repository.files(&root, 10, false).expect("scoped walk");
+    assert!(!truncated);
+    assert!(files.iter().any(|path| path.ends_with("parent.rs")));
+    assert!(!files.iter().any(|path| path.ends_with("local.rs")));
+}
+
 #[tokio::test]
 async fn ambient_structured_filesystem_and_repository_tools_accept_external_control_paths() {
     let workspace = tempdir().expect("workspace");
     let outside = tempdir().expect("outside");
+    fs::create_dir_all(workspace.path().join("src")).expect("source directory");
+    fs::create_dir_all(workspace.path().join("src/generated")).expect("generated directory");
+    fs::create_dir_all(workspace.path().join("target")).expect("ignored directory");
+    fs::create_dir_all(workspace.path().join(".git")).expect("Git control directory");
+    fs::create_dir_all(workspace.path().join(".colossus")).expect("runtime control directory");
+    let host_home = workspace.path().join("host-home");
+    fs::create_dir_all(&host_home).expect("host state directory");
+    let host_home = fs::canonicalize(host_home).expect("canonical host state directory");
+    fs::write(
+        workspace.path().join(".gitignore"),
+        "target/\nsrc/generated/\n",
+    )
+    .expect("ignore rules");
+    fs::write(workspace.path().join("src/visible.rs"), "find_me\n").expect("visible source");
+    fs::write(
+        workspace.path().join("src/generated/ignored.rs"),
+        "find_me\n",
+    )
+    .expect("ignored generated source");
+    fs::write(workspace.path().join("target/ignored.rs"), "find_me\n").expect("ignored source");
+    fs::write(workspace.path().join(".git/config"), "find_me\n").expect("Git control fixture");
+    fs::write(workspace.path().join(".colossus/state"), "find_me\n")
+        .expect("runtime control fixture");
+    fs::write(host_home.join("private.txt"), "find_me\n").expect("host state fixture");
     let control = outside.path().join(".colossus");
     fs::create_dir_all(&control).expect("control directory");
     let source = control.join("ambient.txt");
@@ -6674,6 +6792,7 @@ async fn ambient_structured_filesystem_and_repository_tools_accept_external_cont
     let destination = outside.path().join("written.txt");
     let actions = [
         "filesystem.read",
+        "filesystem.search",
         "filesystem.write",
         "repo.map",
         "repo.file_summary",
@@ -6699,7 +6818,10 @@ async fn ambient_structured_filesystem_and_repository_tools_accept_external_cont
     let executor = GatewayToolExecutor {
         process_sessions: None,
         gateway,
-        filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+        filesystem: Arc::new(
+            colossus_sandbox::FilesystemExecutor::new()
+                .with_workspace_search_exclusions(vec![host_home]),
+        ),
         process: None,
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: None,
@@ -6728,6 +6850,91 @@ async fn ambient_structured_filesystem_and_repository_tools_accept_external_cont
         .await
         .expect("external control-state read");
     assert_eq!(read.output, "ambient access\n");
+
+    let workspace_search = executor
+        .execute(
+            invoke(
+                "filesystem.search",
+                json!({"path": ".", "pattern": "find_me"}),
+            ),
+            ExecutionContext::default(),
+        )
+        .await
+        .expect("workspace content search");
+    let workspace_search: Value =
+        serde_json::from_str(&workspace_search.output).expect("search JSON");
+    assert_eq!(
+        workspace_search["matches"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert!(
+        workspace_search["matches"][0]["path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("visible.rs"))
+    );
+
+    let external_search = executor
+        .execute(
+            invoke(
+                "filesystem.search",
+                json!({"path": outside.path(), "pattern": "ambient access"}),
+            ),
+            ExecutionContext::default(),
+        )
+        .await
+        .expect("external content search");
+    let external_search: Value =
+        serde_json::from_str(&external_search.output).expect("external search JSON");
+    assert_eq!(external_search["matches"].as_array().map(Vec::len), Some(1));
+    assert!(
+        external_search["matches"][0]["path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("ambient.txt"))
+    );
+
+    let workspace_map = executor
+        .execute(
+            invoke("repo.map", json!({"path": ".", "max_files": 20})),
+            ExecutionContext::default(),
+        )
+        .await
+        .expect("workspace file map");
+    let workspace_map: Value =
+        serde_json::from_str(&workspace_map.output).expect("workspace map JSON");
+    let mapped_paths = workspace_map["files"]
+        .as_array()
+        .expect("mapped files")
+        .iter()
+        .filter_map(|file| file["path"].as_str())
+        .map(|path| path.replace('\\', "/"))
+        .collect::<Vec<_>>();
+    assert!(
+        mapped_paths
+            .iter()
+            .any(|path| path.ends_with("src/visible.rs"))
+    );
+    assert!(!mapped_paths.iter().any(|path| {
+        path.contains("/target/")
+            || path.contains("/.git/")
+            || path.contains("/.colossus/")
+            || path.contains("/src/generated/")
+    }));
+
+    let source_map = executor
+        .execute(
+            invoke("repo.map", json!({"path": "src", "max_files": 20})),
+            ExecutionContext::default(),
+        )
+        .await
+        .expect("source subdirectory map");
+    let source_map: Value = serde_json::from_str(&source_map.output).expect("source map JSON");
+    let source_files = source_map["files"].as_array().expect("source files");
+    assert_eq!(source_files.len(), 1);
+    assert!(
+        source_files[0]["path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("visible.rs"))
+    );
 
     executor
         .execute(

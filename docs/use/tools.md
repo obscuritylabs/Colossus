@@ -51,7 +51,7 @@ denied for a specific file, command, or destination. See
 
 | To do this | Tools to look for |
 | --- | --- |
-| Explore code | `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary` |
+| Explore code | `repo.map` for file paths (`rg --files` style), `filesystem.search` for regex or literal file contents, `repo.symbol_search` for structural declarations, `repo.references` for exact symbols, `repo.file_summary` for a file overview |
 | Read and search files | `filesystem.list`, `filesystem.read`, `filesystem.search` |
 | Check Git state | `git.status`, `git.diff`, `git.show` |
 | Edit and verify | `filesystem.write`, `filesystem.replace`, `patch.preview`, `patch.apply` |

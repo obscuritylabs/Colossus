@@ -90,12 +90,15 @@ impl GatewayToolExecutor {
                 let input = optional_tool_string(&call, "path")?.unwrap_or(".");
                 let ambient = self.danger_full_access(&context);
                 let path = self.model_read_path(input, &context, ambient)?;
+                let workspace_scoped = fs::canonicalize(&path)
+                    .is_ok_and(|resolved| resolved.starts_with(&self.workspace));
                 let content = json!({
                     "pattern": required_tool_string(&call, "pattern")?,
                     "glob": optional_tool_string(&call, "glob")?,
                     "regex": optional_tool_bool(&call, "regex")?.unwrap_or(true),
                     "case_sensitive": optional_tool_bool(&call, "case_sensitive")?.unwrap_or(true),
                     "max_matches": optional_tool_u64(&call, "max_matches")?.unwrap_or(100),
+                    "workspace_scoped": workspace_scoped,
                 });
                 let mut request = effect_request(
                     model_actor(&call, &context),
