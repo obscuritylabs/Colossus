@@ -1443,7 +1443,7 @@ export default function App() {
           dispatch({ type: "hydrate_run", details });
         },
       })
-        .then((result) => {
+        .then(async (result) => {
           if (
             result.type === "stale" ||
             targetRoutes.current?.isCurrent(route) !== true
@@ -1452,6 +1452,14 @@ export default function App() {
           }
           if (result.type === "complete") {
             dispatch({ type: "watch_complete", runId });
+            try {
+              const details = await getRun(route.targetId, { runId });
+              if (targetRoutes.current?.isCurrent(route) === true) {
+                dispatch({ type: "hydrate_run", details });
+              }
+            } catch {
+              // The next run-list refresh will reconcile the display title.
+            }
             return;
           }
           markConnectionFailure(result.error, route);
@@ -1503,7 +1511,7 @@ export default function App() {
           dispatchAside({ type: "hydrate_run", details });
         },
       })
-        .then((result) => {
+        .then(async (result) => {
           if (
             result.type === "stale" ||
             targetRoutes.current?.isCurrent(route) !== true
@@ -1512,6 +1520,14 @@ export default function App() {
           }
           if (result.type === "complete") {
             dispatchAside({ type: "watch_complete", runId });
+            try {
+              const details = await getRun(route.targetId, { runId });
+              if (targetRoutes.current?.isCurrent(route) === true) {
+                dispatchAside({ type: "hydrate_run", details });
+              }
+            } catch {
+              // The next run-list refresh will reconcile the display title.
+            }
           } else {
             dispatchAside({ type: "watch_error", runId, error: result.error });
           }

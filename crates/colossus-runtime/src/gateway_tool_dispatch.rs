@@ -28,7 +28,8 @@ impl ToolExecutor for GatewayToolExecutor {
                 Box::pin(self.execute_process_session(call, context)).await
             }
             "shell.run" => Box::pin(self.execute_process(call, context)).await,
-            "task.create"
+            "session.set_title"
+            | "task.create"
             | "task.update"
             | "task.list"
             | "decision.create"

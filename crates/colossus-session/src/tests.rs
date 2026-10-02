@@ -67,6 +67,63 @@ fn sessions_and_messages_reconstruct_after_repository_restart() {
 }
 
 #[test]
+fn session_title_changes_are_durable_and_keep_message_history() {
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let repository = EventSourcedSessionRepository::new(Arc::clone(&journal));
+    repository
+        .create_session("title-session", Some("Opening words"), actor())
+        .expect("create");
+    repository
+        .append_message(
+            "title-session",
+            "run-one",
+            message(ModelMessageRole::User, "Help with releases"),
+            actor(),
+        )
+        .expect("message");
+    let updated = repository
+        .set_title("title-session", "  Prepare release checklist  ", actor())
+        .expect("set title");
+    assert_eq!(updated.title.as_deref(), Some("Prepare release checklist"));
+    assert_eq!(updated.message_count, 1);
+    assert_eq!(updated.last_run_id.as_deref(), Some("run-one"));
+    assert_eq!(
+        journal
+            .read_stream_backwards("session-title:title-session", None, 1)
+            .expect("title index")[0]
+            .event_type,
+        TITLE_INDEX_EVENT
+    );
+
+    let reopened = EventSourcedSessionRepository::new(Arc::clone(&journal));
+    assert_eq!(
+        reopened.list_sessions(10).expect("list")[0]
+            .title
+            .as_deref(),
+        Some("Prepare release checklist")
+    );
+    assert_eq!(
+        reopened
+            .list_messages("title-session")
+            .expect("history")
+            .len(),
+        1
+    );
+    assert!(reopened.set_title("title-session", "\n", actor()).is_err());
+    assert!(
+        reopened
+            .set_title("title-session", "bad\ntitle", actor())
+            .is_err()
+    );
+    assert!(
+        reopened
+            .set_title("title-session", "bad\u{202e}title", actor())
+            .is_err()
+    );
+    assert!(reopened.set_title("missing", "Valid", actor()).is_err());
+}
+
+#[test]
 fn multipart_image_messages_reconstruct_with_ordered_metadata_and_text_preview() {
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
     let repository = EventSourcedSessionRepository::new(Arc::clone(&journal));

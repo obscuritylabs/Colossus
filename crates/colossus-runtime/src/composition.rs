@@ -742,6 +742,7 @@ impl Runtime {
         let work_executor = Arc::new(WorkEffectExecutor {
             service: Arc::clone(&work_service),
             repository: Arc::clone(&work),
+            sessions: Arc::clone(&sessions),
             instruction_snapshots: Arc::clone(&instruction_snapshots),
         });
         let presentation_executor = Arc::new(PresentationEffectExecutor {

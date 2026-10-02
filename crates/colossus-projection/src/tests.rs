@@ -391,6 +391,22 @@ fn lag_catches_up_idempotently_and_rebuilds() {
             .expect("session")["title"],
         json!("First")
     );
+    journal
+        .append(event(
+            "session:one",
+            1,
+            "session.title.set.v1",
+            json!({"title": "Clear title"}),
+        ))
+        .expect("set title");
+    worker.drain(8, 8).expect("project title");
+    assert_eq!(
+        store
+            .get("sessions-v1", "one")
+            .expect("get")
+            .expect("session")["title"],
+        json!("Clear title")
+    );
     store
         .apply(colossus_contracts::ProjectionBatch {
             projection: "unrelated-v1".into(),
@@ -400,6 +416,13 @@ fn lag_catches_up_idempotently_and_rebuilds() {
         })
         .expect("unrelated");
     assert!(worker.rebuild("sessions-v1").expect("rebuild").projections[0].ready);
+    assert_eq!(
+        store
+            .get("sessions-v1", "one")
+            .expect("get")
+            .expect("session")["title"],
+        json!("Clear title")
+    );
 }
 
 #[test]

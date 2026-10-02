@@ -111,6 +111,7 @@ const TRUSTED_BUILTIN_TOOL_GRANT: &[&str] = &[
     "repo.map",
     "repo.references",
     "repo.symbol_search",
+    "session.set_title",
     "shell.run",
     "shell.wait",
     "shell.read",
@@ -1409,6 +1410,7 @@ mod tests {
             "web.search",
             "network.http",
             "plan.approve_request",
+            "session.set_title",
         ] {
             assert!(debug.contains(required));
         }

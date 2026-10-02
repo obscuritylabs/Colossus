@@ -4264,14 +4264,16 @@ async fn model_work_tools_keep_tasks_session_confined_and_decisions_workspace_wi
     );
     let service = Arc::new(colossus_work::WorkService::new(
         Arc::clone(&repository),
-        sessions,
+        Arc::clone(&sessions),
     ));
     let work = Arc::new(WorkEffectExecutor {
         service,
         repository: Arc::clone(&repository),
+        sessions: Arc::clone(&sessions),
         instruction_snapshots: Arc::new(InstructionSnapshotStore::new(Arc::clone(&journal))),
     });
     let actions = [
+        "session.set_title",
         "task.create",
         "task.update",
         "task.list",
@@ -4320,6 +4322,31 @@ async fn model_work_tools_keep_tasks_session_confined_and_decisions_workspace_wi
         run_id: Some(format!("run-{session}")),
         ..ExecutionContext::default()
     };
+
+    let titled = executor
+        .execute(
+            ToolCall {
+                call_id: "session-title".into(),
+                name: "session.set_title".into(),
+                arguments: json!({"title": "Review Rust transition"}),
+            },
+            context("session-a"),
+        )
+        .await
+        .expect("set current session title");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&titled.output).expect("title JSON")["title"],
+        "Review Rust transition"
+    );
+    assert_eq!(
+        sessions
+            .get_session("session-b")
+            .expect("other session")
+            .expect("record")
+            .title
+            .as_deref(),
+        Some("session-b")
+    );
 
     let created = executor
         .execute(
@@ -4913,9 +4940,10 @@ async fn model_plans_are_session_confined_and_approval_obligated() {
     let work = Arc::new(WorkEffectExecutor {
         service: Arc::new(colossus_work::WorkService::new(
             Arc::clone(&repository),
-            sessions,
+            Arc::clone(&sessions),
         )),
         repository: Arc::clone(&repository),
+        sessions: Arc::clone(&sessions),
         instruction_snapshots: Arc::new(InstructionSnapshotStore::new(Arc::clone(&journal))),
     });
     let policy = colossus_policy::BuiltInPolicy::offline_default()
@@ -5058,6 +5086,7 @@ async fn model_subagent_tools_inject_lineage_scope_results_and_deny_recursion() 
             Arc::clone(&sessions),
         )),
         repository: Arc::clone(&repository),
+        sessions: Arc::clone(&sessions),
         instruction_snapshots: Arc::clone(&instruction_snapshots),
     });
     let actions = ["subagent.create", "subagent.read", "subagent.list"];
@@ -5552,6 +5581,7 @@ async fn decision_created_by_one_model_turn_binds_the_next_turn_context() {
     let work = Arc::new(WorkEffectExecutor {
         service: work_service,
         repository: Arc::clone(&repository),
+        sessions: Arc::clone(&sessions),
         instruction_snapshots: Arc::new(InstructionSnapshotStore::new(Arc::clone(&journal))),
     });
     let gateway = Arc::new(colossus_policy::EffectGateway::new(
@@ -5875,6 +5905,7 @@ async fn goal_update_is_bound_to_active_goal_context_and_stops_future_updates() 
     let work = Arc::new(WorkEffectExecutor {
         service: Arc::clone(&service),
         repository: Arc::clone(&repository),
+        sessions: Arc::clone(&sessions),
         instruction_snapshots: Arc::new(InstructionSnapshotStore::new(Arc::clone(&journal))),
     });
     let gateway = Arc::new(colossus_policy::EffectGateway::new(

@@ -23,6 +23,7 @@ fn plan_mode_allowlist_blocks_implementation_and_external_mutation() {
         "git.diff",
         "patch.preview",
         "plan.create",
+        "session.set_title",
         "memory.search",
         "user.ask",
         "context.show",
@@ -65,6 +66,73 @@ fn plan_mode_allowlist_blocks_implementation_and_external_mutation() {
 struct ScriptedProvider {
     turns: Mutex<VecDeque<Result<ProviderTurn, ModelProviderError>>>,
     requests: Mutex<Vec<ModelRequest>>,
+}
+
+#[tokio::test]
+async fn new_session_receives_one_time_title_instruction() {
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        turn(vec![ProviderEvent::FinalOutput {
+            text: "first".into(),
+        }]),
+        turn(vec![ProviderEvent::FinalOutput {
+            text: "second".into(),
+        }]),
+        turn(vec![ProviderEvent::FinalOutput {
+            text: "explicit".into(),
+        }]),
+    ]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["session.set_title".into()]).expect("catalog")),
+        Arc::new(EchoTools),
+        Arc::clone(&sessions) as Arc<dyn SessionRepository>,
+    );
+    let first = service
+        .run("primary", "base instructions", "Plan a release", 1)
+        .await
+        .expect("first run");
+    service
+        .run_in_session(
+            "primary",
+            "base instructions",
+            "Change direction",
+            1,
+            first.session_id.as_deref(),
+        )
+        .await
+        .expect("second run");
+    sessions
+        .create_session("named-session", Some("Chosen by user"), test_actor())
+        .expect("named session");
+    service
+        .run_in_session(
+            "primary",
+            "base instructions",
+            "New work",
+            1,
+            Some("named-session"),
+        )
+        .await
+        .expect("named run");
+    let requests = provider.requests.lock().expect("requests");
+    assert!(
+        requests[0]
+            .instructions
+            .contains("Set this new session's title once")
+    );
+    assert!(
+        !requests[1]
+            .instructions
+            .contains("Set this new session's title once")
+    );
+    assert!(
+        !requests[2]
+            .instructions
+            .contains("Set this new session's title once")
+    );
 }
 
 #[derive(Default)]
@@ -391,6 +459,10 @@ impl SessionRepository for RejectingToolTurnCompletionRepository {
         actor: Actor,
     ) -> Result<SessionSummary, StoreError> {
         self.inner.create_session(id, title, actor)
+    }
+
+    fn set_title(&self, id: &str, title: &str, actor: Actor) -> Result<SessionSummary, StoreError> {
+        self.inner.set_title(id, title, actor)
     }
 
     fn get_session(&self, id: &str) -> Result<Option<SessionSummary>, StoreError> {
@@ -828,6 +900,7 @@ async fn plan_mode_create_offers_exact_catalog_and_dispatches_only_one_bound_wri
             "repo.map",
             "repo.references",
             "repo.symbol_search",
+            "session.set_title",
             "task.list",
             "tool.search",
             "user.ask",

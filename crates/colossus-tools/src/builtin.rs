@@ -478,6 +478,17 @@ fn core_builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 1024 * 1024,
         },
         ToolSpec {
+            name: "session.set_title".into(),
+            description: "Set a concise title for the current session. Use once near the start when the session was created from a user request; use again only when the user explicitly asks to rename it.".into(),
+            input_schema: object_schema(
+                json!({"title": {"type": "string", "minLength": 1, "maxLength": 200}}),
+                &["title"],
+            ),
+            effect_action: Some("session.set_title".into()),
+            capability: Some("session.set_title".into()),
+            max_output_bytes: 4096,
+        },
+        ToolSpec {
             name: "plan.create".into(),
             description: "Create a durable draft plan in the current session.".into(),
             input_schema: object_schema(
