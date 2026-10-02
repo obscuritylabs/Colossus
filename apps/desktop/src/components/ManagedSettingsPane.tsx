@@ -229,7 +229,7 @@ type SpaceTab =
   | "effective";
 
 interface ManagedSettingsPaneProps {
-  initialSpaceTab?: "runtime" | "providers" | undefined;
+  initialSpaceTab?: "runtime" | "providers" | "terminal" | undefined;
   desktop: DesktopStatus;
   connecting: boolean;
   updateChecking: boolean;
@@ -1689,9 +1689,15 @@ export function ManagedSettingsPane({
     [desktop],
   );
   const [snapshot, setSnapshot] = useState(initial);
-  const [scope, setScope] = useState<SettingsScope>("space");
-  const [globalTab, setGlobalTab] = useState<GlobalTab>("mcp");
-  const [spaceTab, setSpaceTab] = useState<SpaceTab>(initialSpaceTab);
+  const [scope, setScope] = useState<SettingsScope>(
+    initialSpaceTab === "terminal" ? "global" : "space",
+  );
+  const [globalTab, setGlobalTab] = useState<GlobalTab>(
+    initialSpaceTab === "terminal" ? "terminal" : "mcp",
+  );
+  const [spaceTab, setSpaceTab] = useState<SpaceTab>(
+    initialSpaceTab === "terminal" ? "runtime" : initialSpaceTab,
+  );
   const [focusedFieldId, setFocusedFieldId] = useState<string | null>(null);
   const [expandedAdvancedSections, setExpandedAdvancedSections] = useState<
     ReadonlySet<string>
@@ -8096,6 +8102,7 @@ function DesktopSettings(
     return (
       <TerminalSettings
         enabled={desktop.terminalEnabled}
+        consentPending={desktop.terminalConsentPending === true}
         disabled={!desktop.workspace || connecting}
         shellAvailable={desktop.capabilities.shellTerminal}
         onSetEnabled={props.onSetTerminalEnabled}

@@ -231,6 +231,8 @@ const FIXTURE_MODE =
     FIXTURE_SCENARIO === "activity-comparison" ||
     FIXTURE_SCENARIO === "interaction-question" ||
     FIXTURE_SCENARIO === "plan-workflow");
+const FIXTURE_TERMINAL_CONSENT_PENDING =
+  FIXTURE_MODE && FIXTURE_QUERY.get("terminalConsentPending") === "1";
 function readDesktopDiff(
   workspaceId: string,
   path: string,
@@ -418,7 +420,8 @@ const INITIAL_DESKTOP: DesktopStatus = {
   accessProfile: FIXTURE_MODE ? "allow_all" : "minimal",
   executionBoundary: FIXTURE_MODE ? "full_access" : "offline_isolated",
   approvalMode: "ask",
-  terminalEnabled: FIXTURE_MODE,
+  terminalEnabled: FIXTURE_MODE && !FIXTURE_TERMINAL_CONSENT_PENDING,
+  terminalConsentPending: FIXTURE_TERMINAL_CONSENT_PENDING,
   additionalCaBundle: {
     configured: false,
     certificateCount: 0,
@@ -996,7 +999,7 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [surface, setSurface] = useState<WorkspaceSurface>("work");
   const [settingsStartTab, setSettingsStartTab] = useState<
-    "runtime" | "providers"
+    "runtime" | "providers" | "terminal"
   >("runtime");
   const [workNavigationOpen, setWorkNavigationOpen] = useState(false);
   const [workspaceFileOpenRequest, setWorkspaceFileOpenRequest] =
@@ -2434,7 +2437,7 @@ export default function App() {
         );
         if (
           !desktop.capabilities.tui ||
-          !desktop.terminalEnabled ||
+          (!desktop.terminalEnabled && !desktop.terminalConsentPending) ||
           selected?.terminalAvailable !== true
         ) {
           setSlashCommandError(
@@ -4543,7 +4546,9 @@ export default function App() {
     }
   }
 
-  async function handleSetTerminalEnabled(enabled: boolean) {
+  async function handleSetTerminalEnabled(
+    enabled: boolean,
+  ): Promise<DesktopStatus | null> {
     const status = desktopRef.current;
     const selectedTarget = status.targets.find(
       (target) => target.targetId === status.selectedTargetId,
@@ -4554,16 +4559,22 @@ export default function App() {
       !status.capabilities.shellTerminal
     ) {
       setSurface("settings");
-      return;
+      return null;
     }
     try {
       const status = FIXTURE_MODE
-        ? { ...desktopRef.current, terminalEnabled: enabled }
+        ? {
+            ...desktopRef.current,
+            terminalEnabled: enabled,
+            terminalConsentPending: false,
+          }
         : await setTerminalEnabled(enabled);
       desktopRef.current = status;
       setDesktop(status);
+      return status;
     } catch (error: unknown) {
       setActionError(commandError(error));
+      return null;
     }
   }
 
@@ -4582,7 +4593,7 @@ export default function App() {
     kind: TerminalKind,
     planContext?: { sessionId: string; planId: string },
   ) {
-    const status = desktopRef.current;
+    let status = desktopRef.current;
     const selectedTarget = status.targets.find(
       (target) => target.targetId === status.selectedTargetId,
     );
@@ -4590,7 +4601,17 @@ export default function App() {
       kind === "shell"
         ? status.capabilities.shellTerminal
         : selectedTarget?.terminalAvailable === true;
-    if (!status.terminalEnabled || !terminalAvailable) {
+    if (!terminalAvailable) {
+      setSurface("settings");
+      return;
+    }
+    if (status.terminalConsentPending) {
+      const confirmed = await handleSetTerminalEnabled(true);
+      if (confirmed?.terminalEnabled !== true) return;
+      status = confirmed;
+    }
+    if (!status.terminalEnabled) {
+      setSettingsStartTab("terminal");
       setSurface("settings");
       return;
     }
@@ -5166,6 +5187,7 @@ export default function App() {
           connectionState={connection.state}
           capabilities={desktop.capabilities}
           terminalEnabled={desktop.terminalEnabled}
+          terminalConsentPending={desktop.terminalConsentPending === true}
           terminalAvailable={terminalAvailable}
           activeSessionId={activeRun?.sessionId ?? null}
           pinnedSessionIds={pinnedThreadSessionIds}
@@ -5286,9 +5308,13 @@ export default function App() {
                 : terminalAvailable || desktop.capabilities.shellTerminal)
           }
           terminalRequest={currentTerminalRequest}
-          onOpenGenericTerminal={() => setTerminalDockRequest(null)}
+          onOpenGenericTerminal={() => {
+            setTerminalDockRequest(null);
+            if (desktopRef.current.terminalConsentPending)
+              void handleSetTerminalEnabled(true);
+          }}
           onTerminalSettings={() => {
-            setSettingsStartTab("runtime");
+            setSettingsStartTab("terminal");
             setSurface("settings");
           }}
           title={title}

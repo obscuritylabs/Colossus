@@ -161,11 +161,13 @@ export function BrowserSettings() {
 
 export function TerminalSettings({
   enabled,
+  consentPending,
   disabled,
   shellAvailable,
   onSetEnabled,
 }: {
   enabled: boolean;
+  consentPending: boolean;
   disabled: boolean;
   shellAvailable: boolean;
   onSetEnabled: (enabled: boolean) => void;
@@ -193,7 +195,7 @@ export function TerminalSettings({
             role="switch"
             aria-label="Enable local terminal"
             aria-describedby="local-terminal-help"
-            checked={enabled}
+            checked={enabled || consentPending}
             disabled={disabled}
             onChange={(event) => onSetEnabled(event.target.checked)}
           />
@@ -206,6 +208,21 @@ export function TerminalSettings({
             </small>
           </span>
         </label>
+        {consentPending ? (
+          <div className="desktop-terminal-consent">
+            <p>
+              Native confirmation is required before the first session opens.
+            </p>
+            <button
+              className="button secondary"
+              type="button"
+              disabled={disabled}
+              onClick={() => onSetEnabled(true)}
+            >
+              Confirm terminal access
+            </button>
+          </div>
+        ) : null}
         <label
           className="desktop-preference-select"
           htmlFor="terminal-default-session"

@@ -72,6 +72,7 @@ interface WorkSidebarProps {
   connectionState: ConnectionState;
   capabilities: DesktopCapabilities;
   terminalEnabled: boolean;
+  terminalConsentPending?: boolean;
   terminalAvailable: boolean;
   activeSessionId: string | null;
   pinnedSessionIds: ReadonlySet<string>;
@@ -180,6 +181,7 @@ export function WorkSidebar({
   connectionState,
   capabilities,
   terminalEnabled,
+  terminalConsentPending = false,
   terminalAvailable,
   activeSessionId,
   pinnedSessionIds,
@@ -626,7 +628,7 @@ export function WorkSidebar({
                       disabled={
                         actionsDisabled ||
                         !terminalAvailable ||
-                        !terminalEnabled
+                        (!terminalEnabled && !terminalConsentPending)
                       }
                       onClick={onOpenTerminal}
                     >
@@ -641,7 +643,10 @@ export function WorkSidebar({
                   {capabilities.shellTerminal ? (
                     <button
                       type="button"
-                      disabled={actionsDisabled || !terminalEnabled}
+                      disabled={
+                        actionsDisabled ||
+                        (!terminalEnabled && !terminalConsentPending)
+                      }
                       onClick={onOpenShell}
                     >
                       <IconTerminal2

@@ -69,3 +69,17 @@ test("Git and Browser preferences change their panes and survive Settings naviga
     "https://example.com/docs",
   );
 });
+
+test("a new workspace can confirm default terminal access on first use", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 950 });
+  await page.goto("/?fixture=operations-studio&terminalConsentPending=1");
+  await page.getByRole("button", { name: "Manage Workspaces" }).click();
+  const openShell = page.getByRole("button", { name: "Open Shell" });
+  await expect(openShell).toBeEnabled();
+  await openShell.click();
+  await expect(
+    page.getByRole("region", { name: "Terminal pane" }),
+  ).toBeVisible();
+});

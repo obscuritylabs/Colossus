@@ -409,6 +409,10 @@ impl DesktopSettings {
         self.terminal_enabled && self.has_local_terminal_consent()
     }
 
+    pub(crate) fn terminal_consent_pending(&self) -> bool {
+        self.terminal_enabled && !self.has_local_terminal_consent()
+    }
+
     pub(crate) fn has_local_terminal_consent(&self) -> bool {
         self.local_terminal_consent_version == LOCAL_TERMINAL_CONSENT_VERSION
     }
@@ -2283,9 +2287,15 @@ mod tests {
             !settings.local_terminal_enabled(),
             "a settings record without the versioned native warning is not shell consent"
         );
+        assert!(settings.terminal_consent_pending());
 
         settings.local_terminal_consent_version = LOCAL_TERMINAL_CONSENT_VERSION;
         assert!(settings.local_terminal_enabled());
+        assert!(!settings.terminal_consent_pending());
+
+        settings.terminal_enabled = false;
+        assert!(!settings.terminal_consent_pending());
+        settings.terminal_enabled = true;
 
         settings.local_terminal_consent_version = LOCAL_TERMINAL_CONSENT_VERSION + 1;
         assert!(
