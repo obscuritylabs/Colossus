@@ -35,6 +35,7 @@ pub fn builtin_tool_descriptor(name: &str) -> Result<ToolDescriptor, AccessError
         "patch.preview" => ("patch", vec![ToolPrerequisite::FilesystemRead]),
         "patch.apply" | "patch.reverse" => ("patch", vec![ToolPrerequisite::FilesystemWrite]),
         "trace.export" => ("trace", vec![ToolPrerequisite::FilesystemWrite]),
+        "session.set_title" => simple_tool("sessions"),
         "task.create" | "task.update" | "task.list" => simple_tool("tasks"),
         "decision.create" | "decision.update" | "decision.list" | "decision.archive"
         | "decision.supersede" => simple_tool("decisions"),
@@ -139,6 +140,7 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
         ActionClass::LocalState,
         &[
             "shell.stop",
+            "session.set_title",
             "context.compact",
             "context.restore",
             "presentation.preferences.update",

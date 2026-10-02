@@ -31,6 +31,7 @@ const IDEMPOTENCY_EVENT: &str = "api.idempotency.claimed.v1";
 const RUN_CREATED_EVENT: &str = "api.run.created.v1";
 pub(crate) const RUN_INDEXED_EVENT: &str = "api.run.indexed.v1";
 const RUN_UPDATE_EVENT: &str = "api.run.update.v1";
+const SESSION_TITLE_INDEX_EVENT: &str = "session.title.indexed.v1";
 const THREAD_ATTACHED_EVENT: &str = "api.thread.run.attached.v1";
 const THREAD_ARCHIVED_EVENT: &str = "api.thread.archived.v1";
 const THREAD_RESTORED_EVENT: &str = "api.thread.restored.v1";
@@ -721,7 +722,52 @@ impl EventSourcedRunRepository {
         }
         let mut run = reconstruct(self.journal.as_ref(), caller, run_id, &events)?;
         run.archived = self.thread_state(caller, &run.session_id)?.0.archived;
+        self.apply_session_title(caller, &mut run)?;
         Ok(Some(run))
+    }
+
+    fn apply_session_title(&self, caller: &CallerContext, run: &mut Run) -> ApiResult<()> {
+        let stream = format!("session-title:{}", run.session_id);
+        let events = self
+            .journal
+            .read_stream_backwards(&stream, None, 1)
+            .map_err(|error| ApiError::from_store(&error, caller.request_id()))?;
+        let Some(event) = events.first() else {
+            return Ok(());
+        };
+        if event.event_type != SESSION_TITLE_INDEX_EVENT
+            || event.context.session_id.as_deref() != Some(run.session_id.as_str())
+        {
+            return Err(invariant(
+                caller,
+                "the durable session title owner is invalid",
+            ));
+        }
+        let payload = self
+            .journal
+            .decrypt_payload(event)
+            .map_err(|error| ApiError::from_store(&error, caller.request_id()))?;
+        let title = payload
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .filter(|title| {
+                !title.is_empty()
+                    && title.len() <= 200
+                    && !title.chars().any(|character| {
+                        character.is_control()
+                            || matches!(
+                                character,
+                                '\u{061c}'
+                                    | '\u{200e}'
+                                    | '\u{200f}'
+                                    | '\u{202a}'..='\u{202e}'
+                                    | '\u{2066}'..='\u{2069}'
+                            )
+                    })
+            })
+            .ok_or_else(|| invariant(caller, "the durable session title is invalid"))?;
+        run.title = title.into();
+        Ok(())
     }
 
     fn read_bounded_run_stream(
@@ -1418,6 +1464,7 @@ impl RunRepository for EventSourcedRunRepository {
                     archived_threads.insert(run.session_id.clone(), archived);
                     archived
                 };
+                self.apply_session_title(caller, &mut run)?;
 
                 scanned = scanned.saturating_add(1);
                 before_version = Some(index_event.stream_version);

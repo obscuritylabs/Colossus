@@ -161,9 +161,10 @@ impl AgentService {
         }
         let mut written_plan = None::<PlanRecord>;
         let mut plan_write_recovery_attempted = false;
-        let session_id = match requested_session_id {
+        let (session_id, needs_initial_title) = match requested_session_id {
             Some(id) => {
-                if self.sessions.get_session(id)?.is_none() {
+                let existing = self.sessions.get_session(id)?;
+                if existing.is_none() {
                     if !scope.create_requested_session {
                         return Err(StoreError::NotFound(format!("session {id}")).into());
                     }
@@ -173,7 +174,11 @@ impl AgentService {
                         initiator.clone(),
                     )?;
                 }
-                id.to_owned()
+                let needs_title = existing.is_none()
+                    || existing.is_some_and(|session| {
+                        session.message_count == 0 && session.title.is_none()
+                    });
+                (id.to_owned(), needs_title)
             }
             None => {
                 let id = Uuid::now_v7().to_string();
@@ -182,7 +187,7 @@ impl AgentService {
                     Some(&session_title(&prompt.plain_text())),
                     initiator.clone(),
                 )?;
-                id
+                (id, true)
             }
         };
         tracing::Span::current().record("gen_ai.conversation.id", &session_id);
@@ -313,6 +318,17 @@ impl AgentService {
         if !route.capabilities.tool_calls {
             definitions.clear();
         }
+        let instructions = if needs_initial_title
+            && definitions
+                .iter()
+                .any(|definition| definition.name == "session.set_title")
+        {
+            format!(
+                "{instructions}\n\n[Colossus session title]\nSet this new session's title once with session.set_title. Choose a short, specific title describing the user's initial request. Do this near the start of the run. Keep that title on later turns, including if the conversation changes direction, unless the user explicitly asks to rename the session."
+            )
+        } else {
+            instructions.to_owned()
+        };
         let initial_offered_tools = definitions
             .iter()
             .map(|definition| definition.name.as_str())
@@ -412,7 +428,7 @@ impl AgentService {
                 let prepared = preparer
                     .prepare(ContextPreparationRequest {
                         session_id: session_id.clone(),
-                        instructions: instructions.into(),
+                        instructions: instructions.clone(),
                         messages: messages.clone(),
                         tools: turn_definitions.clone(),
                         route: route.clone(),
@@ -464,7 +480,7 @@ impl AgentService {
                     .await;
             }
             let request = ModelRequest {
-                instructions: instructions.into(),
+                instructions: instructions.clone(),
                 messages: prepared,
                 tools: turn_definitions.clone(),
                 max_output_tokens: None,

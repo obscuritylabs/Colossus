@@ -8,6 +8,18 @@ impl GatewayToolExecutor {
     ) -> Result<ToolResult, ToolError> {
         let exit_code = 0;
         let output = match call.name.as_str() {
+            "session.set_title" => {
+                let session_id = Self::current_session(&context)?;
+                self.execute_work_tool(
+                    &call,
+                    context,
+                    WorkOperation::SessionSetTitle {
+                        session_id,
+                        title: required_tool_string(&call, "title")?.into(),
+                    },
+                )
+                .await?
+            }
             "task.create" => {
                 let session_id = Self::current_session(&context)?;
                 self.execute_work_tool(

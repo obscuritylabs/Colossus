@@ -12,6 +12,12 @@ A session keeps a conversation and its runs together. You can leave the terminal
 return to the same work later. Browse sessions inside the terminal UI, or use CLI
 commands when you need an exact ID or machine-readable history.
 
+For a new conversation, the agent sets a short title based on the opening request
+when `session.set_title` is available. It keeps that title as the conversation
+continues, even if the work changes direction. Ask the agent to rename the session
+if you want a different title. The TUI session browser and Desktop use the saved
+title; an unavailable or disabled title tool leaves the opening-request fallback.
+
 ## List sessions in the terminal UI
 
 Enter `/sessions` to see your 20 most recently updated sessions. The list shows each

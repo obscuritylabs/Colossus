@@ -26,7 +26,8 @@ impl Runtime {
         let action = mutation.action();
         let resource = mutation.resource().to_owned();
         let session_id = match &mutation {
-            WorkOperation::TaskCreate { session_id, .. }
+            WorkOperation::SessionSetTitle { session_id, .. }
+            | WorkOperation::TaskCreate { session_id, .. }
             | WorkOperation::TaskList { session_id, .. }
             | WorkOperation::DecisionCreate { session_id, .. }
             | WorkOperation::DecisionList { session_id, .. }

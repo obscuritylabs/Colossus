@@ -166,6 +166,7 @@ pub(super) fn plan_mode_tool(name: &str, target: &PlanDraftTarget) -> bool {
         || matches!(
             name,
             "echo"
+                | "session.set_title"
                 | "filesystem.list"
                 | "filesystem.read"
                 | "filesystem.search"

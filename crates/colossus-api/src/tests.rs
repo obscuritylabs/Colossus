@@ -210,6 +210,70 @@ fn create_run(
 }
 
 #[test]
+fn run_views_follow_the_canonical_session_title() {
+    let (journal, repository, caller) = fixture();
+    let request = create_request("title-key", "Opening request words");
+    let run = create_run(&repository, &caller, &request, "run-title", "session-title");
+    assert_eq!(run.title, "Opening request words");
+    journal
+        .append(NewEvent {
+            event_version: 1,
+            stream_id: "session:session-title".into(),
+            expected_stream_version: 0,
+            classification: EventClassification::Domain,
+            event_type: "session.created.v1".into(),
+            actor: caller.actor(),
+            context: ExecutionContext {
+                correlation_id: "session-title".into(),
+                session_id: Some("session-title".into()),
+                ..ExecutionContext::default()
+            },
+            payload: serde_json::json!({"title": "Opening request words"}),
+        })
+        .expect("session created");
+    journal
+        .append(NewEvent {
+            event_version: 1,
+            stream_id: "session-title:session-title".into(),
+            expected_stream_version: 0,
+            classification: EventClassification::Domain,
+            event_type: "session.title.indexed.v1".into(),
+            actor: Actor {
+                actor_type: ActorType::Model,
+                id: "assistant".into(),
+            },
+            context: ExecutionContext {
+                correlation_id: "run-title".into(),
+                session_id: Some("session-title".into()),
+                ..ExecutionContext::default()
+            },
+            payload: serde_json::json!({"title": "Prepare release checklist"}),
+        })
+        .expect("title set");
+    assert_eq!(
+        repository
+            .get_run(&caller, "run-title")
+            .expect("read")
+            .expect("run")
+            .title,
+        "Prepare release checklist"
+    );
+    let listed = repository
+        .list_runs(
+            &caller,
+            &ListRunsRequest {
+                session_id: Some("session-title".into()),
+                statuses: Vec::new(),
+                page_size: 10,
+                page_token: None,
+                include_archived: false,
+            },
+        )
+        .expect("list");
+    assert_eq!(listed.runs[0].title, "Prepare release checklist");
+}
+
+#[test]
 fn caller_context_is_exact_scope_deny_by_default_and_application_attributed() {
     let principal = principal("app:desktop-ui", &[scopes::RUNS_READ]);
     assert!(principal.has_scope(scopes::RUNS_READ));
@@ -2291,7 +2355,7 @@ fn owner_index_listing_is_bounded_stable_and_independent_of_global_growth() {
     let token = first.next_page_token.expect("continuation");
     assert_eq!(journal.global_reads.load(Ordering::Acquire), 0);
     assert_eq!(journal.full_stream_reads.load(Ordering::Acquire), 0);
-    assert_eq!(journal.backwards_stream_reads.load(Ordering::Acquire), 4);
+    assert_eq!(journal.backwards_stream_reads.load(Ordering::Acquire), 7);
     assert_eq!(journal.backwards_events_returned.load(Ordering::Acquire), 7);
 
     let changed_filter = repository
