@@ -6,6 +6,7 @@ pub(super) async fn line_runner(
     resume_latest: bool,
     _approval_mode: ApprovalMode,
     themes: &ThemeLibrary,
+    herdr: Option<&HerdrReporter>,
 ) -> Result<(), Box<dyn Error>> {
     if output_mode() == OutputMode::Auto {
         set_output_mode(OutputMode::Human);
@@ -40,6 +41,9 @@ pub(super) async fn line_runner(
         env!("CARGO_PKG_VERSION")
     );
     loop {
+        if let Some(herdr) = herdr {
+            herdr.report(&active_session_id, AgentState::Idle);
+        }
         let line = if let Some(line) = pending_line.take() {
             line
         } else {
@@ -52,6 +56,9 @@ pub(super) async fn line_runner(
         let line = line.trim();
         if line.is_empty() {
             continue;
+        }
+        if let Some(herdr) = herdr {
+            herdr.report(&active_session_id, AgentState::Working);
         }
         match runtime.append_terminal_history(line).await {
             Ok(entry) => remember_history_entry(&mut history_entries, &entry),

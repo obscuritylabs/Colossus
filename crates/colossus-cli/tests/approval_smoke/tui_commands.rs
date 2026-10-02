@@ -65,7 +65,7 @@ fn both_tui_hosts_review_long_argv_before_deciding_in_a_real_pty() {
         fs::write(config, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
         let _worker = worker_host.then(|| {
             let child = process(&workspace, &home)
-                .args(["--approval-mode", "ask", "worker"])
+                .args(["--approval-mode", "deny", "worker"])
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
                 .spawn()
@@ -91,11 +91,17 @@ fn both_tui_hosts_review_long_argv_before_deciding_in_a_real_pty() {
         });
         let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_colossus"));
         command.cwd(&workspace);
-        command.args(["--config", "config.json", "--alt-screen"]);
+        // A Herdr restore includes the TUI's approval mode. With a worker present,
+        // this must stay a client-scoped override of its deny default.
+        command.args([
+            "--config",
+            "config.json",
+            "--alt-screen",
+            "--approval-mode",
+            "ask",
+        ]);
         if worker_host {
             command.arg("--worker-required");
-        } else {
-            command.args(["--approval-mode", "ask"]);
         }
         command.arg("tui");
         command.env("HOME", home.path());

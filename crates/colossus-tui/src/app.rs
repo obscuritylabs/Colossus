@@ -12,9 +12,11 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         bootstrap,
         screen_mode,
         background_notice,
+        lifecycle,
     } = options;
     let snapshot = host.bootstrap(bootstrap).await.map_err(TuiError::Host)?;
     let mut state = TuiState::from_snapshot(snapshot);
+    observe_lifecycle(&state, lifecycle.as_deref());
     if screen_mode == ScreenMode::Inline {
         preload_native_history(&mut state, Arc::clone(&host)).await;
     }
@@ -60,6 +62,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         if state.should_exit {
             break;
         }
+        observe_lifecycle(&state, lifecycle.as_deref());
         if event::poll(Duration::from_millis(33))? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
@@ -80,10 +83,35 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
                 Event::Resize(_, _) => {}
                 _ => {}
             }
+            observe_lifecycle(&state, lifecycle.as_deref());
         }
     }
     terminal.finish()?;
     Ok(())
+}
+
+pub(super) fn observe_lifecycle(
+    state: &TuiState,
+    observer: Option<&dyn InteractiveLifecycleObserver>,
+) {
+    if let Some(observer) = observer {
+        observer.observe(
+            &state.session_id,
+            state.is_busy(),
+            matches!(
+                state.overlay.as_ref(),
+                Some(
+                    Overlay::Prompt { .. }
+                        | Overlay::SessionBrowser(_)
+                        | Overlay::ThemePicker(_)
+                        | Overlay::PlanExecutionChoice { .. }
+                        | Overlay::PlanReviewChoice { .. }
+                        | Overlay::QueuePaused
+                )
+            ),
+            &state.footer.approval_mode,
+        );
+    }
 }
 
 fn preview_picker(screen_mode: ScreenMode) -> Picker {

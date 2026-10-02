@@ -94,6 +94,18 @@ colossus -w /absolute/path/to/repository tui --resume
 If you cannot find earlier work, check that you are using the same workspace and
 configuration. [Sessions](sessions.md) shows how to list and resume a specific ID.
 
+### Restore in Herdr
+
+When an interactive TUI starts inside a [Herdr](https://herdr.dev/docs/add-herdr-support/) pane,
+Colossus reports its current session and whether it is idle, working, or waiting for a
+decision. Herdr 0.9.2 or later can reopen that session after a server restart with the
+same workspace, configuration, approval mode, and screen mode. Switching sessions
+updates the restore command, and exiting Colossus releases the pane. Check the
+integration with `herdr pane get "$HERDR_PANE_ID"` or `herdr agent list`.
+
+If the TUI is connected to an active worker, `--approval-mode` sets the mode for that
+TUI client without changing the worker default for other clients.
+
 ## What's next?
 
 <div class="grid cards" markdown>

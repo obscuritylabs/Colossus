@@ -12,6 +12,7 @@ pub(super) async fn worker_line_runner(
     requested_session: Option<String>,
     resume: bool,
     themes: &ThemeLibrary,
+    herdr: Option<&HerdrReporter>,
 ) -> Result<(), Box<dyn Error>> {
     if output_mode() == OutputMode::Auto {
         set_output_mode(OutputMode::Human);
@@ -77,6 +78,9 @@ pub(super) async fn worker_line_runner(
         "Colossus Rust line runner via authenticated worker. mode=execute; Type /help for commands."
     );
     loop {
+        if let Some(herdr) = herdr {
+            herdr.report(&active_session_id, AgentState::Idle);
+        }
         let line = if let Some(line) = pending_line.take() {
             line
         } else {
@@ -89,6 +93,9 @@ pub(super) async fn worker_line_runner(
         let line = line.trim();
         if line.is_empty() {
             continue;
+        }
+        if let Some(herdr) = herdr {
+            herdr.report(&active_session_id, AgentState::Working);
         }
         match client
             .call(WorkerOperation::PresentationHistoryAppend { entry: line.into() })
