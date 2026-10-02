@@ -777,33 +777,40 @@ struct CompanionBootstrap {
     credential: HostSecret,
 }
 
+#[cfg(windows)]
 async fn start_outlook_companion(
     state: &AppState,
     settings: &DesktopSettings,
     space_id: &str,
     colossus_home: &Path,
 ) -> Result<Option<CompanionBootstrap>, (CommandErrorDto, RuntimeFailureCodeDto)> {
-    #[cfg(windows)]
+    if settings
+        .space(space_id)
+        .is_some_and(|space| space.outlook_companion_enabled)
     {
-        if settings
-            .space(space_id)
-            .is_some_and(|space| space.outlook_companion_enabled)
-        {
-            let (process, credential) =
-                crate::outlook_companion::OutlookCompanion::start(colossus_home)
-                    .await
-                    .map_err(|error| (error, RuntimeFailureCodeDto::Configuration))?;
-            let registration = CompanionBootstrap {
-                endpoint: process.endpoint.clone(),
-                credential,
-            };
-            state.install_outlook_companion_for(space_id, process).await;
-            return Ok(Some(registration));
-        }
+        let (process, credential) = crate::outlook_companion::OutlookCompanion::start(colossus_home)
+            .await
+            .map_err(|error| (error, RuntimeFailureCodeDto::Configuration))?;
+        let registration = CompanionBootstrap {
+            endpoint: process.endpoint.clone(),
+            credential,
+        };
+        state.install_outlook_companion_for(space_id, process).await;
+        return Ok(Some(registration));
     }
-    #[cfg(not(windows))]
-    let _ = (state, settings, space_id, colossus_home);
     Ok(None)
+}
+
+#[cfg(not(windows))]
+fn start_outlook_companion(
+    state: &AppState,
+    settings: &DesktopSettings,
+    space_id: &str,
+    colossus_home: &Path,
+) -> std::future::Ready<Result<Option<CompanionBootstrap>, (CommandErrorDto, RuntimeFailureCodeDto)>>
+{
+    let _ = (state, settings, space_id, colossus_home);
+    std::future::ready(Ok(None))
 }
 
 async fn prepare_managed_bootstrap(

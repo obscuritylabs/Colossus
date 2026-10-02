@@ -11,12 +11,15 @@ use crate::managed_configuration::FieldOverrideSetting;
 use crate::plugin_adapter::{self, PluginInventoryDto, PluginPreviewInput, PluginPreviewKind};
 use crate::{
     commands::{target, unary_slot},
-    desktop_commands::{connect_guard, settings_store},
+    desktop_commands::settings_store,
     dto::CommandErrorDto,
-    managed_configuration_commands::persist_and_restart,
     managed_diagnostics::worker_for,
-    managed_runtime,
     state::{AppState, TargetConsentContext},
+};
+#[cfg(windows)]
+use crate::{
+    desktop_commands::connect_guard, managed_configuration_commands::persist_and_restart,
+    managed_runtime,
 };
 
 #[derive(Serialize)]
@@ -59,10 +62,10 @@ pub(crate) async fn configure_outlook_companion(
     #[cfg(not(windows))]
     {
         let _ = (state, space_id, enabled);
-        return Err(CommandErrorDto::invalid(
+        Err(CommandErrorDto::invalid(
             "spaceId",
             "Classic Outlook integration requires Windows Desktop.",
-        ));
+        ))
     }
     #[cfg(windows)]
     {
