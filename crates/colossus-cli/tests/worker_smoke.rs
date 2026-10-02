@@ -27,6 +27,11 @@ const JOURNAL_KEY: &str = "55555555555555555555555555555555555555555555555555555
 const SIGNING_KEY: &str = "6666666666666666666666666666666666666666666666666666666666666666";
 const WEBHOOK_SECRET: &str = "worker-webhook-secret-with-at-least-thirty-two-bytes";
 #[cfg(not(windows))]
+const WORKER_START_TIMEOUT: Duration = Duration::from_secs(10);
+// AppContainer setup can delay the named-pipe listener on a busy Windows runner.
+#[cfg(windows)]
+const WORKER_START_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(not(windows))]
 const WORKER_AGENT_DRAIN_TIMEOUT: Duration = Duration::from_secs(20);
 #[cfg(windows)]
 const WORKER_AGENT_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
@@ -299,7 +304,7 @@ sandbox:
         .spawn()
         .expect("start worker");
     let mut worker = ChildGuard(child);
-    wait_for_worker(binary, &config, &mut worker, Duration::from_secs(10));
+    wait_for_worker(binary, &config, &mut worker, WORKER_START_TIMEOUT);
     #[cfg(unix)]
     assert_eq!(
         fs::metadata(&socket)

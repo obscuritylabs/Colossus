@@ -68,7 +68,10 @@ impl Server {
         client_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
         let client_key = KeyPair::generate().unwrap();
         let client_cert = client_params.signed_by(&client_key, &ca).unwrap();
+        #[cfg(windows)]
         fs::write(root.join("ca.pem"), ca.pem()).unwrap();
+        #[cfg(target_os = "macos")]
+        write_private_fixture_file(&root.join("ca.pem"), ca.pem().as_bytes());
         fs::write(root.join("client.pem"), client_cert.pem()).unwrap();
         #[cfg(windows)]
         colossus_windows_native::create_private_file(
@@ -77,7 +80,10 @@ impl Server {
         )
         .unwrap();
         #[cfg(target_os = "macos")]
-        fs::write(root.join("client-key.pem"), client_key.serialize_pem()).unwrap();
+        write_private_fixture_file(
+            &root.join("client-key.pem"),
+            client_key.serialize_pem().as_bytes(),
+        );
         let mut trusted_clients = RootCertStore::empty();
         trusted_clients.add(ca.der().clone()).unwrap();
         let verifier = WebPkiClientVerifier::builder_with_provider(
@@ -164,6 +170,19 @@ impl Server {
             );
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn write_private_fixture_file(path: &Path, bytes: &[u8]) {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .unwrap();
+    file.write_all(bytes).unwrap();
 }
 
 impl Drop for Server {
