@@ -143,14 +143,10 @@ sandbox:
         "--server",
         "fixture-plugin/mail",
     ]);
-    let inventory = run(&["plugins", "list"]);
-    let servers = run(&["mcp", "servers"]);
     assert!(
         tools.status.success(),
-        "tools stderr: {}\nplugin inventory: {}\nMCP servers: {}",
-        String::from_utf8_lossy(&tools.stderr),
-        String::from_utf8_lossy(&inventory.stdout),
-        String::from_utf8_lossy(&servers.stdout),
+        "{}",
+        String::from_utf8_lossy(&tools.stderr)
     );
     let discovered: Value = serde_json::from_slice(&tools.stdout).expect("tool discovery");
     let names = discovered
