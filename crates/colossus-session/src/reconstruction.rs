@@ -10,13 +10,24 @@ pub(super) fn reconstruct_summary(
         .filter(|event| event.event_type == SESSION_EVENT)
         .ok_or_else(|| StoreError::Verification(format!("session {id} has no creation event")))?;
     let created_payload = journal.decrypt_payload(created)?;
-    let title = created_payload
+    let mut title = created_payload
         .get("title")
         .and_then(Value::as_str)
         .map(str::to_owned);
     let mut message_count = 0_u64;
     let mut last_run_id = None;
     let mut last_user_preview = None;
+    for event in events
+        .iter()
+        .filter(|event| event.event_type == TITLE_EVENT)
+    {
+        let payload = journal.decrypt_payload(event)?;
+        let updated = payload
+            .get("title")
+            .and_then(Value::as_str)
+            .ok_or_else(|| StoreError::Verification("session title event has no title".into()))?;
+        title = Some(updated.to_owned());
+    }
     for event in events
         .iter()
         .filter(|event| event.event_type == MESSAGE_EVENT)

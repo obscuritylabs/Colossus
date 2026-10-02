@@ -23,12 +23,24 @@ import type {
   ResolvedColorTheme,
   TextSizePreference,
 } from "./appearance";
+import {
+  DEFAULT_THEME_PALETTES,
+  normalizedPaletteColor,
+  validPaletteColor,
+} from "./palette";
+import type { PaletteColor, PaletteTheme } from "./palette";
 
 interface AppearanceContextValue extends AppearancePreference {
   resolvedColorTheme: ResolvedColorTheme;
   setColorTheme: (theme: ColorThemePreference) => void;
   setTextSize: (size: TextSizePreference) => void;
   setShowSecurityWarnings: (show: boolean) => void;
+  setPaletteColor: (
+    theme: PaletteTheme,
+    slot: PaletteColor,
+    color: string,
+  ) => boolean;
+  resetPalette: (theme: PaletteTheme) => void;
 }
 
 const AppearanceContext = createContext<AppearanceContextValue | null>(null);
@@ -107,6 +119,30 @@ export function AppearanceProvider({
         setPreference((current) => ({ ...current, textSize })),
       setShowSecurityWarnings: (showSecurityWarnings) =>
         setPreference((current) => ({ ...current, showSecurityWarnings })),
+      setPaletteColor: (theme, slot, value) => {
+        if (
+          !validPaletteColor(theme, slot, value, preference.palettes[theme])
+        ) {
+          return false;
+        }
+        const color = normalizedPaletteColor(value)!;
+        setPreference((current) => ({
+          ...current,
+          palettes: {
+            ...current.palettes,
+            [theme]: { ...current.palettes[theme], [slot]: color },
+          },
+        }));
+        return true;
+      },
+      resetPalette: (theme) =>
+        setPreference((current) => ({
+          ...current,
+          palettes: {
+            ...current.palettes,
+            [theme]: DEFAULT_THEME_PALETTES[theme],
+          },
+        })),
     }),
     [preference, systemPrefersDark],
   );

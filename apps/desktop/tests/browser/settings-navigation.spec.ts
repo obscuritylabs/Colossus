@@ -30,6 +30,7 @@ for (const width of [1586, 880, 700]) {
     await expect(
       page.getByRole("heading", { name: "Settings", exact: true }),
     ).toBeVisible();
+    await expect(page.locator(".settings-brand > strong")).toBeVisible();
     await expect(page.locator("#work-navigation")).toHaveCount(0);
     const sidebar = page.getByRole("complementary", {
       name: "Settings navigation",
@@ -42,6 +43,10 @@ for (const width of [1586, 880, 700]) {
       exact: true,
     });
     await expect(sidebarBack).toBeInViewport();
+    const globalScopeBounds = await sidebar
+      .getByRole("button", { name: "Global", exact: true })
+      .boundingBox();
+    expect(globalScopeBounds!.height).toBeLessThanOrEqual(52);
     const geometry = () =>
       page.locator(".managed-settings-shell").evaluate((shell) => {
         const rect = (selector: string) => {
@@ -102,6 +107,11 @@ for (const width of [1586, 880, 700]) {
     await expect(
       sidebar.getByRole("button", { name: "Global", exact: true }),
     ).toHaveAttribute("aria-pressed", "true");
+    const globalHeading = categories.getByRole("heading", {
+      name: "Global settings",
+    });
+    await expect(globalHeading).toBeVisible();
+    await expect(globalHeading).toHaveCSS("border-top-width", "1px");
     const globalGeometry = await geometry();
     await expect(sidebarBack).toBeInViewport();
     // Keep the editor stable, but only reserve workspace controls in Workspace scope.
@@ -145,6 +155,8 @@ for (const width of [1586, 880, 700]) {
       "Appearance",
       "Connections",
       "Setup",
+      "Git",
+      "Browser",
       "Terminal",
       "Certificates",
       "Updates & diagnostics",
@@ -332,14 +344,14 @@ test("Desktop sections keep controls focused and are discoverable through search
     .getByRole("button", { name: "Terminal", exact: true })
     .click();
   await expect(
-    page.getByRole("checkbox", { name: "Enable terminal", exact: true }),
+    page.getByRole("switch", { name: "Enable local terminal" }),
+  ).toBeChecked();
+  await expect(
+    page.getByRole("combobox", { name: "Default session" }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Open Shell", exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Open Colossus TUI", exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(0);
 
   await navigation
     .getByRole("button", { name: "Certificates", exact: true })

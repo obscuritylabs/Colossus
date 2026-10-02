@@ -690,7 +690,7 @@ pub struct Run {
     pub id: String,
     /// Durable session identity associated with the run.
     pub session_id: String,
-    /// Bounded deterministic display title derived from the opening request.
+    /// Display title from the canonical session when set, otherwise the opening request.
     pub title: String,
     /// Current lifecycle state.
     pub status: RunStatus,

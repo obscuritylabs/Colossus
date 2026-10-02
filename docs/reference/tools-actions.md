@@ -20,6 +20,7 @@ and output bounds.
 | Patch | `patch.preview`, `patch.apply`, `patch.reverse` | Preview read; apply/reverse write; declared roots or ambient host paths |
 | Trace export | `trace.export` | Bounded metadata-only write; workspace-confined under isolation and host-wide under ambient authority |
 | Repository context | `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary` | Workspace-confined under isolation; absolute and traversing host paths accepted under ambient authority |
+| Sessions | `session.set_title` | Updates the current session's canonical title through the effect gateway; no session ID is accepted from the model |
 | Tasks | `task.create`, `task.update`, `task.list` | Canonical session work |
 | Decisions | `decision.create`, `decision.update`, `decision.list`, `decision.archive`, `decision.supersede` | Binding canonical decisions |
 | Plans | `plan.create`, `plan.update`, `plan.show`, `plan.approve_request` | Session-scoped, revision-aware lifecycle; the update target is bound by the runtime |
@@ -52,7 +53,7 @@ expected revision, so the model cannot redirect the write.
 
 The remaining Plan Mode allowlist is:
 
-- `echo`, `tool.search`, and interactive `user.ask`;
+- `echo`, `tool.search`, `session.set_title`, and interactive `user.ask`;
 - `filesystem.list`, `filesystem.read`, `filesystem.search`, `git.status`, `git.diff`,
   `git.show`, `repo.map`, `repo.symbol_search`, `repo.references`,
   `repo.file_summary`, and `patch.preview`;
@@ -76,7 +77,28 @@ Published CLI and Desktop builds include a pinned `rg` for command searches. Whe
 `shell.run` has execute authority for that exact file, `rg` resolves to the managed
 copy before an ambient executable. Its presence does not change the approval and
 sandbox rules for `shell.run`. For ordinary workspace search, `filesystem.search`
-remains available without process execution, including in Plan Mode.
+remains available without process execution, including in Plan Mode. It accepts
+regular expressions by default, an optional file glob, and a result limit.
+Workspace searches and `repo.map` honor repository ignore rules. Use
+`filesystem.search` for arbitrary code or text matches; `repo.symbol_search` only
+matches literal substrings in structural declarations. Source and debug Desktop
+builds do not stage the release ripgrep binary, so use `filesystem.search` there unless an
+executable has been explicitly configured.
+
+For direct command searches in a published build, pass `argv` so the tool
+resolver selects the managed executable without relying on a shell `PATH`.
+The isolated Windows shell has a restricted `PATH`, so `command: "rg ..."` can
+fail even when the exact bundled executable is granted:
+
+```json
+{"argv":["rg","-n","load_plugin|discover_plugins","crates/colossus-plugins"],"justification":"Find the plugin loader implementation."}
+```
+
+The equivalent `filesystem.search` call works without process execution:
+
+```json
+{"pattern":"load_plugin|discover_plugins","path":"crates/colossus-plugins","glob":"**/*.rs","max_matches":50}
+```
 
 The model-visible tool description includes the host operating system before the
 agent's first command. It is a hint for native execution; a configured OCI container
@@ -207,7 +229,7 @@ from the active run snapshot and workspace overlay.
 | --- | --- |
 | Provider | `provider.echo`, `provider.openai.responses`, `provider.openai.codex`, `provider.openai.chat`, `provider.models`, `provider.call` |
 | Read | `filesystem.read`, `filesystem.list`, `filesystem.metadata`, `filesystem.search`, `git.status`, `git.diff`, `git.show`, `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary`, `context.show`, `context.snapshots`, `patch.preview`, `task.list`, `decision.list`, `plan.show`, `goal.show`, `subagent.read`, `subagent.list`, `memory.read`, `memory.list`, `memory.search`, `memory.index.status`, `plugin.list`, `plugin.inspect`, `plugin.skill.read`, `plugin.resource.list`, `plugin.resource.read`, `plugin.validate`, `plugin.verify`, `bundle.verify`, `bundle.key.inspect`, `mcp.tools` |
-| Local state | `context.compact`, `context.restore`, `presentation.preferences.update`, `presentation.history.append`, `task.create`, `task.update`, `decision.create`, `decision.update`, `decision.archive`, `decision.supersede`, `plan.create`, `plan.update`, `plan.discard`, `goal.create`, `goal.update`, `goal.iteration.record`, `subagent.create`, `subagent.start`, `subagent.complete`, `subagent.fail`, `subagent.cancel`, `subagent.interrupt`, `subagent.requeue`, `memory.create`, `memory.update`, `memory.archive`, `memory.supersede`, `memory.index.sync`, `memory.index.rebuild`, `workflow.webhook.ingest`, `workflow.subscription.dispatch` |
+| Local state | `session.set_title`, `context.compact`, `context.restore`, `presentation.preferences.update`, `presentation.history.append`, `task.create`, `task.update`, `decision.create`, `decision.update`, `decision.archive`, `decision.supersede`, `plan.create`, `plan.update`, `plan.discard`, `goal.create`, `goal.update`, `goal.iteration.record`, `subagent.create`, `subagent.start`, `subagent.complete`, `subagent.fail`, `subagent.cancel`, `subagent.interrupt`, `subagent.requeue`, `memory.create`, `memory.update`, `memory.archive`, `memory.supersede`, `memory.index.sync`, `memory.index.rebuild`, `workflow.webhook.ingest`, `workflow.subscription.dispatch` |
 | Workspace mutation | `filesystem.write`, `patch.apply`, `patch.reverse`, `trace.export`, `audit.export.write` |
 | Execution | `process.spawn`, `shell.run`, `plugin.registry.credential_helper`, `workflow.execute`, `workflow.start`, `agent.run`, `plan.execute` |
 | External network | `network.http`, `web.search`, `embedding.openai.create`, `memory.index.chroma.search`, `memory.index.chroma.status`, `memory.index.chroma.upsert`, `memory.index.chroma.remove`, `memory.index.chroma.reset`, `research.run`, `integration.openapi.import`, `integration.connect`, `integration.disconnect`, `integration.invoke`, `mcp.invoke`, `mcp.call` |

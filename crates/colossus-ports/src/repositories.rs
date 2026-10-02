@@ -19,6 +19,9 @@ pub trait SessionRepository: Send + Sync {
         actor: Actor,
     ) -> Result<SessionSummary, StoreError>;
 
+    /// Set the current session title with an audited canonical event.
+    fn set_title(&self, id: &str, title: &str, actor: Actor) -> Result<SessionSummary, StoreError>;
+
     /// Reconstruct one session summary from canonical events.
     fn get_session(&self, id: &str) -> Result<Option<SessionSummary>, StoreError>;
 

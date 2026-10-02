@@ -31,7 +31,6 @@ import {
   IconSearch,
   IconServer,
   IconShield,
-  IconTerminal2,
   IconTrash,
   IconX,
 } from "@tabler/icons-react";
@@ -115,6 +114,11 @@ import type {
   TerminalKind,
 } from "../types";
 import { AppearanceSettings } from "./AppearanceSettings";
+import {
+  BrowserSettings,
+  GitSettings,
+  TerminalSettings,
+} from "./DesktopToolSettings";
 import { DropdownSelect } from "./DropdownSelect";
 import { ProviderPresetSelect } from "./ProviderPresetSelect";
 import { ProviderIcon } from "./ProviderIcon";
@@ -167,10 +171,21 @@ const DESKTOP_PAGES = [
     keywords: "setup file package manifest import export global defaults",
   },
   {
+    id: "git",
+    label: "Git",
+    description: "Choose how workspace changes and history are shown.",
+    keywords: "git changes history refresh repository",
+  },
+  {
+    id: "browser",
+    label: "Browser",
+    description: "Choose what opens in a new browser tab.",
+    keywords: "browser new tab home page url localhost preview",
+  },
+  {
     id: "terminal",
     label: "Terminal",
-    description:
-      "Enable local terminals and open a system shell or the Colossus TUI.",
+    description: "Control local terminal access and the default session.",
     keywords: "shell powershell bash zsh tui terminal",
   },
   {
@@ -214,7 +229,7 @@ type SpaceTab =
   | "effective";
 
 interface ManagedSettingsPaneProps {
-  initialSpaceTab?: "runtime" | "providers" | "plugins" | undefined;
+  initialSpaceTab?: "runtime" | "providers" | "plugins" | "terminal" | undefined;
   desktop: DesktopStatus;
   connecting: boolean;
   updateChecking: boolean;
@@ -337,14 +352,14 @@ const GLOBAL_TABS: ReadonlyArray<{
   label: string;
   group?: string;
 }> = [
-  { id: "providers", label: "Providers" },
-  { id: "models", label: "Models" },
-  { id: "credentials", label: "Credentials" },
-  { id: "mcp", label: "MCP" },
-  { id: "plugins", label: "Plugins" },
-  { id: "search", label: "Search" },
-  { id: "telemetry", label: "Telemetry" },
-  { id: "defaults", label: "Defaults" },
+  { id: "providers", label: "Providers", group: "Global settings" },
+  { id: "models", label: "Models", group: "Global settings" },
+  { id: "credentials", label: "Credentials", group: "Global settings" },
+  { id: "mcp", label: "MCP", group: "Global settings" },
+  { id: "plugins", label: "Plugins", group: "Global settings" },
+  { id: "search", label: "Search", group: "Global settings" },
+  { id: "telemetry", label: "Telemetry", group: "Global settings" },
+  { id: "defaults", label: "Defaults", group: "Global settings" },
   ...DESKTOP_PAGES.map(({ id, label }) => ({ id, label, group: "Desktop" })),
 ];
 
@@ -1578,7 +1593,7 @@ export function buildManagedSettingsFixture(
             value: {
               accessProfile: "development",
               executionBoundary: "workspace_isolated",
-              terminalEnabled: false,
+              terminalEnabled: true,
               fieldOverrides: [],
             },
           },
@@ -1661,7 +1676,6 @@ export function ManagedSettingsPane({
   onAddExternalTarget,
   onRemoveExternalTarget,
   onSetTerminalEnabled,
-  onOpenTerminal,
   onCheckForUpdates,
   onInstallUpdate,
   onImportCaBundle,
@@ -1675,9 +1689,15 @@ export function ManagedSettingsPane({
     [desktop],
   );
   const [snapshot, setSnapshot] = useState(initial);
-  const [scope, setScope] = useState<SettingsScope>("space");
-  const [globalTab, setGlobalTab] = useState<GlobalTab>("mcp");
-  const [spaceTab, setSpaceTab] = useState<SpaceTab>(initialSpaceTab);
+  const [scope, setScope] = useState<SettingsScope>(
+    initialSpaceTab === "terminal" ? "global" : "space",
+  );
+  const [globalTab, setGlobalTab] = useState<GlobalTab>(
+    initialSpaceTab === "terminal" ? "terminal" : "mcp",
+  );
+  const [spaceTab, setSpaceTab] = useState<SpaceTab>(
+    initialSpaceTab === "terminal" ? "runtime" : initialSpaceTab,
+  );
   const [focusedFieldId, setFocusedFieldId] = useState<string | null>(null);
   const [expandedAdvancedSections, setExpandedAdvancedSections] = useState<
     ReadonlySet<string>
@@ -2999,7 +3019,6 @@ export function ManagedSettingsPane({
             onAddExternalTarget={onAddExternalTarget}
             onRemoveExternalTarget={onRemoveExternalTarget}
             onSetTerminalEnabled={onSetTerminalEnabled}
-            onOpenTerminal={onOpenTerminal}
             onCheckForUpdates={onCheckForUpdates}
             onInstallUpdate={onInstallUpdate}
             onImportCaBundle={onImportCaBundle}
@@ -3194,7 +3213,6 @@ function GlobalSettingsBody({
   onAddExternalTarget,
   onRemoveExternalTarget,
   onSetTerminalEnabled,
-  onOpenTerminal,
   onCheckForUpdates,
   onInstallUpdate,
   onImportCaBundle,
@@ -3252,7 +3270,6 @@ function GlobalSettingsBody({
   onAddExternalTarget: () => void;
   onRemoveExternalTarget: (targetId: string) => void;
   onSetTerminalEnabled: (enabled: boolean) => void;
-  onOpenTerminal: (kind: TerminalKind) => void;
   onCheckForUpdates: () => void;
   onInstallUpdate: () => void;
   onImportCaBundle: () => void;
@@ -4310,7 +4327,6 @@ function GlobalSettingsBody({
       onAddExternalTarget={onAddExternalTarget}
       onRemoveExternalTarget={onRemoveExternalTarget}
       onSetTerminalEnabled={onSetTerminalEnabled}
-      onOpenTerminal={onOpenTerminal}
       onCheckForUpdates={onCheckForUpdates}
       onInstallUpdate={onInstallUpdate}
       onImportCaBundle={onImportCaBundle}
@@ -8059,7 +8075,7 @@ export function modelDraft(
 }
 
 function DesktopSettings(
-  props: Omit<ManagedSettingsPaneProps, "desktop"> & {
+  props: Omit<ManagedSettingsPaneProps, "desktop" | "onOpenTerminal"> & {
     desktop: DesktopStatus;
     externalTargets: RuntimeTarget[];
     section: DesktopTab;
@@ -8073,9 +8089,6 @@ function DesktopSettings(
     updateMessage,
     externalTargets,
   } = props;
-  const terminalAvailable = desktop.targets.some(
-    (target) => target.kind === "managed_local" && target.terminalAvailable,
-  );
   const managedStateLabel = desktop.managedState
     .replaceAll("_", " ")
     .replace(/^./, (character) => character.toUpperCase());
@@ -8083,6 +8096,19 @@ function DesktopSettings(
     .replaceAll("_", " ")
     .replace(/^./, (character) => character.toUpperCase());
   if (section === "appearance") return <AppearanceSettings />;
+  if (section === "git") return <GitSettings />;
+  if (section === "browser") return <BrowserSettings />;
+  if (section === "terminal") {
+    return (
+      <TerminalSettings
+        enabled={desktop.terminalEnabled}
+        consentPending={desktop.terminalConsentPending === true}
+        disabled={!desktop.workspace || connecting}
+        shellAvailable={desktop.capabilities.shellTerminal}
+        onSetEnabled={props.onSetTerminalEnabled}
+      />
+    );
+  }
   const page = DESKTOP_PAGES.find((page) => page.id === section)!;
   return (
     <section
@@ -8308,63 +8334,6 @@ function DesktopSettings(
                 >
                   Export diagnostics
                 </button>
-              </div>
-            </div>
-          ) : null}
-          {section === "terminal" ? (
-            <div
-              className="managed-list-row desktop-control-row"
-              role="listitem"
-            >
-              <span className="resource-icon">
-                <IconTerminal2 size={18} aria-hidden="true" />
-              </span>
-              <div>
-                <strong>Local terminal</strong>
-                <small>
-                  Open a shell or the Colossus TUI inside the managed workspace.
-                </small>
-              </div>
-              <span
-                className={`status-chip${desktop.terminalEnabled ? " tone-success" : " tone-neutral"}`}
-              >
-                {desktop.terminalEnabled ? "Enabled" : "Disabled"}
-              </span>
-              <div className="resource-actions desktop-terminal-actions">
-                <label className="compact-switch">
-                  <input
-                    className="switch-input"
-                    type="checkbox"
-                    checked={desktop.terminalEnabled}
-                    disabled={!desktop.workspace || connecting}
-                    onChange={(event) =>
-                      props.onSetTerminalEnabled(event.target.checked)
-                    }
-                  />
-                  <span>
-                    {desktop.terminalEnabled ? "Enabled" : "Enable terminal"}
-                  </span>
-                </label>
-                {desktop.capabilities.shellTerminal ? (
-                  <button
-                    className="button secondary"
-                    type="button"
-                    disabled={!desktop.terminalEnabled}
-                    onClick={() => props.onOpenTerminal("shell")}
-                  >
-                    Open Shell
-                  </button>
-                ) : null}
-                {desktop.capabilities.tui ? (
-                  <button
-                    className="button secondary"
-                    type="button"
-                    disabled={!desktop.terminalEnabled || !terminalAvailable}
-                    onClick={() => props.onOpenTerminal("colossus_tui")}
-                  >
-                    Open Colossus TUI
-                  </button>
-                ) : null}
               </div>
             </div>
           ) : null}

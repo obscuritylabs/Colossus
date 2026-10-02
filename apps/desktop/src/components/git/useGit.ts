@@ -7,6 +7,7 @@ import {
 import type { GitStatus, GitCommitPage, GitCommitDetails } from "../../git";
 import { GitStatusCache } from "./statusCache";
 import { queueGitRead as queue } from "./readQueue";
+import { useDesktopPreferences } from "../../DesktopPreferencesProvider";
 
 const statusCache = new GitStatusCache();
 
@@ -25,6 +26,7 @@ export function useGit(
   fixture: boolean,
   refreshKey: string,
 ) {
+  const { gitAutoRefresh } = useDesktopPreferences();
   const scope = available ? workspaceId : null;
   const cacheKey =
     scope === null ? null : `${fixture ? "fixture" : "native"}:${scope}`;
@@ -131,7 +133,7 @@ export function useGit(
     };
   }, [refresh]);
   useEffect(() => {
-    if (scope === null) return;
+    if (scope === null || !gitAutoRefresh) return;
     const update = () => {
       if (!document.hidden) void refresh(false, true);
     };
@@ -143,7 +145,7 @@ export function useGit(
       document.removeEventListener("visibilitychange", update);
       window.clearInterval(timer);
     };
-  }, [scope, visible, refresh]);
+  }, [scope, visible, refresh, gitAutoRefresh]);
   useEffect(() => {
     void refresh(false, true);
   }, [refreshKey, refresh]);

@@ -233,7 +233,10 @@ impl Default for GlobalDefaultsSetting {
             current_revision: 1,
             revisions: vec![CatalogRevisionSetting {
                 revision: 1,
-                value: DefaultOverridesSetting::default(),
+                value: DefaultOverridesSetting {
+                    terminal_enabled: Some(true),
+                    ..DefaultOverridesSetting::default()
+                },
             }],
         }
     }
@@ -419,7 +422,7 @@ pub(crate) fn resolve_space_configuration(
             .configuration
             .terminal_enabled_override
             .or(defaults.terminal_enabled)
-            .unwrap_or(false),
+            .unwrap_or(true),
         field_overrides: field_overrides
             .into_iter()
             .map(|(field_id, value)| FieldOverrideSetting { field_id, value })
@@ -1090,6 +1093,37 @@ mod tests {
             outlook_companion_enabled: false,
             configuration: SpaceConfigurationSetting::default(),
         }
+    }
+
+    #[test]
+    fn local_terminal_defaults_on_but_explicit_off_is_preserved() {
+        let mut global = GlobalConfigurationSetting::default();
+        let mut workspace = space("one", provider("https://example.test/v1"));
+        workspace.configuration.accepted_global_revision = global.revision;
+        assert_eq!(
+            global.defaults.current().unwrap().terminal_enabled,
+            Some(true)
+        );
+        assert!(
+            resolve_space_configuration(&global, &workspace)
+                .unwrap()
+                .terminal_enabled
+        );
+
+        workspace.configuration.terminal_enabled_override = Some(false);
+        assert!(
+            !resolve_space_configuration(&global, &workspace)
+                .unwrap()
+                .terminal_enabled
+        );
+
+        global.defaults.revisions[0].value.terminal_enabled = None;
+        workspace.configuration.terminal_enabled_override = None;
+        assert!(
+            resolve_space_configuration(&global, &workspace)
+                .unwrap()
+                .terminal_enabled
+        );
     }
 
     #[test]

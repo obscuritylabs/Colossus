@@ -32,7 +32,7 @@ import { PluginsSurface } from "./PluginsSurface";
 import type { WorkspaceSurface } from "./ProductRail";
 
 interface OperationsSurfaceProps {
-  initialSettingsTab?: "runtime" | "providers" | "plugins" | undefined;
+  initialSettingsTab?: "runtime" | "providers" | "plugins" | "terminal" | undefined;
   onConfigurePluginConnection?: () => void;
   pluginSelections?: readonly string[];
   onUsePluginSkill?: (id: string) => void;

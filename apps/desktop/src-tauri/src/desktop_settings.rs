@@ -399,7 +399,7 @@ impl Default for DesktopSettings {
             client_identity: None,
             access_profile: AccessProfileSetting::AllowAll,
             execution_boundary: ExecutionBoundarySetting::FullAccess,
-            terminal_enabled: false,
+            terminal_enabled: true,
             local_terminal_consent_version: 0,
             selected_target_id: None,
             external_targets: Vec::new(),
@@ -411,6 +411,10 @@ impl Default for DesktopSettings {
 impl DesktopSettings {
     pub(crate) fn local_terminal_enabled(&self) -> bool {
         self.terminal_enabled && self.has_local_terminal_consent()
+    }
+
+    pub(crate) fn terminal_consent_pending(&self) -> bool {
+        self.terminal_enabled && !self.has_local_terminal_consent()
     }
 
     pub(crate) fn has_local_terminal_consent(&self) -> bool {
@@ -2280,17 +2284,24 @@ mod tests {
 
     #[test]
     fn legacy_tui_consent_cannot_silently_enable_local_shell_authority() {
-        let mut settings = DesktopSettings {
-            terminal_enabled: true,
-            ..DesktopSettings::default()
-        };
+        let mut settings = DesktopSettings::default();
+        assert!(
+            settings.terminal_enabled,
+            "new workspaces default to terminal access"
+        );
         assert!(
             !settings.local_terminal_enabled(),
             "a settings record without the versioned native warning is not shell consent"
         );
+        assert!(settings.terminal_consent_pending());
 
         settings.local_terminal_consent_version = LOCAL_TERMINAL_CONSENT_VERSION;
         assert!(settings.local_terminal_enabled());
+        assert!(!settings.terminal_consent_pending());
+
+        settings.terminal_enabled = false;
+        assert!(!settings.terminal_consent_pending());
+        settings.terminal_enabled = true;
 
         settings.local_terminal_consent_version = LOCAL_TERMINAL_CONSENT_VERSION + 1;
         assert!(

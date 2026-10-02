@@ -45,6 +45,8 @@ function renderComposer(
       attachmentBusy: false,
       error: null,
       onPromptChange: vi.fn(),
+      onPromptPaste: vi.fn(() => 0),
+      condensedPasteCount: 0,
       onRoleChange: vi.fn(),
       onMaxTurnsChange: vi.fn(),
       onModeChange: vi.fn(),

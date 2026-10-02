@@ -44,6 +44,7 @@ impl EffectExecutor for PresentationEffectExecutor {
 pub(super) struct WorkEffectExecutor {
     pub(super) service: Arc<WorkService>,
     pub(super) repository: Arc<dyn WorkRepository>,
+    pub(super) sessions: Arc<dyn SessionRepository>,
     pub(super) instruction_snapshots: Arc<InstructionSnapshotStore>,
 }
 
@@ -98,7 +99,8 @@ impl WorkEffectExecutor {
             _ => {}
         }
         let operation_session = match operation {
-            WorkOperation::TaskCreate { session_id, .. }
+            WorkOperation::SessionSetTitle { session_id, .. }
+            | WorkOperation::TaskCreate { session_id, .. }
             | WorkOperation::TaskList { session_id, .. }
             | WorkOperation::DecisionCreate { session_id, .. }
             | WorkOperation::DecisionList { session_id, .. }
@@ -207,6 +209,9 @@ impl EffectExecutor for WorkEffectExecutor {
         let creating_subagent = matches!(&mutation, WorkOperation::SubagentCreate { .. });
         let actor = request.actor.clone();
         let value = match mutation {
+            WorkOperation::SessionSetTitle { session_id, title } => {
+                work_result(self.sessions.set_title(&session_id, &title, actor))
+            }
             WorkOperation::TaskCreate {
                 session_id,
                 title,

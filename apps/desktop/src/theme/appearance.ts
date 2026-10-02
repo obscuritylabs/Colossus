@@ -1,3 +1,12 @@
+import {
+  DEFAULT_THEME_PALETTES,
+  PALETTE_CSS_VARIABLES,
+  isDefaultPalette,
+  paletteCssVariables,
+  parseThemePalettes,
+} from "./palette";
+import type { ThemePalettes } from "./palette";
+
 export const COLOR_THEME_OPTIONS = ["system", "dark", "light"] as const;
 export const TEXT_SIZE_OPTIONS = ["compact", "comfortable", "large"] as const;
 
@@ -9,6 +18,7 @@ export interface AppearancePreference {
   colorTheme: ColorThemePreference;
   textSize: TextSizePreference;
   showSecurityWarnings: boolean;
+  palettes: ThemePalettes;
 }
 
 export interface AppearanceStorage {
@@ -39,6 +49,7 @@ export interface AppearanceStorageEventTarget {
 
 export interface AppearanceRoot {
   setAttribute(name: string, value: string): void;
+  style: Pick<CSSStyleDeclaration, "setProperty" | "removeProperty">;
 }
 
 export interface NativeDialogAppearance {
@@ -67,6 +78,7 @@ export const DEFAULT_APPEARANCE: AppearancePreference = {
   colorTheme: "system",
   textSize: "comfortable",
   showSecurityWarnings: false,
+  palettes: DEFAULT_THEME_PALETTES,
 };
 
 function includes<const T extends readonly string[]>(
@@ -92,6 +104,7 @@ export function parseAppearancePreference(
         ? value.textSize
         : DEFAULT_APPEARANCE.textSize,
       showSecurityWarnings: value.showSecurityWarnings === true,
+      palettes: parseThemePalettes(value.palettes),
     };
   } catch {
     return DEFAULT_APPEARANCE;
@@ -185,5 +198,16 @@ export function applyAppearance(
   root.setAttribute("data-theme", resolved);
   root.setAttribute("data-theme-preference", preference.colorTheme);
   root.setAttribute("data-text-size", preference.textSize);
+  for (const name of PALETTE_CSS_VARIABLES) {
+    root.style.removeProperty(name);
+  }
+  const palette = preference.palettes[resolved];
+  if (!isDefaultPalette(resolved, palette)) {
+    for (const [name, value] of Object.entries(
+      paletteCssVariables(resolved, palette),
+    )) {
+      root.style.setProperty(name, value);
+    }
+  }
   return resolved;
 }
