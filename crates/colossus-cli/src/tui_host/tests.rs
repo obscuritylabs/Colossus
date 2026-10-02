@@ -4,6 +4,57 @@ use colossus_contracts::SessionMessage;
 #[path = "command_approval_tests.rs"]
 mod command_approval_tests;
 
+#[test]
+fn tui_display_status_commands_report_current_values_without_changing_preferences() {
+    let preferences = TerminalPreferences {
+        stream_mode: colossus_contracts::StreamDisplayMode::Raw,
+        events_mode: colossus_contracts::EventDisplayMode::Verbose,
+        transcript_density: colossus_contracts::TranscriptDensity::Compact,
+        ..TerminalPreferences::default()
+    };
+    for (name, title, value) in [
+        ("stream", "Streaming", json!({"stream": "raw"})),
+        ("events", "Events", json!({"events": "verbose"})),
+        ("transcript", "Transcript", json!({"transcript": "compact"})),
+    ] {
+        for arguments in ["", " \t\r\n"] {
+            let result = presentation_status(name, arguments, &preferences)
+                .expect("bare display command reports status in both TUI hosts");
+            assert_eq!(result.document, document_from_json(&value, Some(title)));
+            assert!(
+                result.preferences.is_none(),
+                "status must not save preferences"
+            );
+        }
+        for arguments in ["on", "off", "compact", "invalid"] {
+            assert!(presentation_status(name, arguments, &preferences).is_none());
+        }
+    }
+    assert!(presentation_status("theme", "", &preferences).is_none());
+    assert!(presentation_status("unknown", "", &preferences).is_none());
+}
+
+#[test]
+fn tui_boolean_switches_accept_on_off_toggle_and_status_from_either_state() {
+    for current in [false, true] {
+        for (argument, expected) in [
+            ("on", true),
+            ("off", false),
+            ("toggle", !current),
+            ("", current),
+        ] {
+            assert_eq!(parse_toggle(argument, current), Ok(expected));
+            assert_eq!(
+                parse_toggle(&format!(" \t{argument}\r\n"), current),
+                Ok(expected)
+            );
+        }
+        for argument in ["enabled", "on extra", "off extra", "toggle extra"] {
+            assert!(parse_toggle(argument, current).is_err(), "{argument}");
+        }
+    }
+}
+
 fn plan(id: &str, session_id: &str, status: PlanStatus, revision: u64) -> PlanRecord {
     PlanRecord {
         id: id.into(),

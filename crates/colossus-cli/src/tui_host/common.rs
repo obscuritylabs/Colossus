@@ -1,5 +1,28 @@
 use super::*;
 
+pub(super) fn presentation_status(
+    name: &str,
+    arguments: &str,
+    preferences: &TerminalPreferences,
+) -> Option<HostCommandResult> {
+    if !arguments.trim().is_empty() {
+        return None;
+    }
+    let (value, title) = match name {
+        "stream" => (json!({"stream": preferences.stream_mode}), "Streaming"),
+        "events" => (json!({"events": preferences.events_mode}), "Events"),
+        "transcript" => (
+            json!({"transcript": preferences.transcript_density}),
+            "Transcript",
+        ),
+        _ => return None,
+    };
+    Some(HostCommandResult::document(document_from_json(
+        &value,
+        Some(title),
+    )))
+}
+
 pub(super) fn resumable_sessions(
     mut sessions: Vec<SessionSummary>,
     limit: usize,

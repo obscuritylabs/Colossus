@@ -70,6 +70,9 @@ impl EmbeddedInteractiveHost {
             .runtime
             .presentation_preferences()
             .map_err(|error| error.to_string())?;
+        if let Some(status) = presentation_status(name, arguments, &preferences) {
+            return Ok(Some(status));
+        }
         let changed = match name {
             "theme" => {
                 let argument = arguments.trim();
@@ -121,12 +124,6 @@ impl EmbeddedInteractiveHost {
                     "on" => colossus_contracts::StreamDisplayMode::On,
                     "raw" => colossus_contracts::StreamDisplayMode::Raw,
                     "off" => colossus_contracts::StreamDisplayMode::Off,
-                    "" => {
-                        return Ok(Some(self.result(
-                            &json!({"stream": preferences.stream_mode}),
-                            Some("Streaming"),
-                        )?));
-                    }
                     _ => return Err("/stream expects on, raw, or off".into()),
                 };
                 true
@@ -136,12 +133,6 @@ impl EmbeddedInteractiveHost {
                     "compact" => colossus_contracts::EventDisplayMode::Compact,
                     "verbose" => colossus_contracts::EventDisplayMode::Verbose,
                     "off" => colossus_contracts::EventDisplayMode::Off,
-                    "" => {
-                        return Ok(Some(self.result(
-                            &json!({"events": preferences.events_mode}),
-                            Some("Events"),
-                        )?));
-                    }
                     _ => return Err("/events expects compact, verbose, or off".into()),
                 };
                 true
@@ -158,12 +149,6 @@ impl EmbeddedInteractiveHost {
                 preferences.transcript_density = match arguments.trim() {
                     "comfortable" => colossus_contracts::TranscriptDensity::Comfortable,
                     "compact" => colossus_contracts::TranscriptDensity::Compact,
-                    "" => {
-                        return Ok(Some(self.result(
-                            &json!({"transcript": preferences.transcript_density}),
-                            Some("Transcript"),
-                        )?));
-                    }
                     _ => return Err("/transcript expects comfortable or compact".into()),
                 };
                 true
