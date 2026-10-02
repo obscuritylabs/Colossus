@@ -18,10 +18,12 @@ export function pluginConnectionRequest(
   const space = snapshot.spaces.find((candidate) => candidate.id === spaceId);
   if (!space || space.archived)
     throw new Error("The selected workspace is no longer available.");
-  const current = space.effectiveValues.find(
+  const current = space.configuration.fieldOverrides.find(
     (entry) => entry.fieldId === "plugins.mcpServers",
   );
-  const servers = { ...record(current?.value ?? {}) };
+  const servers = {
+    ...record(current?.value ?? { $colossusPatchV1: true }),
+  };
   const existing = record(servers[serverId] ?? {});
   servers[serverId] = {
     ...existing,

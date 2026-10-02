@@ -171,29 +171,20 @@ pub(crate) fn start_watchdog(app: AppHandle) {
         loop {
             interval.tick().await;
             let state = app.state::<crate::state::AppState>();
-            let snapshots = state.outlook_companion_snapshots().await;
-            if snapshots.is_empty() {
-                continue;
-            }
-            let Ok(store) = crate::desktop_commands::settings_store() else {
-                for (space_id, digest) in snapshots {
-                    state
-                        .stop_outlook_companion_if_digest(&space_id, &digest)
-                        .await;
-                }
-                continue;
-            };
-            let home = if let Ok(home) = store.home_root() {
-                home.to_path_buf()
-            } else {
-                for (space_id, digest) in snapshots {
-                    state
-                        .stop_outlook_companion_if_digest(&space_id, &digest)
-                        .await;
-                }
-                continue;
-            };
-            let active = tokio::task::spawn_blocking(move || {
+            reconcile_active_digest(&state).await;
+        }
+    });
+}
+
+pub(crate) async fn reconcile_active_digest(state: &crate::state::AppState) {
+    let snapshots = state.outlook_companion_snapshots().await;
+    if snapshots.is_empty() {
+        return;
+    }
+    let active = if let Ok(store) = crate::desktop_commands::settings_store() {
+        if let Ok(home) = store.home_root() {
+            let home = home.to_path_buf();
+            tokio::task::spawn_blocking(move || {
                 PluginStore::new(home)
                     .and_then(|store| store.active(PLUGIN_NAME))
                     .ok()
@@ -202,16 +193,20 @@ pub(crate) fn start_watchdog(app: AppHandle) {
             })
             .await
             .ok()
-            .flatten();
-            for (space_id, digest) in snapshots {
-                if active.as_deref() != Some(&digest) {
-                    state
-                        .stop_outlook_companion_if_digest(&space_id, &digest)
-                        .await;
-                }
-            }
+            .flatten()
+        } else {
+            None
         }
-    });
+    } else {
+        None
+    };
+    for (space_id, digest) in snapshots {
+        if active.as_deref() != Some(&digest) {
+            state
+                .stop_outlook_companion_if_digest(&space_id, &digest)
+                .await;
+        }
+    }
 }
 
 #[cfg(test)]

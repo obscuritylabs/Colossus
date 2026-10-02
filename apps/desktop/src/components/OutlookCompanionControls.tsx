@@ -71,7 +71,7 @@ export function OutlookCompanionControls({
       const result = await diagnoseManagedMcpServer(spaceId, "outlook-session");
       setCheck(
         result.healthy
-          ? `${result.tools.length} allowlisted Outlook tools discovered.`
+          ? `${result.tools.length} allowlisted Outlook tools discovered. Outlook attachment is checked when a tool runs.`
           : (result.message ?? "Outlook session connection failed."),
       );
     } catch (reason) {
@@ -109,7 +109,7 @@ export function OutlookCompanionControls({
         disabled={busy || !status.activeDigest}
         onClick={() => void testConnection()}
       >
-        Test connection
+        Discover tools
       </button>
       {status.enabled && (
         <p role="status">

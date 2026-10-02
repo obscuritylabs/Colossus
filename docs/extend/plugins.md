@@ -183,6 +183,10 @@ digest. A CLI activation change revokes a running helper within 15 seconds. The
 published alpha.3 package does not contain this companion and the switch
 rejects it until a signed companion-capable release is installed.
 
+**Discover tools** checks the authenticated MCP transport and allowlist. Outlook COM
+attachment is checked when an authorized Outlook tool runs; discovery alone does not
+prove that classic Outlook is open.
+
 ```bash
 colossus plugins validate ./example-plugin
 colossus plugins package ./example-plugin --output ./example-plugin.oci

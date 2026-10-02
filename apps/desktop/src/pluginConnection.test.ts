@@ -51,9 +51,45 @@ describe("plugin connection save", () => {
       {
         fieldId: "plugins.mcpServers",
         value: {
+          $colossusPatchV1: true,
           "example/mail": { enabled: true, allowedTools: ["*"] },
-          "other/docs": { enabled: true, allowedTools: ["search"] },
         },
+      },
+    ]);
+  });
+
+  it("keeps an existing whole-map workspace override as a whole-map override", () => {
+    const snapshot = {
+      globalConfiguration: { revision: 17 },
+      spaces: [
+        {
+          id: "workspace",
+          archived: false,
+          configuration: {
+            fieldOverrides: [
+              {
+                fieldId: "plugins.mcpServers",
+                value: { "local/docs": { enabled: true } },
+              },
+            ],
+            catalogRevisions: {},
+            searchRoles: {},
+            modelRoles: {},
+            credentialOverrides: {},
+          },
+        },
+      ],
+    } as unknown as ManagedSettingsSnapshot;
+    const request = pluginConnectionRequest(
+      snapshot,
+      "workspace",
+      "local/docs",
+      false,
+    );
+    expect(request.fieldOverrides).toEqual([
+      {
+        fieldId: "plugins.mcpServers",
+        value: { "local/docs": { enabled: false, allowedTools: [] } },
       },
     ]);
   });

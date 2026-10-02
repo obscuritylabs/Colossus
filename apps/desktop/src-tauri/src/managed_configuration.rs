@@ -346,14 +346,7 @@ pub(crate) fn resolve_space_configuration(
         .defaults
         .revision(space.configuration.accepted_global_revision)
         .ok_or_else(configuration_error)?;
-    let mut field_overrides = defaults
-        .field_overrides
-        .iter()
-        .map(|field| (field.field_id.clone(), field.value.clone()))
-        .collect::<BTreeMap<_, _>>();
-    for field in &space.configuration.field_overrides {
-        field_overrides.insert(field.field_id.clone(), field.value.clone());
-    }
+    let field_overrides = merge_field_overrides(defaults, &space.configuration)?;
     let mut providers = resolve_catalog_values(
         &global.providers,
         &space.configuration.catalog_revisions,
@@ -439,6 +432,58 @@ pub(crate) fn resolve_space_configuration(
         mcp_servers,
         telemetry,
     })
+}
+
+fn merge_field_overrides(
+    defaults: &DefaultOverridesSetting,
+    space: &SpaceConfigurationSetting,
+) -> Result<BTreeMap<String, Value>, CommandErrorDto> {
+    let mut fields = defaults
+        .field_overrides
+        .iter()
+        .map(|field| (field.field_id.clone(), field.value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for field in &space.field_overrides {
+        let value = if field.field_id == "plugins.mcpServers"
+            && field.value.get(PLUGIN_SERVER_PATCH_MARKER) == Some(&Value::Bool(true))
+        {
+            merge_plugin_server_overrides(fields.get(&field.field_id), &field.value)?
+        } else {
+            field.value.clone()
+        };
+        fields.insert(field.field_id.clone(), value);
+    }
+    Ok(fields)
+}
+
+pub(crate) const PLUGIN_SERVER_PATCH_MARKER: &str = "$colossusPatchV1";
+
+fn merge_plugin_server_overrides(
+    inherited: Option<&Value>,
+    local: &Value,
+) -> Result<Value, CommandErrorDto> {
+    let mut servers = match inherited {
+        Some(value) => value.as_object().cloned().ok_or_else(configuration_error)?,
+        None => serde_json::Map::new(),
+    };
+    let local = local.as_object().ok_or_else(configuration_error)?;
+    for (name, override_value) in local {
+        if name == PLUGIN_SERVER_PATCH_MARKER {
+            continue;
+        }
+        let mut server = match servers.get(name) {
+            Some(value) => value.as_object().cloned().ok_or_else(configuration_error)?,
+            None => serde_json::Map::new(),
+        };
+        server.extend(
+            override_value
+                .as_object()
+                .ok_or_else(configuration_error)?
+                .clone(),
+        );
+        servers.insert(name.clone(), Value::Object(server));
+    }
+    Ok(Value::Object(servers))
 }
 
 fn resolve_optional_catalog_value<T: Clone>(
@@ -1221,6 +1266,79 @@ mod tests {
             spaces[0].configuration.catalog_revisions["model:primary"],
             model_pin
         );
+    }
+
+    #[test]
+    fn plugin_server_override_keeps_unrelated_inherited_servers() {
+        let mut spaces = vec![space("one", provider("https://example.test/v1"))];
+        let mut global = GlobalConfigurationSetting::default();
+        initialize_catalog(&mut global, &mut spaces);
+        global.defaults.revisions[0]
+            .value
+            .field_overrides
+            .push(FieldOverrideSetting {
+                field_id: "plugins.mcpServers".into(),
+                value: serde_json::json!({
+                    "example/mail": {"enabled": false, "allowedTools": ["list_mail"]},
+                    "other/docs": {"enabled": true, "allowedTools": ["search"]}
+                }),
+            });
+        spaces[0]
+            .configuration
+            .field_overrides
+            .push(FieldOverrideSetting {
+                field_id: "plugins.mcpServers".into(),
+                value: serde_json::json!({
+                    "$colossusPatchV1": true,
+                    "example/mail": {"enabled": true}
+                }),
+            });
+        let resolved = resolve_space_configuration(&global, &spaces[0]).expect("resolved");
+        let servers = &resolved
+            .field_overrides
+            .iter()
+            .find(|field| field.field_id == "plugins.mcpServers")
+            .expect("plugin servers")
+            .value;
+        assert_eq!(servers["example/mail"]["enabled"], true);
+        assert_eq!(
+            servers["example/mail"]["allowedTools"],
+            serde_json::json!(["list_mail"])
+        );
+        assert_eq!(
+            servers["other/docs"]["allowedTools"],
+            serde_json::json!(["search"])
+        );
+    }
+
+    #[test]
+    fn legacy_plugin_server_override_still_replaces_global_servers() {
+        let mut spaces = vec![space("one", provider("https://example.test/v1"))];
+        let mut global = GlobalConfigurationSetting::default();
+        initialize_catalog(&mut global, &mut spaces);
+        global.defaults.revisions[0]
+            .value
+            .field_overrides
+            .push(FieldOverrideSetting {
+                field_id: "plugins.mcpServers".into(),
+                value: serde_json::json!({"global/mail": {"enabled": true}}),
+            });
+        spaces[0]
+            .configuration
+            .field_overrides
+            .push(FieldOverrideSetting {
+                field_id: "plugins.mcpServers".into(),
+                value: serde_json::json!({"local/docs": {"enabled": true}}),
+            });
+        let resolved = resolve_space_configuration(&global, &spaces[0]).expect("resolved");
+        let servers = &resolved
+            .field_overrides
+            .iter()
+            .find(|field| field.field_id == "plugins.mcpServers")
+            .expect("plugin servers")
+            .value;
+        assert!(servers.get("global/mail").is_none());
+        assert_eq!(servers["local/docs"]["enabled"], true);
     }
 
     #[test]
