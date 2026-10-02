@@ -257,6 +257,8 @@ pub(crate) struct AppState {
     pub(crate) mcp_health_history:
         StdMutex<std::collections::VecDeque<crate::mcp_health::RecentMcpHealth>>,
     pub(crate) plugin_operations: StdMutex<HashMap<String, (String, watch::Sender<bool>)>>,
+    #[cfg(windows)]
+    outlook_companions: Mutex<HashMap<String, crate::outlook_companion::OutlookCompanion>>,
     targets: RwLock<HashMap<String, TargetHandle>>,
     selected_target_id: RwLock<Option<String>>,
     selection_epoch: AtomicU64,
@@ -422,6 +424,8 @@ impl Default for AppState {
             mcp_health_history: StdMutex::new(std::collections::VecDeque::new()),
             selected_target_id: RwLock::new(None),
             plugin_operations: StdMutex::new(HashMap::new()),
+            #[cfg(windows)]
+            outlook_companions: Mutex::new(HashMap::new()),
             selection_epoch: AtomicU64::new(0),
             selection_updates,
             run_targets: RwLock::new(HashMap::new()),
@@ -557,7 +561,85 @@ impl AppState {
     }
 
     pub(crate) async fn remove_target(&self, target_id: &str) -> Option<TargetHandle> {
-        self.targets.write().await.remove(target_id)
+        let target = self.targets.write().await.remove(target_id);
+        #[cfg(windows)]
+        self.stop_outlook_companion_for(target_id).await;
+        target
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn install_outlook_companion_for(
+        &self,
+        space_id: &str,
+        companion: crate::outlook_companion::OutlookCompanion,
+    ) {
+        let previous = self
+            .outlook_companions
+            .lock()
+            .await
+            .insert(space_id.to_owned(), companion);
+        if let Some(previous) = previous {
+            previous.stop().await;
+        }
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn stop_outlook_companion_for(&self, space_id: &str) {
+        let companion = self.outlook_companions.lock().await.remove(space_id);
+        if let Some(companion) = companion {
+            companion.stop().await;
+        }
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn stop_all_outlook_companions(&self) {
+        let companions = self
+            .outlook_companions
+            .lock()
+            .await
+            .drain()
+            .map(|(_, companion)| companion)
+            .collect::<Vec<_>>();
+        for companion in companions {
+            companion.stop().await;
+        }
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn outlook_companion_digest_for(&self, space_id: &str) -> Option<String> {
+        self.outlook_companions
+            .lock()
+            .await
+            .get_mut(space_id)
+            .and_then(crate::outlook_companion::OutlookCompanion::active_digest)
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn outlook_companion_snapshots(&self) -> Vec<(String, String)> {
+        self.outlook_companions
+            .lock()
+            .await
+            .iter()
+            .map(|(space_id, companion)| (space_id.clone(), companion.digest.clone()))
+            .collect()
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn stop_outlook_companion_if_digest(&self, space_id: &str, digest: &str) {
+        let companion = {
+            let mut current = self.outlook_companions.lock().await;
+            if current
+                .get(space_id)
+                .is_some_and(|value| value.digest == digest)
+            {
+                current.remove(space_id)
+            } else {
+                None
+            }
+        };
+        if let Some(companion) = companion {
+            companion.stop().await;
+        }
     }
 
     pub(crate) async fn connected(&self, target_id: &str) -> bool {
@@ -1207,6 +1289,8 @@ impl AppState {
     }
 
     pub(crate) async fn close_all(&self) {
+        #[cfg(windows)]
+        self.stop_all_outlook_companions().await;
         {
             // Terminal processes may hold worker IPC (notably the bundled TUI).
             // Revoke their document authority and tear down their process trees

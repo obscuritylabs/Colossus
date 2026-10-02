@@ -76,6 +76,7 @@ fn workspace(name: &str, accepted_revision: u64) -> WorkspaceProfile {
         access_profile: AccessProfileSetting::Minimal,
         execution_boundary: ExecutionBoundarySetting::WorkspaceIsolated,
         terminal_enabled: false,
+        outlook_companion_enabled: false,
         configuration: SpaceConfigurationSetting {
             accepted_global_revision: accepted_revision,
             ..SpaceConfigurationSetting::default()

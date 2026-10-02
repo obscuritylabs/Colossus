@@ -28,6 +28,11 @@ On Managed Local, the plugin page can install, verify, export, disable, and mana
 
 Plugin-provided MCP servers are listed in the plugin details. Enable each one explicitly in the workspace's [plugin settings](settings.md#connections-search-and-telemetry); storing a credential alone does not enable it. Standalone MCP server definitions live in Global and Workspace settings. [MCP guide](../use/mcp-servers.md)
 
+Classic Outlook is a special case on Windows: its live COM connection needs the
+**Connect Outlook session** control in the signed plugin's details. The older published
+alpha.3 package has only a sandboxed stdio server and cannot attach to the running
+Outlook session. [Plugin installation and Outlook requirements](../extend/plugins.md#validate-package-and-install)
+
 ## Other navigation destinations
 
 - **Library** lists released artifacts and their safe metadata for the current Desktop session. Open a thread's **Resources** or **Artifacts** pane for its specific outputs.

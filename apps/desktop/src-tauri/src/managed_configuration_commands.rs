@@ -2253,6 +2253,7 @@ mod tests {
             access_profile: AccessProfileSetting::AllowAll,
             execution_boundary: ExecutionBoundarySetting::FullAccess,
             terminal_enabled: false,
+            outlook_companion_enabled: false,
             configuration: SpaceConfigurationSetting {
                 accepted_global_revision: 1,
                 ..SpaceConfigurationSetting::default()

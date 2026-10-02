@@ -1,3 +1,4 @@
+use colossus_contracts::HostSecret;
 use colossus_sdk::{
     ApiMajor, ApiScope, AppPrivateInstanceDir, Colossus, CreateRunRequest, GetRunRequest,
     IdempotencyKey, InputContentPart, InstanceId, ListRunsRequest, ManagedAccessProfile,
@@ -55,6 +56,8 @@ const ACTIVE_RUN_PAGE_SIZE: u32 = 100;
 const MAX_ACTIVE_RUN_PAGES: usize = 4_096;
 const CONFIGURATION_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CONFIGURATION_DRAIN_TIMEOUT: Duration = Duration::from_mins(5);
+const OUTLOOK_SESSION_SERVER: &str = "outlook-session";
+const OUTLOOK_SESSION_CREDENTIAL: &str = "outlook-companion-session";
 const PRIMARY_SCOPES: [&str; 7] = [
     scopes::EXTENSIONS_READ,
     scopes::RUNS_EXECUTE,
@@ -227,6 +230,8 @@ async fn start_after_operation_drain(
             Ok(())
         }
         Err((error, failure_code)) => {
+            #[cfg(windows)]
+            state.stop_outlook_companion_for(space_id).await;
             state
                 .clear_managed_lifecycle_for(space_id, lifecycle_generation)
                 .await;
@@ -681,6 +686,7 @@ async fn start_inner(
         ApiMajor::new(1).map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Internal))?,
     )
     .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
+    let companion = start_outlook_companion(state, settings, space_id, &colossus_home).await?;
     let PreparedManagedBootstrap {
         bootstrap,
         worker_authentication,
@@ -692,6 +698,7 @@ async fn start_inner(
         settings,
         &DesktopCredentials::for_settings(state, store)
             .map_err(|error| (error, RuntimeFailureCodeDto::Provider))?,
+        companion,
     )
     .await?;
     let lifecycle = NativeSidecarLifecycle::new(bootstrap);
@@ -765,12 +772,47 @@ struct PreparedManagedBootstrap {
     terminal_enabled: bool,
 }
 
+struct CompanionBootstrap {
+    endpoint: String,
+    credential: HostSecret,
+}
+
+async fn start_outlook_companion(
+    state: &AppState,
+    settings: &DesktopSettings,
+    space_id: &str,
+    colossus_home: &Path,
+) -> Result<Option<CompanionBootstrap>, (CommandErrorDto, RuntimeFailureCodeDto)> {
+    #[cfg(windows)]
+    {
+        if settings
+            .space(space_id)
+            .is_some_and(|space| space.outlook_companion_enabled)
+        {
+            let (process, credential) =
+                crate::outlook_companion::OutlookCompanion::start(colossus_home)
+                    .await
+                    .map_err(|error| (error, RuntimeFailureCodeDto::Configuration))?;
+            let registration = CompanionBootstrap {
+                endpoint: process.endpoint.clone(),
+                credential,
+            };
+            state.install_outlook_companion_for(space_id, process).await;
+            return Ok(Some(registration));
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (state, settings, space_id, colossus_home);
+    Ok(None)
+}
+
 async fn prepare_managed_bootstrap(
     workspace: &Path,
     workspace_identity: WorkspaceIdentity,
     store: &SettingsStore,
     settings: &DesktopSettings,
     credentials: &std::sync::Arc<DesktopCredentials>,
+    companion: Option<CompanionBootstrap>,
 ) -> Result<PreparedManagedBootstrap, (CommandErrorDto, RuntimeFailureCodeDto)> {
     let space = settings
         .selected_space_id
@@ -817,6 +859,7 @@ async fn prepare_managed_bootstrap(
         approval_broker_grant,
         worker_bootstrap_secret.as_ref(),
         &paths,
+        companion,
     )
     .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
     if let Some(identity) = settings.client_identity.as_ref() {
@@ -848,8 +891,17 @@ fn managed_bootstrap(
     approval_broker_grant: SidecarApprovalBrokerGrant,
     worker_authentication: &[u8],
     paths: &ManagedBootstrapPaths<'_>,
+    companion: Option<CompanionBootstrap>,
 ) -> Result<SidecarBootstrapConfig, SdkError> {
-    let runtime = managed_runtime_config(resolved);
+    let mut runtime = managed_runtime_config(resolved);
+    let mut host_credentials = host_credentials;
+    if let Some(companion) = companion {
+        configure_outlook_companion(&mut runtime, &companion.endpoint)?;
+        host_credentials.push(SidecarHostCredential::new(
+            OUTLOOK_SESSION_CREDENTIAL,
+            companion.credential,
+        )?);
+    }
     let bootstrap = SidecarBootstrapConfig::new(
         workspace,
         runtime,
@@ -870,6 +922,115 @@ fn managed_bootstrap(
     match paths.codex_auth {
         Some(path) => bootstrap.with_codex_auth_path(path),
         None => Ok(bootstrap),
+    }
+}
+
+fn configure_outlook_companion(
+    runtime: &mut ManagedRuntimeConfig,
+    endpoint: &str,
+) -> Result<(), SdkError> {
+    if runtime
+        .mcp_servers
+        .iter()
+        .any(|server| server.name == OUTLOOK_SESSION_SERVER)
+    {
+        return Err(SdkError::InvalidConfiguration(
+            "Outlook companion server name conflicts with another MCP server",
+        ));
+    }
+    // An enabled portable stdio declaration still runs inside windows_job. The
+    // companion replaces that one connection for this Workspace only.
+    if let Some(field) = runtime
+        .field_overrides
+        .iter_mut()
+        .find(|field| field.field_id == "plugins.mcpServers")
+        && let Some(overlay) = field.value.as_object_mut()
+        && let Some(mail) = overlay.get_mut("outlook-classic/mail")
+        && let Some(mail) = mail.as_object_mut()
+    {
+        mail.insert("enabled".into(), serde_json::Value::Bool(false));
+    }
+    runtime.mcp_servers.push(ManagedMcpServerConfig {
+        name: OUTLOOK_SESSION_SERVER.into(),
+        transport: ManagedMcpTransport::StreamableHttp,
+        command: None,
+        args: Vec::new(),
+        working_directory: None,
+        environment_credentials: BTreeMap::new(),
+        url: Some(endpoint.into()),
+        headers: BTreeMap::new(),
+        credential_headers: BTreeMap::from([(
+            "Authorization".into(),
+            ManagedMcpCredentialHeader {
+                scheme: Some("Bearer".into()),
+                credential_id: OUTLOOK_SESSION_CREDENTIAL.into(),
+            },
+        )]),
+        allow_stateless: true,
+        oauth: None,
+        allowed_tools: [
+            "get_status",
+            "list_stores",
+            "list_folders",
+            "get_mail_folders",
+            "list_messages",
+            "search_messages",
+            "get_message",
+            "list_attachments",
+            "mark_message_read",
+            "move_message",
+            "archive_message",
+            "delete_message",
+            "create_draft",
+            "update_draft",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
+        research_tools: Vec::new(),
+        timeout_ms: Some(30_000),
+        max_output_bytes: Some(65_536),
+    });
+    Ok(())
+}
+
+#[cfg(test)]
+mod outlook_companion_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn companion_uses_exact_http_endpoint_and_disables_portable_stdio() {
+        let mut runtime = ManagedRuntimeConfig::echo(ManagedAccessProfile::Development);
+        runtime.field_overrides.push(ManagedFieldOverride {
+            field_id: "plugins.mcpServers".into(),
+            value: json!({
+                "outlook-classic/mail": {"enabled": true, "allowedTools": ["*"]},
+                "other/plugin": {"enabled": true}
+            }),
+        });
+        configure_outlook_companion(&mut runtime, "http://127.0.0.1:64123/mcp")
+            .expect("configure companion");
+        let server = runtime.mcp_servers.last().expect("companion server");
+        assert_eq!(server.name, OUTLOOK_SESSION_SERVER);
+        assert_eq!(server.url.as_deref(), Some("http://127.0.0.1:64123/mcp"));
+        assert_eq!(server.transport, ManagedMcpTransport::StreamableHttp);
+        assert!(server.allow_stateless);
+        assert_eq!(
+            server.credential_headers["Authorization"].scheme.as_deref(),
+            Some("Bearer")
+        );
+        assert_eq!(server.allowed_tools.len(), 14);
+        assert!(!server.allowed_tools.iter().any(|tool| tool == "*"));
+        assert_eq!(
+            runtime.field_overrides[0].value["outlook-classic/mail"]["enabled"],
+            false
+        );
+        assert_eq!(
+            runtime.field_overrides[0].value["other/plugin"]["enabled"],
+            true
+        );
+        runtime.validate().expect("valid managed transport");
     }
 }
 

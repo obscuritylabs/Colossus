@@ -2,6 +2,7 @@ import { useState } from "react";
 import { readPluginPreview } from "../api";
 import type { PluginEntry, PluginResource, PluginSkill } from "../plugins";
 import { PluginMcpControls } from "./PluginMcpControls";
+import { OutlookCompanionControls } from "./OutlookCompanionControls";
 import { PluginIcon } from "./PluginIcon";
 import type { PluginAction } from "./PluginOperationForm";
 
@@ -139,6 +140,10 @@ export function PluginDetail({
                 server={server.id}
                 enabled={server.enabled}
                 pluginActive={plugin.available}
+                sessionRequired={
+                  plugin.manifest.name === "outlook-classic" &&
+                  server.id === "outlook-classic/mail"
+                }
                 onChanged={onConnectionChanged}
                 http={
                   server.transport === "http" ||
@@ -150,6 +155,15 @@ export function PluginDetail({
           </div>
         ))
       )}
+      {managementAvailable &&
+        spaceId &&
+        plugin.manifest.name === "outlook-classic" && (
+          <OutlookCompanionControls
+            spaceId={spaceId}
+            pluginActive={plugin.available && plugin.trust.trusted}
+            onChanged={onConnectionChanged}
+          />
+        )}
       {managementAvailable &&
         plugin.mcp_servers.length > 0 &&
         onConfigureConnection && (

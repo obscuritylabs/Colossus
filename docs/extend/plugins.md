@@ -167,8 +167,21 @@ reported digest before activation. A different registry needs a configured exact
 profile; pass `--registry NAME` when more than one profile matches its origin.
 The Outlook Classic alpha.3 server uses legacy COM and cannot attach to Outlook from
 the `windows_job` AppContainer. Installation and activation do not make its mail tools
-usable there; the managed user-session companion tracked in [issue #246](https://github.com/obscuritylabs/Colossus/issues/246)
-is required for that connection.
+usable there. A signed package with the user-session companion is required.
+
+When a newer signed Outlook Classic package includes companion support, select its
+active digest in Desktop **Plugins**, then choose **Connect Outlook session** in its
+details. This per-Workspace switch starts the verified executable as the logged-in
+Windows user and passes a fresh bearer token to Managed Local through its protected
+bootstrap. The runtime connects to one loopback MCP endpoint; the ordinary
+`windows_job` boundary remains in place for agent and plugin subprocesses. The
+connection exposes the package's 14 current tool names and keeps ordinary MCP policy,
+approval, and audit. **Disconnect Outlook session** stops the helper and rotates the
+token on the next connection. Updating, disabling, or uninstalling the plugin through
+Desktop revokes running Outlook helpers; restart a Workspace to use a newly activated
+digest. A CLI activation change revokes a running helper within 15 seconds. The
+published alpha.3 package does not contain this companion and the switch
+rejects it until a signed companion-capable release is installed.
 
 ```bash
 colossus plugins validate ./example-plugin

@@ -20,6 +20,8 @@
     "allow-read-plugin-preview",
     "allow-manage-plugin",
     "allow-cancel-plugin-operation",
+    "allow-outlook-companion-status",
+    "allow-configure-outlook-companion",
     "allow-desktop-release-channel",
     "allow-desktop-release-metadata",
     "allow-export-diagnostics",

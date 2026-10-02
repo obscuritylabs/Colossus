@@ -1,7 +1,7 @@
 //! Native-owned target binding, file dialogs, and policy approval for plugin management.
 
 use colossus_worker_protocol::PluginManagementRequest;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
@@ -9,10 +9,104 @@ use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKin
 use crate::plugin_adapter::{self, PluginInventoryDto, PluginPreviewInput, PluginPreviewKind};
 use crate::{
     commands::{target, unary_slot},
+    desktop_commands::{connect_guard, settings_store},
     dto::CommandErrorDto,
+    managed_configuration_commands::persist_and_restart,
     managed_diagnostics::worker_for,
+    managed_runtime,
     state::{AppState, TargetConsentContext},
 };
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OutlookCompanionStatusDto {
+    supported: bool,
+    enabled: bool,
+    active_digest: Option<String>,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn outlook_companion_status(
+    state: State<'_, AppState>,
+    space_id: String,
+) -> Result<OutlookCompanionStatusDto, CommandErrorDto> {
+    let settings = settings_store()?.load()?;
+    let space = settings
+        .space(&space_id)
+        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Workspace is unknown."))?;
+    #[cfg(windows)]
+    let active_digest = state.outlook_companion_digest_for(&space_id).await;
+    #[cfg(not(windows))]
+    let active_digest = {
+        let _ = state;
+        None
+    };
+    Ok(OutlookCompanionStatusDto {
+        supported: cfg!(windows),
+        enabled: space.outlook_companion_enabled,
+        active_digest,
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn configure_outlook_companion(
+    state: State<'_, AppState>,
+    space_id: String,
+    enabled: bool,
+) -> Result<OutlookCompanionStatusDto, CommandErrorDto> {
+    #[cfg(not(windows))]
+    {
+        let _ = (state, space_id, enabled);
+        return Err(CommandErrorDto::invalid(
+            "spaceId",
+            "Classic Outlook integration requires Windows Desktop.",
+        ));
+    }
+    #[cfg(windows)]
+    {
+        let _guard = connect_guard(&state)?;
+        let store = settings_store()?;
+        let mut settings = store.load()?;
+        if settings.selected_space_id.as_deref() != Some(&space_id) {
+            return Err(CommandErrorDto::invalid(
+                "spaceId",
+                "Select this Workspace before changing its Outlook connection.",
+            ));
+        }
+        let previous = settings.clone();
+        let space = settings
+            .spaces
+            .iter_mut()
+            .find(|space| space.id == space_id)
+            .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Workspace is unknown."))?;
+        if space.archived {
+            return Err(CommandErrorDto::invalid(
+                "spaceId",
+                "Restore this Workspace first.",
+            ));
+        }
+        if space.outlook_companion_enabled != enabled {
+            if enabled {
+                // Verify both the active signed digest and its companion handshake
+                // before persisting a setting that would fail every future startup.
+                let (probe, _) =
+                    crate::outlook_companion::OutlookCompanion::start(store.home_root()?).await?;
+                probe.stop().await;
+            }
+            space.outlook_companion_enabled = enabled;
+            let drain =
+                managed_runtime::drain_active_runs_for_configuration(&state, &space_id).await?;
+            persist_and_restart(&state, &store, &mut settings, previous, &space_id).await?;
+            drop(drain);
+        }
+        let active_digest = state.outlook_companion_digest_for(&space_id).await;
+        Ok(OutlookCompanionStatusDto {
+            supported: true,
+            enabled,
+            active_digest,
+        })
+    }
+}
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn get_plugin_inventory(
@@ -156,7 +250,16 @@ pub(crate) async fn manage_plugin(
     else {
         return Ok(json!({"cancelled": true}));
     };
-    plugin_adapter::manage(&worker, request, cancellation, |prompt| {
+    #[cfg(windows)]
+    let revokes_outlook = matches!(
+        &request,
+        PluginManagementRequest::Enable { name, .. }
+            | PluginManagementRequest::Disable { name }
+            | PluginManagementRequest::Update { name, .. }
+            | PluginManagementRequest::Uninstall { name, .. }
+            if name == "outlook-classic"
+    );
+    let result = plugin_adapter::manage(&worker, request, cancellation, |prompt| {
         let app = app.clone();
         let target_id = target_id.clone();
         async move {
@@ -168,7 +271,14 @@ pub(crate) async fn manage_plugin(
                 .buttons(MessageDialogButtons::OkCancelCustom(approve.clone(), deny)).blocking_show()).await.ok()?;
             accepted.then_some(prompt.choices[0].clone())
         }
-    }).await.map_err(operation_error)
+    }).await.map_err(operation_error)?;
+    #[cfg(windows)]
+    if revokes_outlook && result.get("cancelled").and_then(Value::as_bool) != Some(true) {
+        // The store's immutable-content lease protects an in-flight process, but a
+        // lifecycle change must revoke the old session token and endpoint now.
+        state.stop_all_outlook_companions().await;
+    }
+    Ok(result)
 }
 
 #[tauri::command(rename_all = "camelCase")]

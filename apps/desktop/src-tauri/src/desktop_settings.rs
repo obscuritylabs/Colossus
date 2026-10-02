@@ -157,6 +157,10 @@ pub(crate) struct WorkspaceProfile {
     pub(crate) access_profile: AccessProfileSetting,
     pub(crate) execution_boundary: ExecutionBoundarySetting,
     pub(crate) terminal_enabled: bool,
+    /// Explicit per-Workspace consent to attach a trusted Outlook plugin to the
+    /// logged-in Windows session. This is never inherited by a new Workspace.
+    #[serde(default)]
+    pub(crate) outlook_companion_enabled: bool,
     /// Sparse inherited configuration and pinned global catalog revisions. The legacy
     /// concrete fields above remain the selected-runtime compatibility projection.
     #[serde(default)]
@@ -599,6 +603,7 @@ impl DesktopSettings {
             terminal_enabled: defaults
                 .and_then(|d| d.terminal_enabled)
                 .unwrap_or(self.terminal_enabled),
+            outlook_companion_enabled: false,
             configuration: SpaceConfigurationSetting {
                 accepted_global_revision: self.global_configuration.revision,
                 ..SpaceConfigurationSetting::default()
@@ -687,6 +692,7 @@ impl DesktopSettings {
             access_profile: self.access_profile,
             execution_boundary: self.execution_boundary,
             terminal_enabled: self.terminal_enabled,
+            outlook_companion_enabled: false,
             configuration: SpaceConfigurationSetting {
                 accepted_global_revision: self.global_configuration.revision,
                 ..SpaceConfigurationSetting::default()
@@ -2396,6 +2402,7 @@ mod tests {
             access_profile: settings.access_profile,
             execution_boundary: settings.execution_boundary,
             terminal_enabled: settings.terminal_enabled,
+            outlook_companion_enabled: false,
             configuration: SpaceConfigurationSetting::default(),
         });
         let mut encoded = serde_json::to_value(settings).expect("settings");

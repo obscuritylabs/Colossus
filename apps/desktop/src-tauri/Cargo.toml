@@ -58,6 +58,7 @@ colossus-network = { version = "=0.11.6", path = "../../../crates/colossus-netwo
 colossus-native-credential-ui = { version = "=0.1.0", path = "../native-credential-ui" }
 colossus-native-browser = { version = "=0.1.0", path = "../native-browser" }
 colossus-ports = { version = "=0.11.6", path = "../../../crates/colossus-ports" }
+colossus-plugins = { version = "=0.11.6", path = "../../../crates/colossus-plugins" }
 colossus-sdk = { version = "=0.11.6", path = "../../../crates/colossus-sdk", features = ["daemon", "keyring", "sidecar"] }
 colossus-sidecar-protocol = { version = "=0.11.6", path = "../../../crates/colossus-sidecar-protocol" }
 colossus-worker-protocol = { version = "=0.11.6", path = "../../../crates/colossus-worker-protocol" }

@@ -23,6 +23,8 @@ const COMMANDS: &[&str] = &[
     "read_plugin_preview",
     "manage_plugin",
     "cancel_plugin_operation",
+    "outlook_companion_status",
+    "configure_outlook_companion",
     "desktop_release_channel",
     "desktop_release_metadata",
     "check_desktop_update",

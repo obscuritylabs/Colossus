@@ -19,6 +19,7 @@ export function PluginMcpControls({
   enabled,
   pluginActive,
   http,
+  sessionRequired = false,
   onChanged,
 }: {
   spaceId: string;
@@ -26,6 +27,7 @@ export function PluginMcpControls({
   enabled: boolean;
   pluginActive: boolean;
   http: boolean;
+  sessionRequired?: boolean;
   onChanged?: (() => void) | undefined;
 }) {
   const [busy, setBusy] = useState(false);
@@ -85,7 +87,7 @@ export function PluginMcpControls({
       <div className="plugin-actions">
         <button
           className="button secondary"
-          disabled={busy || !pluginActive}
+          disabled={busy || !pluginActive || (!enabled && sessionRequired)}
           onClick={() => void setEnabled(!enabled)}
         >
           {enabled ? "Disable connection" : "Enable all plugin tools"}
@@ -126,6 +128,12 @@ export function PluginMcpControls({
       {!pluginActive ? (
         <small>
           Activate this plugin digest before configuring its connection.
+        </small>
+      ) : sessionRequired ? (
+        <small>
+          Classic Outlook needs the Windows session connection below. Its
+          sandboxed stdio connection cannot attach to the running Outlook
+          process.
         </small>
       ) : !enabled ? (
         <small>
