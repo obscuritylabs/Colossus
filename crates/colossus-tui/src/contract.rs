@@ -761,6 +761,13 @@ pub trait BackgroundNoticeProvider: Send + Sync {
     async fn notice(&self) -> Option<PresentationDocument>;
 }
 
+/// Optional observer of the active terminal session's user-facing lifecycle.
+pub trait InteractiveLifecycleObserver: Send + Sync {
+    /// Report the selected durable session and whether the terminal is working or
+    /// waiting for an operator decision. Neither state includes transcript content.
+    fn observe(&self, session_id: &str, working: bool, blocked: bool, approval_mode: &str);
+}
+
 /// Terminal result of one serialized background operation.
 pub enum OperationResult {
     /// Application command completed.
@@ -864,6 +871,8 @@ pub struct TuiOptions {
     pub screen_mode: ScreenMode,
     /// Optional one-shot notice resolved after terminal startup.
     pub background_notice: Option<Arc<dyn BackgroundNoticeProvider>>,
+    /// Optional integration with a terminal host's agent lifecycle.
+    pub lifecycle: Option<Arc<dyn InteractiveLifecycleObserver>>,
 }
 
 impl std::fmt::Debug for TuiOptions {
@@ -873,6 +882,7 @@ impl std::fmt::Debug for TuiOptions {
             .field("bootstrap", &self.bootstrap)
             .field("screen_mode", &self.screen_mode)
             .field("background_notice", &self.background_notice.is_some())
+            .field("lifecycle", &self.lifecycle.is_some())
             .finish()
     }
 }

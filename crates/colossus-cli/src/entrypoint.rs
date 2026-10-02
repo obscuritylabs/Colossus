@@ -337,6 +337,16 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         .as_ref()
         .map(|workspace| inherited_desktop_worker_client(&config, workspace))
         .transpose()?;
+    let herdr = matches!(cli.command, Command::Tui { .. })
+        .then(|| {
+            HerdrReporter::from_env(
+                &cli,
+                &runtime_options.workspace,
+                &config_path,
+                interactive_tui,
+            )
+        })
+        .flatten();
     if !matches!(cli.command, Command::Acp)
         && dispatch_to_worker_if_active(
             &config,
@@ -349,6 +359,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 alt_screen: cli.alt_screen,
                 worker_required: cli.worker_required,
                 inherited_worker,
+                herdr: herdr.clone(),
                 config_resolution: config_resolution.clone(),
             },
         )
@@ -1221,13 +1232,14 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                         ScreenMode::Inline
                     },
                     background_notice: Some(default_update_notice_provider()),
+                    lifecycle: herdr.clone().map(|reporter| reporter as Arc<dyn colossus_tui::InteractiveLifecycleObserver>),
                 },
             )
             .await?;
         }
         Command::Tui { session, resume } => {
             let themes = ThemeLibrary::load_for_config(&config_path)?;
-            line_runner(&runtime, session, resume, configured_approval, &themes).await?
+            line_runner(&runtime, session, resume, configured_approval, &themes, herdr.as_deref()).await?
         }
         Command::Worker(WorkerCommand {
             once,

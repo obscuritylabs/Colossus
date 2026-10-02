@@ -6,6 +6,7 @@ pub(super) struct WorkerDispatchOptions {
     pub(super) alt_screen: bool,
     pub(super) worker_required: bool,
     pub(super) inherited_worker: Option<WorkerClient>,
+    pub(super) herdr: Option<Arc<HerdrReporter>>,
     pub(super) config_resolution: Value,
 }
 
@@ -43,6 +44,7 @@ pub(super) async fn dispatch_to_worker_if_active(
         alt_screen,
         worker_required,
         inherited_worker,
+        herdr,
         config_resolution,
     } = options;
     if config.storage.adapter == colossus_runtime::StorageAdapter::Ephemeral {
@@ -77,9 +79,12 @@ pub(super) async fn dispatch_to_worker_if_active(
         }
         Err(error) => return Err(error.into()),
     }
-    if approval_mode.is_some() {
+    let interactive_tui = matches!(command, Command::Tui { .. })
+        && io::stdin().is_terminal()
+        && io::stdout().is_terminal();
+    if approval_mode.is_some() && !interactive_tui {
         return Err(
-            "an active worker owns approval handling; restart it with the desired --approval-mode"
+            "an active worker owns approval handling outside the interactive TUI; restart it with the desired --approval-mode"
                 .into(),
         );
     }
@@ -1178,11 +1183,15 @@ pub(super) async fn dispatch_to_worker_if_active(
         }
         Command::Tui { session, resume } => {
             let themes = ThemeLibrary::load_for_config(config_path)?;
-            if io::stdin().is_terminal() && io::stdout().is_terminal() {
+            if interactive_tui {
                 if output_mode() == OutputMode::Json {
                     return Err("interactive --output json is not supported; omit it for the TUI or redirect line-mode input".into());
                 }
-                let host = Arc::new(tui_host::WorkerInteractiveHost::new(client, themes, None));
+                let host = Arc::new(tui_host::WorkerInteractiveHost::new(
+                    client,
+                    themes,
+                    approval_mode,
+                ));
                 run_tui(
                     host,
                     TuiOptions {
@@ -1197,11 +1206,15 @@ pub(super) async fn dispatch_to_worker_if_active(
                             ScreenMode::Inline
                         },
                         background_notice: Some(default_update_notice_provider()),
+                        lifecycle: herdr.clone().map(|reporter| {
+                            reporter as Arc<dyn colossus_tui::InteractiveLifecycleObserver>
+                        }),
                     },
                 )
                 .await?;
             } else {
-                worker_line_runner(&client, session.clone(), *resume, &themes).await?;
+                worker_line_runner(&client, session.clone(), *resume, &themes, herdr.as_deref())
+                    .await?;
             }
             Ok(true)
         }

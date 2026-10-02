@@ -3,6 +3,61 @@ use super::*;
 mod command_approval;
 
 #[test]
+fn lifecycle_observer_tracks_busy_decisions_and_session_changes() {
+    struct Recorder(std::sync::Mutex<Vec<(String, bool, bool, String)>>);
+
+    impl InteractiveLifecycleObserver for Recorder {
+        fn observe(&self, session_id: &str, working: bool, blocked: bool, approval_mode: &str) {
+            self.0.lock().expect("recording").push((
+                session_id.into(),
+                working,
+                blocked,
+                approval_mode.into(),
+            ));
+        }
+    }
+
+    let recorder = Recorder(std::sync::Mutex::new(Vec::new()));
+    let mut state = TuiState::from_snapshot(snapshot());
+    observe_lifecycle(&state, Some(&recorder));
+    state.operation = Some(OperationKind::Run);
+    observe_lifecycle(&state, Some(&recorder));
+    state.operation = Some(OperationKind::Command);
+    let (session_response, _session_receiver) = oneshot::channel();
+    handle_host_event(
+        &mut state,
+        HostEvent::SessionBrowser(session_browser(session_response)),
+    );
+    observe_lifecycle(&state, Some(&recorder));
+    state.overlay = None;
+    let (theme_response, _theme_receiver) = oneshot::channel();
+    handle_host_event(
+        &mut state,
+        HostEvent::ThemePicker(theme_picker(theme_response)),
+    );
+    observe_lifecycle(&state, Some(&recorder));
+    state.operation = None;
+    state.overlay = Some(Overlay::QueuePaused);
+    observe_lifecycle(&state, Some(&recorder));
+    state.overlay = None;
+    state.session_id = "next-session".into();
+    state.footer.approval_mode = "deny".into();
+    observe_lifecycle(&state, Some(&recorder));
+
+    assert_eq!(
+        *recorder.0.lock().expect("recording"),
+        vec![
+            ("019f-test".into(), false, false, "ask".into()),
+            ("019f-test".into(), true, false, "ask".into()),
+            ("019f-test".into(), true, true, "ask".into()),
+            ("019f-test".into(), true, true, "ask".into()),
+            ("019f-test".into(), false, true, "ask".into()),
+            ("next-session".into(), false, false, "deny".into()),
+        ]
+    );
+}
+
+#[test]
 fn terminal_query_requires_a_real_emulator_hint() {
     assert!(!terminal_can_answer_graphics_query(|name| match name {
         "TERM" => Ok("xterm-256color".into()),

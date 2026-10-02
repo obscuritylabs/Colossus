@@ -563,6 +563,7 @@ fn fixture_process() {
                 bootstrap: BootstrapRequest::default(),
                 screen_mode,
                 background_notice: None,
+                lifecycle: None,
             },
         ))
         .expect("fixture TUI");

@@ -109,8 +109,8 @@ pub use app::run_tui;
 pub use contract::{
     AttachmentDetach, BackgroundNoticeProvider, BootstrapRequest, FooterState, HostCommandResult,
     HostEvent, HostPlanExecutionOutcome, HostPlanExecutionResult, HostRunResult,
-    InteractiveApprovalMode, InteractiveCommand, InteractiveHost, InteractiveMode,
-    InteractivePlanExecutionRequest, InteractivePrompt, InteractivePromptKind,
+    InteractiveApprovalMode, InteractiveCommand, InteractiveHost, InteractiveLifecycleObserver,
+    InteractiveMode, InteractivePlanExecutionRequest, InteractivePrompt, InteractivePromptKind,
     InteractiveRunRequest, InteractiveSessionBrowser, InteractiveSessionBrowserEntry,
     InteractiveSessionBrowserMessage, InteractiveSnapshot, InteractiveThemePicker,
     InteractiveThemePickerEntry, LocalCommand, OperationResult, PlanCommand, PlanHostCommand,
