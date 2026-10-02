@@ -879,20 +879,29 @@ fn preview_cache_bounds_resize_workers_per_image() {
 
 #[test]
 fn parser_handles_process_local_permission_modes() {
-    assert_eq!(
-        parse_interactive_command("/permissions"),
-        InteractiveCommand::Runtime(RuntimeCommand::Permissions(None))
-    );
+    for input in ["/permissions", " \t/permissions\r\n"] {
+        assert_eq!(
+            parse_interactive_command(input),
+            InteractiveCommand::Runtime(RuntimeCommand::Permissions(None)),
+            "{input:?}"
+        );
+    }
     for (value, mode) in [
         ("deny", InteractiveApprovalMode::Deny),
         ("ask", InteractiveApprovalMode::Ask),
         ("risk-auto", InteractiveApprovalMode::RiskAuto),
         ("full-access", InteractiveApprovalMode::FullAccess),
     ] {
-        assert_eq!(
-            parse_interactive_command(&format!("/permissions {value}")),
-            InteractiveCommand::Runtime(RuntimeCommand::Permissions(Some(mode)))
-        );
+        for input in [
+            format!("/permissions {value}"),
+            format!(" \t/permissions\t{value}\r\n"),
+        ] {
+            assert_eq!(
+                parse_interactive_command(&input),
+                InteractiveCommand::Runtime(RuntimeCommand::Permissions(Some(mode))),
+                "{input:?}"
+            );
+        }
     }
     for input in ["/permissions automatic", "/permissions ask now"] {
         assert!(matches!(
@@ -941,47 +950,81 @@ fn help_is_generated_from_the_available_command_catalog() {
 
 #[test]
 fn parser_enforces_the_exact_plan_command_grammar() {
-    assert_eq!(
-        parse_interactive_command("/plan"),
-        InteractiveCommand::Plan(PlanCommand::Toggle)
-    );
-    assert_eq!(
-        parse_interactive_command("/plan on"),
-        InteractiveCommand::Plan(PlanCommand::On)
-    );
-    assert_eq!(
-        parse_interactive_command("/plan use plan-1"),
-        InteractiveCommand::Plan(PlanCommand::Use {
-            plan_id: "plan-1".into(),
-        })
-    );
-    assert_eq!(
-        parse_interactive_command("/plan show"),
-        InteractiveCommand::Plan(PlanCommand::Show { plan_id: None })
-    );
-    assert_eq!(
-        parse_interactive_command("/plan execute direct"),
-        InteractiveCommand::Plan(PlanCommand::Execute {
-            strategy: Some(PlanExecutionStrategy::Direct),
-        })
-    );
-    assert_eq!(
-        parse_interactive_command("/plan execute goal"),
-        InteractiveCommand::Plan(PlanCommand::Execute {
-            strategy: Some(PlanExecutionStrategy::Goal { max_iterations: 5 }),
-        })
-    );
-    assert_eq!(
-        parse_interactive_command("/plan execute goal 50"),
-        InteractiveCommand::Plan(PlanCommand::Execute {
-            strategy: Some(PlanExecutionStrategy::Goal { max_iterations: 50 }),
-        })
-    );
+    for (input, expected) in [
+        ("/plan", PlanCommand::Toggle),
+        ("/plan on", PlanCommand::On),
+        ("/plan off", PlanCommand::Off),
+        ("/plan status", PlanCommand::Status),
+        ("/plan new", PlanCommand::New),
+        ("/plan list", PlanCommand::List),
+        (
+            "/plan use plan-1",
+            PlanCommand::Use {
+                plan_id: "plan-1".into(),
+            },
+        ),
+        ("/plan show", PlanCommand::Show { plan_id: None }),
+        (
+            "/plan show plan-1",
+            PlanCommand::Show {
+                plan_id: Some("plan-1".into()),
+            },
+        ),
+        ("/plan approve", PlanCommand::Approve),
+        ("/plan discard", PlanCommand::Discard),
+        ("/plan execute", PlanCommand::Execute { strategy: None }),
+        (
+            "/plan execute direct",
+            PlanCommand::Execute {
+                strategy: Some(PlanExecutionStrategy::Direct),
+            },
+        ),
+        (
+            "/plan execute goal",
+            PlanCommand::Execute {
+                strategy: Some(PlanExecutionStrategy::Goal { max_iterations: 5 }),
+            },
+        ),
+        (
+            "/plan execute goal 1",
+            PlanCommand::Execute {
+                strategy: Some(PlanExecutionStrategy::Goal { max_iterations: 1 }),
+            },
+        ),
+        (
+            "/plan execute goal 50",
+            PlanCommand::Execute {
+                strategy: Some(PlanExecutionStrategy::Goal { max_iterations: 50 }),
+            },
+        ),
+    ] {
+        for input in [
+            input.to_owned(),
+            format!(" \t{}\r\n", input.replace(' ', "\t")),
+        ] {
+            assert_eq!(
+                parse_interactive_command(&input),
+                InteractiveCommand::Plan(expected.clone()),
+                "{input:?}"
+            );
+        }
+    }
     for input in [
+        "/plan on extra",
+        "/plan off extra",
+        "/plan status extra",
+        "/plan new extra",
+        "/plan list extra",
         "/plan use",
+        "/plan use plan-1 extra",
+        "/plan show plan-1 extra",
         "/plan approve extra",
+        "/plan discard extra",
+        "/plan execute direct extra",
         "/plan execute goal 0",
         "/plan execute goal 51",
+        "/plan execute goal nope",
+        "/plan execute goal 5 extra",
         "/plan execute other",
         "/plan unknown",
     ] {

@@ -393,7 +393,8 @@ fn parse_detach_command(input: &str) -> InteractiveCommand {
 
 fn parse_permissions_command(input: &str) -> InteractiveCommand {
     let mut words = input.split_whitespace();
-    debug_assert_eq!(words.next(), Some("/permissions"));
+    let command = words.next();
+    debug_assert_eq!(command, Some("/permissions"));
     let mode = match words.next() {
         None => None,
         Some("deny") => Some(InteractiveApprovalMode::Deny),
@@ -437,7 +438,8 @@ const MAX_GOAL_ITERATIONS: u16 = 50;
 
 fn parse_plan_command(input: &str) -> InteractiveCommand {
     let mut words = input.split_whitespace();
-    debug_assert_eq!(words.next(), Some("/plan"));
+    let command = words.next();
+    debug_assert_eq!(command, Some("/plan"));
     let subcommand = words.next();
     let parsed = match subcommand {
         None => Some(PlanCommand::Toggle),

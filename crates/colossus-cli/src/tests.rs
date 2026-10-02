@@ -1,6 +1,9 @@
 use super::*;
 use std::collections::BTreeSet;
 
+#[path = "terminal_command_tests.rs"]
+mod terminal_commands;
+
 struct PrivateTempDir {
     #[cfg(windows)]
     path: PathBuf,

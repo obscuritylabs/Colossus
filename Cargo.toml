@@ -235,6 +235,8 @@ missing_docs = "warn"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
+# Debug assertions must not change release behavior.
+debug_assert_with_mut_call = "deny"
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
 

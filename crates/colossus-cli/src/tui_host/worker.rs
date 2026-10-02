@@ -474,6 +474,9 @@ impl WorkerInteractiveHost {
             self.value(WorkerOperation::PresentationGet).await?,
         )
         .map_err(|error| error.to_string())?;
+        if let Some(status) = presentation_status(name, arguments, &preferences) {
+            return Ok(Some(status));
+        }
         let changed = match name {
             "theme" => {
                 let argument = arguments.trim();
