@@ -788,9 +788,10 @@ async fn start_outlook_companion(
         .space(space_id)
         .is_some_and(|space| space.outlook_companion_enabled)
     {
-        let (process, credential) = crate::outlook_companion::OutlookCompanion::start(colossus_home)
-            .await
-            .map_err(|error| (error, RuntimeFailureCodeDto::Configuration))?;
+        let (process, credential) =
+            crate::outlook_companion::OutlookCompanion::start(colossus_home)
+                .await
+                .map_err(|error| (error, RuntimeFailureCodeDto::Configuration))?;
         let registration = CompanionBootstrap {
             endpoint: process.endpoint.clone(),
             credential,
