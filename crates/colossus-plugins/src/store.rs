@@ -56,7 +56,7 @@ fn verify_content_trees(expected: &Path, actual: &Path) -> Result<(), StoreError
             } else {
                 0o400
             };
-            if actual_mode & 0o777 != published_mode {
+            if actual_mode & 0o7777 != published_mode {
                 return Err(mismatch());
             }
         }
