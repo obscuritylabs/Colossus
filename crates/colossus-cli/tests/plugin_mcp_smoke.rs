@@ -42,6 +42,9 @@ fn installed_plugin_stdio_discovers_and_calls_with_host_bound_paths() {
     store
         .enable("fixture-plugin", &installed.digest, true, actor)
         .expect("enable fixture");
+    let snapshot = store.snapshot(&[], &[]).expect("installed plugin snapshot");
+    assert_eq!(snapshot.len(), 1, "{snapshot:?}");
+    assert_eq!(snapshot[0].mcp_servers.len(), 1, "{snapshot:?}");
     let data = store.data_path("fixture-plugin").expect("plugin data");
 
     let workflows = workspace.join("workflows");
@@ -140,10 +143,14 @@ sandbox:
         "--server",
         "fixture-plugin/mail",
     ]);
+    let inventory = run(&["plugins", "list"]);
+    let servers = run(&["mcp", "servers"]);
     assert!(
         tools.status.success(),
-        "{}",
-        String::from_utf8_lossy(&tools.stderr)
+        "tools stderr: {}\nplugin inventory: {}\nMCP servers: {}",
+        String::from_utf8_lossy(&tools.stderr),
+        String::from_utf8_lossy(&inventory.stdout),
+        String::from_utf8_lossy(&servers.stdout),
     );
     let discovered: Value = serde_json::from_slice(&tools.stdout).expect("tool discovery");
     let names = discovered
