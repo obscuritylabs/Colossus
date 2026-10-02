@@ -45,6 +45,12 @@ export interface PluginEntry {
     detail: string;
   }[];
 }
+export interface OutlookCompanionStatus {
+  supported: boolean;
+  enabled: boolean;
+  activeDigest: string | null;
+}
+
 export interface PluginInventory {
   plugins: PluginEntry[];
   managementAvailable: boolean;

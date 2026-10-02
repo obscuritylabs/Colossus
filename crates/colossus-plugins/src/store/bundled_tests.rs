@@ -211,3 +211,19 @@ fn corrupt_content_is_never_reused_or_overwritten_even_when_leased() {
     assert!(store.snapshot(&[], &[]).is_err());
     assert_eq!(fs::read(&path).expect("not overwritten"), b"corrupted");
 }
+
+#[cfg(unix)]
+#[test]
+fn cached_plugin_special_mode_bits_are_rejected() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let home = tempfile::tempdir().expect("home");
+    let store = PluginStore::new(home.path()).expect("store");
+    let core = store
+        .bootstrap_bundled(artifact("1.0.0"), actor())
+        .expect("bootstrap");
+    let path = Path::new(&core.root).join("skills/test/assets/binary.dat");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o4400))
+        .expect("set unexpected setuid bit");
+    assert!(store.snapshot(&[], &[]).is_err());
+}

@@ -58,6 +58,12 @@ workflows:
 | `plugins.registries` | Exact-origin OCI Distribution profiles |
 | `plugins.mcpServers` | Explicit workspace enablement and authority overlay keyed by `PLUGIN/SERVER` |
 
+The built-in `obscuritylabs` trust profile pins the `colossus-plugins` signing workflow.
+Custom `trustProfiles` entries are added alongside it; the built-in signing identity cannot
+be redefined. When `registries` is omitted, the built-in `obscuritylabs` GHCR registry is
+available. An explicit `registries` map replaces that default, so `registries: {}` disables
+OCI registry profiles for the workspace.
+
 The owner-scoped plugin store is always `$COLOSSUS_HOME/plugins`; it is not configurable by
 a workspace. Trust roots, CA bundles, Docker config files, and Docker helper executables
 must use absolute paths. Registry credentials are references, never literal values.

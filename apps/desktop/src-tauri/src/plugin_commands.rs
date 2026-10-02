@@ -1,18 +1,161 @@
 //! Native-owned target binding, file dialogs, and policy approval for plugin management.
 
 use colossus_worker_protocol::PluginManagementRequest;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
 
+#[cfg(windows)]
+use crate::managed_configuration::FieldOverrideSetting;
 use crate::plugin_adapter::{self, PluginInventoryDto, PluginPreviewInput, PluginPreviewKind};
 use crate::{
     commands::{target, unary_slot},
+    desktop_commands::settings_store,
     dto::CommandErrorDto,
     managed_diagnostics::worker_for,
     state::{AppState, TargetConsentContext},
 };
+#[cfg(windows)]
+use crate::{
+    desktop_commands::connect_guard, managed_configuration_commands::persist_and_restart,
+    managed_runtime,
+};
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OutlookCompanionStatusDto {
+    supported: bool,
+    enabled: bool,
+    active_digest: Option<String>,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn outlook_companion_status(
+    state: State<'_, AppState>,
+    space_id: String,
+) -> Result<OutlookCompanionStatusDto, CommandErrorDto> {
+    let settings = settings_store()?.load()?;
+    let space = settings
+        .space(&space_id)
+        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Workspace is unknown."))?;
+    #[cfg(windows)]
+    let active_digest = state.outlook_companion_digest_for(&space_id).await;
+    #[cfg(not(windows))]
+    let active_digest = {
+        let _ = state;
+        None
+    };
+    Ok(OutlookCompanionStatusDto {
+        supported: cfg!(windows),
+        enabled: space.outlook_companion_enabled,
+        active_digest,
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn configure_outlook_companion(
+    state: State<'_, AppState>,
+    space_id: String,
+    enabled: bool,
+) -> Result<OutlookCompanionStatusDto, CommandErrorDto> {
+    #[cfg(not(windows))]
+    {
+        let _ = (state, space_id, enabled);
+        Err(CommandErrorDto::invalid(
+            "spaceId",
+            "Classic Outlook integration requires Windows Desktop.",
+        ))
+    }
+    #[cfg(windows)]
+    {
+        let _guard = connect_guard(&state)?;
+        let store = settings_store()?;
+        let mut settings = store.load()?;
+        if settings.selected_space_id.as_deref() != Some(&space_id) {
+            return Err(CommandErrorDto::invalid(
+                "spaceId",
+                "Select this Workspace before changing its Outlook connection.",
+            ));
+        }
+        let previous = settings.clone();
+        let space = settings
+            .space(&space_id)
+            .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Workspace is unknown."))?;
+        if space.archived {
+            return Err(CommandErrorDto::invalid(
+                "spaceId",
+                "Restore this Workspace first.",
+            ));
+        }
+        let space = settings
+            .spaces
+            .iter_mut()
+            .find(|space| space.id == space_id)
+            .expect("space checked above");
+        let portable_changed =
+            disable_portable_outlook_connection(&mut space.configuration.field_overrides)?;
+        if space.outlook_companion_enabled != enabled || portable_changed {
+            if enabled {
+                // Verify both the active signed digest and its companion handshake
+                // before persisting a setting that would fail every future startup.
+                let (probe, _) =
+                    crate::outlook_companion::OutlookCompanion::start(store.home_root()?).await?;
+                probe.stop().await;
+            }
+            space.outlook_companion_enabled = enabled;
+            let drain =
+                managed_runtime::drain_active_runs_for_configuration(&state, &space_id).await?;
+            persist_and_restart(&state, &store, &mut settings, previous, &space_id).await?;
+            drop(drain);
+        }
+        let active_digest = state.outlook_companion_digest_for(&space_id).await;
+        Ok(OutlookCompanionStatusDto {
+            supported: true,
+            enabled,
+            active_digest,
+        })
+    }
+}
+
+#[cfg(windows)]
+fn disable_portable_outlook_connection(
+    overrides: &mut Vec<FieldOverrideSetting>,
+) -> Result<bool, CommandErrorDto> {
+    let mut servers = overrides
+        .iter()
+        .find(|field| field.field_id == "plugins.mcpServers")
+        .map_or_else(
+            || json!({ crate::managed_configuration::PLUGIN_SERVER_PATCH_MARKER: true }),
+            |field| field.value.clone(),
+        );
+    let servers = servers.as_object_mut().ok_or_else(|| {
+        CommandErrorDto::invalid("plugins.mcpServers", "The plugin connections are invalid.")
+    })?;
+    let server = servers
+        .entry("outlook-classic/mail")
+        .or_insert_with(|| json!({}));
+    let server = server.as_object_mut().ok_or_else(|| {
+        CommandErrorDto::invalid("plugins.mcpServers", "The Outlook connection is invalid.")
+    })?;
+    server.insert("enabled".into(), Value::Bool(false));
+    let value = Value::Object(servers.clone());
+    if let Some(existing) = overrides
+        .iter_mut()
+        .find(|field| field.field_id == "plugins.mcpServers")
+    {
+        if existing.value == value {
+            return Ok(false);
+        }
+        existing.value = value;
+    } else {
+        overrides.push(FieldOverrideSetting {
+            field_id: "plugins.mcpServers".into(),
+            value,
+        });
+    }
+    Ok(true)
+}
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn get_plugin_inventory(
@@ -156,7 +299,28 @@ pub(crate) async fn manage_plugin(
     else {
         return Ok(json!({"cancelled": true}));
     };
-    plugin_adapter::manage(&worker, request, cancellation, |prompt| {
+    #[cfg(windows)]
+    let revokes_outlook = matches!(
+        &request,
+        PluginManagementRequest::Enable { name, .. }
+            | PluginManagementRequest::Disable { name }
+            | PluginManagementRequest::Update { name, .. }
+            | PluginManagementRequest::Uninstall { name, .. }
+            if name == "outlook-classic"
+    );
+    #[cfg(windows)]
+    let force_revoke_on_success = match &request {
+        PluginManagementRequest::Disable { name } if name == "outlook-classic" => true,
+        PluginManagementRequest::Uninstall { name, digest, .. } if name == "outlook-classic" => {
+            state
+                .outlook_companion_snapshots()
+                .await
+                .iter()
+                .any(|(_, active_digest)| active_digest == digest)
+        }
+        _ => false,
+    };
+    let result = plugin_adapter::manage(&worker, request, cancellation, |prompt| {
         let app = app.clone();
         let target_id = target_id.clone();
         async move {
@@ -168,7 +332,30 @@ pub(crate) async fn manage_plugin(
                 .buttons(MessageDialogButtons::OkCancelCustom(approve.clone(), deny)).blocking_show()).await.ok()?;
             accepted.then_some(prompt.choices[0].clone())
         }
-    }).await.map_err(operation_error)
+    }).await;
+    #[cfg(windows)]
+    if revokes_outlook {
+        match &result {
+            Ok(value)
+                if force_revoke_on_success
+                    && value.get("cancelled").and_then(Value::as_bool) != Some(true) =>
+            {
+                // A disable, or removal of the running digest, invalidates its
+                // session even if another process re-enables it immediately.
+                state.stop_all_outlook_companions().await;
+            }
+            Ok(_) | Err(colossus_worker_protocol::WorkerControlError::Remote(_)) => {
+                // Updates can leave the old digest active, and a failed operation
+                // can still have changed it. Keep a healthy helper when it matches.
+                crate::outlook_companion::reconcile_active_digest(&state).await;
+            }
+            Err(_) => {
+                // A lost worker response leaves the operation outcome unknown.
+                state.stop_all_outlook_companions().await;
+            }
+        }
+    }
+    result.map_err(operation_error)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -247,5 +434,37 @@ fn operation_error(error: colossus_worker_protocol::WorkerControlError) -> Comma
     match error {
         colossus_worker_protocol::WorkerControlError::Remote(message) => CommandErrorDto::local_sanitized("plugin_operation_failed", &message.chars().filter(|c| !c.is_control() || *c == '\n').take(4096).collect::<String>(), false),
         _ => CommandErrorDto { code: "plugin_operation_unknown".into(), message: "The plugin operation lost contact with the runtime. Refresh the inventory before retrying; a change may have committed.".into(), retryable: false, outcome_unknown: true, violations: Vec::new() },
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disconnect_persists_portable_stdio_disabled_without_copying_other_servers() {
+        let mut fields = vec![FieldOverrideSetting {
+            field_id: "plugins.mcpServers".into(),
+            value: json!({
+                "outlook-classic/mail": {"enabled": true, "allowedTools": ["get_status"]},
+                "local/docs": {"enabled": true}
+            }),
+        }];
+        assert!(disable_portable_outlook_connection(&mut fields).expect("disable"));
+        assert_eq!(fields[0].value["outlook-classic/mail"]["enabled"], false);
+        assert_eq!(
+            fields[0].value["outlook-classic/mail"]["allowedTools"],
+            json!(["get_status"])
+        );
+        assert_eq!(fields[0].value["local/docs"]["enabled"], true);
+        assert!(!disable_portable_outlook_connection(&mut fields).expect("idempotent"));
+    }
+
+    #[test]
+    fn disconnect_without_local_override_uses_a_server_patch() {
+        let mut fields = Vec::new();
+        assert!(disable_portable_outlook_connection(&mut fields).expect("disable"));
+        assert_eq!(fields[0].value["$colossusPatchV1"], true);
+        assert_eq!(fields[0].value["outlook-classic/mail"]["enabled"], false);
     }
 }

@@ -999,7 +999,7 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [surface, setSurface] = useState<WorkspaceSurface>("work");
   const [settingsStartTab, setSettingsStartTab] = useState<
-    "runtime" | "providers" | "terminal"
+    "runtime" | "providers" | "plugins" | "terminal"
   >("runtime");
   const [workNavigationOpen, setWorkNavigationOpen] = useState(false);
   const [workspaceFileOpenRequest, setWorkspaceFileOpenRequest] =
@@ -5482,6 +5482,10 @@ export default function App() {
       ) : (
         <OperationsSurface
           initialSettingsTab={settingsStartTab}
+          onConfigurePluginConnection={() => {
+            setSettingsStartTab("plugins");
+            setSurface("settings");
+          }}
           onReturnToWork={() => selectSurface("work")}
           pluginSelections={pluginSelections}
           onUsePluginSkill={(id) => {

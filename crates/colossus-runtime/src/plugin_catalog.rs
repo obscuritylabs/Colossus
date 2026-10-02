@@ -138,6 +138,36 @@ pub(super) struct PluginCatalogSource {
 }
 
 impl PluginCatalogSource {
+    pub(super) fn live_inventory(&self) -> Result<Vec<PluginInventoryEntry>, RuntimeError> {
+        let Some(store) = &self.store else {
+            return Ok(Vec::new());
+        };
+        let mut inventory = store.inventory()?;
+        if self.configuration.enabled {
+            let (records, _lease) = store.available_snapshot_with_lease(
+                &self.configuration.include,
+                &self.configuration.exclude,
+            )?;
+            let extensions = compile_active_plugin_extensions(
+                &records,
+                &self.configuration,
+                &self.standalone_mcp,
+                &self.sandbox,
+                Some(store),
+            )?;
+            for entry in &mut inventory {
+                if records.iter().any(|record| {
+                    record.installation.manifest.name == entry.manifest.name
+                        && record.installation.digest == entry.digest
+                }) && let Some(diagnostics) = extensions.diagnostics.get(&entry.manifest.name)
+                {
+                    entry.diagnostics.extend(diagnostics.iter().cloned());
+                }
+            }
+        }
+        Ok(narrow_plugin_inventory(inventory, &self.configuration))
+    }
+
     pub(super) fn capture(&self) -> Result<Arc<PluginRunCatalog>, RuntimeError> {
         if let Some(catalog) = active_plugin_catalog() {
             return Ok(catalog);

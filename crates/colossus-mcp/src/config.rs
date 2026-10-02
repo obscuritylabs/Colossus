@@ -658,6 +658,8 @@ fn validate_stdio_server(
     }
     for (child_name, reference) in &server.environment {
         if !valid_environment_name(child_name)
+            || child_name.eq_ignore_ascii_case("PLUGIN_ROOT")
+            || child_name.eq_ignore_ascii_case("PLUGIN_DATA")
             || (!ambient_resources && !allowed_environment.contains(child_name))
             || !valid_credential_reference(reference)
         {
@@ -668,12 +670,29 @@ fn validate_stdio_server(
     }
     for (child_name, value) in &server.literal_environment {
         if !valid_environment_name(child_name)
-            || matches!(child_name.as_str(), "PLUGIN_ROOT" | "PLUGIN_DATA")
             || value.len() > 64 * 1024
             || value.contains('\0')
+            || ((child_name.eq_ignore_ascii_case("PLUGIN_ROOT")
+                || child_name.eq_ignore_ascii_case("PLUGIN_DATA"))
+                && (server.effect_action_prefix.is_none() || server.provenance.is_none()))
+            || ((child_name.eq_ignore_ascii_case("PLUGIN_ROOT")
+                || child_name.eq_ignore_ascii_case("PLUGIN_DATA"))
+                && !matches!(child_name.as_str(), "PLUGIN_ROOT" | "PLUGIN_DATA"))
         {
             return Err(McpError::Invalid(format!(
                 "server {name} contains an invalid literal plugin environment entry"
+            )));
+        }
+    }
+    if server.effect_action_prefix.is_some() {
+        let root = server.literal_environment.get("PLUGIN_ROOT");
+        let data = server.literal_environment.get("PLUGIN_DATA");
+        if !root.is_some_and(|value| Path::new(value).is_absolute())
+            || !data.is_some_and(|value| Path::new(value).is_absolute())
+            || !root.is_some_and(|value| server.command.starts_with(value))
+        {
+            return Err(McpError::Invalid(format!(
+                "server {name} requires runtime-bound PLUGIN_ROOT and PLUGIN_DATA"
             )));
         }
     }

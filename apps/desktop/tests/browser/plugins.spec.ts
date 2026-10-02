@@ -103,6 +103,31 @@ test.beforeEach(async ({ page }) => {
           }
           return snapshot;
         }
+        if (command === "get_managed_configuration")
+          return {
+            globalConfiguration: { revision: 4 },
+            spaces: [
+              {
+                id: "local",
+                archived: false,
+                effectiveValues: [{ fieldId: "plugins.mcpServers", value: {} }],
+                configuration: {
+                  accessProfileOverride: null,
+                  executionBoundaryOverride: null,
+                  terminalEnabledOverride: null,
+                  fieldOverrides: [],
+                  catalogRevisions: {},
+                  searchRoles: {},
+                  modelRoles: {},
+                  credentialOverrides: {},
+                },
+              },
+            ],
+          };
+        if (command === "save_space_configuration") {
+          state.pluginMcpEnabled = true;
+          return {};
+        }
         if (command === "managed_mcp_oauth_status")
           return {
             server: "colossus/docs",
@@ -211,6 +236,37 @@ test.beforeEach(async ({ page }) => {
   await expect(
     page.getByRole("button", { name: /colossus 0\.11/u }),
   ).toBeVisible();
+});
+
+test("enables a plugin connection from its detail view", async ({ page }) => {
+  const controls = page.getByRole("group", {
+    name: "colossus/docs connection",
+  });
+  await controls
+    .getByRole("button", { name: "Enable all plugin tools" })
+    .click();
+  await expect(
+    controls.getByRole("button", { name: "Disable connection" }),
+  ).toBeVisible();
+  const request = await page.evaluate(() => {
+    const state = window as unknown as {
+      pluginCalls: { command: string; args: Record<string, unknown> }[];
+    };
+    return state.pluginCalls.find(
+      (entry) => entry.command === "save_space_configuration",
+    )?.args.request;
+  });
+  expect(request).toMatchObject({
+    spaceId: "local",
+    fieldOverrides: [
+      {
+        fieldId: "plugins.mcpServers",
+        value: {
+          "colossus/docs": { enabled: true, allowedTools: ["*"] },
+        },
+      },
+    ],
+  });
 });
 
 test("failed plugin MCP diagnostics keep TLS evidence readable before expansion", async ({
@@ -583,6 +639,13 @@ for (const action of [
       .click();
     const form = page.getByRole("form", { name: `${action} plugin` });
     await expect(form).toBeFocused();
+    if (action === "install") {
+      await form
+        .getByLabel("OCI plugin reference")
+        .fill(
+          "oci://ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:0.1.0-alpha.3.ci.3.1-windows-amd64",
+        );
+    }
     if (action === "pull" || action === "push") {
       await form
         .getByLabel("Registry profile", { exact: true })

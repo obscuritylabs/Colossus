@@ -22,6 +22,8 @@ mod managed_configuration_commands;
 mod managed_diagnostics;
 mod managed_runtime;
 mod mcp_health;
+#[cfg(windows)]
+mod outlook_companion;
 mod plugin_adapter;
 mod plugin_commands;
 mod plugin_selection;
@@ -87,7 +89,8 @@ use managed_diagnostics::{
     managed_mcp_oauth_status,
 };
 use plugin_commands::{
-    cancel_plugin_operation, get_plugin_inventory, manage_plugin, read_plugin_preview,
+    cancel_plugin_operation, configure_outlook_companion, get_plugin_inventory, manage_plugin,
+    outlook_companion_status, read_plugin_preview,
 };
 use plugin_selection::resolve_plugin_selection;
 use provider_catalog::{discover_managed_provider_models, get_provider_presets};
@@ -156,6 +159,8 @@ pub fn run() {
         .setup(|app| {
             status_bar::setup(app)?;
             browser::start_watchdog(app.handle().clone());
+            #[cfg(windows)]
+            outlook_companion::start_watchdog(app.handle().clone());
             terminal_commands::pane::start_watchdog(app.handle().clone());
             Ok(())
         })
@@ -187,6 +192,8 @@ pub fn run() {
             read_plugin_preview,
             manage_plugin,
             cancel_plugin_operation,
+            outlook_companion_status,
+            configure_outlook_companion,
             desktop_release_channel,
             desktop_release_metadata,
             check_desktop_update,

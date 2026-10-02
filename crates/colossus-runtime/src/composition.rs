@@ -225,6 +225,7 @@ impl Runtime {
         codex_auth: Option<CodexAuthStore>,
     ) -> Result<Self, RuntimeError> {
         validate_storage_config(&config.storage)?;
+        validate_builtin_plugin_trust_identity(&config.plugins)?;
         let storage_adapter = match config.storage.adapter {
             StorageAdapter::Redb => "redb",
             StorageAdapter::Ephemeral => "ephemeral",

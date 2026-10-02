@@ -152,7 +152,27 @@ plugins:
       publicKeys: []
       identities: []
       trustRootPath: null
-  registries: {}
+    obscuritylabs:
+      mode: required
+      publicKeys: []
+      identities:
+        - issuer: https://token.actions.githubusercontent.com
+          subject: https://github.com/obscuritylabs/colossus-plugins/.github/workflows/plugins.yml@refs/heads/main
+      trustRootPath: null
+  registries:
+    obscuritylabs:
+      origin: https://ghcr.io
+      trustProfile: obscuritylabs
+      auth:
+        kind: anonymous
+      tokenOrigins:
+        - https://ghcr.io
+      blobRedirectOrigins:
+        - https://pkg-containers.githubusercontent.com
+      caBundlePath: null
+      tokenCaBundlePaths: {}
+      blobRedirectCaBundlePaths: {}
+      allowNonPublic: false
   mcpServers: {}
 bundles:
   trustedPublishers: {}

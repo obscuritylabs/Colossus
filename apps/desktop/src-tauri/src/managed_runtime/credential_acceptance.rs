@@ -183,6 +183,7 @@ async fn native_backend_process_child() {
             codex_auth: None,
             colossus_home: &home,
         },
+        None,
     )
     .unwrap();
     let identity = settings.load().unwrap().client_identity.unwrap();

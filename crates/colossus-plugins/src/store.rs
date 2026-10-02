@@ -49,7 +49,14 @@ fn verify_content_trees(expected: &Path, actual: &Path) -> Result<(), StoreError
                 .map_err(adapter)?
                 .permissions()
                 .mode();
-            if expected_mode & 0o111 != actual_mode & 0o111 || actual_mode & 0o222 != 0 {
+            // Published content is owner-only (0500/0400), while the extracted
+            // artifact carries archive modes (0755/0644).
+            let published_mode = if expected_mode & 0o111 != 0 {
+                0o500
+            } else {
+                0o400
+            };
+            if actual_mode & 0o7777 != published_mode {
                 return Err(mismatch());
             }
         }

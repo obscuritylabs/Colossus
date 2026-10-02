@@ -40,7 +40,7 @@ export function PluginOperationForm({
         trigger.focus({ preventScroll: true });
     };
   }, []);
-  const [source, setSource] = useState<PluginSource["kind"]>("directory");
+  const [source, setSource] = useState<PluginSource["kind"]>("reference");
   const [digest, setDigest] = useState("");
   const [registry, setRegistry] = useState("");
   const [reference, setReference] = useState("");
@@ -60,7 +60,11 @@ export function PluginOperationForm({
       case "install": {
         const input: PluginSource =
           source === "reference"
-            ? { kind: source, registry, reference }
+            ? {
+                kind: source,
+                registry: registry.trim(),
+                reference: reference.trim().replace(/^oci:\/\//, ""),
+              }
             : source === "directory"
               ? { kind: source, path: "" }
               : { kind: source, path: "", digest: digest || null };
@@ -147,33 +151,49 @@ export function PluginOperationForm({
                 setSource(event.target.value as PluginSource["kind"])
               }
             >
+              <option value="reference">OCI registry</option>
               <option value="directory">Plugin directory</option>
               <option value="layout">OCI layout directory</option>
               <option value="archive">OCI layout archive</option>
-              <option value="reference">Registry reference</option>
             </DropdownSelect>
           </label>
         )}
         {network && (
           <>
             <label>
-              Registry profile
-              <input
-                required
-                value={registry}
-                onChange={(event) => setRegistry(event.target.value)}
-                placeholder="Configured registry name"
-              />
-            </label>
-            <label>
-              Registry reference
+              {action === "install"
+                ? "OCI plugin reference"
+                : "Registry reference"}
               <input
                 required
                 value={reference}
                 onChange={(event) => setReference(event.target.value)}
-                placeholder="registry.example.com/team/plugin:version"
+                placeholder="oci://ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:version"
               />
             </label>
+            {action === "install" ? (
+              <details>
+                <summary>Registry options</summary>
+                <label>
+                  Registry profile
+                  <input
+                    value={registry}
+                    onChange={(event) => setRegistry(event.target.value)}
+                    placeholder="Selected automatically when one profile matches"
+                  />
+                </label>
+              </details>
+            ) : (
+              <label>
+                Registry profile
+                <input
+                  required
+                  value={registry}
+                  onChange={(event) => setRegistry(event.target.value)}
+                  placeholder="Configured registry name"
+                />
+              </label>
+            )}
           </>
         )}
         {((action === "install" && source !== "reference") ||
@@ -189,8 +209,9 @@ export function PluginOperationForm({
         )}
         {action === "install" && source === "reference" && (
           <p>
-            Registry installations enforce the trust profile configured for this
-            registry.
+            The matching registry profile verifies the package signature. The
+            built-in Obscurity Labs profile accepts only its published plugin
+            workflow identity.
           </p>
         )}
         {(action === "verify" ||

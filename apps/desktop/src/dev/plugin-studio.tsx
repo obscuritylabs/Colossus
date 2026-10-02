@@ -51,6 +51,7 @@ export default function PluginStudio() {
       <PluginsSurface
         key={target}
         targetId={target}
+        spaceId={target === "local" ? "local" : null}
         supported={target !== "old"}
         selections={skills}
         onUseSkill={(id) =>

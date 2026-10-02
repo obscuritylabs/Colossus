@@ -32,7 +32,9 @@ import { PluginsSurface } from "./PluginsSurface";
 import type { WorkspaceSurface } from "./ProductRail";
 
 interface OperationsSurfaceProps {
-  initialSettingsTab?: "runtime" | "providers" | "terminal" | undefined;
+  initialSettingsTab?:
+    "runtime" | "providers" | "plugins" | "terminal" | undefined;
+  onConfigurePluginConnection?: () => void;
   pluginSelections?: readonly string[];
   onUsePluginSkill?: (id: string) => void;
   surface: Exclude<WorkspaceSurface, "work" | "terminal">;
@@ -1016,6 +1018,8 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
         <PluginsSurface
           key={props.desktop.selectedTargetId}
           targetId={props.desktop.selectedTargetId}
+          spaceId={props.desktop.selectedSpaceId}
+          onConfigureConnection={props.onConfigurePluginConnection}
           supported={props.desktop.capabilities.plugins}
           selections={props.pluginSelections}
           onUseSkill={

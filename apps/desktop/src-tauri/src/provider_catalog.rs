@@ -581,6 +581,7 @@ mod tests {
             access_profile: AccessProfileSetting::Minimal,
             execution_boundary: ExecutionBoundarySetting::OfflineIsolated,
             terminal_enabled: false,
+            outlook_companion_enabled: false,
             configuration: crate::managed_configuration::SpaceConfigurationSetting::default(),
         });
         assert_eq!(

@@ -243,7 +243,7 @@ fn compile_plugin_extensions(
                     portable.id.clone(),
                     McpServerConfig {
                         transport,
-                        command,
+                        command: command.clone(),
                         args: portable
                             .args
                             .iter()
@@ -283,19 +283,31 @@ fn compile_plugin_extensions(
             for suffix in ["tools", "call"] {
                 let action = format!("{action_prefix}.{suffix}");
                 actions.push(action.clone());
+                let mut action_filesystem = vec![
+                    FilesystemGrant {
+                        root: root.display().to_string(),
+                        mode: "read".into(),
+                    },
+                    FilesystemGrant {
+                        root: data.display().to_string(),
+                        mode: "write".into(),
+                    },
+                ];
+                if transport == colossus_mcp::McpTransportKind::Stdio {
+                    action_filesystem.push(FilesystemGrant {
+                        root: command.display().to_string(),
+                        mode: "execute".into(),
+                    });
+                }
+                let mut allowed_environment =
+                    overlay.environment.keys().cloned().collect::<Vec<_>>();
+                if transport == colossus_mcp::McpTransportKind::Stdio {
+                    allowed_environment.extend(["PLUGIN_ROOT".into(), "PLUGIN_DATA".into()]);
+                }
                 restrictions.push(PluginActionRestriction {
                     action,
-                    filesystem: vec![
-                        FilesystemGrant {
-                            root: root.display().to_string(),
-                            mode: "read".into(),
-                        },
-                        FilesystemGrant {
-                            root: data.display().to_string(),
-                            mode: "write".into(),
-                        },
-                    ],
-                    allowed_environment: overlay.environment.keys().cloned().collect(),
+                    filesystem: action_filesystem,
+                    allowed_environment,
                     network_destinations: portable
                         .url
                         .as_deref()

@@ -1,6 +1,10 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { PluginInventory, PluginRequest } from "./plugins";
+import type {
+  OutlookCompanionStatus,
+  PluginInventory,
+  PluginRequest,
+} from "./plugins";
 import { readNativeDialogAppearance } from "./theme/appearance";
 import type { ProviderPreset, ProviderCatalogModel } from "./providerCatalog";
 import type { GitStatus, GitCommitPage, GitCommitDetails } from "./git";
@@ -156,6 +160,17 @@ export function discoverManagedProviderModels(
 
 export function getPluginInventory(targetId: string): Promise<PluginInventory> {
   return call("get_plugin_inventory", { targetId });
+}
+export function getOutlookCompanionStatus(
+  spaceId: string,
+): Promise<OutlookCompanionStatus> {
+  return call("outlook_companion_status", { spaceId });
+}
+export function configureOutlookCompanion(
+  spaceId: string,
+  enabled: boolean,
+): Promise<OutlookCompanionStatus> {
+  return call("configure_outlook_companion", { spaceId, enabled });
 }
 export function resolvePluginSelection(
   targetId: string,
