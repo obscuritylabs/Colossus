@@ -229,7 +229,8 @@ type SpaceTab =
   | "effective";
 
 interface ManagedSettingsPaneProps {
-  initialSpaceTab?: "runtime" | "providers" | "plugins" | "terminal" | undefined;
+  initialSpaceTab?:
+    "runtime" | "providers" | "plugins" | "terminal" | undefined;
   desktop: DesktopStatus;
   connecting: boolean;
   updateChecking: boolean;
