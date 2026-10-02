@@ -160,11 +160,11 @@ fn core_builtin_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "filesystem.search".into(),
-            description: "Search policy-permitted UTF-8 workspace files without following links."
+            description: "Search file contents like rg (ripgrep): bounded regex or literal matches with an optional path and glob. Use this for code or text search when shell.run rg is unavailable; it requires read authority, not process execution."
                 .into(),
             input_schema: object_schema(
                 json!({
-                    "pattern": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "pattern": {"type": "string", "minLength": 1, "maxLength": 4096, "description": "Rust regex by default; set regex=false for a literal substring."},
                     "path": {"type": "string", "minLength": 1, "maxLength": 4096, "default": "."},
                     "glob": {"type": "string", "minLength": 1, "maxLength": 4096},
                     "regex": {"type": "boolean", "default": true},
@@ -249,7 +249,7 @@ fn core_builtin_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "repo.map".into(),
-            description: "Map bounded policy-permitted repository files without following links."
+            description: "List bounded policy-permitted repository file paths, like rg --files, without following links. Use filesystem.search to find text inside files."
                 .into(),
             input_schema: object_schema(
                 json!({
@@ -264,11 +264,11 @@ fn core_builtin_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "repo.symbol_search".into(),
-            description: "Search bounded UTF-8 repository text for a symbol or declaration."
+            description: "Find structural declarations containing a literal substring. This does not interpret regex or search arbitrary file content; use filesystem.search for those searches."
                 .into(),
             input_schema: object_schema(
                 json!({
-                    "pattern": {"type": "string", "minLength": 1, "maxLength": 512},
+                    "pattern": {"type": "string", "minLength": 1, "maxLength": 512, "description": "Literal substring of a declaration kind, name, or text; not a regex."},
                     "path": {"type": "string", "minLength": 1, "maxLength": 4096, "default": "."},
                     "max_results": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}
                 }),
@@ -337,7 +337,7 @@ fn core_builtin_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "shell.run".into(),
             description: format!(
-                "Run a non-interactive process. Set yield_time_ms (normally 1000) to return a tracked session and use shell.wait/read/stop. A running session is not a successful command. Lifetime run is cleaned up when this run ends; explicitly choose workspace for a server that must survive later turns. Wait until a workspace session is running before ending the turn; pending launches are cancelled. Both lifetimes keep the original sandbox deadline. Run inside the selected workspace; provide exactly one of command or argv. Prefer command to use the configured shell (PowerShell on Windows); argv[0] must name an explicitly configured executable. Use a workspace-relative cwd, normally dot. Shell PATH contains configured executable directories, not the ambient host PATH. An acknowledged danger_full_access backend instead permits ambient host executables, environment, working directories, filesystem access, and network access. Host OS: {}. Verify OS in containers.",
+                "Run a non-interactive process. Set yield_time_ms (normally 1000) to return a tracked session and use shell.wait/read/stop. A running session is not a successful command. Lifetime run is cleaned up when this run ends; explicitly choose workspace for a server that must survive later turns. Wait until a workspace session is running before ending the turn; pending launches are cancelled. Both lifetimes keep the original sandbox deadline. Run inside the selected workspace; provide exactly one of command or argv. Use command for shell syntax (PowerShell on Windows); use argv to run a named executable directly. argv[0] must name an explicitly configured executable. Use a workspace-relative cwd, normally dot. Shell PATH is restricted and may not expose a granted executable on Windows. Published CLI and Desktop bundles include rg (ripgrep); use argv starting with rg to resolve that exact managed executable when it is granted or under danger_full_access. Source builds may not have rg available; use filesystem.search for bounded regex content search in that case. An acknowledged danger_full_access backend instead permits ambient host executables, environment, working directories, filesystem access, and network access. Host OS: {}. Verify OS in containers.",
                 host_os_name()
             ),
             input_schema: object_schema_with(

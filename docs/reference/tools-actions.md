@@ -76,7 +76,28 @@ Published CLI and Desktop builds include a pinned `rg` for command searches. Whe
 `shell.run` has execute authority for that exact file, `rg` resolves to the managed
 copy before an ambient executable. Its presence does not change the approval and
 sandbox rules for `shell.run`. For ordinary workspace search, `filesystem.search`
-remains available without process execution, including in Plan Mode.
+remains available without process execution, including in Plan Mode. It accepts
+regular expressions by default, an optional file glob, and a result limit.
+Workspace searches and `repo.map` honor repository ignore rules. Use
+`filesystem.search` for arbitrary code or text matches; `repo.symbol_search` only
+matches literal substrings in structural declarations. Source and debug Desktop
+builds do not stage the release ripgrep binary, so use `filesystem.search` there unless an
+executable has been explicitly configured.
+
+For direct command searches in a published build, pass `argv` so the tool
+resolver selects the managed executable without relying on a shell `PATH`.
+The isolated Windows shell has a restricted `PATH`, so `command: "rg ..."` can
+fail even when the exact bundled executable is granted:
+
+```json
+{"argv":["rg","-n","load_plugin|discover_plugins","crates/colossus-plugins"],"justification":"Find the plugin loader implementation."}
+```
+
+The equivalent `filesystem.search` call works without process execution:
+
+```json
+{"pattern":"load_plugin|discover_plugins","path":"crates/colossus-plugins","glob":"**/*.rs","max_matches":50}
+```
 
 The model-visible tool description includes the host operating system before the
 agent's first command. It is a hint for native execution; a configured OCI container

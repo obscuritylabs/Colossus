@@ -112,23 +112,39 @@ impl RepositoryEffectExecutor {
         let mut files = Vec::new();
         let mut truncated = false;
         let hard_limit = maximum.clamp(1, 5_000);
-        let mut walker = WalkBuilder::new(root);
+        let workspace_scoped = root.starts_with(&self.workspace);
+        let respect_repository_ignores = !ambient || workspace_scoped;
+        // Full access can read workspace ancestor ignore files so a subdirectory
+        // search inherits them. A scoped permit authorizes only its selected root.
+        let walk_root = if ambient && workspace_scoped {
+            &self.workspace
+        } else {
+            root
+        };
+        let selected_root = root.to_path_buf();
+        let mut walker = WalkBuilder::new(walk_root);
         walker
             .follow_links(false)
+            .filter_entry(move |entry| {
+                entry.path().starts_with(&selected_root) || selected_root.starts_with(entry.path())
+            })
             .hidden(false)
-            .ignore(!ambient)
-            .git_ignore(!ambient)
-            .git_global(!ambient)
-            .git_exclude(!ambient)
+            .ignore(respect_repository_ignores)
+            .git_ignore(respect_repository_ignores)
+            .git_global(respect_repository_ignores)
+            .git_exclude(respect_repository_ignores)
             .parents(false);
         let walker = walker.build();
         for entry in walker {
             let entry = entry.map_err(|error| ExecutionError::Failed(error.to_string()))?;
+            if !entry.path().starts_with(root) {
+                continue;
+            }
             let boundary = if ambient { root } else { &self.workspace };
             let relative = entry.path().strip_prefix(boundary).map_err(|_| {
                 ExecutionError::Failed("repository walk escaped its authorized root".into())
             })?;
-            if !ambient
+            if respect_repository_ignores
                 && relative.components().any(|component| {
                     matches!(component.as_os_str().to_str(), Some(".git" | ".colossus"))
                 })
