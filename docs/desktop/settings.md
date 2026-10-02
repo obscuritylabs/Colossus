@@ -68,7 +68,9 @@ Define reusable standalone MCP servers under **Global → MCP**, then enable and
 
 ## Desktop preferences and support
 
-Under **Global → Desktop**, adjust appearance, additional CA certificates, update checks, and diagnostic export. A PEM CA bundle is copied into private native storage after validation; Desktop displays its certificate count and fingerprints, not the original path. Importing or removing it restarts Managed Local. Use this when a private provider or organizational TLS gateway requires extra trust.
+Under **Global → Desktop**, adjust appearance, additional CA certificates, a client certificate and key, update checks, and diagnostic export. A PEM CA bundle is copied into private native storage after validation; Desktop displays its certificate count and fingerprints, not the original path. Importing or removing it restarts Managed Local. Use this when a private provider or organizational TLS gateway requires extra trust.
+
+For services that require mutual TLS, import a PEM client certificate chain and its matching PEM private key under **Client identity**. Desktop validates the pair, saves it in private native storage, and restarts Managed Local so Colossus-owned provider, HTTP MCP, and other authorized TLS calls can present it. Treat this as a global identity for the destinations you allow the app to contact. The updater does not present it because downloads can redirect to another origin. External MCP processes manage their own TLS credentials.
 
 Stable builds with a configured signed update channel can use **Check for updates** and **Install update**. Preview and development builds may have no update channel; install a newer release manually after checking its release notes. **Export diagnostics** produces a bounded local report without prompt text, model output, credentials, or private paths. Reproduce a connection failure before export so its latest health report is included.
 
