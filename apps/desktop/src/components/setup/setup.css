@@ -344,4 +344,32 @@
   .setup-wizard .onboarding-diagnostics {
     margin-top: 12px;
   }
+  .setup-wizard--desktop .onboarding-mark {
+    margin-bottom: 8px;
+  }
+  .setup-wizard--desktop .setup-progress {
+    margin: 10px 0;
+  }
+  .setup-wizard--desktop .setup-desktop-options {
+    gap: 8px;
+  }
+  .setup-wizard--desktop .setup-desktop-options legend {
+    margin-bottom: 6px;
+  }
+  .setup-wizard--desktop .setup-theme-preview {
+    height: 24px;
+  }
+  .setup-wizard--desktop .setup-choice {
+    padding: 6px;
+  }
+  .setup-wizard--desktop .setup-certificates {
+    padding-top: 8px;
+  }
+  .setup-wizard--desktop .setup-navigation {
+    margin-top: 12px;
+  }
+  .setup-wizard--desktop .external-setup-row {
+    margin-top: 8px;
+    padding-top: 8px;
+  }
 }

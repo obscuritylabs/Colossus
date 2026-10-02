@@ -1401,6 +1401,13 @@ pub struct BootstrapRequest {
     /// never part of the public API or renderer DTOs.
     #[serde(default)]
     pub ca_bundle_path: Option<String>,
+    /// Native-supplied PEM client identity, available only on inherited bootstrap IPC.
+    /// The private key never enters generated runtime YAML or renderer DTOs.
+    #[serde(default)]
+    pub client_certificate_pem: Option<SecretString>,
+    /// Matching PEM private key, sent only through authenticated bootstrap IPC.
+    #[serde(default)]
+    pub client_key_pem: Option<SecretString>,
     /// Optional native-selected official Codex credential file.
     ///
     /// This path travels only through inherited bootstrap IPC. It is required exactly
@@ -1443,6 +1450,7 @@ impl BootstrapRequest {
             || self.ca_bundle_path.as_deref().is_some_and(|path| {
                 path.len() > MAX_PRIVATE_PATH_BYTES || !absolute_non_root(Path::new(path))
             })
+            || self.client_certificate_pem.is_some() != self.client_key_pem.is_some()
             || self.codex_auth_path.as_deref().is_some_and(|path| {
                 path.len() > MAX_PRIVATE_PATH_BYTES || !absolute_non_root(Path::new(path))
             })
@@ -1535,6 +1543,7 @@ impl fmt::Debug for BootstrapRequest {
             )
             .field("risk_auto_approvals", &self.risk_auto_approvals)
             .field("ca_bundle_configured", &self.ca_bundle_path.is_some())
+            .field("client_identity_configured", &self.client_key_pem.is_some())
             .field("codex_auth_configured", &self.codex_auth_path.is_some())
             .field("runtime", &self.runtime)
             .field("grant", &self.grant)
@@ -1989,6 +1998,8 @@ mod tests {
             plaintext_journal_for_development: false,
             risk_auto_approvals: false,
             ca_bundle_path: None,
+            client_certificate_pem: None,
+            client_key_pem: None,
             codex_auth_path: None,
             runtime: ManagedRuntimeConfig {
                 access_profile: ManagedAccessProfile::Development,
@@ -2327,6 +2338,8 @@ mod tests {
         let mut request = request();
         let ca_bundle_path = absolute_test_path("company-ca.pem");
         request.ca_bundle_path = Some(ca_bundle_path.clone());
+        request.client_certificate_pem = Some(SecretString::new("public-client-cert").unwrap());
+        request.client_key_pem = Some(SecretString::new("secret-client-key").unwrap());
         request.validate().expect("request");
         let frame = ParentFrame::Bootstrap(Box::new(request));
         let mut bytes = Vec::new();
@@ -2351,12 +2364,20 @@ mod tests {
         assert!(!format!("{decoded:?}").contains(&"5a".repeat(32)));
         assert!(!format!("{decoded:?}").contains(&decoded.workspace_identity.sha256));
         assert!(!format!("{decoded:?}").contains("company-ca.pem"));
+        assert!(!format!("{decoded:?}").contains("secret-client-key"));
+        assert_eq!(
+            decoded.client_key_pem.as_ref().unwrap().expose(),
+            "secret-client-key"
+        );
         assert_eq!(
             decoded.ca_bundle_path.as_deref(),
             Some(ca_bundle_path.as_str())
         );
 
         decoded.ca_bundle_path = Some("../company-ca.pem".into());
+        assert_eq!(decoded.validate(), Err(ProtocolError::InvalidFrame));
+        decoded.ca_bundle_path = Some(ca_bundle_path);
+        decoded.client_key_pem = None;
         assert_eq!(decoded.validate(), Err(ProtocolError::InvalidFrame));
     }
 

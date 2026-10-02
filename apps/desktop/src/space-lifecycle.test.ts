@@ -69,6 +69,7 @@ const STATUS: DesktopStatus = {
     certificateCount: 0,
     fingerprintsSha256: [],
   },
+  clientIdentity: { configured: false, leafFingerprintSha256: null },
   capabilities: {
     research: true,
     delegation: true,

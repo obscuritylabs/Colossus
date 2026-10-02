@@ -279,6 +279,7 @@ pub(crate) struct DesktopStatusDto {
     pub(crate) approval_mode: DesktopApprovalModeDto,
     pub(crate) terminal_enabled: bool,
     pub(crate) additional_ca_bundle: CaBundleStatusDto,
+    pub(crate) client_identity: ClientIdentityStatusDto,
     pub(crate) capabilities: DesktopCapabilitiesDto,
 }
 
@@ -329,6 +330,26 @@ impl CaBundleStatusDto {
                 fingerprints_sha256: bundle.fingerprints_sha256.clone(),
             },
         )
+    }
+}
+
+/// Public certificate fingerprint and presence only; the key stays in native storage.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClientIdentityStatusDto {
+    pub(crate) configured: bool,
+    pub(crate) leaf_fingerprint_sha256: Option<String>,
+}
+
+impl ClientIdentityStatusDto {
+    pub(crate) fn from_settings(settings: &DesktopSettings) -> Self {
+        Self {
+            configured: settings.client_identity.is_some(),
+            leaf_fingerprint_sha256: settings
+                .client_identity
+                .as_ref()
+                .map(|identity| identity.leaf_fingerprint_sha256.clone()),
+        }
     }
 }
 

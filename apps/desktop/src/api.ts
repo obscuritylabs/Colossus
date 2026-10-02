@@ -380,6 +380,14 @@ export function removeCaBundle(): Promise<DesktopStatus> {
   return call("remove_ca_bundle");
 }
 
+export function importClientIdentity(): Promise<DesktopStatus | null> {
+  return call("import_client_identity");
+}
+
+export function removeClientIdentity(): Promise<DesktopStatus> {
+  return call("remove_client_identity");
+}
+
 export function addExternalTarget(): Promise<DesktopStatus | null> {
   return call("add_external_target");
 }

@@ -36,6 +36,7 @@ import {
   getSessionMap,
   getThreadDelegate,
   importCaBundle,
+  importClientIdentity,
   installDesktopUpdate,
   initializeDesktop,
   listAsides,
@@ -55,6 +56,7 @@ import {
   restoreThread,
   restoreSpace,
   removeCaBundle,
+  removeClientIdentity,
   removeExternalTarget,
   respondInteraction,
   resolvePluginSelection,
@@ -416,6 +418,7 @@ const INITIAL_DESKTOP: DesktopStatus = {
     certificateCount: 0,
     fingerprintsSha256: [],
   },
+  clientIdentity: { configured: false, leafFingerprintSha256: null },
   capabilities: {
     research: true,
     delegation: false,
@@ -4490,6 +4493,47 @@ export default function App() {
     }
   }
 
+  async function handleImportClientIdentity() {
+    if (connectingRef.current || submitInFlight.current) return;
+    connectingRef.current = true;
+    setConnecting(true);
+    setActionError(null);
+    try {
+      if (FIXTURE_MODE) return;
+      invalidateTargetRoute();
+      const status = await importClientIdentity();
+      if (status !== null) await acceptDesktopStatus(status, true);
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      markConnectionFailure(failure);
+      setActionError(failure);
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
+  async function handleRemoveClientIdentity() {
+    if (connectingRef.current || submitInFlight.current) return;
+    connectingRef.current = true;
+    setConnecting(true);
+    setActionError(null);
+    try {
+      if (FIXTURE_MODE) return;
+      invalidateTargetRoute();
+      await acceptDesktopStatus(await removeClientIdentity(), true);
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      markConnectionFailure(failure);
+      setActionError(failure);
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
   async function handleSetTerminalEnabled(enabled: boolean) {
     const status = desktopRef.current;
     const selectedTarget = status.targets.find(
@@ -5185,6 +5229,7 @@ export default function App() {
               .join(" ")}
             onChooseWorkspace={handleChooseWorkspace}
             onImportCaBundle={handleImportCaBundle}
+            onImportClientIdentity={handleImportClientIdentity}
             onConfigure={handleConfigureManaged}
             onApplyConfiguration={handleApplyManagedModelConfiguration}
             onSetupStatus={async (status) => {
@@ -5428,6 +5473,8 @@ export default function App() {
           onInstallUpdate={() => void handleInstallDesktopUpdate()}
           onImportCaBundle={() => void handleImportCaBundle()}
           onRemoveCaBundle={() => void handleRemoveCaBundle()}
+          onImportClientIdentity={() => void handleImportClientIdentity()}
+          onRemoveClientIdentity={() => void handleRemoveClientIdentity()}
         />
       )}
     </div>

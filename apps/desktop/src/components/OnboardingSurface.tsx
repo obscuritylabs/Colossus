@@ -66,6 +66,7 @@ interface OnboardingSurfaceProps {
   onCodexLogout: () => Promise<void>;
   onUseExternal: () => Promise<void>;
   onImportCaBundle: () => Promise<void>;
+  onImportClientIdentity: () => Promise<void>;
   onSetupStatus?: (status: DesktopStatus) => void | Promise<void>;
   dismissible: boolean;
   onCancel: () => void;
@@ -108,6 +109,7 @@ function WorkspaceOnboardingForm({
   onCodexLogout,
   onUseExternal,
   onImportCaBundle,
+  onImportClientIdentity,
   onSetupStatus,
   dismissible,
   onCancel,
@@ -557,7 +559,9 @@ function WorkspaceOnboardingForm({
           <SetupDesktopStep
             busy={busy}
             certificates={desktop.additionalCaBundle}
+            clientIdentity={desktop.clientIdentity}
             onImportCaBundle={onImportCaBundle}
+            onImportClientIdentity={onImportClientIdentity}
           />
         ) : null}
 

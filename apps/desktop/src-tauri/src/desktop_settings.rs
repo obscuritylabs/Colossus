@@ -272,6 +272,14 @@ pub(crate) struct CaBundleSetting {
     pub(crate) fingerprints_sha256: Vec<String>,
 }
 
+/// Secret-free reference to one client identity stored in the native credential vault.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ClientIdentitySetting {
+    pub(crate) identity_id: String,
+    pub(crate) leaf_fingerprint_sha256: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct AsideSetting {
@@ -321,6 +329,8 @@ pub(crate) struct DesktopSettings {
     pub(crate) pending_provider_cleanup_ids: Vec<String>,
     #[serde(default)]
     pub(crate) additional_ca_bundle: Option<CaBundleSetting>,
+    #[serde(default)]
+    pub(crate) client_identity: Option<ClientIdentitySetting>,
     pub(crate) access_profile: AccessProfileSetting,
     pub(crate) execution_boundary: ExecutionBoundarySetting,
     pub(crate) terminal_enabled: bool,
@@ -382,6 +392,7 @@ impl Default for DesktopSettings {
             model_roles: BTreeMap::new(),
             pending_provider_cleanup_ids: Vec::new(),
             additional_ca_bundle: None,
+            client_identity: None,
             access_profile: AccessProfileSetting::AllowAll,
             execution_boundary: ExecutionBoundarySetting::FullAccess,
             terminal_enabled: false,
@@ -1207,6 +1218,7 @@ fn migrate_v1_settings(
         model_roles: BTreeMap::new(),
         pending_provider_cleanup_ids: pending,
         additional_ca_bundle: None,
+        client_identity: None,
         access_profile,
         execution_boundary: legacy_execution_boundary(access_profile),
         terminal_enabled: legacy.terminal_enabled,
@@ -1345,6 +1357,14 @@ fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> 
             .additional_ca_bundle
             .as_ref()
             .is_some_and(|bundle| validate_ca_bundle_setting(bundle).is_err())
+        || settings.client_identity.as_ref().is_some_and(|identity| {
+            !Uuid::parse_str(&identity.identity_id).is_ok_and(|value| !value.is_nil())
+                || identity.leaf_fingerprint_sha256.len() != 64
+                || !identity
+                    .leaf_fingerprint_sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+        })
     {
         return Err(storage_error());
     }
@@ -1831,7 +1851,7 @@ fn ca_bundle_storage_path(
     Ok(directory.join(format!("{}.pem", bundle.bundle_id)))
 }
 
-fn read_ca_bundle_source(path: &Path) -> Result<Vec<u8>, CommandErrorDto> {
+pub(crate) fn read_ca_bundle_source(path: &Path) -> Result<Vec<u8>, CommandErrorDto> {
     if !path.is_absolute() {
         return Err(ca_bundle_error(
             "Choose a regular PEM file from the native file picker.",
@@ -1899,6 +1919,68 @@ fn read_ca_bundle_source(path: &Path) -> Result<Vec<u8>, CommandErrorDto> {
     Err(ca_bundle_error(
         "CA bundle import is unavailable on this platform.",
     ))
+}
+
+/// Read a selected PEM key through a bound file handle into zeroizing storage.
+/// The source is capped before parsing and never copied into an unprotected Vec.
+pub(crate) fn read_client_key_source(
+    path: &Path,
+) -> Result<zeroize::Zeroizing<Vec<u8>>, CommandErrorDto> {
+    const MAX_KEY_BYTES: u64 = 64 * 1024;
+    let invalid = || {
+        CommandErrorDto::local_sanitized(
+            "client_identity_invalid",
+            "The selected PEM private key could not be read safely.",
+            false,
+        )
+    };
+    if !path.is_absolute() {
+        return Err(invalid());
+    }
+    #[cfg(unix)]
+    {
+        let before = fs::symlink_metadata(path).map_err(|_| invalid())?;
+        if !before.file_type().is_file() || before.len() > MAX_KEY_BYTES {
+            return Err(invalid());
+        }
+        let mut source = rustix::fs::open(
+            path,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map(File::from)
+        .map_err(|_| invalid())?;
+        let opened = source.metadata().map_err(|_| invalid())?;
+        if opened.dev() != before.dev() || opened.ino() != before.ino() {
+            return Err(invalid());
+        }
+        let mut bytes = zeroize::Zeroizing::new(Vec::new());
+        std::io::Read::by_ref(&mut source)
+            .take(MAX_KEY_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| invalid())?;
+        if bytes.len() as u64 > MAX_KEY_BYTES {
+            return Err(invalid());
+        }
+        return Ok(bytes);
+    }
+    #[cfg(windows)]
+    {
+        let binding = colossus_windows_native::BoundPath::open_file(path).map_err(|_| invalid())?;
+        let mut source = binding.try_clone_file().map_err(|_| invalid())?;
+        let mut bytes = zeroize::Zeroizing::new(Vec::new());
+        std::io::Read::by_ref(&mut source)
+            .take(MAX_KEY_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| invalid())?;
+        binding.revalidate().map_err(|_| invalid())?;
+        if bytes.len() as u64 > MAX_KEY_BYTES {
+            return Err(invalid());
+        }
+        return Ok(bytes);
+    }
+    #[allow(unreachable_code)]
+    Err(invalid())
 }
 
 fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), CommandErrorDto> {
@@ -2095,6 +2177,18 @@ fn ca_bundle_error(message: &str) -> CommandErrorDto {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_key_source_is_bounded_before_import() {
+        let source = tempfile::NamedTempFile::new().expect("selected key");
+        fs::write(source.path(), b"private-test-key").unwrap();
+        assert_eq!(
+            read_client_key_source(source.path()).unwrap().as_slice(),
+            b"private-test-key"
+        );
+        fs::write(source.path(), vec![b'x'; 64 * 1024 + 1]).unwrap();
+        assert!(read_client_key_source(source.path()).is_err());
+    }
 
     #[test]
     fn aside_settings_persist_only_bounded_linkage_metadata() {

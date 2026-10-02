@@ -8,6 +8,27 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.11.6] - 2026-10-02
+
+### Added
+
+- Global PEM client certificate and private key configuration for Colossus-owned TLS
+  requests, including provider, HTTP MCP, policy, database, and plugin registry calls.
+- Desktop imports the identity into private native storage and supplies it to managed
+  runtimes. CLI configuration accepts certificate and key paths.
+
+### Fixed
+
+- Desktop repository imports keep native client identity paths under global control.
+- OPA decision requests reject redirects so client identity cannot follow a redirect.
+- Release-build TUI command parsing retains its input behavior.
+
+### Changed
+
+- Desktop settings use compact catalogs and organized preferences, with updated guides.
+- Aligned workspace, bundled plugin, and SDK candidate metadata to `0.11.6`.
+  This release publishes Core/Desktop only; SDK registry publishing remains disabled.
+
 ## [0.11.5] - 2026-10-01
 
 ### Added

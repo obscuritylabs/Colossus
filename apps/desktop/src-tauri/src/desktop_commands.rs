@@ -17,18 +17,19 @@ use crate::{
     connection,
     desktop_credentials::DesktopCredentials,
     desktop_dto::{
-        ApplyManagedModelConfigurationInput, ConfigureManagedRuntimeInput, CredentialActionInput,
-        DesktopApprovalModeDto, DesktopCapabilitiesDto, DesktopReleaseChannelDto, DesktopStatusDto,
-        ManagedModelConfigurationDto, ManagedRuntimeStateDto, ProviderSummaryDto, RuntimeTargetDto,
-        RuntimeTargetKindDto, SpaceAttentionDto, SpaceSearchPageDto, SpaceStatusEventDto,
-        SpaceSummaryDto, WorkspaceSummaryDto,
+        ApplyManagedModelConfigurationInput, ClientIdentityStatusDto, ConfigureManagedRuntimeInput,
+        CredentialActionInput, DesktopApprovalModeDto, DesktopCapabilitiesDto,
+        DesktopReleaseChannelDto, DesktopStatusDto, ManagedModelConfigurationDto,
+        ManagedRuntimeStateDto, ProviderSummaryDto, RuntimeTargetDto, RuntimeTargetKindDto,
+        SpaceAttentionDto, SpaceSearchPageDto, SpaceStatusEventDto, SpaceSummaryDto,
+        WorkspaceSummaryDto,
     },
     desktop_settings::{
-        AccessProfileSetting, DesktopSettings, ExecutionBoundarySetting, ExternalTargetSetting,
-        LOCAL_TERMINAL_CONSENT_VERSION, MAX_EXTERNAL_TARGETS, MAX_PENDING_PROVIDER_CLEANUPS,
-        ModelCapabilitiesSetting, ModelSetting, ProviderKindSetting, ProviderSetting,
-        SettingsStore, WorkspaceSetting, provider_base_url, revalidate_workspace,
-        validate_workspace,
+        AccessProfileSetting, ClientIdentitySetting, DesktopSettings, ExecutionBoundarySetting,
+        ExternalTargetSetting, LOCAL_TERMINAL_CONSENT_VERSION, MAX_EXTERNAL_TARGETS,
+        MAX_PENDING_PROVIDER_CLEANUPS, ModelCapabilitiesSetting, ModelSetting, ProviderKindSetting,
+        ProviderSetting, SettingsStore, WorkspaceSetting, provider_base_url, read_ca_bundle_source,
+        read_client_key_source, revalidate_workspace, validate_workspace,
     },
     dto::{CommandErrorDto, ConnectionStateDto, ConnectionStatusDto, RunDto},
     managed_runtime, provider_enrollment, run_list, space_search,
@@ -276,6 +277,100 @@ pub(crate) async fn remove_ca_bundle(
     }
     store.delete_ca_bundle(&previous)?;
     desktop_status_from(&state, &settings).await
+}
+
+#[tauri::command]
+pub(crate) async fn import_client_identity(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<DesktopStatusDto>, CommandErrorDto> {
+    let certificate = app
+        .dialog()
+        .file()
+        .add_filter("PEM client certificate", &["pem", "crt", "cer"])
+        .blocking_pick_file();
+    let Some(certificate) = certificate else {
+        return Ok(None);
+    };
+    let key = app
+        .dialog()
+        .file()
+        .add_filter("PEM private key", &["pem", "key"])
+        .blocking_pick_file();
+    let Some(key) = key else { return Ok(None) };
+    let certificate = certificate
+        .into_path()
+        .map_err(|_| client_identity_error())?;
+    let key = key.into_path().map_err(|_| client_identity_error())?;
+    let certificate = read_ca_bundle_source(&certificate).map_err(|_| client_identity_error())?;
+    let key = read_client_key_source(&key).map_err(|_| client_identity_error())?;
+    let identity = colossus_network::ClientIdentity::from_pem_pair(&certificate, &key)
+        .map_err(|_| client_identity_error())?;
+    let _guard = connect_guard(&state)?;
+    reject_active_managed_runs(&state).await?;
+    let store = settings_store()?;
+    let mut settings = store.load()?;
+    let previous = settings.client_identity.clone();
+    let staged = ClientIdentitySetting {
+        identity_id: Uuid::now_v7().to_string(),
+        leaf_fingerprint_sha256: identity.leaf_fingerprint_sha256().to_owned(),
+    };
+    let credentials = DesktopCredentials::for_settings(&state, &store)?;
+    credentials
+        .write_client_identity(&staged.identity_id, &certificate, &key)
+        .await?;
+    settings.client_identity = Some(staged.clone());
+    if let Err(error) = store.save(&settings) {
+        let _ = credentials.delete(&staged.identity_id).await;
+        return Err(error);
+    }
+    if has_managed_configuration(&settings)
+        && let Err(start_error) = managed_runtime::start(&state, &store, &settings, true).await
+    {
+        settings.client_identity = previous.clone();
+        store.save(&settings)?;
+        let _ = credentials.delete(&staged.identity_id).await;
+        restore_managed_after_rollback(&state, &store, &settings).await?;
+        return Err(start_error);
+    }
+    if let Some(previous) = previous {
+        credentials.delete(&previous.identity_id).await?;
+    }
+    desktop_status_from(&state, &settings).await.map(Some)
+}
+
+#[tauri::command]
+pub(crate) async fn remove_client_identity(
+    state: State<'_, AppState>,
+) -> Result<DesktopStatusDto, CommandErrorDto> {
+    let _guard = connect_guard(&state)?;
+    reject_active_managed_runs(&state).await?;
+    let store = settings_store()?;
+    let mut settings = store.load()?;
+    let Some(previous) = settings.client_identity.take() else {
+        return desktop_status_from(&state, &settings).await;
+    };
+    store.save(&settings)?;
+    if has_managed_configuration(&settings)
+        && let Err(start_error) = managed_runtime::start(&state, &store, &settings, true).await
+    {
+        settings.client_identity = Some(previous);
+        store.save(&settings)?;
+        restore_managed_after_rollback(&state, &store, &settings).await?;
+        return Err(start_error);
+    }
+    DesktopCredentials::for_settings(&state, &store)?
+        .delete(&previous.identity_id)
+        .await?;
+    desktop_status_from(&state, &settings).await
+}
+
+fn client_identity_error() -> CommandErrorDto {
+    CommandErrorDto::local_sanitized(
+        "client_identity_invalid",
+        "Select a valid PEM client certificate chain and matching unencrypted private key (up to 64 KiB each).",
+        false,
+    )
 }
 
 #[tauri::command]
@@ -2933,6 +3028,7 @@ async fn desktop_status_from(
         },
         terminal_enabled: settings.local_terminal_enabled(),
         additional_ca_bundle: crate::desktop_dto::CaBundleStatusDto::from_settings(settings),
+        client_identity: ClientIdentityStatusDto::from_settings(settings),
         capabilities,
     })
 }

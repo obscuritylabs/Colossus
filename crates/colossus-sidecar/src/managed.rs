@@ -267,6 +267,17 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         runtime_options,
         request.suppress_automatic_agent_instructions,
     );
+    if let (Some(certificate), Some(key)) = (
+        request.client_certificate_pem.as_ref(),
+        request.client_key_pem.as_ref(),
+    ) {
+        let identity = colossus_network::ClientIdentity::from_pem_pair(
+            certificate.expose().as_bytes(),
+            key.expose().as_bytes(),
+        )
+        .map_err(|_| FailureCode::InvalidConfiguration)?;
+        runtime_options = runtime_options.with_client_identity(identity);
+    }
 
     let codex_auth = request
         .codex_auth_path
@@ -874,10 +885,12 @@ fn apply_managed_field_overrides(
     config: &mut RuntimeConfig,
     overrides: &[ManagedFieldOverride],
 ) -> Result<(), FailureCode> {
-    const LOCKED_FIELDS: [&str; 13] = [
+    const LOCKED_FIELDS: [&str; 15] = [
         "schemaVersion",
         "storage",
         "network.caBundlePath",
+        "network.clientCertificatePath",
+        "network.clientKeyPath",
         "providers",
         "models",
         "search",
@@ -1931,11 +1944,13 @@ mod tests {
 
     fn managed_configuration_field_is_classified(field: &str) -> bool {
         const TYPED_CATALOGS: [&str; 5] = ["providers", "models", "search", "mcp", "observability"];
-        const LOCKED_INVARIANTS: [&str; 9] = [
+        const LOCKED_INVARIANTS: [&str; 11] = [
             "schemaVersion",
             "storage",
             "bundles.trustedPublishers",
             "network.caBundlePath",
+            "network.clientCertificatePath",
+            "network.clientKeyPath",
             "memory.indexPath",
             "plugins.trustProfiles",
             "plugins.registries",

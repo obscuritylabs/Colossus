@@ -1,7 +1,7 @@
 use super::*;
 
 /// Explicit host context used when composing a runtime.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct RuntimeOpenOptions {
     /// Canonical repository workspace used by tools and repository identity.
     pub workspace: PathBuf,
@@ -22,6 +22,8 @@ pub struct RuntimeOpenOptions {
     /// configured when this is false.
     pub(super) model_network_tools: bool,
     pub(super) expected_workspace_identity: Option<WorkspaceIdentityToken>,
+    /// Native-supplied TLS identity held only in process memory.
+    pub(super) client_identity: Option<colossus_network::ClientIdentity>,
 }
 
 impl RuntimeOpenOptions {
@@ -34,6 +36,7 @@ impl RuntimeOpenOptions {
             automatic_agent_instructions: true,
             model_network_tools: true,
             expected_workspace_identity: None,
+            client_identity: None,
         }
         .canonicalized()
     }
@@ -93,6 +96,13 @@ impl RuntimeOpenOptions {
     #[must_use]
     pub fn with_expected_workspace_identity(mut self, identity: WorkspaceIdentityToken) -> Self {
         self.expected_workspace_identity = Some(identity);
+        self
+    }
+
+    /// Attach a native-supplied outbound client identity without writing it to runtime YAML.
+    #[must_use]
+    pub fn with_client_identity(mut self, identity: colossus_network::ClientIdentity) -> Self {
+        self.client_identity = Some(identity);
         self
     }
 

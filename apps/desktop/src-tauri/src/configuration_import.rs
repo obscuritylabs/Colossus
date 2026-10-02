@@ -1105,6 +1105,8 @@ fn locked_import_fields(explicit_fields: &[String]) -> Vec<String> {
         "schemaVersion",
         "storage",
         "network.caBundlePath",
+        "network.clientCertificatePath",
+        "network.clientKeyPath",
         "sandbox.backend",
         "memory.indexPath",
         "plugins.trustProfiles",
@@ -1379,6 +1381,25 @@ mod tests {
                 .iter()
                 .all(|warning| !warning.contains("runtime-only"))
         );
+    }
+
+    #[test]
+    fn repository_client_identity_paths_are_locked_to_native_configuration() {
+        let fields = vec![
+            "network.clientCertificatePath".into(),
+            "network.clientKeyPath".into(),
+        ];
+        let proposal = proposal_from_canonical(
+            "space-one",
+            "a".repeat(64),
+            None,
+            false,
+            &canonical(),
+            &fields,
+            &GlobalConfigurationSetting::default(),
+        );
+        assert_eq!(proposal.locked_fields, fields);
+        assert!(proposal.field_overrides.is_empty());
     }
 
     #[test]

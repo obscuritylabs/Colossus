@@ -42,6 +42,7 @@ function desktop(selectedWorkspace: WorkspaceSummary | null): DesktopStatus {
       certificateCount: 0,
       fingerprintsSha256: [],
     },
+    clientIdentity: { configured: false, leafFingerprintSha256: null },
     capabilities: {
       delegation: false,
       plugins: false,
@@ -79,6 +80,7 @@ function renderOnboarding(
         onCodexLogout: vi.fn(),
         onUseExternal: vi.fn(),
         onImportCaBundle: vi.fn(),
+        onImportClientIdentity: vi.fn(),
         dismissible,
         onCancel: vi.fn(),
       }),

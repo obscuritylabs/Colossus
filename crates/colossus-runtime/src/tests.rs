@@ -1774,6 +1774,25 @@ fn runtime_wide_ca_bundle_path_round_trips_and_rejects_an_empty_path() {
 }
 
 #[test]
+fn runtime_client_identity_paths_must_be_a_complete_pair() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.network.client_certificate_path = Some(PathBuf::from("/private/client.pem"));
+    assert!(RuntimeConfig::from_yaml(&config.to_yaml().unwrap()).is_err());
+    config.network.client_key_path = Some(PathBuf::from("/private/client.key"));
+    let parsed = RuntimeConfig::from_yaml(&config.to_yaml().unwrap()).unwrap();
+    assert_eq!(
+        parsed.network.client_certificate_path,
+        config.network.client_certificate_path
+    );
+    assert_eq!(
+        parsed.network.client_key_path,
+        config.network.client_key_path
+    );
+    config.network.client_key_path = Some(PathBuf::new());
+    assert!(RuntimeConfig::from_yaml(&config.to_yaml().unwrap()).is_err());
+}
+
+#[test]
 fn model_reasoning_effort_round_trips_strictly() {
     let mut config = RuntimeConfig::offline_template("state.redb");
     for effort in [

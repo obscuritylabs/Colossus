@@ -39,6 +39,8 @@
     "allow-codex-auth-logout",
     "allow-import-ca-bundle",
     "allow-remove-ca-bundle",
+    "allow-import-client-identity",
+    "allow-remove-client-identity",
     "allow-add-external-target",
     "allow-remove-external-target",
     "allow-choose-workspace",

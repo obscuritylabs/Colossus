@@ -435,6 +435,7 @@ impl Runtime {
                 Arc::clone(&self.process_executor),
                 self.workspace.clone(),
                 self.sandbox_backend == "oci",
+                self.tls_roots.client_identity().cloned(),
             )),
         );
         let released = self.gateway.execute(request, &executor).await?;

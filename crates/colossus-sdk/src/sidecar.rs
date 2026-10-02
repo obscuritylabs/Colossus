@@ -243,6 +243,8 @@ pub struct SidecarBootstrapConfig {
     plaintext_journal_for_development: bool,
     risk_auto_approvals: bool,
     ca_bundle_path: Option<PathBuf>,
+    client_certificate_pem: Option<HostSecret>,
+    client_key_pem: Option<HostSecret>,
     codex_auth_path: Option<PathBuf>,
     approval_broker_grant: Option<SidecarApprovalBrokerGrant>,
     host_credentials: Vec<SidecarHostCredential>,
@@ -272,6 +274,8 @@ impl SidecarBootstrapConfig {
             plaintext_journal_for_development: false,
             risk_auto_approvals: false,
             ca_bundle_path: None,
+            client_certificate_pem: None,
+            client_key_pem: None,
             codex_auth_path: None,
             approval_broker_grant: None,
             host_credentials: Vec::new(),
@@ -358,6 +362,14 @@ impl SidecarBootstrapConfig {
         }
         self.ca_bundle_path = Some(path);
         Ok(self)
+    }
+
+    /// Supply one global PEM client certificate chain and key through private bootstrap IPC.
+    #[must_use]
+    pub fn with_client_identity(mut self, certificate: HostSecret, key: HostSecret) -> Self {
+        self.client_certificate_pem = Some(certificate);
+        self.client_key_pem = Some(key);
+        self
     }
 
     /// Bind a managed Codex provider to one explicit official Codex credential file.
@@ -500,6 +512,18 @@ impl SidecarBootstrapConfig {
                         ))
                 })
                 .transpose()?,
+            client_certificate_pem: self
+                .client_certificate_pem
+                .as_ref()
+                .map(|pem| SecretString::new(pem.expose().to_owned()))
+                .transpose()
+                .map_err(|_| SdkError::SidecarFailed)?,
+            client_key_pem: self
+                .client_key_pem
+                .as_ref()
+                .map(|pem| SecretString::new(pem.expose().to_owned()))
+                .transpose()
+                .map_err(|_| SdkError::SidecarFailed)?,
             codex_auth_path: self
                 .codex_auth_path
                 .as_ref()
@@ -625,6 +649,7 @@ impl fmt::Debug for SidecarBootstrapConfig {
             )
             .field("risk_auto_approvals", &self.risk_auto_approvals)
             .field("ca_bundle_configured", &self.ca_bundle_path.is_some())
+            .field("client_identity_configured", &self.client_key_pem.is_some())
             .field("codex_auth_configured", &self.codex_auth_path.is_some())
             .field("runtime", &self.runtime)
             .field("grant", &self.grant)

@@ -5,10 +5,14 @@ export function SetupDesktopStep({
   busy,
   certificates,
   onImportCaBundle,
+  clientIdentity,
+  onImportClientIdentity,
 }: {
   busy: boolean;
   certificates: DesktopStatus["additionalCaBundle"];
   onImportCaBundle: () => Promise<void>;
+  clientIdentity: DesktopStatus["clientIdentity"];
+  onImportClientIdentity: () => Promise<void>;
 }) {
   const appearance = useAppearance();
   return (
@@ -94,6 +98,27 @@ export function SetupDesktopStep({
           onClick={() => void onImportCaBundle()}
         >
           {certificates.configured ? "Replace CA bundle" : "Import CA bundle"}
+        </button>
+      </details>
+      <details className="setup-certificates">
+        <summary>Advanced: Client certificate</summary>
+        <p>
+          Import a PEM client certificate and matching private key for outbound
+          TLS connections, including remote MCP. The key is stored in the native
+          credential vault. Authorized servers may request this identity.
+        </p>
+        {clientIdentity.configured ? (
+          <p role="status">Client identity imported.</p>
+        ) : null}
+        <button
+          type="button"
+          className="button secondary"
+          disabled={busy}
+          onClick={() => void onImportClientIdentity()}
+        >
+          {clientIdentity.configured
+            ? "Replace client identity"
+            : "Import client identity"}
         </button>
       </details>
     </div>

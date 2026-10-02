@@ -66,6 +66,7 @@ function desktop(overrides: Partial<DesktopStatus> = {}): DesktopStatus {
       certificateCount: 0,
       fingerprintsSha256: [],
     },
+    clientIdentity: { configured: false, leafFingerprintSha256: null },
     capabilities: {
       delegation: false,
       plugins: false,
@@ -114,6 +115,8 @@ function renderSurface(
       onInstallUpdate: vi.fn(),
       onImportCaBundle: vi.fn(),
       onRemoveCaBundle: vi.fn(),
+      onImportClientIdentity: vi.fn(),
+      onRemoveClientIdentity: vi.fn(),
     }),
   );
 }

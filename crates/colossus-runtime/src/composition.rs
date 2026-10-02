@@ -98,6 +98,7 @@ pub struct Runtime {
     pub(super) plugin_configuration: Arc<PluginsConfig>,
     pub(super) plugin_catalog: Arc<PluginCatalogSource>,
     pub(super) plugin_credentials: Arc<dyn CredentialResolver>,
+    pub(super) tls_roots: AdditionalRootCertificates,
     pub(super) plugin_executor: Arc<dyn EffectExecutor>,
     pub(super) integrations: Arc<dyn IntegrationRepository>,
     pub(super) bundle_executor: Arc<dyn EffectExecutor>,
@@ -270,7 +271,7 @@ impl Runtime {
                 workspace.display()
             )));
         }
-        let tls_roots = config
+        let mut tls_roots = config
             .network
             .ca_bundle_path
             .as_ref()
@@ -284,6 +285,29 @@ impl Runtime {
                 RuntimeError::Config(format!("network.caBundlePath is invalid: {error}"))
             })?
             .unwrap_or_default();
+        let client_identity = match (
+            config.network.client_certificate_path.as_ref(),
+            config.network.client_key_path.as_ref(),
+        ) {
+            (Some(certificate), Some(key)) => Some(
+                colossus_network::ClientIdentity::from_pem_paths(
+                    workspace_absolute_path(&workspace, certificate),
+                    workspace_absolute_path(&workspace, key),
+                )
+                .map_err(|error| {
+                    RuntimeError::Config(format!("network client identity is invalid: {error}"))
+                })?,
+            ),
+            (None, None) => options.client_identity.clone(),
+            _ => {
+                return Err(RuntimeError::Config(
+                    "network client identity requires certificate and key paths".into(),
+                ));
+            }
+        };
+        if let Some(identity) = client_identity {
+            tls_roots = tls_roots.with_client_identity(identity);
+        }
         let workspace_lease = observe_startup_phase(
             "colossus.runtime.workspace.acquire",
             "workspace_acquire",
@@ -943,6 +967,7 @@ impl Runtime {
             plugin_configuration: Arc::new(plugin_configuration),
             plugin_catalog,
             plugin_credentials: provider_credentials,
+            tls_roots,
             plugin_executor,
             integrations,
             bundle_executor,

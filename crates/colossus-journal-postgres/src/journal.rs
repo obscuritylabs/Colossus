@@ -614,14 +614,24 @@ impl PostgresEventJournal {
                 ));
             }
         };
-        let config =
+        let builder =
             ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
                 .with_safe_default_protocol_versions()
                 .map_err(|_| {
                     StoreError::Adapter("PostgreSQL TLS protocol configuration failed".into())
                 })?
-                .with_root_certificates(roots)
-                .with_no_client_auth();
+                .with_root_certificates(roots);
+        let config = match tls_roots.client_identity() {
+            Some(identity) => {
+                let (certificates, key) = identity.rustls_material();
+                builder
+                    .with_client_auth_cert(certificates, key)
+                    .map_err(|_| {
+                        StoreError::Adapter("PostgreSQL client identity is invalid".into())
+                    })?
+            }
+            None => builder.with_no_client_auth(),
+        };
         Ok(MakeRustlsConnect::new(config))
     }
 

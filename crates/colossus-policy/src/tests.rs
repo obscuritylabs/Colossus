@@ -2957,6 +2957,44 @@ async fn opa_adapter_accepts_strict_decisions_and_rejects_invalid_responses() {
     ));
 }
 
+#[tokio::test]
+async fn opa_does_not_follow_a_decision_redirect_to_another_origin() {
+    let destination = TcpListener::bind("127.0.0.1:0").unwrap();
+    destination.set_nonblocking(true).unwrap();
+    let source = TcpListener::bind("127.0.0.1:0").unwrap();
+    let source_address = source.local_addr().unwrap();
+    let destination_address = destination.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = source.accept().unwrap();
+        let mut request = [0_u8; 8192];
+        let read = stream.read(&mut request).unwrap();
+        assert!(String::from_utf8_lossy(&request[..read]).contains("/v1/data/colossus/effect"));
+        write!(
+            stream,
+            "HTTP/1.1 302 Found\r\nLocation: http://{destination_address}/capture\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+    });
+    let policy =
+        super::OpaPolicy::new(local_opa_config(format!("http://{source_address}/"))).unwrap();
+    let decision = colossus_ports::PolicyDecisionPoint::decide(
+        &policy,
+        &effect_request(
+            system_actor("test"),
+            "provider.echo",
+            "provider:echo",
+            serde_json::json!({"message":"ok"}),
+        ),
+    )
+    .await;
+    assert!(decision.is_err());
+    server.join().unwrap();
+    assert!(
+        destination.accept().is_err(),
+        "OPA request escaped to redirected origin"
+    );
+}
+
 #[test]
 fn remote_opa_requires_disclosure_https_pinned_trust_and_mtls() {
     let mut config = local_opa_config("https://opa.example.test/".into());
