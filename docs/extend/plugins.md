@@ -157,19 +157,15 @@ On a fresh configuration, the built-in GHCR profile and its required Sigstore si
 identity are ready for a published Obscurity Labs plugin:
 
 ```bash
-colossus plugin install oci://ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:0.1.0-alpha.3.ci.3.1-windows-amd64
+colossus plugin install oci://ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:0.1.0-alpha.4.ci.7.1-windows-amd64
 colossus plugins list
-colossus plugins enable outlook-classic --digest sha256:6ca3c7a1e753e39c85b1345feda29cac368137a67918b03fed31a8300059bced
+colossus plugins enable outlook-classic --digest sha256:e95973e1eb55062d92d8c8810788d142cf62ac94bc7f0b3d5bf49f70e9b5342a
 ```
 
 The install resolves the tag once and records the verified manifest digest. Check the
 reported digest before activation. A different registry needs a configured exact-origin
 profile; pass `--registry NAME` when more than one profile matches its origin.
-The Outlook Classic alpha.3 server uses legacy COM and cannot attach to Outlook from
-the `windows_job` AppContainer. Installation and activation do not make its mail tools
-usable there. A signed package with the user-session companion is required.
-
-When a newer signed Outlook Classic package includes companion support, select its
+The Outlook Classic alpha.4 release includes the user-session companion. Select its
 active digest in Desktop **Plugins**, then choose **Connect Outlook session** in its
 details. This per-Workspace switch starts the verified executable as the logged-in
 Windows user and passes a fresh bearer token to Managed Local through its protected
@@ -177,11 +173,11 @@ bootstrap. The runtime connects to one loopback MCP endpoint; the ordinary
 `windows_job` boundary remains in place for agent and plugin subprocesses. The
 connection exposes the package's 14 current tool names and keeps ordinary MCP policy,
 approval, and audit. **Disconnect Outlook session** stops the helper and rotates the
-token on the next connection. Updating, disabling, or uninstalling the plugin through
-Desktop revokes running Outlook helpers; restart a Workspace to use a newly activated
-digest. A CLI activation change revokes a running helper within 15 seconds. The
-published alpha.3 package does not contain this companion and the switch
-rejects it until a signed companion-capable release is installed.
+token on the next connection. Disabling or removing the active plugin through Desktop
+revokes running Outlook helpers; downloading an update leaves the current session in
+place until a different digest is activated. Restart a Workspace to use a newly
+activated digest. A CLI activation change revokes a running helper within 15 seconds.
+The earlier alpha.3 package does not contain this companion.
 
 **Discover tools** checks the authenticated MCP transport and allowlist. Outlook COM
 attachment is checked when an authorized Outlook tool runs; discovery alone does not
