@@ -22,6 +22,8 @@ Choose a mode beside the composer:
 
 Write a concrete request, including any limits that matter, and press **Enter** or the send button. **Shift+Enter** adds a new line. You can attach a supported PNG, JPEG, WebP, UTF-8 text, or source file with the paperclip. Desktop shows a thread in the selected workspace as soon as the run starts. Tool effects still follow that workspace's [access and approval settings](settings.md#access-and-execution-boundaries).
 
+Pasting more than 1,000 characters into the message box shows a short **Pasted Content** placeholder, as in the TUI. The full text remains part of the draft, counts toward the prompt size limit, and is sent in place of the placeholder. You can write before or after it or paste more text. Deleting or changing a placeholder removes its hidden text from the draft.
+
 For a first task, try asking the agent to explain the repository without changing files. To inspect its response and evidence, open [Session views](session-views.md).
 
 ## Guide a run in progress

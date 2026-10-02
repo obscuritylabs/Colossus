@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { DesktopStartup } from "./components/DesktopStartup";
 import { createRoot } from "react-dom/client";
 import { SetupPresentationProvider } from "./SetupPresentation";
+import { DesktopPreferencesProvider } from "./DesktopPreferencesProvider";
 
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import {
@@ -83,13 +84,15 @@ if (
   const App = lazy(() => import("./App"));
   createRoot(root).render(
     <AppearanceProvider initialPreference={initialAppearance}>
-      <AppErrorBoundary>
-        <Suspense fallback={<DesktopStartup />}>
-          <SetupPresentationProvider>
-            <App />
-          </SetupPresentationProvider>
-        </Suspense>
-      </AppErrorBoundary>
+      <DesktopPreferencesProvider>
+        <AppErrorBoundary>
+          <Suspense fallback={<DesktopStartup />}>
+            <SetupPresentationProvider>
+              <App />
+            </SetupPresentationProvider>
+          </Suspense>
+        </AppErrorBoundary>
+      </DesktopPreferencesProvider>
     </AppearanceProvider>,
   );
 }

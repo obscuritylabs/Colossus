@@ -2,6 +2,7 @@ import { IconTerminal2 } from "@tabler/icons-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import type { TerminalKind, TerminalPlanContext } from "../../types";
+import { useDesktopPreferences } from "../../DesktopPreferencesProvider";
 
 export interface TerminalDockRequest {
   scope: string | null;
@@ -19,17 +20,20 @@ export function terminalRequestForScope(
 
 export function TerminalDock({
   ready,
+  shellAvailable,
   fixture,
   scope,
   request,
   onSettings,
 }: {
   ready: boolean;
+  shellAvailable: boolean;
   fixture: boolean;
   scope: string | null;
   request: TerminalDockRequest | null;
   onSettings: () => void;
 }) {
+  const { terminalDefaultSession } = useDesktopPreferences();
   const host = useRef<HTMLDivElement>(null);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
@@ -91,7 +95,9 @@ export function TerminalDock({
       expectedScope: scope,
       request: currentRequest
         ? { kind: currentRequest.kind, ...currentRequest.planContext }
-        : null,
+        : terminalDefaultSession === "shell" && shellAvailable
+          ? { kind: "shell" }
+          : null,
       requestSequence: currentRequest?.sequence ?? 0,
     })
       .then((value) => {
@@ -142,7 +148,15 @@ export function TerminalDock({
           request: { epoch, rect: null },
         }).catch(() => {});
     };
-  }, [ready, fixture, scope, currentRequest, retry]);
+  }, [
+    ready,
+    shellAvailable,
+    fixture,
+    scope,
+    currentRequest,
+    retry,
+    terminalDefaultSession,
+  ]);
   return (
     <section className="terminal-dock" ref={host} aria-label="Terminal pane">
       {!ready || fixture || loading || error ? (

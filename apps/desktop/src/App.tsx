@@ -87,6 +87,12 @@ import type { AsideDraft } from "./components/AsidePanel";
 import { ReleaseChannelBanner } from "./components/ReleaseChannelBanner";
 import type { WorkspaceSurface } from "./components/ProductRail";
 import { WorkComposer } from "./components/WorkComposer";
+import {
+  composerDraft,
+  editComposerDraft,
+  expandComposerDraft,
+  pasteIntoComposerDraft,
+} from "./composer-paste";
 import { WorkSidebar } from "./components/WorkSidebar";
 import { ToastRegion, useToastQueue } from "./components/ToastRegion";
 import type {
@@ -225,6 +231,8 @@ const FIXTURE_MODE =
     FIXTURE_SCENARIO === "activity-comparison" ||
     FIXTURE_SCENARIO === "interaction-question" ||
     FIXTURE_SCENARIO === "plan-workflow");
+const FIXTURE_TERMINAL_CONSENT_PENDING =
+  FIXTURE_MODE && FIXTURE_QUERY.get("terminalConsentPending") === "1";
 function readDesktopDiff(
   workspaceId: string,
   path: string,
@@ -412,7 +420,8 @@ const INITIAL_DESKTOP: DesktopStatus = {
   accessProfile: FIXTURE_MODE ? "allow_all" : "minimal",
   executionBoundary: FIXTURE_MODE ? "full_access" : "offline_isolated",
   approvalMode: "ask",
-  terminalEnabled: false,
+  terminalEnabled: FIXTURE_MODE && !FIXTURE_TERMINAL_CONSENT_PENDING,
+  terminalConsentPending: FIXTURE_TERMINAL_CONSENT_PENDING,
   additionalCaBundle: {
     configured: false,
     certificateCount: 0,
@@ -990,7 +999,7 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [surface, setSurface] = useState<WorkspaceSurface>("work");
   const [settingsStartTab, setSettingsStartTab] = useState<
-    "runtime" | "providers"
+    "runtime" | "providers" | "terminal"
   >("runtime");
   const [workNavigationOpen, setWorkNavigationOpen] = useState(false);
   const [workspaceFileOpenRequest, setWorkspaceFileOpenRequest] =
@@ -1029,7 +1038,10 @@ export default function App() {
   const [listBusy, setListBusy] = useState(false);
   const [listError, setListError] = useState("");
   const [runLoadError, setRunLoadError] = useState("");
-  const [prompt, setPrompt] = useState("");
+  const [draft, setDraft] = useState(composerDraft);
+  const prompt = draft.display;
+  const expandedPrompt = expandComposerDraft(draft);
+  const setPrompt = (value: string) => setDraft(composerDraft(value));
   const completionSkills = usePluginSkills(
     desktop.selectedTargetId,
     desktop.capabilities.pluginSkillSelection === true,
@@ -2241,12 +2253,12 @@ export default function App() {
     route: TargetRoute,
     placement: QueuePlacement,
   ): Promise<QueuedMessage | null> {
-    const cleanPrompt = prompt.trim();
+    const cleanPrompt = expandedPrompt.trim();
     const cleanRole = role.trim();
     if (
       cleanPrompt.length === 0 ||
       cleanRole.length === 0 ||
-      !isPromptWithinByteLimit(prompt) ||
+      !isPromptWithinByteLimit(expandedPrompt) ||
       (mode === "research" && researchSources.length === 0)
     ) {
       return null;
@@ -2441,7 +2453,7 @@ export default function App() {
         );
         if (
           !desktop.capabilities.tui ||
-          !desktop.terminalEnabled ||
+          (!desktop.terminalEnabled && !desktop.terminalConsentPending) ||
           selected?.terminalAvailable !== true
         ) {
           setSlashCommandError(
@@ -2457,7 +2469,7 @@ export default function App() {
 
   async function submitRun(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const cleanPrompt = prompt.trim();
+    const cleanPrompt = expandedPrompt.trim();
     const slashCommand = parseDesktopSlashCommand(cleanPrompt);
     if (slashCommand.type === "invalid") {
       setSlashCommandError(slashCommand.message);
@@ -2478,7 +2490,7 @@ export default function App() {
       cleanPrompt.length === 0 ||
       cleanRole.length === 0 ||
       connection.state !== "connected" ||
-      !isPromptWithinByteLimit(prompt)
+      !isPromptWithinByteLimit(expandedPrompt)
     ) {
       return;
     }
@@ -3595,7 +3607,7 @@ export default function App() {
       if (FIXTURE_MODE) {
         setDesktop((current) => ({
           ...current,
-          terminalEnabled: false,
+          terminalEnabled: true,
           provider: {
             configured: true,
             kind: request.providerKind,
@@ -4550,7 +4562,9 @@ export default function App() {
     }
   }
 
-  async function handleSetTerminalEnabled(enabled: boolean) {
+  async function handleSetTerminalEnabled(
+    enabled: boolean,
+  ): Promise<DesktopStatus | null> {
     const status = desktopRef.current;
     const selectedTarget = status.targets.find(
       (target) => target.targetId === status.selectedTargetId,
@@ -4561,16 +4575,22 @@ export default function App() {
       !status.capabilities.shellTerminal
     ) {
       setSurface("settings");
-      return;
+      return null;
     }
     try {
       const status = FIXTURE_MODE
-        ? { ...desktopRef.current, terminalEnabled: enabled }
+        ? {
+            ...desktopRef.current,
+            terminalEnabled: enabled,
+            terminalConsentPending: false,
+          }
         : await setTerminalEnabled(enabled);
       desktopRef.current = status;
       setDesktop(status);
+      return status;
     } catch (error: unknown) {
       setActionError(commandError(error));
+      return null;
     }
   }
 
@@ -4589,7 +4609,7 @@ export default function App() {
     kind: TerminalKind,
     planContext?: { sessionId: string; planId: string },
   ) {
-    const status = desktopRef.current;
+    let status = desktopRef.current;
     const selectedTarget = status.targets.find(
       (target) => target.targetId === status.selectedTargetId,
     );
@@ -4597,7 +4617,17 @@ export default function App() {
       kind === "shell"
         ? status.capabilities.shellTerminal
         : selectedTarget?.terminalAvailable === true;
-    if (!status.terminalEnabled || !terminalAvailable) {
+    if (!terminalAvailable) {
+      setSurface("settings");
+      return;
+    }
+    if (status.terminalConsentPending) {
+      const confirmed = await handleSetTerminalEnabled(true);
+      if (confirmed?.terminalEnabled !== true) return;
+      status = confirmed;
+    }
+    if (!status.terminalEnabled) {
+      setSettingsStartTab("terminal");
       setSurface("settings");
       return;
     }
@@ -4802,7 +4832,7 @@ export default function App() {
     !approvalModeChanging;
   const continuation =
     activeRun !== undefined && isTerminalStatus(activeRun.status);
-  const promptBytes = utf8ByteLength(prompt);
+  const promptBytes = utf8ByteLength(expandedPrompt);
   const promptOverLimit = promptBytes > MAX_PROMPT_BYTES;
   const views = useMemo(() => Array.from(chat.views.values()), [chat.views]);
   const selectedArtifacts = useMemo(
@@ -5059,10 +5089,17 @@ export default function App() {
       attachments={attachments}
       attachmentBusy={attachmentBusy}
       error={composerError}
-      onPromptChange={(nextPrompt) => {
-        setPrompt(nextPrompt);
+      onPromptChange={(nextPrompt, intent) => {
+        setDraft((current) => editComposerDraft(current, nextPrompt, intent));
         setComposerError(null);
       }}
+      onPromptPaste={(text, start, end) => {
+        const next = pasteIntoComposerDraft(draft, text, start, end);
+        setDraft(next.draft);
+        setComposerError(null);
+        return next.cursor;
+      }}
+      condensedPasteCount={draft.pastes.length}
       onRoleChange={setRole}
       onMaxTurnsChange={(turns) => setMaxTurns(clampMaxTurns(turns))}
       onModeChange={(nextMode) => {
@@ -5166,6 +5203,7 @@ export default function App() {
           connectionState={connection.state}
           capabilities={desktop.capabilities}
           terminalEnabled={desktop.terminalEnabled}
+          terminalConsentPending={desktop.terminalConsentPending === true}
           terminalAvailable={terminalAvailable}
           activeSessionId={activeRun?.sessionId ?? null}
           pinnedSessionIds={pinnedThreadSessionIds}
@@ -5276,6 +5314,7 @@ export default function App() {
           terminalSupported={
             desktop.capabilities.tui || desktop.capabilities.shellTerminal
           }
+          shellTerminalAvailable={desktop.capabilities.shellTerminal}
           terminalReady={
             desktop.terminalEnabled &&
             (currentTerminalRequest?.kind === "shell"
@@ -5285,9 +5324,13 @@ export default function App() {
                 : terminalAvailable || desktop.capabilities.shellTerminal)
           }
           terminalRequest={currentTerminalRequest}
-          onOpenGenericTerminal={() => setTerminalDockRequest(null)}
+          onOpenGenericTerminal={() => {
+            setTerminalDockRequest(null);
+            if (desktopRef.current.terminalConsentPending)
+              void handleSetTerminalEnabled(true);
+          }}
           onTerminalSettings={() => {
-            setSettingsStartTab("runtime");
+            setSettingsStartTab("terminal");
             setSurface("settings");
           }}
           title={title}

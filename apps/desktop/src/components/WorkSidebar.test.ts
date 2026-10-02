@@ -131,6 +131,22 @@ describe("WorkSidebar", () => {
     ).toContain("disabled");
   });
 
+  it("offers first-use consent only when terminal access is selected", () => {
+    const buttons = (pending: boolean) =>
+      renderSidebar({
+        terminalEnabled: false,
+        terminalConsentPending: pending,
+      }).match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
+    for (const name of ["Open Shell", "Open Colossus TUI"]) {
+      expect(
+        buttons(true).find((button) => button.includes(name)),
+      ).not.toContain("disabled");
+      expect(buttons(false).find((button) => button.includes(name))).toContain(
+        "disabled",
+      );
+    }
+  });
+
   it("shows workspace context once and uses the durable run title", () => {
     const markup = renderSidebar();
 

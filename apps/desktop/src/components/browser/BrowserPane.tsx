@@ -12,6 +12,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import type { BrowserController } from "./useBrowser";
+import { useDesktopPreferences } from "../../DesktopPreferencesProvider";
 import "./browser.css";
 
 export function BrowserPane({
@@ -27,6 +28,7 @@ export function BrowserPane({
   onExpand: () => void;
   onClose: () => void;
 }) {
+  const { browserNewTabUrl } = useDesktopPreferences();
   const { snapshot, command, error, busy, fixture, viewport } = controller;
   const active = snapshot.tabs.find((tab) => tab.id === snapshot.selectedTabId);
   const [address, setAddress] = useState(active?.url ?? "");
@@ -178,7 +180,7 @@ export function BrowserPane({
           type="button"
           aria-label="New browser tab"
           disabled={busy}
-          onClick={() => void command({ type: "new", url: "" })}
+          onClick={() => void command({ type: "new", url: browserNewTabUrl })}
         >
           <IconPlus size={17} />
         </button>

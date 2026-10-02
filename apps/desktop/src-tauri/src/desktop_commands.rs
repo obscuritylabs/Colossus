@@ -3027,6 +3027,7 @@ async fn desktop_status_from(
             None => DesktopApprovalModeDto::Ask,
         },
         terminal_enabled: settings.local_terminal_enabled(),
+        terminal_consent_pending: settings.terminal_consent_pending(),
         additional_ca_bundle: crate::desktop_dto::CaBundleStatusDto::from_settings(settings),
         client_identity: ClientIdentityStatusDto::from_settings(settings),
         capabilities,

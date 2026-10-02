@@ -231,6 +231,7 @@ export interface DesktopStatus {
   executionBoundary: ExecutionBoundary;
   approvalMode: ApprovalMode;
   terminalEnabled: boolean;
+  terminalConsentPending?: boolean;
   additionalCaBundle: CaBundleStatus;
   clientIdentity: ClientIdentityStatus;
   capabilities: DesktopCapabilities;

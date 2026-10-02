@@ -278,6 +278,7 @@ pub(crate) struct DesktopStatusDto {
     pub(crate) execution_boundary: ExecutionBoundarySetting,
     pub(crate) approval_mode: DesktopApprovalModeDto,
     pub(crate) terminal_enabled: bool,
+    pub(crate) terminal_consent_pending: bool,
     pub(crate) additional_ca_bundle: CaBundleStatusDto,
     pub(crate) client_identity: ClientIdentityStatusDto,
     pub(crate) capabilities: DesktopCapabilitiesDto,

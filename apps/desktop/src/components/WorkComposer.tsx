@@ -4,6 +4,7 @@ import {
   IconCheck,
   IconCommand,
   IconCornerDownLeft,
+  IconFileText,
   IconFolder,
   IconPaperclip,
   IconPlaylistAdd,
@@ -36,6 +37,7 @@ import { NextUpQueue } from "./NextUpQueue";
 import { PluginIcon } from "./PluginIcon";
 import type { ComposerModelContext } from "../composer-model";
 import { useComposerAutosize } from "./useComposerAutosize";
+import type { ComposerEditIntent } from "../composer-paste";
 
 const ComposerModelChip = lazy(() =>
   import("./ComposerModelChip").then((module) => ({
@@ -111,7 +113,9 @@ interface WorkComposerProps {
   attachments: readonly ArtifactReference[];
   attachmentBusy: boolean;
   error: CommandError | null;
-  onPromptChange: (prompt: string) => void;
+  onPromptChange: (prompt: string, intent?: ComposerEditIntent) => void;
+  onPromptPaste: (text: string, start: number, end: number) => number;
+  condensedPasteCount: number;
   onRoleChange: (role: string) => void;
   onMaxTurnsChange: (maxTurns: number) => void;
   onModeChange: (mode: RunMode) => void;
@@ -170,6 +174,8 @@ export function WorkComposer({
   attachmentBusy,
   error,
   onPromptChange,
+  onPromptPaste,
+  condensedPasteCount,
   onRoleChange,
   onMaxTurnsChange,
   onModeChange,
@@ -214,6 +220,7 @@ export function WorkComposer({
       ? Math.max(0, selectedSlashIndex)
       : -1;
   const slashOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const editIntent = useRef<ComposerEditIntent | null>(null);
   const researchSourceSummary = researchSources
     .map((source) =>
       source === "repo"
@@ -234,6 +241,16 @@ export function WorkComposer({
   }, [activeSlashIndex, prompt, slashMenuOpen]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Backspace" || event.key === "Delete") {
+      editIntent.current = {
+        start: event.currentTarget.selectionStart,
+        end: event.currentTarget.selectionEnd,
+        inputType:
+          event.key === "Backspace"
+            ? "deleteContentBackward"
+            : "deleteContentForward",
+      };
+    }
     if (slashMenuOpen && event.key === "Escape") {
       event.preventDefault();
       setDismissedSlashDraft(prompt);
@@ -719,10 +736,48 @@ export function WorkComposer({
               : undefined
           }
           aria-describedby={
-            promptOverLimit ? "prompt-byte-limit-error" : undefined
+            [
+              promptOverLimit ? "prompt-byte-limit-error" : null,
+              condensedPasteCount > 0 ? "composer-paste-summary" : null,
+            ]
+              .filter(Boolean)
+              .join(" ") || undefined
           }
           disabled={!canCompose || submitting}
           onKeyDown={handleKeyDown}
+          onBeforeInput={(event) => {
+            const textarea = event.currentTarget;
+            const inputType = (event.nativeEvent as InputEvent).inputType;
+            if (!inputType) return;
+            editIntent.current = {
+              start: textarea.selectionStart,
+              end: textarea.selectionEnd,
+              inputType,
+            };
+          }}
+          onCut={(event) => {
+            editIntent.current = {
+              start: event.currentTarget.selectionStart,
+              end: event.currentTarget.selectionEnd,
+              inputType: "deleteByCut",
+            };
+          }}
+          onPaste={(event) => {
+            const text = event.clipboardData.getData("text/plain");
+            if (text.length === 0) return;
+            event.preventDefault();
+            editIntent.current = null;
+            const textarea = event.currentTarget;
+            const cursor = onPromptPaste(
+              text,
+              textarea.selectionStart,
+              textarea.selectionEnd,
+            );
+            requestAnimationFrame(() => {
+              textarea.focus();
+              textarea.setSelectionRange(cursor, cursor);
+            });
+          }}
           onBlur={(event) => {
             const nextTarget = event.relatedTarget as Node | null;
             if (
@@ -739,9 +794,24 @@ export function WorkComposer({
           onChange={(event) => {
             setSelectedSlashCommand(null);
             setDismissedSlashDraft(null);
-            onPromptChange(event.target.value);
+            onPromptChange(event.target.value, editIntent.current ?? undefined);
+            editIntent.current = null;
           }}
         />
+        {condensedPasteCount > 0 ? (
+          <div
+            className="composer-paste-summary"
+            id="composer-paste-summary"
+            role="status"
+          >
+            <IconFileText size={15} stroke={1.8} aria-hidden="true" />
+            <span>
+              {condensedPasteCount} large{" "}
+              {condensedPasteCount === 1 ? "paste" : "pastes"} condensed. Full
+              text is included when sent.
+            </span>
+          </div>
+        ) : null}
         {attachments.length > 0 ? (
           <div className="composer-attachments" aria-label="Run attachments">
             {attachments.map((attachment) => (

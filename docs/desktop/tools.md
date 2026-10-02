@@ -20,6 +20,8 @@ Select **Tools** above a conversation to open a pane on the right. The tool swit
 
 **Changes** shows the current Git branch, changed-file count, and staged, unstaged, untracked, or conflicted files. **History** lists recent commits and affected files. Choose **Refresh Git** if you need a fresh view. This is inspection: Desktop does not stage, commit, switch branches, or contact remotes from this pane.
 
+Under **Settings → Global → Git**, choose the opening view and whether Desktop refreshes Git on focus and periodically. You can still refresh manually when automatic refresh is off.
+
 For a linked worktree or a folder inside a larger repository, **Connect Git** asks for native confirmation before reading repository metadata outside the selected folder. Git inspection is local to a Managed Local workspace; External targets do not expose it through the local reader.
 
 ## Active shells
@@ -28,13 +30,17 @@ For a linked worktree or a folder inside a larger repository, **Connect Git** as
 
 ## Terminal
 
-Enable local terminals for a Managed Local workspace when Desktop asks for native consent. **Open Colossus TUI** attaches the bundled CLI to the *existing* managed worker. **Open Shell** opens a regular system shell in the selected workspace. The tab bar can add another TUI or shell session; closing a terminal tab ends that session. Switching workspaces closes terminal sessions belonging to the old workspace.
+Local terminals are selected by default for new workspaces. The first time you open Terminal, Desktop asks for native confirmation before enabling access; declining leaves terminal access off. Existing workspaces keep their saved choice. **Open Colossus TUI** attaches the bundled CLI to the *existing* managed worker. **Open Shell** opens a regular system shell in the selected workspace. The tab bar can add another TUI or shell session; closing a terminal tab ends that session. Switching workspaces closes terminal sessions belonging to the old workspace.
 
 The TUI uses normal Colossus policy and audit. The shell is a local-user convenience outside agent policy, approvals, and the agent journal; commands you type there have your operating-system authority. A TUI needs Managed Local to be ready, while the shell can remain useful if the runtime is unavailable. External targets do not offer the bundled TUI. See [Terminal UI](../use/terminal-ui.md) for its commands and keys.
+
+Under **Settings → Global → Terminal**, choose whether opening the Terminal tool selects a session automatically or starts a system shell. Automatic opens the TUI when Managed Local is ready and a shell otherwise. The explicit **Open Shell** and **Open Colossus TUI** actions keep their own behavior.
 
 ## Browser
 
 Where the Desktop build offers it, **Browser** opens websites and local previews beside your conversation. Its temporary session is separate from your usual browser and ends when its last tab closes or Desktop exits. Open downloads, file-upload flows, and sites requiring device permissions in your system browser. Browser availability varies by platform and release; Windows builds expose the native browser, while macOS browsing is still preview-only.
+
+Under **Settings → Global → Browser**, set a new-tab page with a full HTTP or HTTPS address. The default is an empty tab. This preference does not restore tabs or browsing history.
 
 ## Artifacts
 
