@@ -7,11 +7,13 @@ type: how-to
 
 # Evaluate offline Desktop dictation
 
-`apps/desktop/native-dictation` is an opt-in feasibility probe for
-[issue 212](https://github.com/obscuritylabs/Colossus/issues/212). It is not linked
-into the production Desktop application. Run it on representative macOS and Windows
-devices before selecting a production model, inference backend, or delivery method.
-The existing composer and agent protocol are unchanged.
+`apps/desktop/native-dictation` provides a standalone probe and an opt-in development
+Desktop recording preview for [issue 212](https://github.com/obscuritylabs/Colossus/issues/212).
+The microphone UI is available in development builds with the `dictation-preview`
+native feature. Ordinary release renderer bundles exclude the preview, and ordinary
+native builds do not link its capture or inference dependencies. Run it on representative
+macOS and Windows devices before selecting a production model, inference backend,
+or delivery method. Dictated text uses the existing composer and agent protocol.
 
 ## Build and install a candidate
 
@@ -56,6 +58,57 @@ The probe creates no model store. Remove its model by deleting that exact instal
 file. Maintainers must own a reviewed, pinned model manifest and its updates before
 adding a production installer; bundling versus explicit download is still undecided.
 
+## Open Desktop with a microphone control
+
+After downloading a pinned model, run this from the repository root on macOS or Linux:
+
+```bash
+GGML_NATIVE=OFF ./scripts/desktop-dev --dictation
+```
+
+On Windows, use PowerShell from the repository root:
+
+```powershell
+$env:GGML_NATIVE = 'OFF'
+Set-Location apps/desktop
+npm ci --ignore-scripts
+npm run tauri:dev:dictation
+```
+
+These commands prepare the matching sidecar/CLI, start the renderer, and open the
+development Desktop app with the opt-in native recorder. Building `dictation-probe`
+alone does not open Desktop or add a microphone control to an installed release.
+Close any other Colossus Desktop instance before launching the development preview.
+
+In the composer, click the microphone, choose **Choose model…**, and select the
+downloaded `ggml-tiny.en.bin` or `ggml-base.en.bin`. Native code verifies the pinned
+digest; the renderer receives only the fixed model name. Selection stays in memory
+for this application session, so choose the file again after restarting Desktop.
+Click **Start recording**, accept the native recording confirmation, and allow OS
+microphone access if prompted. Speak and watch partial text appear in the draft.
+
+The microphone control pauses and resumes recording. Pause finalizes captured speech
+and releases the input device before the draft becomes editable; this preview protects
+an active partial from competing edits. Resume continues with the edited draft. The
+adjacent stop control finalizes speech and closes the recording session. A clear
+recording indicator remains visible while capture is active.
+
+**Send** settles a FIFO audio boundary before using the existing prompt/run or Next up
+path. The same microphone stream stays open. Audio queued after the boundary goes into
+the next draft, including speech recognized while the previous message is submitting.
+A failed submission keeps the previous draft and appends subsequent speech for review.
+Native replies are serialized, and thread/workspace navigation cancels recording and
+ignores late updates from the old session. Opening another Desktop surface also stops
+capture, as does switching to Topology or Activity where the composer is hidden.
+Speech never submits a turn without an explicit Send or Redirect action.
+
+Check pause/edit/resume, successive sends, failed submission, permission denial and
+recovery, device removal, model failure, renderer reload, and application close on each
+native platform. If capture is unavailable, check the system's default input device and
+microphone privacy settings for Colossus or the launching terminal. The preview includes
+a macOS microphone usage description and an audio-input entitlement configuration;
+actual platform permission prompts and hardened packaging still need acceptance.
+
 ## Exercise offline inference and capture
 
 The release executable is under `apps/desktop/src-tauri/target/release/` unless
@@ -82,8 +135,8 @@ Speak continuously, then enter these commands on stdin:
   EOF also stops; Ctrl+C terminates the console process.
 
 `flush` is a probe segmentation control, not an agent submission. Audio still queued
-at that instant belongs to subsequent updates. Production send semantics must bind
-the capture boundary to a composer draft before wiring this to `create_run`.
+at that instant belongs to subsequent updates. The Desktop preview instead inserts a
+FIFO capture marker and settles the current draft before using the existing Send path.
 
 Stdout contains JSON cold-start and per-revision metrics. It omits transcript text by
 default; add `--show-text` only when deliberately inspecting recognition. Do not
@@ -121,8 +174,10 @@ with a 30-second initialization timeout and a ten-second response timeout per de
 This avoids the unsafe closure ownership in whisper-rs 0.16.0's cancellation adapter.
 Capture overload, malformed input, oversized output, and inference failures stop the
 session rather than silently discarding speech or changing to a hosted service.
-Forced parent termination still requires platform process-lifetime containment
-before production integration.
+Desktop window close, renderer reload, and normal application exit independently
+cancel a decode; the supervisor checks cancellation every 20 ms. Forced parent
+termination still requires platform process-lifetime containment before production
+enablement.
 
 ## Recorded Linux smoke evidence
 
@@ -176,8 +231,9 @@ cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml \
 ```
 
 The ordinary Desktop gate runs the first suite without audio/model build dependencies.
-The feature-enabled suite additionally tests capture bounds and resampler tail handling.
-Production enablement remains blocked on macOS/Windows measurements, native permission
-states, process containment, model delivery, silence/endpoint behavior, and composer
-edit/send integration. No supported-device or packaging decision has been established
-by a Linux replay alone.
+The feature-enabled suite additionally tests capture bounds, resampler tails, continuous
+send boundaries, and cancellation. Renderer tests cover ordered revisions, settled
+drafts, failed sends, bounded output, and stale-session replies. Production enablement
+remains blocked on macOS/Windows measurements, native permission acceptance, forced-exit
+containment, model delivery, silence/endpoint behavior, and release packaging. No
+supported-device or packaging decision has been established by a Linux replay alone.

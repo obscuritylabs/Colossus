@@ -16,6 +16,7 @@ mod desktop_dto;
 mod desktop_instance;
 mod desktop_settings;
 mod diagnostics;
+mod dictation;
 mod dto;
 mod managed_configuration;
 mod managed_configuration_commands;
@@ -71,6 +72,9 @@ use desktop_commands::{
     set_approval_mode, set_terminal_enabled,
 };
 use diagnostics::{desktop_release_metadata, export_diagnostics};
+use dictation::{
+    choose_dictation_model, control_dictation, dictation_status, poll_dictation, start_dictation,
+};
 use managed_configuration_commands::catalog_deletion::{
     delete_global_model, delete_global_provider,
 };
@@ -121,6 +125,10 @@ use workspace_git::commands::{
 // Composition-only registration list: native command implementations stay in modules.
 #[allow(clippy::too_many_lines)]
 pub fn run() {
+    #[cfg(feature = "dictation-preview")]
+    if let Some(code) = colossus_native_dictation::run_if_requested() {
+        std::process::exit(code);
+    }
     #[cfg(windows)]
     if let Some(code) = uninstall::run_if_requested() {
         std::process::exit(code);
@@ -150,6 +158,7 @@ pub fn run() {
     let application = application.plugin(tauri_plugin_notification::init());
     let application = application
         .manage(state::AppState::default())
+        .manage(dictation::DictationState::default())
         .manage(terminal_commands::pane::TerminalPaneState::default())
         .manage(status_bar::StatusBarState::default())
         .manage(setup_package::SetupReviewState::default())
@@ -169,15 +178,30 @@ pub fn run() {
                 && matches!(payload.event(), tauri::webview::PageLoadEvent::Started)
             {
                 use tauri::Manager as _;
+                view.state::<dictation::DictationState>().cancel();
                 view.state::<state::AppState>().browser.controller_loading();
                 terminal_commands::pane::hide(view.app_handle(), true);
             }
         })
         .on_window_event(|window, event| {
+            if window.label() == "main"
+                && matches!(
+                    event,
+                    tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+                )
+            {
+                use tauri::Manager as _;
+                window.state::<dictation::DictationState>().cancel();
+            }
             browser::handle_window_event(window, event);
             status_bar::handle_window_event(window, event);
         })
         .invoke_handler(tauri::generate_handler![
+            dictation_status,
+            choose_dictation_model,
+            start_dictation,
+            poll_dictation,
+            control_dictation,
             mount_terminal_pane,
             terminal_pane_viewport,
             browser_context,
@@ -318,6 +342,7 @@ pub fn run() {
         }
         if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
             use tauri::Manager as _;
+            app.state::<dictation::DictationState>().cancel();
 
             tauri::async_runtime::block_on(app.state::<state::AppState>().close_all());
         }

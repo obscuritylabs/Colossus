@@ -974,6 +974,7 @@ dependencies = [
  "colossus-media",
  "colossus-native-browser",
  "colossus-native-credential-ui",
+ "colossus-native-dictation",
  "colossus-network",
  "colossus-plugins",
  "colossus-ports",

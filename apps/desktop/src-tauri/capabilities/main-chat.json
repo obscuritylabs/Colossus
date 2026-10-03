@@ -5,6 +5,11 @@
   "local": true,
   "webviews": ["main"],
   "permissions": [
+    "allow-dictation-status",
+    "allow-choose-dictation-model",
+    "allow-start-dictation",
+    "allow-poll-dictation",
+    "allow-control-dictation",
     "allow-remembered-command-count",
     "allow-clear-remembered-commands",
     "allow-get-workspace-git-status",

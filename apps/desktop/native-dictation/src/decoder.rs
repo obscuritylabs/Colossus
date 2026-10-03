@@ -2,7 +2,11 @@ use std::{
     io::{BufRead as _, BufReader, Read as _, Write as _},
     path::Path,
     process::{Child, ChildStdin, Command, Stdio},
-    sync::mpsc::{self, Receiver, SyncSender},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, SyncSender},
+    },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -29,22 +33,34 @@ struct Supervisor {
 }
 
 impl Supervisor {
-    fn new(mut child: Child, timeout: Duration) -> Self {
+    #[cfg(test)]
+    fn new(child: Child, timeout: Duration) -> Self {
+        Self::with_cancellation(child, timeout, Arc::new(AtomicBool::new(false)))
+    }
+
+    fn with_cancellation(mut child: Child, timeout: Duration, cancelled: Arc<AtomicBool>) -> Self {
         let (commands, receiver) = mpsc::sync_channel(2);
         let watch = thread::spawn(move || {
             let mut deadline = Some(Instant::now() + timeout);
             loop {
-                let command = if let Some(deadline) = deadline {
-                    receiver
-                        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                        .ok()
-                } else {
-                    receiver.recv().ok()
+                if cancelled.load(Ordering::Acquire)
+                    || deadline.is_some_and(|deadline| Instant::now() >= deadline)
+                {
+                    break;
+                }
+                let wait = deadline.map_or(Duration::from_millis(20), |deadline| {
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(Duration::from_millis(20))
+                });
+                let command = match receiver.recv_timeout(wait) {
+                    Ok(command) => command,
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 };
                 match command {
-                    Some(WatchCommand::Arm(timeout)) => deadline = Some(Instant::now() + timeout),
-                    Some(WatchCommand::Idle) => deadline = None,
-                    None => break,
+                    WatchCommand::Arm(timeout) => deadline = Some(Instant::now() + timeout),
+                    WatchCommand::Idle => deadline = None,
                 }
             }
             let _ = child.kill();
@@ -80,16 +96,30 @@ impl Drop for Supervisor {
 
 impl WhisperDecoder {
     pub(crate) fn load(path: &Path, digest: &str) -> Result<Self, DictationError> {
-        let mut child =
-            Command::new(std::env::current_exe().map_err(|_| DictationError::ModelUnsupported)?)
-                .arg("--dictation-worker")
-                .arg(path)
-                .arg(digest)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn()
-                .map_err(|_| DictationError::ModelUnsupported)?;
+        Self::load_cancellable(path, digest, Arc::new(AtomicBool::new(false)))
+    }
+
+    pub(crate) fn load_cancellable(
+        path: &Path,
+        digest: &str,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<Self, DictationError> {
+        let mut command =
+            Command::new(std::env::current_exe().map_err(|_| DictationError::ModelUnsupported)?);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt as _;
+            command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW for the inference helper.
+        }
+        let mut child = command
+            .arg("--dictation-worker")
+            .arg(path)
+            .arg(digest)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|_| DictationError::ModelUnsupported)?;
         let Some(input) = child.stdin.take() else {
             let _ = child.kill();
             let _ = child.wait();
@@ -121,7 +151,7 @@ impl WhisperDecoder {
             }
         });
         let decoder = Self {
-            supervisor: Supervisor::new(child, Duration::from_secs(30)),
+            supervisor: Supervisor::with_cancellation(child, Duration::from_secs(30), cancelled),
             input,
             replies,
             reader: Some(reader),
@@ -199,6 +229,29 @@ mod tests {
         supervisor.watch.take().unwrap().join().unwrap();
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(supervisor.command(WatchCommand::Idle).is_err());
+    }
+
+    #[test]
+    fn cancellation_terminates_an_idle_helper_without_waiting_for_its_deadline() {
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "decoder::tests::supervised_test_child",
+                "--ignored",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let mut supervisor =
+            Supervisor::with_cancellation(child, Duration::from_secs(30), cancelled.clone());
+        supervisor.command(WatchCommand::Idle).unwrap();
+        let started = Instant::now();
+        cancelled.store(true, Ordering::Release);
+        supervisor.watch.take().unwrap().join().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]

@@ -1,0 +1,53 @@
+.dictation-control {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.dictation-control .is-recording {
+  color: var(--red);
+  background: var(--red-soft);
+}
+.dictation-settings {
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 12px);
+  left: 0;
+  width: min(330px, calc(100vw - 48px));
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+}
+.dictation-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.dictation-settings p {
+  margin: 8px 0;
+}
+.dictation-settings-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.dictation-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.dictation-status.is-recording::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--red);
+}

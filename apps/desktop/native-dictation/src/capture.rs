@@ -20,7 +20,7 @@ const MAX_CALLBACK_FRAMES: usize = 8192;
 const QUEUE_BLOCKS: usize = 256;
 
 struct CaptureQueue {
-    sender: SyncSender<Zeroizing<Vec<f32>>>,
+    sender: SyncSender<CaptureBlock>,
     failure: Arc<AtomicU8>,
 }
 
@@ -52,15 +52,21 @@ impl CaptureQueue {
         );
         if mono.iter().any(|sample| !sample.is_finite()) {
             self.failure.store(3, Ordering::Relaxed);
-        } else if self.sender.try_send(mono).is_err() {
+        } else if self.sender.try_send(CaptureBlock::Audio(mono)).is_err() {
             self.failure.store(2, Ordering::Relaxed);
         }
     }
 }
 
+enum CaptureBlock {
+    Audio(Zeroizing<Vec<f32>>),
+    Boundary,
+}
+
 pub(crate) struct Capture {
     stream: Option<Stream>,
-    receiver: Receiver<Zeroizing<Vec<f32>>>,
+    sender: SyncSender<CaptureBlock>,
+    receiver: Receiver<CaptureBlock>,
     failure: Arc<AtomicU8>,
     resampler: Resampler,
 }
@@ -81,7 +87,7 @@ impl Capture {
         let (sender, receiver) = mpsc::sync_channel(QUEUE_BLOCKS);
         let failure = Arc::new(AtomicU8::new(0));
         let queue = CaptureQueue {
-            sender,
+            sender: sender.clone(),
             failure: failure.clone(),
         };
         let error_flag = failure.clone();
@@ -122,6 +128,7 @@ impl Capture {
             .map_err(|_| DictationError::CaptureUnavailable)?;
         Ok(Self {
             stream: Some(stream),
+            sender,
             receiver,
             failure,
             resampler,
@@ -136,11 +143,39 @@ impl Capture {
         // Consume at most one block per poll, leaving the controller able to
         // service pause and stop between bounded inference calls.
         self.check()?;
-        if let Ok(block) = self.receiver.try_recv() {
+        if let Ok(CaptureBlock::Audio(block)) = self.receiver.try_recv() {
             self.resampler
                 .push(&block, &mut |samples| pipeline.push(samples, emit))?;
         }
         self.check()
+    }
+
+    /// Insert a FIFO boundary while retaining the same microphone stream. Audio
+    /// enqueued after the marker belongs to the next draft, including callbacks
+    /// that were still being prepared when the boundary was requested.
+    pub(crate) fn finish_turn<D: Decoder>(
+        &mut self,
+        pipeline: &mut Pipeline<D>,
+        emit: &mut impl FnMut(TranscriptUpdate) -> Result<(), DictationError>,
+    ) -> Result<(), DictationError> {
+        self.check()?;
+        self.sender
+            .try_send(CaptureBlock::Boundary)
+            .map_err(|_| DictationError::CaptureOverrun)?;
+        while let Ok(block) = self.receiver.try_recv() {
+            match block {
+                CaptureBlock::Audio(audio) => self
+                    .resampler
+                    .push(&audio, &mut |samples| pipeline.push(samples, emit))?,
+                CaptureBlock::Boundary => {
+                    self.resampler
+                        .finish(&mut |samples| pipeline.push(samples, emit))?;
+                    pipeline.finish(emit)?;
+                    return self.resampler.reset();
+                }
+            }
+        }
+        Err(DictationError::CaptureUnavailable)
     }
 
     pub(crate) fn finish<D: Decoder>(
@@ -152,8 +187,10 @@ impl Capture {
         self.stream.take();
         self.check()?;
         for block in self.receiver.try_iter() {
-            self.resampler
-                .push(&block, &mut |samples| pipeline.push(samples, emit))?;
+            if let CaptureBlock::Audio(audio) = block {
+                self.resampler
+                    .push(&audio, &mut |samples| pipeline.push(samples, emit))?;
+            }
         }
         self.resampler
             .finish(&mut |samples| pipeline.push(samples, emit))?;
@@ -183,7 +220,10 @@ mod tests {
             failure: failure.clone(),
         };
         queue.send(&[0.5_f32, 0.25], 2);
-        assert_eq!(receiver.try_recv().unwrap().as_slice(), [0.375]);
+        let CaptureBlock::Audio(audio) = receiver.try_recv().unwrap() else {
+            panic!("expected audio")
+        };
+        assert_eq!(audio.as_slice(), [0.375]);
         queue.send(&[0.0_f32], 1);
         queue.send(&[0.0_f32], 1);
         assert_eq!(failure.load(Ordering::Relaxed), 2);
@@ -208,5 +248,61 @@ mod tests {
         failure.store(0, Ordering::Relaxed);
         queue.send(&[f32::NAN], 1);
         assert_eq!(failure.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn send_marker_settles_prior_audio_and_keeps_later_audio_for_the_next_turn() {
+        struct DurationDecoder;
+        impl Decoder for DurationDecoder {
+            fn decode(&mut self, samples: &[f32]) -> Result<String, DictationError> {
+                Ok(samples.len().to_string())
+            }
+        }
+        let (sender, receiver) = mpsc::sync_channel(QUEUE_BLOCKS);
+        for _ in 0..4 {
+            sender
+                .send(CaptureBlock::Audio(Zeroizing::new(vec![0.25; 8000])))
+                .unwrap();
+        }
+        let mut capture = Capture {
+            stream: None,
+            sender: sender.clone(),
+            receiver,
+            failure: Arc::new(AtomicU8::new(0)),
+            resampler: Resampler::new(16_000).unwrap(),
+        };
+        let mut pipeline = Pipeline::new(DurationDecoder);
+        let mut updates = Vec::new();
+        let mut later_sent = false;
+        capture
+            .finish_turn(&mut pipeline, &mut |update| {
+                if !later_sent {
+                    // Simulates a callback enqueuing new speech after the FIFO marker.
+                    sender
+                        .send(CaptureBlock::Audio(Zeroizing::new(vec![0.5; 8000])))
+                        .unwrap();
+                    later_sent = true;
+                }
+                updates.push(update);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(updates.last().unwrap().audio_ms, 2000);
+        assert!(updates.last().unwrap().is_final);
+        capture
+            .poll(&mut pipeline, &mut |update| {
+                updates.push(update);
+                Ok(())
+            })
+            .unwrap();
+        capture
+            .finish_turn(&mut pipeline, &mut |update| {
+                updates.push(update);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(updates.last().unwrap().segment_id, 2);
+        assert_eq!(updates.last().unwrap().audio_ms, 500);
+        assert!(updates.last().unwrap().is_final);
     }
 }

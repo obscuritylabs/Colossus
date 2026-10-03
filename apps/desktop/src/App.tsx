@@ -87,6 +87,8 @@ import type { AsideDraft } from "./components/AsidePanel";
 import { ReleaseChannelBanner } from "./components/ReleaseChannelBanner";
 import type { WorkspaceSurface } from "./components/ProductRail";
 import { WorkComposer } from "./components/WorkComposer";
+import { useDictation } from "./use-dictation";
+import type { ComposerDraft } from "./composer-paste";
 import {
   composerDraft,
   editComposerDraft,
@@ -1041,10 +1043,33 @@ export default function App() {
   const [listBusy, setListBusy] = useState(false);
   const [listError, setListError] = useState("");
   const [runLoadError, setRunLoadError] = useState("");
-  const [draft, setDraft] = useState(composerDraft);
+  const [draft, commitDraft] = useState(composerDraft);
+  const draftRef = useRef(draft);
+  const setDraft = (
+    next: ComposerDraft | ((current: ComposerDraft) => ComposerDraft),
+  ) => {
+    const value = typeof next === "function" ? next(draftRef.current) : next;
+    draftRef.current = value;
+    commitDraft(value);
+  };
+  const dictation = useDictation(
+    JSON.stringify([
+      desktop.selectedSpaceId,
+      desktop.selectedTargetId,
+      surface,
+      activeSessionWorkspaceView === "topology" ||
+        activeSessionWorkspaceView === "activity",
+    ]),
+    () => draftRef.current,
+    setDraft,
+  );
   const prompt = draft.display;
   const expandedPrompt = expandComposerDraft(draft);
-  const setPrompt = (value: string) => setDraft(composerDraft(value));
+  const setPrompt = (value: string) => {
+    if (!dictation?.controller.getSnapshot().sending)
+      dictation?.controller.reset();
+    setDraft(composerDraft(value));
+  };
   const completionSkills = usePluginSkills(
     desktop.selectedTargetId,
     desktop.capabilities.pluginSkillSelection === true,
@@ -1968,6 +1993,7 @@ export default function App() {
   }
 
   async function openRun(run: Run) {
+    dictation?.controller.reset();
     if (submitInFlight.current || connectingRef.current) {
       return;
     }
@@ -2051,6 +2077,7 @@ export default function App() {
   }
 
   function newWork() {
+    dictation?.controller.reset();
     if (submitInFlight.current) {
       return;
     }
@@ -2256,6 +2283,7 @@ export default function App() {
     route: TargetRoute,
     placement: QueuePlacement,
   ): Promise<QueuedMessage | null> {
+    const expandedPrompt = expandComposerDraft(draftRef.current);
     const cleanPrompt = expandedPrompt.trim();
     const cleanRole = role.trim();
     if (
@@ -2472,6 +2500,30 @@ export default function App() {
 
   async function submitRun(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    await withDictationSend(submitSettledRun);
+  }
+
+  async function withDictationSend(action: () => Promise<void>) {
+    if (!dictation) {
+      await action();
+      return;
+    }
+    if (
+      submitInFlight.current ||
+      connectingRef.current ||
+      dictation.controller.getSnapshot().sending
+    )
+      return;
+    const allowed = await dictation.controller.beginSend();
+    try {
+      if (allowed) await action();
+    } finally {
+      dictation.controller.endSend();
+    }
+  }
+
+  async function submitSettledRun() {
+    const expandedPrompt = expandComposerDraft(draftRef.current);
     const cleanPrompt = expandedPrompt.trim();
     const slashCommand = parseDesktopSlashCommand(cleanPrompt);
     if (slashCommand.type === "invalid") {
@@ -5000,6 +5052,7 @@ export default function App() {
 
   const composer = (contextActions: ReactNode) => (
     <WorkComposer
+      dictation={dictation ?? undefined}
       contextActions={contextActions}
       pluginSkills={completionSkills}
       pluginSelections={pluginSelections}
@@ -5042,7 +5095,7 @@ export default function App() {
         setSurface("settings");
       }}
       canCompose={canCompose}
-      submitting={submitting}
+      submitting={submitting || dictation?.state.sending === true}
       continuation={continuation}
       planRevision={
         planRevision === null
@@ -5097,7 +5150,7 @@ export default function App() {
         setComposerError(null);
       }}
       onPromptPaste={(text, start, end) => {
-        const next = pasteIntoComposerDraft(draft, text, start, end);
+        const next = pasteIntoComposerDraft(draftRef.current, text, start, end);
         setDraft(next.draft);
         setComposerError(null);
         return next.cursor;
@@ -5126,7 +5179,7 @@ export default function App() {
       onEditQueuedMessage={editQueuedMessage}
       onDeleteQueuedMessage={deleteQueuedMessage}
       onRetryQueuedMessage={retryQueuedMessage}
-      onRedirect={() => void redirectCurrentResponse()}
+      onRedirect={() => void withDictationSend(redirectCurrentResponse)}
       onSubmit={(event) => void submitRun(event)}
     />
   );

@@ -26,6 +26,7 @@
     "prepare:sidecars:dev": "cargo xtask desktop prepare --profile debug",
     "prepare:sidecars:release": "cargo xtask desktop prepare --profile release",
     "tauri:dev": "npm run prepare:sidecars:dev && tauri dev -- --locked",
+    "tauri:dev:dictation": "npm run prepare:sidecars:dev && tauri dev --features dictation-preview --config src-tauri/tauri.dictation.conf.json -- --locked",
     "tauri:build": "npm run prepare:sidecars:release && tauri build --no-bundle -- --locked",
     "tauri:bundle:macos": "../../scripts/package-desktop-macos",
     "tauri:bundle:windows": "pwsh -File ../../scripts/package-desktop-windows.ps1"

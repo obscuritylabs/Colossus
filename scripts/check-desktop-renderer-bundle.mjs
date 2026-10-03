@@ -6,6 +6,7 @@ const dist = join(desktop, "dist");
 const maximumJavaScriptChunkBytes = 700_000;
 const maximumRendererBytes = 4_000_000;
 const forbiddenFixtureStrings = [
+  "Offline dictation preview",
   "fixture-run-desktop-release",
   "fixture-session-operations-studio",
   "fixture-managed-local",

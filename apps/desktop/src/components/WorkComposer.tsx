@@ -38,6 +38,8 @@ import { PluginIcon } from "./PluginIcon";
 import type { ComposerModelContext } from "../composer-model";
 import { useComposerAutosize } from "./useComposerAutosize";
 import type { ComposerEditIntent } from "../composer-paste";
+import type { DictationController, DictationSnapshot } from "../dictation";
+import { DictationControl } from "./DictationControl";
 
 const ComposerModelChip = lazy(() =>
   import("./ComposerModelChip").then((module) => ({
@@ -73,6 +75,8 @@ const RESEARCH_SOURCE_OPTIONS = [
 ] as const;
 
 interface WorkComposerProps {
+  dictation?:
+    { controller: DictationController; state: DictationSnapshot } | undefined;
   contextActions?: ReactNode;
   pluginSkills?: readonly PluginSkill[] | null;
   pluginSelections?: readonly string[];
@@ -133,6 +137,7 @@ interface WorkComposerProps {
 }
 
 export function WorkComposer({
+  dictation: requestedDictation,
   contextActions,
   pluginSkills = null,
   pluginSelections = [],
@@ -191,6 +196,14 @@ export function WorkComposer({
   onRedirect,
   onSubmit,
 }: WorkComposerProps) {
+  // The native hardware feasibility gate is still open. Keep the experimental
+  // UI out of ordinary release bundles while allowing live development tests.
+  const dictation = import.meta.env.DEV ? requestedDictation : undefined;
+  const draftReadOnly = Boolean(
+    dictation?.state.phase === "recording" ||
+    dictation?.state.busy ||
+    dictation?.state.sending,
+  );
   useComposerAutosize(textareaRef, prompt);
   const [selectedSlashCommand, setSelectedSlashCommand] = useState<
     string | null
@@ -211,7 +224,9 @@ export function WorkComposer({
           (id) => !pluginSkills.some((skill) => skill.id === id),
         );
   const slashMenuOpen =
-    slashCommandSuggestions.length > 0 && dismissedSlashDraft !== prompt;
+    !draftReadOnly &&
+    slashCommandSuggestions.length > 0 &&
+    dismissedSlashDraft !== prompt;
   const selectedSlashIndex = slashCommandSuggestions.findIndex(
     ({ command }) => command === selectedSlashCommand,
   );
@@ -241,6 +256,17 @@ export function WorkComposer({
   }, [activeSlashIndex, prompt, slashMenuOpen]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (draftReadOnly) {
+      if (
+        event.key === "Enter" &&
+        !event.shiftKey &&
+        !event.nativeEvent.isComposing
+      ) {
+        event.preventDefault();
+        formRef.current?.requestSubmit();
+      }
+      return;
+    }
     if (event.key === "Backspace" || event.key === "Delete") {
       editIntent.current = {
         start: event.currentTarget.selectionStart,
@@ -535,6 +561,27 @@ export function WorkComposer({
         </div>
       </div>
       <div className="composer-body">
+        {dictation?.state.sessionId || dictation?.state.phase === "starting" ? (
+          <p
+            className={`dictation-status${dictation.state.phase === "recording" ? " is-recording" : ""}`}
+            role="status"
+          >
+            {dictation.state.sending
+              ? "Finalizing speech for this message…"
+              : dictation.state.busy
+                ? "Updating recording…"
+                : dictation.state.phase === "starting"
+                  ? "Loading the local speech model…"
+                  : dictation.state.phase === "recording"
+                    ? "Recording locally · Pause to edit · Send keeps the microphone on"
+                    : "Dictation paused · You can edit the draft"}
+          </p>
+        ) : null}
+        {dictation?.state.error ? (
+          <p className="inline-error" role="alert">
+            {dictation.state.error}
+          </p>
+        ) : null}
         {pluginSelections.length > 0 && (
           <div className="plugin-selections" aria-label="Conversation skills">
             <span>Conversation skills:</span>
@@ -744,6 +791,7 @@ export function WorkComposer({
               .join(" ") || undefined
           }
           disabled={!canCompose || submitting}
+          readOnly={draftReadOnly}
           onKeyDown={handleKeyDown}
           onBeforeInput={(event) => {
             const textarea = event.currentTarget;
@@ -763,6 +811,10 @@ export function WorkComposer({
             };
           }}
           onPaste={(event) => {
+            if (event.currentTarget.readOnly || event.currentTarget.disabled) {
+              event.preventDefault();
+              return;
+            }
             const text = event.clipboardData.getData("text/plain");
             if (text.length === 0) return;
             event.preventDefault();
@@ -862,6 +914,12 @@ export function WorkComposer({
           ) : null}
         </div>
         <div className="composer-action-row">
+          {dictation ? (
+            <DictationControl
+              {...dictation}
+              disabled={!canCompose || submitting}
+            />
+          ) : null}
           {attachmentsAvailable ? (
             <div className="composer-context-actions">
               <button

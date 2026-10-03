@@ -86,6 +86,11 @@ impl Resampler {
         self.input.resize(self.filter.input_frames_next(), 0.0);
         self.process(emit)
     }
+
+    pub(crate) fn reset(&mut self) -> Result<(), DictationError> {
+        *self = Self::new(self.rate)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

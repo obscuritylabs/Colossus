@@ -38,6 +38,29 @@ pub(crate) fn run(path: &Path, digest: &str) -> Result<(), DictationError> {
     result
 }
 
+/// Serve the private helper protocol before the Desktop event loop starts.
+/// Returns `None` for an ordinary application launch.
+#[must_use]
+pub fn run_if_requested() -> Option<i32> {
+    let mut args = std::env::args_os().skip(1);
+    if args.next().as_deref() != Some(std::ffi::OsStr::new("--dictation-worker")) {
+        return None;
+    }
+    let result = (|| {
+        let path = args.next().ok_or(DictationError::Arguments)?;
+        let digest = args
+            .next()
+            .ok_or(DictationError::Arguments)?
+            .into_string()
+            .map_err(|_| DictationError::Arguments)?;
+        if args.next().is_some() {
+            return Err(DictationError::Arguments);
+        }
+        run(Path::new(&path), &digest)
+    })();
+    Some(i32::from(result.is_err()))
+}
+
 fn serve(path: &Path, digest: &str) -> Result<(), DictationError> {
     let bytes = model::verify(path, digest)?;
     whisper_rs::install_logging_hooks();
