@@ -358,6 +358,20 @@ function feedProjection(update: RunUpdate): RunUpdate | null {
     createdAt: boundedFeedText(update.createdAt, 128),
   };
   switch (update.update.type) {
+    case "provider_retry":
+      return {
+        ...base,
+        update: {
+          type: "provider_retry",
+          retry: {
+            ...update.update.retry,
+            retry_at:
+              update.update.retry.retry_at == null
+                ? null
+                : boundedFeedText(update.update.retry.retry_at, 64),
+          },
+        },
+      };
     case "message":
       return {
         ...base,
@@ -567,6 +581,7 @@ function applyUpdate(view: RunView, update: RunUpdate): RunView {
         },
       };
       break;
+    case "provider_retry":
     case "reasoning_summary":
     case "tool_activity":
     case "message":

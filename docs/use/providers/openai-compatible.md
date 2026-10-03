@@ -80,6 +80,13 @@ entry does not narrow ambient authority. When
 and 15 minutes for `localhost`, IPv4 loopback, or IPv6 loopback. Set a positive
 `timeoutMs` only when the connection needs an explicit override.
 
+The TUI and desktop app show an inline reconnecting status with a retry count and
+countdown while automatically retrying HTTP 502–504 responses up to five times,
+waiting 1, 2, 4, 8, and 16 seconds between attempts. A longer `Retry-After` delay takes
+precedence, and all attempts share the original request deadline. Retries stop once
+the response stream starts; interrupted streams and uncertain transport failures are
+not replayed. Exhausted retries remain recoverable errors that you can resubmit.
+
 The example selects the modern `max_completion_tokens` Chat Completions field. Use
 `max_tokens` for a legacy endpoint, or `omit` only when the endpoint rejects both token
 limit fields. Omitting `chatCompletionsOutputTokenParameter` defaults to `max_tokens` so

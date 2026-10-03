@@ -1588,6 +1588,31 @@ fn update_from_proto(value: proto::RunUpdate) -> ApiResult<RunUpdate> {
             }
             RunUpdateKind::Message(message)
         }
+        run_update::Update::ProviderRetry(retry) => {
+            let state = match retry.state {
+                1 => colossus_api::ProviderRetryState::Backoff,
+                2 => colossus_api::ProviderRetryState::Retrying,
+                3 => colossus_api::ProviderRetryState::Recovered,
+                _ => return Err(protocol_error()),
+            };
+            if retry.max_retries != 5
+                || !(1..=5).contains(&retry.attempt)
+                || !matches!(retry.http_status, 502..=504)
+                || (state == colossus_api::ProviderRetryState::Backoff) != retry.retry_at.is_some()
+                || retry.retry_at.as_ref().is_some_and(|value| {
+                    value.len() > 64 || value.parse::<prost_types::Timestamp>().is_err()
+                })
+            {
+                return Err(protocol_error());
+            }
+            RunUpdateKind::ProviderRetry(colossus_api::ProviderRetry {
+                attempt: retry.attempt,
+                max_retries: retry.max_retries,
+                http_status: retry.http_status,
+                state,
+                retry_at: retry.retry_at,
+            })
+        }
         run_update::Update::Notice(notice) => {
             validate_identifier(&notice.reason)?;
             validate_text(&notice.message, MAX_SUMMARY_BYTES)?;
@@ -3169,5 +3194,53 @@ mod tests {
             .await
             .expect("server task")
             .expect("server shutdown");
+    }
+
+    #[test]
+    fn provider_recovery_round_trips_typed_progress_and_rejects_invalid_wire_states() {
+        let retry = proto::ProviderRetry {
+            attempt: 2,
+            max_retries: 5,
+            http_status: 503,
+            state: 1,
+            retry_at: Some("2026-10-03T00:00:04Z".into()),
+        };
+        let update = |retry| proto::RunUpdate {
+            run_id: "run-1".into(),
+            sequence: 1,
+            created_at: Some("2026-10-03T00:00:00Z".parse().expect("timestamp")),
+            update: Some(run_update::Update::ProviderRetry(retry)),
+        };
+        let released = update_from_proto(update(retry.clone())).expect("typed recovery");
+        assert!(
+            matches!(released.update, RunUpdateKind::ProviderRetry(progress)
+            if progress.attempt == 2 && progress.state == colossus_api::ProviderRetryState::Backoff
+            && progress.retry_at.as_deref() == Some("2026-10-03T00:00:04Z"))
+        );
+        for invalid in [
+            proto::ProviderRetry {
+                attempt: 0,
+                ..retry.clone()
+            },
+            proto::ProviderRetry {
+                max_retries: 6,
+                ..retry.clone()
+            },
+            proto::ProviderRetry {
+                state: 0,
+                ..retry.clone()
+            },
+            proto::ProviderRetry {
+                http_status: 401,
+                ..retry.clone()
+            },
+            proto::ProviderRetry {
+                retry_at: Some("invalid".into()),
+                ..retry.clone()
+            },
+            proto::ProviderRetry { state: 3, ..retry },
+        ] {
+            assert!(update_from_proto(update(invalid)).is_err());
+        }
     }
 }

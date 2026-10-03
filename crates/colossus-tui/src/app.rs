@@ -1553,6 +1553,7 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
             state.operation = None;
             state.control = None;
             state.activity = None;
+            state.provider_retry = None;
             state.started_at = None;
             let successful = match result {
                 Ok(OperationResult::Command(result)) => {
@@ -1713,6 +1714,7 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
         HostEvent::AttachmentFinished(result) => {
             state.operation = None;
             state.activity = None;
+            state.provider_retry = None;
             state.started_at = None;
             match result {
                 Ok(image) => {
@@ -1788,7 +1790,38 @@ fn offer_plan_execution_choice(state: &mut TuiState) {
 
 pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope) {
     let event = envelope.event;
+    if !matches!(
+        &event,
+        RunEvent::Provider {
+            event: ProviderEvent::Retry { .. }
+        }
+    ) {
+        state.provider_retry = None;
+    }
     match &event {
+        RunEvent::Provider {
+            event: ProviderEvent::Retry { retry },
+        } => {
+            if state
+                .control
+                .as_ref()
+                .is_some_and(|control| control.is_cancelled())
+            {
+                return;
+            }
+            if retry.state == colossus_contracts::ProviderRetryState::Recovered {
+                state.provider_retry = None;
+                state.activity = Some("waiting for model".into());
+            } else if state.operation.is_some()
+                && !state
+                    .control
+                    .as_ref()
+                    .is_some_and(|control| control.is_cancelled())
+            {
+                state.provider_retry = Some(retry.clone());
+            }
+            return;
+        }
         RunEvent::Provider {
             event: ProviderEvent::ModelDelta { text },
         } if state.preferences.stream_mode != colossus_contracts::StreamDisplayMode::Off => {

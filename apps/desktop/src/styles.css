@@ -13663,3 +13663,31 @@ textarea {
     animation: none;
   }
 }
+
+/* Provider recovery shares the live activity rail and the warning palette. */
+.provider-retry-status .feed-marker {
+  border-color: var(--amber-border);
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.provider-retry-status .live-run-status-copy {
+  flex-wrap: wrap;
+  gap: 3px 8px;
+}
+
+.provider-retry-status .live-run-status-copy strong {
+  color: var(--amber-text);
+}
+
+.provider-retry-status .live-run-status-copy small {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: normal;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .provider-retry-status .feed-marker svg {
+    animation: none;
+  }
+}

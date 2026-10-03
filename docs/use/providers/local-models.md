@@ -111,9 +111,9 @@ then explicitly resubmit the smoke test.
 
 - **Connection refused:** start the server, verify its bind address and port, then rerun
   `provider doctor local-provider`.
-- **HTTP 503 while loading:** wait for the server to report the model ready, rerun
-  `models doctor local`, and explicitly resubmit the turn. Colossus reports this as
-  recoverable but does not retry implicitly.
+- **HTTP 503 while loading:** Colossus retries up to five times with increasing
+  backoff within the request deadline. If the error persists, wait for the server to
+  report the model ready, rerun `models doctor local`, and resubmit the turn.
 - **HTTP 400 or malformed response:** verify the exact model ID and the server's model
   catalog, Chat Completions token parameter, tool-call, and streaming compatibility.
   Correct `chatCompletionsOutputTokenParameter`, disable unsupported capability flags,

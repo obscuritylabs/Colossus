@@ -4067,3 +4067,63 @@ fn labeled_transcript_content_reserves_its_indent_within_the_viewport() {
         );
     }
 }
+
+#[test]
+fn provider_recovery_updates_the_activity_rail_without_transcript_noise() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.operation = Some(OperationKind::Run);
+    state.control = Some(RunControl::default());
+    let original_entries = state.transcript.len();
+    let retry = colossus_contracts::ProviderRetry {
+        attempt: 2,
+        max_retries: 5,
+        http_status: 503,
+        state: colossus_contracts::ProviderRetryState::Backoff,
+        retry_at: Some(
+            (time::OffsetDateTime::now_utc() + time::Duration::seconds(4))
+                .format(&time::format_description::well_known::Rfc3339)
+                .expect("retry deadline"),
+        ),
+    };
+    let event = |retry| RunEventEnvelope {
+        schema_version: 1,
+        run_id: "run-retry".into(),
+        session_id: "session-retry".into(),
+        event: RunEvent::Provider {
+            event: ProviderEvent::Retry { retry },
+        },
+    };
+    handle_run_event(&mut state, event(retry.clone()));
+    let backend = TestBackend::new(120, 3);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_activity(frame, &state, Rect::new(0, 0, 120, 1)))
+        .expect("draw");
+    let rendered: String = (0..120)
+        .filter_map(|x| terminal.backend().buffer().cell((x, 0)))
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(rendered.contains("Reconnecting to provider"), "{rendered}");
+    assert!(rendered.contains("Retry 2 of 5"), "{rendered}");
+    assert!(rendered.contains("next attempt in 4s"), "{rendered}");
+    assert_eq!(state.transcript.len(), original_entries);
+    handle_run_event(
+        &mut state,
+        event(colossus_contracts::ProviderRetry {
+            state: colossus_contracts::ProviderRetryState::Recovered,
+            retry_at: None,
+            ..retry.clone()
+        }),
+    );
+    assert!(state.provider_retry.is_none());
+    assert_eq!(state.activity.as_deref(), Some("waiting for model"));
+    handle_run_event(&mut state, event(retry.clone()));
+    state.cancel_focus();
+    assert!(state.provider_retry.is_none());
+    handle_run_event(&mut state, event(retry));
+    assert!(
+        state.provider_retry.is_none(),
+        "late retry must not overwrite cancellation"
+    );
+    assert_eq!(state.transcript.len(), original_entries);
+}

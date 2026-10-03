@@ -1,3 +1,6 @@
+/// Safe automatic provider recovery progress.
+pub use colossus_api::{ProviderRetry, ProviderRetryState};
+
 use colossus_api::IdempotencyKey;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -882,6 +885,8 @@ pub struct RunUpdate {
 /// Released public run-feed update.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RunUpdateKind {
+    /// Safe provider recovery progress.
+    ProviderRetry(ProviderRetry),
     /// Exact historical state transition.
     State(RunStatus),
     /// Incremental visible assistant text.

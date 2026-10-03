@@ -19,7 +19,7 @@ pub(super) struct RunProviderObserver<'local, 'downstream> {
 #[async_trait]
 impl ProviderEventObserver for RunProviderObserver<'_, '_> {
     async fn observe(&mut self, event: ProviderEvent) -> Result<(), ModelProviderError> {
-        if self.first_chunk_seconds.is_none() {
+        if self.first_chunk_seconds.is_none() && !matches!(event, ProviderEvent::Retry { .. }) {
             *self.first_chunk_seconds = Some(self.model_started.elapsed().as_secs_f64());
         }
         if matches!(event, ProviderEvent::ModelDelta { .. }) {
@@ -232,6 +232,7 @@ pub(super) fn session_title(prompt: &str) -> String {
 
 pub(super) fn provider_event_payload(event: &ProviderEvent) -> (&'static str, Value) {
     match event {
+        ProviderEvent::Retry { retry } => ("provider.retry.v1", json!({"retry": retry})),
         ProviderEvent::ModelDelta { text } => ("model.delta.v1", json!({"text": text})),
         ProviderEvent::ReasoningSummary { summary } => {
             ("reasoning.summary.v1", json!({"summary": summary}))

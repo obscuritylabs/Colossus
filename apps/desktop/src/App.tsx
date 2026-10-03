@@ -226,7 +226,8 @@ const FIXTURE_QUERY = new URLSearchParams(window.location.search);
 const FIXTURE_SCENARIO = FIXTURE_QUERY.get("fixture");
 const FIXTURE_MODE =
   import.meta.env.DEV &&
-  (FIXTURE_SCENARIO === "operations-studio" ||
+  (FIXTURE_SCENARIO === "provider-retry" ||
+    FIXTURE_SCENARIO === "operations-studio" ||
     FIXTURE_SCENARIO === "command-approval" ||
     FIXTURE_SCENARIO === "activity-comparison" ||
     FIXTURE_SCENARIO === "interaction-question" ||
@@ -887,16 +888,18 @@ export default function App() {
   const [chat, dispatch] = useReducer(
     chatReducer,
     FIXTURE_MODE
-      ? FIXTURE_SCENARIO === "activity-comparison"
-        ? developmentFixtures().buildActivityComparisonFixture()
-        : FIXTURE_SCENARIO === "plan-workflow"
-          ? developmentFixtures().buildPlanWorkflowFixture()
-          : developmentFixtures().buildOperationsStudioFixture(
-              FIXTURE_SCENARIO === "interaction-question"
-                ? "user_prompt"
-                : "approval",
-              FIXTURE_SCENARIO === "command-approval",
-            )
+      ? FIXTURE_SCENARIO === "provider-retry"
+        ? developmentFixtures().buildProviderRetryFixture()
+        : FIXTURE_SCENARIO === "activity-comparison"
+          ? developmentFixtures().buildActivityComparisonFixture()
+          : FIXTURE_SCENARIO === "plan-workflow"
+            ? developmentFixtures().buildPlanWorkflowFixture()
+            : developmentFixtures().buildOperationsStudioFixture(
+                FIXTURE_SCENARIO === "interaction-question"
+                  ? "user_prompt"
+                  : "approval",
+                FIXTURE_SCENARIO === "command-approval",
+              )
       : initialChatState,
   );
   const chatRef = useRef(chat);

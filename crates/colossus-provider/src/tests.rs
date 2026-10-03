@@ -32,6 +32,9 @@ use tokio::{
 };
 use tokio_rustls::TlsAcceptor;
 
+#[path = "retry_tests.rs"]
+mod retry_tests;
+
 struct CountingCredentialResolver {
     calls: AtomicUsize,
 }
@@ -611,6 +614,7 @@ fn provider_request(profile: &ProviderProfile) -> EffectRequest {
         profile.kind.generation_action(),
         profile.generation_endpoint().expect("generation endpoint"),
         serde_json::to_value(ProviderEffectInput {
+            stream_response: None,
             provider_profile: profile.name.clone(),
             model_profile: Some("unit-profile".into()),
             model: Some("unit-model".into()),

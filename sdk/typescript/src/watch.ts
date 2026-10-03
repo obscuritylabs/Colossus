@@ -42,6 +42,7 @@ export type RunUpdateCase =
   | "interaction"
   | "message"
   | "notice"
+  | "providerRetry"
   | "result"
   | "failure"
   | "cancellation";

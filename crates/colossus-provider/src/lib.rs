@@ -69,6 +69,8 @@ pub use profile::*;
 mod executor;
 pub use executor::*;
 
+mod retry;
+
 mod registry;
 pub use registry::*;
 

@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+mod provider_retry;
+pub use provider_retry::*;
+
 mod agent;
 mod command_approval;
 mod command_output;

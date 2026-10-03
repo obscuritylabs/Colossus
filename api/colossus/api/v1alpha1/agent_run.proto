@@ -929,6 +929,32 @@ message TokenUsage {
   optional uint64 reasoning_tokens = 5;
 }
 
+// ProviderRetryState identifies one stage of automatic provider recovery.
+enum ProviderRetryState {
+  // PROVIDER_RETRY_STATE_UNSPECIFIED is never emitted.
+  PROVIDER_RETRY_STATE_UNSPECIFIED = 0;
+  // PROVIDER_RETRY_STATE_BACKOFF waits until retry_at.
+  PROVIDER_RETRY_STATE_BACKOFF = 1;
+  // PROVIDER_RETRY_STATE_RETRYING dispatches the next request.
+  PROVIDER_RETRY_STATE_RETRYING = 2;
+  // PROVIDER_RETRY_STATE_RECOVERED returns to normal model activity.
+  PROVIDER_RETRY_STATE_RECOVERED = 3;
+}
+
+// ProviderRetry is credential-free progress, separate from model output.
+message ProviderRetry {
+  // attempt is the one-based retry number, excluding the original request.
+  uint32 attempt = 1;
+  // max_retries is the bounded retry allowance.
+  uint32 max_retries = 2;
+  // http_status is the confirmed transient upstream response.
+  uint32 http_status = 3;
+  // state identifies waiting, dispatch, or recovery.
+  ProviderRetryState state = 4;
+  // retry_at is the UTC RFC3339 deadline, present only during backoff.
+  optional string retry_at = 5;
+}
+
 // RunNotice is a bounded non-terminal user-safe notice.
 message RunNotice {
   // reason is a stable machine-readable notice reason.
@@ -998,6 +1024,9 @@ message RunUpdate {
 
     // cancellation is the exact cancelled terminal update at this sequence.
     RunCancellation cancellation = 14;
+
+    // provider_retry is bounded recovery progress without conversation output.
+    ProviderRetry provider_retry = 15;
   }
 }
 

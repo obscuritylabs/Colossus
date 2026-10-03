@@ -362,6 +362,7 @@ pub struct TuiState {
     pub(super) pending_sandbox_boundary_acknowledgement: Option<SandboxBoundaryMode>,
     pub(super) sandbox_boundary_acknowledgement_in_progress: bool,
     pub(super) activity: Option<String>,
+    pub(super) provider_retry: Option<colossus_contracts::ProviderRetry>,
     pub(super) started_at: Option<Instant>,
     pub(super) scroll_from_bottom: usize,
     pub(super) new_items: usize,
@@ -453,6 +454,7 @@ impl TuiState {
                 .pending_sandbox_boundary_acknowledgement,
             sandbox_boundary_acknowledgement_in_progress: false,
             activity: None,
+            provider_retry: None,
             started_at: None,
             scroll_from_bottom: 0,
             new_items: 0,
@@ -910,6 +912,7 @@ impl TuiState {
         }
         if let Some(control) = &self.control {
             control.cancel();
+            self.provider_retry = None;
             self.activity = Some("cancelling after the current effect settles".into());
             return true;
         }
@@ -931,6 +934,7 @@ impl TuiState {
             if let Some(control) = &self.control {
                 control.cancel();
             }
+            self.provider_retry = None;
             self.activity = Some("cancelling after the current effect settles".into());
             return;
         }

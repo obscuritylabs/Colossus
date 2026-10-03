@@ -1102,7 +1102,16 @@ export interface SessionMessage {
   createdAt: string;
 }
 
+export interface ProviderRetry {
+  attempt: number;
+  max_retries: number;
+  http_status: number;
+  state: "backoff" | "retrying" | "recovered";
+  retry_at: string | null;
+}
+
 export type RunUpdateKind =
+  | { type: "provider_retry"; retry: ProviderRetry }
   | { type: "state"; status: RunStatus }
   | { type: "output_delta"; delta: string }
   | { type: "reasoning_summary"; summary: string }

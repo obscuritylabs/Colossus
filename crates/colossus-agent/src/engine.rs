@@ -789,7 +789,9 @@ impl AgentService {
                         arguments: arguments.clone(),
                     }),
                     ProviderEvent::FinalOutput { text } => final_output = Some(text.clone()),
-                    ProviderEvent::ReasoningSummary { .. } | ProviderEvent::Usage { .. } => {}
+                    ProviderEvent::ReasoningSummary { .. }
+                    | ProviderEvent::Usage { .. }
+                    | ProviderEvent::Retry { .. } => {}
                 }
             }
             if calls.is_empty() {
