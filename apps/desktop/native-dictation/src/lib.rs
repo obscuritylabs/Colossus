@@ -1,8 +1,8 @@
 //! Opt-in, offline Desktop dictation feasibility probe.
 //!
 //! The standalone probe and opt-in Desktop preview own audio and model bytes;
-//! only bounded transcript revisions leave this native boundary. Hardware
-//! acceptance is required before enabling dictation in ordinary releases.
+//! only bounded transcript revisions and loudness bytes leave this native boundary.
+//! Hardware acceptance is required before enabling dictation in ordinary releases.
 
 #[cfg(feature = "probe")]
 mod capture;
@@ -11,6 +11,8 @@ mod contract;
 mod decoder;
 #[cfg(feature = "probe")]
 mod installed_model;
+#[cfg(feature = "probe")]
+mod meter;
 #[cfg(any(feature = "probe", test))]
 mod model;
 #[cfg(any(feature = "probe", test))]

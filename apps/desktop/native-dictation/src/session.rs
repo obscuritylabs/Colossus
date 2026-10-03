@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     DictationError, InstalledModel, TranscriptUpdate, capture::Capture, decoder::WhisperDecoder,
-    pipeline::Pipeline,
+    meter::InputMeter, pipeline::Pipeline,
 };
 
 const MAX_EVENTS: usize = 8;
@@ -53,6 +53,9 @@ pub enum SessionPhase {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionEvent {
+    Level {
+        level: u8,
+    },
     State {
         phase: SessionPhase,
     },
@@ -82,6 +85,8 @@ pub struct Session {
     outcome: Arc<Mutex<Option<Result<(), DictationError>>>>,
     thread: Option<JoinHandle<()>>,
     reported_end: bool,
+    meter: Arc<InputMeter>,
+    last_level: u8,
 }
 
 impl Session {
@@ -97,10 +102,12 @@ impl Session {
         let outcome = Arc::new(Mutex::new(None));
         let thread_cancelled = cancelled.clone();
         let thread_outcome = outcome.clone();
+        let meter = Arc::new(InputMeter::default());
+        let thread_meter = meter.clone();
         let thread = thread::Builder::new()
             .name("offline-dictation".into())
             .spawn(move || {
-                let result = record(&model, &receiver, &sender, &thread_cancelled);
+                let result = record(&model, &receiver, &sender, &thread_cancelled, &thread_meter);
                 if let Ok(mut outcome) = thread_outcome.lock() {
                     *outcome = Some(result);
                 }
@@ -113,13 +120,30 @@ impl Session {
             outcome,
             thread: Some(thread),
             reported_end: false,
+            meter,
+            last_level: 0,
         })
     }
 
-    /// Drain at most eight updates plus one terminal state. A stalled renderer
+    /// Drain at most eight ordered updates plus one coalesced input level. A stalled renderer
     /// cannot retain an unbounded transcript or keep capture alive indefinitely.
     #[must_use]
     pub fn poll(&mut self) -> Vec<SessionEvent> {
+        let mut events = self.drain();
+        let level = if self.reported_end {
+            self.meter.clear();
+            0
+        } else {
+            self.meter.take()
+        };
+        if level > 0 || self.last_level > 0 {
+            events.push(SessionEvent::Level { level });
+            self.last_level = level;
+        }
+        events
+    }
+
+    fn drain(&mut self) -> Vec<SessionEvent> {
         let mut events: Vec<_> = self.events.try_iter().take(MAX_EVENTS).collect();
         if !self.reported_end
             && events.len() < MAX_EVENTS
@@ -154,17 +178,20 @@ impl Session {
         let deadline = Instant::now() + Duration::from_mins(1);
         let mut events = Vec::new();
         loop {
-            events.extend(self.poll());
+            events.extend(self.drain());
             if events.len() > MAX_COMMAND_EVENTS || Instant::now() >= deadline {
                 self.cancel();
                 return Err(DictationError::CaptureOverrun);
             }
             match acknowledgement.try_recv() {
                 Ok(Ok(())) => {
-                    events.extend(self.poll());
+                    events.extend(self.drain());
                     if events.len() > MAX_COMMAND_EVENTS {
                         self.cancel();
                         return Err(DictationError::CaptureOverrun);
+                    }
+                    if matches!(action, SessionAction::Pause | SessionAction::Stop) {
+                        self.last_level = 0;
                     }
                     return Ok(events);
                 }
@@ -226,6 +253,7 @@ fn record(
     commands: &Receiver<Command>,
     events: &SyncSender<SessionEvent>,
     cancelled: &Arc<AtomicBool>,
+    meter: &Arc<InputMeter>,
 ) -> Result<(), DictationError> {
     emit(
         events,
@@ -238,7 +266,7 @@ fn record(
         return Ok(());
     }
     let mut pipeline = Pipeline::new(decoder);
-    let mut capture = Some(Capture::start()?);
+    let mut capture = Some(Capture::start_with_meter(meter.clone())?);
     emit(
         events,
         SessionEvent::State {
@@ -267,6 +295,7 @@ fn record(
                         if let Some(active) = capture.take() {
                             active.finish(&mut pipeline, &mut transcript)?;
                         }
+                        meter.clear();
                         emit(
                             events,
                             SessionEvent::State {
@@ -280,7 +309,7 @@ fn record(
                     }
                     SessionAction::Resume => {
                         if capture.is_none() {
-                            capture = Some(Capture::start()?);
+                            capture = Some(Capture::start_with_meter(meter.clone())?);
                         }
                         emit(
                             events,

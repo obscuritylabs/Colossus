@@ -12,6 +12,7 @@ use zeroize::Zeroizing;
 
 use crate::{
     DictationError, TranscriptUpdate,
+    meter::InputMeter,
     pipeline::{Decoder, Pipeline},
     resample::Resampler,
 };
@@ -22,6 +23,7 @@ const QUEUE_BLOCKS: usize = 256;
 struct CaptureQueue {
     sender: SyncSender<CaptureBlock>,
     failure: Arc<AtomicU8>,
+    meter: Arc<InputMeter>,
 }
 
 impl CaptureQueue {
@@ -52,8 +54,11 @@ impl CaptureQueue {
         );
         if mono.iter().any(|sample| !sample.is_finite()) {
             self.failure.store(3, Ordering::Relaxed);
-        } else if self.sender.try_send(CaptureBlock::Audio(mono)).is_err() {
-            self.failure.store(2, Ordering::Relaxed);
+        } else {
+            self.meter.observe(&mono);
+            if self.sender.try_send(CaptureBlock::Audio(mono)).is_err() {
+                self.failure.store(2, Ordering::Relaxed);
+            }
         }
     }
 }
@@ -73,6 +78,10 @@ pub(crate) struct Capture {
 
 impl Capture {
     pub(crate) fn start() -> Result<Self, DictationError> {
+        Self::start_with_meter(Arc::default())
+    }
+
+    pub(crate) fn start_with_meter(meter: Arc<InputMeter>) -> Result<Self, DictationError> {
         let device = cpal::default_host()
             .default_input_device()
             .ok_or(DictationError::MicrophoneMissing)?;
@@ -89,6 +98,7 @@ impl Capture {
         let queue = CaptureQueue {
             sender: sender.clone(),
             failure: failure.clone(),
+            meter,
         };
         let error_flag = failure.clone();
         let channels = config.channels;
@@ -218,12 +228,14 @@ mod tests {
         let queue = CaptureQueue {
             sender,
             failure: failure.clone(),
+            meter: Arc::default(),
         };
         queue.send(&[0.5_f32, 0.25], 2);
         let CaptureBlock::Audio(audio) = receiver.try_recv().unwrap() else {
             panic!("expected audio")
         };
         assert_eq!(audio.as_slice(), [0.375]);
+        assert_eq!(queue.meter.take(), 219);
         queue.send(&[0.0_f32], 1);
         queue.send(&[0.0_f32], 1);
         assert_eq!(failure.load(Ordering::Relaxed), 2);
@@ -242,6 +254,7 @@ mod tests {
         let queue = CaptureQueue {
             sender,
             failure: failure.clone(),
+            meter: Arc::default(),
         };
         queue.send(&vec![0.0_f32; MAX_CALLBACK_FRAMES + 1], 1);
         assert_eq!(failure.load(Ordering::Relaxed), 3);

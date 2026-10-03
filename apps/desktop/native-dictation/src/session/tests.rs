@@ -19,6 +19,8 @@ fn transport(
         outcome,
         thread: Some(thread),
         reported_end: false,
+        meter: Arc::default(),
+        last_level: 0,
     }
 }
 
@@ -48,7 +50,13 @@ fn control_drains_ordered_finals_before_acknowledging_the_next_draft() {
         command.reply.send(Ok(())).unwrap();
         Ok(())
     });
+    session.meter.observe(&[0.1; 64]);
     let events = session.command(SessionAction::FinishTurn).unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, SessionEvent::Level { .. }))
+    );
     let segments: Vec<_> = events
         .iter()
         .filter_map(|event| match event {
@@ -63,6 +71,26 @@ fn control_drains_ordered_finals_before_acknowledging_the_next_draft() {
             .any(|event| matches!(event, SessionEvent::Boundary { turn_id: 2 }))
     );
     assert!(events.len() <= MAX_COMMAND_EVENTS);
+}
+
+#[test]
+fn input_levels_remain_available_while_the_recording_thread_is_waiting() {
+    let mut session = transport(|commands, _| {
+        let command = commands.recv_timeout(Duration::from_secs(2)).unwrap();
+        command.reply.send(Ok(())).unwrap();
+        Ok(())
+    });
+    session.meter.observe(&[0.1; 64]);
+    assert!(matches!(
+        session.poll().as_slice(),
+        [SessionEvent::Level { level: 170 }]
+    ));
+    assert!(matches!(
+        session.poll().as_slice(),
+        [SessionEvent::Level { level: 0 }]
+    ));
+    assert!(session.poll().is_empty());
+    session.command(SessionAction::Stop).unwrap();
 }
 
 #[test]

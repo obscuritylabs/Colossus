@@ -6,7 +6,7 @@ import {
 } from "@tabler/icons-react";
 import { useState } from "react";
 import type { DictationController, DictationSnapshot } from "../dictation";
-import "./dictation.css";
+if (import.meta.env.DEV) void import("./dictation.css");
 
 export function DictationControl({
   controller,
@@ -34,8 +34,8 @@ export function DictationControl({
         aria-label={label}
         title={label}
         aria-pressed={recording}
-        aria-expanded={open}
-        aria-controls="dictation-settings"
+        aria-expanded={active ? undefined : open}
+        aria-controls={open ? "dictation-settings" : undefined}
         disabled={disabled || state.busy || state.sending}
         onClick={() => {
           if (recording) void controller.control("pause");
@@ -58,8 +58,11 @@ export function DictationControl({
           className="icon-button"
           aria-label="Stop dictation"
           title="Stop dictation and release the microphone"
-          disabled={state.busy}
-          onClick={() => void controller.control("stop")}
+          disabled={state.busy && state.phase !== "starting"}
+          onClick={() => {
+            if (state.phase === "starting") controller.reset();
+            else void controller.control("stop");
+          }}
         >
           <IconPlayerStop size={17} aria-hidden="true" />
         </button>

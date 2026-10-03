@@ -40,6 +40,7 @@ import { useComposerAutosize } from "./useComposerAutosize";
 import type { ComposerEditIntent } from "../composer-paste";
 import type { DictationController, DictationSnapshot } from "../dictation";
 import { DictationControl } from "./DictationControl";
+import { DictationRecordingBar } from "./DictationRecordingBar";
 
 const ComposerModelChip = lazy(() =>
   import("./ComposerModelChip").then((module) => ({
@@ -562,20 +563,12 @@ export function WorkComposer({
       </div>
       <div className="composer-body">
         {dictation?.state.sessionId || dictation?.state.phase === "starting" ? (
-          <p
-            className={`dictation-status${dictation.state.phase === "recording" ? " is-recording" : ""}`}
-            role="status"
-          >
-            {dictation.state.sending
-              ? "Finalizing speech for this message…"
-              : dictation.state.busy
-                ? "Updating recording…"
-                : dictation.state.phase === "starting"
-                  ? "Loading the local speech model…"
-                  : dictation.state.phase === "recording"
-                    ? "Recording locally · Pause to edit · Send keeps the microphone on"
-                    : "Dictation paused · You can edit the draft"}
-          </p>
+          <DictationRecordingBar {...dictation}>
+            <DictationControl
+              {...dictation}
+              disabled={!canCompose || submitting}
+            />
+          </DictationRecordingBar>
         ) : null}
         {dictation?.state.error ? (
           <p className="inline-error" role="alert">
@@ -914,7 +907,9 @@ export function WorkComposer({
           ) : null}
         </div>
         <div className="composer-action-row">
-          {dictation ? (
+          {dictation &&
+          !dictation.state.sessionId &&
+          dictation.state.phase !== "starting" ? (
             <DictationControl
               {...dictation}
               disabled={!canCompose || submitting}

@@ -18,6 +18,7 @@ export interface TranscriptUpdate {
 export type DictationPhase =
   "idle" | "starting" | "recording" | "paused" | "stopped" | "failed";
 export type DictationEvent =
+  | { type: "level"; level: number }
   | { type: "state"; phase: "starting" | "recording" | "paused" | "stopped" }
   | { type: "transcript"; turn_id: number; update: TranscriptUpdate }
   | { type: "boundary"; turn_id: number }
@@ -205,6 +206,8 @@ export class DictationController {
     error: "",
   };
   private listeners = new Set<() => void>();
+  private levelListeners = new Set<() => void>();
+  private inputLevel = { level: 0, receivedAt: 0 };
   private generation = 0;
   private queue: Promise<unknown> = Promise.resolve();
   private cursor = freshCursor();
@@ -217,6 +220,15 @@ export class DictationController {
     private readonly byteLimit = 65_536,
   ) {}
   getSnapshot = (): DictationSnapshot => this.snapshot;
+  getInputLevelSnapshot = () => this.inputLevel;
+  subscribeInputLevel = (listener: () => void): (() => void) => {
+    this.levelListeners.add(listener);
+    return () => this.levelListeners.delete(listener);
+  };
+  private setInputLevel(level: number) {
+    this.inputLevel = { level, receivedAt: performance.now() };
+    this.levelListeners.forEach((listener) => listener());
+  }
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => {
@@ -250,6 +262,7 @@ export class DictationController {
   }
   private async fail(error: unknown) {
     const id = this.snapshot.sessionId;
+    this.setInputLevel(0);
     this.change({
       phase: "failed",
       error: this.message(error),
@@ -266,7 +279,19 @@ export class DictationController {
   }
   private apply(events: DictationEvent[]) {
     for (const event of events) {
-      if (event.type === "state") {
+      if (event.type === "level") {
+        if (
+          !Number.isInteger(event.level) ||
+          event.level < 0 ||
+          event.level > 255
+        )
+          throw new Error(
+            "The microphone level is invalid. Recording stopped.",
+          );
+        if (this.snapshot.phase === "recording")
+          this.setInputLevel(event.level);
+      } else if (event.type === "state") {
+        if (event.phase !== "recording") this.setInputLevel(0);
         this.change({
           phase: event.phase,
           ...(event.phase === "stopped" ? { sessionId: null } : {}),
@@ -333,6 +358,7 @@ export class DictationController {
   async start() {
     if (this.snapshot.busy || this.snapshot.sessionId) return;
     const generation = this.generation;
+    this.setInputLevel(0);
     this.change({ busy: true, error: "", phase: "starting" });
     try {
       const id = await this.serialized(() => this.api.start());
@@ -458,6 +484,7 @@ export class DictationController {
   /** Stop on thread/workspace navigation and ignore replies from the old session. */
   reset() {
     const id = this.snapshot.sessionId;
+    this.setInputLevel(0);
     this.generation += 1;
     this.cursor = freshCursor();
     this.turn = 1;

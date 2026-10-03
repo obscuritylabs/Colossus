@@ -108,7 +108,20 @@ The microphone control pauses and resumes recording. Pause finalizes captured sp
 and releases the input device before the draft becomes editable; this preview protects
 an active partial from competing edits. Resume continues with the edited draft. The
 adjacent stop control finalizes speech and closes the recording session. A clear
-recording indicator remains visible while capture is active.
+recording strip remains visible while capture is active. Its cyan waveform shows
+recent microphone loudness, with a glow that follows the input level and a clock
+counting active recording time. Silence settles into dots; Pause freezes and dims
+the waveform and stops the clock. Starting shows a loading indicator. Reduced
+motion keeps a stationary input meter and disables decorative animation.
+
+The native callback coalesces RMS loudness into one byte from 0 to 255. The existing
+session poll delivers at most one level update alongside its bounded transcript
+events, so metering stays responsive while inference is running without queuing
+telemetry. The renderer retains 96 loudness values for the display, independently
+of composer updates. Samples and model data stay in native code. The level history
+is not a recording or a frequency spectrum; it measures input strength, including
+background noise. Stale levels decay visually, and Pause, Stop, navigation, or a
+failure clears the input meter. Stopping during model initialization cancels it.
 
 **Send** settles a FIFO audio boundary before using the existing prompt/run or Next up
 path. The same microphone stream stays open. Audio queued after the boundary goes into

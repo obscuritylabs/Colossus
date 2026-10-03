@@ -293,6 +293,52 @@ describe("dictation draft revisions", () => {
 });
 
 describe("native dictation composer boundary", () => {
+  it("updates input levels independently of the draft and clears them on pause and navigation", async () => {
+    const f = fixture();
+    await f.controller.start();
+    f.events([{ type: "state", phase: "recording" }]);
+    await f.controller.poll();
+    const mainUpdates = vi.fn();
+    const meterUpdates = vi.fn();
+    const unsubscribeMain = f.controller.subscribe(mainUpdates);
+    const unsubscribeMeter = f.controller.subscribeInputLevel(meterUpdates);
+    const before = f.draft;
+    f.events([{ type: "level", level: 180 }]);
+    await f.controller.poll();
+    expect(f.controller.getInputLevelSnapshot().level).toBe(180);
+    expect(meterUpdates).toHaveBeenCalledTimes(1);
+    expect(mainUpdates).not.toHaveBeenCalled();
+    expect(f.draft).toBe(before);
+    f.events([
+      { type: "state", phase: "paused" },
+      { type: "level", level: 250 },
+    ]);
+    await f.controller.poll();
+    expect(f.controller.getInputLevelSnapshot().level).toBe(0);
+    f.events([
+      { type: "state", phase: "recording" },
+      { type: "level", level: 200 },
+    ]);
+    await f.controller.poll();
+    f.controller.reset();
+    expect(f.controller.getInputLevelSnapshot().level).toBe(0);
+    unsubscribeMain();
+    unsubscribeMeter();
+  });
+  it("rejects invalid input levels without changing the draft", async () => {
+    const f = fixture();
+    await f.controller.start();
+    const before = f.draft;
+    f.events([
+      { type: "state", phase: "recording" },
+      { type: "level", level: 256 },
+    ]);
+    await f.controller.poll();
+    expect(f.controller.getSnapshot().phase).toBe("failed");
+    expect(f.controller.getInputLevelSnapshot().level).toBe(0);
+    expect(f.draft).toBe(before);
+    expect(f.api.control).toHaveBeenCalledWith("session-one", "abort");
+  });
   it.each([
     ["something", "question mark", "Review this: first?"],
     ["comma", "correction", "Review this: first correction"],
