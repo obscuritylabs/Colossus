@@ -239,9 +239,9 @@ describe("OperationsSurface runtime targets", () => {
               maxOutputTokens: 8_000,
               reasoningEffort: "high",
               capabilities: {
-                toolCalls: true,
-                streaming: true,
-                imageInputs: false,
+                toolCalls: "on",
+                streaming: "on",
+                imageInputs: "off",
               },
             },
           ],

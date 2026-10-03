@@ -175,9 +175,9 @@ describe("OnboardingSurface", () => {
               maxOutputTokens: 4096,
               reasoningEffort: null,
               capabilities: {
-                toolCalls: false,
-                imageInputs: false,
-                streaming: false,
+                toolCalls: "off",
+                imageInputs: "off",
+                streaming: "off",
               },
             },
           ],
@@ -267,9 +267,9 @@ describe("OnboardingSurface", () => {
               maxOutputTokens: 2000,
               reasoningEffort: null,
               capabilities: {
-                toolCalls: false,
-                streaming: false,
-                imageInputs: false,
+                toolCalls: "off",
+                streaming: "off",
+                imageInputs: "off",
               },
             },
             {
@@ -280,9 +280,9 @@ describe("OnboardingSurface", () => {
               maxOutputTokens: 8000,
               reasoningEffort: null,
               capabilities: {
-                toolCalls: true,
-                streaming: true,
-                imageInputs: false,
+                toolCalls: "on",
+                streaming: "on",
+                imageInputs: "off",
               },
             },
           ],

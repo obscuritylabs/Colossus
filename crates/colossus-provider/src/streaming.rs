@@ -33,9 +33,13 @@ pub(super) fn redact_value_exact(value: &mut Value, secret: Option<&str>) {
         Value::Array(values) => values
             .iter_mut()
             .for_each(|value| redact_value_exact(value, Some(secret))),
-        Value::Object(values) => values
-            .values_mut()
-            .for_each(|value| redact_value_exact(value, Some(secret))),
+        Value::Object(values) => {
+            for (key, value) in values {
+                if key != "encrypted_content" {
+                    redact_value_exact(value, Some(secret));
+                }
+            }
+        }
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
 }
@@ -168,6 +172,13 @@ impl ProviderStreamState {
         }
     }
 
+    pub(super) fn output_items(&self) -> &[Value] {
+        match self {
+            Self::Responses(state) => &state.output_items,
+            Self::Chat(_) => &[],
+        }
+    }
+
     pub(super) fn response_id(&self) -> Option<&str> {
         match self {
             Self::Responses(state) => state.response_id.as_deref(),
@@ -178,6 +189,8 @@ impl ProviderStreamState {
 
 #[derive(Default)]
 pub(super) struct ResponsesStreamState {
+    output_items: Vec<Value>,
+    completed_items: BTreeMap<u64, Value>,
     tool_names: ProviderToolNames,
     response_id: Option<String>,
     text: String,
@@ -214,6 +227,20 @@ impl ResponsesStreamState {
                         "Responses output_item.done has no item object".into(),
                     ));
                 };
+                if let Some(index) = object.get("output_index").and_then(Value::as_u64) {
+                    if index >= 512
+                        || self
+                            .completed_items
+                            .get(&index)
+                            .is_some_and(|prior| prior != &Value::Object(item.clone()))
+                    {
+                        return Err(ProviderError::Malformed(
+                            "Responses output item index is invalid or changed".into(),
+                        ));
+                    }
+                    self.completed_items
+                        .insert(index, Value::Object(item.clone()));
+                }
                 self.tool_event(item)
                     .map(|event| event.into_iter().collect())
             }
@@ -309,6 +336,7 @@ impl ResponsesStreamState {
         self.capture_response_id(response.get("id"))?;
         let mut events = Vec::new();
         if let Some(output) = response.get("output").and_then(Value::as_array) {
+            self.output_items = output.clone();
             for item in output.iter().filter_map(Value::as_object) {
                 if let Some(event) = self.tool_event(item)? {
                     events.push(event);
@@ -322,6 +350,9 @@ impl ResponsesStreamState {
         }
         if let Some(usage) = normalize_usage(response.get("usage"), UsageShape::Responses)? {
             events.push(ProviderEvent::Usage { usage });
+        }
+        if self.output_items.is_empty() && !self.completed_items.is_empty() {
+            self.output_items = self.completed_items.values().cloned().collect();
         }
         self.completed = true;
         Ok(events)

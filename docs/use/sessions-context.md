@@ -60,7 +60,7 @@ colossus -w /absolute/path/to/repository context status SESSION_ID
 ## When Colossus compacts a session
 
 With automatic compaction enabled, Colossus creates a snapshot when the working
-context crosses the configured threshold. The default threshold is 70% of the
+context crosses the configured threshold. The default threshold is 85% of the
 effective input budget. A snapshot keeps a bounded summary of older messages and
 preserves recent messages for the next model turn. The full transcript remains in
 the session; [Sessions](sessions.md) shows how to read it.

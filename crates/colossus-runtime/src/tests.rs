@@ -158,11 +158,11 @@ fn configure_primary_model(
             model: model.into(),
             context_window_tokens: 32_768,
             max_output_tokens: 4_096,
-            capabilities: ModelCapabilities {
+            capabilities: crate::ModelFeatureSettings::from(ModelCapabilities {
                 tool_calls: true,
                 streaming: true,
                 image_inputs: false,
-            },
+            }),
             reasoning_effort: None,
         },
     );

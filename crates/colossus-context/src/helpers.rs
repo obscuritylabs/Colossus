@@ -304,12 +304,27 @@ pub(super) fn bound_summary_to_target(
         .collect::<Vec<_>>();
     let without_summary =
         estimate_tokens_for_model(model, instructions, &without_summary_messages, tools);
-    let available_tokens = target.saturating_sub(without_summary).max(64);
-    let available_bytes = usize::try_from(available_tokens.saturating_mul(4))
+    let available_tokens = target.saturating_sub(without_summary);
+    let available_bytes = usize::try_from(available_tokens.saturating_mul(3))
         .unwrap_or(usize::MAX)
         .min(MAX_SUMMARY_BYTES);
     let summary = prepared[summary_index].content.plain_text();
     prepared[summary_index].content = truncate_snapshot_content(&summary, available_bytes).into();
+    loop {
+        let estimate = estimate_tokens_for_model(model, instructions, prepared, tools);
+        if estimate <= target {
+            return;
+        }
+        let current = prepared[summary_index].content.plain_text();
+        let excess_bytes = usize::try_from(estimate.saturating_sub(target).saturating_mul(3))
+            .unwrap_or(usize::MAX);
+        let next_limit = current.len().saturating_sub(excess_bytes.max(1));
+        let bounded = truncate_snapshot_content(&current, next_limit);
+        if bounded.len() >= current.len() {
+            return;
+        }
+        prepared[summary_index].content = bounded.into();
+    }
 }
 
 pub(super) fn bound_summary_to_byte_limit(
@@ -586,13 +601,20 @@ pub(super) fn paths_from_json(value: &Value, paths: &mut BTreeSet<String>) {
 }
 
 pub(super) fn dedupe(values: impl IntoIterator<Item = String>, limit: usize) -> Vec<String> {
-    values
-        .into_iter()
-        .filter(|value| !value.is_empty())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .take(limit)
-        .collect()
+    if limit == 0 {
+        return Vec::new();
+    }
+    let mut seen = BTreeSet::new();
+    let mut result = Vec::new();
+    for value in values {
+        if !value.is_empty() && seen.insert(value.clone()) {
+            result.push(value);
+            if result.len() == limit {
+                break;
+            }
+        }
+    }
+    result
 }
 
 pub(super) fn truncate_chars(value: &str, limit: usize) -> String {

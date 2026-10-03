@@ -462,15 +462,25 @@ impl Runtime {
             )?;
         }
         let run_input_media = Arc::new(JournalRunInputMediaResolver::new(Arc::clone(&journal)));
-        let providers = Arc::new(provider_registry(
-            &config.providers,
-            &config.models,
-            Arc::clone(&provider_credentials),
-            codex_auth,
-            &tls_roots,
-            configured_resource_authority(&config.sandbox),
-            Some(Arc::clone(&run_input_media) as Arc<dyn RunInputMediaResolver>),
-        )?);
+        let context_repository: Arc<dyn ContextRepository> =
+            Arc::new(EventSourcedContextRepository::new(Arc::clone(&journal)));
+        let continuations: Arc<dyn colossus_ports::ProviderContinuationRepository> =
+            Arc::new(colossus_context::EventSourcedProviderContinuations::new(
+                Arc::clone(&journal),
+                !matches!(config.storage.keys, KeyConfig::None),
+            ));
+        let providers = Arc::new(
+            provider_registry(
+                &config.providers,
+                &config.models,
+                Arc::clone(&provider_credentials),
+                codex_auth,
+                &tls_roots,
+                configured_resource_authority(&config.sandbox),
+                Some(Arc::clone(&run_input_media) as Arc<dyn RunInputMediaResolver>),
+            )?
+            .with_continuations(Arc::clone(&continuations))?,
+        );
         let searches = Arc::new(search_registry(
             config,
             &tls_roots,
@@ -778,6 +788,10 @@ impl Runtime {
         let model_provider: Arc<dyn ModelProvider> = Arc::new(GatewayModelProvider {
             gateway: Arc::clone(&gateway),
             providers: Arc::clone(&providers),
+            sessions: Arc::clone(&sessions),
+            snapshots: Arc::clone(&context_repository),
+            continuations,
+            pending: StdMutex::default(),
         });
         let risk_evaluator: Arc<dyn RiskEvaluator> = Arc::new(GatewayRiskEvaluator {
             provider: Arc::clone(&model_provider),
@@ -818,8 +832,6 @@ impl Runtime {
         let research_executor = Arc::new(ResearchEffectExecutor {
             service: research_service,
         });
-        let context_repository: Arc<dyn ContextRepository> =
-            Arc::new(EventSourcedContextRepository::new(Arc::clone(&journal)));
         let context = Arc::new(
             ContextService::new(
                 config.context.clone(),

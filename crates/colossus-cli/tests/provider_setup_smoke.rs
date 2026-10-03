@@ -189,8 +189,11 @@ fn manual_responses_setup_writes_only_a_credential_reference_and_never_overwrite
         (model.context_window_tokens, model.max_output_tokens),
         (64_000, 8_000)
     );
-    assert!(model.capabilities.tool_calls && model.capabilities.image_inputs);
-    assert!(!model.capabilities.streaming);
+    assert!(
+        model.capabilities.capabilities().tool_calls
+            && model.capabilities.capabilities().image_inputs
+    );
+    assert!(!model.capabilities.capabilities().streaming);
     assert_eq!(config.models.roles["primary"], "primary");
     assert_eq!(
         config.sandbox.network_destinations,

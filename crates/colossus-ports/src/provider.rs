@@ -1,10 +1,12 @@
 use super::*;
 
 /// Explicit controls for one provider turn.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProviderTurnOptions {
     /// Capture a bounded non-success response for a trusted local diagnostic surface.
     pub include_response_diagnostics: bool,
+    /// Safe continuation reference selected by context preparation.
+    pub continuation: Option<colossus_contracts::ProviderContinuationPlan>,
 }
 
 /// Exact transient image bytes resolved only inside a permit-bearing provider adapter.
@@ -42,6 +44,25 @@ pub trait RunInputMediaResolver: Send + Sync {
 pub trait ModelProvider: Send + Sync {
     /// Resolve role metadata without performing an effect.
     fn route(&self, role: &str) -> Result<ModelRoute, ModelProviderError>;
+
+    /// Resolve safe continuation metadata against the exact canonical history.
+    fn continuation_plan(
+        &self,
+        _role: &str,
+        _request: &ModelRequest,
+        _context: &ExecutionContext,
+    ) -> Result<Option<colossus_contracts::ProviderContinuationPlan>, ModelProviderError> {
+        Ok(None)
+    }
+
+    /// Promote private state only after the assistant and tool results are durable.
+    fn settle_continuation(&self, _context: &ExecutionContext) -> Result<(), ModelProviderError> {
+        Ok(())
+    }
+    /// Retire private state after a failed or uncertain turn.
+    fn discard_continuation(&self, _context: &ExecutionContext) -> Result<(), ModelProviderError> {
+        Ok(())
+    }
 
     /// Execute one normalized provider turn through the effect boundary.
     async fn turn(

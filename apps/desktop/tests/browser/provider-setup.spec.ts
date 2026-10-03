@@ -1,6 +1,19 @@
 import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
+const AUTO_REASONER_CAPABILITIES = {
+  toolCalls: "auto",
+  streaming: "auto",
+  imageInputs: "auto",
+  serverCompaction: "auto",
+  declared: {
+    toolCalls: true,
+    streaming: null,
+    imageInputs: false,
+    serverCompaction: null,
+  },
+};
+
 test("five-step setup preserves preferences and draft choices through Back and saves only at Start", async ({
   page,
 }) => {
@@ -107,7 +120,7 @@ test("five-step setup preserves preferences and draft choices through Back and s
       modelMetadata: expect.objectContaining({
         maxOutputTokens: 2048,
         contextWindowTokens: 8192,
-        toolCalls: true,
+        capabilities: AUTO_REASONER_CAPABILITIES,
       }),
     }),
   ]);
@@ -628,9 +641,7 @@ test("custom Responses setup searches model cards, imports metadata and saves na
     modelMetadata: {
       contextWindowTokens: 8192,
       maxOutputTokens: 2048,
-      toolCalls: true,
-      imageInputs: false,
-      streaming: false,
+      capabilities: AUTO_REASONER_CAPABILITIES,
     },
   });
 });
@@ -695,7 +706,9 @@ test("catalog loading locks conflicting actions and workspace changes ignore pen
     .getByText("Model limits and capabilities", { exact: true })
     .click();
   await expect(page.getByLabel("Context window (tokens)")).toHaveValue("32768");
-  await expect(page.getByLabel("Tools", { exact: true })).not.toBeChecked();
+  await expect(
+    page.getByRole("slider", { name: "Tools", exact: true }),
+  ).toHaveAttribute("aria-valuetext", "Auto");
   await expect(
     page.getByText(/This model’s details have not been loaded/),
   ).toBeVisible();
@@ -1082,7 +1095,7 @@ test("simple and advanced setup preserve endpoint, model metadata and enrolled c
     modelMetadata: {
       contextWindowTokens: 8192,
       maxOutputTokens: 2048,
-      toolCalls: true,
+      capabilities: AUTO_REASONER_CAPABILITIES,
     },
   });
 });

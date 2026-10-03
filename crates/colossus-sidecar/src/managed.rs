@@ -15,10 +15,10 @@ use colossus_provider::{
 };
 use colossus_runtime::{
     HostCredentialResolver, JournalPayloadMode, KeyConfig, LogSignalConfig, MetricSignalConfig,
-    ModelCapabilities, ModelProfileConfig, ModelsConfig, ObservabilityConfig, OtlpConfig,
-    OtlpProtocol, ProviderProfileConfig, ProvidersConfig, ReasoningEffort, RuntimeConfig,
-    RuntimeError, RuntimeOpenOptions, SearchConfig, SearchProfileConfig, StorageLocation,
-    TraceSignalConfig, WorkspaceIdentityToken,
+    ModelProfileConfig, ModelsConfig, ObservabilityConfig, OtlpConfig, OtlpProtocol,
+    ProviderProfileConfig, ProvidersConfig, ReasoningEffort, RuntimeConfig, RuntimeError,
+    RuntimeOpenOptions, SearchConfig, SearchProfileConfig, StorageLocation, TraceSignalConfig,
+    WorkspaceIdentityToken,
 };
 use colossus_sidecar_protocol::{
     AckRequest, ActivatedResponse, BootstrapGrant, BootstrapRequest, ChildFrame,
@@ -650,11 +650,7 @@ fn managed_runtime_config(
                         model: model.model.clone(),
                         context_window_tokens: model.context_window_tokens,
                         max_output_tokens: model.max_output_tokens,
-                        capabilities: ModelCapabilities {
-                            tool_calls: model.capabilities.tool_calls,
-                            streaming: model.capabilities.streaming,
-                            image_inputs: model.capabilities.image_inputs,
-                        },
+                        capabilities: model.capabilities.into(),
                         reasoning_effort: model.reasoning_effort.map(reasoning_effort),
                     },
                 )
@@ -1598,9 +1594,10 @@ mod tests {
                 context_window_tokens: 32_768,
                 max_output_tokens: 4_096,
                 capabilities: colossus_sidecar_protocol::ManagedModelCapabilities {
-                    tool_calls: true,
-                    streaming: true,
-                    image_inputs: false,
+                    tool_calls: true.into(),
+                    streaming: true.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
                 reasoning_effort: None,
             }],
@@ -2373,9 +2370,10 @@ mod tests {
                 context_window_tokens: 64_000,
                 max_output_tokens: 8_000,
                 capabilities: colossus_sidecar_protocol::ManagedModelCapabilities {
-                    tool_calls: true,
-                    streaming: true,
-                    image_inputs: false,
+                    tool_calls: true.into(),
+                    streaming: true.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
                 reasoning_effort: None,
             }],
@@ -2434,9 +2432,10 @@ mod tests {
                 context_window_tokens: 64_000,
                 max_output_tokens: 8_000,
                 capabilities: colossus_sidecar_protocol::ManagedModelCapabilities {
-                    tool_calls: true,
-                    streaming: true,
-                    image_inputs: false,
+                    tool_calls: true.into(),
+                    streaming: true.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
                 reasoning_effort: None,
             }],
@@ -2481,9 +2480,10 @@ mod tests {
                 context_window_tokens: 128_000,
                 max_output_tokens: 16_000,
                 capabilities: colossus_sidecar_protocol::ManagedModelCapabilities {
-                    tool_calls: true,
-                    streaming: true,
-                    image_inputs: false,
+                    tool_calls: true.into(),
+                    streaming: true.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
                 reasoning_effort: Some(ManagedReasoningEffort::High),
             }],

@@ -13,9 +13,13 @@ colossus-ports.workspace = true
 colossus-tools.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+colossus-journal-redb.workspace = true
+tempfile.workspace = true
 colossus-session.workspace = true
 colossus-testkit.workspace = true
 colossus-work.workspace = true

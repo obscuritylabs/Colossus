@@ -17,6 +17,15 @@ impl EventSourcedContextRepository {
 }
 
 impl ContextRepository for EventSourcedContextRepository {
+    fn activation_epoch(&self, session_id: &str) -> Result<u64, StoreError> {
+        Ok(self
+            .journal
+            .read_stream(&Self::stream(session_id))?
+            .iter()
+            .rev()
+            .find(|e| e.event_type == SNAPSHOT_ACTIVATED)
+            .map_or(0, |e| e.stream_version))
+    }
     fn create(
         &self,
         mut snapshot: ContextSnapshot,

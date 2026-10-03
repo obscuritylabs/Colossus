@@ -255,12 +255,16 @@ model metadata Colossus needs to shape requests safely:
 | `contextWindowTokens` | Total model context window; at least `1024` |
 | `maxOutputTokens` | Positive output reservation that leaves room for input and safety margin |
 | `reasoningEffort` | Optional exact effort: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra` |
-| `capabilities.toolCalls` | Whether Colossus may send tool definitions and structured tool history |
-| `capabilities.streaming` | Whether Colossus requests the provider's streaming transport |
+| `capabilities.toolCalls` | Off/Auto/On preference for tool definitions and history |
+| `capabilities.streaming` | Off/Auto/On preference for streamed transport |
+| `capabilities.imageInputs` | Off/Auto/On preference for verified images |
+| `capabilities.serverCompaction` | Off/Auto/On preference for Responses compaction |
+| `capabilities.declared` | Optional boolean model-card declarations, separate from saved modes |
 
-Desktop can fill these fields from explicit model-catalog declarations when you select
-a discovered model. Review them before saving, and use the provider's documentation
-for missing values. Colossus does not infer limits or capabilities from a model name.
+Desktop imports token limits and capability declarations when you select a discovered
+model, preserving your saved feature modes. Review them before saving, and use the
+provider's documentation for missing values. Colossus does not infer limits or
+capabilities from a model name.
 `models doctor` exercises a request shaped by the configured values, but it cannot prove
 that a declared context-window number matches the provider's actual limit.
 
@@ -277,6 +281,7 @@ metadata maps into these shared fields:
 | `tool_calls` | `tool_calls`, `supports_tool_calls`, `tooling_support`; then the same keys inside `capabilities`; then `tools` in `supported_parameters` |
 | `image_inputs` | `image_inputs`, `supports_image_inputs`; then the same keys inside `capabilities`; then `image` in `input_modalities` or `architecture.input_modalities` |
 | `streaming` | `streaming`, `supports_streaming`; then the same keys inside `capabilities` |
+| `server_compaction` | `server_compaction`, `supports_server_compaction`; then the same keys inside `capabilities` |
 
 Token limits must be positive JSON integers no greater than 1,000,000,000. Capability
 flags must be JSON booleans. The first valid declaration wins; explicit `false` is
@@ -362,21 +367,62 @@ but is not a portable level across providers.
 
 ### Capabilities
 
-Set `toolCalls: true` only when the selected endpoint and model support function tools.
-When it is `false`, Colossus omits tool definitions and rejects structured tool history
-for that route. This is appropriate for a text-only summarizer or a local model without
-reliable tool support.
+Each capability accepts `off`, `auto`, or `on`. New Desktop/setup profiles default to
+`auto`. Legacy YAML and saved booleans remain accepted: `false` means Off and `true`
+means On. Missing legacy image settings preserve Off. The saved mode is user intent;
+Colossus does not rewrite it after a failed request.
 
-Set `streaming: true` when the provider supports the adapter's streaming response
-contract. Set it to `false` for a compatible server that implements only complete JSON
-responses. Capability flags shape requests; they do not grant access to tools or
-actions.
+```yaml
+capabilities:
+  toolCalls: auto
+  streaming: auto
+  imageInputs: auto
+  serverCompaction: auto
+  declared:
+    toolCalls: true
+    streaming: true
+```
 
-Set `imageInputs: true` only when the exact model and endpoint accept image inputs.
-Colossus never infers vision support from a model name. The default is `false`, and an
-image-bearing run is rejected before a provider effect when the selected profile has not
-opted in. OpenAI Responses and compatible Chat Completions routes use their documented
-multipart image shapes; the Codex route uses only the Responses projection.
+| Mode | Request behavior |
+| --- | --- |
+| `off` | Omit the feature; image/tool-dependent input fails explicitly if incompatible |
+| `auto` | Use advertised support, attempt unknown support, suppress advertised false or definitive unsupported evidence |
+| `on` | Attempt despite negative metadata; adapter compatibility and runtime policy still apply |
+
+`declared` contains optional model-card booleans for these four fields. Missing values
+mean unknown. OpenAI's public `/models` endpoint is not a universal capability oracle.
+Only exact structured unsupported-feature errors establish negative runtime evidence;
+timeouts, 5xx responses, rate limits, malformed output and context overflow do not.
+Evidence is scoped to the provider, canonical endpoint and model, lasts 15 minutes, and
+resets with runtime configuration reload. No failed generation is automatically replayed.
+Images and tools are never silently removed from a failed request.
+`colossus model doctor` reports feature modes and observations separately from its probe.
+
+### Responses server compaction
+
+`serverCompaction` applies to `open_ai_responses`. The subscription-backed
+`open_ai_codex`, Chat Completions and Echo adapters do not enable this field, including
+under On. Requests retain `store:false` and send optional `context_management` with an
+absolute threshold of 75% of the effective input budget. See the
+[official OpenAI compaction guide](https://developers.openai.com/api/docs/guides/compaction).
+
+Accepted requests do not prove compaction occurred. A returned compaction item provides
+that evidence. Colossus carries its exact opaque contents and following output items
+into the next request, followed by the new canonical message suffix. Opaque state is
+never shown in run events, model-visible summaries, diagnostics or plaintext exports.
+It becomes reusable only after the assistant and any tool results are durably settled.
+Protected journals retain it across restart; keyless installations retain it only in
+bounded process memory. Restart then rebuilds from canonical history.
+
+A changed model, endpoint, instructions, tools, active decision or retrieved memory,
+branch, local snapshot activation or
+incomplete turn invalidates reuse. Retained state is limited to 512 items and 512 KiB;
+resolved image bytes are not retained. Conservative opaque-byte and suffix-token
+accounting can trigger local fallback earlier than the provider's tokenizer predicts.
+Local summarization stays enabled by default at 85% of the **same effective input
+budget**, with hard token and request-byte ceilings always enforced. Previously saved
+explicit local thresholds remain unchanged. Percentages cannot guarantee the server
+compacts first; local fallback remains necessary.
 
 ## Role routing
 
@@ -494,10 +540,11 @@ sandbox:
     - http://127.0.0.1:11434
 ```
 
-Set `toolCalls` or `streaming` to `false` if the local server or selected model does not
+Set `toolCalls` or `streaming` to `off` if the local server or selected model does not
 implement that contract. A server that is still loading may return HTTP 503; Colossus
-reports a recoverable temporary-unavailability error but does not retry the turn
-implicitly.
+retries HTTP 502–504 responses up to five times before model output begins, within the
+existing request deadline. Exhaustion reports a recoverable temporary-unavailability
+error. Transport failures, timeouts and partially received output are not replayed.
 
 ### Offline echo route
 

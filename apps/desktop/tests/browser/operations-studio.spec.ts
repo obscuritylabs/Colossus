@@ -896,15 +896,23 @@ test("managed settings expose complete catalog editors without horizontal overfl
   expect(Math.abs(modelLabelHeight - reasoningFieldHeight)).toBeLessThanOrEqual(
     1,
   );
-  for (const label of ["Tool calls", "Streaming", "Image inputs"]) {
-    const capability = page.getByRole("switch", { name: new RegExp(label) });
+  for (const label of [
+    "Tool calls",
+    "Streaming",
+    "Image inputs",
+    "Server compaction",
+  ]) {
+    const capability = page.getByRole("slider", { name: label, exact: true });
     await expect(capability).toBeVisible();
+    await expect(capability).toHaveAttribute("min", "0");
+    await expect(capability).toHaveAttribute("max", "2");
+    await expect(capability).toHaveAttribute("step", "1");
     const dimensions = await capability.evaluate((element) => ({
-      height: element.getBoundingClientRect().height,
-      width: element.getBoundingClientRect().width,
+      left: element.getBoundingClientRect().left,
+      right: element.getBoundingClientRect().right,
     }));
-    expect(dimensions.width).toBeLessThanOrEqual(36);
-    expect(dimensions.height).toBeLessThanOrEqual(20);
+    expect(dimensions.left).toBeGreaterThanOrEqual(0);
+    expect(dimensions.right).toBeLessThanOrEqual(1281);
   }
   const modelResults = await new AxeBuilder({ page })
     .include(".models-settings")
@@ -1636,7 +1644,9 @@ test("model settings stay clear, complete, and compact", async ({ page }) => {
     exact: true,
   });
   await expect(
-    modelDetails.getByText("Tools, Streaming", { exact: true }),
+    modelDetails.getByText("Tools (on), Streaming (on), Compaction (auto)", {
+      exact: true,
+    }),
   ).toBeVisible();
   await expect(
     primaryModel.getByRole("button", {
@@ -1659,7 +1669,12 @@ test("model settings stay clear, complete, and compact", async ({ page }) => {
   await page
     .getByRole("spinbutton", { name: /^Maximum output \(tokens\)/u })
     .fill("32000");
-  await page.getByRole("switch", { name: /Image inputs/u }).check();
+  const imageInputs = page.getByRole("slider", {
+    name: "Image inputs",
+    exact: true,
+  });
+  await imageInputs.press("End");
+  await expect(imageInputs).toHaveAttribute("aria-valuetext", "On");
   const reasoningEffort = page.getByRole("combobox", {
     name: /^Reasoning effort/u,
   });
@@ -1691,7 +1706,7 @@ test("model settings stay clear, complete, and compact", async ({ page }) => {
   await expect(
     page
       .getByRole("region", { name: "Details for Vision model", exact: true })
-      .getByText(/Images/u),
+      .getByText(/Images \(on\)/u),
   ).toBeVisible();
 
   const pane = page.locator(".managed-settings-shell");

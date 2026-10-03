@@ -16,7 +16,7 @@ const configured: ManagedModelConfiguration = {
   contextWindowTokens: 128000,
   maxOutputTokens: 16000,
   reasoningEffort: "high",
-  capabilities: { toolCalls: true, streaming: true, imageInputs: true },
+  capabilities: { toolCalls: "on", streaming: "on", imageInputs: "on" },
 };
 
 describe("provider catalog selection", () => {
@@ -55,12 +55,22 @@ describe("provider catalog selection", () => {
       contextWindowTokens: 32768,
       maxOutputTokens: 4096,
       reasoningEffort: null,
-      capabilities: { toolCalls: false, streaming: false, imageInputs: false },
+      capabilities: {
+        toolCalls: "on",
+        streaming: "on",
+        imageInputs: "on",
+        declared: { toolCalls: null },
+      },
     });
     expect(
       selectCatalogModel(selected, { id: "known", tool_calls: true }),
     ).toMatchObject({
-      capabilities: { toolCalls: true, streaming: false, imageInputs: false },
+      capabilities: {
+        toolCalls: "on",
+        streaming: "on",
+        imageInputs: "on",
+        declared: { toolCalls: true },
+      },
     });
   });
 
@@ -75,7 +85,50 @@ describe("provider catalog selection", () => {
       profile: "primary",
       providerProfile: "remote",
       contextWindowTokens: 32768,
-      capabilities: { toolCalls: false },
+      capabilities: { toolCalls: "on" },
+    });
+  });
+
+  it("preserves all feature overrides while replacing declarations for a new model", () => {
+    const current: ManagedModelConfiguration = {
+      ...configured,
+      capabilities: {
+        toolCalls: "off",
+        streaming: "auto",
+        imageInputs: "on",
+        serverCompaction: "off",
+        declared: {
+          toolCalls: false,
+          streaming: false,
+          imageInputs: true,
+          serverCompaction: true,
+        },
+      },
+    };
+    const selected = selectCatalogModel(current, {
+      id: "new-model",
+      tool_calls: true,
+    });
+    expect(selected.capabilities).toEqual({
+      toolCalls: "off",
+      streaming: "auto",
+      imageInputs: "on",
+      serverCompaction: "off",
+      declared: {
+        toolCalls: true,
+        streaming: null,
+        imageInputs: null,
+        serverCompaction: null,
+      },
+    });
+    expect(resetModelMetadata(current).capabilities).toEqual({
+      ...current.capabilities,
+      declared: {
+        toolCalls: null,
+        streaming: null,
+        imageInputs: null,
+        serverCompaction: null,
+      },
     });
   });
 

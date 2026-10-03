@@ -1,11 +1,12 @@
 //! Connection setup and discovered-model configuration shared by interfaces.
 
-use colossus_contracts::{ProviderModelInfo, ProviderSetupProtocol, provider_presets};
+use colossus_contracts::{
+    ModelFeatureDeclarations, ModelFeatureSettings, ProviderModelInfo, ProviderSetupProtocol,
+    provider_presets,
+};
 use colossus_provider::{ModelProfile, ProviderKind, ProviderProfile};
 
-use crate::{
-    ModelCapabilities, ModelProfileConfig, ProviderProfileConfig, RuntimeConfig, RuntimeError,
-};
+use crate::{ModelProfileConfig, ProviderProfileConfig, RuntimeConfig, RuntimeError};
 
 /// Profile reserved in a newly generated provider configuration.
 pub const SETUP_PROVIDER_PROFILE: &str = "setup-provider";
@@ -35,11 +36,13 @@ pub struct ProviderSetupModel {
     /// Explicit generated-token ceiling.
     pub max_output_tokens: Option<u64>,
     /// Explicit tool-call support.
-    pub tool_calls: Option<bool>,
+    pub tool_calls: Option<colossus_contracts::ModelFeatureMode>,
     /// Explicit streaming support.
-    pub streaming: Option<bool>,
+    pub streaming: Option<colossus_contracts::ModelFeatureMode>,
     /// Explicit image-input support.
-    pub image_inputs: Option<bool>,
+    pub image_inputs: Option<colossus_contracts::ModelFeatureMode>,
+    /// Explicit Responses compaction preference.
+    pub server_compaction: Option<colossus_contracts::ModelFeatureMode>,
 }
 
 impl RuntimeConfig {
@@ -149,7 +152,7 @@ impl RuntimeConfig {
         Ok(config)
     }
 
-    /// Select a discovered or manually entered model. Unknown capabilities remain off;
+    /// Select a discovered or manually entered model. Unknown capabilities use Auto;
     /// missing limits use conservative 32K/4K defaults, available for explicit override.
     pub fn with_setup_model(
         &self,
@@ -184,19 +187,17 @@ impl RuntimeConfig {
                 .unwrap_or(4_096)
                 .min(context / 2)
         });
-        let capabilities = ModelCapabilities {
-            tool_calls: request
-                .tool_calls
-                .or_else(|| card.and_then(|card| card.tool_calls))
-                .unwrap_or(false),
-            streaming: request
-                .streaming
-                .or_else(|| card.and_then(|card| card.streaming))
-                .unwrap_or(false),
-            image_inputs: request
-                .image_inputs
-                .or_else(|| card.and_then(|card| card.image_inputs))
-                .unwrap_or(false),
+        let capabilities = ModelFeatureSettings {
+            tool_calls: request.tool_calls.unwrap_or_default(),
+            streaming: request.streaming.unwrap_or_default(),
+            image_inputs: request.image_inputs.unwrap_or_default(),
+            server_compaction: request.server_compaction.unwrap_or_default(),
+            declared: ModelFeatureDeclarations {
+                tool_calls: card.and_then(|card| card.tool_calls),
+                streaming: card.and_then(|card| card.streaming),
+                image_inputs: card.and_then(|card| card.image_inputs),
+                server_compaction: card.and_then(|card| card.server_compaction),
+            },
         };
         let model = ModelProfileConfig {
             provider_profile: SETUP_PROVIDER_PROFILE.into(),
@@ -212,7 +213,7 @@ impl RuntimeConfig {
             &model.model,
             context,
             output,
-            model.capabilities,
+            model.capabilities.capabilities(),
             None,
         )?;
         let mut config = self.clone();
@@ -381,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn model_defaults_remain_conservative_and_unknown_capabilities_stay_off() {
+    fn model_defaults_use_auto_and_preserve_unknown_declarations() {
         let config = RuntimeConfig::offline_template("state.redb")
             .with_setup_provider(&connection("ollama"))
             .unwrap();
@@ -395,11 +396,7 @@ mod tests {
             (model.context_window_tokens, model.max_output_tokens),
             (32_768, 4_096)
         );
-        assert!(
-            !model.capabilities.tool_calls
-                && !model.capabilities.streaming
-                && !model.capabilities.image_inputs
-        );
+        assert_eq!(model.capabilities, ModelFeatureSettings::default());
         let card = ProviderModelInfo {
             id: "model".into(),
             context_window_tokens: Some(4_096),
@@ -436,9 +433,10 @@ mod tests {
             (model.context_window_tokens, model.max_output_tokens),
             (64_000, 2_000)
         );
-        assert!(model.capabilities.tool_calls);
-        assert!(!model.capabilities.image_inputs);
-        assert!(!model.capabilities.streaming);
+        assert!(model.capabilities.capabilities().tool_calls);
+        assert_eq!(model.capabilities.declared.tool_calls, Some(true));
+        assert_eq!(model.capabilities.declared.image_inputs, None);
+        assert_eq!(model.capabilities.declared.streaming, None);
         assert_eq!(result.models.roles["primary"], SETUP_MODEL_PROFILE);
         assert!(
             config

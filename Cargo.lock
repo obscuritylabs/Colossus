@@ -1141,13 +1141,17 @@ version = "0.11.7"
 dependencies = [
  "async-trait",
  "colossus-contracts",
+ "colossus-journal-redb",
  "colossus-ports",
  "colossus-session",
  "colossus-testkit",
  "colossus-tools",
  "colossus-work",
+ "hex",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
  "tokio",
  "uuid",
 ]

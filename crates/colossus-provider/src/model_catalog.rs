@@ -102,6 +102,10 @@ fn model_card(id: &str, model: &Map<String, Value>) -> ProviderModelInfo {
             },
         ),
         streaming: declared_boolean(model, &["streaming", "supports_streaming"]),
+        server_compaction: declared_boolean(
+            model,
+            &["server_compaction", "supports_server_compaction"],
+        ),
         supported_reasoning_efforts: reasoning_efforts(model),
     }
 }

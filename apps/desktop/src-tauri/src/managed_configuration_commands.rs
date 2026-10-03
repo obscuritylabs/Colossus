@@ -2481,9 +2481,10 @@ mod tests {
             context_window_tokens: 32_768,
             max_output_tokens: 4_096,
             capabilities: ModelCapabilitiesSetting {
-                tool_calls: true,
-                streaming: true,
-                image_inputs: false,
+                tool_calls: true.into(),
+                streaming: true.into(),
+                image_inputs: false.into(),
+                ..Default::default()
             },
             reasoning_effort: None,
         }
