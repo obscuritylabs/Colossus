@@ -293,7 +293,7 @@ fn rendered_footer(state: &TuiState, width: u16) -> String {
 }
 
 #[test]
-fn footer_separates_runtime_details_and_highlights_warnings_with_readable_contrast() {
+fn footer_combines_status_and_runtime_in_one_row_with_readable_highlights() {
     let mut source = snapshot();
     source
         .preferences
@@ -326,15 +326,13 @@ fn footer_separates_runtime_details_and_highlights_warnings_with_readable_contra
             .collect::<String>()
     };
     let status = row(0);
-    let details = row(1);
     assert!(status.contains("ready · approval ask"), "{status}");
     assert!(status.contains("⚠ Security: 1"), "{status}");
-    assert!(!status.contains("gpt-5.6"), "{status}");
     assert!(
-        details.contains("execute")
-            && details.contains("gpt-5.6-sol@codex via codex-provider · ctx"),
-        "{details}"
+        status.contains("execute") && status.contains("gpt-5.6-sol@codex via codex-provider · ctx"),
+        "{status}"
     );
+    assert_eq!(terminal.backend().buffer().area.height, 1);
     assert!(status.contains("  ⚠"), "{status}");
     let buffer = terminal.backend().buffer();
     let warning_x = (0..120)
@@ -345,10 +343,10 @@ fn footer_separates_runtime_details_and_highlights_warnings_with_readable_contra
     assert_ne!(warning.bg, Color::Reset);
     assert!(!warning.modifier.contains(Modifier::DIM));
     let runtime_x = (0..120)
-        .find(|x| buffer.cell((*x, 1)).expect("cell").symbol() == "g")
+        .find(|x| buffer.cell((*x, 0)).expect("cell").symbol() == "g")
         .expect("runtime text");
-    let runtime = buffer.cell((runtime_x, 1)).expect("runtime cell");
-    assert_eq!(runtime.bg, Color::Reset);
+    let runtime = buffer.cell((runtime_x, 0)).expect("runtime cell");
+    assert_eq!(runtime.bg, buffer.cell((0, 0)).expect("surface cell").bg);
     assert!(!runtime.modifier.contains(Modifier::DIM));
     assert!(
         terminal
@@ -411,8 +409,21 @@ fn footer_removes_terminal_controls_from_host_metadata() {
 
 #[test]
 fn composer_keeps_send_action_and_newline_hint_visible_in_narrow_terminals() {
-    for multiline in [false, true] {
+    for (theme, multiline) in [
+        colossus_contracts::ThemeName::Default,
+        colossus_contracts::ThemeName::Mono,
+        colossus_contracts::ThemeName::HighContrast,
+        colossus_contracts::ThemeName::Carrot,
+        colossus_contracts::ThemeName::Hacker,
+    ]
+    .into_iter()
+    .flat_map(|theme| {
+        [false, true]
+            .into_iter()
+            .map(move |multiline| (theme, multiline))
+    }) {
         let mut state = TuiState::from_snapshot(snapshot());
+        state.preferences.select_builtin_theme(theme);
         state.preferences.multiline = multiline;
         let mut terminal = Terminal::new(TestBackend::new(40, 3)).expect("composer terminal");
         terminal
@@ -435,6 +446,13 @@ fn composer_keeps_send_action_and_newline_hint_visible_in_narrow_terminals() {
             }),
             "{rendered}"
         );
+        let buffer = terminal.backend().buffer();
+        let prompt = buffer.cell((1, 1)).expect("prompt cell");
+        let hint = buffer.cell((2, 2)).expect("hint cell");
+        assert_ne!(prompt.bg, Color::Reset);
+        assert_eq!(prompt.bg, hint.bg);
+        assert_ne!(hint.fg, prompt.bg);
+        assert!(!hint.modifier.contains(Modifier::DIM), "{theme:?}");
     }
 }
 

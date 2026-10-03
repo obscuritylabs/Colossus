@@ -266,29 +266,25 @@ fn launch_rail_labels_the_sandbox_profile_field_as_the_sandbox_profile() {
 }
 
 #[test]
-fn footer_uses_readable_highlights_for_brand_and_status() {
+fn footer_uses_readable_highlights_for_mode_and_status() {
     let backend = TestBackend::new(80, FOOTER_HEIGHT);
     let mut terminal = Terminal::new(backend).expect("test terminal");
     let state = TuiState::from_snapshot(snapshot());
     terminal
         .draw(|frame| render_footer(frame, &state, frame.area(), true))
-        .expect("draw branded footer");
+        .expect("draw footer");
     let rendered = (0..80)
         .filter_map(|x| terminal.backend().buffer().cell((x, 0)))
         .map(|cell| cell.symbol())
         .collect::<String>();
     assert!(
-        rendered.contains("COLOSSUS") && rendered.contains("ready · approval ask"),
+        rendered.contains("execute") && rendered.contains("ready · approval ask"),
         "{rendered}"
     );
-    let brand = terminal
-        .backend()
-        .buffer()
-        .cell((1, 0))
-        .expect("brand cell");
-    assert_eq!(brand.fg, Color::Black);
-    assert_ne!(brand.bg, Color::Reset);
-    assert!(brand.modifier.contains(Modifier::BOLD));
+    let mode = terminal.backend().buffer().cell((1, 0)).expect("mode cell");
+    assert_eq!(mode.fg, Color::Black);
+    assert_ne!(mode.bg, Color::Reset);
+    assert!(mode.modifier.contains(Modifier::BOLD));
 
     let mut mono_source = snapshot();
     mono_source.preferences.theme = colossus_contracts::ThemeName::Mono;
@@ -487,7 +483,7 @@ fn danger_full_access_posture_adds_a_non_durable_card_and_persistent_footer_badg
         .collect::<String>();
     assert!(footer.contains("Security: 2"));
     assert!(
-        footer.contains("COLOSSUS") && footer.contains("ready · approval ask"),
+        footer.contains("execute") && footer.contains("ready · approval ask"),
         "status and permissions must remain readable beside the warning count: {footer}"
     );
     assert_eq!(

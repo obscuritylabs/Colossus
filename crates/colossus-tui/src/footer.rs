@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) const FOOTER_HEIGHT: u16 = 2;
+pub(super) const FOOTER_HEIGHT: u16 = 1;
 
 pub(super) fn render_footer(
     frame: &mut Frame<'_>,
@@ -53,21 +53,23 @@ pub(super) fn render_footer(
     let content_width = width.saturating_sub(badge_width + usize::from(!badge.is_empty()) * 2);
     let mut used =
         UnicodeWidthStr::width(status.as_str()) + UnicodeWidthStr::width(approval_text.as_str());
-    let brand = if width >= 78 && used + 12 <= content_width {
-        " COLOSSUS "
+    let mode = format!(" {} ", state.mode.as_str());
+    let mode = if used + UnicodeWidthStr::width(mode.as_str()) + 2 <= content_width {
+        mode
     } else {
-        ""
+        String::new()
     };
-    used += UnicodeWidthStr::width(brand) + usize::from(!brand.is_empty()) * 2;
+    used += UnicodeWidthStr::width(mode.as_str()) + usize::from(!mode.is_empty()) * 2;
     let status_style = if matches!(status.as_str(), "waiting" | "queue paused" | "error") {
         ratatui_style(palette.warning_style()).bg(band.bg.unwrap_or(Color::Reset))
     } else {
         band
     }
     .add_modifier(Modifier::BOLD);
+    let mode_gap = if mode.is_empty() { "" } else { "  " };
     let mut spans = vec![
-        Span::styled(brand, chrome_chip_style(palette.user_style())),
-        Span::styled(if brand.is_empty() { "" } else { "  " }, band),
+        Span::styled(mode, chrome_chip_style(palette.user_style())),
+        Span::styled(mode_gap, band),
         Span::styled(status, status_style),
         Span::styled(approval_text, metadata.add_modifier(Modifier::BOLD)),
     ];
@@ -94,6 +96,40 @@ pub(super) fn render_footer(
             metadata,
         );
     }
+    let context = state
+        .footer
+        .context
+        .map(|(used, maximum)| format!("ctx {used}/{maximum}"));
+    let reserved = context
+        .as_ref()
+        .map_or(0, |context| UnicodeWidthStr::width(context.as_str()) + 3);
+    let route_width = content_width.saturating_sub(used + reserved + 3);
+    if route_width >= 16 {
+        append_footer_segment(
+            &mut spans,
+            &mut used,
+            content_width,
+            truncate_width_with_ellipsis(
+                &sanitize_approval_field(&state.footer.route),
+                route_width,
+            ),
+            metadata,
+        );
+    }
+    if let Some(context) = context {
+        append_footer_segment(&mut spans, &mut used, content_width, context, metadata);
+    }
+    if show_location {
+        let location = if state.welcome_visible {
+            welcome_workspace(&state.workspace)
+        } else {
+            format!(
+                "session {}",
+                state.session_id.chars().take(8).collect::<String>()
+            )
+        };
+        append_footer_segment(&mut spans, &mut used, content_width, location, metadata);
+    }
     frame.render_widget(
         Paragraph::new(Line::from(spans)),
         Rect::new(
@@ -116,58 +152,6 @@ pub(super) fn render_footer(
             badge_area,
         );
     }
-    if area.height < FOOTER_HEIGHT {
-        return;
-    }
-
-    let mut spans = Vec::new();
-    let mut used = 0;
-    append_footer_segment(
-        &mut spans,
-        &mut used,
-        width,
-        format!(" {} ", state.mode.as_str()),
-        chrome_chip_style(palette.user_style()),
-    );
-    let metadata = ratatui_style(palette.assistant_style()).remove_modifier(Modifier::DIM);
-    let context = state
-        .footer
-        .context
-        .map(|(used, maximum)| format!("ctx {used}/{maximum}"));
-    let reserved = context
-        .as_ref()
-        .map_or(0, |context| UnicodeWidthStr::width(context.as_str()) + 3);
-    let route_width = width.saturating_sub(used + reserved + 3);
-    if route_width >= 16 {
-        append_footer_segment(
-            &mut spans,
-            &mut used,
-            width,
-            truncate_width_with_ellipsis(
-                &sanitize_approval_field(&state.footer.route),
-                route_width,
-            ),
-            metadata,
-        );
-    }
-    if let Some(context) = context {
-        append_footer_segment(&mut spans, &mut used, width, context, metadata);
-    }
-    let location = if state.welcome_visible {
-        welcome_workspace(&state.workspace)
-    } else {
-        format!(
-            "session {}",
-            state.session_id.chars().take(8).collect::<String>()
-        )
-    };
-    if show_location {
-        append_footer_segment(&mut spans, &mut used, width, location, metadata);
-    }
-    frame.render_widget(
-        Paragraph::new(Line::from(spans)),
-        Rect::new(row.x, row.y + 1, row.width, 1),
-    );
 }
 
 fn append_footer_segment(

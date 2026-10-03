@@ -82,15 +82,21 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area:
     let title: String = title;
     let inner_width = composer_inner_width(area.width);
     let hint = composer_hint(state, &layout, visible_rows, inner_width);
+    let surface = chrome_band_style(&palette).bg(Color::Rgb(35, 39, 44));
+    let hint_style = ratatui_style(palette.meta_style()).remove_modifier(Modifier::DIM);
     let composer_block = Block::default()
+        .style(surface)
         .borders(Borders::ALL)
-        .border_style(ratatui_style(palette.meta_style()))
+        .border_style(hint_style)
         .title(Span::styled(
             truncate_width_with_ellipsis(&title, inner_width),
             ratatui_style(palette.assistant_style()).add_modifier(Modifier::BOLD),
         ))
-        .title_bottom(Span::styled(hint, ratatui_style(ghost_style)));
-    frame.render_widget(Paragraph::new(text).block(composer_block), area);
+        .title_bottom(Span::styled(hint, hint_style));
+    frame.render_widget(
+        Paragraph::new(text).style(surface).block(composer_block),
+        area,
+    );
     if state.preview_cache.native_graphics() {
         let pending = state
             .pending_images
