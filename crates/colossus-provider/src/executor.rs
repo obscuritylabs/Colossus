@@ -107,6 +107,12 @@ struct ProviderStreamMetadata<'a> {
     candidate_id: String,
 }
 
+struct ProviderJsonGeneration<'a> {
+    response: reqwest::Response,
+    secrets: RequestSecrets,
+    payload: &'a Value,
+}
+
 enum CollectedProviderOutput {
     Turn(ProviderTurn),
     Diagnostic(ProviderResponseDiagnostic),
@@ -1350,13 +1356,17 @@ impl ProviderExecutor {
 
     async fn release_json_generation(
         &self,
-        response: reqwest::Response,
-        secrets: RequestSecrets,
+        generation: ProviderJsonGeneration<'_>,
         metadata: ProviderStreamMetadata<'_>,
         tool_names: ProviderToolNames,
         permit: &ExecutionPermit,
         observer: &mut dyn QuarantinedEffectObserver,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        let ProviderJsonGeneration {
+            response,
+            secrets,
+            payload,
+        } = generation;
         let limit = usize::try_from(permit.obligations().max_output_bytes)
             .map_err(|error| ExecutionError::Failed(error.to_string()))?;
         let mut bytes = Vec::new();
@@ -1372,7 +1382,14 @@ impl ProviderExecutor {
             }
             bytes.extend_from_slice(&chunk);
         }
-        secrets.redact_bytes(&mut bytes);
+        let mut response_value = serde_json::from_slice::<Value>(&bytes).ok();
+        if let Some(value) = &mut response_value {
+            secrets.redact_value(value);
+            bytes = serde_json::to_vec(value)
+                .map_err(|_| ExecutionError::Failed("invalid provider JSON".into()))?;
+        } else {
+            secrets.redact_bytes(&mut bytes);
+        }
         let turn = match self.profile.kind {
             ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => normalize_responses(
                 &self.profile,
@@ -1391,17 +1408,40 @@ impl ProviderExecutor {
             ProviderKind::Echo => unreachable!("echo handled before HTTP dispatch"),
         }
         .map_err(provider_execution_error)?;
+        let continuation_id = if response_value
+            .as_ref()
+            .is_some_and(|value| value["status"] == "completed")
+        {
+            let output = response_value
+                .as_ref()
+                .and_then(|value| value["output"].as_array())
+                .cloned()
+                .unwrap_or_default();
+            self.stage_continuation(
+                &metadata.candidate_id,
+                metadata.continuation_plan.as_ref(),
+                payload,
+                &output,
+                &turn,
+            )
+            .map_err(provider_execution_error)?
+        } else {
+            None
+        };
         for event in turn.events {
             emit_stream_item(ProviderStreamItem::Event { event }, permit, observer).await?;
         }
         emit_stream_item(
-            ProviderStreamItem::Completed {
-                profile: turn.profile,
-                model_profile: turn.model_profile,
-                provider_profile: turn.provider_profile,
-                provider: turn.provider,
-                model: turn.model,
-                response_id: turn.response_id,
+            crate::ProviderAdapterStreamItem {
+                continuation_id,
+                item: ProviderStreamItem::Completed {
+                    profile: turn.profile,
+                    model_profile: turn.model_profile,
+                    provider_profile: turn.provider_profile,
+                    provider: turn.provider,
+                    model: turn.model,
+                    response_id: turn.response_id,
+                },
             },
             permit,
             observer,
@@ -1474,7 +1514,15 @@ impl ProviderExecutor {
             return tokio::time::timeout_at(
                 generation_deadline,
                 self.release_json_generation(
-                    response, secret, metadata, tool_names, permit, observer,
+                    ProviderJsonGeneration {
+                        response,
+                        secrets: secret,
+                        payload: &payload,
+                    },
+                    metadata,
+                    tool_names,
+                    permit,
+                    observer,
                 ),
             )
             .await
@@ -1791,6 +1839,43 @@ fn generation_metadata(
     Ok((model_profile, model, max_output_tokens))
 }
 
+fn configure_compaction(
+    payload: &mut Value,
+    kind: ProviderKind,
+    threshold: Option<u64>,
+) -> Result<(), ProviderError> {
+    if let Some(threshold) = threshold {
+        if kind != ProviderKind::OpenAiResponses || threshold == 0 {
+            return Err(ProviderError::Configuration(
+                "server compaction requires public Responses and a positive threshold".into(),
+            ));
+        }
+        payload["context_management"] =
+            json!([{ "type": "compaction", "compact_threshold": threshold }]);
+    }
+    Ok(())
+}
+
+fn retain_opaque_redactions(value: &Value, secrets: &mut RequestSecrets) {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                if key == "encrypted_content"
+                    && let Some(secret) = value.as_str()
+                {
+                    secrets.retain(secret);
+                } else {
+                    retain_opaque_redactions(value, secrets);
+                }
+            }
+        }
+        Value::Array(values) => values
+            .iter()
+            .for_each(|value| retain_opaque_redactions(value, secrets)),
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod retry_after_tests {
     use super::*;
@@ -1829,42 +1914,5 @@ mod retry_after_tests {
             parse_retry_after_ms(&unsupported),
             Some(RetryAfter::ExceedsSupportedBound)
         );
-    }
-}
-
-fn configure_compaction(
-    payload: &mut Value,
-    kind: ProviderKind,
-    threshold: Option<u64>,
-) -> Result<(), ProviderError> {
-    if let Some(threshold) = threshold {
-        if kind != ProviderKind::OpenAiResponses || threshold == 0 {
-            return Err(ProviderError::Configuration(
-                "server compaction requires public Responses and a positive threshold".into(),
-            ));
-        }
-        payload["context_management"] =
-            json!([{ "type": "compaction", "compact_threshold": threshold }]);
-    }
-    Ok(())
-}
-
-fn retain_opaque_redactions(value: &Value, secrets: &mut RequestSecrets) {
-    match value {
-        Value::Object(object) => {
-            for (key, value) in object {
-                if key == "encrypted_content"
-                    && let Some(secret) = value.as_str()
-                {
-                    secrets.retain(secret);
-                } else {
-                    retain_opaque_redactions(value, secrets);
-                }
-            }
-        }
-        Value::Array(values) => values
-            .iter()
-            .for_each(|value| retain_opaque_redactions(value, secrets)),
-        _ => {}
     }
 }

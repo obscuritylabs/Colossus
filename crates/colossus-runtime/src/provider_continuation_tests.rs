@@ -6,15 +6,23 @@ use tokio::{
     net::TcpListener,
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FirstResponse {
+    Completed,
+    FeatureRejected,
+    GatewayUnavailable,
+}
+
 async fn responses_server(
     streamed: bool,
-    reject_first: bool,
+    first_response: FirstResponse,
 ) -> (String, tokio::task::JoinHandle<Vec<Value>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/v1", listener.local_addr().unwrap());
     let handle = tokio::spawn(async move {
         let mut requests = Vec::new();
-        for index in 0..3 {
+        let retry_first = first_response == FirstResponse::GatewayUnavailable;
+        for index in 0..(3 + usize::from(retry_first)) {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut bytes = Vec::new();
             let (offset, length) = loop {
@@ -41,7 +49,7 @@ async fn responses_server(
             let mut output = vec![
                 json!({"type":"message", "id":format!("message-{index}"), "role":"assistant", "status":"completed", "content":[{"type":"output_text", "text":"done"}]}),
             ];
-            if index == 0 {
+            if index == usize::from(retry_first) {
                 output.insert(0, json!({"type":"compaction", "id":"cmp-1", "encrypted_content":"opaque-sentinel-do-not-release"}));
             }
             let response =
@@ -58,8 +66,12 @@ async fn responses_server(
             } else {
                 ("application/json", response.to_string())
             };
-            let (status, content_type, body) = if reject_first && index == 0 {
+            let (status, content_type, body) = if first_response == FirstResponse::FeatureRejected
+                && index == 0
+            {
                 ("400 Bad Request", "application/json", json!({"error":{"code":"unsupported_parameter","param":"context_management","message":"untrusted rejection body"}}).to_string())
+            } else if retry_first && index == 0 {
+                ("503 Service Unavailable", "application/json", "{}".into())
             } else {
                 ("200 OK", content_type, body)
             };
@@ -70,8 +82,12 @@ async fn responses_server(
     (url, handle)
 }
 
-async fn compaction_round_trip(streamed: bool, reject_first: bool, archive_binding: bool) {
-    let (base_url, server) = responses_server(streamed, reject_first).await;
+async fn compaction_round_trip(
+    streamed: bool,
+    first_response: FirstResponse,
+    archive_binding: bool,
+) {
+    let (base_url, server) = responses_server(streamed, first_response).await;
     let temporary = private_tempdir();
     let mut config = RuntimeConfig::offline_template(temporary.path().join("state.redb"));
     config.sandbox.backend = "danger_full_access".into();
@@ -129,7 +145,7 @@ async fn compaction_round_trip(streamed: bool, reject_first: bool, archive_bindi
     } else {
         None
     };
-    if reject_first {
+    if first_response == FirstResponse::FeatureRejected {
         let error = runtime
             .run_model_in_session(
                 "primary",
@@ -148,6 +164,7 @@ async fn compaction_round_trip(streamed: bool, reject_first: bool, archive_bindi
                 .unwrap();
         }
         let requests = server.await.unwrap();
+        assert!(requests.iter().all(|request| request["stream"] == streamed));
         assert!(requests[0].get("context_management").is_some());
         assert!(requests[1].get("context_management").is_none());
         assert!(requests[2].get("context_management").is_none());
@@ -183,7 +200,15 @@ async fn compaction_round_trip(streamed: bool, reject_first: bool, archive_bindi
         )
         .await
         .unwrap();
-    let requests = server.await.unwrap();
+    let mut requests = server.await.unwrap();
+    if first_response == FirstResponse::GatewayUnavailable {
+        assert_eq!(
+            requests[0], requests[1],
+            "retry must preserve the exact payload"
+        );
+        requests.remove(0);
+    }
+    assert!(requests.iter().all(|request| request["stream"] == streamed));
     assert_eq!(requests[0]["store"], false);
     assert_eq!(
         requests[0]["context_management"][0]["compact_threshold"],
@@ -249,23 +274,29 @@ async fn compaction_round_trip(streamed: bool, reject_first: bool, archive_bindi
 
 #[tokio::test]
 async fn responses_compaction_chains_nonstream_and_invalidates_changed_instructions() {
-    compaction_round_trip(false, false, false).await;
+    compaction_round_trip(false, FirstResponse::Completed, false).await;
 }
 
 #[tokio::test]
 async fn responses_compaction_chains_stream_and_keeps_opaque_state_private() {
-    compaction_round_trip(true, false, false).await;
+    compaction_round_trip(true, FirstResponse::Completed, false).await;
 }
 
 #[tokio::test]
 async fn responses_compaction_auto_remembers_only_structured_rejection_without_replaying_generation()
  {
-    compaction_round_trip(false, true, false).await;
-    compaction_round_trip(true, true, false).await;
+    compaction_round_trip(false, FirstResponse::FeatureRejected, false).await;
+    compaction_round_trip(true, FirstResponse::FeatureRejected, false).await;
 }
 
 #[tokio::test]
 async fn archived_decisions_invalidate_streamed_and_nonstreamed_compaction() {
-    compaction_round_trip(false, false, true).await;
-    compaction_round_trip(true, false, true).await;
+    compaction_round_trip(false, FirstResponse::Completed, true).await;
+    compaction_round_trip(true, FirstResponse::Completed, true).await;
+}
+
+#[tokio::test]
+async fn gateway_recovery_preserves_streamed_and_nonstreamed_compaction() {
+    compaction_round_trip(false, FirstResponse::GatewayUnavailable, false).await;
+    compaction_round_trip(true, FirstResponse::GatewayUnavailable, false).await;
 }

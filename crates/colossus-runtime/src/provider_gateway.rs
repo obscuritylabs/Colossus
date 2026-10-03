@@ -623,7 +623,12 @@ impl ModelProvider for GatewayModelProvider {
         }
         let candidate = bridge.continuation_id.clone();
         let turn = bridge.finish(&terminal.bytes, options.include_response_diagnostics)?;
-        self.accepted(role, &request_evidence, true, candidate.is_some());
+        self.accepted(
+            role,
+            &request_evidence,
+            route.capabilities.streaming,
+            candidate.is_some(),
+        );
         self.remember_candidate(session_id.as_deref(), candidate)?;
         Ok(turn)
     }

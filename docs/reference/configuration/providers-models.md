@@ -540,10 +540,11 @@ sandbox:
     - http://127.0.0.1:11434
 ```
 
-Set `toolCalls` or `streaming` to `false` if the local server or selected model does not
+Set `toolCalls` or `streaming` to `off` if the local server or selected model does not
 implement that contract. A server that is still loading may return HTTP 503; Colossus
-reports a recoverable temporary-unavailability error but does not retry the turn
-implicitly.
+retries HTTP 502–504 responses up to five times before model output begins, within the
+existing request deadline. Exhaustion reports a recoverable temporary-unavailability
+error. Transport failures, timeouts and partially received output are not replayed.
 
 ### Offline echo route
 
