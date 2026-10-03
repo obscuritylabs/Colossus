@@ -15,6 +15,12 @@ worker, and recover interrupted work without replaying an uncertain external eff
 
 ## Prerequisites
 
+Desktop operators can use [Workflow schedules](../../desktop/schedules.md) to register
+existing YAML and control schedules in their private Workspace partition. The
+authenticated application API exposes the same canonical scheduler with owner-bound
+resources, exact definition hashes, durable request receipts, and revision-bound
+controls. Separate CLI state is not imported implicitly.
+
 - A validated and registered workflow.
 - Input JSON that conforms to the workflow schema.
 - A running worker for unattended dispatch.
@@ -137,6 +143,14 @@ due-time behavior without changing the system clock.
 - **Run has outcome-unknown:** reconcile the target system or require operator input;
   do not blindly resume the effect.
 - **Schedule backlog is unexpected:** inspect its `fire-once` or `skip` misfire policy.
+
+Cadence is fixed elapsed time from 60 seconds through 31 days, with UTC boundaries.
+One due boundary queues under either policy. Multiple due boundaries fire the latest
+once or skip all and advance into the future. Pause does not cancel existing runs;
+re-enable preserves the boundary. Application controls serialize their exact canonical
+revision check with ticks. A creation receipt commits atomically with allocation and
+survives restart; replaying the same owner/key/normalized intent returns the original
+allocation even after ticks. Reusing that key for different intent conflicts.
 
 ## Next step
 

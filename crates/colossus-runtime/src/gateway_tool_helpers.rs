@@ -61,6 +61,7 @@ pub(super) struct GatewayToolExecutor {
     pub(super) filesystem: Arc<dyn EffectExecutor>,
     pub(super) process: Option<Arc<dyn EffectExecutor>>,
     pub(super) process_sessions: Option<Arc<ProcessSessions>>,
+    pub(super) workflows: Option<Arc<std::sync::OnceLock<Weak<WorkflowService>>>>,
     pub(super) http: Arc<HttpExecutor>,
     pub(super) work: Option<Arc<WorkEffectExecutor>>,
     pub(super) memory: Option<Arc<MemoryEffectExecutor>>,

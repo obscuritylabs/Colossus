@@ -852,7 +852,9 @@ impl Runtime {
             raw_process_executor,
             Arc::clone(&workspace_lease),
         )?);
+        let workflow_tools = Arc::new(std::sync::OnceLock::new());
         let gateway_tool_executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
+            workflows: Some(Arc::clone(&workflow_tools)),
             gateway: Arc::clone(&gateway),
             filesystem: Arc::clone(&filesystem_executor),
             process: Some(Arc::clone(&process_executor)),
@@ -947,6 +949,9 @@ impl Runtime {
             Arc::clone(&workflow_repository),
             effects,
         ));
+        workflow_tools
+            .set(Arc::downgrade(&workflows))
+            .map_err(|_| RuntimeError::Config("workflow tools were already bound".into()))?;
         if !journal.is_recovery_mode() {
             observe_startup_phase(
                 "colossus.runtime.workflows.recover",

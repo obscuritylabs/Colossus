@@ -136,7 +136,18 @@ impl WorkflowService {
             }
             schedule.last_run_id = Some(run_id.clone());
             let schedule_id = schedule.schedule_id.clone();
-            let run_event = scheduled_run_event(&schedule, &run_id, &latest_due_text);
+            let mut run_event = scheduled_run_event(&schedule, &run_id, &latest_due_text);
+            if let Some(first) = self
+                .journal
+                .read_stream_from(&schedule_stream(&schedule.schedule_id), 0, 1)?
+                .first()
+                && let Some(origin) = self.journal.decrypt_payload(first)?.get("origin")
+            {
+                let origin: colossus_contracts::WorkflowOrigin =
+                    serde_json::from_value(origin.clone()).map_err(control::control_encoding)?;
+                run_event.payload["origin"] =
+                    serde_json::to_value(origin).map_err(control::control_encoding)?;
+            }
             self.journal.append_batch(vec![
                 schedule_event(
                     &schedule,

@@ -355,11 +355,18 @@ var KnowledgeService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	AutomationService_GetWorkflow_FullMethodName      = "/colossus.api.v1alpha1.AutomationService/GetWorkflow"
-	AutomationService_ListWorkflows_FullMethodName    = "/colossus.api.v1alpha1.AutomationService/ListWorkflows"
-	AutomationService_StartWorkflowRun_FullMethodName = "/colossus.api.v1alpha1.AutomationService/StartWorkflowRun"
-	AutomationService_GetWorkflowRun_FullMethodName   = "/colossus.api.v1alpha1.AutomationService/GetWorkflowRun"
-	AutomationService_WatchWorkflowRun_FullMethodName = "/colossus.api.v1alpha1.AutomationService/WatchWorkflowRun"
+	AutomationService_GetWorkflow_FullMethodName                = "/colossus.api.v1alpha1.AutomationService/GetWorkflow"
+	AutomationService_ListWorkflows_FullMethodName              = "/colossus.api.v1alpha1.AutomationService/ListWorkflows"
+	AutomationService_StartWorkflowRun_FullMethodName           = "/colossus.api.v1alpha1.AutomationService/StartWorkflowRun"
+	AutomationService_GetWorkflowRun_FullMethodName             = "/colossus.api.v1alpha1.AutomationService/GetWorkflowRun"
+	AutomationService_WatchWorkflowRun_FullMethodName           = "/colossus.api.v1alpha1.AutomationService/WatchWorkflowRun"
+	AutomationService_ValidateWorkflowDefinition_FullMethodName = "/colossus.api.v1alpha1.AutomationService/ValidateWorkflowDefinition"
+	AutomationService_RegisterWorkflowDefinition_FullMethodName = "/colossus.api.v1alpha1.AutomationService/RegisterWorkflowDefinition"
+	AutomationService_ListWorkflowSchedules_FullMethodName      = "/colossus.api.v1alpha1.AutomationService/ListWorkflowSchedules"
+	AutomationService_GetWorkflowSchedule_FullMethodName        = "/colossus.api.v1alpha1.AutomationService/GetWorkflowSchedule"
+	AutomationService_CreateWorkflowSchedule_FullMethodName     = "/colossus.api.v1alpha1.AutomationService/CreateWorkflowSchedule"
+	AutomationService_SetWorkflowScheduleEnabled_FullMethodName = "/colossus.api.v1alpha1.AutomationService/SetWorkflowScheduleEnabled"
+	AutomationService_GetWorkflowWorkState_FullMethodName       = "/colossus.api.v1alpha1.AutomationService/GetWorkflowWorkState"
 )
 
 // AutomationServiceClient is the client API for AutomationService service.
@@ -378,6 +385,20 @@ type AutomationServiceClient interface {
 	GetWorkflowRun(ctx context.Context, in *GetWorkflowRunRequest, opts ...grpc.CallOption) (*GetWorkflowRunResponse, error)
 	// WatchWorkflowRun replays snapshots after an exclusive sequence and tails updates.
 	WatchWorkflowRun(ctx context.Context, in *WatchWorkflowRunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchWorkflowRunResponse], error)
+	// ValidateWorkflowDefinition performs one bounded authenticated workflow operation.
+	ValidateWorkflowDefinition(ctx context.Context, in *ValidateWorkflowDefinitionRequest, opts ...grpc.CallOption) (*ValidateWorkflowDefinitionResponse, error)
+	// RegisterWorkflowDefinition performs one bounded authenticated workflow operation.
+	RegisterWorkflowDefinition(ctx context.Context, in *RegisterWorkflowDefinitionRequest, opts ...grpc.CallOption) (*RegisterWorkflowDefinitionResponse, error)
+	// ListWorkflowSchedules performs one bounded authenticated workflow operation.
+	ListWorkflowSchedules(ctx context.Context, in *ListWorkflowSchedulesRequest, opts ...grpc.CallOption) (*ListWorkflowSchedulesResponse, error)
+	// GetWorkflowSchedule performs one bounded authenticated workflow operation.
+	GetWorkflowSchedule(ctx context.Context, in *GetWorkflowScheduleRequest, opts ...grpc.CallOption) (*GetWorkflowScheduleResponse, error)
+	// CreateWorkflowSchedule performs one bounded authenticated workflow operation.
+	CreateWorkflowSchedule(ctx context.Context, in *CreateWorkflowScheduleRequest, opts ...grpc.CallOption) (*CreateWorkflowScheduleResponse, error)
+	// SetWorkflowScheduleEnabled performs one bounded authenticated workflow operation.
+	SetWorkflowScheduleEnabled(ctx context.Context, in *SetWorkflowScheduleEnabledRequest, opts ...grpc.CallOption) (*SetWorkflowScheduleEnabledResponse, error)
+	// GetWorkflowWorkState performs one bounded authenticated workflow operation.
+	GetWorkflowWorkState(ctx context.Context, in *GetWorkflowWorkStateRequest, opts ...grpc.CallOption) (*GetWorkflowWorkStateResponse, error)
 }
 
 type automationServiceClient struct {
@@ -447,6 +468,76 @@ func (c *automationServiceClient) WatchWorkflowRun(ctx context.Context, in *Watc
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AutomationService_WatchWorkflowRunClient = grpc.ServerStreamingClient[WatchWorkflowRunResponse]
 
+func (c *automationServiceClient) ValidateWorkflowDefinition(ctx context.Context, in *ValidateWorkflowDefinitionRequest, opts ...grpc.CallOption) (*ValidateWorkflowDefinitionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ValidateWorkflowDefinitionResponse)
+	err := c.cc.Invoke(ctx, AutomationService_ValidateWorkflowDefinition_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *automationServiceClient) RegisterWorkflowDefinition(ctx context.Context, in *RegisterWorkflowDefinitionRequest, opts ...grpc.CallOption) (*RegisterWorkflowDefinitionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RegisterWorkflowDefinitionResponse)
+	err := c.cc.Invoke(ctx, AutomationService_RegisterWorkflowDefinition_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *automationServiceClient) ListWorkflowSchedules(ctx context.Context, in *ListWorkflowSchedulesRequest, opts ...grpc.CallOption) (*ListWorkflowSchedulesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListWorkflowSchedulesResponse)
+	err := c.cc.Invoke(ctx, AutomationService_ListWorkflowSchedules_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *automationServiceClient) GetWorkflowSchedule(ctx context.Context, in *GetWorkflowScheduleRequest, opts ...grpc.CallOption) (*GetWorkflowScheduleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetWorkflowScheduleResponse)
+	err := c.cc.Invoke(ctx, AutomationService_GetWorkflowSchedule_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *automationServiceClient) CreateWorkflowSchedule(ctx context.Context, in *CreateWorkflowScheduleRequest, opts ...grpc.CallOption) (*CreateWorkflowScheduleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateWorkflowScheduleResponse)
+	err := c.cc.Invoke(ctx, AutomationService_CreateWorkflowSchedule_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *automationServiceClient) SetWorkflowScheduleEnabled(ctx context.Context, in *SetWorkflowScheduleEnabledRequest, opts ...grpc.CallOption) (*SetWorkflowScheduleEnabledResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetWorkflowScheduleEnabledResponse)
+	err := c.cc.Invoke(ctx, AutomationService_SetWorkflowScheduleEnabled_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *automationServiceClient) GetWorkflowWorkState(ctx context.Context, in *GetWorkflowWorkStateRequest, opts ...grpc.CallOption) (*GetWorkflowWorkStateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetWorkflowWorkStateResponse)
+	err := c.cc.Invoke(ctx, AutomationService_GetWorkflowWorkState_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutomationServiceServer is the server API for AutomationService service.
 // All implementations must embed UnimplementedAutomationServiceServer
 // for forward compatibility.
@@ -463,6 +554,20 @@ type AutomationServiceServer interface {
 	GetWorkflowRun(context.Context, *GetWorkflowRunRequest) (*GetWorkflowRunResponse, error)
 	// WatchWorkflowRun replays snapshots after an exclusive sequence and tails updates.
 	WatchWorkflowRun(*WatchWorkflowRunRequest, grpc.ServerStreamingServer[WatchWorkflowRunResponse]) error
+	// ValidateWorkflowDefinition performs one bounded authenticated workflow operation.
+	ValidateWorkflowDefinition(context.Context, *ValidateWorkflowDefinitionRequest) (*ValidateWorkflowDefinitionResponse, error)
+	// RegisterWorkflowDefinition performs one bounded authenticated workflow operation.
+	RegisterWorkflowDefinition(context.Context, *RegisterWorkflowDefinitionRequest) (*RegisterWorkflowDefinitionResponse, error)
+	// ListWorkflowSchedules performs one bounded authenticated workflow operation.
+	ListWorkflowSchedules(context.Context, *ListWorkflowSchedulesRequest) (*ListWorkflowSchedulesResponse, error)
+	// GetWorkflowSchedule performs one bounded authenticated workflow operation.
+	GetWorkflowSchedule(context.Context, *GetWorkflowScheduleRequest) (*GetWorkflowScheduleResponse, error)
+	// CreateWorkflowSchedule performs one bounded authenticated workflow operation.
+	CreateWorkflowSchedule(context.Context, *CreateWorkflowScheduleRequest) (*CreateWorkflowScheduleResponse, error)
+	// SetWorkflowScheduleEnabled performs one bounded authenticated workflow operation.
+	SetWorkflowScheduleEnabled(context.Context, *SetWorkflowScheduleEnabledRequest) (*SetWorkflowScheduleEnabledResponse, error)
+	// GetWorkflowWorkState performs one bounded authenticated workflow operation.
+	GetWorkflowWorkState(context.Context, *GetWorkflowWorkStateRequest) (*GetWorkflowWorkStateResponse, error)
 	mustEmbedUnimplementedAutomationServiceServer()
 }
 
@@ -487,6 +592,27 @@ func (UnimplementedAutomationServiceServer) GetWorkflowRun(context.Context, *Get
 }
 func (UnimplementedAutomationServiceServer) WatchWorkflowRun(*WatchWorkflowRunRequest, grpc.ServerStreamingServer[WatchWorkflowRunResponse]) error {
 	return status.Error(codes.Unimplemented, "method WatchWorkflowRun not implemented")
+}
+func (UnimplementedAutomationServiceServer) ValidateWorkflowDefinition(context.Context, *ValidateWorkflowDefinitionRequest) (*ValidateWorkflowDefinitionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ValidateWorkflowDefinition not implemented")
+}
+func (UnimplementedAutomationServiceServer) RegisterWorkflowDefinition(context.Context, *RegisterWorkflowDefinitionRequest) (*RegisterWorkflowDefinitionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterWorkflowDefinition not implemented")
+}
+func (UnimplementedAutomationServiceServer) ListWorkflowSchedules(context.Context, *ListWorkflowSchedulesRequest) (*ListWorkflowSchedulesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListWorkflowSchedules not implemented")
+}
+func (UnimplementedAutomationServiceServer) GetWorkflowSchedule(context.Context, *GetWorkflowScheduleRequest) (*GetWorkflowScheduleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetWorkflowSchedule not implemented")
+}
+func (UnimplementedAutomationServiceServer) CreateWorkflowSchedule(context.Context, *CreateWorkflowScheduleRequest) (*CreateWorkflowScheduleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateWorkflowSchedule not implemented")
+}
+func (UnimplementedAutomationServiceServer) SetWorkflowScheduleEnabled(context.Context, *SetWorkflowScheduleEnabledRequest) (*SetWorkflowScheduleEnabledResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetWorkflowScheduleEnabled not implemented")
+}
+func (UnimplementedAutomationServiceServer) GetWorkflowWorkState(context.Context, *GetWorkflowWorkStateRequest) (*GetWorkflowWorkStateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetWorkflowWorkState not implemented")
 }
 func (UnimplementedAutomationServiceServer) mustEmbedUnimplementedAutomationServiceServer() {}
 func (UnimplementedAutomationServiceServer) testEmbeddedByValue()                           {}
@@ -592,6 +718,132 @@ func _AutomationService_WatchWorkflowRun_Handler(srv interface{}, stream grpc.Se
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AutomationService_WatchWorkflowRunServer = grpc.ServerStreamingServer[WatchWorkflowRunResponse]
 
+func _AutomationService_ValidateWorkflowDefinition_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidateWorkflowDefinitionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutomationServiceServer).ValidateWorkflowDefinition(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AutomationService_ValidateWorkflowDefinition_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutomationServiceServer).ValidateWorkflowDefinition(ctx, req.(*ValidateWorkflowDefinitionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutomationService_RegisterWorkflowDefinition_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterWorkflowDefinitionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutomationServiceServer).RegisterWorkflowDefinition(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AutomationService_RegisterWorkflowDefinition_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutomationServiceServer).RegisterWorkflowDefinition(ctx, req.(*RegisterWorkflowDefinitionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutomationService_ListWorkflowSchedules_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListWorkflowSchedulesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutomationServiceServer).ListWorkflowSchedules(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AutomationService_ListWorkflowSchedules_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutomationServiceServer).ListWorkflowSchedules(ctx, req.(*ListWorkflowSchedulesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutomationService_GetWorkflowSchedule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetWorkflowScheduleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutomationServiceServer).GetWorkflowSchedule(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AutomationService_GetWorkflowSchedule_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutomationServiceServer).GetWorkflowSchedule(ctx, req.(*GetWorkflowScheduleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutomationService_CreateWorkflowSchedule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateWorkflowScheduleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutomationServiceServer).CreateWorkflowSchedule(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AutomationService_CreateWorkflowSchedule_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutomationServiceServer).CreateWorkflowSchedule(ctx, req.(*CreateWorkflowScheduleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutomationService_SetWorkflowScheduleEnabled_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetWorkflowScheduleEnabledRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutomationServiceServer).SetWorkflowScheduleEnabled(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AutomationService_SetWorkflowScheduleEnabled_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutomationServiceServer).SetWorkflowScheduleEnabled(ctx, req.(*SetWorkflowScheduleEnabledRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutomationService_GetWorkflowWorkState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetWorkflowWorkStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutomationServiceServer).GetWorkflowWorkState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AutomationService_GetWorkflowWorkState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutomationServiceServer).GetWorkflowWorkState(ctx, req.(*GetWorkflowWorkStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutomationService_ServiceDesc is the grpc.ServiceDesc for AutomationService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -614,6 +866,34 @@ var AutomationService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetWorkflowRun",
 			Handler:    _AutomationService_GetWorkflowRun_Handler,
+		},
+		{
+			MethodName: "ValidateWorkflowDefinition",
+			Handler:    _AutomationService_ValidateWorkflowDefinition_Handler,
+		},
+		{
+			MethodName: "RegisterWorkflowDefinition",
+			Handler:    _AutomationService_RegisterWorkflowDefinition_Handler,
+		},
+		{
+			MethodName: "ListWorkflowSchedules",
+			Handler:    _AutomationService_ListWorkflowSchedules_Handler,
+		},
+		{
+			MethodName: "GetWorkflowSchedule",
+			Handler:    _AutomationService_GetWorkflowSchedule_Handler,
+		},
+		{
+			MethodName: "CreateWorkflowSchedule",
+			Handler:    _AutomationService_CreateWorkflowSchedule_Handler,
+		},
+		{
+			MethodName: "SetWorkflowScheduleEnabled",
+			Handler:    _AutomationService_SetWorkflowScheduleEnabled_Handler,
+		},
+		{
+			MethodName: "GetWorkflowWorkState",
+			Handler:    _AutomationService_GetWorkflowWorkState_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

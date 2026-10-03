@@ -1,6 +1,115 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
+  CreateScheduleRequest,
+  RegisteredWorkflow,
+  WorkflowContext,
+  WorkflowPage,
+  WorkflowRun,
+  WorkflowSchedule,
+} from "./workflows";
+
+export function workflowContext(targetId: string): Promise<WorkflowContext> {
+  return call("workflow_context", { targetId });
+}
+export function listRegisteredWorkflows(
+  targetId: string,
+  selectionEpoch: number,
+  after: string | null,
+): Promise<WorkflowPage<RegisteredWorkflow>> {
+  return call("list_registered_workflows", { targetId, selectionEpoch, after });
+}
+export function getRegisteredWorkflow(
+  targetId: string,
+  selectionEpoch: number,
+  workflowId: string,
+): Promise<RegisteredWorkflow> {
+  return call("get_registered_workflow", {
+    targetId,
+    selectionEpoch,
+    workflowId,
+  });
+}
+export function validateWorkflowDefinition(
+  targetId: string,
+  selectionEpoch: number,
+  yaml: string,
+): Promise<RegisteredWorkflow> {
+  return call("validate_workflow_definition", {
+    targetId,
+    selectionEpoch,
+    yaml,
+  });
+}
+export function registerWorkflowDefinition(
+  targetId: string,
+  selectionEpoch: number,
+  yaml: string,
+  expectedHash: string,
+  idempotencyKey: string,
+): Promise<RegisteredWorkflow> {
+  return call("register_workflow_definition", {
+    targetId,
+    selectionEpoch,
+    yaml,
+    expectedHash,
+    idempotencyKey,
+  });
+}
+export function listWorkflowSchedules(
+  targetId: string,
+  selectionEpoch: number,
+  after: string | null,
+): Promise<WorkflowPage<WorkflowSchedule>> {
+  return call("list_workflow_schedules", { targetId, selectionEpoch, after });
+}
+export function getWorkflowSchedule(
+  targetId: string,
+  selectionEpoch: number,
+  scheduleId: string,
+): Promise<WorkflowSchedule> {
+  return call("get_workflow_schedule", {
+    targetId,
+    selectionEpoch,
+    scheduleId,
+  });
+}
+export function createWorkflowSchedule(
+  targetId: string,
+  selectionEpoch: number,
+  request: CreateScheduleRequest,
+): Promise<WorkflowSchedule> {
+  return call("create_workflow_schedule", {
+    targetId,
+    selectionEpoch,
+    request,
+  });
+}
+export function setWorkflowScheduleEnabled(
+  targetId: string,
+  selectionEpoch: number,
+  scheduleId: string,
+  enabled: boolean,
+  etag: string,
+): Promise<WorkflowSchedule> {
+  return call("set_workflow_schedule_enabled", {
+    targetId,
+    selectionEpoch,
+    request: { schedule_id: scheduleId, enabled, etag },
+  });
+}
+export function getScheduledWorkflowRun(
+  targetId: string,
+  selectionEpoch: number,
+  runId: string,
+): Promise<WorkflowRun> {
+  return call("get_scheduled_workflow_run", {
+    targetId,
+    selectionEpoch,
+    runId,
+  });
+}
+import type {
   OutlookCompanionStatus,
   PluginInventory,
   PluginRequest,

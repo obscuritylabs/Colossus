@@ -42,7 +42,9 @@ mod sidecar;
 mod sidecar_agent_runs;
 mod stream;
 mod types;
+mod workflows;
 pub use plugins::*;
+pub use workflows::*;
 
 #[cfg(feature = "embedded")]
 pub use backend::ContextBoundAgentRunClient;

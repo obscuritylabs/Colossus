@@ -29,7 +29,9 @@ async function removeFixture(path: string): Promise<void> {
 }
 
 /** A fresh home/workspace and real SDK/worker; never connects to a user's runtime. */
-export async function processRuntimeHost() {
+export async function processRuntimeHost(
+  mode: "process-acceptance" | "workflow-acceptance" = "process-acceptance",
+) {
   const root = await realpath(
     await mkdtemp(
       join(process.platform === "win32" ? homedir() : tmpdir(), "cp-"),
@@ -78,12 +80,7 @@ export async function processRuntimeHost() {
   const processes = new AcceptanceProcesses();
   const bridge = processes.start(
     process.env.COLOSSUS_APPROVAL_TEST_BRIDGE!,
-    [
-      sidecar,
-      root,
-      `http://127.0.0.1:${address.port}/v1`,
-      "process-acceptance",
-    ],
+    [sidecar, root, `http://127.0.0.1:${address.port}/v1`, mode],
     {
       cwd: workspace,
       env: { ...process.env, HOME: root, COLOSSUS_HOME: join(root, "home") },

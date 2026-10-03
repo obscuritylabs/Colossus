@@ -3949,6 +3949,7 @@ async fn agent_filesystem_tool_executes_only_through_the_gateway() {
         [5_u8; 32],
     ));
     let executor = GatewayToolExecutor {
+        workflows: None,
         process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
@@ -4019,6 +4020,7 @@ async fn agent_list_and_search_tools_return_only_workspace_relative_results() {
         [5_u8; 32],
     ));
     let executor = GatewayToolExecutor {
+        workflows: None,
         process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
@@ -4122,6 +4124,7 @@ async fn agent_mutations_require_approval_and_return_audited_diff_visibility() {
         [7_u8; 32],
     ));
     let denied_executor = GatewayToolExecutor {
+        workflows: None,
         process_sessions: None,
         gateway: denied_gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
@@ -4171,6 +4174,7 @@ async fn agent_mutations_require_approval_and_return_audited_diff_visibility() {
         [8_u8; 32],
     ));
     let allowed_executor = GatewayToolExecutor {
+        workflows: None,
         process_sessions: None,
         gateway: allowed_gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
@@ -4299,6 +4303,7 @@ async fn model_work_tools_keep_tasks_session_confined_and_decisions_workspace_wi
         [10_u8; 32],
     ));
     let executor = GatewayToolExecutor {
+        workflows: None,
         process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
@@ -4545,6 +4550,7 @@ async fn subprocess_content_denied_post_effect_never_reaches_the_tool_caller() {
         [54_u8; 32],
     ));
     let executor = GatewayToolExecutor {
+        workflows: None,
         process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
@@ -4747,6 +4753,7 @@ async fn model_memory_tools_are_durable_scoped_and_post_gated() {
         [12_u8; 32],
     ));
     let executor = GatewayToolExecutor {
+        workflows: None,
         process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
@@ -4964,6 +4971,7 @@ async fn model_plans_are_session_confined_and_approval_obligated() {
         [14_u8; 32],
     ));
     let executor = GatewayToolExecutor {
+        workflows: None,
         process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
@@ -5095,6 +5103,7 @@ async fn model_subagent_tools_inject_lineage_scope_results_and_deny_recursion() 
         policy = policy.with_action(action, DecisionOutcome::Allow);
     }
     let executor = GatewayToolExecutor {
+        workflows: None,
         process_sessions: None,
         gateway: Arc::new(colossus_policy::EffectGateway::new(
             Arc::clone(&journal),
@@ -5595,6 +5604,7 @@ async fn decision_created_by_one_model_turn_binds_the_next_turn_context() {
         [11_u8; 32],
     ));
     let executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
+        workflows: None,
         process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
@@ -5748,6 +5758,7 @@ async fn memory_created_by_one_model_turn_is_retrieved_for_the_next_turn() {
         [13_u8; 32],
     ));
     let executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
+        workflows: None,
         process_sessions: None,
         gateway: Arc::clone(&gateway),
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
@@ -5920,6 +5931,7 @@ async fn goal_update_is_bound_to_active_goal_context_and_stops_future_updates() 
         [15_u8; 32],
     ));
     let executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
+        workflows: None,
         process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
@@ -6145,6 +6157,7 @@ async fn model_patch_tools_preview_apply_and_reverse_exact_text_under_policy() {
         [46_u8; 32],
     ));
     let executor = GatewayToolExecutor {
+        workflows: None,
         process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
@@ -6585,6 +6598,7 @@ async fn repository_context_tools_are_permit_bound_bounded_and_workspace_confine
         [44_u8; 32],
     ));
     let executor = GatewayToolExecutor {
+        workflows: None,
         process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
@@ -6847,6 +6861,7 @@ async fn ambient_structured_filesystem_and_repository_tools_accept_external_cont
         [45_u8; 32],
     ));
     let executor = GatewayToolExecutor {
+        workflows: None,
         process_sessions: None,
         gateway,
         filesystem: Arc::new(
@@ -7116,6 +7131,7 @@ async fn danger_full_access_shell_needs_no_process_resource_configuration() {
     ));
     let recorded = Arc::new(Mutex::new(None));
     let executor = GatewayToolExecutor {
+        workflows: None,
         process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
@@ -7198,6 +7214,7 @@ async fn danger_full_access_withholds_host_resolution_until_acknowledgement() {
     ));
     let recorded = Arc::new(Mutex::new(None));
     let executor = GatewayToolExecutor {
+        workflows: None,
         process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
@@ -7283,6 +7300,7 @@ async fn git_and_shell_tools_keep_distinct_policy_and_nonzero_exit_semantics() {
     ));
     let actions = Arc::new(Mutex::new(Vec::new()));
     let executor = GatewayToolExecutor {
+        workflows: None,
         process_sessions: None,
         gateway,
         filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),

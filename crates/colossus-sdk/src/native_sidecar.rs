@@ -988,6 +988,9 @@ struct ManagedSidecarBackend {
     capabilities: ServerCapabilities,
 }
 
+#[path = "native_sidecar_workflows.rs"]
+mod workflows;
+
 impl fmt::Debug for ManagedSidecarBackend {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1015,6 +1018,17 @@ impl Backend for ManagedSidecarBackend {
         self.artifacts
             .as_ref()
             .map(|client| client.clone() as Arc<dyn ArtifactClient>)
+    }
+
+    fn workflows(&self) -> Option<Arc<dyn crate::WorkflowClient>> {
+        (self.capabilities.contains("workflows.read")
+            || self.capabilities.contains("schedules.read")
+            || self.capabilities.contains("workflow_runs.read"))
+        .then(|| {
+            Arc::new(workflows::ManagedWorkflowClient {
+                state: Arc::downgrade(&self.state),
+            }) as Arc<dyn crate::WorkflowClient>
+        })
     }
 
     async fn close(&self) -> SdkResult<()> {

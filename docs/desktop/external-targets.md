@@ -56,6 +56,17 @@ The CLI validates and retires the old worker credential before removing its keyr
 
 ## If connection fails
 
+For workflow schedules, the worker must advertise `workflows.read`, `schedules.read`,
+and the operations Desktop needs. Enroll `workflows:read`, `workflows:register`,
+`schedules:read`, `schedules:create`, `schedules:control`, and `workflow_runs:read` as
+appropriate. Registration also requires definition reads; schedule creation/control
+also require schedule reads. An optional `workflow_runs:start` grant permits explicit
+independent run allocation; it also requires workflow-run reads. These are separate
+from chat execution and approval-response scopes. Agent scheduling additionally needs
+exact `workflow.definition.list`, `workflow.definition.get`, and applicable
+`workflow.schedule.*` tool names; those ceilings do not grant the corresponding action.
+Unavailable resources remain disabled until the administrator updates the grant.
+
 - **Re-enrollment required:** enroll the daemon using the identity-bound service and `auto` account above, update the JSON from the new output, and import it again. Older Desktop keyring selectors are not used automatically.
 - **Certificate or instance mismatch:** confirm that the JSON came from this worker's current enrollment and certificate. Desktop will not replace a pin silently.
 - **Permission or tool unavailable:** review the enrolled scopes and exact tool ceilings on the worker, then reconnect. Desktop cannot widen them from the connection file.

@@ -103,6 +103,8 @@ const BrowserPane = lazy(() =>
 );
 
 interface WorkSurfaceProps {
+  onInspectSchedule?:
+    import("./ScheduleActivityCard").InspectSchedule | undefined;
   gitWorkspaceId?: string | null;
   gitAvailable?: boolean;
   browserScope?: string | null;
@@ -199,6 +201,7 @@ const STARTERS = [
 const IGNORE_SESSION_WORKSPACE_VIEW = () => undefined;
 
 export function WorkSurface({
+  onInspectSchedule,
   gitWorkspaceId = null,
   gitAvailable = false,
   title,
@@ -1368,6 +1371,7 @@ export function WorkSurface({
                         key={conversationView.run.runId}
                       >
                         <RunTimeline
+                          onInspectSchedule={onInspectSchedule}
                           view={conversationView}
                           activityComparison={activityComparisonEnabled}
                           planContinuationAvailable={canContinuePlanFromRun(

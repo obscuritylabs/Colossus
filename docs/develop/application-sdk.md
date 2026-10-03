@@ -552,6 +552,47 @@ unrelated journal growth.
 
 ## Durable run contract
 
+### Workflow resources
+
+The worker hosts authenticated `AutomationService` alongside chat services. The Rust
+SDK's optional `workflows()` client exposes canonical registered-definition metadata
+and schemas, validate/register of existing YAML, schedule list/detail/create/control,
+independent workflow-run start/state, and a bounded active-work fact for lifecycle
+supervision. Public workflow runs are separate from `AgentRunService` chat runs.
+Generated TypeScript, Python, and Go contracts expose the corresponding typed RPCs.
+
+Discovery advertises `workflows.read/register`, `schedules.read/create/control`, and
+`workflow_runs.read/start` only for hosted support and sufficient scopes. Enroll their
+distinct colon-separated API scopes. Registration requires definition read; schedule
+mutations require schedule read; independent allocation requires workflow-run read.
+Managed Local's primary grant contains these scopes and six exact workflow tools;
+its separate native approval broker receives no scheduling scopes or tools.
+
+Operator mutations are authenticated application controls. Agent requests instead
+cross the ordinary effect gateway, exact ceilings, policy, approval, one-use permits,
+and quarantine. The host derives bounded owner/session/run provenance from trusted
+live run evidence and checks public scopes again immediately before committing.
+Renderer and model arguments cannot choose provenance or a runtime. Native Desktop
+commands hold the selected-target lease and validate its generation through each
+request; mutation guards reject configuration drain. SDK mutations attempt once and
+report lost/malformed responses as outcome-unknown rather than automatically retrying.
+
+Schedules pin a reviewed canonical definition hash, validated immutable inputs, fixed
+cadence and UTC start. Creation and its caller-scoped receipt share one transaction;
+equivalent UTC offsets normalize before approval/retry hashing. Matching retries return
+the original allocation; mismatches conflict. Enabled-state controls check the last
+canonical schedule record hash under the same writer lock as ticks. Legacy records
+without ownership expose only metadata and cannot be controlled or reveal inputs/runs.
+Future queued runs preserve their origin and undergo current policy and trust checks.
+
+Workflow pages are limited to 100 items and omit input schemas/snapshots until detail.
+Workflow requests are bounded to 256 KiB, responses to 2 MiB, and four concurrent domain
+operations. Workflow watches share the 64-stream server ceiling with chat watches,
+leaving existing unary headroom. Their exclusive sequence cursor yields coalesced
+canonical snapshots, ends on terminal state/disconnect, and is bounded to 15 minutes;
+reconnect or poll explicitly. Runtime active-work inspection fails closed when its
+bounded catalog cannot prove inactivity. Future schedules alone do not pin workers.
+
 `CreateRun` durably claims an idempotency key before execution. A caller can then fetch
 the run or call `WatchRun` with an exclusive `after_sequence` cursor. Watch delivery is
 at least once; SDKs deduplicate exact `(run_id, sequence)` replays and fail on gaps.
