@@ -2,7 +2,6 @@ use super::*;
 
 const OBSCURITY_LABS_RED: Color = Color::Rgb(213, 16, 48);
 const OBSCURITY_LABS_SEGMENT: &str = "OL //  ";
-const OBSCURITY_LABS_FOOTER_SEGMENT: &str = " Obscurity Labs // COLOSSUS ";
 const WIDE_WELCOME_MIN_WIDTH: usize = 96;
 const WIDE_WELCOME_MIN_HEIGHT: usize = 22;
 
@@ -29,14 +28,46 @@ pub(super) fn render(
         return;
     }
 
-    prepare_image_previews(state, area);
+    match state.overlay.as_ref() {
+        Some(Overlay::SessionBrowser(browser)) => {
+            render_session_browser(frame, state, browser, area);
+            return;
+        }
+        Some(Overlay::ThemePicker(picker)) => {
+            render_theme_picker(frame, state, picker, area);
+            return;
+        }
+        Some(Overlay::HistorySearch(search)) => {
+            render_history_search(frame, state, search, area);
+            return;
+        }
+        Some(Overlay::SettingsPicker(picker)) => {
+            render_settings_picker(frame, state, picker, area);
+            return;
+        }
+        _ => {}
+    }
+
+    let header_height = if screen_mode == ScreenMode::Alternate && area.height >= 18 {
+        HEADER_HEIGHT
+    } else {
+        0
+    };
+    let chrome =
+        Layout::vertical([Constraint::Length(header_height), Constraint::Min(0)]).split(area);
+    if header_height > 0 {
+        render_header(frame, state, chrome[0]);
+    }
+    let content_area = chrome[1];
+
+    prepare_image_previews(state, content_area);
 
     let composer_height = composer_height(state, area.width);
     let activity_height = u16::from(state.operation.is_some());
     let approval_height =
-        approval_dock_height(state, area.height, composer_height, activity_height);
+        approval_dock_height(state, content_area.height, composer_height, activity_height);
     let plan_execution_height =
-        plan_execution_dock_height(state, area.height, composer_height, activity_height);
+        plan_execution_dock_height(state, content_area.height, composer_height, activity_height);
     let decision_height = approval_height.max(plan_execution_height);
     let completion_height = if state.docked_decision_active() {
         0
@@ -44,7 +75,7 @@ pub(super) fn render(
         completion_menu_height(
             state,
             area.width,
-            area.height,
+            content_area.height,
             composer_height,
             activity_height,
         )
@@ -61,9 +92,9 @@ pub(super) fn render(
             Constraint::Length(completion_height),
             Constraint::Length(decision_height),
             Constraint::Length(composer_height),
-            Constraint::Length(1),
+            Constraint::Length(FOOTER_HEIGHT),
         ])
-        .split(area);
+        .split(content_area);
     state.transcript_height = usize::from(
         rows[0]
             .height
@@ -79,6 +110,9 @@ pub(super) fn render(
         transcript_start,
         usize::from(area.height),
     );
+    if screen_mode == ScreenMode::Alternate {
+        render_welcome_mark(frame, state, rows[0]);
+    }
     if activity_height > 0 {
         render_activity(frame, state, rows[1]);
     }
@@ -93,7 +127,7 @@ pub(super) fn render(
         }
     }
     render_composer(frame, state, rows[4]);
-    render_footer(frame, state, rows[5]);
+    render_footer(frame, state, rows[5], header_height == 0);
     if state.overlay.is_some() && decision_height == 0 {
         render_overlay(frame, state, area);
     }
@@ -236,7 +270,7 @@ pub(super) fn desired_inline_viewport_height(
     let chrome_height = activity_height
         .saturating_add(completion_height)
         .saturating_add(composer_height)
-        .saturating_add(1);
+        .saturating_add(FOOTER_HEIGHT);
     let mut transcript_line_count = transcript_lines_range(
         state,
         usize::from(width).max(20),
@@ -315,10 +349,6 @@ pub(super) fn welcome_lines(state: &TuiState, width: usize, height: usize) -> Ve
                 Span::styled(OBSCURITY_LABS_SEGMENT, brand),
                 Span::styled("COLOSSUS", accent),
             ]),
-            Line::from(Span::styled(
-                truncate_width("─".repeat(width).as_str(), width),
-                ratatui_style(palette.assistant_style()),
-            )),
             Line::from(Span::styled("What do you want to work on?", primary)),
             Line::from(Span::styled(truncate_width(&workspace, width), secondary)),
             Line::from(vec![
@@ -488,7 +518,11 @@ fn welcome_status_row(
     Line::from(spans)
 }
 
-fn welcome_workspace(workspace: &str) -> String {
+pub(super) fn welcome_workspace(workspace: &str) -> String {
+    format!("{} · new session", workspace_display(workspace))
+}
+
+pub(super) fn workspace_display(workspace: &str) -> String {
     let user_home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok();
@@ -496,7 +530,7 @@ fn welcome_workspace(workspace: &str) -> String {
         .as_deref()
         .and_then(|user_home| workspace.strip_prefix(user_home))
         .map_or_else(|| workspace.to_owned(), |relative| format!("~{relative}"));
-    format!("{} · new session", sanitize_approval_field(&display))
+    sanitize_approval_field(&display)
 }
 
 pub(super) fn transcript_lines<'a>(state: &'a TuiState, width: usize) -> Vec<Line<'a>> {
@@ -895,256 +929,6 @@ pub(super) fn render_completion_menu(frame: &mut Frame<'_>, state: &TuiState, ar
     );
 }
 
-pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area: Rect) {
-    let palette = TerminalPalette::for_preferences(&state.preferences);
-    let ghost = if state.welcome_visible && state.composer.draft.is_empty() {
-        "Implement {feature}"
-    } else {
-        state.ghost_text().unwrap_or("")
-    };
-    let layout = composer_layout(
-        &state.composer.draft,
-        ghost,
-        state.composer.cursor,
-        composer_inner_width(area.width),
-    );
-    let mut text = pending_thumbnail_lines(state);
-    let preview_rows = text.len();
-    let visible_rows = usize::from(area.height.saturating_sub(2)).saturating_sub(preview_rows);
-    let first_visible_row = layout
-        .cursor_row
-        .saturating_sub(visible_rows.saturating_sub(1));
-    let mut ghost_style = palette.meta_style();
-    ghost_style.dim = true;
-    text.extend(
-        layout
-            .lines
-            .iter()
-            .skip(first_visible_row)
-            .take(visible_rows)
-            .map(|line| {
-                Line::from(vec![
-                    Span::raw(line.draft.clone()),
-                    Span::styled(line.ghost.clone(), ratatui_style(ghost_style)),
-                ])
-            }),
-    );
-    let action = if state.preferences.multiline {
-        "Enter newline · Ctrl+D sends"
-    } else {
-        "Enter sends · Shift+Enter newline"
-    };
-    let title = if state.plan_review_decision_active() {
-        " Message · paused for plan review · draft preserved ".into()
-    } else if state.plan_execution_decision_active() {
-        " Message · paused for plan execution · draft preserved ".into()
-    } else if let Some(kind) = state.docked_decision_kind() {
-        let decision = match kind {
-            InteractivePromptKind::Approval => "approval",
-            InteractivePromptKind::SandboxBoundaryAcknowledgement => "boundary acknowledgement",
-            InteractivePromptKind::UserInput | InteractivePromptKind::Choice => "decision",
-        };
-        format!(" Message · paused for {decision} · draft preserved ")
-    } else {
-        match state.mode {
-            InteractiveMode::Execute if state.welcome_visible => {
-                format!(" Execute · {action} ")
-            }
-            InteractiveMode::Execute => format!(" Message · {action} "),
-            InteractiveMode::Research => format!(" Research · sourced question · {action} "),
-            InteractiveMode::Plan if state.selected_plan.is_none() => {
-                format!(" Plan · new draft · {action} ")
-            }
-            InteractiveMode::Plan => {
-                let plan = state
-                    .selected_plan
-                    .as_ref()
-                    .expect("selected plan checked above");
-                if plan.status == PlanStatus::Approved {
-                    format!(
-                        " Plan {} · approved · use /plan execute ",
-                        short_plan_id(&plan.id)
-                    )
-                } else {
-                    format!(
-                        " Plan {} · draft r{} · message refines · {action} · /plan approve ",
-                        short_plan_id(&plan.id),
-                        plan.revision
-                    )
-                }
-            }
-        }
-    };
-    let mut composer_block = Block::default().borders(Borders::ALL).title(title);
-    if !state.sticky_skills.is_empty() {
-        composer_block = composer_block.title_bottom(format!(
-            " Skills: {} · /plugin remove ID ",
-            state.sticky_skills.join(", ")
-        ));
-    }
-    frame.render_widget(Paragraph::new(text).block(composer_block), area);
-    if state.preview_cache.native_graphics() {
-        let pending = state
-            .pending_images
-            .iter()
-            .take(3)
-            .map(|image| image.sha256.clone())
-            .collect::<Vec<_>>();
-        for (index, digest) in pending.into_iter().enumerate() {
-            let thumbnail_area = Rect::new(
-                area.x
-                    .saturating_add(1)
-                    .saturating_add(u16::try_from(index).unwrap_or(u16::MAX).saturating_mul(19)),
-                area.y.saturating_add(1),
-                18,
-                5,
-            );
-            if thumbnail_area.right() <= area.right().saturating_sub(1)
-                && thumbnail_area.bottom() <= area.bottom().saturating_sub(1)
-            {
-                state
-                    .preview_cache
-                    .render_native(frame, &digest, Size::new(18, 5), thumbnail_area);
-            }
-        }
-    }
-    let cursor_row = layout.cursor_row.saturating_sub(first_visible_row);
-    let x = area
-        .x
-        .saturating_add(1)
-        .saturating_add(u16::try_from(layout.cursor_column).unwrap_or(u16::MAX));
-    let y = area
-        .y
-        .saturating_add(1)
-        .saturating_add(u16::try_from(preview_rows).unwrap_or(u16::MAX))
-        .saturating_add(u16::try_from(cursor_row).unwrap_or(u16::MAX));
-    if state.overlay.is_none()
-        && x < area.right().saturating_sub(1)
-        && y < area.bottom().saturating_sub(1)
-    {
-        frame.set_cursor_position((x, y));
-    }
-}
-
-fn pending_thumbnail_lines(state: &TuiState) -> Vec<Line<'static>> {
-    if state.pending_images.is_empty() {
-        return Vec::new();
-    }
-    let visible = state.pending_images.iter().take(3).collect::<Vec<_>>();
-    let mut lines = Vec::with_capacity(6);
-    for row in 0..5 {
-        let mut spans = Vec::new();
-        for (index, image) in visible.iter().enumerate() {
-            if index > 0 {
-                spans.push(Span::raw(" "));
-            }
-            if let Some(preview) = state.preview_cache.lines(&image.sha256, Size::new(18, 5)) {
-                if let Some(line) = preview.get(row) {
-                    spans.extend(line.spans.clone());
-                }
-            } else {
-                spans.push(Span::raw(if row == 2 {
-                    "   loading image  "
-                } else {
-                    "                  "
-                }));
-            }
-        }
-        lines.push(Line::from(spans));
-    }
-    let mut labels = visible
-        .iter()
-        .map(|image| truncate_width(&image.file_name, 18))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let more = state.pending_images.len().saturating_sub(3);
-    if more > 0 {
-        labels.push_str(&format!("  +{more} more"));
-    }
-    lines.push(Line::from(labels));
-    lines
-}
-
-pub(super) fn render_footer(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
-    let width = usize::from(area.width);
-    let short_session = state.session_id.chars().take(8).collect::<String>();
-    if state.welcome_visible {
-        render_branded_footer(frame, state, area, &welcome_workspace(&state.workspace));
-        return;
-    }
-
-    let mut segments = vec![short_session, format!("mode={}", state.mode.as_str())];
-    if width >= 72
-        && let Some(plan) = state.selected_plan.as_ref()
-    {
-        segments.push(format!(
-            "plan={}:r{}:{}",
-            short_plan_id(&plan.id),
-            plan.revision,
-            plan_status_label(plan.status)
-        ));
-    }
-    if width >= 60 {
-        segments.push(format!("{}:{}", state.footer.role, state.footer.route));
-    }
-    if width >= 90
-        && let Some((used, maximum)) = state.footer.context
-    {
-        segments.push(format!("ctx={used}/{maximum}"));
-    }
-    if width >= 110 {
-        segments.push(format!("msgs={}", state.footer.message_count));
-        segments.push(format!("approval={}", state.footer.approval_mode));
-    }
-    segments.push(format!("status={}", state.footer.status));
-    render_branded_footer(frame, state, area, &segments.join(" · "));
-}
-
-fn render_branded_footer(frame: &mut Frame<'_>, state: &TuiState, area: Rect, footer: &str) {
-    let width = usize::from(area.width);
-    let palette = TerminalPalette::for_preferences(&state.preferences);
-    let surface = filled_approval_control_style(palette.meta_style(), false);
-    let brand_width = UnicodeWidthStr::width(OBSCURITY_LABS_FOOTER_SEGMENT);
-    if state.security_posture.is_hardened() {
-        let footer = truncate_width(footer, width.saturating_sub(brand_width));
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    OBSCURITY_LABS_FOOTER_SEGMENT,
-                    obscurity_labs_footer_style(&state.preferences),
-                ),
-                Span::styled(footer, ratatui_style(palette.meta_style())),
-            ]))
-            .style(surface),
-            area,
-        );
-    } else {
-        let badge = format!(" ⚠ Security: {} ", state.security_posture.finding_count());
-        let badge_width = UnicodeWidthStr::width(badge.as_str());
-        let brand = if brand_width + badge_width > width {
-            " Obscurity Labs "
-        } else {
-            OBSCURITY_LABS_FOOTER_SEGMENT
-        };
-        let remaining = width
-            .saturating_sub(badge_width)
-            .saturating_sub(UnicodeWidthStr::width(brand));
-        let footer = truncate_width(footer, remaining);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(brand, obscurity_labs_footer_style(&state.preferences)),
-                Span::styled(
-                    badge,
-                    filled_approval_control_style(palette.warning_style(), true),
-                ),
-                Span::styled(footer, ratatui_style(palette.meta_style())),
-            ]))
-            .style(surface),
-            area,
-        );
-    }
-}
-
 fn obscurity_labs_brand_style(preferences: &TerminalPreferences) -> Style {
     let style = Style::default().add_modifier(Modifier::BOLD);
     if preferences.theme == colossus_contracts::ThemeName::Mono {
@@ -1154,26 +938,13 @@ fn obscurity_labs_brand_style(preferences: &TerminalPreferences) -> Style {
     }
 }
 
-fn obscurity_labs_footer_style(preferences: &TerminalPreferences) -> Style {
-    ratatui_style(TerminalPalette::for_preferences(preferences).meta_style())
-        .add_modifier(Modifier::BOLD)
-}
-
-pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
+fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
     if state.docked_decision_kind().is_some() {
         render_approval_dock(frame, state, area);
         return;
     }
     if state.plan_decision_active() {
         render_plan_execution_dock(frame, state, area);
-        return;
-    }
-    if let Some(Overlay::SessionBrowser(browser)) = state.overlay.as_ref() {
-        render_session_browser(frame, state, browser, area);
-        return;
-    }
-    if let Some(Overlay::ThemePicker(picker)) = state.overlay.as_ref() {
-        render_theme_picker(frame, state, picker, area);
         return;
     }
     let overlay_area = match state.overlay.as_ref() {
@@ -1215,22 +986,6 @@ pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect
             );
             (title, lines)
         }
-        Some(Overlay::HistorySearch { query }) => (
-            "History search".into(),
-            vec![
-                Line::from(format!("> {query}")),
-                Line::default(),
-                Line::from(
-                    state
-                        .history
-                        .iter()
-                        .rev()
-                        .find(|entry| entry.contains(query.as_str()))
-                        .map_or("No match", String::as_str)
-                        .to_owned(),
-                ),
-            ],
-        ),
         Some(Overlay::QueuePaused) => (
             "Queued turns paused".into(),
             vec![
@@ -1243,6 +998,8 @@ pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect
         Some(
             Overlay::SessionBrowser(_)
             | Overlay::ThemePicker(_)
+            | Overlay::HistorySearch(_)
+            | Overlay::SettingsPicker(_)
             | Overlay::PlanReviewChoice { .. }
             | Overlay::PlanExecutionChoice { .. },
         ) => return,
@@ -1277,7 +1034,7 @@ pub(super) fn approval_dock_height(
         .saturating_sub(MINIMUM_APPROVAL_TRANSCRIPT_ROWS)
         .saturating_sub(activity_height)
         .saturating_sub(composer_height)
-        .saturating_sub(1);
+        .saturating_sub(FOOTER_HEIGHT);
     if available < MIN_APPROVAL_DOCK_ROWS {
         return 0;
     }

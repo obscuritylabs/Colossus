@@ -1,6 +1,7 @@
 use super::*;
 
 mod command_approval;
+mod layout;
 
 #[test]
 fn lifecycle_observer_tracks_busy_decisions_and_session_changes() {
@@ -265,19 +266,19 @@ fn launch_rail_labels_the_sandbox_profile_field_as_the_sandbox_profile() {
 }
 
 #[test]
-fn footer_uses_a_terminal_native_obscurity_labs_segment() {
-    let backend = TestBackend::new(80, 1);
+fn footer_uses_readable_highlights_for_brand_and_status() {
+    let backend = TestBackend::new(80, FOOTER_HEIGHT);
     let mut terminal = Terminal::new(backend).expect("test terminal");
     let state = TuiState::from_snapshot(snapshot());
     terminal
-        .draw(|frame| render_footer(frame, &state, frame.area()))
+        .draw(|frame| render_footer(frame, &state, frame.area(), true))
         .expect("draw branded footer");
     let rendered = (0..80)
         .filter_map(|x| terminal.backend().buffer().cell((x, 0)))
         .map(|cell| cell.symbol())
         .collect::<String>();
     assert!(
-        rendered.starts_with(" Obscurity Labs // COLOSSUS 019f-tes"),
+        rendered.contains("COLOSSUS") && rendered.contains("ready · approval ask"),
         "{rendered}"
     );
     let brand = terminal
@@ -285,26 +286,22 @@ fn footer_uses_a_terminal_native_obscurity_labs_segment() {
         .buffer()
         .cell((1, 0))
         .expect("brand cell");
-    assert_eq!(
-        brand.fg,
-        ratatui_style(TerminalPalette::for_preferences(&state.preferences).meta_style())
-            .fg
-            .unwrap_or(Color::Reset)
-    );
+    assert_eq!(brand.fg, Color::Black);
+    assert_ne!(brand.bg, Color::Reset);
     assert!(brand.modifier.contains(Modifier::BOLD));
 
     let mut mono_source = snapshot();
     mono_source.preferences.theme = colossus_contracts::ThemeName::Mono;
     let mono = TuiState::from_snapshot(mono_source);
     terminal
-        .draw(|frame| render_footer(frame, &mono, frame.area()))
+        .draw(|frame| render_footer(frame, &mono, frame.area(), true))
         .expect("draw monochrome branded footer");
     let brand = terminal
         .backend()
         .buffer()
         .cell((1, 0))
         .expect("monochrome brand cell");
-    assert_eq!(brand.bg, Color::Reset);
+    assert_eq!(brand.bg, Color::Gray);
     assert!(brand.modifier.contains(Modifier::BOLD));
 }
 
@@ -482,7 +479,7 @@ fn danger_full_access_posture_adds_a_non_durable_card_and_persistent_footer_badg
     let backend = TestBackend::new(80, 1);
     let mut terminal = Terminal::new(backend).expect("test terminal");
     terminal
-        .draw(|frame| render_footer(frame, &state, frame.area()))
+        .draw(|frame| render_footer(frame, &state, frame.area(), true))
         .expect("draw footer");
     let footer = (0..80)
         .filter_map(|x| terminal.backend().buffer().cell((x, 0)))
@@ -490,24 +487,26 @@ fn danger_full_access_posture_adds_a_non_durable_card_and_persistent_footer_badg
         .collect::<String>();
     assert!(footer.contains("Security: 2"));
     assert!(
-        footer.starts_with(" Obscurity Labs // COLOSSUS  ⚠ Security: 2"),
-        "the branded footer must retain the persistent security status: {footer}"
+        footer.contains("COLOSSUS") && footer.contains("ready · approval ask"),
+        "status and permissions must remain readable beside the warning count: {footer}"
     );
-    assert_ne!(
+    assert_eq!(
         terminal
             .backend()
             .buffer()
             .cell((79, 0))
             .expect("footer surface cell")
             .bg,
-        Color::Reset,
-        "the footer surface should fill the available status row"
+        chrome_band_style(&TerminalPalette::for_preferences(&state.preferences))
+            .bg
+            .expect("status surface"),
+        "the status band must have a quiet neutral surface"
     );
     assert_ne!(
         terminal
             .backend()
             .buffer()
-            .cell((31, 0))
+            .cell((65, 0))
             .expect("security badge cell")
             .bg,
         terminal
@@ -516,18 +515,18 @@ fn danger_full_access_posture_adds_a_non_durable_card_and_persistent_footer_badg
             .cell((79, 0))
             .expect("footer surface cell")
             .bg,
-        "the warning badge should read as a distinct shell-style segment"
+        "the warning badge must stand out from the status surface"
     );
     for width in [40, 42, 43] {
         let mut terminal = Terminal::new(TestBackend::new(width, 1)).expect("narrow terminal");
         terminal
-            .draw(|frame| render_footer(frame, &state, frame.area()))
+            .draw(|frame| render_footer(frame, &state, frame.area(), true))
             .expect("draw narrow footer");
         let footer = (0..width)
             .filter_map(|x| terminal.backend().buffer().cell((x, 0)))
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(footer.contains("Obscurity Labs"), "{width}: {footer}");
+        assert!(footer.contains("ready · approval ask"), "{width}: {footer}");
         assert!(
             footer.contains("⚠ Security: 2"),
             "the warning count must remain visible at {width} columns: {footer}"
@@ -1725,8 +1724,8 @@ fn plan_mode_and_selection_are_visible_in_composer_and_footer() {
         .expect("draw plan mode");
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("Plan plan-019"), "{rendered}");
-    assert!(rendered.contains("mode=plan"), "{rendered}");
-    assert!(rendered.contains("plan=plan-019:r7:draft"), "{rendered}");
+    assert!(rendered.contains(" plan "), "{rendered}");
+    assert!(rendered.contains("plan plan-019 r7 draft"), "{rendered}");
 }
 
 #[test]
@@ -1739,11 +1738,8 @@ fn research_mode_is_visible_in_composer_and_footer() {
         .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
         .expect("draw research mode");
     let rendered = terminal.backend().to_string();
-    assert!(
-        rendered.contains("Research · sourced question"),
-        "{rendered}"
-    );
-    assert!(rendered.contains("mode=research"), "{rendered}");
+    assert!(rendered.contains("Research · Enter sends"), "{rendered}");
+    assert!(rendered.contains(" research "), "{rendered}");
 }
 
 #[test]
@@ -1898,9 +1894,9 @@ fn multiline_history_search_and_first_line_navigation_preserve_the_draft() {
     assert_eq!(state.draft(), "first\n界");
     assert_eq!(state.cursor(), "first".len());
 
-    state.overlay = Some(Overlay::HistorySearch {
-        query: "older".into(),
-    });
+    state.overlay = Some(Overlay::HistorySearch(HistorySearchState::new(
+        &state.history,
+    )));
     handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(state.draft(), "first\n界");
 }
@@ -2121,8 +2117,8 @@ fn command_completion_is_left_aligned_compact_and_described() {
         "/tui prefs".into(),
         "/tui save".into(),
         "/tui reset".into(),
-        "/provider diagnostics on".into(),
-        "/provider diagnostics off".into(),
+        "/provider diagnostics".into(),
+        "/permissions".into(),
     ];
     state.composer.insert("/");
 
@@ -2177,11 +2173,11 @@ fn roomy_command_completion_doubles_visible_rows_and_expands_width() {
         "/permissions".into(),
         "/theme".into(),
         "/theme list".into(),
-        "/stream on".into(),
-        "/events compact".into(),
-        "/reasoning on".into(),
-        "/transcript comfortable".into(),
-        "/multiline on".into(),
+        "/stream".into(),
+        "/events".into(),
+        "/reasoning".into(),
+        "/transcript".into(),
+        "/multiline".into(),
         "/trace".into(),
         "/resume".into(),
     ];
@@ -2213,7 +2209,7 @@ fn roomy_command_completion_doubles_visible_rows_and_expands_width() {
         "{rendered}"
     );
     assert_eq!(controls_row - title_row + 1, ROOMY_COMPLETION_MENU_ROWS + 2);
-    assert!(rendered.contains("/multiline on"), "{rendered}");
+    assert!(rendered.contains("/multiline"), "{rendered}");
     assert!(!rendered.contains("/trace"), "{rendered}");
 }
 
@@ -2700,7 +2696,7 @@ fn session_switch_replaces_transcript_and_resets_live_scroll_state() {
 
 #[test]
 fn native_history_commits_every_finalized_entry_and_keeps_only_streaming_output_live() {
-    assert_eq!(ScreenMode::default(), ScreenMode::Inline);
+    assert_eq!(ScreenMode::default(), ScreenMode::Alternate);
     let mut state = TuiState::from_snapshot(snapshot());
     state.transcript.clear();
     state.transcript_sources.clear();
@@ -3235,7 +3231,8 @@ fn approval_is_bottom_docked_with_preserved_composer_and_inspectable_sections() 
     assert!(rendered.contains("Tab sections"));
     assert!(!rendered.contains("S/R/P inspect"));
     assert!(!rendered.contains("request-line-00"));
-    assert!(rendered.contains("Message · paused for approval · draft preserved"));
+    assert!(rendered.contains("Message · paused for approval"));
+    assert!(rendered.contains("Draft preserved"));
     assert!(rendered.contains("draft stays visible"));
     let approval_row = rendered
         .lines()
@@ -3479,7 +3476,7 @@ fn theme_picker_previews_reversibly_and_applies_only_after_enter() {
 #[test]
 fn theme_picker_is_master_detail_without_false_saved_state() {
     let mut state = TuiState::from_snapshot(snapshot());
-    state.composer.insert("draft remains visible");
+    state.composer.insert("draft stays preserved");
     let (response, _received) = oneshot::channel();
     handle_host_event(&mut state, HostEvent::ThemePicker(theme_picker(response)));
     handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -3494,7 +3491,13 @@ fn theme_picker_is_master_detail_without_false_saved_state() {
     assert!(rendered.contains("hacker preview"), "{rendered}");
     assert!(rendered.contains("preview only until Enter"), "{rendered}");
     assert!(rendered.contains("Cancel and restore"), "{rendered}");
-    assert!(rendered.contains("draft remains visible"), "{rendered}");
+    assert!(!rendered.contains("draft stays preserved"), "{rendered}");
+    assert_eq!(state.draft(), "draft stays preserved");
+    assert!(rendered.contains("View"), "{rendered}");
+    assert!(
+        !rendered.contains("Obscurity Labs // COLOSSUS"),
+        "{rendered}"
+    );
     assert!(!rendered.contains("Theme applied"), "{rendered}");
     assert!(!rendered.contains("Saved"), "{rendered}");
 
@@ -3505,7 +3508,7 @@ fn theme_picker_is_master_detail_without_false_saved_state() {
         .expect("draw compact theme picker");
     let compact = terminal.backend().to_string();
     assert!(compact.contains("Choose theme"), "{compact}");
-    assert!(compact.contains("Enter apply"), "{compact}");
+    assert!(compact.contains("Enter Apply"), "{compact}");
 }
 
 #[test]
@@ -3711,7 +3714,7 @@ fn session_browser_matches_the_master_detail_reference_and_remains_responsive() 
         let mut state = TuiState::from_snapshot(snapshot());
         state.operation = Some(OperationKind::Command);
         state.activity = Some("/resume".into());
-        state.composer.insert("draft stays visible");
+        state.composer.insert("draft stays preserved");
         let (response, _received) = oneshot::channel();
         handle_host_event(
             &mut state,
@@ -3730,7 +3733,7 @@ fn session_browser_matches_the_master_detail_reference_and_remains_responsive() 
             "{width}x{height}: {rendered}"
         );
         assert!(
-            rendered.contains("draft stays visible"),
+            !rendered.contains("draft stays preserved"),
             "{width}x{height}: {rendered}"
         );
         if width >= 72 {
@@ -3741,18 +3744,18 @@ fn session_browser_matches_the_master_detail_reference_and_remains_responsive() 
             let lines = rendered.lines().collect::<Vec<_>>();
             let current_row = lines
                 .iter()
-                .position(|line| line.contains("Dangerous full access"))
+                .position(|line| line.contains("CURRENT"))
                 .expect("current session row");
             let selected_row = lines
                 .iter()
-                .position(|line| line.contains("│ › Rust PR compiler"))
+                .position(|line| line.contains("› Rust PR compiler"))
                 .expect("selected session row");
             let shell_row = lines
                 .iter()
                 .position(|line| line.contains("Run PowerShell"))
                 .expect("following session row");
-            assert_eq!(selected_row, current_row + 2, "{rendered}");
-            assert_eq!(shell_row, selected_row + 2, "{rendered}");
+            assert_eq!(selected_row, current_row + 1, "{rendered}");
+            assert_eq!(shell_row, selected_row + 1, "{rendered}");
         }
     }
 }
@@ -3820,9 +3823,9 @@ fn mouse_wheel_scrolls_transcript_by_lines_and_returns_to_live_output() {
     assert!(requested_older);
 
     let offset = state.scroll_from_bottom;
-    state.overlay = Some(Overlay::HistorySearch {
-        query: String::new(),
-    });
+    state.overlay = Some(Overlay::HistorySearch(HistorySearchState::new(
+        &state.history,
+    )));
     assert!(!handle_mouse(&mut state, mouse(MouseEventKind::ScrollUp)));
     assert_eq!(state.scroll_from_bottom, offset);
 }
@@ -3855,7 +3858,7 @@ fn mouse_scrolling_keeps_the_composer_and_status_footer_sticky() {
         .expect("draw scrolled TUI");
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("sticky draft"), "{rendered}");
-    assert!(rendered.contains("primary:echo@echo"), "{rendered}");
+    assert!(rendered.contains("ready · approval ask"), "{rendered}");
     assert!(state.scroll_from_bottom > 0);
 }
 

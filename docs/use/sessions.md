@@ -49,19 +49,22 @@ can also reopen the most recently updated session directly:
 colossus tui --resume
 ```
 
-The `/resume` browser shows searchable sessions on the left and a preview of the
-selected conversation on the right. It marks the session you are in as `CURRENT`.
+The `/resume` browser fills the screen with searchable sessions on the left and a
+view of the selected conversation on the right. It marks the session you are in as `CURRENT`.
 This abbreviated example shows the labels and controls; your titles, messages, and
 timestamps will differ:
 
 ```text
-Resume session          / Search sessions        2 sessions
-Session             Updated  Msgs │ Recent conversation
-› Release review     2m ago     8 │ Release review
+Resume session · 2 sessions       │ View
+                                 │
+/ Search sessions                │ Release review
+                                 │ ID: 0195b640 · 8 messages
+  Session           Updated Msgs │ Updated: 2 min ago
+› Release review    2m ago      8 │ Recent conversation
   CURRENT Repo task 10m ago     4 │ USER       Review the release notes
-                             │ ASSISTANT  Here is the summary...
+                                 │ ASSISTANT  Here is the summary...
 
-↑/↓ Select   / Search   PgUp/PgDn Preview   Enter Resume   Esc Cancel
+↑/↓ Select   / Search   PgUp/Dn View   Enter Resume   Esc Cancel
 ```
 
 Press `/` to search, Up/Down to choose, PageUp/PageDown to scroll the preview, and

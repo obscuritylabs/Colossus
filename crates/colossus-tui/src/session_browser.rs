@@ -1,7 +1,7 @@
 use super::*;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-const SESSION_LIST_ENTRY_HEIGHT: u16 = 2;
+const SESSION_LIST_ENTRY_HEIGHT: u16 = 1;
 
 pub(super) struct SessionBrowserState {
     pub(super) request: InteractiveSessionBrowser,
@@ -132,202 +132,32 @@ pub(super) fn render_session_browser(
     browser: &SessionBrowserState,
     area: Rect,
 ) {
-    let canvas = session_browser_canvas_rect(state, area);
-    frame.render_widget(Clear, canvas);
-    let area = session_browser_rect(state, area);
-    if area.width < 72 || area.height < 14 {
-        render_compact_session_browser(frame, state, browser, area);
-        return;
-    }
-
     let palette = TerminalPalette::for_preferences(&state.preferences);
-    let outer = Block::default().borders(Borders::ALL);
-    let inner = outer.inner(area);
-    frame.render_widget(outer, area);
-    if inner.width == 0 || inner.height == 0 {
-        return;
+    let areas = render_browser_shell(
+        frame,
+        &palette,
+        area,
+        44,
+        BrowserHeader {
+            title: "Resume session",
+            count: format!("{} sessions", browser.filtered_indices().len()),
+            search_hint: "Search sessions",
+            query: &browser.query,
+            search_active: browser.search_active,
+        },
+    );
+    render_session_list(frame, browser, &palette, areas.list);
+    let mut controls = vec![
+        ("↑/↓", "Select"),
+        ("/", "Search"),
+        ("Enter", "Resume"),
+        ("Esc", "Cancel"),
+    ];
+    if let Some(preview) = areas.preview {
+        render_session_preview(frame, browser, &palette, preview);
+        controls.insert(2, ("PgUp/Dn", "View"));
     }
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(4),
-            Constraint::Length(2),
-        ])
-        .split(inner);
-    render_session_browser_header(frame, browser, &palette, rows[0]);
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(44), Constraint::Percentage(56)])
-        .split(rows[1]);
-    render_session_list(frame, browser, &palette, panes[0]);
-    render_session_preview(frame, browser, &palette, panes[1]);
-    render_session_browser_controls(frame, browser, &palette, rows[2]);
-}
-
-fn session_browser_rect(state: &TuiState, area: Rect) -> Rect {
-    let canvas = session_browser_canvas_rect(state, area);
-    let available_height = canvas.height;
-    let horizontal_margin = if area.width >= 120 {
-        4
-    } else if area.width >= 80 {
-        2
-    } else if area.width >= 48 {
-        1
-    } else {
-        0
-    };
-    let top_margin = u16::from(available_height >= 12);
-    let bottom_margin = if available_height >= 32 {
-        4
-    } else if available_height >= 18 {
-        2
-    } else {
-        u16::from(available_height >= 9)
-    };
-    Rect::new(
-        canvas.x.saturating_add(horizontal_margin),
-        canvas.y.saturating_add(top_margin),
-        canvas
-            .width
-            .saturating_sub(horizontal_margin.saturating_mul(2)),
-        available_height
-            .saturating_sub(top_margin)
-            .saturating_sub(bottom_margin),
-    )
-}
-
-fn session_browser_canvas_rect(state: &TuiState, area: Rect) -> Rect {
-    let reserved = composer_height(state, area.width)
-        .saturating_add(u16::from(state.operation.is_some()))
-        .saturating_add(1);
-    Rect::new(
-        area.x,
-        area.y,
-        area.width,
-        area.height.saturating_sub(reserved),
-    )
-}
-
-fn render_compact_session_browser(
-    frame: &mut Frame<'_>,
-    state: &TuiState,
-    browser: &SessionBrowserState,
-    area: Rect,
-) {
-    let palette = TerminalPalette::for_preferences(&state.preferences);
-    let count = browser.filtered_indices().len();
-    let title = if browser.search_active || !browser.query.is_empty() {
-        format!(" Resume session · /{} · {count} ", browser.query)
-    } else {
-        format!(" Resume session · {count} ")
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(Span::styled(
-            title,
-            ratatui_style(palette.assistant_style()),
-        ))
-        .title_bottom(Span::styled(
-            " ↑/↓ select · / search · Enter resume · Esc cancel ",
-            ratatui_style(palette.warning_style()),
-        ));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let indices = browser.filtered_indices();
-    if indices.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                "No matching sessions",
-                ratatui_style(palette.meta_style()),
-            )),
-            inner,
-        );
-        return;
-    }
-    let focus = browser
-        .selected
-        .and_then(|selected| indices.iter().position(|index| *index == selected))
-        .unwrap_or(0);
-    let visible = usize::from(inner.height).max(1);
-    let start = focus
-        .saturating_sub(visible / 2)
-        .min(indices.len().saturating_sub(visible));
-    let lines = indices
-        .iter()
-        .skip(start)
-        .take(visible)
-        .map(|index| {
-            let entry = &browser.request.sessions[*index];
-            let current = entry.summary.id == browser.request.current_session_id;
-            let selected = browser.selected == Some(*index);
-            let marker = if selected { "›" } else { " " };
-            let prefix = if current { "CURRENT " } else { "" };
-            let content = format!("{marker} {prefix}{}", session_browser_title(&entry.summary));
-            let style = if selected {
-                selected_session_style(&palette)
-            } else if current {
-                ratatui_style(palette.user_style()).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            Line::from(Span::styled(
-                truncate_width_with_ellipsis(&content, usize::from(inner.width)),
-                style,
-            ))
-        })
-        .collect::<Vec<_>>();
-    frame.render_widget(Paragraph::new(lines), inner);
-}
-
-fn render_session_browser_header(
-    frame: &mut Frame<'_>,
-    browser: &SessionBrowserState,
-    palette: &TerminalPalette,
-    area: Rect,
-) {
-    frame.render_widget(Block::default().borders(Borders::BOTTOM), area);
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(24),
-            Constraint::Percentage(38),
-            Constraint::Length(18),
-            Constraint::Min(0),
-        ])
-        .split(area);
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            " Resume session",
-            ratatui_style(palette.assistant_style()).add_modifier(Modifier::BOLD),
-        ))
-        .alignment(Alignment::Left),
-        inset_vertically(columns[0]),
-    );
-    let search_text = if browser.search_active {
-        format!("/ {}_", browser.query)
-    } else if browser.query.is_empty() {
-        "/ Search sessions".into()
-    } else {
-        format!("/ {}", browser.query)
-    };
-    let search_style = if browser.search_active {
-        palette.user_style()
-    } else {
-        palette.meta_style()
-    };
-    frame.render_widget(
-        Paragraph::new(Span::styled(search_text, ratatui_style(search_style)))
-            .block(Block::default().borders(Borders::ALL)),
-        columns[1],
-    );
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            format!(" {} sessions", browser.filtered_indices().len()),
-            ratatui_style(palette.user_style()),
-        )),
-        inset_vertically(columns[2]),
-    );
+    render_browser_controls(frame, &palette, areas.controls, &controls);
 }
 
 fn render_session_list(
@@ -336,15 +166,13 @@ fn render_session_list(
     palette: &TerminalPalette,
     area: Rect,
 ) {
-    let block = Block::default().borders(Borders::RIGHT);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = area;
     if inner.height < 2 || inner.width == 0 {
         return;
     }
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .constraints([Constraint::Length(2), Constraint::Min(0)])
         .split(inner);
     render_session_list_header(frame, palette, rows[0]);
     let indices = browser.filtered_indices();
@@ -388,9 +216,7 @@ fn render_session_list(
 }
 
 fn render_session_list_header(frame: &mut Frame<'_>, palette: &TerminalPalette, area: Rect) {
-    let block = Block::default().borders(Borders::BOTTOM);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = area;
     let widths = list_column_widths(inner.width);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
@@ -418,7 +244,7 @@ fn render_session_list_entry(
         return;
     }
     let style = if selected {
-        selected_session_style(palette)
+        browser_selection_style(palette)
     } else {
         Style::default()
     };
@@ -474,26 +300,6 @@ fn render_session_list_entry(
         .style(style),
         columns[2],
     );
-    if area.height > 1 {
-        let id = entry.summary.id.chars().take(8).collect::<String>();
-        let detail = if current {
-            format!("    {id}  (active session)")
-        } else {
-            format!("    {id}")
-        };
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                truncate_width(&detail, usize::from(area.width)),
-                if selected {
-                    style
-                } else {
-                    ratatui_style(palette.meta_style())
-                },
-            ))
-            .style(style),
-            Rect::new(area.x, area.y.saturating_add(1), area.width, 1),
-        );
-    }
 }
 
 fn render_session_preview(
@@ -502,13 +308,7 @@ fn render_session_preview(
     palette: &TerminalPalette,
     area: Rect,
 ) {
-    let padding = if area.width >= 48 { 3 } else { 1 };
-    let inner = Rect::new(
-        area.x.saturating_add(padding),
-        area.y.saturating_add(1),
-        area.width.saturating_sub(padding.saturating_mul(2)),
-        area.height.saturating_sub(2),
-    );
+    let inner = area;
     let Some(entry) = browser.selected_entry() else {
         frame.render_widget(
             Paragraph::new(Span::styled(
@@ -542,41 +342,17 @@ fn render_session_preview(
         rows[0],
     );
     let short_id = entry.summary.id.chars().take(8).collect::<String>();
-    let metadata = format!(
-        "ID: {short_id}   Last updated: {} · {}",
-        relative_timestamp(&entry.summary.updated_at),
-        compact_timestamp(&entry.summary.updated_at),
-    );
-    let metadata_block = Block::default().borders(Borders::BOTTOM);
-    let metadata_inner = metadata_block.inner(rows[1]);
-    frame.render_widget(metadata_block, rows[1]);
-    let metadata_columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(1), Constraint::Length(13)])
-        .split(metadata_inner);
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            truncate_width_with_ellipsis(&metadata, usize::from(metadata_columns[0].width)),
+    let metadata = vec![
+        Line::from(Span::styled(
+            format!("ID: {short_id} · {} messages", entry.summary.message_count),
             ratatui_style(palette.meta_style()),
         )),
-        metadata_columns[0],
-    );
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            format!(
-                "{} message{}",
-                entry.summary.message_count,
-                if entry.summary.message_count == 1 {
-                    ""
-                } else {
-                    "s"
-                }
-            ),
-            ratatui_style(palette.user_style()),
-        ))
-        .alignment(Alignment::Right),
-        metadata_columns[1],
-    );
+        Line::from(Span::styled(
+            format!("Updated: {}", compact_timestamp(&entry.summary.updated_at)),
+            ratatui_style(palette.meta_style()),
+        )),
+    ];
+    frame.render_widget(Paragraph::new(metadata), rows[1]);
     frame.render_widget(
         Paragraph::new(Span::styled(
             "Recent conversation",
@@ -652,75 +428,8 @@ fn preview_lines(
     lines
 }
 
-fn render_session_browser_controls(
-    frame: &mut Frame<'_>,
-    browser: &SessionBrowserState,
-    palette: &TerminalPalette,
-    area: Rect,
-) {
-    let inner = Block::default().borders(Borders::TOP).inner(area);
-    frame.render_widget(Block::default().borders(Borders::TOP), area);
-    let key_style = ratatui_style(palette.warning_style()).add_modifier(Modifier::BOLD);
-    let label_style = ratatui_style(palette.meta_style());
-    let mut spans = vec![
-        Span::styled(" ↑/↓", key_style),
-        Span::styled(" Select   ", label_style),
-        Span::styled("/", key_style),
-        Span::styled(" Search   ", label_style),
-        Span::styled("PgUp/PgDn", key_style),
-        Span::styled(" Preview   ", label_style),
-        Span::styled("Enter", key_style),
-        Span::styled(" Resume   ", label_style),
-        Span::styled("Esc", key_style),
-        Span::styled(" Cancel", label_style),
-    ];
-    if browser.selected.is_none() {
-        spans = vec![Span::styled(
-            " No other matching session can be resumed · / Search · Esc Cancel",
-            key_style,
-        )];
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), inner);
-}
-
-fn selected_session_style(palette: &TerminalPalette) -> Style {
-    let accent = ratatui_style(palette.user_style());
-    Style::default()
-        .fg(Color::Black)
-        .bg(softened_selection_color(
-            accent.fg.unwrap_or(Color::LightGreen),
-        ))
-        .add_modifier(Modifier::BOLD)
-}
-
-fn softened_selection_color(color: Color) -> Color {
-    match color {
-        Color::Rgb(red, green, blue) => Color::Rgb(
-            soften_channel(red),
-            soften_channel(green),
-            soften_channel(blue),
-        ),
-        Color::Green | Color::LightGreen => Color::Rgb(191, 255, 207),
-        Color::Cyan | Color::LightCyan => Color::Rgb(207, 246, 255),
-        _ => Color::Gray,
-    }
-}
-
-const fn soften_channel(value: u8) -> u8 {
-    ((value as u16 * 28 + 255 * 72) / 100) as u8
-}
-
 fn list_column_widths(width: u16) -> (u16, u16) {
     if width >= 48 { (13, 5) } else { (9, 4) }
-}
-
-fn inset_vertically(area: Rect) -> Rect {
-    Rect::new(
-        area.x,
-        area.y.saturating_add(1),
-        area.width,
-        area.height.saturating_sub(1),
-    )
 }
 
 fn compact_timestamp(value: &str) -> String {
@@ -769,6 +478,6 @@ fn relative_timestamp(value: &str) -> String {
         60..=3_599 => format!("{} min ago", seconds / 60),
         3_600..=86_399 => format!("{} hr ago", seconds / 3_600),
         86_400..=604_799 => format!("{} days ago", seconds / 86_400),
-        _ => compact_timestamp(value),
+        _ => value.get(..10).unwrap_or(value).to_owned(),
     }
 }

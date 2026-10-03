@@ -481,8 +481,8 @@ fn inline_empty_session_shows_launch_rail_and_recedes_after_the_first_turn() {
     assert!(welcome.contains("OL //  COLOSSUS"), "{welcome}");
     assert!(welcome.contains("OBSCURITY LABS"), "{welcome}");
     assert!(
-        welcome.contains("Obscurity Labs // COLOSSUS  ⚠ Security: 2"),
-        "the branded footer must retain the persistent security status: {welcome}"
+        welcome.contains("ready · approval ask") && welcome.contains("⚠ Security: 2"),
+        "the footer must retain readable status, permissions, and security count: {welcome}"
     );
     let rail = welcome
         .find("What do you want to work on?")
@@ -572,6 +572,15 @@ fn fixture_process() {
 #[cfg(unix)]
 #[test]
 fn enhanced_shift_enter_composes_a_multiline_turn_and_restores_keyboard_mode() {
+    multiline_turn_and_keyboard_restoration(b"\x1b[13;2u");
+}
+
+#[test]
+fn legacy_newline_composes_a_multiline_turn_without_submitting() {
+    multiline_turn_and_keyboard_restoration(b"\n");
+}
+
+fn multiline_turn_and_keyboard_restoration(newline: &[u8]) {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -609,14 +618,22 @@ fn enhanced_shift_enter_composes_a_multiline_turn_and_restores_keyboard_mode() {
     wait_for_screen(&output, 24, 80, "Message · Enter sends");
     wait_for_raw(&output, b"\x1b[>1u");
 
+    let composed_input = [b"first".as_slice(), newline, b"second".as_slice()].concat();
     writer
-        .write_all(b"first\x1b[13;2usecond")
+        .write_all(&composed_input)
         .expect("compose modified Enter turn");
     writer.flush().expect("flush modified Enter turn");
     wait_for_screen(&output, 24, 80, "second");
     let composed = screen_contents(&output, 24, 80);
     assert!(composed.contains("first"), "{composed}");
     assert!(!composed.contains("stream-final-row-30"), "{composed}");
+
+    writer
+        .write_all(b"\x1b[AX\x1b[BY")
+        .expect("edit both composer rows with arrow keys");
+    writer.flush().expect("flush vertical editing");
+    wait_for_screen(&output, 24, 80, "firstX");
+    wait_for_screen(&output, 24, 80, "secondY");
 
     writer.write_all(b"\r").expect("submit composed turn");
     writer.flush().expect("flush composed turn");

@@ -49,7 +49,14 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
             screen_mode,
         );
         if !state.is_busy() && state.overlay.is_none() {
-            if let Some(command) = state.pending_plan_command.take() {
+            if let Some(command) = state.pending_setting_command.take() {
+                start_line(
+                    &mut state,
+                    command.into(),
+                    Arc::clone(&host),
+                    event_tx.clone(),
+                );
+            } else if let Some(command) = state.pending_plan_command.take() {
                 handle_plan_command(&mut state, command, Arc::clone(&host), event_tx.clone());
             } else if let Some(request) = state.pending_plan_execution.take() {
                 start_plan_execution(&mut state, request, Arc::clone(&host), event_tx.clone());
@@ -104,6 +111,7 @@ pub(super) fn observe_lifecycle(
                     Overlay::Prompt { .. }
                         | Overlay::SessionBrowser(_)
                         | Overlay::ThemePicker(_)
+                        | Overlay::SettingsPicker(_)
                         | Overlay::PlanExecutionChoice { .. }
                         | Overlay::PlanReviewChoice { .. }
                         | Overlay::QueuePaused
@@ -383,16 +391,19 @@ fn handle_key(
                 submit_line(state, line, host, event_tx);
             }
         }
+        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.composer.insert("\n");
+        }
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.overlay = Some(Overlay::HistorySearch {
-                query: String::new(),
-            });
+            state.overlay = Some(Overlay::HistorySearch(HistorySearchState::new(
+                &state.history,
+            )));
         }
         KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.composer.cursor = 0;
+            state.composer.move_to(0);
         }
         KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.composer.cursor = state.composer.draft.len();
+            state.composer.move_to(state.composer.draft.len());
         }
         KeyCode::Char(character)
             if !key
@@ -410,12 +421,12 @@ fn handle_key(
             }
             state.composer.move_right();
         }
-        KeyCode::Home => state.composer.cursor = 0,
+        KeyCode::Home => state.composer.move_to(0),
         KeyCode::End => {
             if state.composer.cursor == state.composer.draft.len() {
                 state.end();
             } else {
-                state.composer.cursor = state.composer.draft.len();
+                state.composer.move_to(state.composer.draft.len());
             }
         }
         KeyCode::Up if !state.completion_menu_candidates().is_empty() => {
@@ -424,8 +435,26 @@ fn handle_key(
         KeyCode::Down if !state.completion_menu_candidates().is_empty() => {
             state.advance_completion();
         }
-        KeyCode::Up => state.previous_history(),
-        KeyCode::Down => state.next_history(),
+        KeyCode::Up => {
+            if state.composer.history_index.is_some()
+                || !state.composer.move_vertical(
+                    ComposerVerticalDirection::Previous,
+                    state.transcript_width.saturating_sub(2).max(1),
+                )
+            {
+                state.previous_history();
+            }
+        }
+        KeyCode::Down => {
+            if state.composer.history_index.is_some() {
+                state.next_history();
+            } else {
+                state.composer.move_vertical(
+                    ComposerVerticalDirection::Next,
+                    state.transcript_width.saturating_sub(2).max(1),
+                );
+            }
+        }
         KeyCode::Tab => {
             state.accept_completion();
         }
@@ -593,31 +622,43 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
             }
             _ => {}
         },
-        Overlay::HistorySearch { query } => match key.code {
+        Overlay::HistorySearch(search) => match key.code {
             KeyCode::Enter => {
-                let selected = state
-                    .history
-                    .iter()
-                    .rev()
-                    .find(|entry| entry.contains(query.as_str()))
-                    .cloned();
-                state.overlay = None;
-                if let Some(selected) = selected {
+                if let Some(selected) = search
+                    .selected
+                    .and_then(|index| state.history.get(index))
+                    .cloned()
+                {
+                    state.overlay = None;
                     state.composer.set(selected);
                 }
             }
+            KeyCode::Up | KeyCode::BackTab => search.move_selection(&state.history, -1),
+            KeyCode::Down | KeyCode::Tab => search.move_selection(&state.history, 1),
+            KeyCode::Home => search.select_boundary(&state.history, false),
+            KeyCode::End => search.select_boundary(&state.history, true),
+            KeyCode::PageUp => search.preview_scroll = search.preview_scroll.saturating_sub(5),
+            KeyCode::PageDown => search.preview_scroll = search.preview_scroll.saturating_add(5),
             KeyCode::Backspace => {
-                query.pop();
+                search.query.pop();
+                search.reconcile_selection(&state.history);
             }
             KeyCode::Char(character)
                 if !key
                     .modifiers
                     .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
             {
-                query.push(character);
+                search.query.push(character);
+                search.reconcile_selection(&state.history);
             }
             _ => {}
         },
+        Overlay::SettingsPicker(picker) => {
+            if let Some(command) = picker.handle_key(key) {
+                state.pending_setting_command = Some(command);
+                state.overlay = None;
+            }
+        }
         Overlay::PlanReviewChoice { selected, .. } => match key.code {
             KeyCode::Enter => {
                 let Some(selected) = *selected else {
@@ -914,8 +955,9 @@ pub(super) fn insert_active_text(state: &mut TuiState, text: &str) {
             Overlay::Prompt { request, input, .. } if !request.kind.uses_decision_dock() => {
                 input.push_str(&text);
             }
-            Overlay::HistorySearch { query: input } => {
-                input.push_str(&text);
+            Overlay::HistorySearch(search) => {
+                search.query.push_str(&text);
+                search.reconcile_selection(&state.history);
             }
             Overlay::SessionBrowser(browser) if browser.search_active => {
                 browser.query.push_str(&text);
@@ -931,6 +973,7 @@ pub(super) fn insert_active_text(state: &mut TuiState, text: &str) {
             Overlay::Prompt { .. }
             | Overlay::SessionBrowser(_)
             | Overlay::ThemePicker(_)
+            | Overlay::SettingsPicker(_)
             | Overlay::PlanReviewChoice { .. }
             | Overlay::PlanExecutionChoice { .. }
             | Overlay::QueuePaused => {}
@@ -992,6 +1035,10 @@ pub(super) fn start_line(
     host: Arc<dyn InteractiveHost>,
     event_tx: mpsc::Sender<HostEvent>,
 ) {
+    if let Some(picker) = SettingsPickerState::for_command(&line, state) {
+        state.overlay = Some(Overlay::SettingsPicker(picker));
+        return;
+    }
     match parse_interactive_command(&line) {
         InteractiveCommand::Empty => {}
         InteractiveCommand::Local(command) => handle_local_command(state, command, host, event_tx),

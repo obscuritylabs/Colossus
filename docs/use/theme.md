@@ -8,7 +8,8 @@ icon: lucide/palette
 
 # Theme
 
-Enter `/theme` in the terminal UI to open the theme browser. Moving through the list
+Enter `/theme` in the terminal UI to open the full-screen theme browser. Themes
+and search appear on the left, with a view of the selected theme on the right. Moving through the list
 previews each theme immediately. Press **Enter** to apply and save the selected theme,
 or **Esc** to restore the one you were using.
 
@@ -18,8 +19,8 @@ or **Esc** to restore the one you were using.
 
 ![The Colossus theme browser with built-in themes on the left and a live preview on the right.](../assets/screenshots/theme-picker.png)
 
-The screenshot previews `default` while `hacker` remains the current theme. The
-preview becomes active only when you press **Enter**.
+The screenshot previews `hacker` while `default` remains marked as the current
+theme. Press **Enter** to save the selection.
 [Open the full-size screenshot](../assets/screenshots/theme-picker.png).
 
 Use **Up/Down** to move between themes and **/** to search by name. When search is

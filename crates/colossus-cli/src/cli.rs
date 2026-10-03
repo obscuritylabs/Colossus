@@ -19,10 +19,10 @@ pub(super) struct Cli {
     /// Output format for structured commands. Auto is human on a terminal and JSON when piped.
     #[arg(long, value_enum, default_value_t = OutputMode::Auto)]
     pub(super) output: OutputMode,
-    /// Compatibility alias for the default native-scrollback TUI.
+    /// Use an inline TUI with finalized output in native terminal scrollback.
     #[arg(long, global = true, conflicts_with = "alt_screen")]
     pub(super) no_alt_screen: bool,
-    /// Use the application-owned full alternate-screen transcript viewport.
+    /// Use the full alternate-screen transcript viewport (the default).
     #[arg(long, global = true, conflicts_with = "no_alt_screen")]
     pub(super) alt_screen: bool,
     /// Require the TUI to attach to an existing authenticated worker.
@@ -33,6 +33,16 @@ pub(super) struct Cli {
     pub(super) desktop_worker_auth: bool,
     #[command(subcommand)]
     pub(super) command: Command,
+}
+
+impl Cli {
+    pub(super) fn screen_mode(&self) -> ScreenMode {
+        if self.no_alt_screen {
+            ScreenMode::Inline
+        } else {
+            ScreenMode::Alternate
+        }
+    }
 }
 
 #[repr(u8)]
@@ -68,6 +78,7 @@ pub(super) const TERMINAL_COMPLETIONS: &[&str] = &[
     "/tui prefs",
     "/tui save",
     "/tui reset",
+    "/provider diagnostics",
     "/provider diagnostics on",
     "/provider diagnostics off",
     "/permissions",
@@ -81,16 +92,21 @@ pub(super) const TERMINAL_COMPLETIONS: &[&str] = &[
     "/theme validate",
     "/theme scaffold",
     "/theme reset",
+    "/stream",
     "/stream on",
     "/stream raw",
     "/stream off",
+    "/events",
     "/events compact",
     "/events verbose",
     "/events off",
+    "/reasoning",
     "/reasoning on",
     "/reasoning off",
+    "/transcript",
     "/transcript comfortable",
     "/transcript compact",
+    "/multiline",
     "/multiline on",
     "/multiline off",
     "/multiline toggle",

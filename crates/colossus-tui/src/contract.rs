@@ -856,9 +856,9 @@ pub trait InteractiveHost: Send + Sync {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ScreenMode {
     /// Dynamic inline viewport with finalized output in native terminal scrollback.
-    #[default]
     Inline,
-    /// Full alternate screen with an application-owned transcript viewport.
+    /// Full alternate screen with an application-owned transcript viewport (default).
+    #[default]
     Alternate,
 }
 

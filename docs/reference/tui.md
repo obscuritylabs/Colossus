@@ -10,8 +10,8 @@ icon: lucide/keyboard
 
 Enter `/help` in Colossus for the command list supported by your running version.
 Start with the [Terminal UI guide](../use/terminal-ui.md) if you are new to the
-interface. The default view uses your terminal's native scrollback; add the global
-`--alt-screen` flag to use the full-screen transcript view.
+interface. The default view fills the alternate screen. Add the global
+`--no-alt-screen` flag to use an inline view with native terminal scrollback.
 
 ## Keys
 
@@ -21,18 +21,20 @@ interface. The default view uses your terminal's native scrollback; add the glob
 | --- | --- |
 | `Enter` | Send the prompt. |
 | `Shift-Enter` | Insert a newline if your terminal reports the modifier. |
+| `Ctrl-J` | Insert a newline, including when Shift-Enter is indistinguishable from Enter. |
 | `Ctrl-R` | Search earlier submitted prompts. |
-| `Up` / `Down` | Browse submitted prompts from the first composer line; Down past the newest restores your draft. |
+| `Up` / `Down` | Move through wrapped or multiline draft rows. Up from the first row browses submitted prompts; Down past the newest restores your draft. |
 | `Tab` / `Right` | Accept a visible completion. |
 | `Up` / `Down` / `Shift-Tab` | Move through completion suggestions. |
-| Terminal scroll shortcuts | Read finalized output in the default inline view. |
-| `PageUp` / `PageDown` | Scroll the transcript in alternate-screen mode. |
-| `End` | Return to live output in alternate-screen mode. |
+| Terminal scroll shortcuts | Read finalized output when using `--no-alt-screen`. |
+| `PageUp` / `PageDown` | Scroll the transcript in the default full-screen view. |
+| `End` | Return to live output in the full-screen view. |
 | `Ctrl-C` | Exit when idle. During a run, request cancellation; press again to exit. |
 | `Ctrl-D` | Exit from an empty, idle composer. |
 
-If Shift-Enter submits instead of inserting a newline, enter `/multiline on` before
-writing. In that mode, Enter inserts a line and Ctrl-D submits a nonempty prompt.
+If Shift-Enter submits instead of inserting a newline, use Ctrl-J or open
+`/multiline` and select **Enter adds a newline**. In that mode, Enter inserts a line
+and Ctrl-D submits a nonempty prompt.
 Ctrl-Enter and Alt-Enter also submit when your terminal reports them distinctly.
 `/multiline off` restores the default; `/multiline toggle` switches modes.
 
@@ -52,10 +54,17 @@ skill token offers active plugin skills as `@PLUGIN/SKILL`. Esc closes suggestio
 | `Esc` | Approval dock | Dismiss and deny the request. |
 | `/` | Session or theme browser | Search. Esc leaves search before closing the browser. |
 | `Up` / `Down` | Session or theme browser | Select a session or preview a theme. |
-| `PageUp` / `PageDown` | Session browser | Scroll the selected conversation preview. |
+| `PageUp` / `PageDown` | Session or history browser | Scroll the selected preview. |
+| `Up` / `Down` | History browser | Select an earlier prompt; typing filters the list. |
+| `Enter` | History browser | Place the selected prompt in the composer for editing. |
+| `Esc` | History browser | Close and preserve the draft. |
 | `Enter` | Session or theme browser | Resume the session or save the selected theme. |
 | `Esc` | Theme browser | Cancel and restore the original theme. |
 | `D` / `G` | Plan execution dock | Select Direct or Goal Mode; Enter confirms. |
+
+Session, theme, and history browsers fill the screen with a list on the left and
+an inspecting view on the right. Narrow terminals show the list without the view.
+Closing a browser restores the conversation and draft.
 
 The approval dock preserves the composer draft. Cancelling, timing out, or
 disconnecting does not grant approval. For the browser workflows, see
@@ -70,7 +79,7 @@ Use `/help` for arguments and commands available in your installed version.
 | --- | --- |
 | Help and exit | `/help`, `/exit` |
 | Sessions | `/sessions`, `/session show`, `/session new`, `/session resume`, `/resume` |
-| Permissions | `/permissions [deny\|ask\|risk-auto\|full-access]` |
+| Permissions | `/permissions` opens a chooser; `/permissions deny\|ask\|risk-auto\|full-access` sets a mode directly |
 | Tools and work | `/tools`, `/work`, `/tasks`, `/decisions`, `/plans`, `/goals`, `/goal`, `/goal resume GOAL_ID`, `/agents`, `/agents drain` |
 | Planning | `/plan`, `/plan on`, `/plan off`, `/plan status`, `/plan new`, `/plan list`, `/plan use PLAN_ID`, `/plan show [PLAN_ID]`, `/plan approve`, `/plan discard`, `/plan execute [direct\|goal [ITERATIONS]]` |
 | Context | `/context status`, `/context list`, `/context compact`, `/context restore` |
@@ -79,9 +88,9 @@ Use `/help` for arguments and commands available in your installed version.
 | MCP and integrations | `/mcp servers`, `/mcp tools`, `/mcp auth login SERVER`, `/mcp auth complete SERVER CALLBACK_URL`, `/mcp auth status SERVER`, `/mcp auth logout SERVER`, `/integrations`, `/integration show`, `/integration call`, `/integration disconnect` |
 | Images | `/attach PATH`, `/attachments`, `/detach INDEX`, `/detach all` |
 | Theme | `/theme`, `/theme list`, `/theme preview`, `/theme validate`, `/theme scaffold`, `/theme reset` |
-| Display | `/stream on`, `/stream raw`, `/stream off`, `/events compact`, `/events verbose`, `/events off`, `/reasoning on`, `/reasoning off`, `/transcript comfortable`, `/transcript compact`, `/multiline on`, `/multiline off`, `/multiline toggle`, `/trace` |
+| Display | `/stream`, `/events`, `/reasoning`, `/transcript`, `/multiline` open setting choosers; direct value arguments remain supported. `/trace` toggles compact events. |
 | Preferences | `/tui prefs`, `/tui save`, `/tui reset` |
-| Telemetry and diagnostics | `/telemetry`, `/telemetry metrics`, `/audit verify`, `/projection status`, `/models doctor [PROFILE]`, `/provider doctor [PROFILE]`, `/provider diagnostics on`, `/provider diagnostics off` |
+| Telemetry and diagnostics | `/telemetry`, `/telemetry metrics`, `/audit verify`, `/projection status`, `/models doctor [PROFILE]`, `/provider doctor [PROFILE]`, `/provider diagnostics` |
 | Workflows | `/workflow list`, `/workflow status`; schedule `list`, `show`, `enable`, `disable`, `tick`; webhook `list`, `show`, `enable`, `disable`; subscription `list`, `show`, `enable`, `disable`, `tick` |
 | Bundles | `/bundle verify` |
 
@@ -136,5 +145,6 @@ request may contain conversation content, so review it before sharing.
 
 While a run is active, the composer can queue up to eight future turns. A failure
 or cancellation pauses the queue for your decision. Finalized output remains in
-native scrollback by default; an active run does not move you away from older
-content you are reading.
+the transcript viewport; an active run does not move you away from older
+content you are reading. With `--no-alt-screen`, finalized output goes to native
+terminal scrollback.

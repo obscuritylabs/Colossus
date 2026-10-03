@@ -20,8 +20,8 @@ colossus [OPTIONS] <COMMAND>
 | `--config PATH` | YAML path | See below | Select one explicit configuration |
 | `--approval-mode MODE` | `deny`, `ask`, `risk-auto`, `full-access` | See below | Satisfy existing approval obligations |
 | `--output FORMAT` | `auto`, `human`, `json` | `auto` | Select structured output rendering |
-| `--alt-screen` | Flag | Off | Use the full-screen application-owned transcript viewport |
-| `--no-alt-screen` | Flag | Off | Compatibility alias for the default inline native-scrollback viewport |
+| `--alt-screen` | Flag | Full-screen view | Explicitly select the default application-owned alternate-screen viewport |
+| `--no-alt-screen` | Flag | Off | Use an inline view with finalized output in native terminal scrollback |
 | `-h`, `--help` | Flag | — | Show command help |
 | `-V`, `--version` | Flag | — | Show binary version |
 

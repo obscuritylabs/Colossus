@@ -2,8 +2,7 @@ use super::*;
 
 pub(super) struct WorkerDispatchOptions {
     pub(super) approval_mode: Option<ApprovalMode>,
-    pub(super) no_alt_screen: bool,
-    pub(super) alt_screen: bool,
+    pub(super) screen_mode: ScreenMode,
     pub(super) worker_required: bool,
     pub(super) inherited_worker: Option<WorkerClient>,
     pub(super) herdr: Option<Arc<HerdrReporter>>,
@@ -40,8 +39,7 @@ pub(super) async fn dispatch_to_worker_if_active(
 ) -> Result<bool, Box<dyn Error>> {
     let WorkerDispatchOptions {
         approval_mode,
-        no_alt_screen,
-        alt_screen,
+        screen_mode,
         worker_required,
         inherited_worker,
         herdr,
@@ -1199,12 +1197,7 @@ pub(super) async fn dispatch_to_worker_if_active(
                             session_id: session.clone(),
                             resume_latest: *resume,
                         },
-                        screen_mode: if alt_screen {
-                            ScreenMode::Alternate
-                        } else {
-                            let _ = no_alt_screen;
-                            ScreenMode::Inline
-                        },
+                        screen_mode,
                         background_notice: Some(default_update_notice_provider()),
                         lifecycle: herdr.clone().map(|reporter| {
                             reporter as Arc<dyn colossus_tui::InteractiveLifecycleObserver>

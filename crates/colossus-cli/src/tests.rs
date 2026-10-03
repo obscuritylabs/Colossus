@@ -1469,16 +1469,19 @@ fn tui_parses_with_the_global_inline_flag_and_repl_is_rejected() {
     let default = Cli::try_parse_from(["colossus", "tui"]).expect("default TUI");
     assert!(!default.no_alt_screen);
     assert!(!default.alt_screen);
+    assert_eq!(default.screen_mode(), ScreenMode::Alternate);
 
     let tui = Cli::try_parse_from(["colossus", "tui", "--no-alt-screen"]).expect("explicit TUI");
     assert!(tui.no_alt_screen);
     assert!(!tui.alt_screen);
     assert!(matches!(tui.command, Command::Tui { .. }));
+    assert_eq!(tui.screen_mode(), ScreenMode::Inline);
 
     let alternate =
         Cli::try_parse_from(["colossus", "tui", "--alt-screen"]).expect("alternate TUI");
     assert!(alternate.alt_screen);
     assert!(!alternate.no_alt_screen);
+    assert_eq!(alternate.screen_mode(), ScreenMode::Alternate);
 
     let conflict = Cli::try_parse_from(["colossus", "tui", "--alt-screen", "--no-alt-screen"])
         .err()

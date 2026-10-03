@@ -337,6 +337,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         .as_ref()
         .map(|workspace| inherited_desktop_worker_client(&config, workspace))
         .transpose()?;
+    let screen_mode = cli.screen_mode();
     let herdr = matches!(cli.command, Command::Tui { .. })
         .then(|| {
             HerdrReporter::from_env(
@@ -355,8 +356,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             &cli.command,
             WorkerDispatchOptions {
                 approval_mode: cli.approval_mode,
-                no_alt_screen: cli.no_alt_screen,
-                alt_screen: cli.alt_screen,
+                screen_mode,
                 worker_required: cli.worker_required,
                 inherited_worker,
                 herdr: herdr.clone(),
@@ -1226,11 +1226,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                         session_id: session,
                         resume_latest: resume,
                     },
-                    screen_mode: if cli.alt_screen {
-                        ScreenMode::Alternate
-                    } else {
-                        ScreenMode::Inline
-                    },
+                    screen_mode,
                     background_notice: Some(default_update_notice_provider()),
                     lifecycle: herdr.clone().map(|reporter| reporter as Arc<dyn colossus_tui::InteractiveLifecycleObserver>),
                 },
