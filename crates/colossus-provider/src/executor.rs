@@ -990,11 +990,15 @@ impl ProviderExecutor {
             let (response, secrets) = self
                 .send_request_once(endpoint, payload, permit, deadline)
                 .await?;
-            let Some(delay) = super::retry::retry_delay(
-                response.status().as_u16(),
-                retries,
-                response_retry_after_ms(&response),
-            ) else {
+            let delay = match response_retry_after(&response) {
+                Some(RetryAfter::ExceedsSupportedBound) => None,
+                retry_after => super::retry::retry_delay(
+                    response.status().as_u16(),
+                    retries,
+                    retry_after.and_then(RetryAfter::milliseconds),
+                ),
+            };
+            let Some(delay) = delay else {
                 if retries > 0 && response.status().is_success() {
                     report_retry(
                         &mut observer,
@@ -1567,11 +1571,26 @@ async fn report_retry(
 fn provider_status_error(response: &reqwest::Response) -> ProviderError {
     ProviderError::Status {
         status: response.status().as_u16(),
-        retry_after_ms: response_retry_after_ms(response),
+        retry_after_ms: response_retry_after(response).and_then(RetryAfter::milliseconds),
     }
 }
 
-fn response_retry_after_ms(response: &reqwest::Response) -> Option<u64> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RetryAfter {
+    Delay(u64),
+    ExceedsSupportedBound,
+}
+
+impl RetryAfter {
+    fn milliseconds(self) -> Option<u64> {
+        match self {
+            Self::Delay(milliseconds) => Some(milliseconds),
+            Self::ExceedsSupportedBound => None,
+        }
+    }
+}
+
+fn response_retry_after(response: &reqwest::Response) -> Option<RetryAfter> {
     response
         .headers()
         .get(reqwest::header::RETRY_AFTER)
@@ -1579,12 +1598,19 @@ fn response_retry_after_ms(response: &reqwest::Response) -> Option<u64> {
         .and_then(parse_retry_after_ms)
 }
 
-fn parse_retry_after_ms(value: &str) -> Option<u64> {
+fn parse_retry_after_ms(value: &str) -> Option<RetryAfter> {
     const MAX_RETRY_AFTER_MS: u64 = 24 * 60 * 60 * 1_000;
 
     let value = value.trim();
-    let milliseconds = if let Ok(seconds) = value.parse::<u64>() {
-        seconds.checked_mul(1_000)?
+    let milliseconds = if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        let Some(milliseconds) = value
+            .parse::<u64>()
+            .ok()
+            .and_then(|seconds| seconds.checked_mul(1_000))
+        else {
+            return Some(RetryAfter::ExceedsSupportedBound);
+        };
+        milliseconds
     } else {
         let deadline =
             OffsetDateTime::parse(value, &time::format_description::well_known::Rfc2822).ok()?;
@@ -1595,7 +1621,11 @@ fn parse_retry_after_ms(value: &str) -> Option<u64> {
         )
         .ok()?
     };
-    (milliseconds <= MAX_RETRY_AFTER_MS).then_some(milliseconds)
+    Some(if milliseconds <= MAX_RETRY_AFTER_MS {
+        RetryAfter::Delay(milliseconds)
+    } else {
+        RetryAfter::ExceedsSupportedBound
+    })
 }
 
 fn generation_metadata(
@@ -1626,20 +1656,37 @@ mod retry_after_tests {
 
     #[test]
     fn retry_after_accepts_seconds_and_http_dates_with_bounded_delays() {
-        assert_eq!(parse_retry_after_ms(" 7 "), Some(7_000));
-        assert_eq!(parse_retry_after_ms("86400"), Some(86_400_000));
-        assert_eq!(parse_retry_after_ms("86401"), None);
+        assert_eq!(parse_retry_after_ms(" 7 "), Some(RetryAfter::Delay(7_000)));
+        assert_eq!(
+            parse_retry_after_ms("86400"),
+            Some(RetryAfter::Delay(86_400_000))
+        );
+        assert_eq!(
+            parse_retry_after_ms("86401"),
+            Some(RetryAfter::ExceedsSupportedBound)
+        );
+        assert_eq!(
+            parse_retry_after_ms("18446744073709551616"),
+            Some(RetryAfter::ExceedsSupportedBound)
+        );
         assert_eq!(parse_retry_after_ms("invalid"), None);
         assert_eq!(
             parse_retry_after_ms("Sun, 06 Nov 1994 08:49:37 GMT"),
-            Some(0)
+            Some(RetryAfter::Delay(0))
         );
         let future = (OffsetDateTime::now_utc() + time::Duration::seconds(60))
             .format(&time::format_description::well_known::Rfc2822)
             .expect("HTTP date");
         assert!(matches!(
             parse_retry_after_ms(&future),
-            Some(59_000..=60_000)
+            Some(RetryAfter::Delay(59_000..=60_000))
         ));
+        let unsupported = (OffsetDateTime::now_utc() + time::Duration::days(2))
+            .format(&time::format_description::well_known::Rfc2822)
+            .expect("HTTP date");
+        assert_eq!(
+            parse_retry_after_ms(&unsupported),
+            Some(RetryAfter::ExceedsSupportedBound)
+        );
     }
 }

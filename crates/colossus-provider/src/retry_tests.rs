@@ -304,6 +304,31 @@ async fn retry_backoff_stops_at_the_existing_generation_deadline() {
 }
 
 #[tokio::test]
+async fn oversized_retry_after_does_not_replay_a_confirmed_gateway_failure() {
+    for status in 502..=504 {
+        let server = sequence_server(vec![Reply::Status(status, Some("86401"))]).await;
+        let profile = retry_profile(server.base_url, ProviderKind::OpenAiCompatible);
+        let mut released = ReleasedItems::default();
+        let error = retry_gateway(&profile)
+            .execute_stream(
+                provider_request(&profile),
+                &ProviderExecutor::new(profile),
+                &mut released,
+            )
+            .await
+            .expect_err("server lower bound cannot be honored");
+        assert!(matches!(
+            error,
+            GatewayError::RecoverableExecution { http_status: Some(actual), .. }
+                if actual == status
+        ));
+        server.task.await.expect("server");
+        assert_eq!(server.requests.lock().expect("requests").len(), 1);
+        assert!(released.0.is_empty());
+    }
+}
+
+#[tokio::test]
 async fn cancellation_during_backoff_never_sends_the_next_request() {
     let server = sequence_server(vec![Reply::Status(502, None), Reply::Status(502, None)]).await;
     let requests = Arc::clone(&server.requests);
