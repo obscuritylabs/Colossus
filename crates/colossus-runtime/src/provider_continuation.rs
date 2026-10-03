@@ -67,6 +67,7 @@ impl GatewayModelProvider {
         Ok(Some(ProviderContinuationPlan {
             session_id: session_id.clone(),
             binding,
+            context_binding_hash: String::new(),
             source_count: canonical.len(),
             source_hash: fingerprint(&canonical)?,
             snapshot_epoch,

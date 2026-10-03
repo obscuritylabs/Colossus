@@ -24,14 +24,22 @@ impl EventSourcedProviderContinuations {
         let bytes = serde_json::to_vec(&state.hidden_reasoning)
             .map_err(|_| StoreError::Adapter("invalid Responses state".into()))?
             .len();
+        let state_bytes = serde_json::to_vec(state)
+            .map_err(|_| StoreError::Adapter("invalid Responses state".into()))?
+            .len()
+            // Canonical settlement replaces the empty hash with 64 hex bytes.
+            .saturating_add(if state.settled_hash.is_empty() { 64 } else { 0 });
         if state.hidden_reasoning.len() > 512
             || bytes > 512 * 1024
+            || state_bytes > 512 * 1024
             || bytes != state.view.bytes
             || state.view.reserved_tokens != (bytes as u64).div_ceil(3).saturating_add(64)
             || state.view.id.is_empty()
             || state.view.id.len() > 256
             || state.plan.session_id.is_empty()
             || state.plan.session_id.len() > 256
+            || state.plan.context_binding_hash.len() != 64
+            || state.view.context_binding_hash != state.plan.context_binding_hash
             || state.view.covered_count != state.plan.source_count.saturating_add(1)
             || !state.hidden_reasoning.first().is_some_and(|item| {
                 item["type"] == "compaction"

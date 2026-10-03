@@ -473,10 +473,11 @@ impl AgentService {
                         "message_count": prepared.messages.len(),
                     }),
                 )?;
-                if prepared.continuation_id.is_none()
-                    && let Some(plan) = &mut continuation_plan
-                {
-                    plan.selected = None;
+                if let Some(plan) = &mut continuation_plan {
+                    plan.context_binding_hash = prepared.context_binding_hash;
+                    if prepared.continuation_id.is_none() {
+                        plan.selected = None;
+                    }
                 }
                 prepared.messages
             } else {

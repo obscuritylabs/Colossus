@@ -288,6 +288,7 @@ async fn server_continuation_reserves_budget_and_falls_back_at_local_threshold()
     ];
     let mut request = preparation_request(messages, false);
     request.continuation = Some(ProviderContinuationView {
+        context_binding_hash: hex::encode(<sha2::Sha256 as sha2::Digest>::digest(b"[]")),
         id: "safe-reference".into(),
         covered_count: 2,
         reserved_tokens: 100,
@@ -1217,7 +1218,7 @@ async fn active_decisions_are_binding_context_before_snapshots() {
 }
 
 #[tokio::test]
-async fn active_decision_from_another_session_is_binding_until_archived() {
+async fn active_decision_from_another_session_invalidates_continuation_when_archived() {
     let provider: Arc<dyn ModelProvider> = Arc::new(SummaryProvider {
         output: None,
         calls: AtomicUsize::new(0),
@@ -1256,6 +1257,22 @@ async fn active_decision_from_another_session_is_binding_until_archived() {
     let prepared = service.prepare(request.clone()).await.expect("prepare");
     assert!(prepared.messages[0].content.contains(&decision.id));
     assert!(prepared.messages[0].content.contains(&decision.decision));
+    request.continuation = Some(ProviderContinuationView {
+        id: "before-archive".into(),
+        covered_count: 1,
+        context_binding_hash: prepared.context_binding_hash.clone(),
+        reserved_tokens: 100,
+        bytes: 300,
+    });
+    assert_eq!(
+        service
+            .prepare(request.clone())
+            .await
+            .unwrap()
+            .continuation_id
+            .as_deref(),
+        Some("before-archive")
+    );
 
     work_service
         .archive_decision(&decision.id, user_actor())
@@ -1265,6 +1282,85 @@ async fn active_decision_from_another_session_is_binding_until_archived() {
         .await
         .expect("prepare after archive");
     assert_eq!(after_archive.messages, vec![user_message]);
+    assert!(after_archive.continuation_id.is_none());
+    assert_ne!(
+        after_archive.context_binding_hash,
+        prepared.context_binding_hash
+    );
+}
+
+struct QueryMemories;
+
+#[async_trait]
+impl MemoryRetriever for QueryMemories {
+    async fn relevant(
+        &self,
+        query: &str,
+        session_id: &str,
+        _context: ExecutionContext,
+        _limit: usize,
+    ) -> Result<Vec<MemoryRecord>, StoreError> {
+        Ok(vec![MemoryRecord {
+            id: "query-memory".into(),
+            scope: MemoryScope::Session(session_id.into()),
+            kind: "preference".into(),
+            confidence: 1.0,
+            source: "user".into(),
+            status: colossus_contracts::MemoryStatus::Active,
+            text: format!("Retrieved context for {query}"),
+            rationale: String::new(),
+            created_at: "2026-07-10T00:00:00Z".into(),
+            updated_at: "2026-07-10T00:00:00Z".into(),
+            expires_at: None,
+            superseded_by: None,
+        }])
+    }
+}
+
+#[tokio::test]
+async fn changed_retrieved_memories_rebuild_context_without_opaque_continuation() {
+    let provider: Arc<dyn ModelProvider> = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let (_, _, _, service) = fixture(ContextConfig::default(), provider);
+    let service = service.with_memory_retriever(Arc::new(QueryMemories));
+    let mut request =
+        preparation_request(vec![message(ModelMessageRole::User, "first query")], false);
+    let prepared = service.prepare(request.clone()).await.unwrap();
+    request.continuation = Some(ProviderContinuationView {
+        id: "first-memory".into(),
+        covered_count: 1,
+        context_binding_hash: prepared.context_binding_hash.clone(),
+        reserved_tokens: 100,
+        bytes: 300,
+    });
+    assert_eq!(
+        service
+            .prepare(request.clone())
+            .await
+            .unwrap()
+            .continuation_id
+            .as_deref(),
+        Some("first-memory")
+    );
+    request
+        .messages
+        .push(message(ModelMessageRole::User, "second query"));
+    let changed = service.prepare(request).await.unwrap();
+    assert!(changed.continuation_id.is_none());
+    assert_ne!(changed.context_binding_hash, prepared.context_binding_hash);
+    assert!(
+        changed.messages[0]
+            .content
+            .contains("Retrieved context for second query")
+    );
+    assert!(
+        changed
+            .messages
+            .iter()
+            .any(|message| message.content.contains("first query"))
+    );
 }
 
 #[tokio::test]

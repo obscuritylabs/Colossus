@@ -98,6 +98,7 @@ fn auto_observations_are_route_scoped_and_on_overrides_negative_evidence() {
     let plan = ProviderContinuationPlan {
         session_id: "session-a".into(),
         binding: "binding".into(),
+        context_binding_hash: "0".repeat(64),
         source_count: 0,
         source_hash: "hash".into(),
         snapshot_epoch: 0,
@@ -157,12 +158,14 @@ fn responses_continuation_preserves_tool_ids_without_duplicate_assistant_calls()
         view: ProviderContinuationView {
             id: "state".into(),
             covered_count: 2,
+            context_binding_hash: "0".repeat(64),
             reserved_tokens: 100,
             bytes: 100,
         },
         plan: ProviderContinuationPlan {
             session_id: "session".into(),
             binding: "binding".into(),
+            context_binding_hash: "0".repeat(64),
             source_count: 1,
             source_hash: "hash".into(),
             snapshot_epoch: 0,

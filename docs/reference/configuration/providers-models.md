@@ -414,7 +414,8 @@ It becomes reusable only after the assistant and any tool results are durably se
 Protected journals retain it across restart; keyless installations retain it only in
 bounded process memory. Restart then rebuilds from canonical history.
 
-A changed model, endpoint, instructions, tools, branch, local snapshot activation or
+A changed model, endpoint, instructions, tools, active decision or retrieved memory,
+branch, local snapshot activation or
 incomplete turn invalidates reuse. Retained state is limited to 512 items and 512 KiB;
 resolved image bytes are not retained. Conservative opaque-byte and suffix-token
 accounting can trigger local fallback earlier than the provider's tokenizer predicts.

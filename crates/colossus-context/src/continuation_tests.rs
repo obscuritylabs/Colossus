@@ -12,12 +12,14 @@ fn candidate() -> ProviderContinuation {
         view: ProviderContinuationView {
             id: "candidate".into(),
             covered_count: 2,
+            context_binding_hash: "0".repeat(64),
             bytes,
             reserved_tokens: (bytes as u64).div_ceil(3) + 64,
         },
         plan: ProviderContinuationPlan {
             session_id: "session".into(),
             binding: "binding".into(),
+            context_binding_hash: "0".repeat(64),
             source_count: 1,
             source_hash: "prefix".into(),
             snapshot_epoch: 0,
@@ -62,6 +64,48 @@ fn responses_staging_is_never_durable_and_keyless_save_stays_in_memory() {
         .clear("session", &ExecutionContext::default())
         .unwrap();
     assert!(state.load("session").unwrap().is_none());
+}
+
+#[test]
+fn responses_state_bounds_include_assistant_and_provenance() {
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let repository = EventSourcedProviderContinuations::new(journal, false);
+    for large_assistant in [true, false] {
+        let mut state = candidate();
+        state.settled_hash = "settled".into();
+        if large_assistant {
+            state.assistant.content = "x".repeat(512 * 1024).into();
+        } else {
+            state.plan.binding = "x".repeat(512 * 1024);
+        }
+        assert!(state.view.bytes < 1024);
+        assert!(repository.stage(state.clone()).is_err());
+        assert!(
+            repository
+                .save(state, &ExecutionContext::default())
+                .is_err()
+        );
+        assert!(repository.load("session").unwrap().is_none());
+    }
+}
+
+#[test]
+fn responses_staging_reserves_space_for_the_settled_hash() {
+    let repository =
+        EventSourcedProviderContinuations::new(Arc::new(InMemoryEventJournal::default()), false);
+    let mut state = candidate();
+    state.assistant.content = "".into();
+    let overhead = serde_json::to_vec(&state).unwrap().len();
+    state.assistant.content = "x".repeat(512 * 1024 - overhead - 64).into();
+    repository.stage(state.clone()).unwrap();
+    let mut oversized = state.clone();
+    oversized.assistant.content = format!("{}x", state.assistant.content.plain_text()).into();
+    assert!(repository.stage(oversized).is_err());
+    state.settled_hash = "0".repeat(64);
+    repository
+        .save(state, &ExecutionContext::default())
+        .unwrap();
+    assert!(repository.load("session").unwrap().is_some());
 }
 
 #[test]

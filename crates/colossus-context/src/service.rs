@@ -390,6 +390,11 @@ impl ContextPreparer for ContextService {
         let bindings = self
             .binding_messages(&session_id, &messages, context.clone())
             .await?;
+        let context_binding_hash = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(
+            serde_json::to_vec(&bindings).map_err(|_| {
+                ContextError::Configuration("unable to bind context messages".into())
+            })?,
+        ));
         let original_messages = prepend_bindings(bindings.clone(), messages.clone());
         let original =
             estimate_tokens_for_model(&budget.model, &instructions, &original_messages, &tools);
@@ -423,7 +428,10 @@ impl ContextPreparer for ContextService {
             estimate_tokens_for_model(&budget.model, &instructions, &active_messages, &tools);
         let active_bytes = model_request_bytes(&instructions, &active_messages, &tools);
         if !force
-            && let Some(view) = continuation.filter(|view| view.covered_count <= messages.len())
+            && let Some(view) = continuation.filter(|view| {
+                view.covered_count <= messages.len()
+                    && view.context_binding_hash == context_binding_hash
+            })
         {
             // Settle tool calls represented by the opaque prefix before adding
             // new developer bindings; preserve result ordering and exact IDs.
@@ -441,6 +449,7 @@ impl ContextPreparer for ContextService {
                 && bytes <= MAX_PREPARED_MODEL_REQUEST_BYTES
             {
                 return Ok(PreparedContext {
+                    context_binding_hash,
                     continuation_id: Some(view.id),
                     messages: suffix,
                     token_estimate: estimate,
@@ -478,6 +487,7 @@ impl ContextPreparer for ContextService {
                 )));
             }
             return Ok(PreparedContext {
+                context_binding_hash,
                 continuation_id: None,
                 messages: active_messages,
                 token_estimate: active_estimate,
@@ -518,6 +528,7 @@ impl ContextPreparer for ContextService {
                 )));
             }
             return Ok(PreparedContext {
+                context_binding_hash,
                 continuation_id: None,
                 messages: original_messages,
                 token_estimate: original,
@@ -602,6 +613,7 @@ impl ContextPreparer for ContextService {
             .create(snapshot, actor)
             .map_err(ContextError::from)?;
         Ok(PreparedContext {
+            context_binding_hash,
             continuation_id: None,
             messages: prepared,
             token_estimate: estimate,

@@ -625,6 +625,7 @@ impl ContextPreparer for FixedContext {
             ..
         } = request;
         Ok(PreparedContext {
+            context_binding_hash: String::new(),
             continuation_id: None,
             messages,
             token_estimate: 10,
@@ -665,6 +666,7 @@ impl ContextPreparer for LogicalTurnContext {
             .sum::<usize>();
         assert!(tool_bytes <= MAX_MODEL_TOOL_TURN_BYTES);
         Ok(PreparedContext {
+            context_binding_hash: String::new(),
             continuation_id: None,
             messages,
             token_estimate: 10,

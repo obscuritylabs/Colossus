@@ -55,6 +55,7 @@ impl ProviderExecutor {
             .filter(|state| {
                 state.view == *view
                     && state.plan.binding == plan.binding
+                    && state.plan.context_binding_hash == plan.context_binding_hash
                     && state.plan.snapshot_epoch == plan.snapshot_epoch
             })
             .ok_or_else(|| {
@@ -77,6 +78,9 @@ impl ProviderExecutor {
         let (Some(repository), Some(plan)) = (&self.continuations, plan) else {
             return Ok(None);
         };
+        if plan.context_binding_hash.len() != 64 {
+            return Ok(None);
+        }
         let mut items = payload["input"].as_array().cloned().unwrap_or_default();
         items.extend_from_slice(output);
         let Some(start) = items.iter().rposition(|item| {
@@ -128,23 +132,31 @@ impl ProviderExecutor {
             tool_calls: calls,
             tool_call_id: None,
         };
-        repository
-            .stage(ProviderContinuation {
-                view: ProviderContinuationView {
-                    id: id.into(),
-                    covered_count: plan.source_count.saturating_add(1),
-                    bytes,
-                    // Include opaque bytes conservatively; never infer their plaintext contents.
-                    reserved_tokens: (bytes as u64).div_ceil(3).saturating_add(64),
-                },
-                plan: plan.clone(),
-                settled_hash: String::new(),
-                assistant,
-                hidden_reasoning: items,
-            })
-            .map_err(|_| {
-                ProviderError::Configuration("unable to stage bounded Responses state".into())
-            })?;
+        let state = ProviderContinuation {
+            view: ProviderContinuationView {
+                id: id.into(),
+                covered_count: plan.source_count.saturating_add(1),
+                context_binding_hash: plan.context_binding_hash.clone(),
+                bytes,
+                // Include opaque bytes conservatively; never infer their plaintext contents.
+                reserved_tokens: (bytes as u64).div_ceil(3).saturating_add(64),
+            },
+            plan: plan.clone(),
+            settled_hash: String::new(),
+            assistant,
+            hidden_reasoning: items,
+        };
+        if serde_json::to_vec(&state)
+            .map_err(|_| ProviderError::Malformed("invalid Responses state".into()))?
+            .len()
+            .saturating_add(64)
+            > 512 * 1024
+        {
+            return Ok(None);
+        }
+        repository.stage(state).map_err(|_| {
+            ProviderError::Configuration("unable to stage bounded Responses state".into())
+        })?;
         Ok(Some(id.into()))
     }
 }

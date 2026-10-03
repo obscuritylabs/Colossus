@@ -70,7 +70,7 @@ async fn responses_server(
     (url, handle)
 }
 
-async fn compaction_round_trip(streamed: bool, reject_first: bool) {
+async fn compaction_round_trip(streamed: bool, reject_first: bool, archive_binding: bool) {
     let (base_url, server) = responses_server(streamed, reject_first).await;
     let temporary = private_tempdir();
     let mut config = RuntimeConfig::offline_template(temporary.path().join("state.redb"));
@@ -110,6 +110,25 @@ async fn compaction_round_trip(streamed: bool, reject_first: bool) {
     )
     .unwrap();
     let session = runtime.create_session(Some("server compaction")).unwrap();
+    let decision = if archive_binding {
+        Some(
+            runtime
+                .create_decision(
+                    &session.id,
+                    "Temporary binding",
+                    "Retired decision sentinel",
+                    DecisionPriority::High,
+                    "Test continuation invalidation",
+                    "While active",
+                    "",
+                    "",
+                )
+                .await
+                .unwrap(),
+        )
+    } else {
+        None
+    };
     if reject_first {
         let error = runtime
             .run_model_in_session(
@@ -146,11 +165,18 @@ async fn compaction_round_trip(streamed: bool, reject_first: bool) {
             .await
             .unwrap();
     }
-    // A change in instructions invalidates state before the next request.
+    // Changes to dynamic bindings or instructions invalidate the opaque prefix.
+    if let Some(decision) = &decision {
+        runtime.archive_decision(&decision.id).await.unwrap();
+    }
     runtime
         .run_model_in_session(
             "primary",
-            "changed instructions",
+            if archive_binding {
+                "test instructions"
+            } else {
+                "changed instructions"
+            },
             "third unique prompt",
             Some(1),
             &session.id,
@@ -186,6 +212,18 @@ async fn compaction_round_trip(streamed: bool, reject_first: bool) {
             .contains("second unique prompt")
     );
     assert!(!requests[2]["input"].to_string().contains("opaque-sentinel"));
+    if archive_binding {
+        assert!(
+            requests[0]["input"]
+                .to_string()
+                .contains("Retired decision sentinel")
+        );
+        assert!(
+            !requests[2]["input"]
+                .to_string()
+                .contains("Retired decision sentinel")
+        );
+    }
     assert!(
         requests[2]["input"]
             .to_string()
@@ -211,17 +249,23 @@ async fn compaction_round_trip(streamed: bool, reject_first: bool) {
 
 #[tokio::test]
 async fn responses_compaction_chains_nonstream_and_invalidates_changed_instructions() {
-    compaction_round_trip(false, false).await;
+    compaction_round_trip(false, false, false).await;
 }
 
 #[tokio::test]
 async fn responses_compaction_chains_stream_and_keeps_opaque_state_private() {
-    compaction_round_trip(true, false).await;
+    compaction_round_trip(true, false, false).await;
 }
 
 #[tokio::test]
 async fn responses_compaction_auto_remembers_only_structured_rejection_without_replaying_generation()
  {
-    compaction_round_trip(false, true).await;
-    compaction_round_trip(true, true).await;
+    compaction_round_trip(false, true, false).await;
+    compaction_round_trip(true, true, false).await;
+}
+
+#[tokio::test]
+async fn archived_decisions_invalidate_streamed_and_nonstreamed_compaction() {
+    compaction_round_trip(false, false, true).await;
+    compaction_round_trip(true, false, true).await;
 }
