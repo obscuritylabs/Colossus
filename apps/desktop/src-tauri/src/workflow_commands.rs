@@ -15,6 +15,8 @@ use tauri::State;
 use tokio::sync::OwnedRwLockReadGuard;
 
 #[derive(Serialize)]
+// These independent advertised permissions form the renderer capability DTO.
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct WorkflowContext {
     selection_epoch: u64,
     workflows_read: bool,

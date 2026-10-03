@@ -12,6 +12,7 @@ use colossus_sdk::{
     WorkspaceIdentity, scopes,
 };
 use colossus_worker_protocol::{WorkerControlClient, worker_ipc_endpoint};
+mod activity;
 mod provider_catalog;
 pub(crate) use provider_catalog::discover_provider_models;
 #[cfg(all(test, any(windows, target_os = "macos")))]
@@ -285,7 +286,14 @@ async fn ensure_managed_capacity(
         let active = managed_target_has_active_work(&target.client).await?;
         candidates.push((last_used, target_id, active));
     }
-    let Some(target_id) = idle_lru_candidate(&candidates)? else {
+    let Some(target_id) = activity::revalidated_idle_lru(candidates, |target_id| async move {
+        let Some(target) = state.target(&target_id).await else {
+            return Ok(false);
+        };
+        managed_target_has_active_work(&target.client).await
+    })
+    .await?
+    else {
         return Ok(());
     };
     if let Some(target) = state.remove_target(&target_id).await {
@@ -302,18 +310,27 @@ async fn ensure_managed_capacity(
 pub(crate) async fn managed_target_has_active_work(
     client: &Colossus,
 ) -> Result<bool, CommandErrorDto> {
+    activity::has_active_work(
+        || managed_workflows_have_active_work(client),
+        managed_target_has_active_chat_work(client),
+    )
+    .await
+}
+
+async fn managed_workflows_have_active_work(client: &Colossus) -> Result<bool, CommandErrorDto> {
     if client.capabilities().contains("schedules.read") {
         let workflows = client
             .workflows()
             .ok_or_else(|| CommandErrorDto::busy("Workflow activity could not be inspected."))?;
-        if workflows
+        return workflows
             .has_active_work()
             .await
-            .map_err(CommandErrorDto::from_api)?
-        {
-            return Ok(true);
-        }
+            .map_err(CommandErrorDto::from_api);
     }
+    Ok(false)
+}
+
+async fn managed_target_has_active_chat_work(client: &Colossus) -> Result<bool, CommandErrorDto> {
     if client.capabilities().contains("process_sessions.v1") {
         let mut after = None;
         for _ in 0..3 {
