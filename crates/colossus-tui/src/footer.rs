@@ -1,6 +1,12 @@
 use super::*;
+use colossus_contracts::ThemeColor;
 
 pub(super) const FOOTER_HEIGHT: u16 = 1;
+const CHROME_BACKGROUND: ThemeColor = ThemeColor {
+    red: 27,
+    green: 30,
+    blue: 34,
+};
 
 pub(super) fn render_footer(
     frame: &mut Frame<'_>,
@@ -61,7 +67,7 @@ pub(super) fn render_footer(
     };
     used += UnicodeWidthStr::width(mode.as_str()) + usize::from(!mode.is_empty()) * 2;
     let status_style = if matches!(status.as_str(), "waiting" | "queue paused" | "error") {
-        ratatui_style(palette.warning_style()).bg(band.bg.unwrap_or(Color::Reset))
+        chrome_text_style(palette.warning_style(), CHROME_BACKGROUND)
     } else {
         band
     }
@@ -174,11 +180,48 @@ fn append_footer_segment(
 
 /// A neutral surface keeps themed accents from coloring every metadata field.
 pub(super) fn chrome_band_style(palette: &TerminalPalette) -> Style {
-    let mut style = ratatui_style(palette.assistant_style()).remove_modifier(Modifier::DIM);
-    if style.fg.is_none() {
-        style = style.fg(Color::White);
-    }
-    style.bg(Color::Rgb(27, 30, 34))
+    chrome_text_style(palette.assistant_style(), CHROME_BACKGROUND)
+}
+
+/// Keep readable theme colors; use light ink when a fixed surface needs more contrast.
+pub(super) fn chrome_text_style(accent: ThemeTextStyle, background: ThemeColor) -> Style {
+    let fallback = ThemeColor {
+        red: 230,
+        green: 237,
+        blue: 243,
+    };
+    let foreground = accent.foreground.unwrap_or(fallback);
+    let ink = relative_luminance(foreground);
+    let surface = relative_luminance(background);
+    let foreground = if (ink.max(surface) + 0.05) / (ink.min(surface) + 0.05) >= 4.5 {
+        foreground
+    } else {
+        fallback
+    };
+    ratatui_style(accent)
+        .remove_modifier(Modifier::DIM)
+        .fg(Color::Rgb(
+            foreground.red,
+            foreground.green,
+            foreground.blue,
+        ))
+        .bg(Color::Rgb(
+            background.red,
+            background.green,
+            background.blue,
+        ))
+}
+
+fn relative_luminance(color: ThemeColor) -> f64 {
+    let linear = |channel| {
+        let channel = f64::from(channel) / 255.0;
+        if channel <= 0.04045 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(color.red) + 0.7152 * linear(color.green) + 0.0722 * linear(color.blue)
 }
 
 pub(super) fn chrome_chip_style(accent: ThemeTextStyle) -> Style {

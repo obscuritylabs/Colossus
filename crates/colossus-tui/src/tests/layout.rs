@@ -457,6 +457,80 @@ fn composer_keeps_send_action_and_newline_hint_visible_in_narrow_terminals() {
 }
 
 #[test]
+fn custom_theme_dark_ink_stays_readable_on_shaded_chrome() {
+    for (assistant, meta) in [(0, 0), (230, 0), (0, 230), (100, 100), (230, 230)] {
+        let mut theme = custom_theme();
+        let foreground = |channel| ThemeColor {
+            red: channel,
+            green: channel,
+            blue: channel,
+        };
+        theme.assistant.foreground = Some(foreground(assistant));
+        theme.warning.foreground = theme.assistant.foreground;
+        theme.meta.foreground = Some(foreground(meta));
+        let mut source = snapshot();
+        source.preferences.select_custom_theme(theme);
+        let mut state = TuiState::from_snapshot(source);
+        state.completions = vec!["draft suggestion".into()];
+        state.composer.insert("draft");
+        let mut terminal = Terminal::new(TestBackend::new(80, 4)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                render_composer(frame, &mut state, Rect::new(0, 0, 80, 3));
+                render_footer(frame, &state, Rect::new(0, 3, 80, 1), false);
+            })
+            .expect("custom theme chrome");
+        let buffer = terminal.backend().buffer();
+        let expected = |channel| {
+            if channel == 230 {
+                Color::Rgb(230, 230, 230)
+            } else {
+                Color::Rgb(230, 237, 243)
+            }
+        };
+        for position in [(2, 0), (1, 1), (12, 3)] {
+            let cell = buffer.cell(position).expect("draft, title, or status");
+            assert_eq!(cell.fg, expected(assistant), "{position:?}");
+            assert_ne!(cell.fg, cell.bg);
+            assert!(!cell.modifier.contains(Modifier::DIM));
+        }
+        for position in [(0, 1), (2, 2), (6, 1)] {
+            let cell = buffer.cell(position).expect("border, hint, or completion");
+            assert_eq!(cell.fg, expected(meta), "{position:?}");
+            assert_ne!(cell.fg, cell.bg);
+        }
+        assert!(
+            buffer
+                .cell((6, 1))
+                .expect("completion")
+                .modifier
+                .contains(Modifier::DIM)
+        );
+        assert!(
+            !buffer
+                .cell((2, 2))
+                .expect("hint")
+                .modifier
+                .contains(Modifier::DIM)
+        );
+        assert_eq!(state.composer.draft, "draft");
+        state.footer.status = "waiting".into();
+        terminal
+            .draw(|frame| render_footer(frame, &state, Rect::new(0, 3, 80, 1), false))
+            .expect("waiting footer");
+        assert_eq!(
+            terminal
+                .backend()
+                .buffer()
+                .cell((12, 3))
+                .expect("waiting status")
+                .fg,
+            expected(assistant)
+        );
+    }
+}
+
+#[test]
 fn composer_shows_queue_action_and_scrolled_draft_position() {
     let mut state = TuiState::from_snapshot(snapshot());
     state.operation = Some(OperationKind::Run);
