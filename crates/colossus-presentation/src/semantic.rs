@@ -100,7 +100,9 @@ impl SemanticRenderer {
             return Ok(None);
         }
         let rendered = match event {
-            ProviderEvent::ModelDelta { .. } | ProviderEvent::FinalOutput { .. } => None,
+            ProviderEvent::ModelDelta { .. }
+            | ProviderEvent::FinalOutput { .. }
+            | ProviderEvent::Retry { .. } => None,
             ProviderEvent::ReasoningSummary { summary } if self.preferences.show_reasoning => {
                 if self.preferences.transcript_density == TranscriptDensity::Comfortable {
                     Some(self.render_document(PresentationDocument::from_block(

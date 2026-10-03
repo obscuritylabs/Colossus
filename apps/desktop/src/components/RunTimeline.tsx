@@ -26,6 +26,8 @@ import {
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
+import { RetryStatus, currentProviderRetry } from "./RetryStatus";
+
 import colossusMark from "../assets/colossus-mark.svg";
 import {
   presentNotice,
@@ -368,7 +370,7 @@ function compactTimelineItems(updates: readonly RunUpdate[]): TimelineItem[] {
   const emittedTools = new Set<string>();
   const items: TimelineItem[] = [];
   for (const item of updates) {
-    if (isLifecycleNotice(item)) {
+    if (isLifecycleNotice(item) || item.update.type === "provider_retry") {
       continue;
     }
     if (item.update.type !== "tool_activity") {
@@ -557,6 +559,7 @@ function isVisibleActivityItem(item: TimelineItem): boolean {
         item.update.update.message.role === "tool" ||
         item.update.update.message.role === "system"
       );
+    case "provider_retry":
     case "state":
     case "output_delta":
     case "usage":
@@ -755,7 +758,9 @@ function liveRunStatus(view: RunView): { label: string; detail: string } {
 }
 
 function LiveRunStatus({ view }: { view: RunView }) {
+  const retry = currentProviderRetry(view);
   const status = liveRunStatus(view);
+  if (retry !== null) return <RetryStatus retry={retry} />;
   return (
     <div className="feed-entry live-run-status">
       <span className="feed-marker" aria-hidden="true">
@@ -772,6 +777,8 @@ function LiveRunStatus({ view }: { view: RunView }) {
 function FeedItem({ item }: { item: RunUpdate }): ReactNode {
   const update = item.update;
   switch (update.type) {
+    case "provider_retry":
+      return null;
     case "message":
       return <Message message={update.message} />;
     case "reasoning_summary":

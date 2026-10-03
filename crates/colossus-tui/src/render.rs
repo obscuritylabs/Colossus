@@ -727,7 +727,39 @@ pub(super) fn render_activity(frame: &mut Frame<'_>, state: &TuiState, area: Rec
         .map_or(0.0, |started| started.elapsed().as_secs_f64());
     let palette = TerminalPalette::for_preferences(&state.preferences);
     let frame_text = palette.activity_frame(elapsed, false);
-    let activity = state.activity.as_deref().unwrap_or("working");
+    let retry_copy = state.provider_retry.as_ref().map(|retry| {
+        let next = retry
+            .retry_at
+            .as_deref()
+            .and_then(|value| {
+                time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+                    .ok()
+            })
+            .map(|deadline| {
+                ((deadline - time::OffsetDateTime::now_utc())
+                    .whole_milliseconds()
+                    .max(0)
+                    + 999)
+                    / 1_000
+            });
+        let detail = match next {
+            Some(seconds) if seconds > 0 => format!("next attempt in {seconds}s"),
+            _ => "retrying now".into(),
+        };
+        format!(
+            "Reconnecting to provider · Retry {} of {} · {detail}",
+            retry.attempt, retry.max_retries
+        )
+    });
+    let activity = retry_copy
+        .as_deref()
+        .or(state.activity.as_deref())
+        .unwrap_or("working");
+    let style = if state.provider_retry.is_some() {
+        palette.warning_style()
+    } else {
+        palette.activity_style()
+    };
     let queued = if state.queue.is_empty() {
         String::new()
     } else {
@@ -735,13 +767,10 @@ pub(super) fn render_activity(frame: &mut Frame<'_>, state: &TuiState, area: Rec
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(
-                format!(" {frame_text} "),
-                ratatui_style(palette.activity_style()),
-            ),
+            Span::styled(format!(" {frame_text} "), ratatui_style(style)),
             Span::styled(
                 format!("{activity} · {elapsed:.1}s{queued}"),
-                ratatui_style(palette.activity_style()),
+                ratatui_style(style),
             ),
         ])),
         area,

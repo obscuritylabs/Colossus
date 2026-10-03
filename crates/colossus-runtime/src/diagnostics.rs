@@ -635,6 +635,7 @@ impl Runtime {
             "provider.models",
             endpoint,
             serde_json::to_value(ProviderEffectInput {
+                stream_response: None,
                 provider_profile: provider.profile().name.clone(),
                 model_profile: None,
                 model: None,
@@ -769,6 +770,7 @@ impl Runtime {
             provider.profile().kind.generation_action(),
             endpoint,
             serde_json::to_value(ProviderEffectInput {
+                stream_response: None,
                 provider_profile: route.provider_profile.clone(),
                 model_profile: Some(route.model_profile.clone()),
                 model: Some(route.model.clone()),

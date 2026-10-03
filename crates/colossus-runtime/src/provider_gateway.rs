@@ -419,6 +419,7 @@ impl GatewayModelProvider {
             provider.profile().kind.generation_action(),
             endpoint,
             serde_json::to_value(ProviderEffectInput {
+                stream_response: None,
                 provider_profile: route.provider_profile,
                 model_profile: Some(route.model_profile),
                 model: Some(route.model),
@@ -498,16 +499,6 @@ impl ModelProvider for GatewayModelProvider {
         options: ProviderTurnOptions,
         observer: &mut dyn ProviderEventObserver,
     ) -> Result<ProviderTurn, ModelProviderError> {
-        let route = self.route(role)?;
-        if !route.capabilities.streaming {
-            let turn = self
-                .turn_with_options(role, request, context, options)
-                .await?;
-            for event in &turn.events {
-                observer.observe(event.clone()).await?;
-            }
-            return Ok(turn);
-        }
         let resolved = self
             .providers
             .resolve(role)
@@ -528,6 +519,7 @@ impl ModelProvider for GatewayModelProvider {
             provider.profile().kind.generation_action(),
             endpoint,
             serde_json::to_value(ProviderEffectInput {
+                stream_response: Some(route.capabilities.streaming),
                 provider_profile: route.provider_profile,
                 model_profile: Some(route.model_profile),
                 model: Some(route.model),
@@ -674,6 +666,12 @@ impl ReleasedEffectObserver for ReleasedProviderStream<'_> {
             ExecutionError::Failed("released provider stream item violated its contract".into())
         })?;
         match item {
+            ProviderStreamItem::Retry { retry } => {
+                self.observer
+                    .observe(ProviderEvent::Retry { retry })
+                    .await
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+            }
             ProviderStreamItem::Event { event } => {
                 self.observer
                     .observe(event.clone())

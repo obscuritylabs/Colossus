@@ -1854,6 +1854,7 @@ impl RunEventObserver for PublicRunObserver {
 fn public_event(event: RunEvent) -> RunUpdateKind {
     match event {
         RunEvent::Provider { event } => match event {
+            ProviderEvent::Retry { retry } => RunUpdateKind::ProviderRetry { retry },
             ProviderEvent::ModelDelta { text } => RunUpdateKind::OutputDelta { text },
             ProviderEvent::ReasoningSummary { summary } => {
                 RunUpdateKind::ReasoningSummary { summary }
@@ -3511,5 +3512,24 @@ mod tests {
         assert!(!update.recoverable);
         assert!(!update.message.contains("localhost"));
         assert!(!update.message.contains("chat/completions"));
+    }
+
+    #[test]
+    fn provider_recovery_is_public_progress_without_conversation_output() {
+        let retry = colossus_contracts::ProviderRetry {
+            attempt: 2,
+            max_retries: 5,
+            http_status: 503,
+            state: colossus_contracts::ProviderRetryState::Backoff,
+            retry_at: Some("2026-10-03T00:00:04Z".into()),
+        };
+        let update = public_event(RunEvent::Provider {
+            event: ProviderEvent::Retry {
+                retry: retry.clone(),
+            },
+        });
+        assert!(
+            matches!(update, RunUpdateKind::ProviderRetry { retry: actual } if actual == retry)
+        );
     }
 }

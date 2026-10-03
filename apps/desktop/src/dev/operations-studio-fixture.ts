@@ -1335,6 +1335,43 @@ The reviewed patch is ready and waiting for your approval.`,
  * calls. The renderer uses this development-only fixture to compare the two
  * activity presentations against identical canonical data.
  */
+export function buildProviderRetryFixture(): ChatState {
+  const state = buildOperationsStudioFixture();
+  const current = state.views.get(SELECTED_RUN_ID);
+  if (current === undefined) throw new Error("Retry fixture requires a run.");
+  const retryAt = new Date(Date.now() + 4_000).toISOString();
+  const view: RunView = {
+    ...current,
+    run: { ...current.run, status: "running", pendingInteractionCount: 0 },
+    pendingInteractions: [],
+    output: "",
+    usage: null,
+    updates: [
+      ...current.updates.filter(
+        (item) =>
+          item.update.type === "message" && item.update.message.role === "user",
+      ),
+      update(99, new Date().toISOString(), {
+        type: "provider_retry",
+        retry: {
+          attempt: 2,
+          max_retries: 5,
+          http_status: 503,
+          state: "backoff",
+          retry_at: retryAt,
+        },
+      }),
+    ],
+  };
+  return {
+    ...state,
+    views: new Map([[SELECTED_RUN_ID, view]]),
+    recentRuns: state.recentRuns.map((run) =>
+      run.runId === SELECTED_RUN_ID ? view.run : run,
+    ),
+  };
+}
+
 export function buildActivityComparisonFixture(): ChatState {
   const state = buildOperationsStudioFixture();
   const current = state.views.get(SELECTED_RUN_ID);

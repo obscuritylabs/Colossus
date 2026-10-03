@@ -110,13 +110,14 @@ pub use types::{
     Interaction, InteractionAnswer, InteractionContent, InteractionKind, InteractionStatus,
     ListRunsRequest, ListRunsResponse, ListSessionActivityRequest, ListSessionActivityResponse,
     MessageContentPart, MessageRole, OutcomeCertainty, PageRequest, PageResponse,
-    PlanExecutionStrategy, PlanRunAction, PlanStatus, PromptAnswer, PromptChoice, ResearchDepth,
-    ResearchSourceKind, RespondInteractionRequest, RespondInteractionResponse,
-    RestoreThreadRequest, Run, RunBranch, RunBranchContextMode, RunCancellation, RunFailure,
-    RunMode, RunResult, RunStatus, RunTerminal, RunUpdate, RunUpdateKind, RunUpdateStream,
-    ServerCapabilities, SessionActivity, SessionActivityContent, SessionActivityKind,
-    SessionActivityLane, SessionActivityStatus, SessionMessage, ThreadLifecycle, TokenUsage,
-    ToolActivity, ToolActivityState, UploadArtifactRequest, UserPromptInteraction, WatchRunRequest,
+    PlanExecutionStrategy, PlanRunAction, PlanStatus, PromptAnswer, PromptChoice, ProviderRetry,
+    ProviderRetryState, ResearchDepth, ResearchSourceKind, RespondInteractionRequest,
+    RespondInteractionResponse, RestoreThreadRequest, Run, RunBranch, RunBranchContextMode,
+    RunCancellation, RunFailure, RunMode, RunResult, RunStatus, RunTerminal, RunUpdate,
+    RunUpdateKind, RunUpdateStream, ServerCapabilities, SessionActivity, SessionActivityContent,
+    SessionActivityKind, SessionActivityLane, SessionActivityStatus, SessionMessage,
+    ThreadLifecycle, TokenUsage, ToolActivity, ToolActivityState, UploadArtifactRequest,
+    UserPromptInteraction, WatchRunRequest,
 };
 
 #[cfg(test)]

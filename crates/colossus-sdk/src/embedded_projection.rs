@@ -348,6 +348,7 @@ pub(super) fn run_update(
         core::RunUpdateKind::Message { message } => {
             RunUpdateKind::Message(released_message(message))
         }
+        core::RunUpdateKind::ProviderRetry { retry } => RunUpdateKind::ProviderRetry(retry),
         core::RunUpdateKind::Notice { notice } => RunUpdateKind::Notice {
             reason: notice.reason,
             message: notice.message,

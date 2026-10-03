@@ -1102,6 +1102,9 @@ impl From<SessionMessage> for SessionMessageDto {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum RunUpdateKindDto {
+    ProviderRetry {
+        retry: colossus_sdk::ProviderRetry,
+    },
     State {
         status: RunStatusDto,
     },
@@ -1142,6 +1145,7 @@ pub(crate) enum RunUpdateKindDto {
 impl From<RunUpdateKind> for RunUpdateKindDto {
     fn from(value: RunUpdateKind) -> Self {
         match value {
+            RunUpdateKind::ProviderRetry(retry) => Self::ProviderRetry { retry },
             RunUpdateKind::State(status) => Self::State {
                 status: status.into(),
             },

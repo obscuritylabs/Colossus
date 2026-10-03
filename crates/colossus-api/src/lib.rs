@@ -47,5 +47,8 @@ pub use runs::{
     validate_public_approval_display, validate_public_command_context,
 };
 
+/// Safe automatic provider recovery progress.
+pub use colossus_contracts::{ProviderRetry, ProviderRetryState};
+
 #[cfg(test)]
 mod tests;

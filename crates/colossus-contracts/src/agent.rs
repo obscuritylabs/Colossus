@@ -288,6 +288,11 @@ pub struct ProviderUsage {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ProviderEvent {
+    /// Safe transport progress, separate from model text and token accounting.
+    Retry {
+        /// Bounded automatic recovery state.
+        retry: crate::ProviderRetry,
+    },
     /// Visible text delta. Non-streaming providers emit one complete delta.
     ModelDelta {
         /// Visible text.
@@ -323,6 +328,11 @@ pub enum ProviderEvent {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ProviderStreamItem {
+    /// Safe transport progress released before response content.
+    Retry {
+        /// Bounded recovery state.
+        retry: crate::ProviderRetry,
+    },
     /// One safe normalized provider event.
     Event {
         /// Event released through per-chunk post-effect policy.

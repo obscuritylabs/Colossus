@@ -715,3 +715,58 @@ describe("RunTimeline assistant output", () => {
     expect(markup).not.toContain("<small>0 steps · 0s</small>");
   });
 });
+
+describe("provider recovery presentation", () => {
+  const retryUpdate = (
+    state: "backoff" | "retrying" | "recovered",
+  ): RunUpdate => ({
+    runId: "run-markdown-test",
+    sequence: 4,
+    createdAt: "2026-10-03T00:00:00Z",
+    update: {
+      type: "provider_retry",
+      retry: {
+        attempt: 2,
+        max_retries: 5,
+        http_status: 503,
+        state,
+        retry_at: state === "backoff" ? "2026-10-03T00:00:04Z" : null,
+      },
+    },
+  });
+
+  it("shows one inline countdown without adding recovery to the transcript", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-10-03T00:00:00Z"));
+      const markup = renderOutput("", "running", "watching", [
+        retryUpdate("backoff"),
+      ]);
+      expect(markup).toContain("provider-retry-status");
+      expect(markup).toContain("Next attempt in 4s");
+      expect(markup).toContain('role="status"');
+      expect(markup).toContain('aria-live="polite"');
+      expect(markup.match(/Reconnecting to provider/g)).toHaveLength(1);
+      expect(markup).not.toContain("HTTP 503");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("replaces the countdown while dispatching and clears on recovery or cancellation", () => {
+    expect(
+      renderOutput("", "running", "watching", [retryUpdate("retrying")]),
+    ).toContain("Retrying now…");
+    for (const status of [
+      "running",
+      "cancelling",
+      "failed",
+      "cancelled",
+    ] as const) {
+      const state = status === "running" ? "recovered" : "backoff";
+      expect(
+        renderOutput("", status, "watching", [retryUpdate(state)]),
+      ).not.toContain("provider-retry-status");
+    }
+  });
+});

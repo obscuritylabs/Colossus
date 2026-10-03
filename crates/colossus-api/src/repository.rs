@@ -2349,6 +2349,28 @@ fn validate_update(run: &Run, kind: &RunUpdateKind) -> ApiResult<()> {
         }
         RunUpdateKind::Interaction { interaction } => validate_interaction(run, interaction)?,
         RunUpdateKind::Message { message } => validate_released_message(message)?,
+        RunUpdateKind::ProviderRetry { retry } => {
+            if retry.max_retries != 5
+                || !(1..=5).contains(&retry.attempt)
+                || !matches!(retry.http_status, 502..=504)
+                || (retry.state == colossus_contracts::ProviderRetryState::Backoff)
+                    != retry.retry_at.is_some()
+                || retry.retry_at.as_ref().is_some_and(|value| {
+                    value.len() > 64
+                        || time::OffsetDateTime::parse(
+                            value,
+                            &time::format_description::well_known::Rfc3339,
+                        )
+                        .is_err()
+                })
+            {
+                return Err(ApiError::invalid(
+                    ApiErrorReason::InvalidArgument,
+                    "update.provider_retry",
+                    "provider recovery progress is invalid",
+                ));
+            }
+        }
         RunUpdateKind::Notice { notice } => {
             token(&notice.reason, "update.notice.reason", MAX_IDENTIFIER_BYTES)?;
             bounded_text(&notice.message, "update.notice.message", 65_536, true)?;
@@ -2760,7 +2782,8 @@ fn apply_update(
         | RunUpdateKind::ToolActivity { .. }
         | RunUpdateKind::Usage { .. }
         | RunUpdateKind::Message { .. }
-        | RunUpdateKind::Notice { .. } => {}
+        | RunUpdateKind::Notice { .. }
+        | RunUpdateKind::ProviderRetry { .. } => {}
         RunUpdateKind::Interaction { interaction } => match interaction.status {
             InteractionStatus::Pending => {
                 run.status = RunStatus::Waiting;

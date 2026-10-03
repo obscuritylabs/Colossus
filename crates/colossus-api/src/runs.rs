@@ -743,6 +743,11 @@ pub struct RunUpdate {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RunUpdateKind {
+    /// Safe provider recovery progress, without conversation output.
+    ProviderRetry {
+        /// Bounded automatic recovery state.
+        retry: colossus_contracts::ProviderRetry,
+    },
     /// Durable lifecycle transition.
     State {
         /// New run state.

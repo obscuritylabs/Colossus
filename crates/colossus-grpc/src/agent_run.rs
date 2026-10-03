@@ -1288,6 +1288,19 @@ async fn proto_update(
         CoreRunUpdateKind::Message { message } => {
             run_update::Update::Message(proto_released_message(message)?)
         }
+        CoreRunUpdateKind::ProviderRetry { retry } => {
+            run_update::Update::ProviderRetry(colossus_api_proto::v1alpha1::ProviderRetry {
+                attempt: retry.attempt,
+                max_retries: retry.max_retries,
+                http_status: retry.http_status,
+                state: match retry.state {
+                    colossus_contracts::ProviderRetryState::Backoff => 1,
+                    colossus_contracts::ProviderRetryState::Retrying => 2,
+                    colossus_contracts::ProviderRetryState::Recovered => 3,
+                },
+                retry_at: retry.retry_at,
+            })
+        }
         CoreRunUpdateKind::Notice { notice } => run_update::Update::Notice(RunNotice {
             reason: notice.reason,
             message: notice.message,

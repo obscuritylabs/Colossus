@@ -454,13 +454,26 @@ fn sse_server(responses: Vec<&'static str>) -> (String, thread::JoinHandle<Vec<S
     (format!("http://{address}"), task)
 }
 
-fn status_server(status: &'static str, body: &'static str) -> (String, thread::JoinHandle<String>) {
+fn status_server_with_retry_after(
+    status: &'static str,
+    body: &'static str,
+    retry_after: Option<&'static str>,
+) -> (String, thread::JoinHandle<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("provider listener");
     let address = listener.local_addr().expect("provider address");
     let task = thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("provider accept");
         let request = read_request(&mut stream);
-        respond_json(&mut stream, status, body);
+        let retry_after = retry_after
+            .map(|value| format!("retry-after: {value}\r\n"))
+            .unwrap_or_default();
+        let headers = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\n{retry_after}content-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(headers.as_bytes()).expect("headers");
+        stream.write_all(body.as_bytes()).expect("JSON body");
+        stream.flush().expect("flush response");
         request
     });
     (format!("http://{address}"), task)
@@ -1279,9 +1292,10 @@ fn active_provider_stream_can_outlive_its_inactivity_timeout() {
 fn service_unavailable_is_visible_as_a_recoverable_provider_error() {
     let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
-    let (origin, server) = status_server(
+    let (origin, server) = status_server_with_retry_after(
         "503 Service Unavailable",
         r#"{"error":{"message":"private local loading detail"}}"#,
+        Some("86400"),
     );
     let config = write_failure_config(directory.path(), &origin, "echo");
 
