@@ -42,6 +42,14 @@ missing configured resource, credential, extension trust decision, or post-effec
 release. A separate acknowledged full-access execution boundary can supply ambient
 resource authority after the action decision; it does not create a capability.
 
+Persistent schedule creation and enabled-state control are explicit review defaults
+under `allow_all` as well as `development`. This includes creating a paused schedule
+and disabling future ticks. Reads remain read-only. Ask and Risk auto request a
+decision; Deny rejects approval obligations; explicitly elevated Full access can
+satisfy them. Exact policy denials continue to deny. Review binds the normalized UTC
+start, immutable inputs/cadence/misfire/state, definition hash, or canonical control
+revision. Future occurrences require current workflow and effect policy independently.
+
 ## Exact override rules
 
 - `tools.include` and `tools.exclude` contain exact tool names.

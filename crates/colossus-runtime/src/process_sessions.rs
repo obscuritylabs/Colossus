@@ -88,6 +88,30 @@ fn state(session: &ManagedSession) -> std::sync::MutexGuard<'_, SessionState> {
 }
 
 impl ProcessSessions {
+    pub(super) fn journal_for_workflows(&self) -> &dyn EventJournal {
+        self.journal.as_ref()
+    }
+
+    pub(super) fn registry_for_workflows(
+        &self,
+        context: &ExecutionContext,
+    ) -> Result<Actor, ToolError> {
+        let registry = self.registry();
+        let owner = context
+            .run_id
+            .as_ref()
+            .and_then(|id| registry.runs.get(id))
+            .ok_or_else(|| ToolError::Denied("active run ownership is required".into()))?;
+        if owner.control.is_cancelled()
+            || owner.context.session_id != context.session_id
+            || owner.context.subagent_id != context.subagent_id
+        {
+            return Err(ToolError::Denied(
+                "active run lineage does not match".into(),
+            ));
+        }
+        Ok(owner.actor.clone())
+    }
     pub(super) fn open(
         journal: Arc<dyn EventJournal>,
         gateway: Arc<EffectGateway>,

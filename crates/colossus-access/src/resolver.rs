@@ -226,7 +226,16 @@ fn profile_decision(profile: AccessProfile, descriptor: &ActionDescriptor) -> Ac
             | ActionClass::ExternalNetwork
             | ActionClass::Administration => AccessDecision::RequireApproval,
         },
-        AccessProfile::AllowAll => AccessDecision::Allow,
+        AccessProfile::AllowAll => {
+            if matches!(
+                descriptor.name.as_str(),
+                "workflow.schedule.create" | "workflow.schedule.set_enabled"
+            ) {
+                AccessDecision::RequireApproval
+            } else {
+                AccessDecision::Allow
+            }
+        }
         AccessProfile::Pinned => {
             if descriptor.name == "provider.echo" {
                 AccessDecision::Allow

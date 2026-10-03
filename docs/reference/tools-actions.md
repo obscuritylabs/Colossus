@@ -32,6 +32,24 @@ and output bounds.
 | Search and fetch | `web.search`, `web.fetch`, `docs.fetch`, `network.http` | Search needs an explicit route; generic fetch needs host activation plus declared or ambient HTTP(S) authority; quarantined output |
 | MCP | `mcp.servers`, `mcp.search`, `mcp.tools`, `mcp.call` | Configured stdio or Streamable HTTP servers and exact-name or star-pattern tool allowlists |
 | Integrations | Connected operation names | Configured, trusted, and selected only |
+| Workflows | `workflow.definition.list`, `workflow.definition.get`, `workflow.schedule.list`, `workflow.schedule.get`, `workflow.schedule.create`, `workflow.schedule.set_enabled` | Registered hash-pinned definitions; caller-owned canonical schedules; persistent mutations use policy, review, one-use permits, and quarantined results |
+
+Schedule create and enabled-state control are Administration actions. Both require
+approval under Allow all and Development defaults, including initially paused creation
+and disable. Reads remain Read actions. Exact overrides and external policy retain
+their authority. Risk auto does not automatically approve persistent schedule controls.
+The strict tools accept no owner, application, Workspace, session, or run provenance;
+the host binds these from active authenticated run and delegation evidence. Application
+scopes remain an independent requirement. Schedule fields are immutable except enabled
+state, and controls require the canonical revision returned by an authorized read.
+Agent schedule input snapshots are limited to 48 KiB so the complete immutable inputs
+fit in the approval review.
+`workflow.definition.read` is the Read action shared by registered-definition listing
+and inspection.
+`workflow.definition.register` is an Administration action for validated definition
+registration; Desktop operators use the separately scoped authenticated import API.
+`workflow.run.read` and `workflow.run.start` describe independent workflow-run
+inspection and allocation; their authenticated API scopes are distinct from chat runs.
 
 Every tool schema denies unknown fields. Tool availability does not imply permission.
 The access profile and exact overrides decide visibility and the built-in decision;

@@ -295,7 +295,7 @@ impl ApprovalProvider for PublicInteractionRouter {
         let response = request_interaction(
             &active,
             InteractionKind::Approval,
-            PUBLIC_APPROVAL_PROMPT.into(),
+            public_approval_prompt(request),
             Vec::new(),
             false,
             Some(ApprovalContext {
@@ -533,9 +533,60 @@ fn public_approval_resource(request: &EffectRequest) -> String {
     }
 }
 
+fn public_approval_prompt(request: &EffectRequest) -> String {
+    use colossus_contracts::WorkflowControlOperation as Operation;
+    if matches!(
+        request.action.as_str(),
+        "workflow.schedule.create" | "workflow.schedule.set_enabled"
+    ) && let Ok(operation) = serde_json::from_value::<Operation>(request.content.clone())
+        && operation.action() == request.action
+        && operation.resource() == request.resource
+    {
+        let summary = match operation {
+            Operation::CreateSchedule {
+                schedule_id,
+                workflow_id,
+                expected_hash,
+                inputs,
+                cadence_seconds,
+                starts_at,
+                misfire_policy,
+                enabled,
+                ..
+            } => {
+                let input = serde_json::to_string(&inputs).unwrap_or_default();
+                let input = if input.len() <= 48 * 1024 {
+                    input
+                } else {
+                    "Input snapshot exceeds inline review size; deny and request a smaller reviewed schedule.".into()
+                };
+                format!(
+                    "Create persistent schedule {schedule_id} for {workflow_id}.\nPinned definition: {expected_hash}\nCadence: {cadence_seconds} seconds (fixed elapsed time)\nFirst UTC boundary: {starts_at}\nMultiple overdue occurrences: {misfire_policy:?}\nInitially enabled: {enabled}\nImmutable inputs: {input}\nOne due occurrence queues a run under either policy. Multiple due occurrences fire the latest once or skip all. A running worker is required. Each occurrence starts an independent workflow run."
+                )
+            }
+            Operation::SetScheduleEnabled {
+                schedule_id,
+                enabled,
+                etag,
+            } => format!(
+                "{} persistent schedule {schedule_id}.\nReviewed canonical revision: {etag}\nPausing affects future ticks; already queued or running workflows continue. Enabling retains its next boundary and may reconcile missed occurrences. Inspect the schedule before approving.",
+                if enabled { "Enable" } else { "Pause" }
+            ),
+            _ => return PUBLIC_APPROVAL_PROMPT.into(),
+        };
+        return summary;
+    }
+    PUBLIC_APPROVAL_PROMPT.into()
+}
+
 fn public_approval_action(request: &EffectRequest) -> String {
     let action = request.action.as_str();
-    if action.starts_with("filesystem.")
+    if matches!(
+        action,
+        "workflow.schedule.create" | "workflow.schedule.set_enabled"
+    ) {
+        "workflow.schedule.control".into()
+    } else if action.starts_with("filesystem.")
         || action.starts_with("patch.")
         || action.starts_with("git.")
         || action.starts_with("repo.")

@@ -45,6 +45,7 @@ The left side is your workspace and thread list. **Work** is where you start or 
 | [Session views](session-views.md) | Inspect a conversation, plan, activity, sources, snapshots, and other resources. |
 | [Tools beside your work](tools.md) | Browse files, inspect changes, open a terminal, view artifacts, or ask in an Aside. |
 | [Capabilities and plugins](capabilities.md) | See the selected runtime's advertised tools and use installed skills or plugin connections. |
+| [Workflow schedules](schedules.md) | Register an existing workflow, review a fixed cadence, and inspect independent runs. |
 | [Settings and access](settings.md) | Choose a model, set workspace access, manage shared connections, and run diagnostics. |
 | [External targets](external-targets.md) | Connect Desktop to an enrolled daemon instead of a managed local workspace. |
 

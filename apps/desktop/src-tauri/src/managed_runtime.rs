@@ -58,7 +58,14 @@ const CONFIGURATION_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CONFIGURATION_DRAIN_TIMEOUT: Duration = Duration::from_mins(5);
 const OUTLOOK_SESSION_SERVER: &str = "outlook-session";
 const OUTLOOK_SESSION_CREDENTIAL: &str = "outlook-companion-session";
-const PRIMARY_SCOPES: [&str; 7] = [
+const PRIMARY_SCOPES: [&str; 14] = [
+    scopes::WORKFLOWS_READ,
+    scopes::WORKFLOWS_REGISTER,
+    scopes::WORKFLOW_RUNS_READ,
+    scopes::WORKFLOW_RUNS_START,
+    scopes::SCHEDULES_READ,
+    scopes::SCHEDULES_CREATE,
+    scopes::SCHEDULES_CONTROL,
     scopes::EXTENSIONS_READ,
     scopes::RUNS_EXECUTE,
     scopes::RUNS_READ,
@@ -69,6 +76,12 @@ const PRIMARY_SCOPES: [&str; 7] = [
 ];
 
 const TRUSTED_BUILTIN_TOOL_GRANT: &[&str] = &[
+    "workflow.definition.list",
+    "workflow.definition.get",
+    "workflow.schedule.list",
+    "workflow.schedule.get",
+    "workflow.schedule.create",
+    "workflow.schedule.set_enabled",
     "agent.delegate",
     "agent.list",
     "agent.result",
@@ -289,6 +302,18 @@ async fn ensure_managed_capacity(
 pub(crate) async fn managed_target_has_active_work(
     client: &Colossus,
 ) -> Result<bool, CommandErrorDto> {
+    if client.capabilities().contains("schedules.read") {
+        let workflows = client
+            .workflows()
+            .ok_or_else(|| CommandErrorDto::busy("Workflow activity could not be inspected."))?;
+        if workflows
+            .has_active_work()
+            .await
+            .map_err(CommandErrorDto::from_api)?
+        {
+            return Ok(true);
+        }
+    }
     if client.capabilities().contains("process_sessions.v1") {
         let mut after = None;
         for _ in 0..3 {
@@ -1581,7 +1606,7 @@ mod tests {
         }
         assert!(!debug.contains("worker.admin"));
         assert!(!debug.contains(scopes::APPROVALS_RESPOND));
-        assert_eq!(PRIMARY_SCOPES.len(), 7);
+        assert_eq!(PRIMARY_SCOPES.len(), 14);
         for required in PRIMARY_SCOPES {
             assert!(debug.contains(required));
         }
@@ -1594,6 +1619,13 @@ mod tests {
         assert!(debug.contains(APPLICATION_ID));
         assert!(debug.contains("primary"));
         assert!(!debug.contains("shell.run"));
+        for scope in [
+            scopes::SCHEDULES_CREATE,
+            scopes::SCHEDULES_CONTROL,
+            scopes::WORKFLOWS_REGISTER,
+        ] {
+            assert!(!debug.contains(scope));
+        }
     }
 
     #[test]

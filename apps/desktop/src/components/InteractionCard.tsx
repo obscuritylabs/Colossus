@@ -75,7 +75,15 @@ export function InteractionCard({
             </span>
           )}
         </div>
-        <p>{content.reason}</p>
+        <p
+          className={
+            content.action === "workflow.schedule.control"
+              ? "preserve-lines"
+              : undefined
+          }
+        >
+          {content.reason}
+        </p>
         {content.commandContext ? (
           <CommandApprovalDetails context={content.commandContext} />
         ) : content.action === "process.execute" ? (

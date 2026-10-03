@@ -49,6 +49,7 @@ run(
     "tests/browser/approval-diagnostics.spec.ts",
     "tests/browser/approval-runtime.spec.ts",
     "tests/browser/process-runtime.spec.ts",
+    "tests/browser/workflow-runtime.spec.ts",
   ],
   desktop,
   {

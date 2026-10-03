@@ -61,6 +61,12 @@ const MAX_SUBSCRIPTION_DISPATCHES_PER_TICK: usize = 64;
 /// Workflow validation or durable execution failure.
 #[derive(Debug, Error)]
 pub enum WorkflowError {
+    /// Optimistic revision, reviewed hash, or idempotency intent changed.
+    #[error("workflow control conflict: {0}")]
+    Conflict(String),
+    /// Record is outside the trusted caller's ownership.
+    #[error("workflow control is not authorized")]
+    PermissionDenied,
     /// Definition violates the strict workflow contract.
     #[error("invalid workflow definition: {0}")]
     InvalidDefinition(String),
@@ -85,6 +91,7 @@ pub enum WorkflowError {
 }
 
 mod condition;
+mod control;
 mod execution;
 mod repository;
 mod schedule_ticks;
@@ -95,6 +102,7 @@ mod validation;
 mod webhooks;
 
 pub use condition::Condition;
+pub use control::normalize_control_operation;
 pub use execution::DenyWorkflowEffects;
 pub use repository::EventSourcedWorkflowRepository;
 pub use service::{WorkflowEffect, WorkflowEffectRunner, WorkflowService};

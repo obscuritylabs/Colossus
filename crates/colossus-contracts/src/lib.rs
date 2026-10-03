@@ -35,6 +35,7 @@ mod session;
 mod tool_pattern;
 mod work;
 mod workflow;
+mod workflow_control;
 
 pub use agent::*;
 pub use command_approval::*;
@@ -64,6 +65,7 @@ pub use session::*;
 pub use tool_pattern::*;
 pub use work::*;
 pub use workflow::*;
+pub use workflow_control::*;
 
 #[cfg(test)]
 mod tests;

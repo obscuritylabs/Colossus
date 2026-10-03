@@ -1,0 +1,14 @@
+use super::*;
+
+pub(super) fn workflow_specs() -> Vec<ToolSpec> {
+    let id = json!({"type": "string", "minLength": 1, "maxLength": 128});
+    let page = json!({"after": id, "limit": {"type": "integer", "minimum": 1, "maximum": 100}});
+    [
+        ("workflow.definition.list", "workflow.definition.read", "List registered workflow identities and exact definition hashes in this Workspace.", page.clone(), vec![]),
+        ("workflow.definition.get", "workflow.definition.read", "Inspect one registered workflow and its strict input schema before scheduling.", json!({"workflow_id": id}), vec!["workflow_id"]),
+        ("workflow.schedule.list", "workflow.schedule.list", "List this application's schedules, with metadata-only legacy records. Lists omit input snapshots.", page, vec![]),
+        ("workflow.schedule.get", "workflow.schedule.get", "Inspect a schedule's canonical inputs, fixed cadence, origin, last dispatch, last independent run ID, and revision token.", json!({"schedule_id": id}), vec!["schedule_id"]),
+        ("workflow.schedule.create", "workflow.schedule.create", "Request review of an immutable fixed-cadence registered-workflow schedule, including initially paused schedules. Future runs require current policy and a running worker; schedules do not wake sleeping Workspaces. One due boundary always queues; multiple boundaries use fire_once or skip. Preserve the same retry key and exact intent when reconciling an uncertain result.", json!({"schedule_id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9.-]*$"}, "workflow_id": id, "expected_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "inputs": {"type": "object"}, "cadence_seconds": {"type": "integer", "minimum": 60, "maximum": 2678400}, "starts_at": {"type": "string", "minLength": 1, "maxLength": 64}, "misfire_policy": {"type": "string", "enum": ["fire_once", "skip"]}, "enabled": {"type": "boolean"}, "idempotency_key": id}), vec!["schedule_id", "workflow_id", "expected_hash", "inputs", "cadence_seconds", "starts_at", "misfire_policy", "enabled", "idempotency_key"]),
+        ("workflow.schedule.set_enabled", "workflow.schedule.set_enabled", "Request authorized future-tick control at the exact schedule revision. Pause does not cancel queued/running work; enable preserves the boundary and reconciles missed occurrences. A stale token needs fresh inspection and review.", json!({"schedule_id": id, "enabled": {"type": "boolean"}, "etag": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}), vec!["schedule_id", "enabled", "etag"]),
+    ].into_iter().map(|(name, action, description, properties, required)| ToolSpec { name: name.into(), description: description.into(), input_schema: json!({"type": "object", "properties": properties, "required": required, "additionalProperties": false}), effect_action: Some(action.into()), capability: Some(action.into()), max_output_bytes: 1024 * 1024 }).collect()
+}

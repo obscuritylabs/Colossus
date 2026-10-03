@@ -86,6 +86,7 @@ pub struct SystemServiceAdapter {
     readiness: Arc<dyn ReadinessProvider>,
     application_limits: Vec<ApiLimit>,
     plugin_discovery: bool,
+    workflows: bool,
 }
 
 impl SystemServiceAdapter {
@@ -96,6 +97,7 @@ impl SystemServiceAdapter {
             readiness,
             application_limits: default_application_limits(),
             plugin_discovery: false,
+            workflows: false,
         }
     }
 
@@ -107,6 +109,10 @@ impl SystemServiceAdapter {
 
     pub(crate) fn with_plugin_discovery(mut self) -> Self {
         self.plugin_discovery = true;
+        self
+    }
+    pub(crate) fn with_workflows(mut self) -> Self {
+        self.workflows = true;
         self
     }
 }
@@ -135,6 +141,36 @@ impl SystemService for SystemServiceAdapter {
             enabled: caller.principal().has_scope(scope),
             detail: String::new(),
         })
+        .chain(
+            [
+                ("workflows.read", scopes::WORKFLOWS_READ),
+                ("workflows.register", scopes::WORKFLOWS_REGISTER),
+                ("workflow_runs.read", scopes::WORKFLOW_RUNS_READ),
+                ("workflow_runs.start", scopes::WORKFLOW_RUNS_START),
+                ("schedules.read", scopes::SCHEDULES_READ),
+                ("schedules.create", scopes::SCHEDULES_CREATE),
+                ("schedules.control", scopes::SCHEDULES_CONTROL),
+            ]
+            .into_iter()
+            .map(|(name, scope)| Capability {
+                name: name.into(),
+                enabled: self.workflows
+                    && caller.principal().has_scope(scope)
+                    && match name {
+                        "workflows.register" => {
+                            caller.principal().has_scope(scopes::WORKFLOWS_READ)
+                        }
+                        "workflow_runs.start" => {
+                            caller.principal().has_scope(scopes::WORKFLOW_RUNS_READ)
+                        }
+                        "schedules.create" | "schedules.control" => {
+                            caller.principal().has_scope(scopes::SCHEDULES_READ)
+                        }
+                        _ => true,
+                    },
+                detail: String::new(),
+            }),
+        )
         .chain(std::iter::once(Capability {
             name: "plugins.discovery".into(),
             enabled: self.plugin_discovery && caller.principal().has_scope(scopes::EXTENSIONS_READ),
@@ -495,6 +531,60 @@ mod tests {
         assert!(disabled.contains("agent_runs.delegation"));
         assert!(disabled.contains(PLAN_CONTINUATION_CAPABILITY));
         assert!(disabled.contains(SESSION_ACTIVITY_CAPABILITY));
+    }
+
+    #[tokio::test]
+    async fn workflow_discovery_requires_hosting_and_matching_read_scopes() {
+        let granted = [
+            scopes::WORKFLOWS_REGISTER,
+            scopes::SCHEDULES_CREATE,
+            scopes::SCHEDULES_CONTROL,
+            scopes::WORKFLOW_RUNS_START,
+        ];
+        for hosted in [false, true] {
+            let service = if hosted {
+                service().with_workflows()
+            } else {
+                service()
+            };
+            let info = service
+                .get_server_info(request_with(GetServerInfoRequest {}, granted, vec![]))
+                .await
+                .unwrap()
+                .into_inner()
+                .server_info
+                .unwrap();
+            assert!(!info.capabilities.iter().any(|c| c.enabled
+                && (c.name.starts_with("workflow") || c.name.starts_with("schedules"))));
+        }
+        let info = service()
+            .with_workflows()
+            .get_server_info(request_with(
+                GetServerInfoRequest {},
+                granted.into_iter().chain([
+                    scopes::WORKFLOWS_READ,
+                    scopes::SCHEDULES_READ,
+                    scopes::WORKFLOW_RUNS_READ,
+                ]),
+                vec![],
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+            .server_info
+            .unwrap();
+        for name in [
+            "workflows.register",
+            "schedules.create",
+            "schedules.control",
+            "workflow_runs.start",
+        ] {
+            assert!(
+                info.capabilities
+                    .iter()
+                    .any(|c| c.name == name && c.enabled)
+            );
+        }
     }
 
     #[tokio::test]
