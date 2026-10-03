@@ -1,4 +1,11 @@
 use super::*;
+use colossus_contracts::ThemeColor;
+
+const COMPOSER_BACKGROUND: ThemeColor = ThemeColor {
+    red: 35,
+    green: 39,
+    blue: 44,
+};
 
 pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area: Rect) {
     let palette = TerminalPalette::for_preferences(&state.preferences);
@@ -19,8 +26,9 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area:
     let first_visible_row = layout
         .cursor_row
         .saturating_sub(visible_rows.saturating_sub(1));
-    let mut ghost_style = palette.meta_style();
-    ghost_style.dim = true;
+    let surface = chrome_text_style(palette.assistant_style(), COMPOSER_BACKGROUND);
+    let hint_style = chrome_text_style(palette.meta_style(), COMPOSER_BACKGROUND);
+    let ghost_style = hint_style.add_modifier(Modifier::DIM);
     text.extend(
         layout
             .lines
@@ -30,7 +38,7 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area:
             .map(|line| {
                 Line::from(vec![
                     Span::raw(line.draft.clone()),
-                    Span::styled(line.ghost.clone(), ratatui_style(ghost_style)),
+                    Span::styled(line.ghost.clone(), ghost_style),
                 ])
             }),
     );
@@ -83,14 +91,18 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area:
     let inner_width = composer_inner_width(area.width);
     let hint = composer_hint(state, &layout, visible_rows, inner_width);
     let composer_block = Block::default()
+        .style(surface)
         .borders(Borders::ALL)
-        .border_style(ratatui_style(palette.meta_style()))
+        .border_style(hint_style)
         .title(Span::styled(
             truncate_width_with_ellipsis(&title, inner_width),
-            ratatui_style(palette.assistant_style()).add_modifier(Modifier::BOLD),
+            surface.add_modifier(Modifier::BOLD),
         ))
-        .title_bottom(Span::styled(hint, ratatui_style(ghost_style)));
-    frame.render_widget(Paragraph::new(text).block(composer_block), area);
+        .title_bottom(Span::styled(hint, hint_style));
+    frame.render_widget(
+        Paragraph::new(text).style(surface).block(composer_block),
+        area,
+    );
     if state.preview_cache.native_graphics() {
         let pending = state
             .pending_images
