@@ -442,9 +442,9 @@ describe("desktop API target routing", () => {
           maxOutputTokens: 4_096,
           reasoningEffort: null,
           capabilities: {
-            toolCalls: false,
-            streaming: false,
-            imageInputs: false,
+            toolCalls: "off",
+            streaming: "off",
+            imageInputs: "off",
           },
         },
       ],
@@ -557,7 +557,11 @@ describe("desktop API target routing", () => {
         model: "gpt-compatible",
         contextWindowTokens: 128_000,
         maxOutputTokens: 16_384,
-        capabilities: { toolCalls: true, streaming: true, imageInputs: false },
+        capabilities: {
+          toolCalls: "on" as const,
+          streaming: "on" as const,
+          imageInputs: "off" as const,
+        },
         reasoningEffort: null,
       },
     };

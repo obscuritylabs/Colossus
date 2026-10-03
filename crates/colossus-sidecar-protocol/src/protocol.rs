@@ -21,7 +21,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 /// Exact bootstrap protocol version.
-pub const PROTOCOL_VERSION: u16 = 10;
+pub const PROTOCOL_VERSION: u16 = 11;
 /// Exact desktop-to-TUI inherited-channel protocol version.
 pub const DESKTOP_TUI_PROTOCOL_VERSION: u16 = 3;
 /// Fixed child descriptor from which the bundled TUI reads native authentication.
@@ -485,15 +485,53 @@ impl ManagedProviderConfig {
 
 /// Explicit request-shaping capabilities for an app-managed model.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct ManagedModelCapabilities {
     /// Whether the model receives tools and structured tool history.
-    pub tool_calls: bool,
+    pub tool_calls: colossus_contracts::ModelFeatureMode,
     /// Whether the model uses provider streaming.
-    pub streaming: bool,
+    pub streaming: colossus_contracts::ModelFeatureMode,
     /// Whether the model receives verified encrypted run-input images.
-    #[serde(default)]
-    pub image_inputs: bool,
+    #[serde(default = "legacy_image_mode")]
+    pub image_inputs: colossus_contracts::ModelFeatureMode,
+    /// Optional Responses server compaction preference.
+    pub server_compaction: colossus_contracts::ModelFeatureMode,
+    /// Advertised model-card metadata, independent of the saved preference.
+    pub declared: colossus_contracts::ModelFeatureDeclarations,
+}
+
+fn legacy_image_mode() -> colossus_contracts::ModelFeatureMode {
+    colossus_contracts::ModelFeatureMode::Off
+}
+
+impl Default for ManagedModelCapabilities {
+    fn default() -> Self {
+        colossus_contracts::ModelFeatureSettings::default().into()
+    }
+}
+
+impl From<colossus_contracts::ModelFeatureSettings> for ManagedModelCapabilities {
+    fn from(value: colossus_contracts::ModelFeatureSettings) -> Self {
+        Self {
+            tool_calls: value.tool_calls,
+            streaming: value.streaming,
+            image_inputs: value.image_inputs,
+            server_compaction: value.server_compaction,
+            declared: value.declared,
+        }
+    }
+}
+
+impl From<ManagedModelCapabilities> for colossus_contracts::ModelFeatureSettings {
+    fn from(value: ManagedModelCapabilities) -> Self {
+        Self {
+            tool_calls: value.tool_calls,
+            streaming: value.streaming,
+            image_inputs: value.image_inputs,
+            server_compaction: value.server_compaction,
+            declared: value.declared,
+        }
+    }
 }
 
 /// Compact explicit model metadata without provider credentials.
@@ -1196,9 +1234,10 @@ impl ManagedRuntimeConfig {
                 context_window_tokens: 32_768,
                 max_output_tokens: 4_096,
                 capabilities: ManagedModelCapabilities {
-                    tool_calls: true,
-                    streaming: true,
-                    image_inputs: false,
+                    tool_calls: true.into(),
+                    streaming: true.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
                 reasoning_effort: None,
             }],
@@ -2019,9 +2058,10 @@ mod tests {
                     context_window_tokens: 32_768,
                     max_output_tokens: 4_096,
                     capabilities: ManagedModelCapabilities {
-                        tool_calls: true,
-                        streaming: true,
-                        image_inputs: false,
+                        tool_calls: true.into(),
+                        streaming: true.into(),
+                        image_inputs: false.into(),
+                        ..Default::default()
                     },
                     reasoning_effort: None,
                 }],

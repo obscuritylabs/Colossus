@@ -68,11 +68,17 @@ pub use profile::*;
 
 mod executor;
 pub use executor::*;
+mod continuation;
+pub use continuation::{ProviderAdapterStreamItem, ProviderAdapterTurn};
 
 mod retry;
 
 mod registry;
 pub use registry::*;
+mod features;
+pub use features::{ProviderFeature, ProviderFeatureRejection};
 
+#[cfg(test)]
+mod feature_tests;
 #[cfg(test)]
 mod tests;

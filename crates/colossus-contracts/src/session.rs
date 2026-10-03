@@ -594,6 +594,12 @@ pub struct ContextStatus {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedContext {
+    /// Internal fingerprint of the exact dynamic decision and memory bindings.
+    #[serde(skip)]
+    pub context_binding_hash: String,
+    /// Safe identifier of private Responses state used on this request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation_id: Option<String>,
     /// Ordered messages released to the provider.
     pub messages: Vec<ModelMessage>,
     /// Estimated tokens in the released request.

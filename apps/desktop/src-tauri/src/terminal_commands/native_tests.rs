@@ -142,9 +142,10 @@ fn tui_fixture() -> (
             context_window_tokens: 32768,
             max_output_tokens: 1024,
             capabilities: ModelCapabilitiesSetting {
-                tool_calls: true,
-                streaming: false,
-                image_inputs: false,
+                tool_calls: true.into(),
+                streaming: false.into(),
+                image_inputs: false.into(),
+                ..Default::default()
             },
             reasoning_effort: None,
         }],

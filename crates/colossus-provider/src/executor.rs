@@ -18,6 +18,12 @@ pub struct ProviderEffectInput {
     /// Selected route streaming capability; absent retains streaming compatibility.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_response: Option<bool>,
+    /// Optional absolute rendered-token threshold, only for public Responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_compaction_threshold: Option<u64>,
+    /// Safe state provenance; opaque items are resolved only after a permit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation: Option<colossus_contracts::ProviderContinuationPlan>,
     /// Provider connection profile selected by routing.
     pub provider_profile: String,
     /// Model profile selected by routing. Absent only for provider diagnostics.
@@ -68,6 +74,7 @@ pub enum ProviderError {
 enum ProviderJsonResponse {
     Success(Vec<u8>),
     HttpError(ProviderResponseDiagnostic),
+    FeatureRejected(crate::ProviderFeatureRejection),
 }
 
 #[derive(Default)]
@@ -96,6 +103,14 @@ struct ProviderStreamMetadata<'a> {
     model: &'a str,
     include_response_diagnostics: bool,
     generation_deadline: tokio::time::Instant,
+    continuation_plan: Option<colossus_contracts::ProviderContinuationPlan>,
+    candidate_id: String,
+}
+
+struct ProviderJsonGeneration<'a> {
+    response: reqwest::Response,
+    secrets: RequestSecrets,
+    payload: &'a Value,
 }
 
 enum CollectedProviderOutput {
@@ -298,6 +313,7 @@ impl CredentialResolver for HostCredentialResolver {
 
 /// One permit-bound provider adapter instance.
 pub struct ProviderExecutor {
+    pub(super) continuations: Option<Arc<dyn colossus_ports::ProviderContinuationRepository>>,
     pub(super) profile: ProviderProfile,
     pub(super) credentials: Arc<dyn CredentialResolver>,
     tls_roots: AdditionalRootCertificates,
@@ -318,6 +334,7 @@ impl ProviderExecutor {
         credentials: Arc<dyn CredentialResolver>,
     ) -> Self {
         Self {
+            continuations: None,
             profile,
             credentials,
             tls_roots: AdditionalRootCertificates::default(),
@@ -345,6 +362,16 @@ impl ProviderExecutor {
     #[must_use]
     pub fn with_run_input_media(mut self, media: Arc<dyn RunInputMediaResolver>) -> Self {
         self.media = Some(media);
+        self
+    }
+
+    /// Resolve private Responses state within the permit-bearing adapter.
+    #[must_use]
+    pub fn with_continuations(
+        mut self,
+        repository: Arc<dyn colossus_ports::ProviderContinuationRepository>,
+    ) -> Self {
+        self.continuations = Some(repository);
         self
     }
 
@@ -499,6 +526,14 @@ impl ProviderExecutor {
         let stream_response = input.stream_response.unwrap_or(true);
         let include_response_diagnostics = input.include_response_diagnostics;
         let reasoning_effort = input.reasoning_effort;
+        let continuation_plan = input.continuation.clone();
+        let continuation = self
+            .resolve_continuation(
+                continuation_plan.as_ref(),
+                effect.context.session_id.as_deref(),
+            )
+            .map_err(provider_execution_error)?;
+        let server_compaction_threshold = input.server_compaction_threshold;
         let model_request = input.request.ok_or_else(|| {
             provider_execution_error(ProviderError::Configuration(
                 "provider generation request is absent".into(),
@@ -568,7 +603,7 @@ impl ProviderExecutor {
             .map_err(provider_execution_error)?;
         let tool_names =
             ProviderToolNames::from_request(&model_request).map_err(provider_execution_error)?;
-        let payload = match self.profile.kind {
+        let mut payload = match self.profile.kind {
             ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => {
                 responses_payload_with_images(
                     &model_request,
@@ -577,7 +612,8 @@ impl ProviderExecutor {
                     max_output_tokens,
                     reasoning_effort,
                     stream_response,
-                    ProviderProjection::new(&tool_names, &resolved_images),
+                    ProviderProjection::new(&tool_names, &resolved_images)
+                        .with_continuation(continuation.as_ref()),
                 )
             }
             ProviderKind::OpenAiCompatible => chat_payload_with_images(
@@ -592,6 +628,8 @@ impl ProviderExecutor {
             ProviderKind::Echo => unreachable!("handled above"),
         }
         .map_err(provider_execution_error)?;
+        configure_compaction(&mut payload, self.profile.kind, server_compaction_threshold)
+            .map_err(provider_execution_error)?;
         self.stream_generation(
             &endpoint,
             payload,
@@ -600,6 +638,8 @@ impl ProviderExecutor {
                 model: &model,
                 include_response_diagnostics,
                 generation_deadline: deadline,
+                continuation_plan,
+                candidate_id: effect.request_id.clone(),
             },
             tool_names,
             permit,
@@ -625,7 +665,7 @@ pub(super) fn provider_generation_budget_ms(
 }
 
 async fn emit_stream_item(
-    item: ProviderStreamItem,
+    item: impl Serialize,
     permit: &ExecutionPermit,
     observer: &mut dyn QuarantinedEffectObserver,
 ) -> Result<QuarantinedEffectResult, ExecutionError> {
@@ -753,6 +793,9 @@ impl ProviderExecutor {
                 .await?
             {
                 ProviderJsonResponse::Success(bytes) => bytes,
+                ProviderJsonResponse::FeatureRejected(rejection) => {
+                    return bounded_result(&rejection, permit);
+                }
                 ProviderJsonResponse::HttpError(diagnostic) => {
                     return bounded_result(&diagnostic, permit);
                 }
@@ -767,6 +810,12 @@ impl ProviderExecutor {
         }
         let (model_profile, model, max_output_tokens) = generation_metadata(&input)?;
         let reasoning_effort = input.reasoning_effort;
+        let continuation_plan = input.continuation.clone();
+        let continuation = self.resolve_continuation(
+            continuation_plan.as_ref(),
+            effect.context.session_id.as_deref(),
+        )?;
+        let server_compaction_threshold = input.server_compaction_threshold;
         let model_request = input.request.ok_or_else(|| {
             ProviderError::Configuration("provider generation request is absent".into())
         })?;
@@ -802,7 +851,7 @@ impl ProviderExecutor {
         }
         self.validate_resource(effect, &endpoint, permit)?;
         let tool_names = ProviderToolNames::from_request(&model_request)?;
-        let payload = match self.profile.kind {
+        let mut payload = match self.profile.kind {
             ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => {
                 responses_payload_with_images(
                     &model_request,
@@ -811,7 +860,8 @@ impl ProviderExecutor {
                     max_output_tokens,
                     reasoning_effort,
                     false,
-                    ProviderProjection::new(&tool_names, &resolved_images),
+                    ProviderProjection::new(&tool_names, &resolved_images)
+                        .with_continuation(continuation.as_ref()),
                 )
             }
             ProviderKind::OpenAiCompatible => chat_payload_with_images(
@@ -825,6 +875,8 @@ impl ProviderExecutor {
             ),
             ProviderKind::Echo => unreachable!("handled above"),
         }?;
+        configure_compaction(&mut payload, self.profile.kind, server_compaction_threshold)?;
+        let request_payload = payload.clone();
         let bytes = match self
             .request_json(
                 &endpoint,
@@ -835,6 +887,9 @@ impl ProviderExecutor {
             .await?
         {
             ProviderJsonResponse::Success(bytes) => bytes,
+            ProviderJsonResponse::FeatureRejected(rejection) => {
+                return bounded_result(&rejection, permit);
+            }
             ProviderJsonResponse::HttpError(diagnostic) => {
                 return bounded_result(&diagnostic, permit);
             }
@@ -848,7 +903,37 @@ impl ProviderExecutor {
             }
             ProviderKind::Echo => unreachable!("handled above"),
         }?;
-        bounded_result(&turn, permit)
+        let response = serde_json::from_slice::<Value>(&bytes).ok();
+        let continuation_id = if response
+            .as_ref()
+            .is_some_and(|value| value["status"] == "completed")
+        {
+            let output = response
+                .as_ref()
+                .and_then(|value| value["output"].as_array())
+                .cloned()
+                .unwrap_or_default();
+            self.stage_continuation(
+                &effect.request_id,
+                continuation_plan.as_ref(),
+                &request_payload,
+                &output,
+                &turn,
+            )?
+        } else {
+            None
+        };
+        if continuation_id.is_some() {
+            bounded_result(
+                &crate::ProviderAdapterTurn {
+                    turn,
+                    continuation_id,
+                },
+                permit,
+            )
+        } else {
+            bounded_result(&turn, permit)
+        }
     }
 
     fn validate_resource(
@@ -939,14 +1024,24 @@ impl ProviderExecutor {
         .await
         .map_err(|_| ProviderError::Transport("provider request exceeded its deadline".into()))??;
         if !response.status().is_success() {
-            if include_response_diagnostics {
-                let payload = payload.as_ref().map(redacted_image_payload);
-                return self
-                    .capture_http_error(endpoint, payload, response, secret)
-                    .await
-                    .map(ProviderJsonResponse::HttpError);
+            let error = provider_status_error(&response);
+            let diagnostic = self
+                .capture_http_error(
+                    endpoint,
+                    payload.as_ref().map(redacted_image_payload),
+                    response,
+                    secret,
+                )
+                .await?;
+            if let Some(rejection) =
+                crate::features::feature_rejection(&diagnostic, payload.as_ref())
+            {
+                return Ok(ProviderJsonResponse::FeatureRejected(rejection));
             }
-            return Err(provider_status_error(&response));
+            if include_response_diagnostics {
+                return Ok(ProviderJsonResponse::HttpError(diagnostic));
+            }
+            return Err(error);
         }
         let limit = usize::try_from(permit.obligations().max_output_bytes)
             .map_err(|error| ProviderError::Configuration(error.to_string()))?;
@@ -961,7 +1056,13 @@ impl ProviderExecutor {
             }
             bytes.extend_from_slice(&chunk);
         }
-        secret.redact_bytes(&mut bytes);
+        if let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) {
+            secret.redact_value(&mut value);
+            bytes = serde_json::to_vec(&value)
+                .map_err(|_| ProviderError::Malformed("invalid provider JSON".into()))?;
+        } else {
+            secret.redact_bytes(&mut bytes);
+        }
         Ok(ProviderJsonResponse::Success(bytes))
     }
 
@@ -1087,6 +1188,7 @@ impl ProviderExecutor {
             secrets.0.push(secret);
         }
         if let Some(payload) = payload {
+            retain_opaque_redactions(payload, &mut secrets);
             let body = serde_json::to_vec(payload)
                 .map_err(|error| ProviderError::Malformed(error.to_string()))?;
             validate_serialized_provider_request(payload, body.len())?;
@@ -1223,6 +1325,10 @@ impl ProviderExecutor {
             body.extend_from_slice(&chunk);
         }
         secret.redact_bytes(&mut body);
+        if let Ok(value) = serde_json::from_slice::<Value>(&body) {
+            body = serde_json::to_vec(&redacted_image_payload(&value))
+                .map_err(|_| ProviderError::Malformed("invalid diagnostic JSON".into()))?;
+        }
         if body.len() > MAX_PROVIDER_DIAGNOSTIC_BODY_BYTES {
             body.truncate(MAX_PROVIDER_DIAGNOSTIC_BODY_BYTES);
             body_truncated = true;
@@ -1250,13 +1356,17 @@ impl ProviderExecutor {
 
     async fn release_json_generation(
         &self,
-        response: reqwest::Response,
-        secrets: RequestSecrets,
+        generation: ProviderJsonGeneration<'_>,
         metadata: ProviderStreamMetadata<'_>,
         tool_names: ProviderToolNames,
         permit: &ExecutionPermit,
         observer: &mut dyn QuarantinedEffectObserver,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        let ProviderJsonGeneration {
+            response,
+            secrets,
+            payload,
+        } = generation;
         let limit = usize::try_from(permit.obligations().max_output_bytes)
             .map_err(|error| ExecutionError::Failed(error.to_string()))?;
         let mut bytes = Vec::new();
@@ -1272,7 +1382,14 @@ impl ProviderExecutor {
             }
             bytes.extend_from_slice(&chunk);
         }
-        secrets.redact_bytes(&mut bytes);
+        let mut response_value = serde_json::from_slice::<Value>(&bytes).ok();
+        if let Some(value) = &mut response_value {
+            secrets.redact_value(value);
+            bytes = serde_json::to_vec(value)
+                .map_err(|_| ExecutionError::Failed("invalid provider JSON".into()))?;
+        } else {
+            secrets.redact_bytes(&mut bytes);
+        }
         let turn = match self.profile.kind {
             ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => normalize_responses(
                 &self.profile,
@@ -1291,17 +1408,40 @@ impl ProviderExecutor {
             ProviderKind::Echo => unreachable!("echo handled before HTTP dispatch"),
         }
         .map_err(provider_execution_error)?;
+        let continuation_id = if response_value
+            .as_ref()
+            .is_some_and(|value| value["status"] == "completed")
+        {
+            let output = response_value
+                .as_ref()
+                .and_then(|value| value["output"].as_array())
+                .cloned()
+                .unwrap_or_default();
+            self.stage_continuation(
+                &metadata.candidate_id,
+                metadata.continuation_plan.as_ref(),
+                payload,
+                &output,
+                &turn,
+            )
+            .map_err(provider_execution_error)?
+        } else {
+            None
+        };
         for event in turn.events {
             emit_stream_item(ProviderStreamItem::Event { event }, permit, observer).await?;
         }
         emit_stream_item(
-            ProviderStreamItem::Completed {
-                profile: turn.profile,
-                model_profile: turn.model_profile,
-                provider_profile: turn.provider_profile,
-                provider: turn.provider,
-                model: turn.model,
-                response_id: turn.response_id,
+            crate::ProviderAdapterStreamItem {
+                continuation_id,
+                item: ProviderStreamItem::Completed {
+                    profile: turn.profile,
+                    model_profile: turn.model_profile,
+                    provider_profile: turn.provider_profile,
+                    provider: turn.provider,
+                    model: turn.model,
+                    response_id: turn.response_id,
+                },
             },
             permit,
             observer,
@@ -1343,14 +1483,24 @@ impl ProviderExecutor {
         .map_err(|_| generation_deadline_error())?
         .map_err(provider_execution_error)?;
         if !response.status().is_success() {
+            let error = provider_status_error(&response);
+            let diagnostic = tokio::time::timeout_at(
+                generation_deadline,
+                self.capture_http_error(
+                    endpoint,
+                    Some(redacted_image_payload(&payload)),
+                    response,
+                    secret,
+                ),
+            )
+            .await
+            .map_err(|_| generation_deadline_error())?
+            .map_err(provider_execution_error)?;
+            if let Some(rejection) = crate::features::feature_rejection(&diagnostic, Some(&payload))
+            {
+                return emit_stream_item(rejection, permit, observer).await;
+            }
             if metadata.include_response_diagnostics {
-                let diagnostic = tokio::time::timeout_at(
-                    generation_deadline,
-                    self.capture_http_error(endpoint, Some(payload), response, secret),
-                )
-                .await
-                .map_err(|_| generation_deadline_error())?
-                .map_err(provider_execution_error)?;
                 return emit_stream_item(
                     ProviderStreamItem::Diagnostic { diagnostic },
                     permit,
@@ -1358,13 +1508,21 @@ impl ProviderExecutor {
                 )
                 .await;
             }
-            return Err(provider_execution_error(provider_status_error(&response)));
+            return Err(provider_execution_error(error));
         }
         if !streaming {
             return tokio::time::timeout_at(
                 generation_deadline,
                 self.release_json_generation(
-                    response, secret, metadata, tool_names, permit, observer,
+                    ProviderJsonGeneration {
+                        response,
+                        secrets: secret,
+                        payload: &payload,
+                    },
+                    metadata,
+                    tool_names,
+                    permit,
+                    observer,
                 ),
             )
             .await
@@ -1401,6 +1559,7 @@ impl ProviderExecutor {
             .map_err(|error| ExecutionError::Failed(error.to_string()))?;
         let mut decoder = SseDecoder::default();
         let mut state = ProviderStreamState::new(self.profile.kind, tool_names);
+        let mut continuation_events = Vec::new();
         let mut raw_bytes = 0_usize;
         let mut stream = response.bytes_stream();
         let mut emitter = ProviderStreamEmitter::new(permit, observer);
@@ -1435,8 +1594,6 @@ impl ProviderExecutor {
                     )));
                 }
                 for data in decoder.feed(&chunk).map_err(provider_execution_error)? {
-                    let mut data = data;
-                    secret.redact_bytes(&mut data);
                     if data == b"[DONE]" {
                         state.mark_done();
                         continue;
@@ -1448,12 +1605,14 @@ impl ProviderExecutor {
                     })?;
                     secret.redact_value(&mut value);
                     for event in state.ingest(value).map_err(provider_execution_error)? {
+                        continuation_events.push(event.clone());
                         emitter.push(event).await?;
                     }
                 }
             }
             decoder.finish().map_err(provider_execution_error)?;
             for event in state.finish().map_err(provider_execution_error)? {
+                continuation_events.push(event.clone());
                 emitter.push(event).await?;
             }
             Ok(())
@@ -1469,16 +1628,37 @@ impl ProviderExecutor {
         }
         drop(emitter);
         let response_id = state.response_id().map(str::to_owned);
+        let turn = ProviderTurn {
+            profile: metadata.model_profile.into(),
+            model_profile: metadata.model_profile.into(),
+            provider_profile: self.profile.name.clone(),
+            provider: self.profile.kind.as_str().into(),
+            model: metadata.model.into(),
+            response_id: response_id.clone(),
+            events: continuation_events,
+        };
+        let continuation_id = self
+            .stage_continuation(
+                &metadata.candidate_id,
+                metadata.continuation_plan.as_ref(),
+                &payload,
+                state.output_items(),
+                &turn,
+            )
+            .map_err(provider_execution_error)?;
         tokio::time::timeout_at(
             generation_deadline,
             emit_stream_item(
-                ProviderStreamItem::Completed {
-                    profile: metadata.model_profile.into(),
-                    model_profile: metadata.model_profile.into(),
-                    provider_profile: self.profile.name.clone(),
-                    provider: self.profile.kind.as_str().into(),
-                    model: metadata.model.into(),
-                    response_id,
+                crate::ProviderAdapterStreamItem {
+                    continuation_id,
+                    item: ProviderStreamItem::Completed {
+                        profile: metadata.model_profile.into(),
+                        model_profile: metadata.model_profile.into(),
+                        provider_profile: self.profile.name.clone(),
+                        provider: self.profile.kind.as_str().into(),
+                        model: metadata.model.into(),
+                        response_id,
+                    },
                 },
                 permit,
                 observer,
@@ -1529,7 +1709,16 @@ pub(super) fn redacted_image_payload(value: &Value) -> Value {
         Value::Object(object) => Value::Object(
             object
                 .iter()
-                .map(|(key, value)| (key.clone(), redacted_image_payload(value)))
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        if key == "encrypted_content" {
+                            Value::String("[REDACTED_PROVIDER_STATE]".into())
+                        } else {
+                            redacted_image_payload(value)
+                        },
+                    )
+                })
                 .collect(),
         ),
         _ => value.clone(),
@@ -1648,6 +1837,43 @@ fn generation_metadata(
         .filter(|value| *value > 0)
         .ok_or_else(|| ProviderError::Configuration("model output limit is absent".into()))?;
     Ok((model_profile, model, max_output_tokens))
+}
+
+fn configure_compaction(
+    payload: &mut Value,
+    kind: ProviderKind,
+    threshold: Option<u64>,
+) -> Result<(), ProviderError> {
+    if let Some(threshold) = threshold {
+        if kind != ProviderKind::OpenAiResponses || threshold == 0 {
+            return Err(ProviderError::Configuration(
+                "server compaction requires public Responses and a positive threshold".into(),
+            ));
+        }
+        payload["context_management"] =
+            json!([{ "type": "compaction", "compact_threshold": threshold }]);
+    }
+    Ok(())
+}
+
+fn retain_opaque_redactions(value: &Value, secrets: &mut RequestSecrets) {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                if key == "encrypted_content"
+                    && let Some(secret) = value.as_str()
+                {
+                    secrets.retain(secret);
+                } else {
+                    retain_opaque_redactions(value, secrets);
+                }
+            }
+        }
+        Value::Array(values) => values
+            .iter()
+            .for_each(|value| retain_opaque_redactions(value, secrets)),
+        _ => {}
+    }
 }
 
 #[cfg(test)]

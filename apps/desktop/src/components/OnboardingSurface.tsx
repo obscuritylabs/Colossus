@@ -1,3 +1,4 @@
+import { ModelFeatureControl } from "./ModelFeatureControl";
 import {
   IconArrowRight,
   IconAlertTriangle,
@@ -156,9 +157,10 @@ function WorkspaceOnboardingForm({
     maxOutputTokens: initialModel?.maxOutputTokens ?? 4_096,
     reasoningEffort: initialModel?.reasoningEffort ?? null,
     capabilities: initialModel?.capabilities ?? {
-      toolCalls: false,
-      streaming: false,
-      imageInputs: false,
+      toolCalls: "auto",
+      streaming: "auto",
+      imageInputs: "auto",
+      serverCompaction: "auto",
     },
   });
   const [accessProfile, setAccessProfile] = useState<
@@ -424,7 +426,7 @@ function WorkspaceOnboardingForm({
         modelMetadata: {
           contextWindowTokens: modelConfiguration.contextWindowTokens,
           maxOutputTokens: modelConfiguration.maxOutputTokens,
-          ...modelConfiguration.capabilities,
+          capabilities: modelConfiguration.capabilities,
         },
       },
       onConfigure,
@@ -981,38 +983,35 @@ function WorkspaceOnboardingForm({
                           }
                         />
                       </label>
-                      {(["toolCalls", "streaming", "imageInputs"] as const).map(
-                        (capability) => (
-                          <label
-                            className="provider-credential-toggle"
-                            key={capability}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={
-                                modelConfiguration.capabilities[capability]
-                              }
-                              disabled={busy}
-                              onChange={(event) =>
-                                setModelConfiguration((current) => ({
-                                  ...current,
-                                  capabilities: {
-                                    ...current.capabilities,
-                                    [capability]: event.target.checked,
-                                  },
-                                }))
-                              }
-                            />
-                            <span>
-                              {capability === "toolCalls"
-                                ? "Tools"
-                                : capability === "imageInputs"
-                                  ? "Images"
-                                  : "Streaming"}
-                            </span>
-                          </label>
-                        ),
-                      )}
+                      {(
+                        [
+                          ["toolCalls", "Tools"],
+                          ["streaming", "Streaming"],
+                          ["imageInputs", "Images"],
+                          ["serverCompaction", "Server compaction"],
+                        ] as const
+                      ).map(([feature, label]) => (
+                        <ModelFeatureControl
+                          key={feature}
+                          label={label}
+                          declared={
+                            modelConfiguration.capabilities.declared?.[feature]
+                          }
+                          value={
+                            modelConfiguration.capabilities[feature] ?? "auto"
+                          }
+                          disabled={busy}
+                          onChange={(mode) =>
+                            setModelConfiguration((current) => ({
+                              ...current,
+                              capabilities: {
+                                ...current.capabilities,
+                                [feature]: mode,
+                              },
+                            }))
+                          }
+                        />
+                      ))}
                     </div>
                   </details>
                 </div>

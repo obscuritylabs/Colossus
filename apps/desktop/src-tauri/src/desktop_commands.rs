@@ -1359,9 +1359,10 @@ async fn configure_managed_codex_runtime(
         context_window_tokens: 128_000,
         max_output_tokens: 16_000,
         capabilities: ModelCapabilitiesSetting {
-            tool_calls: true,
-            streaming: true,
-            image_inputs: false,
+            tool_calls: true.into(),
+            streaming: true.into(),
+            image_inputs: false.into(),
+            ..Default::default()
         },
         reasoning_effort: None,
     }];
@@ -2037,9 +2038,10 @@ fn persist_provider_rotation(
         context_window_tokens: 128_000,
         max_output_tokens: 16_000,
         capabilities: ModelCapabilitiesSetting {
-            tool_calls: true,
-            streaming: true,
-            image_inputs: false,
+            tool_calls: true.into(),
+            streaming: true.into(),
+            image_inputs: false.into(),
+            ..Default::default()
         },
         reasoning_effort: None,
     }];
@@ -3319,9 +3321,10 @@ mod tests {
                 context_window_tokens: 128_000,
                 max_output_tokens: 16_000,
                 capabilities: ModelCapabilitiesSetting {
-                    tool_calls: true,
-                    streaming: true,
-                    image_inputs: false,
+                    tool_calls: true.into(),
+                    streaming: true.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
                 reasoning_effort: None,
             }],

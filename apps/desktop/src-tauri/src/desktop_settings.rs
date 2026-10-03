@@ -26,7 +26,7 @@ use std::fs::File;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
-const SETTINGS_SCHEMA_VERSION: u16 = 7;
+const SETTINGS_SCHEMA_VERSION: u16 = 8;
 const SETTINGS_FILE: &str = "settings.json";
 const THREAD_SEARCH_FILE: &str = "thread-search.redb";
 const MANAGED_DIRECTORY: &str = "managed-local";
@@ -204,14 +204,7 @@ pub(crate) fn managed_provider_setting_is_valid(provider: &ProviderSetting) -> b
                 && !provider.credential_required))
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ModelCapabilitiesSetting {
-    pub(crate) tool_calls: bool,
-    pub(crate) streaming: bool,
-    #[serde(default)]
-    pub(crate) image_inputs: bool,
-}
+pub(crate) type ModelCapabilitiesSetting = colossus_contracts::ModelFeatureSettings;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -744,6 +737,7 @@ pub(crate) fn decode_settings(bytes: &[u8]) -> Result<(DesktopSettings, bool), C
         4 => migrate_v4_settings(bytes)?,
         5 => migrate_v5_settings(bytes)?,
         6 => migrate_v6_settings(bytes)?,
+        7 => migrate_v7_settings(bytes)?,
         SETTINGS_SCHEMA_VERSION => serde_json::from_slice(bytes).map_err(|_| storage_error())?,
         _ => return Err(storage_error()),
     };
@@ -1239,6 +1233,13 @@ fn migrate_v1_settings(
         external_targets: legacy.external_targets,
         legacy_connection_migrated: legacy.legacy_connection_migrated,
     })
+}
+
+fn migrate_v7_settings(bytes: &[u8]) -> Result<DesktopSettings, CommandErrorDto> {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| storage_error())?;
+    value["schemaVersion"] = serde_json::json!(SETTINGS_SCHEMA_VERSION);
+    serde_json::from_value(value).map_err(|_| storage_error())
 }
 
 fn migrate_v6_settings(bytes: &[u8]) -> Result<DesktopSettings, CommandErrorDto> {
@@ -2342,9 +2343,10 @@ mod tests {
                 context_window_tokens: 128_000,
                 max_output_tokens: 16_000,
                 capabilities: ModelCapabilitiesSetting {
-                    tool_calls: true,
-                    streaming: true,
-                    image_inputs: false,
+                    tool_calls: true.into(),
+                    streaming: true.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
                 reasoning_effort: None,
             }],

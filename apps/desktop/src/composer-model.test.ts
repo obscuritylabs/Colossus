@@ -33,7 +33,7 @@ const context: ComposerModelContext = {
         reasoningEffort: "high",
         contextWindowTokens: 128000,
         maxOutputTokens: 16000,
-        capabilities: { toolCalls: true, imageInputs: true, streaming: true },
+        capabilities: { toolCalls: "on", imageInputs: "on", streaming: "on" },
       },
       {
         profile: "review",
@@ -42,7 +42,7 @@ const context: ComposerModelContext = {
         reasoningEffort: null,
         contextWindowTokens: 128000,
         maxOutputTokens: 16000,
-        capabilities: { toolCalls: true, imageInputs: false, streaming: true },
+        capabilities: { toolCalls: "on", imageInputs: "off", streaming: "on" },
       },
     ],
     roles: { primary: "main", reviewer: "review" },

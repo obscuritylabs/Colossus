@@ -424,9 +424,22 @@ impl AgentService {
                 )
                 .await?;
             }
+            let mut continuation_plan = self.provider.continuation_plan(
+                role,
+                &ModelRequest {
+                    instructions: instructions.clone(),
+                    messages: messages.clone(),
+                    tools: turn_definitions.clone(),
+                    max_output_tokens: None,
+                },
+                &context,
+            )?;
             let prepared = if let Some(preparer) = &self.context_preparer {
                 let prepared = preparer
                     .prepare(ContextPreparationRequest {
+                        continuation: continuation_plan
+                            .as_ref()
+                            .and_then(|plan| plan.selected.clone()),
                         session_id: session_id.clone(),
                         instructions: instructions.clone(),
                         messages: messages.clone(),
@@ -460,8 +473,17 @@ impl AgentService {
                         "message_count": prepared.messages.len(),
                     }),
                 )?;
+                if let Some(plan) = &mut continuation_plan {
+                    plan.context_binding_hash = prepared.context_binding_hash;
+                    if prepared.continuation_id.is_none() {
+                        plan.selected = None;
+                    }
+                }
                 prepared.messages
             } else {
+                if let Some(plan) = &mut continuation_plan {
+                    plan.selected = None;
+                }
                 messages.clone()
             };
             if control.is_some_and(RunControl::is_cancelled) {
@@ -582,6 +604,7 @@ impl AgentService {
                         request,
                         context.clone(),
                         ProviderTurnOptions {
+                            continuation: continuation_plan,
                             include_response_diagnostics: scope
                                 .include_provider_response_diagnostics,
                         },
@@ -717,6 +740,7 @@ impl AgentService {
                     continue;
                 }
                 Err(error) => {
+                    self.provider.discard_continuation(&context)?;
                     let http_status = provider_error_http_status(&error);
                     let retry_after_ms = provider_error_retry_after_ms(&error);
                     let message = error.to_string();
@@ -882,6 +906,7 @@ impl AgentService {
                             id: route.model_profile.clone(),
                         },
                     )?;
+                    self.provider.settle_continuation(&context)?;
                     let elapsed_seconds = started.elapsed().as_secs_f64();
                     self.append(
                         &stream_id,
@@ -1506,6 +1531,11 @@ impl AgentService {
                 appends,
                 system_actor(),
             )?;
+            if terminal.is_none() {
+                self.provider.settle_continuation(&context)?;
+            } else {
+                self.provider.discard_continuation(&context)?;
+            }
             messages = next_messages;
 
             for event in post_commit_events {
@@ -1632,6 +1662,7 @@ impl AgentService {
         started: &Instant,
     ) -> Result<AgentRunResult, AgentError> {
         let elapsed_seconds = started.elapsed().as_secs_f64();
+        self.provider.discard_continuation(context)?;
         emit_run_event(
             observer,
             run_id,

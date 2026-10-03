@@ -141,6 +141,11 @@ pub trait ContextRepository: Send + Sync {
     /// Return the explicitly active snapshot, if any.
     fn active(&self, session_id: &str) -> Result<Option<ContextSnapshot>, StoreError>;
 
+    /// Latest activation version, including explicit restores of the same snapshot.
+    fn activation_epoch(&self, _session_id: &str) -> Result<u64, StoreError> {
+        Ok(0)
+    }
+
     /// Activate an existing snapshot without mutating or deleting later snapshots.
     fn activate(
         &self,
@@ -172,6 +177,8 @@ pub trait PresentationRepository: Send + Sync {
 /// Complete input for one context-preparation pass.
 #[derive(Clone, Debug)]
 pub struct ContextPreparationRequest {
+    /// Safe opaque-state budget and canonical watermark, when available.
+    pub continuation: Option<colossus_contracts::ProviderContinuationView>,
     /// Canonical session whose history is being prepared.
     pub session_id: String,
     /// System instructions included in the model budget.

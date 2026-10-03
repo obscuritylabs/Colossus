@@ -103,6 +103,11 @@ fn model_diagnostics_use_a_readable_route_and_named_check_table() {
             },
             "reasoning_effort": "xhigh"
         },
+        "features": [{
+            "name": "feature_ServerCompaction",
+            "status": "not_checked",
+            "detail": "mode=Auto; declared=unknown; effective=eligible; observed=accepted"
+        }],
         "checks": [
             {
                 "name": "metadata",
@@ -145,6 +150,8 @@ fn model_diagnostics_use_a_readable_route_and_named_check_table() {
         checks.rows[1],
         ["generation", "Fail", "provider endpoint returned HTTP 400"]
     );
+    assert_eq!(checks.rows[2][0], "feature_ServerCompaction");
+    assert!(checks.rows[2][2].contains("effective=eligible"));
 }
 
 #[test]

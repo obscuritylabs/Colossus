@@ -37,6 +37,10 @@ pub use config::*;
 
 mod repository;
 pub use repository::*;
+mod continuation;
+pub use continuation::*;
+#[cfg(test)]
+mod continuation_tests;
 
 mod service;
 pub use service::*;

@@ -227,9 +227,10 @@ pub(super) fn provider_registry(
                 model.model.clone(),
                 model.context_window_tokens,
                 model.max_output_tokens,
-                model.capabilities,
+                model.capabilities.capabilities(),
                 model.reasoning_effort,
             )
+            .map(|profile| profile.with_feature_settings(model.capabilities))
         })
         .collect::<Result<Vec<_>, _>>()?;
     ProviderRegistry::new(profiles, models, models_config.roles.clone()).map_err(Into::into)

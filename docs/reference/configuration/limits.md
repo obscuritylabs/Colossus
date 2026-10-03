@@ -171,7 +171,7 @@ advertised context window:
 ```yaml
 context:
   autoCompaction: true
-  compactAtPercent: 70
+  compactAtPercent: 85
   targetPercent: 45
   preserveRecentMessages: 8
   modelAssisted: true
@@ -184,7 +184,7 @@ estimation, so these are planning thresholds rather than provider billing measur
 | Context field | Constraint | Default |
 | --- | --- | ---: |
 | `targetPercent` | `1..99` and lower than `compactAtPercent` | `45` |
-| `compactAtPercent` | `1..99` | `70` |
+| `compactAtPercent` | `1..99` | `85` |
 | `preserveRecentMessages` | `0..=1024` messages | `8` |
 
 Increasing `maxOutputTokens` reduces the available input budget. Increasing
@@ -305,7 +305,7 @@ for adapter-specific limits.
 | `models.profiles.*.contextWindowTokens` | At least `1024` | Profile-specific |
 | `models.profiles.*.maxOutputTokens` | Positive with remaining input budget | Profile-specific |
 | `context.targetPercent` | `1..99`, below compaction threshold | `45` |
-| `context.compactAtPercent` | `1..99` | `70` |
+| `context.compactAtPercent` | `1..99` | `85` |
 | `context.preserveRecentMessages` | `0..=1024` | `8` |
 | `memory.retrievalLimit` | `1..=100` | `6` |
 | `research.maxSources` | `1..=100` | `20` |

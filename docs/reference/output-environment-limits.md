@@ -51,7 +51,7 @@ and never interpreted as terminal control input.
 | Sandbox memory | `1073741824 bytes` |
 | Sandbox concurrency | `1` |
 | Context window estimate | `32768 tokens` |
-| Auto-compaction threshold | `70%` |
+| Auto-compaction threshold | `85%` |
 | Compaction target | `45%` |
 | Recent messages preserved | `8` |
 | Memory retrieval | `6` |

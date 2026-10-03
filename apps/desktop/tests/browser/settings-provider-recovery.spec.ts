@@ -240,6 +240,21 @@ test("catalog failure preserves the model editor and a retry imports only advert
   );
   await expect(identifier).toHaveValue(originalModel);
   await expect(identifier).toBeEnabled();
+  await editor
+    .getByRole("slider", { name: "Tool calls", exact: true })
+    .press("Home");
+  await editor
+    .getByRole("slider", { name: "Streaming", exact: true })
+    .press("Home");
+  await editor
+    .getByRole("slider", { name: "Streaming", exact: true })
+    .press("ArrowRight");
+  await editor
+    .getByRole("slider", { name: "Image inputs", exact: true })
+    .press("End");
+  await editor
+    .getByRole("slider", { name: "Server compaction", exact: true })
+    .press("Home");
   await expect(
     editor.getByRole("button", { name: "Save changes", exact: true }),
   ).toBeEnabled();
@@ -266,9 +281,15 @@ test("catalog failure preserves the model editor and a retry imports only advert
     }),
   ).toHaveValue("4096");
   await expect(
-    editor.getByRole("switch", { name: /Tool calls/ }),
-  ).not.toBeChecked();
+    editor.getByRole("slider", { name: "Tool calls", exact: true }),
+  ).toHaveAttribute("aria-valuetext", "Off");
   await expect(
-    editor.getByRole("switch", { name: /Streaming/ }),
-  ).not.toBeChecked();
+    editor.getByRole("slider", { name: "Streaming", exact: true }),
+  ).toHaveAttribute("aria-valuetext", "Auto");
+  await expect(
+    editor.getByRole("slider", { name: "Image inputs", exact: true }),
+  ).toHaveAttribute("aria-valuetext", "On");
+  await expect(
+    editor.getByRole("slider", { name: "Server compaction", exact: true }),
+  ).toHaveAttribute("aria-valuetext", "Off");
 });

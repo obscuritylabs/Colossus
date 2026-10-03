@@ -232,9 +232,9 @@ function desktop(): DesktopStatus {
           contextWindowTokens: 128_000,
           maxOutputTokens: 16_384,
           capabilities: {
-            toolCalls: true,
-            streaming: true,
-            imageInputs: false,
+            toolCalls: "on",
+            streaming: "on",
+            imageInputs: "off",
           },
           reasoningEffort: null,
         },
@@ -1300,9 +1300,9 @@ describe("ManagedSettingsPane", () => {
       contextWindowTokens: 200_000,
       maxOutputTokens: 32_000,
       capabilities: {
-        toolCalls: true,
-        streaming: false,
-        imageInputs: true,
+        toolCalls: "on",
+        streaming: "off",
+        imageInputs: "on",
       },
       reasoningEffort: "xhigh",
     };
@@ -1313,7 +1313,10 @@ describe("ManagedSettingsPane", () => {
       archived: false,
       revisions: [{ revision: 1, value: model }],
     };
-    expect(managedModel(modelDraft(modelEntry))).toEqual(model);
+    expect(managedModel(modelDraft(modelEntry))).toEqual({
+      ...model,
+      capabilities: { ...model.capabilities, serverCompaction: "auto" },
+    });
 
     const telemetry: ManagedTelemetryProfile = {
       name: "colossus-desktop",

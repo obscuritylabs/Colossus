@@ -213,9 +213,9 @@ export function SetupPackagesPanel({
                     </td>
                     <td>
                       {[
-                        model.capabilities.toolCalls && "Tools",
-                        model.capabilities.streaming && "Streaming",
-                        model.capabilities.imageInputs && "Images",
+                        model.capabilities.toolCalls !== "off" && "Tools",
+                        model.capabilities.streaming !== "off" && "Streaming",
+                        model.capabilities.imageInputs !== "off" && "Images",
                       ]
                         .filter(Boolean)
                         .join(", ") || "Text"}

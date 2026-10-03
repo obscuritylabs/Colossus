@@ -40,9 +40,9 @@ export function ImportedModelPicker({
               </small>
               <small>
                 {[
-                  model.capabilities.toolCalls && "Tools",
-                  model.capabilities.streaming && "Streaming",
-                  model.capabilities.imageInputs && "Images",
+                  model.capabilities.toolCalls !== "off" && "Tools",
+                  model.capabilities.streaming !== "off" && "Streaming",
+                  model.capabilities.imageInputs !== "off" && "Images",
                   model.reasoningEffort && `${model.reasoningEffort} reasoning`,
                 ]
                   .filter(Boolean)
