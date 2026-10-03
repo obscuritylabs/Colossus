@@ -42,7 +42,7 @@ export function WorkflowDialog({
     const alert = ref.current?.querySelector<HTMLElement>('[role="alert"]');
     if (alert) {
       alert.tabIndex = -1;
-      alert.scrollIntoView({ block: "nearest" });
+      ref.current?.scrollTo({ top: 0 });
       alert.focus({ preventScroll: true });
     }
   }, [error]);
