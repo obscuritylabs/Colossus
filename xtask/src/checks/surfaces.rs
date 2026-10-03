@@ -35,6 +35,18 @@ pub(super) fn desktop(repository: &Repository) -> Result<(), String> {
         ])
         .run()?;
     repository
+        .task(cargo_program())
+        .args([
+            "test",
+            "--locked",
+            "--manifest-path",
+            "apps/desktop/src-tauri/Cargo.toml",
+            "--package",
+            "colossus-native-dictation",
+            "--lib",
+        ])
+        .run()?;
+    repository
         .task("npm")
         .args(["ci", "--ignore-scripts"])
         .current_dir("apps/desktop")

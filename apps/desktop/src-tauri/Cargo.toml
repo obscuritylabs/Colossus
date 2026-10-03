@@ -9,7 +9,7 @@ license = "Apache-2.0"
 repository = "https://github.com/obscuritylabs/Colossus"
 
 [workspace]
-members = ["../native-credential-ui", "../native-browser"]
+members = ["../native-credential-ui", "../native-browser", "../native-dictation"]
 
 [features]
 plugin-test-bridge = []
