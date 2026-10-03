@@ -28,6 +28,11 @@ pub(super) fn render(
         return;
     }
 
+    if let Some(Overlay::HistorySearch(search)) = state.overlay.as_mut() {
+        render_history_search(frame, &state.history, &state.preferences, search, area);
+        return;
+    }
+
     match state.overlay.as_ref() {
         Some(Overlay::SessionBrowser(browser)) => {
             render_session_browser(frame, state, browser, area);
@@ -35,10 +40,6 @@ pub(super) fn render(
         }
         Some(Overlay::ThemePicker(picker)) => {
             render_theme_picker(frame, state, picker, area);
-            return;
-        }
-        Some(Overlay::HistorySearch(search)) => {
-            render_history_search(frame, state, search, area);
             return;
         }
         Some(Overlay::SettingsPicker(picker)) => {

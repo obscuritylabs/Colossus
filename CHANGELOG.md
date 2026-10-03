@@ -21,6 +21,8 @@ include breaking changes while the public API is still settling.
 ### Fixed
 
 - Transient provider gateway failures retry with visible recovery status.
+- Prompt history caches search matches between redraws, and preview paging
+  stops at the end so PageUp responds immediately after repeated PageDown.
 - Multiline composition accepts legacy newline input and exposes Ctrl-J as a
   newline shortcut. Cursor navigation follows visual rows in wrapped drafts.
 - Welcome security warnings no longer hide the background mark, and narrow

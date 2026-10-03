@@ -613,3 +613,79 @@ fn top_bar_sanitizes_and_bounds_runtime_labels() {
         assert!(!text.chars().any(char::is_control), "{text}");
     }
 }
+
+#[test]
+fn history_preview_scrolls_back_immediately_after_repeated_page_down_and_resize() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.history = vec![
+        (0..100)
+            .map(|n| format!("line {n:03}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    ];
+    state.overlay = Some(Overlay::HistorySearch(HistorySearchState::new(
+        &state.history,
+    )));
+    let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("terminal");
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("history");
+    for _ in 0..100 {
+        handle_overlay_key(
+            &mut state,
+            KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+        );
+    }
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("last page");
+    let bottom = terminal.backend().to_string();
+    assert!(bottom.contains("line 099"), "{bottom}");
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+    );
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("previous page");
+    let previous = terminal.backend().to_string();
+    assert_ne!(previous, bottom);
+    assert!(!previous.contains("line 099"), "{previous}");
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+    );
+    let mut taller = Terminal::new(TestBackend::new(120, 40)).expect("taller terminal");
+    taller
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("resized last page");
+    let bottom = taller.backend().to_string();
+    assert!(bottom.contains("line 099"), "{bottom}");
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+    );
+    taller
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("resized previous page");
+    assert_ne!(taller.backend().to_string(), bottom);
+}
+
+#[test]
+fn history_search_filters_large_histories_only_when_the_query_changes() {
+    let history = (0..1_000)
+        .map(|n| format!("Prompt {n}: {}", "Résumé detail ".repeat(128)))
+        .collect::<Vec<_>>();
+    let mut search = HistorySearchState::new(&history);
+    assert_eq!(search.filtered_indices().len(), 1_000);
+    search.query = "RÉSUMÉ".into();
+    search.reconcile_selection(&history);
+    assert_eq!(search.filtered_indices().len(), 1_000);
+    search.query = "prompt 998:".into();
+    search.reconcile_selection(&history);
+    assert_eq!(search.filtered_indices(), &[998]);
+    search.query.clear();
+    search.reconcile_selection(&history);
+    assert_eq!(search.filtered_indices().len(), 1_000);
+    assert_eq!(search.filtered_indices()[0], 999);
+}

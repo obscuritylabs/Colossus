@@ -633,12 +633,12 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
                     state.composer.set(selected);
                 }
             }
-            KeyCode::Up | KeyCode::BackTab => search.move_selection(&state.history, -1),
-            KeyCode::Down | KeyCode::Tab => search.move_selection(&state.history, 1),
-            KeyCode::Home => search.select_boundary(&state.history, false),
-            KeyCode::End => search.select_boundary(&state.history, true),
-            KeyCode::PageUp => search.preview_scroll = search.preview_scroll.saturating_sub(5),
-            KeyCode::PageDown => search.preview_scroll = search.preview_scroll.saturating_add(5),
+            KeyCode::Up | KeyCode::BackTab => search.move_selection(-1),
+            KeyCode::Down | KeyCode::Tab => search.move_selection(1),
+            KeyCode::Home => search.select_boundary(false),
+            KeyCode::End => search.select_boundary(true),
+            KeyCode::PageUp => search.scroll_preview(false),
+            KeyCode::PageDown => search.scroll_preview(true),
             KeyCode::Backspace => {
                 search.query.pop();
                 search.reconcile_selection(&state.history);
