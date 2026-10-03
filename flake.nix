@@ -12,23 +12,23 @@
         "x86_64-linux"
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
-      version = "0.11.0";
+      version = "0.11.7";
       releases = {
         aarch64-darwin = {
           target = "aarch64-apple-darwin";
-          sha256 = "c5140fa28173641838069e4ec331ef3848c8f3a4f3149b174e09380719e75b9a";
+          sha256 = "c33f8fae21d8dba9531a939c2468c9d696ffa64a92c5ee2665c47dce503b31d5";
         };
         x86_64-darwin = {
           target = "x86_64-apple-darwin";
-          sha256 = "c274017f83a11b47123e80471417548029123b245ae04b0ae4386b78c2b07478";
+          sha256 = "ad36dd071552501a565d6abfd3d38a2b40ec9c0d9be667b71c1811a55e650b05";
         };
         aarch64-linux = {
           target = "aarch64-unknown-linux-musl";
-          sha256 = "efad03b81b04b66900acd4c835031aca4c2be4294a409d0c23df643e0f277407";
+          sha256 = "df6ac90c28aa11582def5be32ce097660a47b2eb3e785771d2418457bc5f96ad";
         };
         x86_64-linux = {
           target = "x86_64-unknown-linux-musl";
-          sha256 = "f520245f4c02e5c3fe7b3e926bb2663d39b97566f0eefa34ef860a09d515f9c5";
+          sha256 = "59b92c902e4503ac4835b952edd126f47ae1c467ec89229f3b9a11f6e026391e";
         };
       };
     in {
