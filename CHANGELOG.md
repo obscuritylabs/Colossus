@@ -8,10 +8,12 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
-## [0.11.7] - 2026-10-02
+## [0.11.7] - 2026-10-03
 
 ### Added
 
+- Automatic model capability discovery and Responses conversation compaction,
+  with Auto/On/Off feature controls in Desktop.
 - Full-screen TUI session, theme, and history browsers with a searchable list and
   a right-hand preview pane. Settings such as permissions open a current-value
   chooser while retaining direct command arguments.
