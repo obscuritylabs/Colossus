@@ -24,13 +24,21 @@ press Enter to start. For example:
 
 > Explain how this repository handles configuration. Show me the relevant files.
 
-The transcript appears above the composer as work progresses. By default, completed
-output is available in your terminal's normal scrollback, where you can select,
-copy, and search it. Use `--alt-screen` before `tui` if you prefer a full-screen
-application viewport:
+The transcript appears above the composer as work progresses. The TUI fills the
+alternate screen by default; use the mouse wheel or PageUp/PageDown to read older
+output and End to return to live output. Exiting restores your prior terminal view.
+
+The top bar shows the workspace, session, and installed version when there is
+enough vertical space. Below the composer, highlighted badges identify the mode
+and security warnings; the status band shows readiness and approval handling.
+The model route and context budget appear on their own line. Compact terminals
+keep the conversation and composer visible by omitting the top bar.
+
+Use `--no-alt-screen` for an inline interface that leaves completed output in your
+terminal's normal scrollback:
 
 ```bash
-colossus -w /absolute/path/to/repository --alt-screen tui
+colossus -w /absolute/path/to/repository --no-alt-screen tui
 ```
 
 To return to the latest conversation, start with `tui --resume`. Use
@@ -49,7 +57,7 @@ Enter a slash command in the composer. These are useful starting points:
 | `/context status` | Current context budget and snapshot |
 | `/tools` | Tools available to the agent |
 | `/work` | Current work records |
-| `/permissions` | The active approval mode |
+| `/permissions` | Choose approval handling |
 | `/theme` | Theme previews and selection |
 
 Type `/` to complete commands. Type `@` at a skill token to choose an active plugin
@@ -61,13 +69,25 @@ long-session history.
 ## Write and review a turn
 
 Enter sends the current prompt. Shift-Enter adds a new line when your terminal
-reports that key combination. If Shift-Enter sends instead, enter `/multiline on`:
-Enter will then add lines and Ctrl-D will send the prompt. Use `/multiline off` to
-restore the default.
+reports that key combination. Ctrl-J also adds a new line, including in terminals
+that send Shift-Enter as plain Enter. Use `/multiline` to choose Enter behavior:
+Enter can add lines while Ctrl-D sends the prompt. Direct shortcuts such as
+`/multiline on` and `/multiline off` remain available.
+
+`/permissions` opens an approval-mode chooser with the current mode highlighted.
+Up/Down moves the selection, Enter applies it, and Esc returns without changing
+anything. This changes approval handling for subsequent operations in this TUI
+process; policy, tool authority, and sandbox boundaries still apply. `/stream`,
+`/events`, `/reasoning`, `/transcript`, and `/provider diagnostics` use the same
+chooser. Slash completion shows each setting once; type the setting followed by a
+space to see direct argument shortcuts. `/theme list` and other theme tools remain
+available alongside the theme picker.
 
 You can continue typing while a run is active. Colossus queues up to eight future
 turns; after a failure or cancellation, it pauses the queue for your decision.
-Use Ctrl-R to search earlier prompts. To include a supported image, use `/attach PATH`,
+Use Ctrl-R to open full-screen prompt history. Type to filter, use Up/Down to
+choose, and press Enter to place a prompt in your draft. Esc keeps the draft you
+had before opening history. To include a supported image, use `/attach PATH`,
 inspect the queue with `/attachments`, and remove one with `/detach INDEX`.
 
 When an action needs approval, a decision dock opens above the preserved draft.

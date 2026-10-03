@@ -665,7 +665,6 @@ fn run_full_screen_lifecycle(
         process.arg("--approval-mode");
         process.arg("full-access");
     }
-    process.arg("--alt-screen");
     process.arg("tui");
     process.arg("--session");
     process.arg(session_id);
@@ -711,14 +710,43 @@ fn run_full_screen_lifecycle(
         writer.flush().expect("flush cursor position response");
     }
 
-    let booted = wait_for_screen(&output, ROWS, COLS, "mode=execute");
+    let booted = wait_for_screen(&output, ROWS, COLS, "Message · Enter sends");
     if booted {
+        writer
+            .write_all(b"/permissions\r")
+            .expect("open permissions");
+        writer.flush().expect("flush permissions");
+    }
+    let permissions_visible = booted && wait_for_screen(&output, ROWS, COLS, "Update permissions");
+    if permissions_visible {
+        writer.write_all(b"2\r").expect("choose ask mode");
+        writer.flush().expect("flush ask mode");
+    }
+    let ask_applied = permissions_visible && wait_for_screen(&output, ROWS, COLS, "approval ask");
+    if ask_applied {
+        writer
+            .write_all(b"/permissions\r")
+            .expect("reopen permissions");
+        writer.flush().expect("flush reopened permissions");
+    }
+    let current_visible =
+        ask_applied && wait_for_screen(&output, ROWS, COLS, "Ask for approval (current)");
+    if current_visible {
+        writer
+            .write_all(b"4\r")
+            .expect("restore fixture approval mode");
+        writer.flush().expect("flush fixture approval mode");
+    }
+    let permissions_applied =
+        current_visible && wait_for_screen(&output, ROWS, COLS, "approval full-access");
+    if permissions_applied {
         writer
             .write_all(b"/plugins\r")
             .expect("write plugin inventory command");
         writer.flush().expect("flush plugin inventory command");
     }
-    let plugins_visible = booted && wait_for_screen(&output, ROWS, COLS, "Bundled with Colossus");
+    let plugins_visible =
+        permissions_applied && wait_for_screen(&output, ROWS, COLS, "Bundled with Colossus");
     if plugins_visible {
         writer
             .write_all(b"/plugin skills\r")
@@ -735,7 +763,7 @@ fn run_full_screen_lifecycle(
         writer.flush().expect("flush Plan lifecycle commands");
     }
     let short_id = plan_id.chars().take(8).collect::<String>();
-    let approved_marker = format!("plan={short_id}:r2:approved");
+    let approved_marker = format!("plan {short_id} r2 approved");
     let approved = plugin_skills_visible && wait_for_screen(&output, ROWS, COLS, &approved_marker);
     let execution_choice_visible =
         approved && wait_for_screen(&output, ROWS, COLS, "choose strategy");
@@ -746,7 +774,7 @@ fn run_full_screen_lifecycle(
     if execution_choice_visible {
         let _ = writer.write_all(b"\x1b");
         let _ = writer.flush();
-        let _ = wait_for_screen(&output, ROWS, COLS, "use /plan execute");
+        let _ = wait_for_screen(&output, ROWS, COLS, &format!("Plan {short_id} · approved"));
     }
     let _ = writer.write_all(b"/exit\r");
     let _ = writer.flush();
@@ -774,6 +802,25 @@ fn run_full_screen_lifecycle(
         status,
         approved_screen,
         raw_output
+    );
+    #[cfg(unix)]
+    {
+        assert!(
+            raw_output.contains("\x1b[?1049h"),
+            "{} TUI did not enter the default alternate screen",
+            host.label()
+        );
+        assert!(
+            raw_output.contains("\x1b[?1049l"),
+            "{} TUI did not restore the terminal on exit",
+            host.label()
+        );
+    }
+    assert!(
+        permissions_applied,
+        "{} TUI did not apply permissions through the chooser: {}",
+        host.label(),
+        approved_screen
     );
     assert!(
         plugins_visible,

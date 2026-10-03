@@ -1,7 +1,7 @@
 //! Best-effort Herdr presence and session restore for terminal Colossus.
 
 use crate::{ApprovalMode, Cli, OutputMode};
-use colossus_tui::InteractiveLifecycleObserver;
+use colossus_tui::{InteractiveLifecycleObserver, ScreenMode};
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
@@ -55,7 +55,7 @@ struct ResumeOptions {
     config: Option<String>,
     approval_mode: Option<&'static str>,
     output: Option<&'static str>,
-    alt_screen: bool,
+    screen_mode: ScreenMode,
     worker_required: bool,
     resumable: bool,
 }
@@ -76,7 +76,7 @@ impl ResumeOptions {
                 OutputMode::Human => Some("human"),
                 OutputMode::Json => Some("json"),
             },
-            alt_screen: cli.alt_screen,
+            screen_mode: cli.screen_mode(),
             worker_required: cli.worker_required,
             // The managed Desktop TUI receives a one-time authenticated channel
             // that cannot be recreated by a Herdr resume command.
@@ -111,9 +111,13 @@ impl ResumeOptions {
         if let Some(output) = self.output {
             argv.extend(["--output".to_owned(), output.to_owned()]);
         }
-        if self.alt_screen {
-            argv.push("--alt-screen".to_owned());
-        }
+        argv.push(
+            match self.screen_mode {
+                ScreenMode::Alternate => "--alt-screen",
+                ScreenMode::Inline => "--no-alt-screen",
+            }
+            .to_owned(),
+        );
         if self.worker_required {
             argv.push("--worker-required".to_owned());
         }
@@ -369,7 +373,7 @@ mod tests {
             config: Some("/work/config.yaml".into()),
             approval_mode: Some("risk-auto"),
             output: None,
-            alt_screen: true,
+            screen_mode: ScreenMode::Alternate,
             worker_required: false,
             resumable: true,
         };
@@ -394,6 +398,13 @@ mod tests {
                 .collect()
             )
         );
+        let inline = ResumeOptions {
+            screen_mode: ScreenMode::Inline,
+            ..options.clone()
+        };
+        let inline_argv = inline.argv("session-1", None).expect("inline resume argv");
+        assert!(inline_argv.iter().any(|arg| arg == "--no-alt-screen"));
+        assert!(!inline_argv.iter().any(|arg| arg == "--alt-screen"));
         assert!(options.argv("bad'session", None).is_none());
         assert!(options.argv("bad\nsession", None).is_none());
         assert!(
@@ -448,7 +459,7 @@ mod tests {
                 config: None,
                 approval_mode: None,
                 output: None,
-                alt_screen: false,
+                screen_mode: ScreenMode::Inline,
                 worker_required: false,
                 resumable: true,
             },
@@ -468,7 +479,7 @@ mod tests {
         assert!(lines[0].contains(
             "pane report-agent pane-1 --source colossus --agent colossus --state idle --seq"
         ));
-        assert!(lines[0].contains("--agent-session-id session-1 -- colossus --workspace /work/repo --approval-mode ask tui --session session-1"));
+        assert!(lines[0].contains("--agent-session-id session-1 -- colossus --workspace /work/repo --approval-mode ask --no-alt-screen tui --session session-1"));
         assert!(lines[1].contains("--state blocked"));
         assert!(lines[1].contains("--message Waiting for a decision in Colossus"));
         assert!(lines[1].contains("--approval-mode deny"));

@@ -8,6 +8,35 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.11.7] - 2026-10-03
+
+### Added
+
+- Automatic model capability discovery and Responses conversation compaction,
+  with Auto/On/Off feature controls in Desktop.
+- Full-screen TUI session, theme, and history browsers with a searchable list and
+  a right-hand preview pane. Settings such as permissions open a current-value
+  chooser while retaining direct command arguments.
+- A persistent workspace/session top bar, readable highlighted status and warning
+  badges, and a faint encoded Obscurity Labs mark on the welcome screen.
+
+### Fixed
+
+- Transient provider gateway failures retry with visible recovery status.
+- Prompt history caches search matches between redraws, and preview paging
+  stops at the end so PageUp responds immediately after repeated PageDown.
+- Multiline composition accepts legacy newline input and exposes Ctrl-J as a
+  newline shortcut. Cursor navigation follows visual rows in wrapped drafts.
+- Welcome security warnings no longer hide the background mark, and narrow
+  layouts preserve status, permissions, and warning counts without overlap.
+
+### Changed
+
+- TUI sessions use the alternate screen by default; `--no-alt-screen` preserves
+  native scrollback, including resumed Herdr sessions.
+- Aligned workspace, bundled plugin, and SDK candidate metadata to `0.11.7`.
+  This release publishes Core/Desktop only; SDK registry publishing remains disabled.
+
 ## [0.11.6] - 2026-10-02
 
 ### Added

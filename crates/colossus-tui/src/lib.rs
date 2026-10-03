@@ -83,7 +83,7 @@ const MIN_PLAN_EXECUTION_DOCK_ROWS: u16 = 11;
 /// Number of transcript lines moved by one terminal mouse-wheel event.
 const MOUSE_SCROLL_LINES: usize = 3;
 /// Smallest inline viewport: the composer and status footer, with no reserved transcript gap.
-const MINIMUM_INLINE_VIEWPORT_HEIGHT: u16 = 4;
+const MINIMUM_INLINE_VIEWPORT_HEIGHT: u16 = 5;
 /// Maximum older durable pages eagerly restored into native terminal scrollback.
 const MAX_NATIVE_HISTORY_PAGES: usize = 10;
 /// Maximum durable messages restored into native scrollback, including the bootstrap page.
@@ -94,12 +94,19 @@ const HISTORY_INSERT_CHUNK_LINES: usize = 1_024;
 
 mod app;
 pub use app::{sandbox_boundary_acknowledgement_choice, sandbox_boundary_prompt};
+mod branding;
+mod browser;
 mod completion;
+mod composer;
 mod contract;
+mod footer;
+mod header;
+mod history_search;
 mod plan_execution;
 mod preview;
 mod render;
 mod session_browser;
+mod settings_picker;
 mod state;
 mod terminal;
 mod theme_picker;
@@ -119,10 +126,17 @@ pub use contract::{
 };
 pub use state::TuiState;
 
+use branding::*;
+use browser::*;
 use completion::*;
+use composer::*;
+use footer::*;
+use header::*;
+use history_search::*;
 use plan_execution::*;
 use preview::*;
 use session_browser::*;
+use settings_picker::*;
 use theme_picker::*;
 
 #[cfg(test)]
