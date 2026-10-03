@@ -12,6 +12,11 @@ Open **Schedules** in the Workspace navigation to create, inspect, pause, or ena
 registered workflow schedule. A schedule starts independent workflow runs; it does not
 resume a chat or add a future user message.
 
+![Workspace schedule list and canonical detail](../assets/screenshots/desktop-schedules.png)
+
+Schedule resources captured by the real managed SDK/sidecar acceptance test; the
+surrounding Workspace navigation uses the Desktop test fixture.
+
 ## Register a workflow
 
 Choose **Import workflow**, paste an existing declarative workflow YAML, and select
@@ -36,6 +41,10 @@ definition. For authoring help, see [Your first workflow](../extend/workflows/fi
    immediately. New schedules default to paused.
 5. Review the frozen UTC start, definition hash, inputs, cadence, policy, and initial
    state, then choose **Create schedule**.
+
+![Exact workflow schedule review](../assets/screenshots/desktop-schedule-review.png)
+
+Creation review with illustrative test data.
 
 Every 24 hours means elapsed time: its local hour may shift across daylight saving
 changes. With **one** due occurrence, both misfire options queue a run. With **multiple**
