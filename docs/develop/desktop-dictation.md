@@ -87,6 +87,23 @@ for this application session, so choose the file again after restarting Desktop.
 Click **Start recording**, accept the native recording confirmation, and allow OS
 microphone access if prompted. Speak and watch partial text appear in the draft.
 
+**Spoken punctuation** is enabled by default in the microphone settings. Say
+“period” or “full stop” for `.`, “comma” for `,`, “question mark” for `?`,
+“exclamation mark” or “exclamation point” for `!`, “colon” for `:`, “semicolon”
+for `;`, and “new line” or “new paragraph” for line breaks. For example,
+“Check the build period Is it ready question mark” becomes
+“Check the build. Is it ready?”. The formatter works on recognized speech only;
+typed text and pasted content keep their wording.
+
+This mode treats punctuation names as commands, including in ordinary phrases.
+Say “a literal period of time” to keep “a period of time”, or turn **Spoken
+punctuation** off before starting recording to retain all punctuation names as
+words. The setting stays fixed during a recording session. Multiword commands
+can span transcript segments; editing a settled draft discards that suffix when
+its text or position changes. Recognition mistakes can still require Pause and
+an edit. This is formatting after local transcription, so it cannot recover a
+spoken command that the model did not recognize.
+
 The microphone control pauses and resumes recording. Pause finalizes captured speech
 and releases the input device before the draft becomes editable; this preview protects
 an active partial from competing edits. Resume continues with the edited draft. The

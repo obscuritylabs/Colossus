@@ -9,6 +9,7 @@ test.beforeEach(async ({ page }) => {
       segment: 1,
       model: null as string | null,
       denied: false,
+      initialText: "Check Linux",
     };
     const transcript = (text: string, final: boolean) => ({
       type: "transcript",
@@ -43,7 +44,7 @@ test.beforeEach(async ({ page }) => {
               ? [{ type: "failure", error: "capture_unavailable" }]
               : [
                   { type: "state", phase: "recording" },
-                  transcript("Check Linux", false),
+                  transcript(fixture.initialText, false),
                 ];
             return "native-session";
           }
@@ -97,6 +98,37 @@ async function startRecording(page: import("@playwright/test").Page) {
   await page
     .getByRole("button", { name: "Start recording", exact: true })
     .click();
+}
+
+for (const enabled of [true, false]) {
+  test(`spoken punctuation can be ${enabled ? "enabled" : "disabled"} before recording`, async ({
+    page,
+  }) => {
+    await page.goto("/?fixture=interaction-question");
+    await page.evaluate(() => {
+      (
+        window as unknown as { dictationFixture: { initialText: string } }
+      ).dictationFixture.initialText = "Ready question mark.";
+    });
+    await page
+      .getByRole("button", { name: "Start offline dictation", exact: true })
+      .click();
+    const setting = page.getByRole("checkbox", {
+      name: "Spoken punctuation",
+      exact: true,
+    });
+    await expect(setting).toBeChecked();
+    if (!enabled) await setting.uncheck();
+    await page
+      .getByRole("button", { name: "Choose model…", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "Start recording", exact: true })
+      .click();
+    await expect(
+      page.getByRole("textbox", { name: "Prompt", exact: true }),
+    ).toHaveValue(enabled ? "Ready?" : "Ready question mark.");
+  });
 }
 
 test("live composer controls pause for edits and keep the session across an explicit queued send", async ({

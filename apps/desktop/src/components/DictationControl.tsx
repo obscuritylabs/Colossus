@@ -99,6 +99,22 @@ export function DictationControl({
             </p>
           ) : (
             <>
+              <label className="dictation-punctuation-option">
+                <input
+                  type="checkbox"
+                  checked={state.spokenPunctuation}
+                  disabled={active || state.busy || state.sending}
+                  onChange={(event) =>
+                    controller.setSpokenPunctuation(event.target.checked)
+                  }
+                />
+                Spoken punctuation
+              </label>
+              <p>
+                Say “period”, “comma”, or “question mark” to add punctuation.
+                Say “literal period” to keep the word. Turn this off before
+                recording to keep punctuation names as words.
+              </p>
               <p>
                 {state.model
                   ? `Local model: ${state.model}`

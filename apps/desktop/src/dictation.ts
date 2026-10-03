@@ -5,6 +5,7 @@ import {
   expandComposerDraft,
 } from "./composer-paste";
 import type { ComposerDraft } from "./composer-paste";
+import { formatSpokenPunctuation } from "./dictation-punctuation";
 
 export interface TranscriptUpdate {
   segment_id: number;
@@ -55,6 +56,13 @@ interface DraftCursor {
     end: number;
     text: string;
     separator: string;
+    rawPrefix: string;
+  } | null;
+  punctuationTail?: {
+    start: number;
+    end: number;
+    text: string;
+    raw: string;
   } | null;
 }
 const freshCursor = (): DraftCursor => ({
@@ -69,6 +77,7 @@ export function transcribeDraft(
   draft: ComposerDraft,
   cursor: DraftCursor,
   update: TranscriptUpdate,
+  spokenPunctuation = true,
 ): { draft: ComposerDraft; cursor: DraftCursor } {
   if (
     !Number.isSafeInteger(update.segment_id) ||
@@ -92,15 +101,34 @@ export function transcribeDraft(
       "A speech segment was not finalized. Recording stopped to protect your draft.",
     );
   const partial = update.segment_id === cursor.segment ? cursor.partial : null;
-  const start = partial?.start ?? draft.display.length;
-  const end = partial?.end ?? start;
+  const tail =
+    spokenPunctuation &&
+    !partial &&
+    cursor.punctuationTail?.end === draft.display.length &&
+    draft.display.slice(
+      cursor.punctuationTail.start,
+      cursor.punctuationTail.end,
+    ) === cursor.punctuationTail.text
+      ? cursor.punctuationTail
+      : null;
+  const start = partial?.start ?? tail?.start ?? draft.display.length;
+  const end = partial?.end ?? tail?.end ?? start;
   if (partial && draft.display.slice(start, end) !== partial.text)
     throw new Error(
       "Your draft changed during transcription. Recording stopped to preserve your edits.",
     );
+  const before = draft.display.slice(0, start);
   const separator =
-    partial?.separator ?? (start > 0 && !/\s$/.test(draft.display) ? " " : "");
-  const text = update.text.trim() ? separator + update.text.trim() : "";
+    partial?.separator ?? (before && !/\s$/u.test(before) ? " " : "");
+  const rawPrefix = partial?.rawPrefix ?? tail?.raw ?? "";
+  const raw = rawPrefix
+    ? rawPrefix + (update.text.trim() ? " " + update.text.trim() : "")
+    : update.text.trim();
+  const formatted = spokenPunctuation
+    ? formatSpokenPunctuation(raw)
+    : { text: raw, tail: null };
+  const join = /^[\n.,?!:;]/u.test(formatted.text) ? "" : separator;
+  const text = formatted.text ? join + formatted.text : "";
   const display =
     draft.display.slice(0, start) + text + draft.display.slice(end);
   return {
@@ -111,7 +139,23 @@ export function transcribeDraft(
       final: update.is_final,
       partial: update.is_final
         ? null
-        : { start, end: start + text.length, text, separator },
+        : { start, end: start + text.length, text, separator, rawPrefix },
+      punctuationTail:
+        update.is_final && formatted.tail
+          ? {
+              start:
+                start +
+                (formatted.tail.offset === 0
+                  ? 0
+                  : join.length + formatted.tail.offset),
+              end: start + text.length,
+              text:
+                formatted.tail.offset === 0
+                  ? text
+                  : formatted.text.slice(formatted.tail.offset),
+              raw: formatted.tail.raw,
+            }
+          : null,
     },
   };
 }
@@ -136,6 +180,7 @@ const FAILURE_MESSAGES: Record<string, string> = {
 };
 
 export interface DictationSnapshot extends DictationStatus {
+  spokenPunctuation: boolean;
   phase: DictationPhase;
   sessionId: string | null;
   busy: boolean;
@@ -152,6 +197,7 @@ export class DictationController {
   private snapshot: DictationSnapshot = {
     enabled: false,
     model: null,
+    spokenPunctuation: true,
     phase: "idle",
     sessionId: null,
     busy: false,
@@ -177,6 +223,11 @@ export class DictationController {
       this.listeners.delete(listener);
     };
   };
+  setSpokenPunctuation(enabled: boolean) {
+    if (this.snapshot.sessionId || this.snapshot.busy || this.snapshot.sending)
+      return;
+    this.change({ spokenPunctuation: enabled });
+  }
   private change(next: Partial<DictationSnapshot>) {
     this.snapshot = { ...this.snapshot, ...next };
     this.listeners.forEach((listener) => listener());
@@ -245,6 +296,7 @@ export class DictationController {
           current.draft,
           current.cursor,
           event.update,
+          this.snapshot.spokenPunctuation,
         );
         if (
           new TextEncoder().encode(expandComposerDraft(next.draft)).length >
@@ -350,9 +402,12 @@ export class DictationController {
   endSend() {
     if (this.sendTurn === null) return;
     const draft = this.drafts.read();
+    const baseSeparator =
+      draft.display && !/\s$/u.test(draft.display) ? " " : "";
     const separator =
-      draft.display && this.pending.draft.display && !/\s$/.test(draft.display)
-        ? " "
+      this.pending.draft.display &&
+      !/^[\n.,?!:;]/u.test(this.pending.draft.display)
+        ? baseSeparator
         : "";
     const offset = draft.display.length + separator.length;
     if (this.pending.draft.display)
@@ -367,8 +422,32 @@ export class DictationController {
       partial: this.pending.cursor.partial
         ? {
             ...this.pending.cursor.partial,
-            start: this.pending.cursor.partial.start + offset,
+            start:
+              this.pending.cursor.partial.start === 0
+                ? draft.display.length
+                : this.pending.cursor.partial.start + offset,
             end: this.pending.cursor.partial.end + offset,
+            text:
+              (this.pending.cursor.partial.start === 0 ? separator : "") +
+              this.pending.cursor.partial.text,
+            separator:
+              this.pending.cursor.partial.start === 0
+                ? baseSeparator
+                : this.pending.cursor.partial.separator,
+          }
+        : null,
+      punctuationTail: this.pending.cursor.punctuationTail
+        ? {
+            ...this.pending.cursor.punctuationTail,
+            start:
+              this.pending.cursor.punctuationTail.start === 0
+                ? draft.display.length
+                : this.pending.cursor.punctuationTail.start + offset,
+            end: this.pending.cursor.punctuationTail.end + offset,
+            text:
+              (this.pending.cursor.punctuationTail.start === 0
+                ? separator
+                : "") + this.pending.cursor.punctuationTail.text,
           }
         : null,
     };

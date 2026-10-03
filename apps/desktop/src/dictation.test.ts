@@ -78,6 +78,155 @@ function fixture(byteLimit = 65_536) {
 }
 
 describe("dictation draft revisions", () => {
+  it.each([
+    [
+      "Check the build period Is it ready question mark",
+      "Check the build. Is it ready?",
+    ],
+    ["One new line Two new paragraph Three period", "One\nTwo\n\nThree."],
+    ["a literal period of time", "a period of time"],
+    ["Keep the literal question mark", "Keep the question mark"],
+  ])("formats %j consistently at every word boundary", (speech, expected) => {
+    const words = speech.split(" ");
+    for (let split = 1; split < words.length; split += 1) {
+      let current = transcribeDraft(
+        composerDraft(),
+        cursor(),
+        update(1, 1, words.slice(0, split).join(" "), true),
+      );
+      current = transcribeDraft(
+        current.draft,
+        current.cursor,
+        update(2, 1, words.slice(split).join(" "), true),
+      );
+      expect(current.draft.display, `split after word ${split}`).toBe(expected);
+    }
+  });
+  it("restores an owned command prefix if the following segment has an empty final", () => {
+    let current = transcribeDraft(
+      composerDraft(),
+      cursor(),
+      update(1, 1, "Ready question", true),
+    );
+    current = transcribeDraft(
+      current.draft,
+      current.cursor,
+      update(2, 1, "mark"),
+    );
+    expect(current.draft.display).toBe("Ready?");
+    current = transcribeDraft(
+      current.draft,
+      current.cursor,
+      update(2, 2, "", true),
+    );
+    expect(current.draft.display).toBe("Ready question");
+  });
+  it("formats revised speech while preserving typed punctuation names and hidden pastes", () => {
+    const original = pasteIntoComposerDraft(
+      composerDraft("Discuss the period and question mark: "),
+      "period question mark ".repeat(100),
+      38,
+      38,
+    ).draft;
+    let current = transcribeDraft(
+      original,
+      cursor(),
+      update(1, 1, "Ready period"),
+    );
+    expect(current.draft.display).toBe(original.display + " Ready.");
+    current = transcribeDraft(
+      current.draft,
+      current.cursor,
+      update(1, 2, "Ready question mark.", true),
+    );
+    expect(current.draft.display).toBe(original.display + " Ready?");
+    expect(expandComposerDraft(current.draft)).toContain(
+      "period question mark ".repeat(100),
+    );
+    expect(expandComposerDraft(current.draft)).toContain(
+      "Discuss the period and question mark:",
+    );
+  });
+  it("joins split commands and replaces their partials without losing a revised word", () => {
+    let current = transcribeDraft(
+      composerDraft(),
+      cursor(),
+      update(1, 1, "Is it ready question.", true),
+    );
+    current = transcribeDraft(
+      current.draft,
+      current.cursor,
+      update(2, 1, "mark."),
+    );
+    expect(current.draft.display).toBe("Is it ready?");
+    current = transcribeDraft(
+      current.draft,
+      current.cursor,
+      update(2, 2, "about the build", true),
+    );
+    expect(current.draft.display).toBe("Is it ready question. about the build");
+  });
+  it("does not duplicate model punctuation or remove dictated line breaks across segments", () => {
+    let current = transcribeDraft(
+      composerDraft(),
+      cursor(),
+      update(1, 1, "Ready.", true),
+    );
+    current = transcribeDraft(
+      current.draft,
+      current.cursor,
+      update(2, 1, "Period. New paragraph", true),
+    );
+    expect(current.draft.display).toBe("Ready.\n\n");
+    current = transcribeDraft(
+      current.draft,
+      current.cursor,
+      update(3, 1, "Next line new", true),
+    );
+    current = transcribeDraft(
+      current.draft,
+      current.cursor,
+      update(4, 1, "line Last line", true),
+    );
+    expect(current.draft.display).toBe("Ready.\n\nNext line\nLast line");
+  });
+  it("can say literal punctuation names even when the escape spans segments", () => {
+    let current = transcribeDraft(
+      composerDraft("Keep:"),
+      cursor(),
+      update(1, 1, "literal question", true),
+    );
+    current = transcribeDraft(
+      current.draft,
+      current.cursor,
+      update(2, 1, "mark and literal", true),
+    );
+    current = transcribeDraft(
+      current.draft,
+      current.cursor,
+      update(3, 1, "period", true),
+    );
+    expect(current.draft.display).toBe("Keep: question mark and period");
+  });
+  it("leaves an edited or moved settled suffix alone when recording resumes", () => {
+    const current = transcribeDraft(
+      composerDraft("Keep:"),
+      cursor(),
+      update(1, 1, "a question", true),
+    );
+    const edited = transcribeDraft(
+      composerDraft("Keep: an answer"),
+      current.cursor,
+      update(2, 1, "mark", true),
+    );
+    expect(edited.draft.display).toBe("Keep: an answer mark");
+    const appended = transcribeDraft(
+      composerDraft(current.draft.display + " typed edits"),
+      current.cursor,
+      update(2, 1, "mark", true),
+    );
+    expect(appended.draft.display).toBe("Keep: a question typed edits mark");
+  });
   it("settles a long session in order, replacing partials and rejecting stale revisions", () => {
     let current = { draft: composerDraft(), cursor: cursor() };
     const words: string[] = [];
@@ -144,6 +293,58 @@ describe("dictation draft revisions", () => {
 });
 
 describe("native dictation composer boundary", () => {
+  it.each([
+    ["something", "question mark", "Review this: first?"],
+    ["comma", "correction", "Review this: first correction"],
+  ])(
+    "replaces buffered %j with %j after a failed Send",
+    async (partial, final, expected) => {
+      const f = fixture();
+      await f.controller.start();
+      f.events([
+        transcript(1, 1, 1, "first", true),
+        { type: "boundary", turn_id: 2 },
+        transcript(2, 2, 1, partial),
+      ]);
+      await f.controller.beginSend();
+      f.controller.endSend();
+      f.events([transcript(2, 2, 2, final, true)]);
+      await f.controller.poll();
+      expect(f.draft.display).toBe(expected);
+    },
+  );
+  it("can keep punctuation names literal and freezes the setting while recording", async () => {
+    const f = fixture();
+    f.controller.setSpokenPunctuation(false);
+    await f.controller.start();
+    f.controller.setSpokenPunctuation(true);
+    f.events([transcript(1, 1, 1, "period question mark literal comma", true)]);
+    await f.controller.poll();
+    expect(f.draft.display).toBe(
+      "Review this: period question mark literal comma",
+    );
+    expect(f.controller.getSnapshot().spokenPunctuation).toBe(false);
+  });
+  it("keeps split punctuation with the correct draft across successful and failed Sends", async () => {
+    for (const accepted of [true, false]) {
+      const f = fixture();
+      await f.controller.start();
+      f.events([
+        transcript(1, 1, 1, "first question", true),
+        { type: "boundary", turn_id: 2 },
+        transcript(2, 2, 1, "Next question", true),
+      ]);
+      await f.controller.beginSend();
+      expect(f.draft.display).toBe("Review this: first question");
+      if (accepted) f.replace("");
+      f.controller.endSend();
+      f.events([transcript(2, 3, 1, "mark.", true)]);
+      await f.controller.poll();
+      expect(f.draft.display).toBe(
+        accepted ? "Next?" : "Review this: first question Next?",
+      );
+    }
+  });
   it("can stop the microphone while a submitted message is still pending", async () => {
     const f = fixture();
     await f.controller.start();
