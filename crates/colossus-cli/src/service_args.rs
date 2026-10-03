@@ -86,15 +86,18 @@ pub(super) struct ProviderSetupArgs {
     /// Override the output limit; unknown models default to 4096.
     #[arg(long)]
     pub(super) max_output_tokens: Option<u64>,
-    /// Explicit tool-call capability when catalog metadata is missing or incorrect.
+    /// Tool calls: off, auto (default), or on; true/false remain accepted.
     #[arg(long, action = clap::ArgAction::Set)]
-    pub(super) tool_calls: Option<bool>,
-    /// Explicit streaming capability when catalog metadata is missing or incorrect.
+    pub(super) tool_calls: Option<colossus_contracts::ModelFeatureMode>,
+    /// Streaming: off, auto (default), or on; true/false remain accepted.
     #[arg(long, action = clap::ArgAction::Set)]
-    pub(super) streaming: Option<bool>,
-    /// Explicit image-input capability when catalog metadata is missing or incorrect.
+    pub(super) streaming: Option<colossus_contracts::ModelFeatureMode>,
+    /// Image inputs: off, auto (default), or on; true/false remain accepted.
     #[arg(long, action = clap::ArgAction::Set)]
-    pub(super) image_inputs: Option<bool>,
+    pub(super) image_inputs: Option<colossus_contracts::ModelFeatureMode>,
+    /// Responses server compaction: off, auto, or on.
+    #[arg(long, action = clap::ArgAction::Set)]
+    pub(super) server_compaction: Option<colossus_contracts::ModelFeatureMode>,
 }
 
 #[derive(Args)]

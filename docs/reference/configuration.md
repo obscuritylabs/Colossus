@@ -116,14 +116,20 @@ models:
       contextWindowTokens: 32768
       maxOutputTokens: 4096
       capabilities:
-        toolCalls: true
-        streaming: true
-        imageInputs: false
+        toolCalls: "on"
+        streaming: "on"
+        imageInputs: "off"
+        serverCompaction: auto
+        declared:
+          toolCalls: null
+          streaming: null
+          imageInputs: null
+          serverCompaction: null
   roles:
     primary: echo
 context:
   autoCompaction: true
-  compactAtPercent: 70
+  compactAtPercent: 85
   targetPercent: 45
   preserveRecentMessages: 8
   modelAssisted: true

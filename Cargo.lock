@@ -1141,6 +1141,7 @@ version = "0.11.6"
 dependencies = [
  "async-trait",
  "colossus-contracts",
+ "colossus-journal-redb",
  "colossus-ports",
  "colossus-session",
  "colossus-testkit",
@@ -1148,6 +1149,7 @@ dependencies = [
  "colossus-work",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "uuid",
 ]

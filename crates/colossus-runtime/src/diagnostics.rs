@@ -636,6 +636,8 @@ impl Runtime {
             endpoint,
             serde_json::to_value(ProviderEffectInput {
                 stream_response: None,
+                server_compaction_threshold: None,
+                continuation: None,
                 provider_profile: provider.profile().name.clone(),
                 model_profile: None,
                 model: None,
@@ -771,6 +773,8 @@ impl Runtime {
             endpoint,
             serde_json::to_value(ProviderEffectInput {
                 stream_response: None,
+                server_compaction_threshold: None,
+                continuation: None,
                 provider_profile: route.provider_profile.clone(),
                 model_profile: Some(route.model_profile.clone()),
                 model: Some(route.model.clone()),
@@ -842,7 +846,9 @@ impl Runtime {
                 provider_response: None,
             },
         };
+        let feature_checks = self.providers.feature_checks(&resolved);
         Ok(json!({
+            "features": feature_checks,
             "ready": generation.status == "pass",
             "route": route,
             "checks": [

@@ -39,6 +39,8 @@ pub use journal::*;
 
 mod provider;
 pub use provider::*;
+mod provider_continuation;
+pub use provider_continuation::*;
 
 mod tools;
 pub use tools::*;

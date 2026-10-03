@@ -243,6 +243,8 @@ pub struct ModelProfile {
     pub limits: ModelLimits,
     /// Explicit request-shaping capabilities.
     pub capabilities: ModelCapabilities,
+    /// Saved intent and model-card declarations for optional features.
+    pub feature_settings: colossus_contracts::ModelFeatureSettings,
     /// Optional configured reasoning effort.
     pub reasoning_effort: Option<ReasoningEffort>,
 }
@@ -293,7 +295,18 @@ impl ModelProfile {
                 input_budget_tokens,
             },
             capabilities,
+            feature_settings: capabilities.into(),
             reasoning_effort,
         })
+    }
+
+    /// Apply saved preferences independently of resolved capability booleans.
+    pub fn with_feature_settings(
+        mut self,
+        settings: colossus_contracts::ModelFeatureSettings,
+    ) -> Self {
+        self.capabilities = settings.capabilities();
+        self.feature_settings = settings;
+        self
     }
 }

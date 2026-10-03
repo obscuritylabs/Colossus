@@ -545,11 +545,11 @@ impl Default for ModelsConfig {
                     model: "echo".into(),
                     context_window_tokens: 32_768,
                     max_output_tokens: 4_096,
-                    capabilities: ModelCapabilities {
+                    capabilities: ModelFeatureSettings::from(ModelCapabilities {
                         tool_calls: true,
                         streaming: true,
                         image_inputs: false,
-                    },
+                    }),
                     reasoning_effort: None,
                 },
             )]),
@@ -570,8 +570,9 @@ pub struct ModelProfileConfig {
     pub context_window_tokens: u64,
     /// Maximum generated tokens reserved from the context window.
     pub max_output_tokens: u64,
-    /// Explicit request-shaping capabilities.
-    pub capabilities: ModelCapabilities,
+    /// Saved request preferences; legacy booleans preserve explicit choices.
+    #[serde(default)]
+    pub capabilities: ModelFeatureSettings,
     /// Optional reasoning effort sent on every turn for this model profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,

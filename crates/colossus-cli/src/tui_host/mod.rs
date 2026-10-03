@@ -124,6 +124,8 @@ struct ModelDiagnostics {
     ready: bool,
     route: ProviderRoute,
     checks: Vec<ProviderReadinessCheck>,
+    #[serde(default)]
+    features: Vec<ProviderReadinessCheck>,
 }
 
 fn grouped_u64(value: u64) -> String {
@@ -225,7 +227,7 @@ fn model_diagnostics_document(value: &Value) -> Result<PresentationDocument, Str
         ["Check", "Status", "Detail"],
         "No model checks were returned.",
     );
-    for check in &report.checks {
+    for check in report.checks.iter().chain(&report.features) {
         checks.push_row([
             check.name.clone(),
             check_status_label(&check.status),

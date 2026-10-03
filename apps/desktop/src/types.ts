@@ -173,10 +173,19 @@ export interface ManagedProviderConfiguration {
   effectiveTimeoutMs: number;
 }
 
+export type ModelFeatureMode = "off" | "auto" | "on";
+
 export interface ManagedModelCapabilities {
-  toolCalls: boolean;
-  streaming: boolean;
-  imageInputs: boolean;
+  toolCalls: ModelFeatureMode;
+  streaming: ModelFeatureMode;
+  imageInputs: ModelFeatureMode;
+  serverCompaction?: ModelFeatureMode;
+  declared?: {
+    toolCalls?: boolean | null;
+    streaming?: boolean | null;
+    imageInputs?: boolean | null;
+    serverCompaction?: boolean | null;
+  };
 }
 
 export interface ManagedModelConfiguration {
@@ -283,9 +292,10 @@ export interface ConfigureManagedRuntimeRequest {
   modelMetadata?: {
     contextWindowTokens: number;
     maxOutputTokens: number;
-    toolCalls: boolean;
-    imageInputs: boolean;
-    streaming: boolean;
+    toolCalls?: boolean;
+    imageInputs?: boolean;
+    streaming?: boolean;
+    capabilities?: ManagedModelCapabilities;
   };
 }
 

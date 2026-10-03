@@ -69,7 +69,7 @@ describe("imported workspace configuration", () => {
     contextWindowTokens: 131072,
     maxOutputTokens: 8192,
     reasoningEffort: "high",
-    capabilities: { toolCalls: true, streaming: true, imageInputs: false },
+    capabilities: { toolCalls: "on", streaming: "on", imageInputs: "off" },
   };
   it("preserves profiles, reasoning, limits, siblings and timeout while deferring a missing key", () => {
     const sibling = {

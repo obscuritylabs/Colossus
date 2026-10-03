@@ -658,6 +658,7 @@ pub(crate) struct ConfigureManagedRuntimeInput {
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SetupModelMetadataInput {
+    pub(crate) capabilities: Option<ModelCapabilitiesSetting>,
     pub(crate) context_window_tokens: Option<u64>,
     pub(crate) max_output_tokens: Option<u64>,
     pub(crate) tool_calls: Option<bool>,
@@ -736,9 +737,10 @@ mod tests {
                 context_window_tokens: 32_768,
                 max_output_tokens: 4_096,
                 capabilities: ModelCapabilitiesSetting {
-                    tool_calls: false,
-                    streaming: true,
-                    image_inputs: false,
+                    tool_calls: false.into(),
+                    streaming: true.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
                 reasoning_effort: None,
             }],
@@ -983,9 +985,10 @@ mod tests {
                 context_window_tokens: 32_768,
                 max_output_tokens: 4_096,
                 capabilities: ModelCapabilitiesSetting {
-                    tool_calls: true,
-                    streaming: false,
-                    image_inputs: false,
+                    tool_calls: true.into(),
+                    streaming: false.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
                 reasoning_effort: Some(ReasoningEffortSetting::High),
             }],

@@ -286,11 +286,17 @@ pub(crate) fn setup_configuration(
             model: request.model,
             context_window_tokens,
             max_output_tokens,
-            capabilities: crate::desktop_settings::ModelCapabilitiesSetting {
-                tool_calls: metadata.tool_calls.unwrap_or(false),
-                streaming: metadata.streaming.unwrap_or(false),
-                image_inputs: metadata.image_inputs.unwrap_or(false),
-            },
+            capabilities: metadata.capabilities.unwrap_or(
+                crate::desktop_settings::ModelCapabilitiesSetting {
+                    declared: colossus_contracts::ModelFeatureDeclarations {
+                        tool_calls: metadata.tool_calls,
+                        streaming: metadata.streaming,
+                        image_inputs: metadata.image_inputs,
+                        server_compaction: None,
+                    },
+                    ..Default::default()
+                },
+            ),
             reasoning_effort: None,
         }],
         roles: std::collections::BTreeMap::from([("primary".into(), "primary".into())]),
@@ -429,15 +435,16 @@ mod tests {
     }
 
     #[test]
-    fn sparse_catalogs_keep_conservative_limits_and_unknown_capabilities_disabled() {
+    fn sparse_catalogs_keep_conservative_limits_and_auto_capabilities() {
         let configuration = setup_configuration(setup_request(), &DesktopSettings::default())
             .expect("setup configuration");
         let model = &configuration.models[0];
         assert_eq!(model.context_window_tokens, 32_768);
         assert_eq!(model.max_output_tokens, 4_096);
-        assert!(!model.capabilities.tool_calls);
-        assert!(!model.capabilities.streaming);
-        assert!(!model.capabilities.image_inputs);
+        assert_eq!(
+            model.capabilities,
+            colossus_contracts::ModelFeatureSettings::default()
+        );
         assert_eq!(
             configuration.providers[0].credential_action,
             CredentialActionInput::None
@@ -645,7 +652,13 @@ mod tests {
         );
         assert_eq!(configuration.models[0].context_window_tokens, 32000);
         assert_eq!(configuration.models[0].max_output_tokens, 4000);
-        assert!(!configuration.models[0].capabilities.tool_calls);
-        assert!(configuration.models[0].capabilities.image_inputs);
+        assert_eq!(
+            configuration.models[0].capabilities.declared.tool_calls,
+            Some(false)
+        );
+        assert_eq!(
+            configuration.models[0].capabilities.declared.image_inputs,
+            Some(true)
+        );
     }
 }

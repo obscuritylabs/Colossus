@@ -1,6 +1,7 @@
 use super::*;
 use colossus_contracts::{
-    ModelCapabilities, ModelLimits, ModelToolCall, ProviderRoute, ProviderTurn,
+    ModelCapabilities, ModelLimits, ModelToolCall, ProviderContinuationView, ProviderRoute,
+    ProviderTurn,
 };
 use colossus_ports::ModelProviderError;
 use colossus_session::EventSourcedSessionRepository;
@@ -131,8 +132,132 @@ fn model_route(role: &str) -> ProviderRoute {
     }
 }
 
+#[tokio::test]
+async fn fitted_active_snapshot_is_reused_for_unchanged_history() {
+    let provider = Arc::new(SummaryProvider {
+        output: Some("summary ".repeat(1_500)),
+        calls: AtomicUsize::new(0),
+    });
+    let config = ContextConfig {
+        preserve_recent_messages: 2,
+        ..ContextConfig::default()
+    };
+    let (_journal, _sessions, snapshots, service) =
+        fixture(config, Arc::clone(&provider) as Arc<dyn ModelProvider>);
+    let messages = vec![
+        message(ModelMessageRole::User, "old requirement ".repeat(1_400)),
+        message(ModelMessageRole::Assistant, "old result"),
+        message(ModelMessageRole::User, "continue"),
+        message(ModelMessageRole::Assistant, "recent result"),
+    ];
+    let first = service
+        .prepare(preparation_request(messages.clone(), false))
+        .await
+        .expect("first preparation");
+    let second = service
+        .prepare(preparation_request(messages, false))
+        .await
+        .expect("reused preparation");
+    assert!(first.snapshot_created);
+    assert!(!second.snapshot_created);
+    assert_eq!(second.token_estimate, first.token_estimate);
+    assert_eq!(snapshots.list("session-1").expect("snapshots").len(), 1);
+    assert_eq!(provider.calls.load(Ordering::Acquire), 1);
+}
+
+#[tokio::test]
+async fn disabled_auto_compaction_still_enforces_input_budget() {
+    let provider = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let config = ContextConfig {
+        auto_compaction: false,
+        ..ContextConfig::default()
+    };
+    let (_journal, _sessions, snapshots, service) =
+        fixture(config, provider as Arc<dyn ModelProvider>);
+    let messages = vec![message(ModelMessageRole::User, "x".repeat(15_000))];
+    let error = service
+        .prepare(preparation_request(messages, false))
+        .await
+        .expect_err("over-budget request");
+    assert!(matches!(error, ContextError::Configuration(_)));
+    assert!(snapshots.list("session-1").expect("snapshots").is_empty());
+}
+
+#[tokio::test]
+async fn failed_preparation_never_activates_a_candidate_snapshot() {
+    let messages = vec![
+        message(ModelMessageRole::User, "old requirement ".repeat(1_400)),
+        message(ModelMessageRole::Assistant, "old result"),
+        message(ModelMessageRole::User, "r".repeat(900)),
+        message(ModelMessageRole::Assistant, "recent result"),
+    ];
+    let mut rejected = 0;
+    for budget in (300..1_000).step_by(25) {
+        let provider = Arc::new(SummaryProvider {
+            output: Some("summary ".repeat(1_500)),
+            calls: AtomicUsize::new(0),
+        });
+        let config = ContextConfig {
+            preserve_recent_messages: 2,
+            ..ContextConfig::default()
+        };
+        let (_journal, _sessions, snapshots, service) =
+            fixture(config, provider as Arc<dyn ModelProvider>);
+        let mut request = preparation_request(messages.clone(), false);
+        request.route.limits.input_budget_tokens = budget;
+        request.route.limits.context_window_tokens = budget + 1_024;
+        if service.prepare(request).await.is_err() {
+            rejected += 1;
+            assert!(
+                snapshots.list("session-1").expect("snapshots").is_empty(),
+                "failed preparation activated a snapshot at budget {budget}"
+            );
+        }
+    }
+    assert!(rejected > 0, "test must exercise a rejected preparation");
+}
+
+#[tokio::test]
+async fn deterministic_summary_keeps_early_user_requirement() {
+    let provider = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let config = ContextConfig {
+        model_assisted: false,
+        preserve_recent_messages: 1,
+        ..ContextConfig::default()
+    };
+    let (_journal, _sessions, _snapshots, service) =
+        fixture(config, provider as Arc<dyn ModelProvider>);
+    let mut messages = vec![message(
+        ModelMessageRole::User,
+        "USER_REQUIREMENT: Preserve the public API",
+    )];
+    for index in 0..20 {
+        messages.push(message(
+            ModelMessageRole::Assistant,
+            format!("progress update {index:02}"),
+        ));
+    }
+    messages.push(message(ModelMessageRole::User, "continue"));
+    let mut request = preparation_request(messages, true);
+    request.force = true;
+    let prepared = service.prepare(request).await.expect("forced compaction");
+    assert!(
+        prepared.messages[0]
+            .content
+            .plain_text()
+            .contains("USER_REQUIREMENT: Preserve the public API")
+    );
+}
+
 fn preparation_request(messages: Vec<ModelMessage>, force: bool) -> ContextPreparationRequest {
     ContextPreparationRequest {
+        continuation: None,
         session_id: "session-1".into(),
         instructions: "test".into(),
         messages,
@@ -141,6 +266,44 @@ fn preparation_request(messages: Vec<ModelMessage>, force: bool) -> ContextPrepa
         context: execution_context(),
         force,
     }
+}
+
+#[tokio::test]
+async fn server_continuation_reserves_budget_and_falls_back_at_local_threshold() {
+    let provider: Arc<dyn ModelProvider> = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let config = ContextConfig {
+        preserve_recent_messages: 2,
+        model_assisted: false,
+        ..ContextConfig::default()
+    };
+    let (_journal, _sessions, snapshots, service) = fixture(config, provider);
+    let messages = vec![
+        message(ModelMessageRole::User, "old requirement ".repeat(1_400)),
+        message(ModelMessageRole::Assistant, "old response"),
+        message(ModelMessageRole::User, "continue"),
+        message(ModelMessageRole::Assistant, "recent response"),
+    ];
+    let mut request = preparation_request(messages, false);
+    request.continuation = Some(ProviderContinuationView {
+        id: "safe-reference".into(),
+        covered_count: 2,
+        reserved_tokens: 100,
+        bytes: 300,
+    });
+    let selected = service.prepare(request.clone()).await.unwrap();
+    assert_eq!(selected.continuation_id.as_deref(), Some("safe-reference"));
+    assert_eq!(selected.messages, request.messages[2..]);
+    assert!(selected.token_estimate >= 100);
+    assert!(snapshots.list("session-1").unwrap().is_empty());
+    request.continuation.as_mut().unwrap().reserved_tokens = selected.threshold_tokens + 1;
+    let fallback = service.prepare(request).await.unwrap();
+    assert!(fallback.continuation_id.is_none());
+    assert!(fallback.snapshot_created);
+    assert!(fallback.token_estimate <= fallback.input_budget_tokens);
+    assert_eq!(snapshots.list("session-1").unwrap().len(), 1);
 }
 
 fn message(role: ModelMessageRole, content: impl Into<String>) -> ModelMessage {

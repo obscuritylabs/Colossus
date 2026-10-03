@@ -505,6 +505,9 @@ pub struct ProviderModelInfo {
     /// Advertised streaming support; absence is unknown rather than unsupported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub streaming: Option<bool>,
+    /// Advertised server-side Responses compaction support; absence is unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_compaction: Option<bool>,
     /// Explicit advertised reasoning efforts understood by this version of Colossus.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supported_reasoning_efforts: Vec<ReasoningEffort>,

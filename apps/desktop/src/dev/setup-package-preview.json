@@ -3,7 +3,7 @@
   "name": "Company AI setup",
   "version": "2",
   "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "descriptionMarkdown": "Five example providers for exploring Desktop setup. Company AI is recommended to start.\n\nThese are sample endpoints and model IDs. Replace them with your organization’s connections before distribution.",
+  "descriptionMarkdown": "Five example providers for exploring Desktop setup. Company AI is recommended to start.\n\nThese are sample endpoints and model IDs. Replace them with your organization\u2019s connections before distribution.",
   "providers": [
     {
       "profile": "company",
@@ -25,9 +25,9 @@
           "maxOutputTokens": 4096,
           "reasoningEffort": "high",
           "capabilities": {
-            "toolCalls": true,
-            "streaming": true,
-            "imageInputs": false
+            "toolCalls": "on",
+            "streaming": "on",
+            "imageInputs": "off"
           }
         },
         {
@@ -37,9 +37,9 @@
           "contextWindowTokens": 65536,
           "maxOutputTokens": 8192,
           "capabilities": {
-            "toolCalls": true,
-            "streaming": true,
-            "imageInputs": false
+            "toolCalls": "on",
+            "streaming": "on",
+            "imageInputs": "off"
           },
           "reasoningEffort": null
         }
@@ -65,9 +65,9 @@
           "maxOutputTokens": 16384,
           "reasoningEffort": "high",
           "capabilities": {
-            "toolCalls": true,
-            "streaming": true,
-            "imageInputs": false
+            "toolCalls": "on",
+            "streaming": "on",
+            "imageInputs": "off"
           }
         }
       ]
@@ -91,9 +91,9 @@
           "contextWindowTokens": 65536,
           "maxOutputTokens": 8192,
           "capabilities": {
-            "toolCalls": true,
-            "streaming": true,
-            "imageInputs": true
+            "toolCalls": "on",
+            "streaming": "on",
+            "imageInputs": "on"
           },
           "reasoningEffort": null
         }
@@ -118,9 +118,9 @@
           "contextWindowTokens": 65536,
           "maxOutputTokens": 8192,
           "capabilities": {
-            "toolCalls": true,
-            "streaming": true,
-            "imageInputs": false
+            "toolCalls": "on",
+            "streaming": "on",
+            "imageInputs": "off"
           },
           "reasoningEffort": null
         }
@@ -145,9 +145,9 @@
           "contextWindowTokens": 32768,
           "maxOutputTokens": 4096,
           "capabilities": {
-            "toolCalls": true,
-            "streaming": true,
-            "imageInputs": false
+            "toolCalls": "on",
+            "streaming": "on",
+            "imageInputs": "off"
           },
           "reasoningEffort": null
         }

@@ -58,9 +58,9 @@ const desktop: DesktopStatus = {
         maxOutputTokens: 4_096,
         reasoningEffort: null,
         capabilities: {
-          toolCalls: false,
-          streaming: false,
-          imageInputs: false,
+          toolCalls: "off",
+          streaming: "off",
+          imageInputs: "off",
         },
       },
     ],
@@ -267,7 +267,7 @@ describe("ModelConfigurationEditor", () => {
         contextWindowTokens: 128_000,
         maxOutputTokens: 16_000,
         reasoningEffort: null,
-        capabilities: { toolCalls: true, streaming: true, imageInputs: false },
+        capabilities: { toolCalls: "on", streaming: "on", imageInputs: "off" },
       },
       {
         profile: "worker",
@@ -276,7 +276,7 @@ describe("ModelConfigurationEditor", () => {
         contextWindowTokens: 128_000,
         maxOutputTokens: 16_000,
         reasoningEffort: null,
-        capabilities: { toolCalls: true, streaming: true, imageInputs: false },
+        capabilities: { toolCalls: "on", streaming: "on", imageInputs: "off" },
       },
       {
         profile: "other",
@@ -285,7 +285,7 @@ describe("ModelConfigurationEditor", () => {
         contextWindowTokens: 128_000,
         maxOutputTokens: 16_000,
         reasoningEffort: null,
-        capabilities: { toolCalls: true, streaming: true, imageInputs: false },
+        capabilities: { toolCalls: "on", streaming: "on", imageInputs: "off" },
       },
     ];
 

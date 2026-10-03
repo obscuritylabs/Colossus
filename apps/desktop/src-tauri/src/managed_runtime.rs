@@ -4,12 +4,12 @@ use colossus_sdk::{
     IdempotencyKey, InputContentPart, InstanceId, ListRunsRequest, ManagedAccessProfile,
     ManagedExecutionBoundary, ManagedFieldOverride, ManagedJournalPayloadMode,
     ManagedMcpCredentialHeader, ManagedMcpOAuthConfig, ManagedMcpResearchTool,
-    ManagedMcpServerConfig, ManagedMcpTransport, ManagedModelCapabilities, ManagedModelConfig,
-    ManagedOtlpProtocol, ManagedProviderConfig, ManagedProviderKind, ManagedReasoningEffort,
-    ManagedRuntimeConfig, ManagedSearchConfig, ManagedSearchKind, ManagedTelemetryConfig,
-    NativeSidecarLifecycle, PageRequest, PageResponse, RunMode, RunStatus, SdkError, Secret,
-    SidecarApplicationGrant, SidecarApprovalBrokerGrant, SidecarBootstrapConfig,
-    SidecarHostCredential, SidecarOptions, WorkspaceIdentity, scopes,
+    ManagedMcpServerConfig, ManagedMcpTransport, ManagedModelConfig, ManagedOtlpProtocol,
+    ManagedProviderConfig, ManagedProviderKind, ManagedReasoningEffort, ManagedRuntimeConfig,
+    ManagedSearchConfig, ManagedSearchKind, ManagedTelemetryConfig, NativeSidecarLifecycle,
+    PageRequest, PageResponse, RunMode, RunStatus, SdkError, Secret, SidecarApplicationGrant,
+    SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarHostCredential, SidecarOptions,
+    WorkspaceIdentity, scopes,
 };
 use colossus_worker_protocol::{WorkerControlClient, worker_ipc_endpoint};
 mod provider_catalog;
@@ -1075,11 +1075,7 @@ pub(crate) fn managed_runtime_config(
                 model: model.model.clone(),
                 context_window_tokens: model.context_window_tokens,
                 max_output_tokens: model.max_output_tokens,
-                capabilities: ManagedModelCapabilities {
-                    tool_calls: model.capabilities.tool_calls,
-                    streaming: model.capabilities.streaming,
-                    image_inputs: model.capabilities.image_inputs,
-                },
+                capabilities: model.capabilities.into(),
                 reasoning_effort: model.reasoning_effort.map(reasoning_effort),
             })
             .collect(),

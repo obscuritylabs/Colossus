@@ -67,9 +67,10 @@ fn settings() -> DesktopSettings {
                 max_output_tokens: 4096,
                 reasoning_effort: None,
                 capabilities: ModelCapabilitiesSetting {
-                    tool_calls: true,
-                    streaming: true,
-                    image_inputs: false,
+                    tool_calls: true.into(),
+                    streaming: true.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
             },
         ));

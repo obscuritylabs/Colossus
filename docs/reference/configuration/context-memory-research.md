@@ -39,7 +39,7 @@ Omitting all three blocks selects these defaults:
 ```yaml
 context:
   autoCompaction: true
-  compactAtPercent: 70
+  compactAtPercent: 85
   targetPercent: 45
   preserveRecentMessages: 8
   modelAssisted: true
@@ -69,7 +69,7 @@ through session commands and audit state.
 | Field | Meaning | Constraint | Default |
 | --- | --- | --- | ---: |
 | `autoCompaction` | Create a snapshot automatically after the threshold is crossed | Boolean | `true` |
-| `compactAtPercent` | Percentage of the effective model input budget that triggers compaction | `1..99` and above `targetPercent` | `70` |
+| `compactAtPercent` | Percentage of the effective model input budget that triggers compaction | `1..99` and above `targetPercent` | `85` |
 | `targetPercent` | Desired prepared-context size after compaction | `1..99` and below `compactAtPercent` | `45` |
 | `preserveRecentMessages` | Newest canonical messages not summarized automatically | `0..=1024` | `8` |
 | `modelAssisted` | Prefer a bounded summarizer-model result before deterministic fallback | Boolean | `true` |
@@ -113,7 +113,7 @@ values are still validated together:
 ```yaml
 context:
   autoCompaction: false
-  compactAtPercent: 70
+  compactAtPercent: 85
   targetPercent: 45
   preserveRecentMessages: 8
   modelAssisted: false

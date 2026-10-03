@@ -14,6 +14,7 @@ import {
   REMOTE_PROVIDER_TIMEOUT_MS,
   automaticProviderTimeoutMs,
 } from "../providerTimeout";
+import { ModelFeatureControl } from "./ModelFeatureControl";
 import { DropdownSelect } from "./DropdownSelect";
 import { ModelRoleRouting } from "./ModelRoleRouting";
 import { ProviderPresetSelect } from "./ProviderPresetSelect";
@@ -159,9 +160,10 @@ function initialModels(desktop: DesktopStatus): ManagedModelConfiguration[] {
         maxOutputTokens: 4_096,
         reasoningEffort: null,
         capabilities: {
-          toolCalls: false,
-          streaming: false,
-          imageInputs: false,
+          toolCalls: "auto",
+          streaming: "auto",
+          imageInputs: "auto",
+          serverCompaction: "auto",
         },
       },
     ];
@@ -818,54 +820,32 @@ export function ModelConfigurationEditor({
               ))}
             </DropdownSelect>
           </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={model.capabilities.toolCalls}
+          {(
+            [
+              ["toolCalls", "Tool use"],
+              ["streaming", "Streaming"],
+              ["imageInputs", "Images"],
+              ["serverCompaction", "Server compaction"],
+            ] as const
+          ).map(([feature, label]) => (
+            <ModelFeatureControl
+              key={feature}
+              label={label}
+              declared={model.capabilities.declared?.[feature]}
+              value={model.capabilities[feature] ?? "auto"}
               disabled={busy}
-              onChange={(event) =>
+              onChange={(mode) =>
                 updateModel(index, {
-                  capabilities: {
-                    ...model.capabilities,
-                    toolCalls: event.target.checked,
-                  },
+                  capabilities: { ...model.capabilities, [feature]: mode },
                 })
               }
             />
-            <span>Tool use</span>
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={model.capabilities.streaming}
-              disabled={busy}
-              onChange={(event) =>
-                updateModel(index, {
-                  capabilities: {
-                    ...model.capabilities,
-                    streaming: event.target.checked,
-                  },
-                })
-              }
-            />
-            <span>Streaming</span>
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={model.capabilities.imageInputs}
-              disabled={busy}
-              onChange={(event) =>
-                updateModel(index, {
-                  capabilities: {
-                    ...model.capabilities,
-                    imageInputs: event.target.checked,
-                  },
-                })
-              }
-            />
-            <span>Images</span>
-          </label>
+          ))}
+          <p className="provider-wide-field">
+            Auto uses advertised support and learns from provider responses. On
+            forces an attempt. Local summarization remains available when server
+            compaction is off or unsupported.
+          </p>
           {models.length > 1 ? (
             <>
               {Object.values(roles).includes(model.profile) ? (
@@ -908,9 +888,10 @@ export function ModelConfigurationEditor({
                 maxOutputTokens: 4_096,
                 reasoningEffort: null,
                 capabilities: {
-                  toolCalls: false,
-                  streaming: false,
-                  imageInputs: false,
+                  toolCalls: "auto",
+                  streaming: "auto",
+                  imageInputs: "auto",
+                  serverCompaction: "auto",
                 },
               },
             ])

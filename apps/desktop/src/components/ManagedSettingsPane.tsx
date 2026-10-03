@@ -1,3 +1,5 @@
+import { ModelFeatureControl } from "./ModelFeatureControl";
+import type { ModelFeatureMode, ManagedModelCapabilities } from "../types";
 import { RememberedCommands } from "./RememberedCommands";
 import { SetupPackagesPanel } from "./setup/SetupPackagesPanel";
 import { useSetupPackages } from "./setup/useSetupPackages";
@@ -325,9 +327,11 @@ export interface ModelEditorDraft {
   model: string;
   contextWindowTokens: number;
   maxOutputTokens: number;
-  toolCalls: boolean;
-  streaming: boolean;
-  imageInputs: boolean;
+  toolCalls: ModelFeatureMode;
+  streaming: ModelFeatureMode;
+  imageInputs: ModelFeatureMode;
+  serverCompaction?: ModelFeatureMode;
+  declared?: ManagedModelCapabilities["declared"];
   reasoningEffort: ReasoningEffort | null;
 }
 
@@ -449,9 +453,10 @@ const EMPTY_MODEL_DRAFT: ModelEditorDraft = {
   model: "",
   contextWindowTokens: 32_768,
   maxOutputTokens: 4_096,
-  toolCalls: false,
-  streaming: false,
-  imageInputs: false,
+  toolCalls: "auto",
+  streaming: "auto",
+  imageInputs: "auto",
+  serverCompaction: "auto",
   reasoningEffort: null,
 };
 
@@ -576,7 +581,7 @@ const FIELD_DESCRIPTORS: ManagedFieldDescriptor[] = [
     "Context",
     "Compact at",
     "Start compaction when context usage reaches this percentage.",
-    70,
+    85,
     true,
     2,
     99,
@@ -3806,9 +3811,18 @@ function GlobalSettingsBody({
                 currentValue(candidate).profile === model.providerProfile,
             );
             const capabilities = [
-              model.capabilities.toolCalls ? "Tools" : null,
-              model.capabilities.streaming ? "Streaming" : null,
-              model.capabilities.imageInputs ? "Images" : null,
+              model.capabilities.toolCalls !== "off"
+                ? `Tools (${model.capabilities.toolCalls})`
+                : null,
+              model.capabilities.streaming !== "off"
+                ? `Streaming (${model.capabilities.streaming})`
+                : null,
+              model.capabilities.imageInputs !== "off"
+                ? `Images (${model.capabilities.imageInputs})`
+                : null,
+              model.capabilities.serverCompaction !== "off"
+                ? `Compaction (${model.capabilities.serverCompaction ?? "auto"})`
+                : null,
             ].filter((value): value is string => Boolean(value));
             return {
               id: entry.id,
@@ -7217,48 +7231,34 @@ function ModelEditor({
       >
         <div className="model-editor-section-heading">
           <h5 id="model-editor-capabilities-heading">Supported features</h5>
-          <p>Turn on only the features supported by this model.</p>
+          <p>
+            Auto uses advertised support and provider responses. On forces an
+            attempt; Off disables the feature.
+          </p>
         </div>
         <div className="model-capability-grid">
-          <label className="compact-switch model-capability-toggle">
-            <SwitchInput
+          {(
+            [
+              ["toolCalls", "Tool calls", "Let the model request tools."],
+              ["streaming", "Streaming", "Show response text as it arrives."],
+              ["imageInputs", "Image inputs", "Receive attached images."],
+              [
+                "serverCompaction",
+                "Server compaction",
+                "Use Responses compaction with local summarization as fallback.",
+              ],
+            ] as const
+          ).map(([feature, label, description]) => (
+            <ModelFeatureControl
+              key={feature}
+              label={label}
+              declared={draft.declared?.[feature]}
+              description={description}
+              value={draft[feature] ?? "auto"}
               disabled={busy}
-              checked={draft.toolCalls}
-              onChange={(event) =>
-                onChange({ ...draft, toolCalls: event.target.checked })
-              }
+              onChange={(mode) => onChange({ ...draft, [feature]: mode })}
             />
-            <span>
-              <strong>Tool calls</strong>
-              <small>Let the model request tools.</small>
-            </span>
-          </label>
-          <label className="compact-switch model-capability-toggle">
-            <SwitchInput
-              disabled={busy}
-              checked={draft.streaming}
-              onChange={(event) =>
-                onChange({ ...draft, streaming: event.target.checked })
-              }
-            />
-            <span>
-              <strong>Streaming</strong>
-              <small>Show response text as it arrives.</small>
-            </span>
-          </label>
-          <label className="compact-switch model-capability-toggle">
-            <SwitchInput
-              disabled={busy}
-              checked={draft.imageInputs}
-              onChange={(event) =>
-                onChange({ ...draft, imageInputs: event.target.checked })
-              }
-            />
-            <span>
-              <strong>Image inputs</strong>
-              <small>Allow this model to receive attached images.</small>
-            </span>
-          </label>
+          ))}
         </div>
         <div className="model-reasoning-control">
           <label>
@@ -7962,6 +7962,8 @@ export function managedModel(
       toolCalls: draft.toolCalls,
       streaming: draft.streaming,
       imageInputs: draft.imageInputs,
+      serverCompaction: draft.serverCompaction ?? "auto",
+      ...(draft.declared ? { declared: draft.declared } : {}),
     },
     reasoningEffort: draft.reasoningEffort,
   };
@@ -8071,6 +8073,8 @@ export function modelDraft(
     toolCalls: model.capabilities.toolCalls,
     streaming: model.capabilities.streaming,
     imageInputs: model.capabilities.imageInputs,
+    serverCompaction: model.capabilities.serverCompaction ?? "auto",
+    declared: model.capabilities.declared,
     reasoningEffort: model.reasoningEffort,
   };
 }

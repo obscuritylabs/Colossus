@@ -105,9 +105,9 @@ export default function ProviderSetupStudio({
                 contextWindowTokens: 32768,
                 maxOutputTokens: 4096,
                 capabilities: {
-                  toolCalls: false,
-                  imageInputs: false,
-                  streaming: false,
+                  toolCalls: "off",
+                  imageInputs: "off",
+                  streaming: "off",
                 },
                 reasoningEffort: null,
               },

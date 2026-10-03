@@ -615,6 +615,8 @@ fn provider_request(profile: &ProviderProfile) -> EffectRequest {
         profile.generation_endpoint().expect("generation endpoint"),
         serde_json::to_value(ProviderEffectInput {
             stream_response: None,
+            server_compaction_threshold: None,
+            continuation: None,
             provider_profile: profile.name.clone(),
             model_profile: Some("unit-profile".into()),
             model: Some("unit-model".into()),
