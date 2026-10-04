@@ -262,6 +262,10 @@ jobs:
         run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
       - name: Test the desktop native bridge
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+      - name: Test the shared dictation engine and local CLI adapter
+        run: |
+          cargo test --locked -p colossus-native-dictation --features download --lib
+          cargo clippy --locked -p colossus-cli --features dictation --all-targets -- -D warnings
       - name: Exercise credential persistence through the managed sidecar and MCP
         env:
           COLOSSUS_ACCEPTANCE_SIDECAR: ${{ github.workspace }}/apps/desktop/src-tauri/binaries/colossus-sidecar-aarch64-apple-darwin
@@ -535,7 +539,12 @@ jobs:
         id: native_tests
         if: steps.desktop_prepare.outcome == 'success'
         continue-on-error: true
-        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+        run: |
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p colossus-native-dictation --features download --lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked -p colossus-cli --features dictation --all-targets -- -D warnings
       - name: Exercise Windows credential persistence through the managed sidecar and MCP
         if: steps.desktop_prepare.outcome == 'success'
         env:

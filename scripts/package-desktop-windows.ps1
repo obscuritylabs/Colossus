@@ -122,6 +122,9 @@ $TauriOverride = [ordered]@{
         createUpdaterArtifacts = $false
         externalBin = @("binaries/colossus-sidecar", "binaries/colossus", "binaries/rg")
         resources = [ordered]@{
+            "dictation-assets/ggml-tiny.en.bin" = "dictation/ggml-tiny.en.bin"
+            "dictation-assets/models.json" = "dictation/models.json"
+            "dictation-assets/LICENSE-MIT" = "dictation/LICENSE-MIT"
             "binaries/colossus-bundle-manifest.json" = "colossus-bundle-manifest.json"
             "binaries/COPYING" = "ripgrep/COPYING"
             "binaries/LICENSE-MIT" = "ripgrep/LICENSE-MIT"
@@ -156,6 +159,8 @@ $TauriOverrideJson = $TauriOverride | ConvertTo-Json -Compress -Depth 4
 Push-Location $Repository
 try {
     if ($Phase -in @("all", "build")) {
+        node (Join-Path $PSScriptRoot "stage-dictation-model.mjs")
+        if ($LASTEXITCODE -ne 0) { Fail "dictation model staging failed" }
         cargo xtask desktop prepare --profile release --target $Target
         if ($LASTEXITCODE -ne 0) { Fail "desktop binary preparation failed" }
         node (Join-Path $PSScriptRoot "stage-ripgrep.mjs") `

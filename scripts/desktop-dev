@@ -35,4 +35,9 @@ fi
 cd "$desktop"
 npm ci --ignore-scripts
 
-exec npm run tauri:dev
+case "${1:-}" in
+    "") exec npm run tauri:dev ;;
+    --dictation) [ "$#" -eq 1 ] || fail "usage: scripts/desktop-dev [--dictation]"
+        exec npm run tauri:dev:dictation ;;
+    *) fail "usage: scripts/desktop-dev [--dictation]" ;;
+esac

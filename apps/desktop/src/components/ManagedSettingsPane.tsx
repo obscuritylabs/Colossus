@@ -116,6 +116,11 @@ import type {
   TerminalKind,
 } from "../types";
 import { AppearanceSettings } from "./AppearanceSettings";
+const DictationSettings = lazy(() =>
+  import("./DictationSettings").then((module) => ({
+    default: module.DictationSettings,
+  })),
+);
 import {
   BrowserSettings,
   GitSettings,
@@ -153,6 +158,13 @@ const CatalogDeleteDialog = lazy(() =>
 );
 
 const DESKTOP_PAGES = [
+  {
+    id: "dictation",
+    label: "Dictation",
+    description: "Choose your microphone and offline speech model.",
+    keywords:
+      "microphone mic speech voice dictation whisper offline punctuation recording",
+  },
   {
     id: "appearance",
     label: "Appearance",
@@ -232,7 +244,7 @@ type SpaceTab =
 
 interface ManagedSettingsPaneProps {
   initialSpaceTab?:
-    "runtime" | "providers" | "plugins" | "terminal" | undefined;
+    "runtime" | "providers" | "plugins" | "terminal" | "dictation" | undefined;
   desktop: DesktopStatus;
   connecting: boolean;
   updateChecking: boolean;
@@ -1696,13 +1708,19 @@ export function ManagedSettingsPane({
   );
   const [snapshot, setSnapshot] = useState(initial);
   const [scope, setScope] = useState<SettingsScope>(
-    initialSpaceTab === "terminal" ? "global" : "space",
+    initialSpaceTab === "terminal" || initialSpaceTab === "dictation"
+      ? "global"
+      : "space",
   );
   const [globalTab, setGlobalTab] = useState<GlobalTab>(
-    initialSpaceTab === "terminal" ? "terminal" : "mcp",
+    initialSpaceTab === "terminal" || initialSpaceTab === "dictation"
+      ? initialSpaceTab
+      : "mcp",
   );
   const [spaceTab, setSpaceTab] = useState<SpaceTab>(
-    initialSpaceTab === "terminal" ? "runtime" : initialSpaceTab,
+    initialSpaceTab === "terminal" || initialSpaceTab === "dictation"
+      ? "runtime"
+      : initialSpaceTab,
   );
   const [focusedFieldId, setFocusedFieldId] = useState<string | null>(null);
   const [expandedAdvancedSections, setExpandedAdvancedSections] = useState<
@@ -8101,6 +8119,12 @@ function DesktopSettings(
     .replaceAll("_", " ")
     .replace(/^./, (character) => character.toUpperCase());
   if (section === "appearance") return <AppearanceSettings />;
+  if (section === "dictation")
+    return (
+      <Suspense fallback={<p role="status">Loading dictation settings…</p>}>
+        <DictationSettings />
+      </Suspense>
+    );
   if (section === "git") return <GitSettings />;
   if (section === "browser") return <BrowserSettings />;
   if (section === "terminal") {

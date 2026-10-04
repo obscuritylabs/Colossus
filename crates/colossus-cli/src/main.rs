@@ -70,6 +70,7 @@ mod codex_commands;
 mod commands;
 mod configuration;
 mod desktop_tui_auth;
+mod dictation;
 mod entrypoint;
 mod extension_args;
 mod herdr;
@@ -147,6 +148,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         colossus_sandbox::run_native_protection_probe()?;
         return Ok(());
     }
+    #[cfg(feature = "dictation")]
+    if let Some(code) = colossus_native_dictation::run_if_requested() {
+        std::process::exit(code);
+    }
     runtime_main()
 }
 
@@ -159,6 +164,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     if sandbox_protection_probe_requested(std::env::args_os()) {
         colossus_sandbox::run_native_protection_probe()?;
         return Ok(());
+    }
+    #[cfg(feature = "dictation")]
+    if let Some(code) = colossus_native_dictation::run_if_requested() {
+        std::process::exit(code);
     }
     // MSVC executables reserve a smaller main-thread stack than the other supported
     // platforms. Debug runtime composition can exceed that reserve before a command is

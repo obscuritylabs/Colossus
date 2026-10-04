@@ -166,6 +166,7 @@ nav = [
     { "Runtime and ports" = "develop/runtime-ports.md" },
     { "OpenTelemetry implementation" = "develop/observability.md" },
     { "Public API and application SDKs" = "develop/application-sdk.md" },
+    { "Evaluate offline Desktop dictation" = "develop/desktop-dictation.md" },
     { "State and recovery" = "develop/state-recovery.md" },
     { "Security architecture" = "develop/security-architecture.md" },
     { "Extensions and presentation" = "develop/extensions-presentation.md" },
