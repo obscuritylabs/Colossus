@@ -65,6 +65,35 @@ async fn schedule_tools_require_live_trusted_ownership_and_exact_public_scopes()
             .unwrap()
             .contains("items")
     );
+    let task_call = ToolCall {
+        call_id: "schedule-task".into(),
+        name: "workflow.task.schedule".into(),
+        arguments: json!({"schedule_id":"briefing","task":{"name":"Briefing","instructions":"Review procurement."},"calendar":{"timezone":"America/New_York","time":"09:00","weekdays":[1]},"starts_at":"2026-10-05T13:00:00Z","misfire_policy":"fire_once","enabled":true,"idempotency_key":"task-v1"}),
+    };
+    assert!(matches!(
+        executor
+            .execute_workflow_tool(&task_call, context.clone())
+            .await,
+        Err(ToolError::Denied(_))
+    ));
+    let mut oversized = task_call.clone();
+    oversized.arguments["task"]["instructions"] = json!("\n".repeat(32 * 1024));
+    assert!(matches!(
+        executor
+            .execute_workflow_tool(&oversized, context.clone())
+            .await,
+        Err(ToolError::InvalidArguments { .. })
+    ));
+    for field in ["origin", "workflow_id", "inputs", "operation"] {
+        let mut forged = task_call.clone();
+        forged.arguments[field] = json!("forged");
+        assert!(
+            executor
+                .execute_workflow_tool(&forged, context.clone())
+                .await
+                .is_err()
+        );
+    }
     let origin = runtime
         .process_sessions
         .workflow_origin(&context, "run-tools", &["schedules:read"])

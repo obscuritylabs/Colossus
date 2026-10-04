@@ -19,6 +19,20 @@ include breaking changes while the public API is still settling.
 - Read-only workflow logic graphs with conditional branches, parallel joins, bounded
   loops, and recorded step states and completion counts.
 
+- Six editable schedule examples with copyable agent prompts and the bundled
+  `colossus/schedule-task` skill. Agents can use `workflow.task.schedule` through
+  normal schedule permissions, review, ownership, and retry protections.
+
+### Changed
+
+- Workflows and Schedules use shared UI typography and theme tokens, with a compact
+  Providers-style schedule inventory and front-end development rules in `AGENTS.md`.
+
+### Fixed
+
+- Agent schedule creation and pause/enable approvals publish the valid public schedule
+  review category, retaining exact response binding and owner isolation.
+
 ## [0.11.7] - 2026-10-03
 
 ### Added

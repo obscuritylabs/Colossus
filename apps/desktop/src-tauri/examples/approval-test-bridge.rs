@@ -75,7 +75,16 @@ async fn main() -> anyhow::Result<()> {
             .map(ApiScope::new)
             .collect::<Result<Vec<_>, _>>()?,
         ["primary".into()],
-        ["shell.run".into()],
+        if workflow_acceptance {
+            vec![
+                "shell.run".into(),
+                "workflow.task.schedule".into(),
+                "workflow.schedule.list".into(),
+                "workflow.schedule.get".into(),
+            ]
+        } else {
+            vec!["shell.run".into()]
+        },
     )?;
     let bootstrap = SidecarBootstrapConfig::new(&workspace, runtime, grant)?
         .with_colossus_home(root.join("home"))?

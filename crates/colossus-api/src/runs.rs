@@ -640,6 +640,7 @@ pub fn validate_public_approval_display(action: &str, resource: &str) -> ApiResu
         "network.access" => "configured network destination",
         "integration.invoke" => "configured integration",
         "colossus.record" => "Colossus record",
+        "workflow.schedule.control" => "persistent schedule",
         "protected.effect" => "protected resource",
         _ => {
             return Err(ApiError::invalid(

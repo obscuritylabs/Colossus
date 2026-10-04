@@ -64,7 +64,7 @@ also require schedule reads. An optional `workflow_runs:start` grant permits exp
 independent run allocation; it also requires workflow-run reads. These are separate
 from chat execution and approval-response scopes. Agent scheduling additionally needs
 exact `workflow.definition.list`, `workflow.definition.get`, and applicable
-`workflow.schedule.*` tool names; those ceilings do not grant the corresponding action.
+`workflow.schedule.*` and `workflow.task.schedule` tool names; those ceilings do not grant the corresponding action.
 Unavailable resources remain disabled until the administrator updates the grant.
 Manual workflow runs additionally require `workflow_runs:start`. Calendar recurrence,
 plain-language tasks, and history need the corresponding advertised `schedules.calendar`,

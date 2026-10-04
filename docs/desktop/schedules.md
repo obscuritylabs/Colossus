@@ -63,6 +63,38 @@ A task uses an internal one-step workflow. Its definition and schedule are alloc
 atomically, and internal task definitions stay out of the reusable Workflows library.
 Select the schedule to inspect its instructions and next occurrence.
 
+## Start with an example or an agent
+
+The Schedules page includes six editable starting points: a cybersecurity market
+briefing, vulnerability watch, workspace health check, dependency review, release
+notes draft, and incident readiness review. **Use example** fills the task form,
+including its suggested recurrence and tool ceiling. Review and adapt these fields
+before creating anything. Research examples need a configured search service.
+
+![Editable schedule examples with Providers-style typography](../assets/screenshots/desktop-schedule-examples.png)
+
+**Agent prompt** opens a copyable prompt for that example, using your local IANA
+timezone. Paste it into an agent chat in the same Workspace. The bundled
+`colossus/schedule-task` skill guides the agent through timing, permissions, exact
+allocation, and confirmation.
+
+![Copying an example's agent scheduling prompt](../assets/screenshots/desktop-schedule-agent-prompt.png)
+
+You can also ask directly:
+
+> @colossus/schedule-task Every Monday at 9 AM America/New_York, brief me on federal
+> cybersecurity procurement and policy changes. Include source links and actionable
+> implications. Use workspace model defaults and run the latest once if missed.
+
+The dedicated `workflow.task.schedule` tool accepts instructions and calendar timing
+without a registered workflow or JSON input object. It uses the same policy, review,
+ownership, and retry protections as ordinary schedule creation. Managed Local exposes
+it to agents; external applications must explicitly grant the tool and the required
+scopes. The skill's tool metadata does not expand authority. An uncertain response
+must be reconciled using the same schedule ID and retry identity.
+Agent task instructions and preferences must fit the 48 KiB inline approval review
+bound; a larger request needs smaller instructions before allocation.
+
 ## Schedule a reusable workflow
 
 Choose **Schedule workflow** from a selected definition in **Workflows**, or

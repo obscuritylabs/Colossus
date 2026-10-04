@@ -1,5 +1,9 @@
 .workflow-surface {
-  padding: clamp(18px, 3vw, 38px);
+  padding: 20px var(--settings-gutter);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+  container-type: inline-size;
   overflow: auto;
   color: var(--text);
 }
@@ -12,14 +16,16 @@
   flex-wrap: wrap;
 }
 .workflow-page-header h2 {
-  margin: 5px 0 8px;
-  font-size: 30px;
-  letter-spacing: -0.035em;
+  margin: 0 0 4px;
+  font-size: var(--font-size-heading);
+  color: var(--text-strong);
+  line-height: var(--line-height-tight);
+  letter-spacing: 0;
 }
 .workflow-page-header p,
 .workflow-availability p {
   color: var(--muted);
-  line-height: 1.6;
+  line-height: var(--line-height-body);
   margin: 8px 0;
 }
 .workflow-actions {
@@ -30,17 +36,17 @@
 }
 .workflow-availability,
 .workflow-empty {
-  margin: 20px 0;
+  margin: 16px 0;
   border: 1px solid var(--border);
   background: var(--surface);
-  border-radius: 12px;
-  padding: 16px 18px;
+  border-radius: var(--radius);
+  padding: 12px 16px;
 }
 .workflow-layout {
   display: grid;
   grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.5fr);
-  gap: 22px;
-  margin-top: 22px;
+  gap: 16px;
+  margin-top: 16px;
 }
 .workflow-list {
   list-style: none;
@@ -59,7 +65,7 @@
   border: 1px solid var(--border);
   background: var(--surface);
   padding: 16px;
-  border-radius: 12px;
+  border-radius: var(--radius);
   color: var(--text);
   cursor: pointer;
 }
@@ -68,28 +74,30 @@
   box-shadow: inset 3px 0 var(--blue);
 }
 .workflow-list button span {
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--muted);
 }
 .workflow-status {
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
   display: inline-block;
   padding: 4px 8px;
-  border-radius: 6px;
+  border-radius: 999px;
   background: var(--surface-control);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   text-transform: capitalize;
 }
 .workflow-detail {
   min-width: 0;
   border: 1px solid var(--border);
   background: var(--surface);
-  border-radius: 12px;
+  border-radius: var(--radius);
   padding: 20px;
 }
 .workflow-detail p,
 .workflow-dialog-content p,
 .workflow-run p {
-  line-height: 1.65;
+  line-height: var(--line-height-body);
 }
 .workflow-detail h3 {
   margin-top: 0;
@@ -99,7 +107,7 @@
   grid-template-columns: minmax(105px, 0.45fr) minmax(0, 1fr);
   gap: 10px 16px;
   margin: 20px 0;
-  font-size: 13px;
+  font-size: var(--font-size-body-sm);
 }
 .workflow-facts dt {
   color: var(--muted);
@@ -119,10 +127,10 @@
   padding: 14px;
   background: var(--surface-control);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   max-height: 260px;
   overflow: auto;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
 }
 .workflow-surface details,
 .workflow-dialog details {
@@ -166,7 +174,7 @@
   flex-direction: column;
   gap: 8px;
   margin: 15px 0;
-  font-size: 13px;
+  font-size: var(--font-size-body-sm);
 }
 .workflow-dialog input,
 .workflow-dialog textarea,
@@ -177,8 +185,9 @@
   border: 1px solid var(--border);
   color: var(--text);
   background: var(--surface-control);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   font: inherit;
+  font-weight: 400;
 }
 .workflow-dialog textarea {
   resize: vertical;
@@ -245,7 +254,7 @@
   margin: 8px 0;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   overflow-wrap: anywhere;
 }
@@ -262,13 +271,14 @@
   display: grid;
   gap: 8px;
   margin: 0;
-  font-size: 13px;
-  font-weight: 550;
+  font-size: var(--font-size-body-sm);
+  font-weight: 500;
+  color: var(--muted);
 }
 .workflow-form small,
 .workflow-help {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   font-weight: 400;
 }
 .workflow-form textarea,
@@ -285,14 +295,14 @@
   overflow: auto;
   padding: 14px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--surface-control);
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
 }
 .workflow-task-instructions {
   font-family: inherit;
-  font-size: 14px;
+  font-size: var(--font-size-body);
 }
 .workflow-weekdays {
   display: flex;
@@ -300,7 +310,7 @@
   gap: 10px;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
 }
 .workflow-weekdays label {
   display: flex;
@@ -343,4 +353,70 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.workflow-surface .surface-breadcrumb {
+  margin: 0 0 16px;
+  font-size: var(--font-size-caption);
+}
+.workflow-surface :is(h3, h4) {
+  font-size: var(--font-size-heading-sm);
+  line-height: var(--line-height-tight);
+  color: var(--text-strong);
+}
+.workflow-dialog {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+.workflow-dialog h3 {
+  font-size: var(--font-size-heading);
+  color: var(--text-strong);
+}
+.workflow-dialog h4 {
+  font-size: var(--font-size-heading-sm);
+  color: var(--text-strong);
+}
+.workflow-dialog :is(input, textarea, .app-select-trigger) {
+  font-size: var(--font-size-control);
+  font-weight: 400;
+}
+.workflow-dialog :is(input:not([type="checkbox"]), .app-select-trigger) {
+  min-height: var(--control-height);
+}
+.workflow-surface :is(pre, code),
+.workflow-dialog :is(pre, code) {
+  font-family: var(--font-mono);
+}
+.workflow-surface pre.workflow-task-instructions,
+.workflow-dialog pre.workflow-task-instructions {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-body-sm);
+}
+.workflow-schedule-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+.workflow-inventory .catalog-name-column {
+  width: 30%;
+}
+.workflow-inventory small {
+  display: block;
+  margin-top: 3px;
+  font-size: var(--font-size-caption);
+  color: var(--muted);
+  font-weight: 400;
+}
+.workflow-status[data-state="enabled"] {
+  color: var(--green-text);
+  border-color: var(--green-border);
+}
+.workflow-status[data-state="blocked"] {
+  color: var(--amber-text);
+  border-color: var(--amber-border);
+}
+@container (max-width: 640px) {
+  .workflow-inventory .catalog-inventory-row > td[data-label] {
+    padding-left: 0;
+    flex-wrap: wrap;
+  }
 }

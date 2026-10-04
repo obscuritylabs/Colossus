@@ -41,6 +41,7 @@ pub fn builtin_tool_descriptor(name: &str) -> Result<ToolDescriptor, AccessError
         | "workflow.schedule.list"
         | "workflow.schedule.get"
         | "workflow.schedule.create"
+        | "workflow.task.schedule"
         | "workflow.schedule.set_enabled" => simple_tool("workflows"),
         "task.create" | "task.update" | "task.list" => simple_tool("tasks"),
         "decision.create" | "decision.update" | "decision.list" | "decision.archive"

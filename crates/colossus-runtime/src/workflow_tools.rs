@@ -138,7 +138,7 @@ impl GatewayToolExecutor {
             "workflow.definition.get" => "get_workflow",
             "workflow.schedule.list" => "list_schedules",
             "workflow.schedule.get" => "get_schedule",
-            "workflow.schedule.create" => "create_schedule",
+            "workflow.schedule.create" | "workflow.task.schedule" => "create_schedule",
             "workflow.schedule.set_enabled" => "set_schedule_enabled",
             _ => return Err(ToolError::Denied("unsupported workflow operation".into())),
         };
@@ -149,6 +149,30 @@ impl GatewayToolExecutor {
             return Err(ToolError::Denied(
                 "workflow operation tags are host-bound".into(),
             ));
+        }
+        if call.name == "workflow.task.schedule" {
+            let allowed = [
+                "schedule_id",
+                "task",
+                "calendar",
+                "starts_at",
+                "misfire_policy",
+                "enabled",
+                "idempotency_key",
+            ];
+            if arguments.keys().any(|key| !allowed.contains(&key.as_str()))
+                || !arguments.get("task").is_some_and(Value::is_object)
+                || !arguments.get("calendar").is_some_and(Value::is_object)
+            {
+                return Err(ToolError::InvalidArguments {
+                    tool: call.name.clone(),
+                    message: "task scheduling accepts only strict task and calendar intent".into(),
+                });
+            }
+            arguments.insert("workflow_id".into(), json!(""));
+            arguments.insert("expected_hash".into(), json!(""));
+            arguments.insert("inputs".into(), json!({}));
+            arguments.insert("cadence_seconds".into(), json!(0));
         }
         arguments.insert("operation".into(), Value::String(name.into()));
         if matches!(name, "list_workflows" | "list_schedules") {
@@ -173,6 +197,18 @@ impl GatewayToolExecutor {
             return Err(ToolError::InvalidArguments {
                 tool: call.name.clone(),
                 message: "Schedule inputs exceed the 48 KiB approval review bound; request a smaller snapshot.".into(),
+            });
+        }
+        if let Operation::CreateSchedule {
+            task: Some(task), ..
+        } = &operation
+            && serde_json::to_vec(task).map_or(true, |bytes| bytes.len() > 48 * 1024)
+        {
+            return Err(ToolError::InvalidArguments {
+                tool: call.name.clone(),
+                message:
+                    "Task exceeds the 48 KiB approval review bound; request smaller instructions."
+                        .into(),
             });
         }
         let owners = self

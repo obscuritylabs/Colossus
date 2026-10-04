@@ -26,7 +26,7 @@ pub(super) async fn serve(client: &Colossus, instance: &Path) -> anyhow::Result<
         if message["command"] == "close" {
             break;
         }
-        let result = match handle(client, &message).await {
+        let result = match handle(client, instance, &message).await {
             Ok(result) => json!({"result": result}),
             Err(error) => json!({"error": error.to_string()}),
         };
@@ -35,7 +35,7 @@ pub(super) async fn serve(client: &Colossus, instance: &Path) -> anyhow::Result<
     }
     Ok(())
 }
-async fn handle(client: &Colossus, message: &Value) -> anyhow::Result<Value> {
+async fn handle(client: &Colossus, instance: &Path, message: &Value) -> anyhow::Result<Value> {
     let api = client
         .workflows()
         .context("workflow resources must be advertised")?;
@@ -47,6 +47,21 @@ async fn handle(client: &Colossus, message: &Value) -> anyhow::Result<Value> {
             .context("required workflow field")
     };
     Ok(match message["command"].as_str() {
+        Some("run") => {
+            let control = WorkerControlClient::new(
+                worker_ipc_endpoint(&instance.join("state.redb"))?,
+                zeroize::Zeroizing::new([0x5a; 32]),
+            )?;
+            control.set_approval_mode(WorkerApprovalMode::Ask).await?;
+            let result =
+                process_acceptance::run(client, args["sessionId"].as_str().map(str::to_owned))
+                    .await;
+            control
+                .set_approval_mode(WorkerApprovalMode::FullAccess)
+                .await?;
+            result?
+        }
+
         Some("workflow_context") => {
             json!({"selection_epoch": 1, "workflows_read": true, "workflows_register": true, "schedules_read": true, "schedules_create": true, "schedules_control": true, "workflow_runs_read": true, "workflow_runs_start": client.capabilities().contains("workflow_runs.start"), "workflow_run_history": client.capabilities().contains("workflow_runs.history"), "calendar_schedules": client.capabilities().contains("schedules.calendar"), "task_schedules": client.capabilities().contains("schedules.tasks"), "managed": true})
         }

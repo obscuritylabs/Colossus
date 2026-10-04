@@ -499,7 +499,12 @@ fn public_approval_resource(request: &EffectRequest) -> String {
     }
 
     let action = request.action.as_str();
-    if action.starts_with("filesystem.")
+    if matches!(
+        action,
+        "workflow.schedule.create" | "workflow.schedule.set_enabled"
+    ) {
+        "persistent schedule".into()
+    } else if action.starts_with("filesystem.")
         || action.starts_with("patch.")
         || action.starts_with("git.")
         || action.starts_with("repo.")
@@ -565,7 +570,7 @@ fn public_approval_prompt(request: &EffectRequest) -> String {
                 let timing = calendar.map_or_else(|| format!("{cadence_seconds} seconds (fixed elapsed time)"), |calendar| format!("{} at {} in {} (ISO weekdays; empty means daily). Missing local times are skipped; repeated times run once.", serde_json::to_string(&calendar.weekdays).unwrap_or_default(), calendar.time, calendar.timezone));
                 let execution = if let Some(task) = task {
                     let reviewed = serde_json::to_string(&task).unwrap_or_default();
-                    if reviewed.len() > 128 * 1024 {
+                    if reviewed.len() > 48 * 1024 {
                         return "Task exceeds inline review size; deny and request smaller instructions.".into();
                     }
                     format!("One-step agent task (allocated atomically with schedule): {reviewed}")

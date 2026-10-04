@@ -252,6 +252,44 @@ test("Workflows and Schedules use real manual runs, calendar tasks, model prefer
           "high",
       ),
     ).toBe(true);
+    const agentTask = {
+      schedule_id: "agent-weekly-briefing",
+      task: {
+        name: "Agent weekly briefing",
+        instructions: "Summarize procurement news.",
+        tools: [],
+        options: {},
+      },
+      calendar: { timezone: "America/New_York", time: "09:00", weekdays: [1] },
+      starts_at: "2026-10-05T13:00:00Z",
+      misfire_policy: "fire_once",
+      enabled: true,
+      idempotency_key: "agent-weekly-briefing-v1",
+    };
+    const agentRun = await host.runTool("workflow_task_schedule", agentTask);
+    expect(agentRun.approvals).toBe(1);
+    const agentSchedule = (await host.invoke("get_workflow_schedule", {
+      scheduleId: agentTask.schedule_id,
+    })) as {
+      record: { task: { instructions: string } };
+      origin: { owner: { id: string }; run_id: string; session_id: string };
+    };
+    expect(agentSchedule.record.task.instructions).toBe(
+      agentTask.task.instructions,
+    );
+    expect(agentSchedule.origin.run_id).toBe(agentRun.run.run_id);
+    expect(agentSchedule.origin.session_id).toBe(agentRun.run.session_id);
+    expect(agentSchedule.origin.owner.id).toBe("app:approval-acceptance");
+    const repeated = await host.runTool("workflow_task_schedule", agentTask);
+    expect(repeated.approvals).toBe(1);
+    const storedSchedules = (await host.invoke("list_workflow_schedules", {
+      after: null,
+    })) as { items: { record: { schedule_id: string } }[] };
+    expect(
+      storedSchedules.items.filter(
+        (item) => item.record.schedule_id === agentTask.schedule_id,
+      ),
+    ).toHaveLength(1);
     const library = (await host.invoke("list_registered_workflows", {
       after: null,
     })) as { items: unknown[] };

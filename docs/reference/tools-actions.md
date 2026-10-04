@@ -32,7 +32,7 @@ and output bounds.
 | Search and fetch | `web.search`, `web.fetch`, `docs.fetch`, `network.http` | Search needs an explicit route; generic fetch needs host activation plus declared or ambient HTTP(S) authority; quarantined output |
 | MCP | `mcp.servers`, `mcp.search`, `mcp.tools`, `mcp.call` | Configured stdio or Streamable HTTP servers and exact-name or star-pattern tool allowlists |
 | Integrations | Connected operation names | Configured, trusted, and selected only |
-| Workflows | `workflow.definition.list`, `workflow.definition.get`, `workflow.schedule.list`, `workflow.schedule.get`, `workflow.schedule.create`, `workflow.schedule.set_enabled` | Registered hash-pinned definitions; caller-owned calendar/interval workflow schedules and plain-language tasks; persistent mutations use policy, review, one-use permits, and quarantined results |
+| Workflows | `workflow.definition.list`, `workflow.definition.get`, `workflow.schedule.list`, `workflow.schedule.get`, `workflow.schedule.create`, `workflow.task.schedule`, `workflow.schedule.set_enabled` | Registered hash-pinned definitions; caller-owned calendar/interval workflow schedules and plain-language tasks; persistent mutations use policy, review, one-use permits, and quarantined results |
 
 Schedule create and enabled-state control are Administration actions. Both require
 approval under Allow all and Development defaults, including initially paused creation
@@ -287,3 +287,25 @@ metadata HTTP(S) origins.
 - A missing terminal event after start becomes `outcome_unknown`.
 - Unknown external effects are not silently retried.
 - Credentials remain references and raw values are hard-redacted.
+
+## Plain-language task scheduling
+
+`workflow.task.schedule` is the agent-facing calendar-task tool. Its strict arguments
+are `schedule_id`, `task`, `calendar`, `starts_at`, `misfire_policy`, `enabled`, and
+`idempotency_key`. `task` contains a name, instructions, explicit tool ceiling, and
+optional configured model/effort preferences. `calendar` contains an IANA timezone,
+`HH:mm` local time, and ISO weekdays; an empty weekday list means daily. `starts_at`
+must be the exact first UTC occurrence matching those calendar fields. Serialized
+task content must fit the 48 KiB inline approval review bound.
+
+The trusted runtime derives the internal definition and empty workflow inputs. The
+tool rejects workflow identifiers, hashes, elapsed cadence, origin, session, and
+run fields. Its effect action and policy capability are `workflow.schedule.create`;
+it does not introduce a separate approval exemption. Application runs require
+`schedules:read`, `schedules:create`, `workflows:read`, and `workflows:register` plus an
+explicit tool grant. Task tool names do not grant their own action permissions.
+
+Use `workflow.schedule.list` to check for an existing request and
+`workflow.schedule.get` to confirm the stored task. Retry identities are scoped to
+the application owner and exact canonical request. Retain them across uncertain
+responses. The bundled `colossus/schedule-task` skill documents this flow.

@@ -38,7 +38,7 @@
 }
 .workflow-logic-heading > div span {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-size-body-sm);
   line-height: 1.5;
   margin-top: 6px;
 }
@@ -75,7 +75,6 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);
-  box-shadow: 0 4px 14px #0000000a;
 }
 .workflow-logic-toolbar button {
   display: flex;
@@ -86,7 +85,7 @@
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   padding: 8px;
   cursor: pointer;
 }
@@ -98,7 +97,7 @@
   bottom: 14px;
   left: 16px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   padding: 6px 9px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -117,8 +116,9 @@
   border-radius: 10px;
   background: var(--surface);
   color: var(--text);
-  padding: 10px 13px;
-  box-shadow: 0 2px 6px #00000008;
+  padding: 8px 12px;
+  font-family: var(--font-sans);
+  line-height: var(--line-height-tight);
   cursor: pointer;
 }
 .workflow-flow-step[aria-pressed="true"] {
@@ -130,13 +130,13 @@
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 .workflow-flow-step strong {
-  font-size: 13px;
+  font-size: var(--font-size-body-sm);
   text-transform: capitalize;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -145,7 +145,7 @@
 }
 .workflow-flow-step small {
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -153,19 +153,19 @@
 }
 .workflow-flow-state {
   margin-left: auto;
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   text-transform: capitalize;
 }
 .workflow-flow-step.state-completed {
-  border-left: 4px solid #229069;
+  border-left: 4px solid var(--green);
 }
 .workflow-flow-step.state-running,
 .workflow-flow-step.state-waiting {
-  border-left: 4px solid #b27a13;
+  border-left: 4px solid var(--amber);
 }
 .workflow-flow-step.state-failed,
 .workflow-flow-step.state-interrupted {
-  border-left: 4px solid #c64d4d;
+  border-left: 4px solid var(--red);
 }
 .workflow-flow-step.kind-condition .workflow-flow-kind {
   color: var(--text);
@@ -181,7 +181,7 @@
   border-radius: 30px;
   color: var(--muted);
   background: var(--surface);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   font-weight: 600;
 }
 .workflow-flow-join {
@@ -200,21 +200,21 @@
 .workflow-logic-eyebrow {
   color: var(--muted);
   font-weight: 600;
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   letter-spacing: 0.1em;
 }
 .workflow-logic-inspector label {
   margin-top: 18px;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
 }
 .workflow-logic-inspector .app-select-trigger {
   width: 100%;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   padding: 8px;
 }
 .workflow-logic-inspector h4 {
   margin: 24px 0 10px;
-  font-size: 19px;
+  font-size: var(--font-size-heading);
   text-transform: capitalize;
   overflow-wrap: anywhere;
 }
@@ -223,11 +223,11 @@
   color: var(--blue);
   padding: 5px 8px;
   border-radius: 5px;
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   background: var(--surface-control);
 }
 .workflow-logic-step-summary {
-  font-size: 13px;
+  font-size: var(--font-size-body-sm);
   overflow-wrap: anywhere;
 }
 .workflow-logic-branches {
@@ -238,7 +238,7 @@
 .workflow-logic-branches strong,
 .workflow-logic-branches span {
   display: block;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
 }
 .workflow-logic-branches span {
   margin-top: 4px;
@@ -253,16 +253,16 @@
   background: var(--surface-control);
 }
 .workflow-logic-execution strong {
-  font-size: 12px;
+  font-size: var(--font-size-caption);
 }
 .workflow-logic-execution p {
   margin: 6px 0;
   text-transform: capitalize;
-  font-size: 13px;
+  font-size: var(--font-size-body-sm);
 }
 .workflow-logic-execution small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .workflow-logic-legend {
   margin-top: 26px;
@@ -274,7 +274,7 @@
   align-items: center;
   gap: 8px;
   margin: 9px 0;
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   color: var(--muted);
 }
 .workflow-logic-legend i {
@@ -284,15 +284,15 @@
   background: var(--border-strong);
 }
 .workflow-logic-legend .legend-completed {
-  background: #229069;
+  background: var(--green);
 }
 .workflow-logic-legend .legend-waiting {
-  background: #b27a13;
+  background: var(--amber);
 }
 .workflow-logic-legend small,
 .workflow-logic-recovery-note {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   line-height: 1.6;
 }
 .workflow-logic-dialog button:focus-visible {

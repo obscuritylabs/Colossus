@@ -46,6 +46,39 @@ fn schedule_schema_keeps_task_workflow_and_timing_choices_exclusive() {
 }
 
 #[test]
+fn task_schedule_tool_needs_no_workflow_placeholders_and_rejects_hidden_authority() {
+    let registry = StaticToolRegistry::builtins(&["workflow.task.schedule".into()]).unwrap();
+    let arguments = json!({"schedule_id":"briefing","task":{"name":"Briefing","instructions":"Review procurement.","tools":[],"options":{}},"calendar":{"timezone":"America/New_York","time":"09:00","weekdays":[1]},"starts_at":"2026-10-05T13:00:00Z","misfire_policy":"fire_once","enabled":true,"idempotency_key":"task-v1"});
+    let valid = |arguments| {
+        registry
+            .validate(&ToolCall {
+                call_id: "task".into(),
+                name: "workflow.task.schedule".into(),
+                arguments,
+            })
+            .is_ok()
+    };
+    assert!(valid(arguments.clone()));
+    let spec = registry.list_specs().pop().unwrap();
+    assert_eq!(
+        spec.effect_action.as_deref(),
+        Some("workflow.schedule.create")
+    );
+    assert_eq!(spec.capability.as_deref(), Some("workflow.schedule.create"));
+    for (field, value) in [
+        ("workflow_id", json!("forged:1.0.0")),
+        ("origin", json!({"owner":"other"})),
+        ("cadence_seconds", json!(60)),
+        ("task", Value::Null),
+        ("calendar", Value::Null),
+    ] {
+        let mut invalid = arguments.clone();
+        invalid[field] = value;
+        assert!(!valid(invalid), "{field}");
+    }
+}
+
+#[test]
 fn configured_catalog_is_sorted_strict_and_rejects_unknown_tools() {
     let registry =
         StaticToolRegistry::builtins(&["network.http".into(), "echo".into()]).expect("catalog");

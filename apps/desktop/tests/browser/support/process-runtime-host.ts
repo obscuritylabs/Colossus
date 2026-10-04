@@ -47,7 +47,8 @@ export async function processRuntimeHost(
   );
   await cp(process.env.COLOSSUS_APPROVAL_TEST_SIDECAR!, sidecar);
   await chmod(sidecar, 0o500);
-  let pending: Record<string, unknown> | null = null;
+  let pending: { name: string; arguments: Record<string, unknown> } | null =
+    null;
   const observations: unknown[] = [];
   const server = createServer(async (request, response) => {
     let body = "";
@@ -63,7 +64,10 @@ export async function processRuntimeHost(
               index: 0,
               id: "process-case",
               type: "function",
-              function: { name: "shell_run", arguments: JSON.stringify(call) },
+              function: {
+                name: call.name,
+                arguments: JSON.stringify(call.arguments),
+              },
             },
           ],
         }
@@ -137,15 +141,25 @@ export async function processRuntimeHost(
     async run(arguments_: Record<string, unknown> | null, sessionId?: string) {
       pending = arguments_
         ? {
-            cwd: ".",
-            justification: "Verify the isolated process acceptance fixture.",
-            ...arguments_,
+            name: "shell_run",
+            arguments: {
+              cwd: ".",
+              justification: "Verify the isolated process acceptance fixture.",
+              ...arguments_,
+            },
           }
         : null;
       return invoke("run", { sessionId }) as Promise<{
         run: { session_id: string };
         approvals: number;
         activity: { activity: { state: string; preview: string | null }[] };
+      }>;
+    },
+    async runTool(name: string, arguments_: Record<string, unknown>) {
+      pending = { name, arguments: arguments_ };
+      return invoke("run", {}) as Promise<{
+        run: { run_id: string; session_id: string };
+        approvals: number;
       }>;
     },
     async close() {

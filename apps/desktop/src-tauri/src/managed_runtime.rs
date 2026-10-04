@@ -82,6 +82,7 @@ const TRUSTED_BUILTIN_TOOL_GRANT: &[&str] = &[
     "workflow.schedule.list",
     "workflow.schedule.get",
     "workflow.schedule.create",
+    "workflow.task.schedule",
     "workflow.schedule.set_enabled",
     "agent.delegate",
     "agent.list",

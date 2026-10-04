@@ -3,7 +3,7 @@ use super::*;
 pub(super) fn workflow_specs() -> Vec<ToolSpec> {
     let id = json!({"type": "string", "minLength": 1, "maxLength": 128});
     let page = json!({"after": id, "limit": {"type": "integer", "minimum": 1, "maximum": 100}});
-    [
+    let mut specs: Vec<_> = [
         ("workflow.definition.list", "workflow.definition.read", "List registered workflow identities and exact definition hashes in this Workspace.", page.clone(), vec![]),
         ("workflow.definition.get", "workflow.definition.read", "Inspect one registered workflow and its strict input schema before scheduling.", json!({"workflow_id": id}), vec!["workflow_id"]),
         ("workflow.schedule.list", "workflow.schedule.list", "List this application's schedules, with metadata-only legacy records. Lists omit input snapshots.", page, vec![]),
@@ -25,7 +25,9 @@ pub(super) fn workflow_specs() -> Vec<ToolSpec> {
             ]);
         }
         ToolSpec { name: name.into(), description: description.into(), input_schema, effect_action: Some(action.into()), capability: Some(action.into()), max_output_bytes: 1024 * 1024 }
-    }).collect()
+    }).collect();
+    specs.push(task_schedule_spec());
+    specs
 }
 
 fn schedule_properties() -> Value {
@@ -46,4 +48,32 @@ fn schedule_properties() -> Value {
         "starts_at":{"type":"string","minLength":1,"maxLength":64}, "misfire_policy":{"type":"string","enum":["fire_once","skip"]},
         "enabled":{"type":"boolean"}, "idempotency_key":{"type":"string","minLength":1,"maxLength":128}
     })
+}
+
+fn task_schedule_spec() -> ToolSpec {
+    let properties = schedule_properties();
+    let fields = [
+        "schedule_id",
+        "task",
+        "calendar",
+        "starts_at",
+        "misfire_policy",
+        "enabled",
+        "idempotency_key",
+    ];
+    let mut task_properties = serde_json::Map::new();
+    for field in fields {
+        task_properties.insert(field.into(), properties[field].clone());
+    }
+    for field in ["task", "calendar"] {
+        task_properties[field]["type"] = json!("object");
+    }
+    ToolSpec {
+        name: "workflow.task.schedule".into(),
+        description: "Schedule a plain-language agent task with daily or selected-weekday calendar timing. No registered workflow, definition hash, or JSON inputs are needed. Specify an exact first UTC occurrence matching the IANA timezone/local time, allowed task tools, configured model preferences, and one durable retry key. Uses normal schedule creation policy and review, even when paused. Inspect existing schedules first; preserve the exact request on uncertain retry and confirm the stored schedule. Requires a running worker; does not wake a sleeping computer.".into(),
+        input_schema: json!({"type":"object", "properties":task_properties, "required":fields, "additionalProperties":false}),
+        effect_action: Some("workflow.schedule.create".into()),
+        capability: Some("workflow.schedule.create".into()),
+        max_output_bytes: 1024 * 1024,
+    }
 }

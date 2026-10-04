@@ -17,6 +17,9 @@ import { ScheduledRunDetail } from "./ScheduledRunDetail";
 import { WorkflowDialog } from "./WorkflowDialog";
 import { ScheduleTaskCreate } from "./ScheduleTaskCreate";
 import { WorkflowLogicDialog } from "./WorkflowLogicDialog";
+import { ScheduleExamples } from "./ScheduleExamples";
+import { ScheduleInventory } from "./ScheduleInventory";
+import type { ScheduleExample } from "./schedule-examples";
 import "./workflows.css";
 
 export function SchedulesSurface({
@@ -39,6 +42,7 @@ export function SchedulesSurface({
   const [runOpen, setRunOpen] = useState(false);
   const [logicOpen, setLogicOpen] = useState(false);
   const [dialog, setDialog] = useState<"create" | "task" | null>(null);
+  const [example, setExample] = useState<ScheduleExample | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -230,7 +234,10 @@ export function SchedulesSurface({
               !context?.task_schedules ||
               !context.calendar_schedules
             }
-            onClick={() => setDialog("task")}
+            onClick={() => {
+              setExample(null);
+              setDialog("task");
+            }}
           >
             Schedule a task
           </button>
@@ -309,50 +316,14 @@ export function SchedulesSurface({
         </div>
       )}
       {context?.schedules_read && (items.length > 0 || detailError) && (
-        <div className="workflow-layout">
+        <div className="workflow-layout workflow-schedule-layout">
           <div>
-            <ul className="workflow-list" aria-label="Schedules">
-              {items.map((schedule) => (
-                <li key={schedule.record.schedule_id}>
-                  <button
-                    aria-pressed={
-                      detail?.record.schedule_id === schedule.record.schedule_id
-                    }
-                    disabled={busy || loading}
-                    onClick={() => void inspect(schedule.record.schedule_id)}
-                  >
-                    <strong>
-                      {schedule.record.task?.name ||
-                        schedule.record.schedule_id}
-                    </strong>
-                    <span>
-                      {schedule.record.task
-                        ? "Agent task"
-                        : `${schedule.record.workflow_name} · ${schedule.record.workflow_version}`}
-                    </span>
-                    <span className="workflow-status">
-                      {schedule.record.blocked_reason
-                        ? "Blocked"
-                        : schedule.record.enabled
-                          ? "Enabled"
-                          : "Paused"}
-                      {!schedule.controllable && " · Legacy"}
-                    </span>
-                    <span>{recurrence(schedule.record)}</span>
-                    <span>
-                      {schedule.record.enabled
-                        ? "Next boundary"
-                        : "Retained boundary"}
-                      :{" "}
-                      {new Date(schedule.record.next_fire_at).toLocaleString()}
-                    </span>
-                    <span>
-                      Last dispatch: {schedule.last_dispatch || "None yet"}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <ScheduleInventory
+              items={items}
+              selectedId={detail?.record.schedule_id}
+              busy={busy || loading}
+              onInspect={(id) => void inspect(id)}
+            />
             {after && (
               <button
                 className="button secondary"
@@ -542,6 +513,19 @@ export function SchedulesSurface({
           </section>
         </div>
       )}
+      <ScheduleExamples
+        disabled={
+          loading ||
+          busy ||
+          !runtimeReady ||
+          !context?.task_schedules ||
+          !context.calendar_schedules
+        }
+        onUse={(example) => {
+          setExample(example);
+          setDialog("task");
+        }}
+      />
       {logicOpen && targetId && context && record && (
         <WorkflowLogicDialog
           targetId={targetId}
@@ -573,6 +557,8 @@ export function SchedulesSurface({
       )}
       {targetId && context && dialog === "task" && (
         <ScheduleTaskCreate
+          key={example?.id || "custom"}
+          initial={example}
           targetId={targetId}
           context={context}
           onClose={() => setDialog(null)}

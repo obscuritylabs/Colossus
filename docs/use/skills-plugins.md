@@ -11,7 +11,7 @@ icon: lucide/puzzle
 A **skill** gives Colossus instructions for a particular kind of work. A **plugin**
 packages skills and may also include resources or MCP server declarations. The CLI
 includes the `colossus` plugin with `coding`, `offline-dev`, `plugin-authoring`, and
-`security-review` skills.
+`schedule-task`, and `security-review` skills.
 
 ## Choose a skill for one message
 
@@ -23,7 +23,7 @@ a qualified name and **Tab** to insert it. Then write your request and press
 @colossus/coding Review the error handling in this module.
 ```
 
-![The terminal skill picker shows four built-in Colossus skills, with coding selected.](../assets/screenshots/skill-picker.png)
+![The terminal skill picker shows built-in Colossus skills, with coding selected.](../assets/screenshots/skill-picker.png)
 
 The selected skill applies to this message. The picker shows skills from plugins
 available in the current workspace; type a qualified `@PLUGIN/SKILL` name directly
@@ -47,6 +47,8 @@ the conversation. You can still add a skill to a single message with `@`.
 /plugin remove colossus/coding
 /plugin clear
 ```
+
+Use `@colossus/schedule-task` to create or control recurring tasks through the scheduling tools. See [Workflows and schedules](../desktop/schedules.md#start-with-an-example-or-an-agent) for prompts and timing behavior.
 
 Use `/plugin show colossus/coding` to read the skill instructions. A plugin can offer
 several skills; selecting its name in plugin inventory does not select them all.
