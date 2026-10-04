@@ -1,7 +1,8 @@
 use super::*;
 
 fn isolated() -> (DictationSettings, PathBuf) {
-    let path = std::env::temp_dir().join(format!(
+    let temporary = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+    let path = temporary.join(format!(
         "colossus-dictation-settings-{}-{}",
         std::process::id(),
         NEXT_WRITE.fetch_add(1, Ordering::Relaxed)
