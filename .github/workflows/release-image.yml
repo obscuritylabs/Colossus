@@ -28,7 +28,7 @@ concurrency:
 jobs:
   publisher-revision:
     name: Resolve the trusted publisher revision
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     permissions:
       contents: read
@@ -54,12 +54,12 @@ jobs:
   test:
     name: Release OCI contracts and offline round trip
     needs: publisher-revision
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
         with:
           persist-credentials: false
           ref: ${{ needs.publisher-revision.outputs.revision }}
@@ -81,7 +81,7 @@ jobs:
       github.repository == 'obscuritylabs/Colossus' &&
       ((github.event_name == 'release' && github.event.release.draft == false) ||
        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     permissions:
       contents: read
@@ -90,7 +90,7 @@ jobs:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
       - name: Check out the publisher, never execute downloaded release assets
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
         with:
           persist-credentials: false
           ref: ${{ needs.publisher-revision.outputs.revision }}

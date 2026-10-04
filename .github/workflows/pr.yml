@@ -14,7 +14,7 @@ concurrency:
 jobs:
   classify:
     name: Classify PR changes
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
       rust_required: ${{ steps.changes.outputs.rust_required }}
@@ -24,10 +24,12 @@ jobs:
       desktop_required: ${{ steps.changes.outputs.desktop_required }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
         with:
           fetch-depth: 0
 
+      # A second useblacksmith/checkout in this job would remount the git-mirror
+      # sticky disk over the first checkout's object alternates.
       - name: Check out trusted CI contracts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -302,11 +304,11 @@ jobs:
     name: Documentation PR build
     if: needs.classify.outputs.docs_required == 'true'
     needs: classify
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
 
       - name: Build and verify documentation
         run: cargo xtask check docs
@@ -324,11 +326,11 @@ jobs:
     name: Dependency policy
     if: needs.classify.outputs.dependency_required == 'true'
     needs: classify
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
 
       - name: Install Rust 1.96
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
@@ -348,11 +350,11 @@ jobs:
     name: Colossus PR gate
     if: always()
     needs: [classify, format, lint, rust, sdk, desktop, documentation, dependency-policy]
-    runs-on: ubuntu-slim
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Check out gate contract
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: .ci-trusted

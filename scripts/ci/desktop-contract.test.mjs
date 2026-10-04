@@ -1239,7 +1239,7 @@ test("Developer Preview compilation and ad-hoc signing use separate runners", ()
     windowsJob,
     /if: needs\.validate\.outputs\.publish_draft != 'true' && needs\.validate\.outputs\.target_channel != 'stable'/u,
   );
-  assert.match(windowsJob, /runs-on: windows-latest-l/u);
+  assert.match(windowsJob, /runs-on: blacksmith-8vcpu-windows-2025/u);
   assert.match(windowsJob, /COLOSSUS_DESKTOP_TEAM_ID: UNSIGNED/u);
   assert.match(windowsJob, /package-desktop-windows\.ps1/u);
   assert.match(windowsJob, /Get-FileHash/u);
@@ -1249,7 +1249,7 @@ test("Developer Preview compilation and ad-hoc signing use separate runners", ()
   assert.match(windowsJob, /Start-Process -FilePath \$uninstallers/u);
   assert.match(windowsJob, /Colossus processes remained after uninstall/u);
 
-  assert.match(signedWindowsJob, /runs-on: windows-latest-l/u);
+  assert.match(signedWindowsJob, /runs-on: blacksmith-8vcpu-windows-2025/u);
   assert.match(signedWindowsJob, /environment: release-signing/u);
   assert.match(signedWindowsJob, /id-token: write/u);
   assert.match(signedWindowsJob, /COLOSSUS_DESKTOP_TEAM_ID: OBSCURITY_LABS_LLC/u);
@@ -1382,7 +1382,7 @@ test("Windows CLI archives are signed before final release hashing", () => {
   assert.match(build, /unsigned-colossus-\{0\}/u);
   assert.match(sign, /if: needs\.validate\.outputs\.publish_draft == 'true'/u);
   assert.match(sign, /environment: release-signing/u);
-  assert.match(sign, /runs-on: windows-2025/u);
+  assert.match(sign, /runs-on: blacksmith-4vcpu-windows-2025/u);
   assert.match(sign, /id-token: write/u);
   assert.match(sign, /target: \[x86_64-pc-windows-msvc, aarch64-pc-windows-msvc\]/u);
   assert.match(sign, /azure\/login@[0-9a-f]{40}/u);
@@ -1445,7 +1445,7 @@ test("draft release checks out the exact verifier and binds GitHub CLI", () => {
   assert.match(draftJob, /GH_REPO: \$\{\{ github\.repository \}\}/u);
   assert.match(draftJob, /gh release upload "\$RELEASE_TAG" dist\/\*/u);
   assert.match(draftJob, /gh release create "\$RELEASE_TAG" dist\/\*/u);
-  assert.match(draftJob, /actions\/checkout@/u);
+  assert.match(draftJob, /useblacksmith\/checkout@[0-9a-f]{40}/u);
   assert.match(draftJob, /ref: \$\{\{ needs\.validate\.outputs\.tag \}\}/u);
   assert.match(draftJob, /persist-credentials: false/u);
 });

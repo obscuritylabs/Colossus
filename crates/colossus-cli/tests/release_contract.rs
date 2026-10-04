@@ -37,10 +37,18 @@ fn release_workflow_has_exactly_six_native_cli_targets() {
         targets,
         [
             ("macos-15-intel", "x86_64-apple-darwin", "tar.gz"),
-            ("macos-14", "aarch64-apple-darwin", "tar.gz"),
+            (
+                "blacksmith-6vcpu-macos-15",
+                "aarch64-apple-darwin",
+                "tar.gz"
+            ),
             ("ubuntu-latest-m", "x86_64-unknown-linux-musl", "tar.gz"),
             ("ubuntu-24.04-arm", "aarch64-unknown-linux-musl", "tar.gz"),
-            ("windows-latest-l", "x86_64-pc-windows-msvc", "zip",),
+            (
+                "blacksmith-8vcpu-windows-2025",
+                "x86_64-pc-windows-msvc",
+                "zip",
+            ),
             ("windows-11-arm", "aarch64-pc-windows-msvc", "zip"),
         ]
         .into_iter()
@@ -529,9 +537,9 @@ fn published_stable_releases_are_installed_anonymously_on_all_host_classes() {
     for required in [
         "permissions: {}",
         "types: [published]",
-        "ubuntu-latest",
-        "macos-latest",
-        "windows-latest",
+        "blacksmith-4vcpu-ubuntu-2404",
+        "blacksmith-6vcpu-macos-15",
+        "blacksmith-4vcpu-windows-2025",
         "releases/latest/download",
         "colossus-install.sh.sha256",
         "colossus-install.ps1.sha256",

@@ -17,7 +17,7 @@ jobs:
   invalidate-label:
     name: Invalidate stale full acceptance
     if: github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ci:full')
-    runs-on: ubuntu-slim
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     permissions:
       contents: read
@@ -36,7 +36,7 @@ jobs:
   eligibility:
     name: Authorize full acceptance
     if: github.event.action == 'labeled' && github.event.label.name == 'ci:full'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Verify actor, PR state, and current PR gate
@@ -128,7 +128,7 @@ jobs:
     name: Representative macOS native sandbox
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: macos-14
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 45
     env:
       SCCACHE_GHA_ENABLED: "true"
@@ -187,7 +187,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14, windows-latest]
+        os: [blacksmith-4vcpu-ubuntu-2404, blacksmith-6vcpu-macos-15, blacksmith-4vcpu-windows-2025]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -218,7 +218,7 @@ jobs:
     name: Representative macOS Desktop acceptance
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: macos-14
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 75
     env:
       COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
@@ -300,7 +300,7 @@ jobs:
     name: Representative macOS Desktop bundle
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: macos-14
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 75
     env:
       COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
@@ -632,14 +632,14 @@ jobs:
     name: Bounded security fuzzing
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     env:
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: "READ_ONLY"
     steps:
       - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
       - name: Install pinned nightly Rust
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
         with:
@@ -688,11 +688,11 @@ jobs:
     name: Complete supply-chain policy
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
       - name: Install Rust 1.96
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
         with:
@@ -709,7 +709,7 @@ jobs:
     name: Chroma ${{ matrix.chroma }} compatibility
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -721,7 +721,7 @@ jobs:
             image: chromadb/chroma:1.5.9@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6
     steps:
       - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
       - name: Install Rust 1.96
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
         with:
@@ -757,7 +757,7 @@ jobs:
     name: PostgreSQL acceptance
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     services:
       postgres:
@@ -773,7 +773,7 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 12
     steps:
       - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
       - name: Install Rust 1.96
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
         with:
@@ -788,11 +788,11 @@ jobs:
     name: OCI and OPA security acceptance
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: ubuntu-latest-m
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 40
     steps:
       - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
       - name: Install Rust 1.96
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
         with:
@@ -921,11 +921,11 @@ jobs:
     name: Colossus pre-merge gate
     if: always()
     needs: [eligibility, linux-rust-integration, macos-native, macos-desktop-acceptance, macos-desktop-bundle, windows-runtime, windows-desktop, credential-vault, fuzz, supply-chain, chroma, storage, live-security]
-    runs-on: ubuntu-slim
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Check out gate contract
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: .ci-trusted
