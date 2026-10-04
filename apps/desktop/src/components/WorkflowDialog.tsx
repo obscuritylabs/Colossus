@@ -8,6 +8,8 @@ export function WorkflowDialog({
   children,
   returnFocus,
   error,
+  className = "",
+  headerActions,
 }: {
   title: string;
   busy: boolean;
@@ -15,6 +17,8 @@ export function WorkflowDialog({
   children: ReactNode;
   returnFocus?: HTMLElement | null;
   error?: string | undefined;
+  className?: string;
+  headerActions?: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -49,7 +53,7 @@ export function WorkflowDialog({
   return createPortal(
     <dialog
       ref={ref}
-      className="settings-dialog workflow-dialog"
+      className={`settings-dialog workflow-dialog ${className}`}
       aria-labelledby={titleId}
       onCancel={(event) => {
         event.preventDefault();
@@ -60,6 +64,7 @@ export function WorkflowDialog({
         <h3 id={titleId} tabIndex={-1}>
           {title}
         </h3>
+        {headerActions}
       </header>
       <div className="workflow-dialog-content" aria-busy={busy}>
         {children}

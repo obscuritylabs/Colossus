@@ -16,6 +16,7 @@ import { ScheduleCreate } from "./ScheduleCreate";
 import { ScheduledRunDetail } from "./ScheduledRunDetail";
 import { WorkflowDialog } from "./WorkflowDialog";
 import { WorkflowImport } from "./WorkflowImport";
+import { WorkflowLogicDialog } from "./WorkflowLogicDialog";
 import "./workflows.css";
 
 export function SchedulesSurface({
@@ -36,6 +37,7 @@ export function SchedulesSurface({
   const [detail, setDetail] = useState<WorkflowSchedule | null>(null);
   const [control, setControl] = useState<WorkflowSchedule | null>(null);
   const [runOpen, setRunOpen] = useState(false);
+  const [logicOpen, setLogicOpen] = useState(false);
   const [dialog, setDialog] = useState<"create" | "import" | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -55,6 +57,7 @@ export function SchedulesSurface({
     setError("");
     setControl(null);
     setDialog(null);
+    setLogicOpen(false);
     try {
       const context = await workflowContext(targetId);
       const page = context.schedules_read
@@ -315,7 +318,7 @@ export function SchedulesSurface({
                     aria-pressed={
                       detail?.record.schedule_id === schedule.record.schedule_id
                     }
-                    disabled={busy}
+                    disabled={busy || loading}
                     onClick={() => void inspect(schedule.record.schedule_id)}
                   >
                     <strong>{schedule.record.schedule_id}</strong>
@@ -368,13 +371,24 @@ export function SchedulesSurface({
               <>
                 <header className="workflow-detail-header">
                   <h3>{record.schedule_id}</h3>
-                  <button
-                    className="button secondary"
-                    disabled={busy}
-                    onClick={() => void inspect(record.schedule_id)}
-                  >
-                    Refresh detail
-                  </button>
+                  <div className="workflow-actions">
+                    {context.workflows_read && (
+                      <button
+                        className="button secondary"
+                        disabled={busy || loading}
+                        onClick={() => setLogicOpen(true)}
+                      >
+                        View workflow logic
+                      </button>
+                    )}
+                    <button
+                      className="button secondary"
+                      disabled={busy}
+                      onClick={() => void inspect(record.schedule_id)}
+                    >
+                      Refresh detail
+                    </button>
+                  </div>
                 </header>
                 <strong className="workflow-status">
                   {record.blocked_reason
@@ -497,6 +511,16 @@ export function SchedulesSurface({
             )}
           </section>
         </div>
+      )}
+      {logicOpen && targetId && context && record && (
+        <WorkflowLogicDialog
+          targetId={targetId}
+          context={context}
+          workflowId={`${record.workflow_name}:${record.workflow_version}`}
+          expectedHash={record.workflow_hash}
+          runId={record.last_run_id}
+          onClose={() => setLogicOpen(false)}
+        />
       )}
       {targetId && context && dialog === "create" && (
         <ScheduleCreate

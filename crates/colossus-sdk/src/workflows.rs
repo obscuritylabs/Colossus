@@ -3,8 +3,9 @@ use crate::{ApiResult, Colossus};
 use async_trait::async_trait;
 pub use colossus_api::{
     CreateWorkflowScheduleRequest, RegisteredWorkflow, SetWorkflowScheduleEnabledRequest,
-    StartWorkflowRunRequest, WorkflowPage, WorkflowRunSnapshot, WorkflowScheduleMisfirePolicy,
-    WorkflowScheduleSnapshot, WorkflowStatus,
+    StartWorkflowRunRequest, WorkflowLogic, WorkflowLogicBranch, WorkflowLogicKind,
+    WorkflowLogicStep, WorkflowPage, WorkflowRunSnapshot, WorkflowScheduleMisfirePolicy,
+    WorkflowScheduleSnapshot, WorkflowStatus, WorkflowStepState, WorkflowStepStatus,
 };
 use std::sync::Arc;
 

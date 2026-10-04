@@ -15,6 +15,7 @@ export interface RegisteredWorkflow {
   workflow_hash: string;
   description: string;
   input_schema: Record<string, unknown> | null;
+  logic?: WorkflowLogic | null;
   scheduling_eligible: boolean;
   unavailable_reason: string | null;
 }
@@ -68,6 +69,39 @@ export interface WorkflowRun {
   last_sequence: number;
   failure_reason: string | null;
   waiting_reason: string | null;
+  step_states?: WorkflowStepState[];
+}
+
+export type WorkflowLogicKind =
+  | "agent"
+  | "tool"
+  | "workflow"
+  | "approval"
+  | "condition"
+  | "parallel"
+  | "foreach"
+  | "wait_for_input"
+  | "emit";
+export interface WorkflowLogicStep {
+  id: string;
+  kind: WorkflowLogicKind;
+  summary: string;
+  branches: { label: string; steps: WorkflowLogicStep[] }[];
+}
+export interface WorkflowLogic {
+  steps: WorkflowLogicStep[];
+  compensation: WorkflowLogicStep[];
+}
+export interface WorkflowStepState {
+  step_id: string;
+  status:
+    | "running"
+    | "waiting"
+    | "completed"
+    | "failed"
+    | "interrupted"
+    | "cancelled";
+  completed_executions: number;
 }
 export interface CreateScheduleRequest {
   schedule_id: string;

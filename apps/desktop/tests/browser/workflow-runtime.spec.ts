@@ -1,7 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { processRuntimeHost } from "./support/process-runtime-host";
+
+test.use({ timezoneId: "America/New_York" });
 
 test.skip(
   process.env.COLOSSUS_APPROVAL_RUNTIME_ACCEPTANCE !== "1",
@@ -76,6 +78,10 @@ test("schedule UI → production managed SDK → authenticated sidecar: registra
     await page
       .getByRole("button", { name: "Register workflow", exact: true })
       .click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(
+      page.getByRole("status").filter({ hasText: "Workflow registered" }),
+    ).toBeVisible();
     await page
       .getByRole("button", { name: "Create schedule", exact: true })
       .click();
@@ -141,3 +147,159 @@ async function choose(page: Page, name: string, option: string) {
   await page.getByRole("combobox", { name, exact: true }).click();
   await page.getByRole("option", { name: option, exact: true }).click();
 }
+
+test("complex workflow graph reflects real condition routing and loop executions", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 1600, height: 1200 });
+  const host = await processRuntimeHost("workflow-acceptance");
+  try {
+    await page.exposeFunction(
+      "workflowBridge",
+      (command: string, args: unknown) => host.invoke(command, args),
+    );
+    await page.addInitScript(() => {
+      const runtime = window as unknown as {
+        workflowBridge: (command: string, args: unknown) => Promise<unknown>;
+        __TAURI_INTERNALS__: unknown;
+      };
+      runtime.__TAURI_INTERNALS__ = {
+        invoke: (command: string, args: unknown) =>
+          runtime.workflowBridge(command, args),
+      };
+    });
+    await page.goto("/?fixture=operations-studio");
+    await expect(
+      page.getByRole("heading", { name: "Harden desktop agent bootstrap" }),
+    ).toBeVisible();
+    if (
+      !(await page
+        .getByRole("button", { name: "Schedules", exact: true })
+        .isVisible())
+    )
+      await page
+        .getByRole("button", { name: "Open work navigation", exact: true })
+        .click();
+    await page.getByRole("button", { name: "Schedules", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Import workflow", exact: true })
+      .click();
+    await page
+      .getByRole("textbox", { name: "Existing definition YAML" })
+      .fill(
+        readFileSync(
+          resolve("../../examples/workflows/01-control-flow-lab.yaml"),
+          "utf8",
+        ),
+      );
+    await page
+      .getByRole("button", { name: "Validate and review", exact: true })
+      .click();
+    await expect(page.getByRole("dialog")).toContainText(
+      "control-flow-lab:1.0.0",
+    );
+    await page
+      .getByRole("button", { name: "Register workflow", exact: true })
+      .click();
+    const workflow = (await host.invoke("get_registered_workflow", {
+      workflowId: "control-flow-lab:1.0.0",
+    })) as { workflow_id: string; workflow_hash: string };
+    await host.invoke("create_workflow_schedule", {
+      request: {
+        schedule_id: "production-readiness",
+        workflow_id: workflow.workflow_id,
+        expected_hash: workflow.workflow_hash,
+        inputs: {
+          environment: "production",
+          components: ["api", "worker", "desktop", "documentation"],
+        },
+        cadence_seconds: 3600,
+        starts_at: new Date(Date.now() - 1000).toISOString(),
+        misfire_policy: "fire_once",
+        enabled: false,
+        idempotency_key: "complex-graph-allocation",
+      },
+    });
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await expect(
+      page.getByText("Loading schedules…", { exact: true }),
+    ).toHaveCount(0);
+    await page
+      .getByRole("button", { name: /production-readiness control-flow-lab/u })
+      .click();
+    await page
+      .getByRole("button", { name: "Review enable", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "Enable schedule", exact: true })
+      .click();
+    await expect
+      .poll(
+        async () =>
+          (
+            (await host.invoke("get_workflow_schedule", {
+              scheduleId: "production-readiness",
+            })) as { record: { last_run_id: string | null } }
+          ).record.last_run_id,
+        { timeout: 60_000 },
+      )
+      .toBeTruthy();
+    await page
+      .getByRole("button", { name: "Refresh detail", exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", {
+        name: "Inspect last workflow run",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "View workflow logic", exact: true })
+      .click();
+    const dialog = page.getByRole("dialog");
+    await expect(
+      dialog.getByRole("button", {
+        name: "component-observed, Output, completed",
+        exact: true,
+      }),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(
+      dialog.getByRole("button", {
+        name: "non-production-route, Output",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(dialog.locator(".react-flow__node-workflowStep")).toHaveCount(
+      9,
+    );
+    if (process.env.COLOSSUS_WORKFLOW_SCREENSHOTS === "1") {
+      const captures = resolve("../../.local/workflow-graph-ui");
+      mkdirSync(captures, { recursive: true });
+      await page.screenshot({
+        path: resolve(captures, "05-real-runtime-complex-workflow.png"),
+        animations: "disabled",
+      });
+    }
+    await dialog
+      .getByRole("button", {
+        name: "component-observed, Output, completed",
+        exact: true,
+      })
+      .click();
+    await expect(
+      dialog.getByRole("complementary", { name: "Workflow step details" }),
+    ).toContainText("4 completed executions");
+    if (process.env.COLOSSUS_WORKFLOW_SCREENSHOTS === "1")
+      await page.screenshot({
+        path: resolve(
+          "../../.local/workflow-graph-ui/06-real-runtime-loop-details.png",
+        ),
+        animations: "disabled",
+      });
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+  } finally {
+    await host.close();
+  }
+});

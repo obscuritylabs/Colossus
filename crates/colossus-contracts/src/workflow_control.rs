@@ -29,6 +29,9 @@ pub struct RegisteredWorkflow {
     pub description: String,
     /// Strict input schema for server-validated creation.
     pub input_schema: Value,
+    /// Read-only logic; omitted in catalog summaries or by older/oversized targets.
+    #[serde(default)]
+    pub logic: Option<WorkflowLogic>,
     /// Whether current pinned definition and dependency trust permit scheduling.
     pub scheduling_eligible: bool,
     /// Safe bounded guidance when the definition is not currently runnable.
@@ -73,6 +76,9 @@ pub struct WorkflowRunSnapshot {
     pub failure_reason: Option<String>,
     /// Safe categorical waiting guidance.
     pub waiting_reason: Option<String>,
+    /// Recorded step states only; no raw effect evidence or unvisited-branch inference.
+    #[serde(default)]
+    pub step_states: Vec<WorkflowStepState>,
 }
 
 /// Narrow workflow control operations. Workspace and actor are host-bound.

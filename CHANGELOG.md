@@ -8,6 +8,13 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+### Added
+
+- Workspace workflow schedule management with definition import, reviewed creation,
+  pause/enable controls, and independent run inspection.
+- Read-only workflow logic graphs with conditional branches, parallel joins, bounded
+  loops, and recorded step states and completion counts.
+
 ## [0.11.7] - 2026-10-03
 
 ### Added

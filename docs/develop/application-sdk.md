@@ -586,6 +586,12 @@ without ownership expose only metadata and cannot be controlled or reveal inputs
 Future queued runs preserve their origin and undergo current policy and trust checks.
 
 Workflow pages are limited to 100 items and omit input schemas/snapshots until detail.
+Definition detail and validation also release bounded structural logic: at most 512
+steps and seven nested branch levels within 256 KiB, without prompts, tool arguments, child inputs,
+or emitted values. Catalog pages omit this projection; older or oversized definitions
+may omit it while keeping ordinary metadata available. Owned run snapshots release
+recorded step states and distinct completion counts, without inferring unvisited paths.
+Desktop renders the graph only when its definition hash matches the schedule and run.
 Workflow requests are bounded to 256 KiB, responses to 2 MiB, and four concurrent domain
 operations. Workflow watches share the 64-stream server ceiling with chat watches,
 leaving existing unary headroom. Their exclusive sequence cursor yields coalesced

@@ -1,8 +1,9 @@
 //! Bounded workflow value translations shared with the authenticated Rust client.
 use colossus_api::{
-    Actor, ActorType, RegisteredWorkflow, WorkflowOrigin, WorkflowRunSnapshot, WorkflowSchedule,
-    WorkflowScheduleDispatchStatus as Dispatch, WorkflowScheduleMisfirePolicy as Misfire,
-    WorkflowScheduleSnapshot, WorkflowStatus,
+    Actor, ActorType, RegisteredWorkflow, WorkflowLogic, WorkflowOrigin, WorkflowRunSnapshot,
+    WorkflowSchedule, WorkflowScheduleDispatchStatus as Dispatch,
+    WorkflowScheduleMisfirePolicy as Misfire, WorkflowScheduleSnapshot, WorkflowStatus,
+    WorkflowStepState,
 };
 use colossus_api_proto::v1alpha1 as proto;
 use prost_types::{Struct, Timestamp, Value, value::Kind};
@@ -149,6 +150,17 @@ pub fn definition(value: RegisteredWorkflow) -> Result<proto::WorkflowSummary, S
         unavailable_reason: value.unavailable_reason,
         created_at: None,
         updated_at: None,
+        logic: value
+            .logic
+            .as_ref()
+            .map(|logic| {
+                if !logic.within_bounds() {
+                    return Err(invalid());
+                }
+                object(&serde_json::to_value(logic).map_err(|_| invalid())?)
+            })
+            .transpose()?
+            .flatten(),
     })
 }
 /// Decode and validate registered-definition metadata from a remote target.
@@ -177,6 +189,17 @@ pub fn decode_definition(value: proto::WorkflowSummary) -> Result<RegisteredWork
         } else {
             Json::Null
         },
+        logic: value
+            .logic
+            .map(|value| {
+                let logic: WorkflowLogic =
+                    serde_json::from_value(json(Some(value))?).map_err(|_| invalid())?;
+                if !logic.within_bounds() {
+                    return Err(invalid());
+                }
+                Ok(logic)
+            })
+            .transpose()?,
         scheduling_eligible: value.enabled,
         unavailable_reason: value.unavailable_reason,
     })
@@ -328,6 +351,7 @@ pub fn run(value: WorkflowRunSnapshot) -> Result<proto::WorkflowRun, Status> {
         failure_reason: value.failure_reason,
         waiting_reason: value.waiting_reason,
         definition_hash: value.workflow_hash,
+        step_states: object(&serde_json::json!({"steps": value.step_states}))?,
     })
 }
 /// Decode safe workflow-run state; unknown states fail closed.
@@ -367,12 +391,135 @@ pub fn decode_run(value: proto::WorkflowRun) -> Result<WorkflowRunSnapshot, Stat
         last_sequence: value.last_sequence,
         failure_reason: value.failure_reason,
         waiting_reason: value.waiting_reason,
+        step_states: decode_step_states(value.step_states)?,
     })
+}
+
+fn decode_step_states(value: Option<Struct>) -> Result<Vec<WorkflowStepState>, Status> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct States {
+        steps: Vec<WorkflowStepState>,
+    }
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    // Struct numbers are doubles. Normalize only this bounded integral field;
+    // never change arbitrary reviewed input/schema numbers at the transport boundary.
+    let mut decoded = json(Some(value))?;
+    let steps = decoded
+        .get_mut("steps")
+        .and_then(Json::as_array_mut)
+        .ok_or_else(invalid)?;
+    if steps.len() > 512 {
+        return Err(invalid());
+    }
+    for step in steps {
+        let count = step
+            .get("completed_executions")
+            .and_then(Json::as_f64)
+            .ok_or_else(invalid)?;
+        if !(0.0..=10000.0).contains(&count) || count.fract() != 0.0 {
+            return Err(invalid());
+        }
+        step["completed_executions"] =
+            Json::from(count.to_string().parse::<u32>().map_err(|_| invalid())?);
+    }
+    let states: States = serde_json::from_value(decoded).map_err(|_| invalid())?;
+    if states.steps.len() > 512 {
+        return Err(invalid());
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    for step in &states.steps {
+        identity(&step.step_id)?;
+        if step.step_id.len() > 128
+            || step.completed_executions > 10000
+            || !ids.insert(&step.step_id)
+        {
+            return Err(invalid());
+        }
+    }
+    Ok(states.steps)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recorded_counts_roundtrip_without_accepting_fractional_or_duplicate_states() {
+        let value = serde_json::json!({"steps": [{"step_id": "loop-item", "status": "completed", "completed_executions": 4}]});
+        let decoded = decode_step_states(object(&value).unwrap()).unwrap();
+        assert_eq!(decoded[0].completed_executions, 4);
+        for count in [
+            serde_json::json!(-1),
+            serde_json::json!(0.5),
+            serde_json::json!(10001),
+        ] {
+            let mut invalid = value.clone();
+            invalid["steps"][0]["completed_executions"] = count;
+            assert!(decode_step_states(object(&invalid).unwrap()).is_err());
+        }
+        let mut duplicate = value.clone();
+        duplicate["steps"]
+            .as_array_mut()
+            .unwrap()
+            .push(value["steps"][0].clone());
+        assert!(decode_step_states(object(&duplicate).unwrap()).is_err());
+        assert_eq!(decode_step_states(None).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn logic_roundtrip_rejects_duplicate_ids_unknown_payloads_and_malformed_branches() {
+        let value = serde_json::json!({"steps": [{"id": "result", "kind": "emit", "summary": "Emit a workflow value", "branches": []}], "compensation": []});
+        let decoded: WorkflowLogic =
+            serde_json::from_value(json(object(&value).unwrap()).unwrap()).unwrap();
+        assert!(decoded.within_bounds());
+        let mut duplicate = decoded.clone();
+        duplicate.steps.push(decoded.steps[0].clone());
+        assert!(!duplicate.within_bounds());
+        let mut malformed = decoded.clone();
+        malformed.steps[0].kind = colossus_api::WorkflowLogicKind::Condition;
+        assert!(!malformed.within_bounds());
+        let mut unexpected = value;
+        unexpected["steps"][0]["arguments"] = serde_json::json!({"secret": "withheld"});
+        assert!(serde_json::from_value::<WorkflowLogic>(unexpected).is_err());
+
+        let mut nested = decoded.clone();
+        for depth in 0..8 {
+            nested.steps = vec![colossus_api::WorkflowLogicStep {
+                id: format!("route-{depth}"),
+                kind: colossus_api::WorkflowLogicKind::Condition,
+                summary: "/inputs/production == true".into(),
+                branches: vec![
+                    colossus_api::WorkflowLogicBranch {
+                        label: "True".into(),
+                        steps: nested.steps,
+                    },
+                    colossus_api::WorkflowLogicBranch {
+                        label: "False".into(),
+                        steps: Vec::new(),
+                    },
+                ],
+            }];
+            if depth < 7 {
+                assert!(nested.within_bounds());
+                let value = serde_json::to_value(&nested).unwrap();
+                assert_eq!(json(object(&value).unwrap()).unwrap(), value);
+            } else {
+                assert!(!nested.within_bounds());
+            }
+        }
+        let mut oversized = decoded.clone();
+        oversized.steps = (0..80)
+            .map(|index| colossus_api::WorkflowLogicStep {
+                id: format!("step-{index}"),
+                summary: "x".repeat(4096),
+                ..decoded.steps[0].clone()
+            })
+            .collect();
+        assert!(!oversized.within_bounds());
+    }
 
     #[test]
     fn reviewed_integers_do_not_round_at_the_protobuf_boundary() {

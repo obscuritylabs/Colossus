@@ -351,6 +351,10 @@ message WorkflowSummary {
 
   // unavailable_reason is safe guidance when pinned trust prevents scheduling.
   optional string unavailable_reason = 11;
+
+  // logic is the bounded released structure, without prompts, arguments, or outputs.
+  // Detail/validation responses include it; catalog pages and older targets omit it.
+  google.protobuf.Struct logic = 12;
 }
 
 // WorkflowRunStatus is the durable automation lifecycle state.
@@ -411,6 +415,10 @@ message WorkflowRun {
 
   // definition_hash is the exact hash pinned when the run was allocated.
   string definition_hash = 9;
+
+  // step_states contains only recorded step identities, states, and completion counts.
+  // The object has a steps array; raw effect payloads and outputs are withheld.
+  google.protobuf.Struct step_states = 10;
 }
 
 // GetWorkflowRequest selects one workflow.

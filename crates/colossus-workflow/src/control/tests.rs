@@ -1,6 +1,144 @@
 use super::*;
 use colossus_testkit::InMemoryEventJournal;
 
+#[tokio::test]
+async fn released_logic_and_recorded_states_preserve_real_routes_without_private_outputs() {
+    let yaml = include_str!("../../../../examples/workflows/01-control-flow-lab.yaml");
+    let (_, service) = setup();
+    let metadata = execute(
+        &service,
+        &WorkflowControlOperation::RegisterDefinition {
+            yaml: yaml.into(),
+            expected_hash: validate_definition(yaml).unwrap().content_hash,
+            idempotency_key: "logic-import".into(),
+        },
+        "app:a",
+    )
+    .unwrap();
+    assert_eq!(metadata["logic"]["steps"][0]["kind"], "parallel");
+    assert_eq!(
+        metadata["logic"]["steps"][1]["branches"][0]["label"],
+        "True"
+    );
+    assert_eq!(metadata["logic"]["steps"][2]["kind"], "foreach");
+    assert!(metadata["logic"]["steps"][3].get("value").is_none());
+    let catalog = execute(
+        &service,
+        &WorkflowControlOperation::ListWorkflows {
+            after: None,
+            limit: 100,
+        },
+        "app:a",
+    )
+    .unwrap();
+    assert!(
+        catalog["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["logic"].is_null())
+    );
+    let queued = execute(&service, &WorkflowControlOperation::StartRun {
+        workflow_id: "control-flow-lab:1.0.0".into(), expected_hash: metadata["workflow_hash"].as_str().unwrap().into(),
+        inputs: json!({"environment": "production", "components": ["api", "worker", "desktop"]}), idempotency_key: "logic-run".into(),
+    }, "app:a").unwrap();
+    let id = queued["run_id"].as_str().unwrap();
+    assert_eq!(
+        execute(
+            &service,
+            &WorkflowControlOperation::GetRun { run_id: id.into() },
+            "app:a"
+        )
+        .unwrap()["step_states"],
+        json!([])
+    );
+    service.run_queued(id).await.unwrap();
+    let run = execute(
+        &service,
+        &WorkflowControlOperation::GetRun { run_id: id.into() },
+        "app:a",
+    )
+    .unwrap();
+    assert_eq!(run["status"], "completed");
+    let states = run["step_states"].as_array().unwrap();
+    assert!(
+        !states
+            .iter()
+            .any(|state| state["step_id"] == "non-production-route")
+    );
+    let component = states
+        .iter()
+        .find(|state| state["step_id"] == "component-observed")
+        .unwrap();
+    assert_eq!(component["status"], "completed");
+    assert_eq!(component["completed_executions"], 3);
+    assert_eq!(
+        states
+            .iter()
+            .find(|state| state["step_id"] == "result")
+            .unwrap()["completed_executions"],
+        1
+    );
+    assert!(run.get("outputs").is_none());
+    assert!(run.get("inputs").is_none());
+    assert!(matches!(
+        execute(
+            &service,
+            &WorkflowControlOperation::GetRun { run_id: id.into() },
+            "app:b"
+        ),
+        Err(WorkflowError::PermissionDenied)
+    ));
+}
+
+#[test]
+fn display_projection_withholds_prompts_arguments_inputs_and_emitted_values() {
+    let mut definition = validate_definition(YAML).unwrap().definition;
+    definition.steps = vec![
+        WorkflowStep::Agent {
+            id: "agent".into(),
+            prompt: "PRIVATE-PROMPT".into(),
+            idempotency: None,
+        },
+        WorkflowStep::Tool {
+            id: "tool".into(),
+            tool: "registered_tool".into(),
+            arguments: json!({"secret": "PRIVATE-ARGUMENT"}),
+            idempotency: None,
+        },
+        WorkflowStep::Workflow {
+            id: "child".into(),
+            workflow: "child".into(),
+            version: "1.0.0".into(),
+            inputs: json!({"secret": "PRIVATE-INPUT"}),
+        },
+        WorkflowStep::Approval {
+            id: "approve".into(),
+            prompt: "PRIVATE-APPROVAL".into(),
+        },
+        WorkflowStep::WaitForInput {
+            id: "input".into(),
+            prompt: "PRIVATE-OPERATOR-PROMPT".into(),
+            schema: json!({"default": "PRIVATE-SCHEMA"}),
+        },
+        WorkflowStep::Emit {
+            id: "output".into(),
+            value: json!({"secret": "PRIVATE-OUTPUT"}),
+        },
+    ];
+    let projection = serde_json::to_string(&view::logic(&definition).unwrap()).unwrap();
+    assert!(!projection.contains("PRIVATE-"));
+    assert!(projection.contains("registered_tool"));
+    assert!(projection.contains("child:1.0.0"));
+    definition.steps = (0..513)
+        .map(|index| WorkflowStep::Emit {
+            id: format!("step-{index}"),
+            value: Value::Null,
+        })
+        .collect();
+    assert!(view::logic(&definition).is_none());
+}
+
 const YAML: &str = "apiVersion: colossus.dev/v1alpha1\nkind: Workflow\nmetadata:\n  name: scheduled\n  version: 1.0.0\n  description: Deterministic scheduled work\ninputs:\n  type: object\n  additionalProperties: false\n  required: [message]\n  properties:\n    message: {type: string}\noutputs: {type: object}\ncapabilities: []\nmaxConcurrency: 1\nstepBudget: 2\nsteps:\n  - id: result\n    type: emit\n    value: {ok: true}\n";
 
 fn owner(id: &str) -> WorkflowOrigin {

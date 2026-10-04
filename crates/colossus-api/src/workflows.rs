@@ -2,9 +2,10 @@
 use crate::{ApiResult, CallerContext};
 use async_trait::async_trait;
 pub use colossus_contracts::{
-    Actor, ActorType, RegisteredWorkflow, WorkflowOrigin, WorkflowPage, WorkflowRunSnapshot,
-    WorkflowSchedule, WorkflowScheduleDispatchStatus, WorkflowScheduleMisfirePolicy,
-    WorkflowScheduleSnapshot, WorkflowStatus,
+    Actor, ActorType, RegisteredWorkflow, WorkflowLogic, WorkflowLogicBranch, WorkflowLogicKind,
+    WorkflowLogicStep, WorkflowOrigin, WorkflowPage, WorkflowRunSnapshot, WorkflowSchedule,
+    WorkflowScheduleDispatchStatus, WorkflowScheduleMisfirePolicy, WorkflowScheduleSnapshot,
+    WorkflowStatus, WorkflowStepState, WorkflowStepStatus,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

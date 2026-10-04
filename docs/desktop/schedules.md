@@ -62,6 +62,21 @@ origin when known, next boundary, and last dispatch. **Queued** describes dispat
 execution success. **Inspect last workflow run** shows the independent run's current
 queued, running, waiting, completed, failed, cancelled, or interrupted state.
 
+Choose **View workflow logic** to see the schedule's exact pinned definition as a graph.
+Parallel checks separate into lanes; conditions label their True and False paths;
+bounded loops show their body, next-item path, and exit. Child workflow nodes identify
+the referenced definition. Recovery steps appear as a separate failure path.
+
+![Complex workflow logic and recorded step execution](../assets/screenshots/desktop-workflow-logic.png)
+
+This example completed through the real managed runtime; Workspace navigation uses
+the Desktop test fixture. Select a node or use **Choose a step** to inspect its logic
+and recorded execution. Zoom, pan, and **Fit workflow** help navigate larger graphs.
+Completed steps have recorded completion evidence; unvisited branches remain neutral.
+Loop completion counts summarize distinct executions. A changed definition hash is
+never substituted for the schedule's pinned version. Older runtimes can still show
+schedule and run details without providing a logic graph.
+
 **Review pause** stops future ticks without cancelling queued or running workflows.
 **Review enable** preserves the retained boundary, so enabling an overdue schedule may
 reconcile missed occurrences. A tick or another control change invalidates a stale

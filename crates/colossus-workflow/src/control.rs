@@ -8,6 +8,7 @@ use colossus_contracts::{
 mod mutations;
 #[cfg(test)]
 mod tests;
+mod view;
 
 const MAX_CONTROL_BYTES: usize = 256 * 1024;
 const MAX_CONTROL_PAGE: usize = 100;
@@ -85,6 +86,7 @@ impl WorkflowService {
                     }
                     let mut metadata = self.control_workflow(id, None)?;
                     metadata.input_schema = Value::Null;
+                    metadata.logic = None;
                     items.push(metadata);
                     if items.len() > limit {
                         break;
@@ -182,6 +184,7 @@ impl WorkflowService {
                     .read_stream(&format!("workflow-run:{run_id}"))?;
                 let last = events.last().ok_or(WorkflowError::PermissionDenied)?;
                 serde_json::to_value(WorkflowRunSnapshot {
+                    step_states: view::step_states(self.journal.as_ref(), &events, run.status)?,
                     run_id: run.run_id,
                     workflow_id: format!("{}:{}", run.workflow_name, run.workflow_version),
                     workflow_hash: run.workflow_hash,
@@ -386,6 +389,7 @@ fn metadata(
         workflow_hash: hash.into(),
         description: definition.metadata.description.clone(),
         input_schema: definition.inputs.clone(),
+        logic: view::logic(definition),
         scheduling_eligible: true,
         unavailable_reason: None,
     })

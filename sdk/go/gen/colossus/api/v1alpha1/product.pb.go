@@ -1443,8 +1443,11 @@ type WorkflowSummary struct {
 	InputSchema *structpb.Struct `protobuf:"bytes,10,opt,name=input_schema,json=inputSchema,proto3" json:"input_schema,omitempty"`
 	// unavailable_reason is safe guidance when pinned trust prevents scheduling.
 	UnavailableReason *string `protobuf:"bytes,11,opt,name=unavailable_reason,json=unavailableReason,proto3,oneof" json:"unavailable_reason,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// logic is the bounded released structure, without prompts, arguments, or outputs.
+	// Detail/validation responses include it; catalog pages and older targets omit it.
+	Logic         *structpb.Struct `protobuf:"bytes,12,opt,name=logic,proto3" json:"logic,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *WorkflowSummary) Reset() {
@@ -1554,6 +1557,13 @@ func (x *WorkflowSummary) GetUnavailableReason() string {
 	return ""
 }
 
+func (x *WorkflowSummary) GetLogic() *structpb.Struct {
+	if x != nil {
+		return x.Logic
+	}
+	return nil
+}
+
 // WorkflowRun is one durable automation execution.
 type WorkflowRun struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1575,8 +1585,11 @@ type WorkflowRun struct {
 	WaitingReason *string `protobuf:"bytes,8,opt,name=waiting_reason,json=waitingReason,proto3,oneof" json:"waiting_reason,omitempty"`
 	// definition_hash is the exact hash pinned when the run was allocated.
 	DefinitionHash string `protobuf:"bytes,9,opt,name=definition_hash,json=definitionHash,proto3" json:"definition_hash,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// step_states contains only recorded step identities, states, and completion counts.
+	// The object has a steps array; raw effect payloads and outputs are withheld.
+	StepStates    *structpb.Struct `protobuf:"bytes,10,opt,name=step_states,json=stepStates,proto3" json:"step_states,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *WorkflowRun) Reset() {
@@ -1670,6 +1683,13 @@ func (x *WorkflowRun) GetDefinitionHash() string {
 		return x.DefinitionHash
 	}
 	return ""
+}
+
+func (x *WorkflowRun) GetStepStates() *structpb.Struct {
+	if x != nil {
+		return x.StepStates
+	}
+	return nil
 }
 
 // GetWorkflowRequest selects one workflow.
@@ -4856,7 +4876,7 @@ const file_colossus_api_v1alpha1_product_proto_rawDesc = "" +
 	"\x05score\x18\x03 \x01(\x01R\x05score\"\x9a\x01\n" +
 	"\x17SearchKnowledgeResponse\x12F\n" +
 	"\aresults\x18\x01 \x03(\v2,.colossus.api.v1alpha1.KnowledgeSearchResultR\aresults\x127\n" +
-	"\x04page\x18\x02 \x01(\v2#.colossus.api.v1alpha1.PageResponseR\x04page\"\xd6\x03\n" +
+	"\x04page\x18\x02 \x01(\v2#.colossus.api.v1alpha1.PageResponseR\x04page\"\x85\x04\n" +
 	"\x0fWorkflowSummary\x12\x1f\n" +
 	"\vworkflow_id\x18\x01 \x01(\tR\n" +
 	"workflowId\x12\x12\n" +
@@ -4872,8 +4892,9 @@ const file_colossus_api_v1alpha1_product_proto_rawDesc = "" +
 	"\x0fdefinition_hash\x18\t \x01(\tR\x0edefinitionHash\x12:\n" +
 	"\finput_schema\x18\n" +
 	" \x01(\v2\x17.google.protobuf.StructR\vinputSchema\x122\n" +
-	"\x12unavailable_reason\x18\v \x01(\tH\x00R\x11unavailableReason\x88\x01\x01B\x15\n" +
-	"\x13_unavailable_reason\"\xda\x03\n" +
+	"\x12unavailable_reason\x18\v \x01(\tH\x00R\x11unavailableReason\x88\x01\x01\x12-\n" +
+	"\x05logic\x18\f \x01(\v2\x17.google.protobuf.StructR\x05logicB\x15\n" +
+	"\x13_unavailable_reason\"\x94\x04\n" +
 	"\vWorkflowRun\x12&\n" +
 	"\x0fworkflow_run_id\x18\x01 \x01(\tR\rworkflowRunId\x12\x1f\n" +
 	"\vworkflow_id\x18\x02 \x01(\tR\n" +
@@ -4886,7 +4907,10 @@ const file_colossus_api_v1alpha1_product_proto_rawDesc = "" +
 	"\rlast_sequence\x18\x06 \x01(\x04R\flastSequence\x12*\n" +
 	"\x0efailure_reason\x18\a \x01(\tH\x00R\rfailureReason\x88\x01\x01\x12*\n" +
 	"\x0ewaiting_reason\x18\b \x01(\tH\x01R\rwaitingReason\x88\x01\x01\x12'\n" +
-	"\x0fdefinition_hash\x18\t \x01(\tR\x0edefinitionHashB\x11\n" +
+	"\x0fdefinition_hash\x18\t \x01(\tR\x0edefinitionHash\x128\n" +
+	"\vstep_states\x18\n" +
+	" \x01(\v2\x17.google.protobuf.StructR\n" +
+	"stepStatesB\x11\n" +
 	"\x0f_failure_reasonB\x11\n" +
 	"\x0f_waiting_reason\"5\n" +
 	"\x12GetWorkflowRequest\x12\x1f\n" +
@@ -5315,111 +5339,113 @@ var file_colossus_api_v1alpha1_product_proto_depIdxs = []int32{
 	73,  // 23: colossus.api.v1alpha1.WorkflowSummary.created_at:type_name -> google.protobuf.Timestamp
 	73,  // 24: colossus.api.v1alpha1.WorkflowSummary.updated_at:type_name -> google.protobuf.Timestamp
 	76,  // 25: colossus.api.v1alpha1.WorkflowSummary.input_schema:type_name -> google.protobuf.Struct
-	3,   // 26: colossus.api.v1alpha1.WorkflowRun.status:type_name -> colossus.api.v1alpha1.WorkflowRunStatus
-	73,  // 27: colossus.api.v1alpha1.WorkflowRun.created_at:type_name -> google.protobuf.Timestamp
-	73,  // 28: colossus.api.v1alpha1.WorkflowRun.updated_at:type_name -> google.protobuf.Timestamp
-	22,  // 29: colossus.api.v1alpha1.GetWorkflowResponse.workflow:type_name -> colossus.api.v1alpha1.WorkflowSummary
-	74,  // 30: colossus.api.v1alpha1.ListWorkflowsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
-	22,  // 31: colossus.api.v1alpha1.ListWorkflowsResponse.workflows:type_name -> colossus.api.v1alpha1.WorkflowSummary
-	75,  // 32: colossus.api.v1alpha1.ListWorkflowsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
-	76,  // 33: colossus.api.v1alpha1.StartWorkflowRunRequest.input:type_name -> google.protobuf.Struct
-	23,  // 34: colossus.api.v1alpha1.StartWorkflowRunResponse.workflow_run:type_name -> colossus.api.v1alpha1.WorkflowRun
-	23,  // 35: colossus.api.v1alpha1.GetWorkflowRunResponse.workflow_run:type_name -> colossus.api.v1alpha1.WorkflowRun
-	73,  // 36: colossus.api.v1alpha1.WatchWorkflowRunResponse.created_at:type_name -> google.protobuf.Timestamp
-	23,  // 37: colossus.api.v1alpha1.WatchWorkflowRunResponse.workflow_run:type_name -> colossus.api.v1alpha1.WorkflowRun
-	76,  // 38: colossus.api.v1alpha1.WorkflowSchedule.input:type_name -> google.protobuf.Struct
-	4,   // 39: colossus.api.v1alpha1.WorkflowSchedule.misfire_policy:type_name -> colossus.api.v1alpha1.ScheduleMisfirePolicy
-	73,  // 40: colossus.api.v1alpha1.WorkflowSchedule.starts_at:type_name -> google.protobuf.Timestamp
-	73,  // 41: colossus.api.v1alpha1.WorkflowSchedule.next_fire_at:type_name -> google.protobuf.Timestamp
-	73,  // 42: colossus.api.v1alpha1.WorkflowSchedule.last_scheduled_at:type_name -> google.protobuf.Timestamp
-	73,  // 43: colossus.api.v1alpha1.WorkflowSchedule.created_at:type_name -> google.protobuf.Timestamp
-	73,  // 44: colossus.api.v1alpha1.WorkflowSchedule.updated_at:type_name -> google.protobuf.Timestamp
-	34,  // 45: colossus.api.v1alpha1.WorkflowSchedule.origin:type_name -> colossus.api.v1alpha1.WorkflowScheduleOrigin
-	5,   // 46: colossus.api.v1alpha1.WorkflowSchedule.last_dispatch:type_name -> colossus.api.v1alpha1.ScheduleDispatchStatus
-	22,  // 47: colossus.api.v1alpha1.ValidateWorkflowDefinitionResponse.workflow:type_name -> colossus.api.v1alpha1.WorkflowSummary
-	22,  // 48: colossus.api.v1alpha1.RegisterWorkflowDefinitionResponse.workflow:type_name -> colossus.api.v1alpha1.WorkflowSummary
-	74,  // 49: colossus.api.v1alpha1.ListWorkflowSchedulesRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
-	35,  // 50: colossus.api.v1alpha1.ListWorkflowSchedulesResponse.schedules:type_name -> colossus.api.v1alpha1.WorkflowSchedule
-	75,  // 51: colossus.api.v1alpha1.ListWorkflowSchedulesResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
-	35,  // 52: colossus.api.v1alpha1.GetWorkflowScheduleResponse.schedule:type_name -> colossus.api.v1alpha1.WorkflowSchedule
-	76,  // 53: colossus.api.v1alpha1.CreateWorkflowScheduleRequest.input:type_name -> google.protobuf.Struct
-	73,  // 54: colossus.api.v1alpha1.CreateWorkflowScheduleRequest.starts_at:type_name -> google.protobuf.Timestamp
-	4,   // 55: colossus.api.v1alpha1.CreateWorkflowScheduleRequest.misfire_policy:type_name -> colossus.api.v1alpha1.ScheduleMisfirePolicy
-	35,  // 56: colossus.api.v1alpha1.CreateWorkflowScheduleResponse.schedule:type_name -> colossus.api.v1alpha1.WorkflowSchedule
-	35,  // 57: colossus.api.v1alpha1.SetWorkflowScheduleEnabledResponse.schedule:type_name -> colossus.api.v1alpha1.WorkflowSchedule
-	6,   // 58: colossus.api.v1alpha1.ExtensionSummary.kind:type_name -> colossus.api.v1alpha1.ExtensionKind
-	50,  // 59: colossus.api.v1alpha1.GetExtensionResponse.extension:type_name -> colossus.api.v1alpha1.ExtensionSummary
-	55,  // 60: colossus.api.v1alpha1.GetExtensionResponse.plugin:type_name -> colossus.api.v1alpha1.AgentPlugin
-	6,   // 61: colossus.api.v1alpha1.ListExtensionsRequest.kinds:type_name -> colossus.api.v1alpha1.ExtensionKind
-	74,  // 62: colossus.api.v1alpha1.ListExtensionsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
-	50,  // 63: colossus.api.v1alpha1.ListExtensionsResponse.extensions:type_name -> colossus.api.v1alpha1.ExtensionSummary
-	75,  // 64: colossus.api.v1alpha1.ListExtensionsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
-	55,  // 65: colossus.api.v1alpha1.ListExtensionsResponse.plugins:type_name -> colossus.api.v1alpha1.AgentPlugin
-	56,  // 66: colossus.api.v1alpha1.AgentPlugin.trust:type_name -> colossus.api.v1alpha1.PluginTrust
-	57,  // 67: colossus.api.v1alpha1.AgentPlugin.skills:type_name -> colossus.api.v1alpha1.PluginSkill
-	58,  // 68: colossus.api.v1alpha1.AgentPlugin.mcp_servers:type_name -> colossus.api.v1alpha1.PluginMcpServer
-	59,  // 69: colossus.api.v1alpha1.AgentPlugin.diagnostics:type_name -> colossus.api.v1alpha1.PluginDiagnostic
-	57,  // 70: colossus.api.v1alpha1.ReadPluginSkillResponse.skill:type_name -> colossus.api.v1alpha1.PluginSkill
-	63,  // 71: colossus.api.v1alpha1.ListPluginResourcesResponse.resources:type_name -> colossus.api.v1alpha1.PluginResource
-	63,  // 72: colossus.api.v1alpha1.ReadPluginResourceResponse.resource:type_name -> colossus.api.v1alpha1.PluginResource
-	7,   // 73: colossus.api.v1alpha1.DiagnosticSummary.status:type_name -> colossus.api.v1alpha1.DiagnosticStatus
-	67,  // 74: colossus.api.v1alpha1.ListDiagnosticsResponse.diagnostics:type_name -> colossus.api.v1alpha1.DiagnosticSummary
-	77,  // 75: colossus.api.v1alpha1.DistributionInspection.artifact:type_name -> colossus.api.v1alpha1.ArtifactReference
-	8,   // 76: colossus.api.v1alpha1.DistributionInspection.kind:type_name -> colossus.api.v1alpha1.DistributionArtifactKind
-	70,  // 77: colossus.api.v1alpha1.InspectDistributionArtifactResponse.inspection:type_name -> colossus.api.v1alpha1.DistributionInspection
-	10,  // 78: colossus.api.v1alpha1.WorkService.GetWorkItem:input_type -> colossus.api.v1alpha1.GetWorkItemRequest
-	12,  // 79: colossus.api.v1alpha1.WorkService.ListWorkItems:input_type -> colossus.api.v1alpha1.ListWorkItemsRequest
-	15,  // 80: colossus.api.v1alpha1.KnowledgeService.GetMemory:input_type -> colossus.api.v1alpha1.GetMemoryRequest
-	17,  // 81: colossus.api.v1alpha1.KnowledgeService.ListMemories:input_type -> colossus.api.v1alpha1.ListMemoriesRequest
-	19,  // 82: colossus.api.v1alpha1.KnowledgeService.SearchKnowledge:input_type -> colossus.api.v1alpha1.SearchKnowledgeRequest
-	24,  // 83: colossus.api.v1alpha1.AutomationService.GetWorkflow:input_type -> colossus.api.v1alpha1.GetWorkflowRequest
-	26,  // 84: colossus.api.v1alpha1.AutomationService.ListWorkflows:input_type -> colossus.api.v1alpha1.ListWorkflowsRequest
-	28,  // 85: colossus.api.v1alpha1.AutomationService.StartWorkflowRun:input_type -> colossus.api.v1alpha1.StartWorkflowRunRequest
-	30,  // 86: colossus.api.v1alpha1.AutomationService.GetWorkflowRun:input_type -> colossus.api.v1alpha1.GetWorkflowRunRequest
-	32,  // 87: colossus.api.v1alpha1.AutomationService.WatchWorkflowRun:input_type -> colossus.api.v1alpha1.WatchWorkflowRunRequest
-	36,  // 88: colossus.api.v1alpha1.AutomationService.ValidateWorkflowDefinition:input_type -> colossus.api.v1alpha1.ValidateWorkflowDefinitionRequest
-	38,  // 89: colossus.api.v1alpha1.AutomationService.RegisterWorkflowDefinition:input_type -> colossus.api.v1alpha1.RegisterWorkflowDefinitionRequest
-	40,  // 90: colossus.api.v1alpha1.AutomationService.ListWorkflowSchedules:input_type -> colossus.api.v1alpha1.ListWorkflowSchedulesRequest
-	42,  // 91: colossus.api.v1alpha1.AutomationService.GetWorkflowSchedule:input_type -> colossus.api.v1alpha1.GetWorkflowScheduleRequest
-	44,  // 92: colossus.api.v1alpha1.AutomationService.CreateWorkflowSchedule:input_type -> colossus.api.v1alpha1.CreateWorkflowScheduleRequest
-	46,  // 93: colossus.api.v1alpha1.AutomationService.SetWorkflowScheduleEnabled:input_type -> colossus.api.v1alpha1.SetWorkflowScheduleEnabledRequest
-	48,  // 94: colossus.api.v1alpha1.AutomationService.GetWorkflowWorkState:input_type -> colossus.api.v1alpha1.GetWorkflowWorkStateRequest
-	51,  // 95: colossus.api.v1alpha1.ExtensionService.GetExtension:input_type -> colossus.api.v1alpha1.GetExtensionRequest
-	53,  // 96: colossus.api.v1alpha1.ExtensionService.ListExtensions:input_type -> colossus.api.v1alpha1.ListExtensionsRequest
-	60,  // 97: colossus.api.v1alpha1.ExtensionService.ReadPluginSkill:input_type -> colossus.api.v1alpha1.ReadPluginSkillRequest
-	62,  // 98: colossus.api.v1alpha1.ExtensionService.ListPluginResources:input_type -> colossus.api.v1alpha1.ListPluginResourcesRequest
-	65,  // 99: colossus.api.v1alpha1.ExtensionService.ReadPluginResource:input_type -> colossus.api.v1alpha1.ReadPluginResourceRequest
-	68,  // 100: colossus.api.v1alpha1.OperationsService.ListDiagnostics:input_type -> colossus.api.v1alpha1.ListDiagnosticsRequest
-	71,  // 101: colossus.api.v1alpha1.DistributionService.InspectDistributionArtifact:input_type -> colossus.api.v1alpha1.InspectDistributionArtifactRequest
-	11,  // 102: colossus.api.v1alpha1.WorkService.GetWorkItem:output_type -> colossus.api.v1alpha1.GetWorkItemResponse
-	13,  // 103: colossus.api.v1alpha1.WorkService.ListWorkItems:output_type -> colossus.api.v1alpha1.ListWorkItemsResponse
-	16,  // 104: colossus.api.v1alpha1.KnowledgeService.GetMemory:output_type -> colossus.api.v1alpha1.GetMemoryResponse
-	18,  // 105: colossus.api.v1alpha1.KnowledgeService.ListMemories:output_type -> colossus.api.v1alpha1.ListMemoriesResponse
-	21,  // 106: colossus.api.v1alpha1.KnowledgeService.SearchKnowledge:output_type -> colossus.api.v1alpha1.SearchKnowledgeResponse
-	25,  // 107: colossus.api.v1alpha1.AutomationService.GetWorkflow:output_type -> colossus.api.v1alpha1.GetWorkflowResponse
-	27,  // 108: colossus.api.v1alpha1.AutomationService.ListWorkflows:output_type -> colossus.api.v1alpha1.ListWorkflowsResponse
-	29,  // 109: colossus.api.v1alpha1.AutomationService.StartWorkflowRun:output_type -> colossus.api.v1alpha1.StartWorkflowRunResponse
-	31,  // 110: colossus.api.v1alpha1.AutomationService.GetWorkflowRun:output_type -> colossus.api.v1alpha1.GetWorkflowRunResponse
-	33,  // 111: colossus.api.v1alpha1.AutomationService.WatchWorkflowRun:output_type -> colossus.api.v1alpha1.WatchWorkflowRunResponse
-	37,  // 112: colossus.api.v1alpha1.AutomationService.ValidateWorkflowDefinition:output_type -> colossus.api.v1alpha1.ValidateWorkflowDefinitionResponse
-	39,  // 113: colossus.api.v1alpha1.AutomationService.RegisterWorkflowDefinition:output_type -> colossus.api.v1alpha1.RegisterWorkflowDefinitionResponse
-	41,  // 114: colossus.api.v1alpha1.AutomationService.ListWorkflowSchedules:output_type -> colossus.api.v1alpha1.ListWorkflowSchedulesResponse
-	43,  // 115: colossus.api.v1alpha1.AutomationService.GetWorkflowSchedule:output_type -> colossus.api.v1alpha1.GetWorkflowScheduleResponse
-	45,  // 116: colossus.api.v1alpha1.AutomationService.CreateWorkflowSchedule:output_type -> colossus.api.v1alpha1.CreateWorkflowScheduleResponse
-	47,  // 117: colossus.api.v1alpha1.AutomationService.SetWorkflowScheduleEnabled:output_type -> colossus.api.v1alpha1.SetWorkflowScheduleEnabledResponse
-	49,  // 118: colossus.api.v1alpha1.AutomationService.GetWorkflowWorkState:output_type -> colossus.api.v1alpha1.GetWorkflowWorkStateResponse
-	52,  // 119: colossus.api.v1alpha1.ExtensionService.GetExtension:output_type -> colossus.api.v1alpha1.GetExtensionResponse
-	54,  // 120: colossus.api.v1alpha1.ExtensionService.ListExtensions:output_type -> colossus.api.v1alpha1.ListExtensionsResponse
-	61,  // 121: colossus.api.v1alpha1.ExtensionService.ReadPluginSkill:output_type -> colossus.api.v1alpha1.ReadPluginSkillResponse
-	64,  // 122: colossus.api.v1alpha1.ExtensionService.ListPluginResources:output_type -> colossus.api.v1alpha1.ListPluginResourcesResponse
-	66,  // 123: colossus.api.v1alpha1.ExtensionService.ReadPluginResource:output_type -> colossus.api.v1alpha1.ReadPluginResourceResponse
-	69,  // 124: colossus.api.v1alpha1.OperationsService.ListDiagnostics:output_type -> colossus.api.v1alpha1.ListDiagnosticsResponse
-	72,  // 125: colossus.api.v1alpha1.DistributionService.InspectDistributionArtifact:output_type -> colossus.api.v1alpha1.InspectDistributionArtifactResponse
-	102, // [102:126] is the sub-list for method output_type
-	78,  // [78:102] is the sub-list for method input_type
-	78,  // [78:78] is the sub-list for extension type_name
-	78,  // [78:78] is the sub-list for extension extendee
-	0,   // [0:78] is the sub-list for field type_name
+	76,  // 26: colossus.api.v1alpha1.WorkflowSummary.logic:type_name -> google.protobuf.Struct
+	3,   // 27: colossus.api.v1alpha1.WorkflowRun.status:type_name -> colossus.api.v1alpha1.WorkflowRunStatus
+	73,  // 28: colossus.api.v1alpha1.WorkflowRun.created_at:type_name -> google.protobuf.Timestamp
+	73,  // 29: colossus.api.v1alpha1.WorkflowRun.updated_at:type_name -> google.protobuf.Timestamp
+	76,  // 30: colossus.api.v1alpha1.WorkflowRun.step_states:type_name -> google.protobuf.Struct
+	22,  // 31: colossus.api.v1alpha1.GetWorkflowResponse.workflow:type_name -> colossus.api.v1alpha1.WorkflowSummary
+	74,  // 32: colossus.api.v1alpha1.ListWorkflowsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
+	22,  // 33: colossus.api.v1alpha1.ListWorkflowsResponse.workflows:type_name -> colossus.api.v1alpha1.WorkflowSummary
+	75,  // 34: colossus.api.v1alpha1.ListWorkflowsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
+	76,  // 35: colossus.api.v1alpha1.StartWorkflowRunRequest.input:type_name -> google.protobuf.Struct
+	23,  // 36: colossus.api.v1alpha1.StartWorkflowRunResponse.workflow_run:type_name -> colossus.api.v1alpha1.WorkflowRun
+	23,  // 37: colossus.api.v1alpha1.GetWorkflowRunResponse.workflow_run:type_name -> colossus.api.v1alpha1.WorkflowRun
+	73,  // 38: colossus.api.v1alpha1.WatchWorkflowRunResponse.created_at:type_name -> google.protobuf.Timestamp
+	23,  // 39: colossus.api.v1alpha1.WatchWorkflowRunResponse.workflow_run:type_name -> colossus.api.v1alpha1.WorkflowRun
+	76,  // 40: colossus.api.v1alpha1.WorkflowSchedule.input:type_name -> google.protobuf.Struct
+	4,   // 41: colossus.api.v1alpha1.WorkflowSchedule.misfire_policy:type_name -> colossus.api.v1alpha1.ScheduleMisfirePolicy
+	73,  // 42: colossus.api.v1alpha1.WorkflowSchedule.starts_at:type_name -> google.protobuf.Timestamp
+	73,  // 43: colossus.api.v1alpha1.WorkflowSchedule.next_fire_at:type_name -> google.protobuf.Timestamp
+	73,  // 44: colossus.api.v1alpha1.WorkflowSchedule.last_scheduled_at:type_name -> google.protobuf.Timestamp
+	73,  // 45: colossus.api.v1alpha1.WorkflowSchedule.created_at:type_name -> google.protobuf.Timestamp
+	73,  // 46: colossus.api.v1alpha1.WorkflowSchedule.updated_at:type_name -> google.protobuf.Timestamp
+	34,  // 47: colossus.api.v1alpha1.WorkflowSchedule.origin:type_name -> colossus.api.v1alpha1.WorkflowScheduleOrigin
+	5,   // 48: colossus.api.v1alpha1.WorkflowSchedule.last_dispatch:type_name -> colossus.api.v1alpha1.ScheduleDispatchStatus
+	22,  // 49: colossus.api.v1alpha1.ValidateWorkflowDefinitionResponse.workflow:type_name -> colossus.api.v1alpha1.WorkflowSummary
+	22,  // 50: colossus.api.v1alpha1.RegisterWorkflowDefinitionResponse.workflow:type_name -> colossus.api.v1alpha1.WorkflowSummary
+	74,  // 51: colossus.api.v1alpha1.ListWorkflowSchedulesRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
+	35,  // 52: colossus.api.v1alpha1.ListWorkflowSchedulesResponse.schedules:type_name -> colossus.api.v1alpha1.WorkflowSchedule
+	75,  // 53: colossus.api.v1alpha1.ListWorkflowSchedulesResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
+	35,  // 54: colossus.api.v1alpha1.GetWorkflowScheduleResponse.schedule:type_name -> colossus.api.v1alpha1.WorkflowSchedule
+	76,  // 55: colossus.api.v1alpha1.CreateWorkflowScheduleRequest.input:type_name -> google.protobuf.Struct
+	73,  // 56: colossus.api.v1alpha1.CreateWorkflowScheduleRequest.starts_at:type_name -> google.protobuf.Timestamp
+	4,   // 57: colossus.api.v1alpha1.CreateWorkflowScheduleRequest.misfire_policy:type_name -> colossus.api.v1alpha1.ScheduleMisfirePolicy
+	35,  // 58: colossus.api.v1alpha1.CreateWorkflowScheduleResponse.schedule:type_name -> colossus.api.v1alpha1.WorkflowSchedule
+	35,  // 59: colossus.api.v1alpha1.SetWorkflowScheduleEnabledResponse.schedule:type_name -> colossus.api.v1alpha1.WorkflowSchedule
+	6,   // 60: colossus.api.v1alpha1.ExtensionSummary.kind:type_name -> colossus.api.v1alpha1.ExtensionKind
+	50,  // 61: colossus.api.v1alpha1.GetExtensionResponse.extension:type_name -> colossus.api.v1alpha1.ExtensionSummary
+	55,  // 62: colossus.api.v1alpha1.GetExtensionResponse.plugin:type_name -> colossus.api.v1alpha1.AgentPlugin
+	6,   // 63: colossus.api.v1alpha1.ListExtensionsRequest.kinds:type_name -> colossus.api.v1alpha1.ExtensionKind
+	74,  // 64: colossus.api.v1alpha1.ListExtensionsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
+	50,  // 65: colossus.api.v1alpha1.ListExtensionsResponse.extensions:type_name -> colossus.api.v1alpha1.ExtensionSummary
+	75,  // 66: colossus.api.v1alpha1.ListExtensionsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
+	55,  // 67: colossus.api.v1alpha1.ListExtensionsResponse.plugins:type_name -> colossus.api.v1alpha1.AgentPlugin
+	56,  // 68: colossus.api.v1alpha1.AgentPlugin.trust:type_name -> colossus.api.v1alpha1.PluginTrust
+	57,  // 69: colossus.api.v1alpha1.AgentPlugin.skills:type_name -> colossus.api.v1alpha1.PluginSkill
+	58,  // 70: colossus.api.v1alpha1.AgentPlugin.mcp_servers:type_name -> colossus.api.v1alpha1.PluginMcpServer
+	59,  // 71: colossus.api.v1alpha1.AgentPlugin.diagnostics:type_name -> colossus.api.v1alpha1.PluginDiagnostic
+	57,  // 72: colossus.api.v1alpha1.ReadPluginSkillResponse.skill:type_name -> colossus.api.v1alpha1.PluginSkill
+	63,  // 73: colossus.api.v1alpha1.ListPluginResourcesResponse.resources:type_name -> colossus.api.v1alpha1.PluginResource
+	63,  // 74: colossus.api.v1alpha1.ReadPluginResourceResponse.resource:type_name -> colossus.api.v1alpha1.PluginResource
+	7,   // 75: colossus.api.v1alpha1.DiagnosticSummary.status:type_name -> colossus.api.v1alpha1.DiagnosticStatus
+	67,  // 76: colossus.api.v1alpha1.ListDiagnosticsResponse.diagnostics:type_name -> colossus.api.v1alpha1.DiagnosticSummary
+	77,  // 77: colossus.api.v1alpha1.DistributionInspection.artifact:type_name -> colossus.api.v1alpha1.ArtifactReference
+	8,   // 78: colossus.api.v1alpha1.DistributionInspection.kind:type_name -> colossus.api.v1alpha1.DistributionArtifactKind
+	70,  // 79: colossus.api.v1alpha1.InspectDistributionArtifactResponse.inspection:type_name -> colossus.api.v1alpha1.DistributionInspection
+	10,  // 80: colossus.api.v1alpha1.WorkService.GetWorkItem:input_type -> colossus.api.v1alpha1.GetWorkItemRequest
+	12,  // 81: colossus.api.v1alpha1.WorkService.ListWorkItems:input_type -> colossus.api.v1alpha1.ListWorkItemsRequest
+	15,  // 82: colossus.api.v1alpha1.KnowledgeService.GetMemory:input_type -> colossus.api.v1alpha1.GetMemoryRequest
+	17,  // 83: colossus.api.v1alpha1.KnowledgeService.ListMemories:input_type -> colossus.api.v1alpha1.ListMemoriesRequest
+	19,  // 84: colossus.api.v1alpha1.KnowledgeService.SearchKnowledge:input_type -> colossus.api.v1alpha1.SearchKnowledgeRequest
+	24,  // 85: colossus.api.v1alpha1.AutomationService.GetWorkflow:input_type -> colossus.api.v1alpha1.GetWorkflowRequest
+	26,  // 86: colossus.api.v1alpha1.AutomationService.ListWorkflows:input_type -> colossus.api.v1alpha1.ListWorkflowsRequest
+	28,  // 87: colossus.api.v1alpha1.AutomationService.StartWorkflowRun:input_type -> colossus.api.v1alpha1.StartWorkflowRunRequest
+	30,  // 88: colossus.api.v1alpha1.AutomationService.GetWorkflowRun:input_type -> colossus.api.v1alpha1.GetWorkflowRunRequest
+	32,  // 89: colossus.api.v1alpha1.AutomationService.WatchWorkflowRun:input_type -> colossus.api.v1alpha1.WatchWorkflowRunRequest
+	36,  // 90: colossus.api.v1alpha1.AutomationService.ValidateWorkflowDefinition:input_type -> colossus.api.v1alpha1.ValidateWorkflowDefinitionRequest
+	38,  // 91: colossus.api.v1alpha1.AutomationService.RegisterWorkflowDefinition:input_type -> colossus.api.v1alpha1.RegisterWorkflowDefinitionRequest
+	40,  // 92: colossus.api.v1alpha1.AutomationService.ListWorkflowSchedules:input_type -> colossus.api.v1alpha1.ListWorkflowSchedulesRequest
+	42,  // 93: colossus.api.v1alpha1.AutomationService.GetWorkflowSchedule:input_type -> colossus.api.v1alpha1.GetWorkflowScheduleRequest
+	44,  // 94: colossus.api.v1alpha1.AutomationService.CreateWorkflowSchedule:input_type -> colossus.api.v1alpha1.CreateWorkflowScheduleRequest
+	46,  // 95: colossus.api.v1alpha1.AutomationService.SetWorkflowScheduleEnabled:input_type -> colossus.api.v1alpha1.SetWorkflowScheduleEnabledRequest
+	48,  // 96: colossus.api.v1alpha1.AutomationService.GetWorkflowWorkState:input_type -> colossus.api.v1alpha1.GetWorkflowWorkStateRequest
+	51,  // 97: colossus.api.v1alpha1.ExtensionService.GetExtension:input_type -> colossus.api.v1alpha1.GetExtensionRequest
+	53,  // 98: colossus.api.v1alpha1.ExtensionService.ListExtensions:input_type -> colossus.api.v1alpha1.ListExtensionsRequest
+	60,  // 99: colossus.api.v1alpha1.ExtensionService.ReadPluginSkill:input_type -> colossus.api.v1alpha1.ReadPluginSkillRequest
+	62,  // 100: colossus.api.v1alpha1.ExtensionService.ListPluginResources:input_type -> colossus.api.v1alpha1.ListPluginResourcesRequest
+	65,  // 101: colossus.api.v1alpha1.ExtensionService.ReadPluginResource:input_type -> colossus.api.v1alpha1.ReadPluginResourceRequest
+	68,  // 102: colossus.api.v1alpha1.OperationsService.ListDiagnostics:input_type -> colossus.api.v1alpha1.ListDiagnosticsRequest
+	71,  // 103: colossus.api.v1alpha1.DistributionService.InspectDistributionArtifact:input_type -> colossus.api.v1alpha1.InspectDistributionArtifactRequest
+	11,  // 104: colossus.api.v1alpha1.WorkService.GetWorkItem:output_type -> colossus.api.v1alpha1.GetWorkItemResponse
+	13,  // 105: colossus.api.v1alpha1.WorkService.ListWorkItems:output_type -> colossus.api.v1alpha1.ListWorkItemsResponse
+	16,  // 106: colossus.api.v1alpha1.KnowledgeService.GetMemory:output_type -> colossus.api.v1alpha1.GetMemoryResponse
+	18,  // 107: colossus.api.v1alpha1.KnowledgeService.ListMemories:output_type -> colossus.api.v1alpha1.ListMemoriesResponse
+	21,  // 108: colossus.api.v1alpha1.KnowledgeService.SearchKnowledge:output_type -> colossus.api.v1alpha1.SearchKnowledgeResponse
+	25,  // 109: colossus.api.v1alpha1.AutomationService.GetWorkflow:output_type -> colossus.api.v1alpha1.GetWorkflowResponse
+	27,  // 110: colossus.api.v1alpha1.AutomationService.ListWorkflows:output_type -> colossus.api.v1alpha1.ListWorkflowsResponse
+	29,  // 111: colossus.api.v1alpha1.AutomationService.StartWorkflowRun:output_type -> colossus.api.v1alpha1.StartWorkflowRunResponse
+	31,  // 112: colossus.api.v1alpha1.AutomationService.GetWorkflowRun:output_type -> colossus.api.v1alpha1.GetWorkflowRunResponse
+	33,  // 113: colossus.api.v1alpha1.AutomationService.WatchWorkflowRun:output_type -> colossus.api.v1alpha1.WatchWorkflowRunResponse
+	37,  // 114: colossus.api.v1alpha1.AutomationService.ValidateWorkflowDefinition:output_type -> colossus.api.v1alpha1.ValidateWorkflowDefinitionResponse
+	39,  // 115: colossus.api.v1alpha1.AutomationService.RegisterWorkflowDefinition:output_type -> colossus.api.v1alpha1.RegisterWorkflowDefinitionResponse
+	41,  // 116: colossus.api.v1alpha1.AutomationService.ListWorkflowSchedules:output_type -> colossus.api.v1alpha1.ListWorkflowSchedulesResponse
+	43,  // 117: colossus.api.v1alpha1.AutomationService.GetWorkflowSchedule:output_type -> colossus.api.v1alpha1.GetWorkflowScheduleResponse
+	45,  // 118: colossus.api.v1alpha1.AutomationService.CreateWorkflowSchedule:output_type -> colossus.api.v1alpha1.CreateWorkflowScheduleResponse
+	47,  // 119: colossus.api.v1alpha1.AutomationService.SetWorkflowScheduleEnabled:output_type -> colossus.api.v1alpha1.SetWorkflowScheduleEnabledResponse
+	49,  // 120: colossus.api.v1alpha1.AutomationService.GetWorkflowWorkState:output_type -> colossus.api.v1alpha1.GetWorkflowWorkStateResponse
+	52,  // 121: colossus.api.v1alpha1.ExtensionService.GetExtension:output_type -> colossus.api.v1alpha1.GetExtensionResponse
+	54,  // 122: colossus.api.v1alpha1.ExtensionService.ListExtensions:output_type -> colossus.api.v1alpha1.ListExtensionsResponse
+	61,  // 123: colossus.api.v1alpha1.ExtensionService.ReadPluginSkill:output_type -> colossus.api.v1alpha1.ReadPluginSkillResponse
+	64,  // 124: colossus.api.v1alpha1.ExtensionService.ListPluginResources:output_type -> colossus.api.v1alpha1.ListPluginResourcesResponse
+	66,  // 125: colossus.api.v1alpha1.ExtensionService.ReadPluginResource:output_type -> colossus.api.v1alpha1.ReadPluginResourceResponse
+	69,  // 126: colossus.api.v1alpha1.OperationsService.ListDiagnostics:output_type -> colossus.api.v1alpha1.ListDiagnosticsResponse
+	72,  // 127: colossus.api.v1alpha1.DistributionService.InspectDistributionArtifact:output_type -> colossus.api.v1alpha1.InspectDistributionArtifactResponse
+	104, // [104:128] is the sub-list for method output_type
+	80,  // [80:104] is the sub-list for method input_type
+	80,  // [80:80] is the sub-list for extension type_name
+	80,  // [80:80] is the sub-list for extension extendee
+	0,   // [0:80] is the sub-list for field type_name
 }
 
 func init() { file_colossus_api_v1alpha1_product_proto_init() }
