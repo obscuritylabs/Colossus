@@ -201,6 +201,7 @@ jobs:
           cache-dependency-path: |
             sdk/package-lock.json
             sdk/typescript/package-lock.json
+            apps/vscode/package-lock.json
       - name: Install Python 3.10
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
@@ -246,6 +247,37 @@ jobs:
           EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           npm_config_cache: ${{ runner.temp }}/npm-pack-cache
         run: cargo xtask check sdk --base "$EVENT_BASE_SHA"
+      - name: Validate the VS Code extension
+        working-directory: apps/vscode
+        run: |
+          npm ci --ignore-scripts
+          npm run check
+          npm run build
+          npm audit --audit-level=high
+      - name: Exercise VS Code against the real worker
+        run: |
+          cargo build --locked -p colossus-cli --example sdk_ephemeral_local
+          npm --prefix apps/vscode run test:live
+      - name: Exercise VS Code's Electron transport
+        run: |
+          colossus_electron_dir="$(mktemp -d)"
+          trap 'rm -rf "$colossus_electron_dir"' EXIT
+          curl --fail --location --retry 3 \
+            https://github.com/electron/electron/releases/download/v42.10.0/electron-v42.10.0-linux-x64.zip \
+            --output "$colossus_electron_dir/runtime.zip"
+          printf '%s  %s\n' \
+            edcfae0a8cf2a75ceee8a9842a0117521283164708b193495f4cb60ab2d6aa0d \
+            "$colossus_electron_dir/runtime.zip" | sha256sum --check
+          unzip -q "$colossus_electron_dir/runtime.zip" -d "$colossus_electron_dir/runtime"
+          npm --prefix apps/vscode run test:live -- --electron "$colossus_electron_dir/runtime/electron"
+      - name: Exercise the VS Code sidebar
+        working-directory: apps/vscode
+        run: |
+          npm exec -- playwright install --with-deps chromium
+          npm run test:browser
+      - name: Package the VS Code MVP
+        working-directory: apps/vscode
+        run: node scripts/package.mjs
 
   desktop:
     name: Desktop PR validation

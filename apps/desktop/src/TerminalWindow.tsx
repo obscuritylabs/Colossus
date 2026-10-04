@@ -31,7 +31,7 @@ import type {
   TerminalKind,
   TerminalPlanContext,
 } from "./types";
-import colossusMark from "./assets/colossus-mark.svg";
+import colossusMark from "@colossus/ui/assets/colossus-mark.svg";
 import "@xterm/xterm/css/xterm.css";
 
 const MAX_TERMINAL_TABS = 8;

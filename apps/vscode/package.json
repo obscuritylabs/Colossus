@@ -1,0 +1,233 @@
+{
+  "name": "colossus",
+  "displayName": "Colossus",
+  "description": "Work with the Colossus agent runtime from VS Code.",
+  "version": "0.1.9",
+  "publisher": "obscuritylabs",
+  "icon": "media/colossus.png",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/obscuritylabs/Colossus.git",
+    "directory": "apps/vscode"
+  },
+  "engines": {
+    "vscode": "^1.104.0",
+    "node": ">=22"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Colossus executes agent tasks in the selected workspace."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "A local filesystem and an enrolled Colossus worker are required."
+    }
+  },
+  "main": "./dist/extension.cjs",
+  "activationEvents": [
+    "onView:colossus.work",
+    "onView:colossus.workspace"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "colossus.showConnectionLog",
+        "title": "Colossus: Show Connection Diagnostics"
+      },
+      {
+        "command": "colossus.connect",
+        "title": "Colossus: Connect Worker"
+      },
+      {
+        "command": "colossus.disconnect",
+        "title": "Colossus: Disconnect Worker"
+      },
+      {
+        "command": "colossus.forgetConnection",
+        "title": "Colossus: Forget Connection"
+      },
+      {
+        "command": "colossus.newSession",
+        "title": "Colossus: New Conversation"
+      },
+      {
+        "command": "colossus.addSelection",
+        "title": "Colossus: Add Selection to Conversation"
+      },
+      {
+        "command": "colossus.addFile",
+        "title": "Colossus: Add Active File to Conversation"
+      },
+      {
+        "command": "colossus.reviewChanges",
+        "title": "Colossus: Review Workspace Changes"
+      },
+      {
+        "command": "colossus.openSettings",
+        "title": "Colossus: Open Settings",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "colossus.configureCredential",
+        "title": "Colossus: Configure Credential Location"
+      },
+      {
+        "command": "colossus.openWorkspace",
+        "title": "Colossus: Open Workspace"
+      }
+    ],
+    "viewsContainers": {
+      "secondarySidebar": [
+        {
+          "id": "colossus",
+          "title": "Colossus",
+          "icon": "media/colossus.svg"
+        }
+      ],
+      "activitybar": [
+        {
+          "id": "colossus-workspace",
+          "title": "Colossus Workspace",
+          "icon": "media/colossus.svg"
+        }
+      ]
+    },
+    "views": {
+      "colossus": [
+        {
+          "id": "colossus.work",
+          "name": "Work",
+          "type": "webview"
+        }
+      ],
+      "colossus-workspace": [
+        {
+          "id": "colossus.workspace",
+          "name": "Workspace",
+          "type": "webview"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "colossus.addSelection",
+          "when": "editorHasSelection && isWorkspaceTrusted",
+          "group": "colossus"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "colossus.newSession",
+          "when": "view == colossus.work",
+          "group": "navigation"
+        },
+        {
+          "command": "colossus.openSettings",
+          "when": "view == colossus.work",
+          "group": "colossus"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Colossus",
+      "properties": {
+        "colossus.composer.sendShortcut": {
+          "type": "string",
+          "enum": [
+            "modEnter",
+            "enter"
+          ],
+          "enumDescriptions": [
+            "Send with Ctrl/Cmd+Enter; Enter inserts a new line.",
+            "Send with Enter; Shift+Enter inserts a new line."
+          ],
+          "default": "modEnter",
+          "scope": "application",
+          "description": "Shortcut for sending a Colossus task."
+        },
+        "colossus.composer.defaultMode": {
+          "type": "string",
+          "enum": [
+            "plan",
+            "execute"
+          ],
+          "default": "plan",
+          "scope": "application",
+          "description": "Default mode for new Colossus conversations. Worker policy and enrollment still govern execution."
+        },
+        "colossus.appearance.showToolActivity": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "description": "Show a collapsible tool activity summary in Colossus conversations."
+        },
+        "colossus.appearance.palette": {
+          "type": "string",
+          "enum": [
+            "editor",
+            "colossus",
+            "hacker"
+          ],
+          "enumDescriptions": [
+            "Neutral Dark+ surfaces in dark themes; Colossus light tokens in light themes.",
+            "Colossus Desktop blue surfaces in dark themes.",
+            "TUI Hacker colors on near-black surfaces in dark themes."
+          ],
+          "default": "editor",
+          "scope": "application",
+          "description": "Choose the Colossus dark palette. Light and high contrast always follow VS Code."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "prepare:sdk": "node scripts/prepare-sdk.mjs",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p tsconfig.webview.json",
+    "build": "node scripts/build.mjs",
+    "test": "tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js test/*.test.mjs ../ui/test/*.test.mjs",
+    "test:browser": "playwright test",
+    "test:live": "node scripts/test-live-worker.mjs",
+    "format": "prettier --write src webview test scripts *.json *.md .vscode ../ui",
+    "format:check": "prettier --check src webview test scripts *.json *.md .vscode ../ui",
+    "check": "npm run typecheck && npm test && npm run format:check",
+    "package": "npm run check && npm run build && node scripts/package.mjs",
+    "preview:capture": "node scripts/capture-preview.mjs"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "1.14.5",
+    "@napi-rs/keyring": "2.1.0",
+    "@obscuritylabs/colossus-sdk": "file:../../sdk/typescript",
+    "@colossus/ui": "file:../ui",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.62.0",
+    "@tabler/icons": "3.45.0",
+    "@types/mdast": "4.0.4",
+    "@types/node": "22.18.0",
+    "@types/vscode": "1.101.0",
+    "@vscode/vsce": "4.0.0",
+    "esbuild": "0.25.12",
+    "mdast-util-from-markdown": "2.0.3",
+    "prettier": "3.9.5",
+    "typescript": "5.9.3",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3"
+  },
+  "overrides": {
+    "playwright-core": "1.62.0"
+  }
+}
