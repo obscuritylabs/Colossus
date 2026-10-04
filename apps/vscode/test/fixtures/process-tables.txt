@@ -1,0 +1,21 @@
+## Top processes by CPU
+
+Snapshot values (sample data):
+
+| PID | CPU | Memory | Process |
+| ---: | ---: | ---: | :--- |
+| 4111 | 93.2% | 0.1% | Adobe Resource Synchronizer |
+| 4222 | 38.1% | 1.1% | VS Code Helper (Renderer) |
+| 4333 | 27.4% | 10.8% | Apple Virtualization VM |
+| 4444 | 8.5% | 0.2% | `colossus` |
+
+## Top processes by memory
+
+| PID | Memory | CPU | Process |
+| ---: | ---: | ---: | :--- |
+| 4333 | 10.8% | 27.4% | Apple Virtualization VM |
+| 4555 | 1.7% | 0.0% | ChatGPT/Codex Renderer |
+| 4222 | 1.1% | 38.1% | VS Code Helper (Renderer) |
+| 4666 | 0.9% | 2.2% | Microsoft Edge |
+
+The largest CPU user is **Adobe Resource Synchronizer**. The virtual machine uses the most memory in this snapshot.

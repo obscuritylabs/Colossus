@@ -20,6 +20,7 @@ import {
 import type {
   AppearancePreference,
   ColorThemePreference,
+  DarkPalettePreference,
   ResolvedColorTheme,
   TextSizePreference,
 } from "./appearance";
@@ -33,6 +34,7 @@ import type { PaletteColor, PaletteTheme } from "./palette";
 interface AppearanceContextValue extends AppearancePreference {
   resolvedColorTheme: ResolvedColorTheme;
   setColorTheme: (theme: ColorThemePreference) => void;
+  setDarkPalette: (palette: DarkPalettePreference) => void;
   setTextSize: (size: TextSizePreference) => void;
   setShowSecurityWarnings: (show: boolean) => void;
   setPaletteColor: (
@@ -115,6 +117,8 @@ export function AppearanceProvider({
       ),
       setColorTheme: (colorTheme) =>
         setPreference((current) => ({ ...current, colorTheme })),
+      setDarkPalette: (darkPalette) =>
+        setPreference((current) => ({ ...current, darkPalette })),
       setTextSize: (textSize) =>
         setPreference((current) => ({ ...current, textSize })),
       setShowSecurityWarnings: (showSecurityWarnings) =>

@@ -184,8 +184,102 @@
   }
 }
 
+/* Neutral dark surfaces for editors and web hosts. Keep Colossus accents. */
+:root[data-theme="dark"][data-palette="neutral"],
+[data-colossus-theme="dark"][data-palette="neutral"] {
+  --canvas: #181818;
+  --rail: #181818;
+  --sidebar: #181818;
+  --main: #1f1f1f;
+  --surface: #252526;
+  --surface-raised: #2d2d2d;
+  --surface-muted: #202020;
+  --surface-hover: #303030;
+  --surface-inset: #181818;
+  --surface-panel: #202020;
+  --surface-header: #252526;
+  --surface-control: #181818;
+  --surface-editor: #1f1f1f;
+  --surface-selected: #2d2d30;
+  --surface-selected-hover: #38383b;
+  --surface-overlay: rgb(0 0 0 / 76%);
+  --text: #d4d4d4;
+  --text-strong: #f0f0f0;
+  --muted: #a0a0a0;
+  --faint: #969696;
+  --border: #363636;
+  --border-strong: #505050;
+  --scroll-thumb: #525252;
+  --code-surface: #181818;
+  --code-header: #252526;
+  --code-text: #d4d4d4;
+  --code-muted: #969696;
+  --code-line-number: #969696;
+}
+
+/* TUI Hacker semantic colors; graphical surfaces add near-black depth. */
+:root[data-theme="dark"][data-palette="hacker"],
+[data-colossus-theme="dark"][data-palette="hacker"] {
+  --canvas: #050806;
+  --rail: #050806;
+  --sidebar: #080d0a;
+  --main: #080d0a;
+  --surface: #0f1712;
+  --surface-raised: #142019;
+  --surface-muted: #0b120e;
+  --surface-hover: #1a2a20;
+  --surface-inset: #050806;
+  --surface-panel: #0f1712;
+  --surface-header: #101b14;
+  --surface-control: #080d0a;
+  --surface-editor: #080d0a;
+  --surface-selected: #142d1e;
+  --surface-selected-hover: #1c3d29;
+  --surface-overlay: rgb(0 0 0 / 76%);
+  --text: #d7ffd7;
+  --text-strong: #efffef;
+  --muted: #70de92;
+  --faint: #3fbf6a;
+  --border: #20392a;
+  --border-strong: #355a40;
+  --blue: #00ff66;
+  --blue-strong: #70de92;
+  --blue-hover: #57ff9b;
+  --blue-soft: #102a1b;
+  --text-on-accent: #050806;
+  --accent-text: #d7ffd7;
+  --accent-border: #357a4a;
+  --focus-ring: rgb(0 255 102 / 24%);
+  --scroll-thumb: #355a40;
+  --cyan: #00d7ff;
+  --green: #00ff66;
+  --green-soft: #102a1b;
+  --green-text: #70de92;
+  --green-border: #357a4a;
+  --amber: #ffd75f;
+  --amber-soft: #302716;
+  --amber-text: #ffd75f;
+  --amber-border: #80672d;
+  --red: #ff5f5f;
+  --red-soft: #321919;
+  --red-text: #ffabab;
+  --red-border: #803535;
+  --icon-surface: #102a1b;
+  --icon-border: #357a4a;
+  --icon-text: #70de92;
+  --code-surface: #050806;
+  --code-header: #101b14;
+  --code-text: #d7ffd7;
+  --code-muted: #70de92;
+  --code-line-number: #3fbf6a;
+  --code-add-surface: rgb(0 255 102 / 10%);
+  --code-add-text: #70de92;
+  --code-delete-surface: rgb(255 95 95 / 10%);
+  --code-delete-text: #ffabab;
+}
+
 @media (forced-colors: active) {
-  :root {
+  :root[data-theme][data-palette] {
     --blue: LinkText;
     --cyan: Highlight;
     --border: CanvasText;

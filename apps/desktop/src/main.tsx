@@ -9,9 +9,11 @@ import {
   AppearanceProvider,
   initializeAppearance,
 } from "./theme/AppearanceProvider";
-import "./theme/theme.css";
+import "@colossus/ui/styles/theme.css";
 import "./styles.css";
-import "./settings-layout.css";
+import "@colossus/ui/styles/composer.css";
+import "@colossus/ui/styles/select.css";
+import "@colossus/ui/styles/settings.css";
 
 const root = document.getElementById("root");
 
