@@ -597,7 +597,8 @@ or emitted values. Catalog pages omit this projection; older or oversized defini
 may omit it while keeping ordinary metadata available. Owned run snapshots release
 recorded step states and distinct completion counts, without inferring unvisited paths.
 Owned run detail can release the final schema-validated JSON object up to 64 KiB via
-`result_json`, preserving exact JSON integers. History pages omit results and step
+`result_json`, preserving exact JSON integers. Desktop keeps this result as JSON text through the
+native-to-renderer boundary. History pages omit results and step
 states, isolate ownership, and sort by canonical allocation sequence rather than run ID.
 Their exclusive cursor is a previously allocated owned run ID for the same definition.
 Desktop renders the graph only when its definition hash matches the selected workflow,

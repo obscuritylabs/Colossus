@@ -62,6 +62,23 @@ desktop_required=false' api/colossus/api/v1alpha1/agent_run.proto sdk/typescript
 expect_classification 'rust_required=true
 docs_required=false
 dependency_required=false
+sdk_required=true
+desktop_required=false' apps/vscode/src/extension.ts
+expect_classification 'rust_required=true
+docs_required=false
+dependency_required=true
+sdk_required=true
+desktop_required=false' apps/vscode/package-lock.json
+
+expect_classification 'rust_required=true
+docs_required=false
+dependency_required=false
+sdk_required=true
+desktop_required=true' apps/ui/src/components/Composer.tsx
+
+expect_classification 'rust_required=true
+docs_required=false
+dependency_required=false
 sdk_required=false
 desktop_required=true' apps/desktop/src/App.tsx release/ripgrep.json scripts/desktop-dev scripts/package-desktop-macos scripts/package-desktop-windows.ps1 scripts/stage-ripgrep.mjs scripts/patch-desktop-manifest-binding.mjs scripts/prepare-desktop-binaries scripts/write-desktop-bundle-manifest.mjs scripts/verify-desktop-bundle.mjs scripts/verify-desktop-unsigned-archive.mjs crates/colossus-sdk/src/lib.rs crates/colossus-sidecar/src/main.rs crates/colossus-sidecar-protocol/src/lib.rs
 expect_classification 'rust_required=true

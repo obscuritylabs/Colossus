@@ -9,7 +9,7 @@ import {
 } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import colossusMark from "../assets/colossus-mark.svg";
+import colossusMark from "@colossus/ui/assets/colossus-mark.svg";
 import { useSetupPackages } from "./setup/useSetupPackages";
 import {
   ImportedProviderPicker,

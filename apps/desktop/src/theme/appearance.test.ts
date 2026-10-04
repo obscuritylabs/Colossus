@@ -60,6 +60,7 @@ describe("appearance preferences", () => {
       ),
     ).toEqual({
       colorTheme: "dark",
+      darkPalette: "colossus",
       textSize: "large",
       showSecurityWarnings: false,
       palettes: DEFAULT_THEME_PALETTES,
@@ -82,6 +83,7 @@ describe("appearance preferences", () => {
 
     storeAppearancePreference(storage, {
       colorTheme: "dark",
+      darkPalette: "colossus",
       textSize: "large",
       showSecurityWarnings: true,
       palettes: DEFAULT_THEME_PALETTES,
@@ -89,12 +91,14 @@ describe("appearance preferences", () => {
 
     expect(JSON.parse(values.get(APPEARANCE_STORAGE_KEY)!)).toEqual({
       colorTheme: "dark",
+      darkPalette: "colossus",
       textSize: "large",
       showSecurityWarnings: true,
       palettes: DEFAULT_THEME_PALETTES,
     });
     expect(readAppearancePreference(storage)).toEqual({
       colorTheme: "dark",
+      darkPalette: "colossus",
       textSize: "large",
       showSecurityWarnings: true,
       palettes: DEFAULT_THEME_PALETTES,
@@ -224,6 +228,7 @@ describe("appearance preferences", () => {
     ).toBe("light");
     expect(Object.fromEntries(attributes)).toEqual({
       "data-theme": "light",
+      "data-palette": "colossus",
       "data-theme-preference": "system",
       "data-text-size": "large",
     });
@@ -245,3 +250,62 @@ describe("appearance preferences", () => {
     expect(properties.size).toBe(0);
   });
 });
+
+it.each(["neutral", "hacker"] as const)(
+  "persists %s without changing legacy defaults or saved custom colors",
+  (darkPalette) => {
+    expect(
+      parseAppearancePreference(JSON.stringify({ darkPalette: "invalid" }))
+        .darkPalette,
+    ).toBe("colossus");
+    const preference = {
+      ...DEFAULT_APPEARANCE,
+      colorTheme: "dark" as const,
+      darkPalette,
+      palettes: {
+        ...DEFAULT_THEME_PALETTES,
+        dark: { ...DEFAULT_THEME_PALETTES.dark, background: "#101010" },
+      },
+    };
+    expect(parseAppearancePreference(JSON.stringify(preference))).toEqual(
+      preference,
+    );
+    const attributes = new Map<string, string>();
+    const properties = new Map<string, string>();
+    const root = {
+      setAttribute: (name: string, value: string) => {
+        attributes.set(name, value);
+      },
+      style: {
+        setProperty: (name: string, value: string) => {
+          properties.set(name, value);
+        },
+        removeProperty: (name: string) => {
+          properties.delete(name);
+          return "";
+        },
+      },
+    };
+    applyAppearance(root, preference, false);
+    expect(attributes.get("data-palette")).toBe(darkPalette);
+    expect(properties.has("--main")).toBe(false);
+    applyAppearance(
+      root,
+      {
+        ...preference,
+        colorTheme: "light",
+        palettes: {
+          ...preference.palettes,
+          light: { ...DEFAULT_THEME_PALETTES.light, background: "#fafafa" },
+        },
+      },
+      false,
+    );
+    expect(properties.get("--main")).toBe("#fafafa");
+    applyAppearance(root, { ...preference, colorTheme: "system" }, true);
+    expect(attributes.get("data-theme")).toBe("dark");
+    expect(properties.has("--main")).toBe(false);
+    applyAppearance(root, { ...preference, darkPalette: "colossus" }, false);
+    expect(properties.get("--main")).toBe("#101010");
+  },
+);

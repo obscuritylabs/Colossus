@@ -32,7 +32,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { ActiveShells } from "./tools/ActiveShells";
 import { useShellSessions, shellIsActive } from "../shellSessions";
 
-import colossusMark from "../assets/colossus-mark.svg";
+import colossusMark from "@colossus/ui/assets/colossus-mark.svg";
 import {
   MAX_ASIDE_PANE_WIDTH,
   MIN_ASIDE_PANE_WIDTH,

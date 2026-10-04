@@ -28,7 +28,7 @@ import type { ReactNode } from "react";
 
 import { RetryStatus, currentProviderRetry } from "./RetryStatus";
 
-import colossusMark from "../assets/colossus-mark.svg";
+import colossusMark from "@colossus/ui/assets/colossus-mark.svg";
 import {
   presentNotice,
   presentToolActivity,

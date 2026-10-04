@@ -293,7 +293,7 @@ fn rendered_footer(state: &TuiState, width: u16) -> String {
 }
 
 #[test]
-fn footer_separates_runtime_details_and_highlights_warnings_with_readable_contrast() {
+fn footer_combines_status_and_runtime_in_one_row_with_readable_highlights() {
     let mut source = snapshot();
     source
         .preferences
@@ -326,15 +326,13 @@ fn footer_separates_runtime_details_and_highlights_warnings_with_readable_contra
             .collect::<String>()
     };
     let status = row(0);
-    let details = row(1);
     assert!(status.contains("ready · approval ask"), "{status}");
     assert!(status.contains("⚠ Security: 1"), "{status}");
-    assert!(!status.contains("gpt-5.6"), "{status}");
     assert!(
-        details.contains("execute")
-            && details.contains("gpt-5.6-sol@codex via codex-provider · ctx"),
-        "{details}"
+        status.contains("execute") && status.contains("gpt-5.6-sol@codex via codex-provider · ctx"),
+        "{status}"
     );
+    assert_eq!(terminal.backend().buffer().area.height, 1);
     assert!(status.contains("  ⚠"), "{status}");
     let buffer = terminal.backend().buffer();
     let warning_x = (0..120)
@@ -345,10 +343,10 @@ fn footer_separates_runtime_details_and_highlights_warnings_with_readable_contra
     assert_ne!(warning.bg, Color::Reset);
     assert!(!warning.modifier.contains(Modifier::DIM));
     let runtime_x = (0..120)
-        .find(|x| buffer.cell((*x, 1)).expect("cell").symbol() == "g")
+        .find(|x| buffer.cell((*x, 0)).expect("cell").symbol() == "g")
         .expect("runtime text");
-    let runtime = buffer.cell((runtime_x, 1)).expect("runtime cell");
-    assert_eq!(runtime.bg, Color::Reset);
+    let runtime = buffer.cell((runtime_x, 0)).expect("runtime cell");
+    assert_eq!(runtime.bg, buffer.cell((0, 0)).expect("surface cell").bg);
     assert!(!runtime.modifier.contains(Modifier::DIM));
     assert!(
         terminal
@@ -411,8 +409,21 @@ fn footer_removes_terminal_controls_from_host_metadata() {
 
 #[test]
 fn composer_keeps_send_action_and_newline_hint_visible_in_narrow_terminals() {
-    for multiline in [false, true] {
+    for (theme, multiline) in [
+        colossus_contracts::ThemeName::Default,
+        colossus_contracts::ThemeName::Mono,
+        colossus_contracts::ThemeName::HighContrast,
+        colossus_contracts::ThemeName::Carrot,
+        colossus_contracts::ThemeName::Hacker,
+    ]
+    .into_iter()
+    .flat_map(|theme| {
+        [false, true]
+            .into_iter()
+            .map(move |multiline| (theme, multiline))
+    }) {
         let mut state = TuiState::from_snapshot(snapshot());
+        state.preferences.select_builtin_theme(theme);
         state.preferences.multiline = multiline;
         let mut terminal = Terminal::new(TestBackend::new(40, 3)).expect("composer terminal");
         terminal
@@ -434,6 +445,87 @@ fn composer_keeps_send_action_and_newline_hint_visible_in_narrow_terminals() {
                 "Ctrl+J newline"
             }),
             "{rendered}"
+        );
+        let buffer = terminal.backend().buffer();
+        let prompt = buffer.cell((1, 1)).expect("prompt cell");
+        let hint = buffer.cell((2, 2)).expect("hint cell");
+        assert_ne!(prompt.bg, Color::Reset);
+        assert_eq!(prompt.bg, hint.bg);
+        assert_ne!(hint.fg, prompt.bg);
+        assert!(!hint.modifier.contains(Modifier::DIM), "{theme:?}");
+    }
+}
+
+#[test]
+fn custom_theme_dark_ink_stays_readable_on_shaded_chrome() {
+    for (assistant, meta) in [(0, 0), (230, 0), (0, 230), (100, 100), (230, 230)] {
+        let mut theme = custom_theme();
+        let foreground = |channel| ThemeColor {
+            red: channel,
+            green: channel,
+            blue: channel,
+        };
+        theme.assistant.foreground = Some(foreground(assistant));
+        theme.warning.foreground = theme.assistant.foreground;
+        theme.meta.foreground = Some(foreground(meta));
+        let mut source = snapshot();
+        source.preferences.select_custom_theme(theme);
+        let mut state = TuiState::from_snapshot(source);
+        state.completions = vec!["draft suggestion".into()];
+        state.composer.insert("draft");
+        let mut terminal = Terminal::new(TestBackend::new(80, 4)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                render_composer(frame, &mut state, Rect::new(0, 0, 80, 3));
+                render_footer(frame, &state, Rect::new(0, 3, 80, 1), false);
+            })
+            .expect("custom theme chrome");
+        let buffer = terminal.backend().buffer();
+        let expected = |channel| {
+            if channel == 230 {
+                Color::Rgb(230, 230, 230)
+            } else {
+                Color::Rgb(230, 237, 243)
+            }
+        };
+        for position in [(2, 0), (1, 1), (12, 3)] {
+            let cell = buffer.cell(position).expect("draft, title, or status");
+            assert_eq!(cell.fg, expected(assistant), "{position:?}");
+            assert_ne!(cell.fg, cell.bg);
+            assert!(!cell.modifier.contains(Modifier::DIM));
+        }
+        for position in [(0, 1), (2, 2), (6, 1)] {
+            let cell = buffer.cell(position).expect("border, hint, or completion");
+            assert_eq!(cell.fg, expected(meta), "{position:?}");
+            assert_ne!(cell.fg, cell.bg);
+        }
+        assert!(
+            buffer
+                .cell((6, 1))
+                .expect("completion")
+                .modifier
+                .contains(Modifier::DIM)
+        );
+        assert!(
+            !buffer
+                .cell((2, 2))
+                .expect("hint")
+                .modifier
+                .contains(Modifier::DIM)
+        );
+        assert_eq!(state.composer.draft, "draft");
+        state.footer.status = "waiting".into();
+        terminal
+            .draw(|frame| render_footer(frame, &state, Rect::new(0, 3, 80, 1), false))
+            .expect("waiting footer");
+        assert_eq!(
+            terminal
+                .backend()
+                .buffer()
+                .cell((12, 3))
+                .expect("waiting status")
+                .fg,
+            expected(assistant)
         );
     }
 }
