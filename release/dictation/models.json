@@ -1,0 +1,20 @@
+{
+  "upstream": "https://huggingface.co/ggerganov/whisper.cpp",
+  "revision": "5359861c739e955e79d9a303bcbc70fb988958b1",
+  "license": "MIT",
+  "licenseSource": "https://github.com/openai/whisper/blob/v20240930/LICENSE",
+  "models": {
+    "tiny_english": {
+      "filename": "ggml-tiny.en.bin",
+      "bytes": 77704715,
+      "sha256": "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
+      "bundled": true
+    },
+    "base_english": {
+      "filename": "ggml-base.en.bin",
+      "bytes": 147964211,
+      "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+      "bundled": false
+    }
+  }
+}

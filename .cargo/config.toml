@@ -2,3 +2,7 @@
 xtask = "run --package xtask --"
 test-fast = "test --workspace --lib"
 test-full = "test --workspace"
+
+[env]
+# Dictation binaries must run on machines other than the build host.
+GGML_NATIVE = { value = "OFF", force = false }

@@ -37,7 +37,7 @@ interface OperationsSurfaceProps {
   scheduleInspection?:
     { scheduleId: string; showRun: boolean } | null | undefined;
   initialSettingsTab?:
-    "runtime" | "providers" | "plugins" | "terminal" | undefined;
+    "runtime" | "providers" | "plugins" | "terminal" | "dictation" | undefined;
   onConfigurePluginConnection?: () => void;
   pluginSelections?: readonly string[];
   onUsePluginSkill?: (id: string) => void;

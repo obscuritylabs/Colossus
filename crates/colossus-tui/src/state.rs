@@ -392,6 +392,7 @@ pub struct TuiState {
     /// Process-local canonical selected plan; cleared on session switches and restart.
     pub selected_plan: Option<PlanRecord>,
     pub(super) composer: Composer,
+    pub(super) dictation: crate::dictation::DictationState,
     pub(super) history: Vec<String>,
     pub(super) completions: Vec<String>,
     pub(super) sticky_skills: Vec<String>,
@@ -484,6 +485,7 @@ impl TuiState {
             mode: InteractiveMode::Execute,
             selected_plan: None,
             composer: Composer::default(),
+            dictation: crate::dictation::DictationState::default(),
             history: snapshot.history,
             completions: with_mode_completions(snapshot.completions),
             sticky_skills: Vec::new(),

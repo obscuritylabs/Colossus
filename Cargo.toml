@@ -10,6 +10,7 @@ members = [
     "crates/colossus-api-runtime",
     "crates/colossus-grpc",
     "crates/colossus-home",
+    "crates/colossus-native-dictation",
     "crates/colossus-linux-native",
     "crates/colossus-sdk",
     "crates/colossus-darwin-process",

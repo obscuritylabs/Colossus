@@ -42,6 +42,9 @@ import {
   isComposerSendKey,
 } from "@colossus/ui";
 import type { ComposerEditIntent } from "../composer-paste";
+import type { DictationController, DictationSnapshot } from "../dictation";
+import { DictationControl } from "./DictationControl";
+import { DictationRecordingBar } from "./DictationRecordingBar";
 
 const ComposerModelChip = lazy(() =>
   import("./ComposerModelChip").then((module) => ({
@@ -77,6 +80,9 @@ const RESEARCH_SOURCE_OPTIONS = [
 ] as const;
 
 interface WorkComposerProps {
+  onOpenDictationSettings?: (() => void) | undefined;
+  dictation?:
+    { controller: DictationController; state: DictationSnapshot } | undefined;
   contextActions?: ReactNode;
   pluginSkills?: readonly PluginSkill[] | null;
   pluginSelections?: readonly string[];
@@ -137,6 +143,8 @@ interface WorkComposerProps {
 }
 
 export function WorkComposer({
+  dictation: requestedDictation,
+  onOpenDictationSettings,
   contextActions,
   pluginSkills = null,
   pluginSelections = [],
@@ -195,6 +203,12 @@ export function WorkComposer({
   onRedirect,
   onSubmit,
 }: WorkComposerProps) {
+  const dictation = requestedDictation;
+  const draftReadOnly = Boolean(
+    dictation?.state.phase === "recording" ||
+    dictation?.state.busy ||
+    dictation?.state.sending,
+  );
   const [selectedSlashCommand, setSelectedSlashCommand] = useState<
     string | null
   >(null);
@@ -214,7 +228,9 @@ export function WorkComposer({
           (id) => !pluginSkills.some((skill) => skill.id === id),
         );
   const slashMenuOpen =
-    slashCommandSuggestions.length > 0 && dismissedSlashDraft !== prompt;
+    !draftReadOnly &&
+    slashCommandSuggestions.length > 0 &&
+    dismissedSlashDraft !== prompt;
   const selectedSlashIndex = slashCommandSuggestions.findIndex(
     ({ command }) => command === selectedSlashCommand,
   );
@@ -244,6 +260,18 @@ export function WorkComposer({
   }, [activeSlashIndex, prompt, slashMenuOpen]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (draftReadOnly) {
+      if (
+        isComposerSendKey(
+          { ...event, isComposing: event.nativeEvent.isComposing },
+          "enter",
+        )
+      ) {
+        event.preventDefault();
+        formRef.current?.requestSubmit();
+      }
+      return;
+    }
     if (event.key === "Backspace" || event.key === "Delete") {
       editIntent.current = {
         start: event.currentTarget.selectionStart,
@@ -539,6 +567,20 @@ export function WorkComposer({
         </div>
       </div>
       <div className="composer-body">
+        {dictation?.state.sessionId || dictation?.state.phase === "starting" ? (
+          <DictationRecordingBar {...dictation}>
+            <DictationControl
+              {...dictation}
+              onSettings={onOpenDictationSettings}
+              disabled={!canCompose || submitting}
+            />
+          </DictationRecordingBar>
+        ) : null}
+        {dictation?.state.error ? (
+          <p className="inline-error" role="alert">
+            {dictation.state.error}
+          </p>
+        ) : null}
         {pluginSelections.length > 0 && (
           <div className="plugin-selections" aria-label="Conversation skills">
             <span>Conversation skills:</span>
@@ -748,6 +790,7 @@ export function WorkComposer({
               .join(" ") || undefined
           }
           disabled={!canCompose || submitting}
+          readOnly={draftReadOnly}
           onKeyDown={handleKeyDown}
           onBeforeInput={(event) => {
             const textarea = event.currentTarget;
@@ -767,6 +810,10 @@ export function WorkComposer({
             };
           }}
           onPaste={(event) => {
+            if (event.currentTarget.readOnly || event.currentTarget.disabled) {
+              event.preventDefault();
+              return;
+            }
             const text = event.clipboardData.getData("text/plain");
             if (text.length === 0) return;
             event.preventDefault();
@@ -866,6 +913,15 @@ export function WorkComposer({
           ) : null}
         </div>
         <div className="composer-action-row">
+          {dictation &&
+          !dictation.state.sessionId &&
+          dictation.state.phase !== "starting" ? (
+            <DictationControl
+              {...dictation}
+              onSettings={onOpenDictationSettings}
+              disabled={!canCompose || submitting}
+            />
+          ) : null}
           {attachmentsAvailable ? (
             <div className="composer-context-actions">
               <button

@@ -13,9 +13,17 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         screen_mode,
         background_notice,
         lifecycle,
+        dictation,
     } = options;
     let snapshot = host.bootstrap(bootstrap).await.map_err(TuiError::Host)?;
     let mut state = TuiState::from_snapshot(snapshot);
+    state.dictation.port = dictation;
+    state.completions.extend([
+        "/dictate".into(),
+        "/dictate settings".into(),
+        "/dictate on".into(),
+        "/dictate microphones".into(),
+    ]);
     observe_lifecycle(&state, lifecycle.as_deref());
     if screen_mode == ScreenMode::Inline {
         preload_native_history(&mut state, Arc::clone(&host)).await;
@@ -39,6 +47,10 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         terminal.draw(&mut state)?;
         while let Ok(host_event) = event_rx.try_recv() {
             handle_host_event(&mut state, host_event);
+        }
+        crate::dictation::tick(&mut state, event_tx.clone());
+        if let Some(line) = crate::dictation::take_send(&mut state) {
+            submit_line(&mut state, line, Arc::clone(&host), event_tx.clone());
         }
         schedule_visible_previews(&mut state, Arc::clone(&host), event_tx.clone());
         start_sandbox_boundary_acknowledgement(&mut state, Arc::clone(&host), event_tx.clone());
@@ -86,13 +98,19 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
                         request_older_page(&mut state, Arc::clone(&host), event_tx.clone());
                     }
                 }
-                Event::Paste(text) => insert_active_text(&mut state, &text),
+                Event::Paste(text)
+                    if !state.dictation.active
+                        || (state.dictation.paused && !state.dictation.pending) =>
+                {
+                    insert_active_text(&mut state, &text)
+                }
                 Event::Resize(_, _) => {}
                 _ => {}
             }
             observe_lifecycle(&state, lifecycle.as_deref());
         }
     }
+    crate::dictation::cancel(&mut state);
     terminal.finish()?;
     Ok(())
 }
@@ -374,6 +392,9 @@ fn handle_key(
     event_tx: mpsc::Sender<HostEvent>,
     screen_mode: ScreenMode,
 ) {
+    if crate::dictation::key(state, key, event_tx.clone()) {
+        return;
+    }
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         state.interrupt_or_exit();
         return;
@@ -996,6 +1017,9 @@ pub(super) fn submit_line(
     if line.is_empty() {
         return;
     }
+    if crate::dictation::command(state, &line, event_tx.clone()) {
+        return;
+    }
     state.dismiss_welcome();
     state.remember_history(&line);
     let history_host = Arc::clone(&host);
@@ -1506,6 +1530,18 @@ pub(super) fn handle_local_command(
 
 pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
     match event {
+        HostEvent::Dictation {
+            generation,
+            action,
+            result,
+        } => crate::dictation::apply(state, generation, action, result),
+        HostEvent::DictationSettings(result) => {
+            state.dictation.pending = false;
+            match result {
+                Ok(message) => state.append_plain(TranscriptKind::Command, &message),
+                Err(error) => state.append_plain(TranscriptKind::Error, &error),
+            }
+        }
         HostEvent::Run(envelope) => handle_run_event(state, envelope),
         HostEvent::Notice(document) => {
             state.append_entry(TranscriptEntry {

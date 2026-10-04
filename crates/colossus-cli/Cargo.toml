@@ -10,7 +10,11 @@ license.workspace = true
 name = "colossus"
 path = "src/main.rs"
 
+[features]
+dictation = ["dep:colossus-native-dictation"]
+
 [dependencies]
+colossus-native-dictation = { version = "=0.1.0", path = "../colossus-native-dictation", optional = true, features = ["download"] }
 agent-client-protocol.workspace = true
 shell-words.workspace = true
 async-trait.workspace = true

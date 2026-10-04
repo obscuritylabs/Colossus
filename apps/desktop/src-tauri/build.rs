@@ -11,6 +11,15 @@ const SIDECAR_FILE_STEM: &str = "colossus-sidecar";
 const CLI_FILE_STEM: &str = "colossus";
 
 const COMMANDS: &[&str] = &[
+    "dictation_status",
+    "get_dictation_settings",
+    "download_dictation_model",
+    "cancel_dictation_download",
+    "save_dictation_settings",
+    "choose_dictation_model",
+    "start_dictation",
+    "poll_dictation",
+    "control_dictation",
     "browser_context",
     "browser_command",
     "browser_viewport",

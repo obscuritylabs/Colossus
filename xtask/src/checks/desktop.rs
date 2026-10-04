@@ -10,6 +10,10 @@ pub(super) fn prepare(
     profile: DesktopProfile,
     requested_target: Option<&str>,
 ) -> Result<(), String> {
+    repository
+        .task("node")
+        .arg("scripts/stage-dictation-model.mjs")
+        .run()?;
     let host = repository
         .task("rustc")
         .args(["--print", "host-tuple"])
@@ -28,6 +32,8 @@ pub(super) fn prepare(
         "--package",
         "colossus-sidecar",
         "--bins",
+        "--features",
+        "colossus-cli/dictation",
     ]);
     if profile == DesktopProfile::Release {
         build = build.arg("--release");

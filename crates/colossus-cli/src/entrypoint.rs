@@ -1222,6 +1222,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             run_tui(
                 host,
                 TuiOptions {
+                        dictation: crate::dictation::local_port(),
                     bootstrap: BootstrapRequest {
                         session_id: session,
                         resume_latest: resume,
