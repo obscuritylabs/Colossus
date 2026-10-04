@@ -12,6 +12,10 @@ include breaking changes while the public API is still settling.
 
 - Workspace workflow schedule management with definition import, reviewed creation,
   pause/enable controls, and independent run inspection.
+- Separate Workflows library with manual runs, schema-based inputs, owned history, and
+  bounded final results; Schedules supports plain-language tasks and reusable workflows.
+- Daily and weekly schedules in IANA timezones, preserving local time across DST, plus
+  configured task model profiles and reasoning effort through the normal provider path.
 - Read-only workflow logic graphs with conditional branches, parallel joins, bounded
   loops, and recorded step states and completion counts.
 

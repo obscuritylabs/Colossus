@@ -6,6 +6,46 @@ use colossus_contracts::{
 use sha2::{Digest as _, Sha256};
 
 #[test]
+fn schedule_schema_keeps_task_workflow_and_timing_choices_exclusive() {
+    let registry = StaticToolRegistry::builtins(&["workflow.schedule.create".into()]).unwrap();
+    let task = json!({"schedule_id":"briefing","workflow_id":"","expected_hash":"","inputs":{},"cadence_seconds":0,"calendar":{"timezone":"America/New_York","time":"09:00","weekdays":[1]},"task":{"name":"Briefing","instructions":"Review procurement.","options":{"reasoning_effort":"high"}},"starts_at":"2026-10-05T13:00:00Z","misfire_policy":"fire_once","enabled":true,"idempotency_key":"task"});
+    let valid = |arguments| {
+        registry
+            .validate(&ToolCall {
+                call_id: "schedule".into(),
+                name: "workflow.schedule.create".into(),
+                arguments,
+            })
+            .is_ok()
+    };
+    assert!(valid(task.clone()));
+    let mut workflow = task.clone();
+    workflow.as_object_mut().unwrap().remove("task");
+    workflow.as_object_mut().unwrap().remove("calendar");
+    workflow["workflow_id"] = json!("health:1.0.0");
+    workflow["expected_hash"] = json!("a".repeat(64));
+    workflow["cadence_seconds"] = json!(60);
+    assert!(valid(workflow.clone()));
+    for (field, value) in [
+        ("workflow_id", json!("health:1.0.0")),
+        ("inputs", json!({"unexpected":true})),
+        ("cadence_seconds", json!(60)),
+    ] {
+        let mut invalid = task.clone();
+        invalid[field] = value;
+        assert!(!valid(invalid));
+    }
+    let mut invalid = task.clone();
+    invalid["calendar"]["time"] = json!("25:00");
+    assert!(!valid(invalid));
+    let mut invalid = task;
+    invalid["task"]["options"]["endpoint"] = json!("https://unconfigured.invalid");
+    assert!(!valid(invalid));
+    workflow["cadence_seconds"] = json!(0);
+    assert!(!valid(workflow));
+}
+
+#[test]
 fn configured_catalog_is_sorted_strict_and_rejects_unknown_tools() {
     let registry =
         StaticToolRegistry::builtins(&["network.http".into(), "echo".into()]).expect("catalog");

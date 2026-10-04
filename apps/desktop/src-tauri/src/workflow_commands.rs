@@ -7,7 +7,8 @@ use crate::{
 };
 use colossus_sdk::{
     CreateWorkflowScheduleRequest, RegisteredWorkflow, SetWorkflowScheduleEnabledRequest,
-    WorkflowClient, WorkflowPage, WorkflowRunSnapshot, WorkflowScheduleSnapshot,
+    StartWorkflowRunRequest, WorkflowClient, WorkflowPage, WorkflowRunSnapshot,
+    WorkflowScheduleSnapshot,
 };
 use serde::Serialize;
 use std::sync::Arc;
@@ -25,6 +26,10 @@ pub(crate) struct WorkflowContext {
     schedules_create: bool,
     schedules_control: bool,
     workflow_runs_read: bool,
+    workflow_runs_start: bool,
+    calendar_schedules: bool,
+    task_schedules: bool,
+    workflow_run_history: bool,
     managed: bool,
 }
 #[tauri::command(rename_all = "camelCase")]
@@ -42,6 +47,10 @@ pub(crate) async fn workflow_context(
         schedules_create: capabilities.contains("schedules.create"),
         schedules_control: capabilities.contains("schedules.control"),
         workflow_runs_read: capabilities.contains("workflow_runs.read"),
+        workflow_runs_start: capabilities.contains("workflow_runs.start"),
+        calendar_schedules: capabilities.contains("schedules.calendar"),
+        task_schedules: capabilities.contains("schedules.tasks"),
+        workflow_run_history: capabilities.contains("workflow_runs.history"),
         managed: matches!(lease.target.consent, TargetConsentContext::ManagedLocal),
     })
 }
@@ -232,11 +241,68 @@ pub(crate) async fn get_scheduled_workflow_run(
     target_id: String,
     selection_epoch: u64,
     run_id: String,
-) -> Result<WorkflowRunSnapshot, CommandErrorDto> {
+) -> Result<WorkflowRunDto, CommandErrorDto> {
     let lease = selected(&state, &target_id, selection_epoch).await?;
     let _slot = unary_slot(&lease.target)?;
     client(&lease)?
         .get_run(run_id)
+        .await
+        .map(WorkflowRunDto::from)
+        .map_err(CommandErrorDto::from_api)
+}
+
+/// Preserve final JSON numbers across JavaScript's double-precision boundary.
+#[derive(Serialize)]
+pub(crate) struct WorkflowRunDto {
+    #[serde(flatten)]
+    state: WorkflowRunSnapshot,
+    result_json: Option<String>,
+}
+impl From<WorkflowRunSnapshot> for WorkflowRunDto {
+    fn from(mut state: WorkflowRunSnapshot) -> Self {
+        let result_json = state.result.take().map(|result| {
+            serde_json::to_string_pretty(&result)
+                .ok()
+                .filter(|json| json.len() <= 64 * 1024)
+                .unwrap_or_else(|| result.to_string())
+        });
+        Self { state, result_json }
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn list_workflow_runs(
+    state: State<'_, AppState>,
+    target_id: String,
+    selection_epoch: u64,
+    workflow_id: String,
+    after: Option<String>,
+) -> Result<WorkflowPage<WorkflowRunSnapshot>, CommandErrorDto> {
+    let lease = selected(&state, &target_id, selection_epoch).await?;
+    let _slot = unary_slot(&lease.target)?;
+    client(&lease)?
+        .list_runs(workflow_id, after, 16)
+        .await
+        .map_err(CommandErrorDto::from_api)
+}
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn start_workflow_run(
+    state: State<'_, AppState>,
+    target_id: String,
+    selection_epoch: u64,
+    request: StartWorkflowRunRequest,
+) -> Result<WorkflowRunSnapshot, CommandErrorDto> {
+    let lease = selected(&state, &target_id, selection_epoch).await?;
+    let _guard = mutation_guard(&state, &lease, &target_id).await?;
+    if serde_json::to_vec(&request.inputs).map_or(true, |bytes| bytes.len() > 64 * 1024) {
+        return Err(CommandErrorDto::invalid(
+            "inputs",
+            "Inputs must be no larger than 64 KiB.",
+        ));
+    }
+    let _slot = unary_slot(&lease.target)?;
+    client(&lease)?
+        .start_run(request)
         .await
         .map_err(CommandErrorDto::from_api)
 }

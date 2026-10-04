@@ -2,10 +2,11 @@
 use crate::{ApiResult, CallerContext};
 use async_trait::async_trait;
 pub use colossus_contracts::{
-    Actor, ActorType, RegisteredWorkflow, WorkflowLogic, WorkflowLogicBranch, WorkflowLogicKind,
-    WorkflowLogicStep, WorkflowOrigin, WorkflowPage, WorkflowRunSnapshot, WorkflowSchedule,
-    WorkflowScheduleDispatchStatus, WorkflowScheduleMisfirePolicy, WorkflowScheduleSnapshot,
-    WorkflowStatus, WorkflowStepState, WorkflowStepStatus,
+    Actor, ActorType, RegisteredWorkflow, WorkflowAgentOptions, WorkflowCalendar, WorkflowLogic,
+    WorkflowLogicBranch, WorkflowLogicKind, WorkflowLogicStep, WorkflowOrigin, WorkflowPage,
+    WorkflowRunSnapshot, WorkflowSchedule, WorkflowScheduleDispatchStatus,
+    WorkflowScheduleMisfirePolicy, WorkflowScheduleSnapshot, WorkflowStatus, WorkflowStepState,
+    WorkflowStepStatus, WorkflowTask,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,6 +25,12 @@ pub struct CreateWorkflowScheduleRequest {
     pub inputs: Value,
     /// Fixed elapsed cadence, 60 seconds through 31 days.
     pub cadence_seconds: u64,
+    /// Optional daily/weekly calendar recurrence, exclusive with elapsed cadence.
+    #[serde(default)]
+    pub calendar: Option<WorkflowCalendar>,
+    /// Optional one-step task, exclusive with an existing workflow reference.
+    #[serde(default)]
+    pub task: Option<WorkflowTask>,
     /// Explicit first UTC instant; never recalculated after review.
     pub starts_at: String,
     /// Reconciliation rule for multiple due occurrences.
@@ -115,6 +122,14 @@ pub trait WorkflowApi: Send + Sync {
         caller: &CallerContext,
         request: SetWorkflowScheduleEnabledRequest,
     ) -> ApiResult<WorkflowScheduleSnapshot>;
+    /// Owner-authorized history for one registered definition.
+    async fn list_runs(
+        &self,
+        caller: &CallerContext,
+        workflow_id: String,
+        after: Option<String>,
+        limit: usize,
+    ) -> ApiResult<WorkflowPage<WorkflowRunSnapshot>>;
     /// Inspect an owned independent workflow run, excluding raw effect outputs.
     async fn get_run(&self, caller: &CallerContext, id: String) -> ApiResult<WorkflowRunSnapshot>;
     /// Allocate one independent idempotent workflow run.

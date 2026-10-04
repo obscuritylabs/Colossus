@@ -66,6 +66,10 @@ from chat execution and approval-response scopes. Agent scheduling additionally 
 exact `workflow.definition.list`, `workflow.definition.get`, and applicable
 `workflow.schedule.*` tool names; those ceilings do not grant the corresponding action.
 Unavailable resources remain disabled until the administrator updates the grant.
+Manual workflow runs additionally require `workflow_runs:start`. Calendar recurrence,
+plain-language tasks, and history need the corresponding advertised `schedules.calendar`,
+`schedules.tasks`, and `workflow_runs.history` capabilities. Task creation also requires
+`workflows:read` and `workflows:register`; Desktop keeps unsupported controls disabled.
 
 - **Re-enrollment required:** enroll the daemon using the identity-bound service and `auto` account above, update the JSON from the new output, and import it again. Older Desktop keyring selectors are not used automatically.
 - **Certificate or instance mismatch:** confirm that the JSON came from this worker's current enrollment and certificate. Desktop will not replace a pin silently.

@@ -557,12 +557,14 @@ unrelated journal growth.
 The worker hosts authenticated `AutomationService` alongside chat services. The Rust
 SDK's optional `workflows()` client exposes canonical registered-definition metadata
 and schemas, validate/register of existing YAML, schedule list/detail/create/control,
-independent workflow-run start/state, and a bounded active-work fact for lifecycle
+independent workflow-run start/state/history, and a bounded active-work fact for lifecycle
 supervision. Public workflow runs are separate from `AgentRunService` chat runs.
 Generated TypeScript, Python, and Go contracts expose the corresponding typed RPCs.
 
 Discovery advertises `workflows.read/register`, `schedules.read/create/control`, and
-`workflow_runs.read/start` only for hosted support and sufficient scopes. Enroll their
+`workflow_runs.read/start` only for hosted support and sufficient scopes. New runtimes
+also advertise `schedules.calendar`, `schedules.tasks`, and `workflow_runs.history`.
+Task creation additionally requires definition read/register scopes. Enroll their
 distinct colon-separated API scopes. Registration requires definition read; schedule
 mutations require schedule read; independent allocation requires workflow-run read.
 Managed Local's primary grant contains these scopes and six exact workflow tools;
@@ -578,7 +580,10 @@ request; mutation guards reject configuration drain. SDK mutations attempt once 
 report lost/malformed responses as outcome-unknown rather than automatically retrying.
 
 Schedules pin a reviewed canonical definition hash, validated immutable inputs, fixed
-cadence and UTC start. Creation and its caller-scoped receipt share one transaction;
+cadence or IANA calendar recurrence and UTC start. Calendar weekdays normalize before
+approval/retry hashing; missing times skip and repeated times run once. Plain-language
+tasks atomically allocate a hidden one-step definition with configured model/effort and
+an exact allowed-tool ceiling. Creation and its caller-scoped receipt share one transaction;
 equivalent UTC offsets normalize before approval/retry hashing. Matching retries return
 the original allocation; mismatches conflict. Enabled-state controls check the last
 canonical schedule record hash under the same writer lock as ticks. Legacy records
@@ -591,7 +596,12 @@ steps and seven nested branch levels within 256 KiB, without prompts, tool argum
 or emitted values. Catalog pages omit this projection; older or oversized definitions
 may omit it while keeping ordinary metadata available. Owned run snapshots release
 recorded step states and distinct completion counts, without inferring unvisited paths.
-Desktop renders the graph only when its definition hash matches the schedule and run.
+Owned run detail can release the final schema-validated JSON object up to 64 KiB via
+`result_json`, preserving exact JSON integers. History pages omit results and step
+states, isolate ownership, and sort by canonical allocation sequence rather than run ID.
+Their exclusive cursor is a previously allocated owned run ID for the same definition.
+Desktop renders the graph only when its definition hash matches the selected workflow,
+schedule, and run.
 Workflow requests are bounded to 256 KiB, responses to 2 MiB, and four concurrent domain
 operations. Workflow watches share the 64-stream server ceiling with chat watches,
 leaving existing unary headroom. Their exclusive sequence cursor yields coalesced

@@ -77,6 +77,8 @@ async fn authenticated_resources_bind_scopes_owner_canonical_revisions_and_indep
         expected_hash: definition.workflow_hash.clone(),
         inputs: serde_json::json!({}),
         cadence_seconds: 60,
+        calendar: None,
+        task: None,
         starts_at: "2026-10-03T12:00:00Z".into(),
         misfire_policy: WorkflowScheduleMisfirePolicy::Skip,
         enabled: true,

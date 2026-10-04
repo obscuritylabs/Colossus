@@ -90,6 +90,7 @@ pub enum WorkflowError {
     Store(#[from] StoreError),
 }
 
+mod calendar;
 mod condition;
 mod control;
 mod execution;

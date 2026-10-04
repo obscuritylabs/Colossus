@@ -32,7 +32,7 @@ and output bounds.
 | Search and fetch | `web.search`, `web.fetch`, `docs.fetch`, `network.http` | Search needs an explicit route; generic fetch needs host activation plus declared or ambient HTTP(S) authority; quarantined output |
 | MCP | `mcp.servers`, `mcp.search`, `mcp.tools`, `mcp.call` | Configured stdio or Streamable HTTP servers and exact-name or star-pattern tool allowlists |
 | Integrations | Connected operation names | Configured, trusted, and selected only |
-| Workflows | `workflow.definition.list`, `workflow.definition.get`, `workflow.schedule.list`, `workflow.schedule.get`, `workflow.schedule.create`, `workflow.schedule.set_enabled` | Registered hash-pinned definitions; caller-owned canonical schedules; persistent mutations use policy, review, one-use permits, and quarantined results |
+| Workflows | `workflow.definition.list`, `workflow.definition.get`, `workflow.schedule.list`, `workflow.schedule.get`, `workflow.schedule.create`, `workflow.schedule.set_enabled` | Registered hash-pinned definitions; caller-owned calendar/interval workflow schedules and plain-language tasks; persistent mutations use policy, review, one-use permits, and quarantined results |
 
 Schedule create and enabled-state control are Administration actions. Both require
 approval under Allow all and Development defaults, including initially paused creation

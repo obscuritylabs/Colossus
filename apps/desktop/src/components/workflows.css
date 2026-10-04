@@ -158,6 +158,9 @@
 .workflow-dialog-content {
   padding: 20px 22px;
 }
+.workflow-dialog-content > .workflow-dialog-content {
+  padding: 0;
+}
 .workflow-dialog label {
   display: flex;
   flex-direction: column;
@@ -248,4 +251,96 @@
 }
 .schedule-activity-card p {
   margin: 6px 0;
+}
+
+.workflow-form {
+  display: grid;
+  gap: 18px;
+}
+.workflow-form label,
+.workflow-inputs label {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 550;
+}
+.workflow-form small,
+.workflow-help {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+.workflow-form textarea,
+.workflow-inputs textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 120px;
+}
+.workflow-json,
+.workflow-task-instructions {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 360px;
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-control);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.workflow-task-instructions {
+  font-family: inherit;
+  font-size: 14px;
+}
+.workflow-weekdays {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.workflow-weekdays label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+}
+.workflow-weekdays input,
+.workflow-form .workflow-checkbox input {
+  width: auto;
+}
+.workflow-advanced {
+  padding: 14px;
+  background: var(--surface-control);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.workflow-advanced summary {
+  cursor: pointer;
+}
+.workflow-advanced > .workflow-form {
+  margin-top: 14px;
+}
+.workflow-dialog textarea.workflow-instructions-input {
+  font-family: inherit;
+}
+.workflow-history {
+  border-top: 1px solid var(--border);
+  margin-top: 24px;
+  padding-top: 16px;
+}
+.workflow-history .workflow-list button {
+  padding: 12px;
+}
+.workflow-list strong,
+.workflow-list span {
+  overflow-wrap: anywhere;
+}
+.workflow-form .workflow-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }

@@ -36,6 +36,10 @@ async fn authenticated_sdk_roundtrip_uses_canonical_resources_and_shared_watch_h
     let directory = tempfile::tempdir().unwrap();
     let mut config = RuntimeConfig::offline_template(directory.path().join("state.redb"));
     config.storage.adapter = StorageAdapter::Ephemeral;
+    config
+        .models
+        .profiles
+        .insert("task-model".into(), config.models.profiles["echo"].clone());
     let runtime = Arc::new(
         Runtime::open_with_options(
             &config,
@@ -132,6 +136,8 @@ async fn authenticated_sdk_roundtrip_uses_canonical_resources_and_shared_watch_h
         expected_hash: definition.workflow_hash,
         inputs: serde_json::json!({}),
         cadence_seconds: 60,
+        calendar: None,
+        task: None,
         starts_at: "2026-10-03T12:00:00Z".into(),
         misfire_policy: crate::WorkflowScheduleMisfirePolicy::Skip,
         enabled: true,
@@ -176,6 +182,68 @@ async fn authenticated_sdk_roundtrip_uses_canonical_resources_and_shared_watch_h
         owner.get_run(run_id.clone()).await.unwrap().status,
         crate::WorkflowStatus::Queued
     );
+    let calendar = crate::WorkflowCalendar {
+        timezone: "America/New_York".into(),
+        time: "09:00".into(),
+        weekdays: vec![1, 5],
+    };
+    let task_request = CreateWorkflowScheduleRequest {
+        schedule_id: "task-briefing".into(),
+        workflow_id: String::new(),
+        expected_hash: String::new(),
+        inputs: serde_json::json!({}),
+        cadence_seconds: 0,
+        calendar: Some(calendar.clone()),
+        task: Some(crate::WorkflowTask {
+            name: "Briefing".into(),
+            instructions: "Summarize the task result".into(),
+            tools: Vec::new(),
+            options: crate::WorkflowAgentOptions {
+                model_profile: Some("task-model".into()),
+                reasoning_effort: None,
+            },
+        }),
+        starts_at: "2050-10-07T13:00:00Z".into(),
+        misfire_policy: crate::WorkflowScheduleMisfirePolicy::Skip,
+        enabled: false,
+        idempotency_key: "task-create".into(),
+    };
+    let task = owner.create_schedule(task_request.clone()).await.unwrap();
+    assert_eq!(task.record.calendar, Some(calendar));
+    assert_eq!(owner.create_schedule(task_request).await.unwrap(), task);
+    assert_eq!(
+        owner.list_workflows(None, 100).await.unwrap().items.len(),
+        1
+    );
+    assert_eq!(
+        owner
+            .list_schedules(None, 100)
+            .await
+            .unwrap()
+            .items
+            .iter()
+            .find(|item| item.record.schedule_id == "task-briefing")
+            .unwrap()
+            .record
+            .task
+            .as_ref()
+            .unwrap()
+            .instructions,
+        ""
+    );
+    let history = owner
+        .list_runs("transport-health:1.0.0".into(), None, 100)
+        .await
+        .unwrap();
+    assert_eq!(history.items[0].run_id, run_id);
+    assert!(
+        other
+            .list_runs("transport-health:1.0.0".into(), None, 100)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
     let mut stream = AutomationServiceClient::new(channel.clone())
         .watch_workflow_run(
             owner
@@ -204,6 +272,32 @@ async fn authenticated_sdk_roundtrip_uses_canonical_resources_and_shared_watch_h
     })
     .await
     .unwrap();
+    let request = crate::StartWorkflowRunRequest {
+        workflow_id: format!(
+            "{}:{}",
+            task.record.workflow_name, task.record.workflow_version
+        ),
+        expected_hash: task.record.workflow_hash,
+        inputs: serde_json::json!({}),
+        idempotency_key: "manual-task-proof".into(),
+    };
+    let run = owner.start_run(request.clone()).await.unwrap();
+    assert_eq!(owner.start_run(request).await.unwrap().run_id, run.run_id);
+    runtime.workflows().drain().await.unwrap();
+    assert_eq!(
+        owner.get_run(run.run_id.clone()).await.unwrap().status,
+        crate::WorkflowStatus::Completed
+    );
+    let events = runtime.journal().read_global(1, 1024).unwrap();
+    let selected = events
+        .iter()
+        .filter(|event| event.event_type == "model.request.prepared.v1")
+        .map(|event| runtime.journal().decrypt_payload(event).unwrap())
+        .any(|payload| payload["model_profile"] == "task-model");
+    assert!(
+        selected,
+        "the task's configured model is used by the agent loop"
+    );
     shutdown.send(()).unwrap();
     server.await.unwrap().unwrap();
 }

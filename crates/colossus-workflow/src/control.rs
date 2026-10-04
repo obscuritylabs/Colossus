@@ -18,7 +18,12 @@ pub fn normalize_control_operation(
     operation: &WorkflowControlOperation,
 ) -> Result<WorkflowControlOperation, WorkflowError> {
     let mut normalized = operation.clone();
-    if let WorkflowControlOperation::CreateSchedule { starts_at, .. } = &mut normalized {
+    if let WorkflowControlOperation::CreateSchedule {
+        starts_at,
+        calendar,
+        ..
+    } = &mut normalized
+    {
         if starts_at.len() > 64 {
             return Err(WorkflowError::InvalidDefinition(
                 "schedule start exceeds timestamp bounds".into(),
@@ -26,6 +31,10 @@ pub fn normalize_control_operation(
         }
         let timestamp = OffsetDateTime::parse(starts_at, &Rfc3339)
             .map_err(|_| WorkflowError::InvalidDefinition("invalid schedule start".into()))?;
+        if let Some(calendar) = calendar {
+            calendar.weekdays.sort_unstable();
+            calendar::validate(calendar, timestamp)?;
+        }
         *starts_at = format_schedule_time(timestamp.to_offset(UtcOffset::UTC))?;
     }
     if serde_json::to_vec(&normalized)
@@ -84,6 +93,14 @@ impl WorkflowService {
                     if after.as_ref().is_some_and(|after| id <= after.as_str()) {
                         continue;
                     }
+                    let (name, version) = workflow_identity(id)?;
+                    if self
+                        .repository
+                        .definition(name, version)?
+                        .is_some_and(|(definition, _)| definition.metadata.scheduled_task)
+                    {
+                        continue;
+                    }
                     let mut metadata = self.control_workflow(id, None)?;
                     metadata.input_schema = Value::Null;
                     metadata.logic = None;
@@ -132,6 +149,9 @@ impl WorkflowService {
                         Err(error) => return Err(error),
                     };
                     snapshot.record.inputs = Value::Null;
+                    if let Some(task) = &mut snapshot.record.task {
+                        task.instructions.clear();
+                    }
                     items.push(snapshot);
                     if items.len() > limit {
                         break;
@@ -150,56 +170,65 @@ impl WorkflowService {
                     .map_err(control_encoding)
             }
             WorkflowControlOperation::GetRun { run_id } => {
-                token(run_id)?;
-                let run = self.get_run(run_id)?;
-                let first = self
-                    .journal
-                    .read_stream(&format!("workflow-run:{run_id}"))?
-                    .into_iter()
-                    .next()
-                    .ok_or(WorkflowError::PermissionDenied)?;
-                let payload = self.journal.decrypt_payload(&first)?;
-                let owner = match payload.get("origin") {
-                    Some(value) => Some(
-                        serde_json::from_value::<WorkflowOrigin>(value.clone())
-                            .map_err(control_encoding)?
-                            .owner,
-                    ),
-                    None if run.trigger_kind == Some(WorkflowTriggerKind::Schedule) => {
-                        let id = run
-                            .trigger_id
-                            .as_deref()
-                            .ok_or(WorkflowError::PermissionDenied)?;
-                        self.control_schedule(id, &origin.owner)?
-                            .origin
-                            .map(|origin| origin.owner)
-                    }
-                    None => None,
-                };
-                if owner.as_ref() != Some(&origin.owner) {
-                    return Err(WorkflowError::PermissionDenied);
+                self.control_run(run_id, &origin.owner, true)
+            }
+            WorkflowControlOperation::ListRuns {
+                workflow_id,
+                after,
+                limit,
+            } => {
+                workflow_identity(workflow_id)?;
+                if let Some(after) = after {
+                    token(after)?;
                 }
-                let events = self
-                    .journal
-                    .read_stream(&format!("workflow-run:{run_id}"))?;
-                let last = events.last().ok_or(WorkflowError::PermissionDenied)?;
-                serde_json::to_value(WorkflowRunSnapshot {
-                    step_states: view::step_states(self.journal.as_ref(), &events, run.status)?,
-                    run_id: run.run_id,
-                    workflow_id: format!("{}:{}", run.workflow_name, run.workflow_version),
-                    workflow_hash: run.workflow_hash,
-                    status: run.status,
-                    created_at: first.occurred_at,
-                    updated_at: last.occurred_at.clone(),
-                    last_sequence: last.stream_version,
-                    failure_reason: run
-                        .failure_reason
-                        .map(|_| "Workflow failed; inspect authorized runtime evidence.".into()),
-                    waiting_reason: run
-                        .waiting_reason
-                        .map(|_| "Workflow is waiting for operator input or a dependency.".into()),
-                })
-                .map_err(control_encoding)
+                let limit = page_limit(*limit)?;
+                let before = if let Some(id) = after {
+                    let value = self.control_run(id, &origin.owner, false)?;
+                    if value["workflow_id"].as_str() != Some(workflow_id) {
+                        return Err(WorkflowError::InvalidDefinition(
+                            "history cursor belongs to another workflow".into(),
+                        ));
+                    }
+                    Some(self.run_allocation_sequence(id)?)
+                } else {
+                    None
+                };
+                let streams = self.control_streams("workflow-run:")?;
+                if streams.len() > MAX_WORKFLOW_SCHEDULES {
+                    return Err(WorkflowError::InvalidTransition(
+                        "run history catalog limit exceeded".into(),
+                    ));
+                }
+                let mut recent = BTreeMap::new();
+                for stream in streams {
+                    let id = stream.trim_start_matches("workflow-run:");
+                    let sequence = self.run_allocation_sequence(id)?;
+                    if before.is_some_and(|before| sequence >= before) {
+                        continue;
+                    }
+                    let value = match self.control_run(id, &origin.owner, false) {
+                        Ok(value) => value,
+                        Err(WorkflowError::PermissionDenied) => continue,
+                        Err(error) => return Err(error),
+                    };
+                    let run: WorkflowRunSnapshot =
+                        serde_json::from_value(value).map_err(control_encoding)?;
+                    if &run.workflow_id != workflow_id {
+                        continue;
+                    }
+                    recent.insert(sequence, run);
+                    if recent.len() > limit + 1 {
+                        recent.pop_first();
+                    }
+                }
+                let mut items: Vec<_> = recent.into_values().rev().collect();
+                let next_cursor = if items.len() > limit {
+                    items.pop();
+                    items.last().map(|run| run.run_id.clone())
+                } else {
+                    None
+                };
+                serde_json::to_value(WorkflowPage { items, next_cursor }).map_err(control_encoding)
             }
             WorkflowControlOperation::ActiveWork => {
                 // Retain the runtime if a bounded lifecycle inspection cannot prove
@@ -223,6 +252,79 @@ impl WorkflowService {
             }
             _ => self.control_mutation(operation, actor, origin),
         }
+    }
+
+    fn control_run(
+        &self,
+        run_id: &str,
+        owner: &Actor,
+        detail: bool,
+    ) -> Result<Value, WorkflowError> {
+        token(run_id)?;
+        let run = self.get_run(run_id)?;
+        let first = self
+            .journal
+            .read_stream(&format!("workflow-run:{run_id}"))?
+            .into_iter()
+            .next()
+            .ok_or(WorkflowError::PermissionDenied)?;
+        let payload = self.journal.decrypt_payload(&first)?;
+        let recorded_owner = match payload.get("origin") {
+            Some(value) => Some(
+                serde_json::from_value::<WorkflowOrigin>(value.clone())
+                    .map_err(control_encoding)?
+                    .owner,
+            ),
+            None if run.trigger_kind == Some(WorkflowTriggerKind::Schedule) => {
+                let id = run
+                    .trigger_id
+                    .as_deref()
+                    .ok_or(WorkflowError::PermissionDenied)?;
+                self.control_schedule(id, owner)?
+                    .origin
+                    .map(|origin| origin.owner)
+            }
+            None => None,
+        };
+        if recorded_owner.as_ref() != Some(owner) {
+            return Err(WorkflowError::PermissionDenied);
+        }
+        let events = self
+            .journal
+            .read_stream(&format!("workflow-run:{run_id}"))?;
+        let last = events.last().ok_or(WorkflowError::PermissionDenied)?;
+        serde_json::to_value(WorkflowRunSnapshot {
+            step_states: if detail {
+                view::step_states(self.journal.as_ref(), &events, run.status)?
+            } else {
+                Vec::new()
+            },
+            result: run.outputs.filter(|value| {
+                serde_json::to_vec(value).is_ok_and(|bytes| detail && bytes.len() <= 64 * 1024)
+            }),
+            run_id: run.run_id,
+            workflow_id: format!("{}:{}", run.workflow_name, run.workflow_version),
+            workflow_hash: run.workflow_hash,
+            status: run.status,
+            created_at: first.occurred_at,
+            updated_at: last.occurred_at.clone(),
+            last_sequence: last.stream_version,
+            failure_reason: run
+                .failure_reason
+                .map(|_| "Workflow failed; inspect authorized runtime evidence.".into()),
+            waiting_reason: run
+                .waiting_reason
+                .map(|_| "Workflow is waiting for operator input or a dependency.".into()),
+        })
+        .map_err(control_encoding)
+    }
+
+    fn run_allocation_sequence(&self, run_id: &str) -> Result<u64, WorkflowError> {
+        self.journal
+            .read_stream_from(&format!("workflow-run:{run_id}"), 0, 1)?
+            .first()
+            .map(|event| event.global_sequence)
+            .ok_or(WorkflowError::PermissionDenied)
     }
 
     fn control_streams(&self, prefix: &str) -> Result<Vec<String>, WorkflowError> {
@@ -305,6 +407,7 @@ impl WorkflowService {
         if !controllable {
             record.inputs = Value::Null;
             record.last_run_id = None;
+            record.task = None;
         }
         let last_dispatch = events
             .iter()

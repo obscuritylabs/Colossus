@@ -98,6 +98,7 @@ fn display_projection_withholds_prompts_arguments_inputs_and_emitted_values() {
         WorkflowStep::Agent {
             id: "agent".into(),
             prompt: "PRIVATE-PROMPT".into(),
+            options: Default::default(),
             idempotency: None,
         },
         WorkflowStep::Tool {
@@ -173,6 +174,8 @@ fn create() -> WorkflowControlOperation {
         expected_hash: validate_definition(YAML).unwrap().content_hash,
         inputs: json!({"message": "private input"}),
         cadence_seconds: 60,
+        calendar: None,
+        task: None,
         starts_at: "2026-10-03T12:00:00Z".into(),
         misfire_policy: WorkflowScheduleMisfirePolicy::FireOnce,
         enabled: true,
@@ -193,6 +196,60 @@ fn setup() -> (Arc<InMemoryEventJournal>, WorkflowService) {
     )
     .unwrap();
     (journal, service)
+}
+
+#[test]
+fn legacy_schedule_intent_preserves_its_receipt_fingerprint() {
+    let operation = create();
+    let value = serde_json::to_value(&operation).unwrap();
+    assert!(value.get("calendar").is_none());
+    assert!(value.get("task").is_none());
+    let restored: WorkflowControlOperation = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(restored).unwrap(), value);
+}
+
+#[test]
+fn history_pages_by_allocation_order_across_manual_and_scheduled_run_ids() {
+    let (_, service) = setup();
+    let start = |key: &str| WorkflowControlOperation::StartRun {
+        workflow_id: "scheduled:1.0.0".into(),
+        expected_hash: validate_definition(YAML).unwrap().content_hash,
+        inputs: json!({"message":"hello"}),
+        idempotency_key: key.into(),
+    };
+    let first = execute(&service, &start("first"), "app:a").unwrap();
+    execute(&service, &create(), "app:a").unwrap();
+    service.tick_schedules_at("2026-10-03T12:00:00Z").unwrap();
+    let schedule = execute(
+        &service,
+        &WorkflowControlOperation::GetSchedule {
+            schedule_id: "daily".into(),
+        },
+        "app:a",
+    )
+    .unwrap();
+    let scheduled = schedule["record"]["last_run_id"].as_str().unwrap();
+    execute(&service, &start("other-owner"), "app:b").unwrap();
+    let newest = execute(&service, &start("newest"), "app:a").unwrap();
+    let list = |after| {
+        execute(
+            &service,
+            &WorkflowControlOperation::ListRuns {
+                workflow_id: "scheduled:1.0.0".into(),
+                after,
+                limit: 1,
+            },
+            "app:a",
+        )
+        .unwrap()
+    };
+    let page1 = list(None);
+    assert_eq!(page1["items"][0]["run_id"], newest["run_id"]);
+    let page2 = list(Some(page1["next_cursor"].as_str().unwrap().into()));
+    assert_eq!(page2["items"][0]["run_id"], scheduled);
+    let page3 = list(Some(page2["next_cursor"].as_str().unwrap().into()));
+    assert_eq!(page3["items"][0]["run_id"], first["run_id"]);
+    assert!(page3["next_cursor"].is_null());
 }
 
 #[test]
@@ -491,4 +548,182 @@ fn simultaneous_tick_and_reviewed_pause_have_one_writer_order() {
             assert!(record.last_run_id.is_some());
         }
     }
+}
+
+#[test]
+fn calendar_ticks_catch_up_once_and_survive_restart_without_duplicate_runs() {
+    use colossus_contracts::WorkflowCalendar;
+    for policy in [
+        WorkflowScheduleMisfirePolicy::FireOnce,
+        WorkflowScheduleMisfirePolicy::Skip,
+    ] {
+        let (journal, service) = setup();
+        let mut operation = create();
+        if let WorkflowControlOperation::CreateSchedule {
+            cadence_seconds,
+            calendar,
+            starts_at,
+            misfire_policy,
+            ..
+        } = &mut operation
+        {
+            *cadence_seconds = 0;
+            *calendar = Some(WorkflowCalendar {
+                timezone: "America/New_York".into(),
+                time: "09:00".into(),
+                weekdays: Vec::new(),
+            });
+            *starts_at = "2026-03-07T14:00:00Z".into();
+            *misfire_policy = policy;
+        }
+        execute(&service, &operation, "app:a").unwrap();
+        let dispatch = service.tick_schedules_at("2026-03-09T13:00:00Z").unwrap();
+        assert_eq!(
+            dispatch[0].scheduled_at.as_deref(),
+            Some("2026-03-09T13:00:00Z")
+        );
+        assert_eq!(dispatch[0].next_fire_at, "2026-03-10T13:00:00Z");
+        assert_eq!(
+            dispatch[0].run_id.is_some(),
+            policy == WorkflowScheduleMisfirePolicy::FireOnce
+        );
+        drop(service);
+        assert!(
+            super::tests::service(journal)
+                .tick_schedules_at("2026-03-09T13:00:00Z")
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn scheduled_task_and_definition_share_a_durable_receipt_and_stay_out_of_the_library() {
+    use colossus_contracts::{WorkflowAgentOptions, WorkflowCalendar, WorkflowTask};
+    let (journal, service) = setup();
+    let mut operation = create();
+    if let WorkflowControlOperation::CreateSchedule {
+        workflow_id,
+        expected_hash,
+        inputs,
+        cadence_seconds,
+        calendar,
+        task,
+        starts_at,
+        ..
+    } = &mut operation
+    {
+        workflow_id.clear();
+        expected_hash.clear();
+        *inputs = json!({});
+        *cadence_seconds = 0;
+        *calendar = Some(WorkflowCalendar {
+            timezone: "America/New_York".into(),
+            time: "09:00".into(),
+            weekdays: vec![1],
+        });
+        *starts_at = "2026-10-05T13:00:00Z".into();
+        *task = Some(Box::new(WorkflowTask {
+            name: "Monday briefing".into(),
+            instructions: "PRIVATE task instructions $() {{ literal }} & * !!".into(),
+            tools: vec!["web.search".into()],
+            options: WorkflowAgentOptions {
+                model_profile: Some("configured".into()),
+                reasoning_effort: Some(colossus_contracts::ReasoningEffort::High),
+            },
+        }));
+    }
+    let snapshot = execute(&service, &operation, "app:a").unwrap();
+    assert_eq!(
+        snapshot["record"]["task"]["options"]["reasoning_effort"],
+        "high"
+    );
+    let etag = snapshot["etag"].as_str().unwrap();
+    assert_eq!(
+        journal.read_stream("workflow-schedule:daily").unwrap()[0].record_hash,
+        etag
+    );
+    let head = journal.head().unwrap();
+    drop(service);
+    let service = super::tests::service(journal.clone());
+    assert_eq!(execute(&service, &operation, "app:a").unwrap(), snapshot);
+    assert_eq!(journal.head().unwrap(), head);
+    let catalog = execute(
+        &service,
+        &WorkflowControlOperation::ListWorkflows {
+            after: None,
+            limit: 100,
+        },
+        "app:a",
+    )
+    .unwrap();
+    assert_eq!(catalog["items"].as_array().unwrap().len(), 1);
+    let list = execute(
+        &service,
+        &WorkflowControlOperation::ListSchedules {
+            after: None,
+            limit: 100,
+        },
+        "app:a",
+    )
+    .unwrap();
+    assert_eq!(list["items"][0]["record"]["task"]["instructions"], "");
+    assert!(matches!(
+        execute(
+            &service,
+            &WorkflowControlOperation::GetSchedule {
+                schedule_id: "daily".into()
+            },
+            "app:b"
+        ),
+        Err(WorkflowError::PermissionDenied)
+    ));
+    let mut changed = operation;
+    if let WorkflowControlOperation::CreateSchedule {
+        task: Some(task), ..
+    } = &mut changed
+    {
+        task.instructions.push('!');
+    }
+    assert!(matches!(
+        execute(&service, &changed, "app:a"),
+        Err(WorkflowError::Conflict(_))
+    ));
+}
+
+#[tokio::test]
+async fn run_history_returns_only_owned_definition_runs_and_detail_releases_final_result() {
+    let (_, service) = setup();
+    let request = |key: &str| WorkflowControlOperation::StartRun {
+        workflow_id: "scheduled:1.0.0".into(),
+        expected_hash: validate_definition(YAML).unwrap().content_hash,
+        inputs: json!({"message":"hello"}),
+        idempotency_key: key.into(),
+    };
+    let mine = execute(&service, &request("mine"), "app:a").unwrap();
+    execute(&service, &request("other"), "app:b").unwrap();
+    let id = mine["run_id"].as_str().unwrap();
+    service.run_queued(id).await.unwrap();
+    let history = execute(
+        &service,
+        &WorkflowControlOperation::ListRuns {
+            workflow_id: "scheduled:1.0.0".into(),
+            after: None,
+            limit: 1,
+        },
+        "app:a",
+    )
+    .unwrap();
+    assert_eq!(history["items"].as_array().unwrap().len(), 1);
+    assert_eq!(history["items"][0]["run_id"], id);
+    assert!(history["items"][0]["result"].is_null());
+    assert_eq!(
+        execute(
+            &service,
+            &WorkflowControlOperation::GetRun { run_id: id.into() },
+            "app:a"
+        )
+        .unwrap()["result"],
+        json!({"result":{"ok":true}})
+    );
 }

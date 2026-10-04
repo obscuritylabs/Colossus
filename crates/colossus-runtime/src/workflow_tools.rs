@@ -70,6 +70,12 @@ fn scope(operation: &Operation) -> &'static [&'static str] {
     match operation {
         Operation::ListWorkflows { .. } | Operation::GetWorkflow { .. } => &["workflows:read"],
         Operation::ListSchedules { .. } | Operation::GetSchedule { .. } => &["schedules:read"],
+        Operation::CreateSchedule { task: Some(_), .. } => &[
+            "schedules:read",
+            "schedules:create",
+            "workflows:read",
+            "workflows:register",
+        ],
         Operation::CreateSchedule { .. } => &["schedules:read", "schedules:create"],
         Operation::SetScheduleEnabled { .. } => &["schedules:read", "schedules:control"],
         _ => &[],

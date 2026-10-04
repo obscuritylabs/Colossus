@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 
 export async function installWorkflowFixture(
   page: Page,
-  options: { empty?: boolean; supported?: boolean } = {},
+  options: { empty?: boolean; supported?: boolean; modern?: boolean } = {},
 ) {
   await page.addInitScript((options) => {
     const host = window as unknown as {
@@ -12,6 +12,7 @@ export async function installWorkflowFixture(
       workflowUncertain?: boolean;
       workflowBadInput?: boolean;
       workflowRunStatus?: string;
+      workflowRunUncertain?: boolean;
     };
     host.workflowCalls = [];
     const hash = "a".repeat(64);
@@ -26,6 +27,17 @@ export async function installWorkflowFixture(
         required: ["message"],
         properties: { message: { type: "string" } },
         additionalProperties: false,
+      },
+      logic: {
+        steps: [
+          {
+            id: "result",
+            kind: "emit",
+            summary: "Emit a health report",
+            branches: [],
+          },
+        ],
+        compensation: [],
       },
       scheduling_eligible: true,
       unavailable_reason: null,
@@ -94,6 +106,8 @@ export async function installWorkflowFixture(
           },
         ];
     let registered = !options.empty;
+    let manualRun: Record<string, unknown> | null = null;
+    let manualKey = "";
     host.__TAURI_INTERNALS__ = {
       invoke: async (command: string, args: Record<string, unknown>) => {
         host.workflowCalls.push({ command, args });
@@ -106,8 +120,14 @@ export async function installWorkflowFixture(
             schedules_create: options.supported !== false,
             schedules_control: options.supported !== false,
             workflow_runs_read: true,
+            workflow_runs_start: !!options.modern,
+            workflow_run_history: !!options.modern,
+            calendar_schedules: !!options.modern,
+            task_schedules: !!options.modern,
             managed: true,
           };
+        if (command === "get_managed_configuration")
+          return { globalConfiguration: { models: [] } };
         if (args.selectionEpoch !== 41)
           throw {
             message: "The Workspace changed. Refresh and review again.",
@@ -245,6 +265,62 @@ export async function installWorkflowFixture(
           schedule.etag = "e".repeat(64);
           return structuredClone(schedule);
         }
+        if (command === "list_workflow_runs")
+          return { items: manualRun ? [manualRun] : [], next_cursor: null };
+        if (command === "start_workflow_run") {
+          const request = args.request as {
+            idempotency_key: string;
+            inputs: Record<string, unknown>;
+          };
+          if (typeof request.inputs.message !== "string")
+            throw {
+              code: "invalid_argument",
+              message: "A message is required.",
+              retryable: false,
+              outcomeUnknown: false,
+              violations: [],
+            };
+          if (!manualRun || manualKey !== request.idempotency_key) {
+            manualRun = {
+              run_id: "manual-run-1",
+              workflow_id: workflow.workflow_id,
+              workflow_hash: hash,
+              status: "completed",
+              created_at: record.created_at,
+              updated_at: record.updated_at,
+              last_sequence: 5,
+              result: null,
+              result_json:
+                '{ "result": { "ok": true, "exact": 18446744073709551615 } }',
+              step_states: [
+                {
+                  step_id: "result",
+                  status: "completed",
+                  completed_executions: 1,
+                },
+              ],
+              failure_reason: null,
+              waiting_reason: null,
+            };
+            manualKey = request.idempotency_key;
+          }
+          if (host.workflowRunUncertain) {
+            host.workflowRunUncertain = false;
+            throw {
+              code: "outcome_unknown",
+              message: "Allocation unconfirmed.",
+              retryable: false,
+              outcomeUnknown: true,
+              violations: [],
+            };
+          }
+          return manualRun;
+        }
+        if (
+          command === "get_scheduled_workflow_run" &&
+          args.runId === "manual-run-1"
+        )
+          return manualRun;
         if (command === "get_scheduled_workflow_run")
           return {
             run_id: args.runId,

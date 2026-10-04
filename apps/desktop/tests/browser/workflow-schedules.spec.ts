@@ -82,6 +82,7 @@ test("imports an existing definition, freezes creation review, and reconciles an
   await page.setViewportSize({ width: 1280, height: 1000 });
   await open(page, { empty: true });
   await capture(page, "04-empty-workspace.png");
+  await page.getByRole("button", { name: "Workflows", exact: true }).click();
   await page
     .getByRole("button", { name: "Import workflow", exact: true })
     .click();
@@ -98,11 +99,14 @@ test("imports an existing definition, freezes creation review, and reconciles an
   await page
     .getByRole("button", { name: "Register workflow", exact: true })
     .click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: "Schedules", exact: true }).click();
   await page
-    .getByRole("button", { name: "Create schedule", exact: true })
+    .getByRole("button", { name: "Schedule a workflow", exact: true })
     .click();
   await choose(page, "Registered workflow", "workspace-health · 1.0.0");
   await page.getByRole("textbox", { name: "Schedule ID" }).fill("daily-health");
+  await page.getByRole("button", { name: "Edit JSON", exact: true }).click();
   await page
     .getByRole("textbox", { name: "Inputs (JSON object)", exact: true })
     .fill('{"message":"Check Workspace health"}');
@@ -184,7 +188,7 @@ test("rejects stale control reviews without retrying the mutation", async ({
 test("shows unavailable capability guidance", async ({ page }) => {
   await open(page, { supported: false });
   await expect(
-    page.getByRole("button", { name: "Create schedule" }),
+    page.getByRole("button", { name: "Schedule a workflow" }),
   ).toBeDisabled();
   await expect(
     page.getByRole("region", { name: "Workspace schedules" }),
@@ -235,10 +239,11 @@ test("validates DST gaps and repeated wall times at a compact width", async ({
   try {
     await open(page);
     await page
-      .getByRole("button", { name: "Create schedule", exact: true })
+      .getByRole("button", { name: "Schedule a workflow", exact: true })
       .click();
     await choose(page, "Registered workflow", "workspace-health · 1.0.0");
     await page.getByRole("textbox", { name: "Schedule ID" }).fill("dst-health");
+    await page.getByRole("button", { name: "Edit JSON", exact: true }).click();
     await page
       .getByRole("textbox", { name: "Inputs (JSON object)" })
       .fill('{"message":"Check health"}');
@@ -285,12 +290,13 @@ test("shows input schema failures inline without allocating a schedule", async (
 }) => {
   await open(page);
   await page
-    .getByRole("button", { name: "Create schedule", exact: true })
+    .getByRole("button", { name: "Schedule a workflow", exact: true })
     .click();
   await choose(page, "Registered workflow", "workspace-health · 1.0.0");
   await page
     .getByRole("textbox", { name: "Schedule ID" })
     .fill("invalid-health");
+  await page.getByRole("button", { name: "Edit JSON", exact: true }).click();
   await choose(page, "Time zone", "UTC — exact occurrence");
   await page
     .getByLabel("First occurrence", { exact: true })

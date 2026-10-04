@@ -7,7 +7,7 @@ import {
   listRegisteredWorkflows,
 } from "../api";
 import {
-  cadence,
+  recurrence,
   canonicalJson,
   firstOccurrence,
   MISFIRE_GUIDANCE,
@@ -23,25 +23,37 @@ import type {
   WorkflowSchedule,
 } from "../workflows";
 import { DropdownSelect } from "./DropdownSelect";
+import { WorkflowInputs } from "./WorkflowInputs";
+import {
+  defaultCalendarDraft,
+  prepareCalendar,
+  ScheduleTiming,
+} from "./ScheduleTiming";
 import { WorkflowDialog } from "./WorkflowDialog";
 
 export function ScheduleCreate({
   targetId,
   context,
+  initialWorkflowId = "",
   onClose,
   onCreated,
 }: {
   targetId: string;
+  initialWorkflowId?: string;
   context: WorkflowContext;
   onClose: () => void;
   onCreated: (schedule: WorkflowSchedule) => void;
 }) {
   const [workflows, setWorkflows] = useState<RegisteredWorkflow[]>([]);
   const [after, setAfter] = useState<string | null>(null);
-  const [workflowId, setWorkflowId] = useState("");
+  const [workflowId, setWorkflowId] = useState(initialWorkflowId);
   const [workflow, setWorkflow] = useState<RegisteredWorkflow | null>(null);
   const [id, setId] = useState("");
   const [inputs, setInputs] = useState("{}");
+  const [calendarMode, setCalendarMode] = useState(
+    !!context.calendar_schedules,
+  );
+  const [calendarDraft, setCalendarDraft] = useState(defaultCalendarDraft);
   const [preset, setPreset] = useState("3600");
   const [custom, setCustom] = useState("1");
   const [unit, setUnit] = useState("3600");
@@ -127,7 +139,10 @@ export function ScheduleCreate({
         );
       const seconds =
         preset === "custom" ? Number(custom) * Number(unit) : Number(preset);
-      if (!Number.isSafeInteger(seconds) || seconds < 60 || seconds > 2678400)
+      if (
+        !calendarMode &&
+        (!Number.isSafeInteger(seconds) || seconds < 60 || seconds > 2678400)
+      )
         throw new Error(
           "Cadence must be a whole number of seconds from 1 minute through 31 days.",
         );
@@ -136,8 +151,11 @@ export function ScheduleCreate({
         workflow_id: workflow.workflow_id,
         expected_hash: workflow.workflow_hash,
         inputs: scheduleInputs(inputs),
-        cadence_seconds: seconds,
-        starts_at: firstOccurrence(start, zone),
+        cadence_seconds: calendarMode ? 0 : seconds,
+        ...(calendarMode
+          ? prepareCalendar(calendarDraft)
+          : { calendar: null, starts_at: firstOccurrence(start, zone) }),
+        task: null,
         misfire_policy: misfire,
         enabled,
         idempotency_key: `desktop-schedule-${crypto.randomUUID()}`,
@@ -186,6 +204,8 @@ export function ScheduleCreate({
         `${record.workflow_name}:${record.workflow_version}` !==
           review.workflow_id ||
         record.cadence_seconds !== review.cadence_seconds ||
+        canonicalJson(record.calendar ?? null) !==
+          canonicalJson(review.calendar ?? null) ||
         new Date(record.starts_at).getTime() !==
           new Date(review.starts_at).getTime() ||
         record.misfire_policy !== review.misfire_policy ||
@@ -224,7 +244,10 @@ export function ScheduleCreate({
               <code>{review.expected_hash}</code>
             </dd>
             <dt>Cadence</dt>
-            <dd>{cadence(review.cadence_seconds)} — fixed elapsed time</dd>
+            <dd>
+              {recurrence(review)}
+              {!review.calendar && " — fixed elapsed time"}
+            </dd>
             <dt>First occurrence</dt>
             <dd>{occurrence(review.starts_at)}</dd>
             <dt>Multiple overdue occurrences</dt>
@@ -245,8 +268,10 @@ export function ScheduleCreate({
           </p>
           <p>
             A running Workspace worker is required. Future schedules do not keep
-            a sleeping Workspace awake. Every 24 hours may shift its local hour
-            across daylight saving changes.
+            a sleeping Workspace awake.{" "}
+            {review.calendar
+              ? "Calendar schedules keep their selected local time through clock changes."
+              : "Every 24 hours may shift its local hour across daylight saving changes."}
           </p>
           {uncertain && (
             <p role="status">
@@ -357,82 +382,99 @@ export function ScheduleCreate({
               autoComplete="off"
             />
           </label>
-          <label>
-            Inputs (JSON object)
-            <textarea
-              value={inputs}
-              rows={6}
-              spellCheck={false}
-              onChange={(event) => setInputs(event.target.value)}
-            />
-          </label>
-          <label>
-            Cadence
-            <DropdownSelect
-              aria-label="Cadence"
-              value={preset}
-              onChange={(event) => setPreset(event.target.value)}
-            >
-              <option value="60">Every minute</option>
-              <option value="900">Every 15 minutes</option>
-              <option value="3600">Every hour</option>
-              <option value="86400">Every 24 hours</option>
-              <option value="custom">Custom</option>
-            </DropdownSelect>
-          </label>
-          {preset === "custom" && (
-            <div className="workflow-columns">
-              <label>
-                Amount
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  required
-                  value={custom}
-                  onChange={(event) => setCustom(event.target.value)}
-                />
-              </label>
-              <label>
-                Unit
-                <DropdownSelect
-                  aria-label="Unit"
-                  value={unit}
-                  onChange={(event) => setUnit(event.target.value)}
-                >
-                  <option value="60">Minutes</option>
-                  <option value="3600">Hours</option>
-                  <option value="86400">Days</option>
-                </DropdownSelect>
-              </label>
-            </div>
-          )}
-          <div className="workflow-columns">
+          <WorkflowInputs
+            schema={workflow?.input_schema ?? null}
+            value={inputs}
+            onChange={setInputs}
+          />
+          {context.calendar_schedules && (
             <label>
-              Time zone
+              Timing
               <DropdownSelect
-                aria-label="Time zone"
-                value={zone}
+                aria-label="Timing"
+                value={calendarMode ? "calendar" : "interval"}
                 onChange={(event) =>
-                  setZone(event.target.value as "local" | "utc")
+                  setCalendarMode(event.target.value === "calendar")
                 }
               >
-                <option value="local">
-                  Local ({Intl.DateTimeFormat().resolvedOptions().timeZone})
-                </option>
-                <option value="utc">UTC — exact occurrence</option>
+                <option value="calendar">Calendar — daily or weekly</option>
+                <option value="interval">Fixed elapsed interval</option>
               </DropdownSelect>
             </label>
-            <label>
-              First occurrence
-              <input
-                type="datetime-local"
-                value={start}
-                required
-                onChange={(event) => setStart(event.target.value)}
-              />
-            </label>
-          </div>
+          )}
+          {calendarMode ? (
+            <ScheduleTiming value={calendarDraft} onChange={setCalendarDraft} />
+          ) : (
+            <>
+              <label>
+                Cadence
+                <DropdownSelect
+                  aria-label="Cadence"
+                  value={preset}
+                  onChange={(event) => setPreset(event.target.value)}
+                >
+                  <option value="60">Every minute</option>
+                  <option value="900">Every 15 minutes</option>
+                  <option value="3600">Every hour</option>
+                  <option value="86400">Every 24 hours</option>
+                  <option value="custom">Custom</option>
+                </DropdownSelect>
+              </label>
+              {preset === "custom" && (
+                <div className="workflow-columns">
+                  <label>
+                    Amount
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      required
+                      value={custom}
+                      onChange={(event) => setCustom(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Unit
+                    <DropdownSelect
+                      aria-label="Unit"
+                      value={unit}
+                      onChange={(event) => setUnit(event.target.value)}
+                    >
+                      <option value="60">Minutes</option>
+                      <option value="3600">Hours</option>
+                      <option value="86400">Days</option>
+                    </DropdownSelect>
+                  </label>
+                </div>
+              )}
+              <div className="workflow-columns">
+                <label>
+                  Time zone
+                  <DropdownSelect
+                    aria-label="Time zone"
+                    value={zone}
+                    onChange={(event) =>
+                      setZone(event.target.value as "local" | "utc")
+                    }
+                  >
+                    <option value="local">
+                      Local ({Intl.DateTimeFormat().resolvedOptions().timeZone})
+                    </option>
+                    <option value="utc">UTC — exact occurrence</option>
+                  </DropdownSelect>
+                </label>
+                <label>
+                  First occurrence
+                  <input
+                    type="datetime-local"
+                    value={start}
+                    required
+                    onChange={(event) => setStart(event.target.value)}
+                  />
+                </label>
+              </div>
+            </>
+          )}
           <label>
             Multiple overdue occurrences
             <DropdownSelect

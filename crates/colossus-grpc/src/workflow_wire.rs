@@ -228,6 +228,8 @@ pub fn schedule(value: WorkflowScheduleSnapshot) -> Result<proto::WorkflowSchedu
         definition_hash: record.workflow_hash,
         input: object(&record.inputs)?,
         cadence_seconds: record.cadence_seconds,
+        calendar: encode_optional(&record.calendar)?,
+        task: encode_optional(&record.task)?,
         misfire_policy: encode_misfire(record.misfire_policy),
         enabled: record.enabled,
         starts_at: Some(timestamp(&record.starts_at)?),
@@ -263,9 +265,15 @@ pub fn decode_schedule(value: proto::WorkflowSchedule) -> Result<WorkflowSchedul
     hash(&value.definition_hash)?;
     hash(&value.etag)?;
     let (name, version) = value.workflow_id.split_once(':').ok_or_else(invalid)?;
-    if !(60..=2_678_400).contains(&value.cadence_seconds)
-        || value.controllable != value.origin.is_some()
-        || (!value.controllable && (value.input.is_some() || value.last_workflow_run_id.is_some()))
+    if (if value.calendar.is_some() {
+        value.cadence_seconds != 0
+    } else {
+        !(60..=2_678_400).contains(&value.cadence_seconds)
+    }) || value.controllable != value.origin.is_some()
+        || (!value.controllable
+            && (value.input.is_some()
+                || value.last_workflow_run_id.is_some()
+                || value.task.is_some()))
         || value
             .blocked_reason
             .as_ref()
@@ -312,6 +320,8 @@ pub fn decode_schedule(value: proto::WorkflowSchedule) -> Result<WorkflowSchedul
                 Json::Null
             },
             cadence_seconds: value.cadence_seconds,
+            calendar: decode_calendar(value.calendar)?,
+            task: decode_optional(value.task)?,
             misfire_policy: misfire(value.misfire_policy)?,
             enabled: value.enabled,
             starts_at: instant(value.starts_at)?,
@@ -351,6 +361,12 @@ pub fn run(value: WorkflowRunSnapshot) -> Result<proto::WorkflowRun, Status> {
         failure_reason: value.failure_reason,
         waiting_reason: value.waiting_reason,
         definition_hash: value.workflow_hash,
+        result_json: value
+            .result
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|_| invalid())?,
         step_states: object(&serde_json::json!({"steps": value.step_states}))?,
     })
 }
@@ -391,6 +407,19 @@ pub fn decode_run(value: proto::WorkflowRun) -> Result<WorkflowRunSnapshot, Stat
         last_sequence: value.last_sequence,
         failure_reason: value.failure_reason,
         waiting_reason: value.waiting_reason,
+        result: value
+            .result_json
+            .map(|result| {
+                if result.len() > 64 * 1024 {
+                    return Err(invalid());
+                }
+                let value: Json = serde_json::from_str(&result).map_err(|_| invalid())?;
+                if !value.is_object() {
+                    return Err(invalid());
+                }
+                Ok(value)
+            })
+            .transpose()?,
         step_states: decode_step_states(value.step_states)?,
     })
 }
@@ -442,9 +471,97 @@ fn decode_step_states(value: Option<Struct>) -> Result<Vec<WorkflowStepState>, S
     Ok(states.steps)
 }
 
+/// Encode an optional strict bounded workflow resource as a protobuf object.
+pub fn encode_optional<T: serde::Serialize>(
+    value: &Option<T>,
+) -> Result<Option<prost_types::Struct>, tonic::Status> {
+    value
+        .as_ref()
+        .map(|value| object(&serde_json::to_value(value).map_err(|_| invalid())?))
+        .transpose()
+        .map(Option::flatten)
+}
+/// Decode an optional object through its strict typed contract.
+pub fn decode_optional<T: serde::de::DeserializeOwned>(
+    value: Option<prost_types::Struct>,
+) -> Result<Option<T>, tonic::Status> {
+    value
+        .map(|value| serde_json::from_value(json(Some(value))?).map_err(|_| invalid()))
+        .transpose()
+}
+
+/// Decode ISO weekday integers without silently rounding Struct's doubles.
+pub fn decode_calendar(
+    value: Option<Struct>,
+) -> Result<Option<colossus_api::WorkflowCalendar>, Status> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let mut value = json(Some(value))?;
+    if let Some(days) = value.get_mut("weekdays").and_then(Json::as_array_mut) {
+        if days.len() > 7 {
+            return Err(invalid());
+        }
+        for day in days {
+            let number = day.as_f64().ok_or_else(invalid)?;
+            if !(1.0..=7.0).contains(&number) || number.fract() != 0.0 {
+                return Err(invalid());
+            }
+            // Seven bounded exact values, avoiding unchecked float-to-integer conversion.
+            *day = (1_u8..=7)
+                .find(|value| f64::from(*value) == number)
+                .map(Json::from)
+                .ok_or_else(invalid)?;
+        }
+    }
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(|_| invalid())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn calendar_weekdays_reject_fractional_transport_values() {
+        let value =
+            serde_json::json!({"timezone":"America/New_York","time":"09:00","weekdays":[1,5]});
+        assert_eq!(
+            decode_calendar(object(&value).unwrap())
+                .unwrap()
+                .unwrap()
+                .weekdays,
+            vec![1, 5]
+        );
+        for day in [0.0, 1.5, 8.0] {
+            let mut invalid = value.clone();
+            invalid["weekdays"] = serde_json::json!([day]);
+            assert!(decode_calendar(object(&invalid).unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn final_result_roundtrips_exact_integers_and_rejects_non_objects() {
+        let snapshot = WorkflowRunSnapshot {
+            run_id: "run-1".into(),
+            workflow_id: "health:1.0.0".into(),
+            workflow_hash: "a".repeat(64),
+            status: WorkflowStatus::Completed,
+            created_at: "2026-10-04T12:00:00Z".into(),
+            updated_at: "2026-10-04T12:00:01Z".into(),
+            last_sequence: 3,
+            failure_reason: None,
+            waiting_reason: None,
+            step_states: vec![],
+            result: Some(serde_json::json!({"exact":u64::MAX})),
+        };
+        let wire = run(snapshot.clone()).unwrap();
+        assert_eq!(decode_run(wire.clone()).unwrap().result, snapshot.result);
+        let mut invalid = wire;
+        invalid.result_json = Some("[]".into());
+        assert!(decode_run(invalid).is_err());
+    }
 
     #[test]
     fn recorded_counts_roundtrip_without_accepting_fractional_or_duplicate_states() {

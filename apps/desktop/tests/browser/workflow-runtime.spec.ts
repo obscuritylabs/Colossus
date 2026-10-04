@@ -58,13 +58,13 @@ test("schedule UI → production managed SDK → authenticated sidecar: registra
     ).toBeVisible();
     if (
       !(await page
-        .getByRole("button", { name: "Schedules", exact: true })
+        .getByRole("button", { name: "Workflows", exact: true })
         .isVisible())
     )
       await page
         .getByRole("button", { name: "Open work navigation", exact: true })
         .click();
-    await page.getByRole("button", { name: "Schedules", exact: true }).click();
+    await page.getByRole("button", { name: "Workflows", exact: true }).click();
     await page
       .getByRole("button", { name: "Import workflow", exact: true })
       .click();
@@ -82,10 +82,12 @@ test("schedule UI → production managed SDK → authenticated sidecar: registra
     await expect(
       page.getByRole("status").filter({ hasText: "Workflow registered" }),
     ).toBeVisible();
+    await page.getByRole("button", { name: "Schedules", exact: true }).click();
     await page
-      .getByRole("button", { name: "Create schedule", exact: true })
+      .getByRole("button", { name: "Schedule a workflow", exact: true })
       .click();
     await choose(page, "Registered workflow", "native-health · 1.0.0");
+    await choose(page, "Timing", "Fixed elapsed interval");
     await page
       .getByRole("textbox", { name: "Schedule ID" })
       .fill("native-health");
@@ -175,13 +177,13 @@ test("complex workflow graph reflects real condition routing and loop executions
     ).toBeVisible();
     if (
       !(await page
-        .getByRole("button", { name: "Schedules", exact: true })
+        .getByRole("button", { name: "Workflows", exact: true })
         .isVisible())
     )
       await page
         .getByRole("button", { name: "Open work navigation", exact: true })
         .click();
-    await page.getByRole("button", { name: "Schedules", exact: true }).click();
+    await page.getByRole("button", { name: "Workflows", exact: true }).click();
     await page
       .getByRole("button", { name: "Import workflow", exact: true })
       .click();
@@ -202,6 +204,8 @@ test("complex workflow graph reflects real condition routing and loop executions
     await page
       .getByRole("button", { name: "Register workflow", exact: true })
       .click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await page.getByRole("button", { name: "Schedules", exact: true }).click();
     const workflow = (await host.invoke("get_registered_workflow", {
       workflowId: "control-flow-lab:1.0.0",
     })) as { workflow_id: string; workflow_hash: string };

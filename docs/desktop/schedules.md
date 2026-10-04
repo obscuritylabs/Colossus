@@ -1,111 +1,144 @@
 ---
-title: Workflow schedules
-description: Import an existing workflow, review a fixed cadence, and inspect independent executions in the selected Workspace.
+title: Workflows and schedules
+description: Run reusable workflows, inspect their logic, and schedule workflows or plain-language agent tasks in a Workspace.
 audience: user
 type: how-to
 icon: lucide/calendar-clock
 ---
 
-# Schedule a workflow
+# Workflows and schedules
 
-Open **Schedules** in the Workspace navigation to create, inspect, pause, or enable a
-registered workflow schedule. A schedule starts independent workflow runs; it does not
-resume a chat or add a future user message.
+Open **Workflows** to manage reusable definitions, inspect their logic, and run them
+with structured inputs. Open **Schedules** to choose when a workflow or agent task runs.
+A workflow defines the work; a schedule supplies its timing.
 
-![Workspace schedule list and canonical detail](../assets/screenshots/desktop-schedules.png)
+## Import and run a workflow
 
-Schedule resources captured by the real managed SDK/sidecar acceptance test; the
-surrounding Workspace navigation uses the Desktop test fixture.
+1. In **Workflows**, choose **Import workflow**, paste existing declarative YAML, and
+   select **Validate and review**. Check the name, version, input schema, and exact hash.
+2. Select **Register workflow**. Registration does not execute the definition. Different
+   content needs a new version; registration cannot replace an existing version.
+3. Select the workflow and choose **View workflow logic**. The graph is available before
+   creating any schedule.
+4. Choose **Run workflow**. Simple input schemas provide labeled fields; **Edit JSON**
+   preserves access to the full input object. Nested or complex schemas use JSON directly.
+5. Review the exact definition and inputs, then choose **Start workflow**. Inspect the
+   independent run and refresh **Workflow run history** to see owned executions.
 
-## Register a workflow
+![Reusable workflows and independent run history](../assets/screenshots/desktop-workflows-library.png)
 
-Choose **Import workflow**, paste an existing declarative workflow YAML, and select
-**Validate and review**. Check its name, version, input schema, and exact definition
-hash before registering it. Registration does not execute the workflow. Different
-content needs a new version; registration cannot silently replace an existing version.
+Workflow resources captured through the production managed SDK and an isolated real
+sidecar; surrounding Workspace navigation uses the Desktop test fixture.
 
-Desktop Managed Local stores its library and schedules in its private Workspace
-partition. A workflow registered against separate CLI state is not automatically
-available here. The managed TUI can inspect existing state but cannot register a new
-definition. For authoring help, see [Your first workflow](../extend/workflows/first-workflow.md).
+History lists this application's runs for the selected definition, newest first.
+Selecting a run shows its status, recorded step states, and bounded final JSON result
+when available. A result larger than 64 KiB is omitted. Run allocation preserves the
+reviewed definition hash and a durable retry identity. If its response is unconfirmed,
+**Confirm same run request** repeats that exact identity after an explicit action.
 
-## Create and review a schedule
+Managed Local stores definitions and schedules in its private Workspace partition.
+Separate CLI registrations are not imported automatically. See
+[Your first workflow](../extend/workflows/first-workflow.md) for definition authoring.
 
-1. Choose **Create schedule** and select a registered workflow. Its detail provides the
-   canonical hash and input schema; unavailable pinned dependencies prevent scheduling.
-2. Enter a unique schedule ID and a JSON input object conforming to that schema.
-3. Choose a fixed elapsed cadence from one minute through 31 days and an explicit first
-   occurrence. Local times that do not exist or occur twice during a clock change are
-   rejected; choose UTC to identify an exact occurrence.
-4. Choose the policy for multiple overdue occurrences and whether to enable future ticks
-   immediately. New schedules default to paused.
-5. Review the frozen UTC start, definition hash, inputs, cadence, policy, and initial
-   state, then choose **Create schedule**.
+## Schedule a task
 
-![Exact workflow schedule review](../assets/screenshots/desktop-schedule-review.png)
+In **Schedules**, choose **Schedule a task**, give it a name, and write instructions in
+plain language. Choose **Daily** or **Weekly**, a local time, an IANA timezone, and a
+first date. Weekly schedules start on the first selected weekday on or after that date.
 
-Creation review with illustrative test data.
+![Plain-language task scheduling](../assets/screenshots/desktop-schedule-task.png)
 
-Every 24 hours means elapsed time: its local hour may shift across daylight saving
-changes. With **one** due occurrence, both misfire options queue a run. With **multiple**
-due occurrences, **Fire once** queues the latest once; **Skip** queues none and advances
-to the next future boundary.
+**Advanced** provides a configured model profile, reasoning effort, allowed tool names,
+missed-run policy, and initial enable state. The selected provider must support the
+chosen effort. **Model default** preserves the profile's configured effort; Echo
+requires that default. Every tool call follows current Workspace permissions and
+approval rules. New task schedules default to enabled.
 
-If creation is unconfirmed, choose **Check stored schedule**. Keep the original reviewed
-request and retry key when reconciling it. Desktop never automatically repeats a
-mutation or allocates a new key after a lost response.
+Select **Review task**, inspect the instructions, recurrence, first UTC occurrence,
+model, tools, and policy, then choose **Create task schedule**. Each occurrence starts a
+fresh agent session on the selected runtime. The worker must be running. Managed Local
+runs on this computer; an external target runs on its configured host.
 
-## Inspect and control future work
+A task uses an internal one-step workflow. Its definition and schedule are allocated
+atomically, and internal task definitions stay out of the reusable Workflows library.
+Select the schedule to inspect its instructions and next occurrence.
 
-Select a schedule to inspect its immutable fields, input snapshot, application and chat
-origin when known, next boundary, and last dispatch. **Queued** describes dispatch, not
-execution success. **Inspect last workflow run** shows the independent run's current
-queued, running, waiting, completed, failed, cancelled, or interrupted state.
+## Schedule a reusable workflow
 
-Choose **View workflow logic** to see the schedule's exact pinned definition as a graph.
-Parallel checks separate into lanes; conditions label their True and False paths;
-bounded loops show their body, next-item path, and exit. Child workflow nodes identify
-the referenced definition. Recovery steps appear as a separate failure path.
+Choose **Schedule workflow** from a selected definition in **Workflows**, or
+**Schedule a workflow** in **Schedules**. Select the registered definition, enter a
+unique schedule ID, and provide its schema-based fields or JSON inputs.
 
-![Complex workflow logic and recorded step execution](../assets/screenshots/desktop-workflow-logic.png)
+Choose calendar timing or a **Fixed interval** from one minute through 31 days.
+Review the exact definition hash, immutable input snapshot, UTC start, recurrence,
+missed-run policy, and initial state before choosing **Create schedule**. Workflow
+schedules default to paused.
 
-This example completed through the real managed runtime; Workspace navigation uses
-the Desktop test fixture. Select a node or use **Choose a step** to inspect its logic
-and recorded execution. Zoom, pan, and **Fit workflow** help navigate larger graphs.
-Completed steps have recorded completion evidence; unvisited branches remain neutral.
-Loop completion counts summarize distinct executions. A changed definition hash is
-never substituted for the schedule's pinned version. Older runtimes can still show
-schedule and run details without providing a logic graph.
+Calendar recurrence preserves the selected local time across daylight saving changes.
+Missing local times are skipped; repeated local times run once at the earlier instant.
+A first occurrence in a missing local time is rejected so the reviewed start is explicit.
+Fixed intervals measure elapsed time: every 24 hours can shift its local hour across DST.
 
-**Review pause** stops future ticks without cancelling queued or running workflows.
-**Review enable** preserves the retained boundary, so enabling an overdue schedule may
-reconcile missed occurrences. A tick or another control change invalidates a stale
-review: refresh and review again. To change immutable fields, create a new schedule and
-pause the previous one.
+With one due occurrence, both missed-run policies queue a run. With multiple overdue
+occurrences, **Run latest once** queues the latest once; **Skip catch-up runs** queues
+none and advances to the next future boundary. Calendar reconciliation is bounded to
+10,000 occurrences; a larger backlog blocks and pauses the schedule for inspection.
 
-A blocked definition is never repinned automatically. Restore the exact pinned
-definition and dependencies, or register a new version and create a new schedule.
-Legacy schedules with unknown ownership show metadata only; Desktop cannot claim their
-inputs, run details, or control authority.
+If creation is unconfirmed, choose **Check stored schedule**. Preserve the original
+reviewed request and retry key. Desktop never automatically repeats a mutation or
+allocates a new key after a lost response.
 
-## Understand availability and agent requests
+## Inspect workflow logic and execution
+
+**View workflow logic** displays the exact definition. Parallel checks separate into
+lanes; conditions label True and False paths; bounded loops show their body, next-item
+path, and exit. Child workflow nodes identify the referenced definition. Explicit
+recovery steps appear as a separate failure path.
+
+![Complex workflow with recorded execution](../assets/screenshots/desktop-workflow-logic.png)
+
+This example completed through the real managed runtime. Select a node or use
+**Choose a step** to inspect logic and recorded execution. Zoom, pan, and **Fit workflow**
+help navigate larger graphs. Completed steps carry recorded evidence; unvisited paths
+remain neutral. Loop counts summarize distinct executions. Desktop checks the definition
+hash against the selected schedule or run before displaying an execution overlay.
+
+## Control future work
+
+Select a schedule to inspect its timing, ownership, next occurrence, last dispatch, and
+last independent run. **Queued** describes dispatch rather than execution success.
+**Inspect last workflow run** shows queued, running, waiting, completed, failed,
+cancelled, or interrupted state.
+
+**Review pause** stops future ticks without cancelling existing runs. **Review enable**
+preserves the retained boundary and can reconcile overdue occurrences. A tick or control
+change invalidates a stale review: refresh and review again. To change immutable fields,
+create a replacement schedule and pause the previous one.
+
+A blocked definition is never repinned automatically. Restore its exact definition and
+dependencies, or register a new version and create a new schedule. Legacy schedules
+with unknown ownership expose metadata only; Desktop cannot claim their inputs, task
+instructions, run details, or control authority.
+
+## Availability and agent requests
 
 Managed Local ticks while its worker runs. Retained unselected workers keep ticking;
 Desktop retains up to four workers. Future schedules do not pin or wake an idle
-Workspace when another needs capacity. Queued, running, or waiting workflow work counts
-as active work for eviction and configuration drain. Closing the main window leaves
-Desktop running in the macOS menu bar or Windows system tray; shutting down Colossus
-stops workers. Resume reconciles missed occurrences using the chosen policy.
+Workspace when another needs capacity. Queued, running, or waiting work counts as active
+for eviction and configuration drain. Closing the main window leaves Desktop running
+in the macOS menu bar or Windows system tray; shutting down Colossus stops workers.
+Resume reconciles missed occurrences using the selected policy.
 
-Agent schedule requests use registered definitions, exact tool ceilings, and the normal
-policy and approval path. Creating even a paused schedule and changing its enabled
-state require review under the default policy. Ask and Risk auto prompt; Deny rejects
-approval obligations. Explicitly elevated Full access can satisfy an approval obligation,
-while policy denials continue to deny. Future occurrences undergo current workflow and
-effect authorization independently of the original chat approval.
+Agent schedule requests use the ordinary policy and approval path. Default policy
+requires review for creation, including paused schedules, and enabled-state changes.
+Ask and Risk auto prompt; Deny rejects approval obligations. Explicitly elevated Full
+access can satisfy an approval obligation, while policy denials continue to deny.
+Future occurrences undergo current workflow and effect authorization independently.
 
-External targets need advertised workflow resources and explicit enrolled scopes. See
-[External runtime targets](external-targets.md). Desktop does not widen their grants.
+External targets need advertised resources and explicit enrolled scopes. Older runtimes
+can retain fixed workflow scheduling while unavailable calendar, task, manual-run, or
+history features remain disabled. See [External runtime targets](external-targets.md).
+Desktop does not widen their grants.
 
 ## Next step
 

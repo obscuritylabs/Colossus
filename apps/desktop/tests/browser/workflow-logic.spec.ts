@@ -220,7 +220,7 @@ for (const mode of ["missing", "mismatch"] as const)
     await expect(page.getByRole("dialog")).toContainText(
       mode === "missing"
         ? "does not provide a displayable workflow definition"
-        : "differs from this schedule's pinned hash",
+        : "differs from the reviewed hash",
     );
     await expect(page.locator(".workflow-logic-canvas")).toHaveCount(0);
   });

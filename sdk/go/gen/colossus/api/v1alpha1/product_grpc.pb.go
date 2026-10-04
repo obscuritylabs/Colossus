@@ -358,6 +358,7 @@ const (
 	AutomationService_GetWorkflow_FullMethodName                = "/colossus.api.v1alpha1.AutomationService/GetWorkflow"
 	AutomationService_ListWorkflows_FullMethodName              = "/colossus.api.v1alpha1.AutomationService/ListWorkflows"
 	AutomationService_StartWorkflowRun_FullMethodName           = "/colossus.api.v1alpha1.AutomationService/StartWorkflowRun"
+	AutomationService_ListWorkflowRuns_FullMethodName           = "/colossus.api.v1alpha1.AutomationService/ListWorkflowRuns"
 	AutomationService_GetWorkflowRun_FullMethodName             = "/colossus.api.v1alpha1.AutomationService/GetWorkflowRun"
 	AutomationService_WatchWorkflowRun_FullMethodName           = "/colossus.api.v1alpha1.AutomationService/WatchWorkflowRun"
 	AutomationService_ValidateWorkflowDefinition_FullMethodName = "/colossus.api.v1alpha1.AutomationService/ValidateWorkflowDefinition"
@@ -381,6 +382,8 @@ type AutomationServiceClient interface {
 	ListWorkflows(ctx context.Context, in *ListWorkflowsRequest, opts ...grpc.CallOption) (*ListWorkflowsResponse, error)
 	// StartWorkflowRun starts one idempotent durable workflow run.
 	StartWorkflowRun(ctx context.Context, in *StartWorkflowRunRequest, opts ...grpc.CallOption) (*StartWorkflowRunResponse, error)
+	// ListWorkflowRuns reads bounded caller-owned history for one definition.
+	ListWorkflowRuns(ctx context.Context, in *ListWorkflowRunsRequest, opts ...grpc.CallOption) (*ListWorkflowRunsResponse, error)
 	// GetWorkflowRun returns one durable workflow run.
 	GetWorkflowRun(ctx context.Context, in *GetWorkflowRunRequest, opts ...grpc.CallOption) (*GetWorkflowRunResponse, error)
 	// WatchWorkflowRun replays snapshots after an exclusive sequence and tails updates.
@@ -433,6 +436,16 @@ func (c *automationServiceClient) StartWorkflowRun(ctx context.Context, in *Star
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StartWorkflowRunResponse)
 	err := c.cc.Invoke(ctx, AutomationService_StartWorkflowRun_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *automationServiceClient) ListWorkflowRuns(ctx context.Context, in *ListWorkflowRunsRequest, opts ...grpc.CallOption) (*ListWorkflowRunsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListWorkflowRunsResponse)
+	err := c.cc.Invoke(ctx, AutomationService_ListWorkflowRuns_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -550,6 +563,8 @@ type AutomationServiceServer interface {
 	ListWorkflows(context.Context, *ListWorkflowsRequest) (*ListWorkflowsResponse, error)
 	// StartWorkflowRun starts one idempotent durable workflow run.
 	StartWorkflowRun(context.Context, *StartWorkflowRunRequest) (*StartWorkflowRunResponse, error)
+	// ListWorkflowRuns reads bounded caller-owned history for one definition.
+	ListWorkflowRuns(context.Context, *ListWorkflowRunsRequest) (*ListWorkflowRunsResponse, error)
 	// GetWorkflowRun returns one durable workflow run.
 	GetWorkflowRun(context.Context, *GetWorkflowRunRequest) (*GetWorkflowRunResponse, error)
 	// WatchWorkflowRun replays snapshots after an exclusive sequence and tails updates.
@@ -586,6 +601,9 @@ func (UnimplementedAutomationServiceServer) ListWorkflows(context.Context, *List
 }
 func (UnimplementedAutomationServiceServer) StartWorkflowRun(context.Context, *StartWorkflowRunRequest) (*StartWorkflowRunResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StartWorkflowRun not implemented")
+}
+func (UnimplementedAutomationServiceServer) ListWorkflowRuns(context.Context, *ListWorkflowRunsRequest) (*ListWorkflowRunsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListWorkflowRuns not implemented")
 }
 func (UnimplementedAutomationServiceServer) GetWorkflowRun(context.Context, *GetWorkflowRunRequest) (*GetWorkflowRunResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetWorkflowRun not implemented")
@@ -685,6 +703,24 @@ func _AutomationService_StartWorkflowRun_Handler(srv interface{}, ctx context.Co
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AutomationServiceServer).StartWorkflowRun(ctx, req.(*StartWorkflowRunRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutomationService_ListWorkflowRuns_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListWorkflowRunsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutomationServiceServer).ListWorkflowRuns(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AutomationService_ListWorkflowRuns_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutomationServiceServer).ListWorkflowRuns(ctx, req.(*ListWorkflowRunsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -862,6 +898,10 @@ var AutomationService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StartWorkflowRun",
 			Handler:    _AutomationService_StartWorkflowRun_Handler,
+		},
+		{
+			MethodName: "ListWorkflowRuns",
+			Handler:    _AutomationService_ListWorkflowRuns_Handler,
 		},
 		{
 			MethodName: "GetWorkflowRun",

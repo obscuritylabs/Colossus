@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
+  StartWorkflowRunRequest,
   CreateScheduleRequest,
   RegisteredWorkflow,
   WorkflowContext,
@@ -1115,4 +1116,25 @@ export function stopShellSession(
   sessionId: string,
 ): Promise<import("./shellSessions").ShellSnapshot> {
   return call("stop_shell_session", { targetId, sessionId });
+}
+
+export function listWorkflowRuns(
+  targetId: string,
+  selectionEpoch: number,
+  workflowId: string,
+  after: string | null,
+): Promise<WorkflowPage<WorkflowRun>> {
+  return call("list_workflow_runs", {
+    targetId,
+    selectionEpoch,
+    workflowId,
+    after,
+  });
+}
+export function startWorkflowRun(
+  targetId: string,
+  selectionEpoch: number,
+  request: StartWorkflowRunRequest,
+): Promise<WorkflowRun> {
+  return call("start_workflow_run", { targetId, selectionEpoch, request });
 }

@@ -76,6 +76,9 @@ pub struct WorkflowRunSnapshot {
     pub failure_reason: Option<String>,
     /// Safe categorical waiting guidance.
     pub waiting_reason: Option<String>,
+    /// Schema-validated final values assembled from released step results; bounded detail only.
+    #[serde(default)]
+    pub result: Option<Value>,
     /// Recorded step states only; no raw effect evidence or unvisited-branch inference.
     #[serde(default)]
     pub step_states: Vec<WorkflowStepState>,
@@ -135,6 +138,12 @@ pub enum WorkflowControlOperation {
         inputs: Value,
         /// Fixed elapsed cadence from 60 seconds through 31 days.
         cadence_seconds: u64,
+        /// Daily or weekly local wall-clock recurrence, exclusive with cadence.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        calendar: Option<WorkflowCalendar>,
+        /// Allocate a one-step task atomically instead of referencing a definition.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task: Option<Box<WorkflowTask>>,
         /// Reviewed first occurrence normalized to a UTC instant.
         starts_at: String,
         /// Explicit multiple-overdue-occurrence reconciliation.
@@ -152,6 +161,15 @@ pub enum WorkflowControlOperation {
         enabled: bool,
         /// Exact canonical schedule revision reviewed for control.
         etag: String,
+    },
+    /// Read a bounded owner-authorized run history for one definition.
+    ListRuns {
+        /// Exact registered name:version.
+        workflow_id: String,
+        /// Exclusive stable run identity cursor.
+        after: Option<String>,
+        /// Requested page size, one through one hundred.
+        limit: usize,
     },
     /// Inspect a workflow run separately from interactive agent runs.
     GetRun {
@@ -185,7 +203,7 @@ impl WorkflowControlOperation {
             Self::GetSchedule { .. } => "workflow.schedule.get",
             Self::CreateSchedule { .. } => "workflow.schedule.create",
             Self::SetScheduleEnabled { .. } => "workflow.schedule.set_enabled",
-            Self::GetRun { .. } | Self::ActiveWork => "workflow.run.read",
+            Self::GetRun { .. } | Self::ListRuns { .. } | Self::ActiveWork => "workflow.run.read",
             Self::StartRun { .. } => "workflow.run.start",
         }
     }

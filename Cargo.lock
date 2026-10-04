@@ -2028,6 +2028,7 @@ dependencies = [
  "futures",
  "hex",
  "hmac 0.12.1",
+ "jiff",
  "jsonschema",
  "serde-saphyr",
  "serde_json",
@@ -3618,6 +3619,7 @@ checksum = "961d16382652bfdd8c6f68b223b26a8c93e0d475c672f414411db31c6c5c900e"
 dependencies = [
  "defmt",
  "jiff-static",
+ "jiff-tzdb",
  "jiff-tzdb-platform",
  "log",
  "portable-atomic",

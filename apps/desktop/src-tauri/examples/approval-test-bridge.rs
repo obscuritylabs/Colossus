@@ -65,6 +65,7 @@ async fn main() -> anyhow::Result<()> {
             scopes::SCHEDULES_CREATE,
             scopes::SCHEDULES_CONTROL,
             scopes::WORKFLOW_RUNS_READ,
+            scopes::WORKFLOW_RUNS_START,
         ]);
     }
     let grant = SidecarApplicationGrant::new(
@@ -95,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
     )?;
     let client = Colossus::start_sidecar(&NativeSidecarLifecycle::new(bootstrap), options).await?;
     let result = if workflow_acceptance {
-        workflow_acceptance::serve(&client).await
+        workflow_acceptance::serve(&client, &instance).await
     } else if args.len() == 4 {
         process_acceptance::serve(&client, &instance).await
     } else {

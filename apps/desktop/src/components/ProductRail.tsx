@@ -18,7 +18,8 @@ export type WorkspaceSurface =
   | "connections"
   | "settings"
   | "plugins"
-  | "schedules";
+  | "schedules"
+  | "workflows";
 
 interface ProductRailProps {
   surface: WorkspaceSurface;
@@ -37,6 +38,7 @@ const MAIN_ITEMS = [
   { id: "fleet", label: "Agents", Icon: IconTopologyStar3 },
   { id: "library", label: "Library", Icon: IconLibrary },
   { id: "plugins", label: "Plugins", Icon: IconPlugConnected },
+  { id: "workflows", label: "Workflows", Icon: IconTopologyStar3 },
   { id: "schedules", label: "Schedules", Icon: IconCalendarTime },
 ] as const;
 

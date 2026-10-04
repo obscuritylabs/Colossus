@@ -72,6 +72,17 @@ impl WorkflowClient for ManagedWorkflowClient {
     ) -> ApiResult<WorkflowScheduleSnapshot> {
         self.current().await?.set_schedule_enabled(request).await
     }
+    async fn list_runs(
+        &self,
+        workflow_id: String,
+        after: Option<String>,
+        limit: usize,
+    ) -> ApiResult<WorkflowPage<WorkflowRunSnapshot>> {
+        self.current()
+            .await?
+            .list_runs(workflow_id, after, limit)
+            .await
+    }
     async fn get_run(&self, id: String) -> ApiResult<WorkflowRunSnapshot> {
         self.current().await?.get_run(id).await
     }

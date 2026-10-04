@@ -133,6 +133,7 @@ const DESTINATIONS = [
   { id: "work", label: "Work", Icon: IconBriefcase2 },
   { id: "fleet", label: "Capabilities", Icon: IconTopologyStar3 },
   { id: "plugins", label: "Plugins", Icon: IconPlugConnected },
+  { id: "workflows", label: "Workflows", Icon: IconTopologyStar3 },
   { id: "schedules", label: "Schedules", Icon: IconCalendarTime },
   { id: "library", label: "Library", Icon: IconLibrary },
   { id: "connections", label: "Connections", Icon: IconPlugConnected },

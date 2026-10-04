@@ -150,6 +150,9 @@ impl SystemService for SystemServiceAdapter {
                 ("schedules.read", scopes::SCHEDULES_READ),
                 ("schedules.create", scopes::SCHEDULES_CREATE),
                 ("schedules.control", scopes::SCHEDULES_CONTROL),
+                ("schedules.calendar", scopes::SCHEDULES_READ),
+                ("schedules.tasks", scopes::SCHEDULES_CREATE),
+                ("workflow_runs.history", scopes::WORKFLOW_RUNS_READ),
             ]
             .into_iter()
             .map(|(name, scope)| Capability {
@@ -162,6 +165,11 @@ impl SystemService for SystemServiceAdapter {
                         }
                         "workflow_runs.start" => {
                             caller.principal().has_scope(scopes::WORKFLOW_RUNS_READ)
+                        }
+                        "schedules.tasks" => {
+                            caller.principal().has_scope(scopes::SCHEDULES_READ)
+                                && caller.principal().has_scope(scopes::WORKFLOWS_READ)
+                                && caller.principal().has_scope(scopes::WORKFLOWS_REGISTER)
                         }
                         "schedules.create" | "schedules.control" => {
                             caller.principal().has_scope(scopes::SCHEDULES_READ)

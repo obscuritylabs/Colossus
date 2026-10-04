@@ -23,6 +23,27 @@ pub fn validate_definition(yaml: &str) -> Result<ValidatedWorkflow, WorkflowErro
     }
     let definition: WorkflowDefinition = serde_saphyr::from_str(yaml)
         .map_err(|error| WorkflowError::InvalidDefinition(error.to_string()))?;
+    validate_parsed(definition, yaml)
+}
+
+/// Internal tasks use strict JSON, allowing literal YAML punctuation in instructions.
+pub(super) fn validate_task_definition(value: Value) -> Result<ValidatedWorkflow, WorkflowError> {
+    let raw = serde_json::to_string(&value)
+        .map_err(|error| WorkflowError::InvalidDefinition(error.to_string()))?;
+    if raw.len() > MAX_WORKFLOW_BYTES {
+        return Err(WorkflowError::InvalidDefinition(
+            "task definition exceeds its bound".into(),
+        ));
+    }
+    let definition = serde_json::from_value(value)
+        .map_err(|error| WorkflowError::InvalidDefinition(error.to_string()))?;
+    validate_parsed(definition, &raw)
+}
+
+fn validate_parsed(
+    definition: WorkflowDefinition,
+    raw: &str,
+) -> Result<ValidatedWorkflow, WorkflowError> {
     if definition.api_version != "colossus.dev/v1alpha1" || definition.kind != "Workflow" {
         return Err(WorkflowError::InvalidDefinition(
             "apiVersion must be colossus.dev/v1alpha1 and kind must be Workflow".into(),
@@ -92,7 +113,7 @@ pub fn validate_definition(yaml: &str) -> Result<ValidatedWorkflow, WorkflowErro
     }
     Ok(ValidatedWorkflow {
         definition,
-        content_hash: hex::encode(Sha256::digest(yaml.as_bytes())),
+        content_hash: hex::encode(Sha256::digest(raw.as_bytes())),
     })
 }
 

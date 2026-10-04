@@ -6,6 +6,10 @@ export interface WorkflowContext {
   schedules_create: boolean;
   schedules_control: boolean;
   workflow_runs_read: boolean;
+  workflow_runs_start?: boolean;
+  calendar_schedules?: boolean;
+  task_schedules?: boolean;
+  workflow_run_history?: boolean;
   managed: boolean;
 }
 export interface RegisteredWorkflow {
@@ -31,6 +35,8 @@ export interface ScheduleRecord {
   workflow_hash: string;
   inputs: Record<string, unknown> | null;
   cadence_seconds: number;
+  calendar?: WorkflowCalendar | null;
+  task?: WorkflowTask | null;
   misfire_policy: MisfirePolicy;
   enabled: boolean;
   starts_at: string;
@@ -70,6 +76,8 @@ export interface WorkflowRun {
   failure_reason: string | null;
   waiting_reason: string | null;
   step_states?: WorkflowStepState[];
+  result?: Record<string, unknown> | null;
+  result_json?: string | null;
 }
 
 export type WorkflowLogicKind =
@@ -109,6 +117,8 @@ export interface CreateScheduleRequest {
   expected_hash: string;
   inputs: Record<string, unknown>;
   cadence_seconds: number;
+  calendar?: WorkflowCalendar | null;
+  task?: WorkflowTask | null;
   starts_at: string;
   misfire_policy: MisfirePolicy;
   enabled: boolean;
@@ -193,3 +203,60 @@ export function workflowFailure(error: unknown): string {
 }
 export const MISFIRE_GUIDANCE =
   "With one due occurrence, both options queue a run. With multiple due occurrences, Fire once queues the latest once; Skip queues none and advances to the next future boundary.";
+
+export interface WorkflowCalendar {
+  timezone: string;
+  time: string;
+  weekdays: number[];
+}
+export interface WorkflowTask {
+  name: string;
+  instructions: string;
+  tools: string[];
+  options: { model_profile: string | null; reasoning_effort: string | null };
+}
+export interface StartWorkflowRunRequest {
+  workflow_id: string;
+  expected_hash: string;
+  inputs: Record<string, unknown>;
+  idempotency_key: string;
+}
+export function recurrence(record: {
+  cadence_seconds: number;
+  calendar?: WorkflowCalendar | null;
+}): string {
+  const calendar = record.calendar;
+  if (!calendar) return cadence(record.cadence_seconds);
+  const days = ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  return `${calendar.weekdays.length ? calendar.weekdays.map((day) => days[day]).join(", ") : "Daily"} at ${calendar.time} · ${calendar.timezone}`;
+}
+/** Resolve a reviewed local occurrence in any IANA zone. Folds choose the earlier instant. */
+export function calendarOccurrence(value: string, timezone: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value))
+    throw new Error("Choose a complete first occurrence.");
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
+  const center = Date.parse(`${value}:00Z`);
+  if (!Number.isFinite(center)) throw new Error("Choose a valid date.");
+  for (let minute = -1440; minute <= 1440; minute++) {
+    const instant = new Date(center + minute * 60_000);
+    const fields = Object.fromEntries(
+      formatter.formatToParts(instant).map((part) => [part.type, part.value]),
+    );
+    if (
+      `${fields.year}-${fields.month}-${fields.day}T${fields.hour}:${fields.minute}` ===
+      value
+    )
+      return instant.toISOString();
+  }
+  throw new Error(
+    "This local time does not exist during a clock change. Choose another first occurrence.",
+  );
+}

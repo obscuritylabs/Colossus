@@ -10,6 +10,9 @@ pub struct WorkflowMetadata {
     pub version: String,
     /// Human-readable description.
     pub description: String,
+    /// Internal one-step definition allocated with a scheduled task.
+    #[serde(default)]
+    pub scheduled_task: bool,
 }
 
 /// A strict versioned workflow definition.
@@ -52,6 +55,9 @@ pub enum WorkflowStep {
         id: String,
         /// Logical prompt expression or literal.
         prompt: String,
+        /// Optional configured model and reasoning selection.
+        #[serde(default)]
+        options: WorkflowAgentOptions,
         /// Explicit idempotency strategy, if any.
         idempotency: Option<String>,
     },
@@ -171,6 +177,12 @@ pub struct WorkflowSchedule {
     pub inputs: Value,
     /// Fixed cadence in seconds.
     pub cadence_seconds: u64,
+    /// Local wall-clock recurrence; cadence is zero when present.
+    #[serde(default)]
+    pub calendar: Option<WorkflowCalendar>,
+    /// Owner-visible instructions for an internally allocated task.
+    #[serde(default)]
+    pub task: Option<WorkflowTask>,
     /// Explicit behavior for multiple overdue occurrences.
     pub misfire_policy: WorkflowScheduleMisfirePolicy,
     /// Whether the worker may evaluate the schedule.

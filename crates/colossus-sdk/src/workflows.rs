@@ -3,9 +3,10 @@ use crate::{ApiResult, Colossus};
 use async_trait::async_trait;
 pub use colossus_api::{
     CreateWorkflowScheduleRequest, RegisteredWorkflow, SetWorkflowScheduleEnabledRequest,
-    StartWorkflowRunRequest, WorkflowLogic, WorkflowLogicBranch, WorkflowLogicKind,
-    WorkflowLogicStep, WorkflowPage, WorkflowRunSnapshot, WorkflowScheduleMisfirePolicy,
-    WorkflowScheduleSnapshot, WorkflowStatus, WorkflowStepState, WorkflowStepStatus,
+    StartWorkflowRunRequest, WorkflowAgentOptions, WorkflowCalendar, WorkflowLogic,
+    WorkflowLogicBranch, WorkflowLogicKind, WorkflowLogicStep, WorkflowPage, WorkflowRunSnapshot,
+    WorkflowScheduleMisfirePolicy, WorkflowScheduleSnapshot, WorkflowStatus, WorkflowStepState,
+    WorkflowStepStatus, WorkflowTask,
 };
 use std::sync::Arc;
 
@@ -47,6 +48,13 @@ pub trait WorkflowClient: Send + Sync {
         &self,
         request: SetWorkflowScheduleEnabledRequest,
     ) -> ApiResult<WorkflowScheduleSnapshot>;
+    /// Read bounded caller-owned history for one definition.
+    async fn list_runs(
+        &self,
+        workflow_id: String,
+        after: Option<String>,
+        limit: usize,
+    ) -> ApiResult<WorkflowPage<WorkflowRunSnapshot>>;
     /// Inspect an independent workflow run without raw effect output.
     async fn get_run(&self, id: String) -> ApiResult<WorkflowRunSnapshot>;
     /// Explicitly allocate one independently queued workflow run.
@@ -124,6 +132,16 @@ impl WorkflowClient for ContextBoundWorkflowClient {
         request: SetWorkflowScheduleEnabledRequest,
     ) -> ApiResult<WorkflowScheduleSnapshot> {
         self.api.set_schedule_enabled(&self.caller, request).await
+    }
+    async fn list_runs(
+        &self,
+        workflow_id: String,
+        after: Option<String>,
+        limit: usize,
+    ) -> ApiResult<WorkflowPage<WorkflowRunSnapshot>> {
+        self.api
+            .list_runs(&self.caller, workflow_id, after, limit)
+            .await
     }
     async fn get_run(&self, id: String) -> ApiResult<WorkflowRunSnapshot> {
         self.api.get_run(&self.caller, id).await

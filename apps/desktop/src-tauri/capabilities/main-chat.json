@@ -15,6 +15,8 @@
     "allow-create-workflow-schedule",
     "allow-set-workflow-schedule-enabled",
     "allow-get-scheduled-workflow-run",
+    "allow-list-workflow-runs",
+    "allow-start-workflow-run",
     "allow-remembered-command-count",
     "allow-clear-remembered-commands",
     "allow-get-workspace-git-status",

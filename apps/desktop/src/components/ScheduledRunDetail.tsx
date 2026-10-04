@@ -99,6 +99,14 @@ export function ScheduledRunDetail({
             </p>
           )}
           {run.failure_reason && <p role="status">{run.failure_reason}</p>}
+          {(run.result_json || run.result) && (
+            <details open>
+              <summary>Result</summary>
+              <pre className="workflow-json">
+                {run.result_json || JSON.stringify(run.result, null, 2)}
+              </pre>
+            </details>
+          )}
           {run.status === "interrupted" && (
             <p>
               The worker stopped before this workflow completed. Review its

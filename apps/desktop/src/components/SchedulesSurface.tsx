@@ -6,7 +6,7 @@ import {
   workflowContext,
 } from "../api";
 import {
-  cadence,
+  recurrence,
   MISFIRE_GUIDANCE,
   occurrence,
   workflowFailure,
@@ -15,7 +15,7 @@ import type { WorkflowContext, WorkflowSchedule } from "../workflows";
 import { ScheduleCreate } from "./ScheduleCreate";
 import { ScheduledRunDetail } from "./ScheduledRunDetail";
 import { WorkflowDialog } from "./WorkflowDialog";
-import { WorkflowImport } from "./WorkflowImport";
+import { ScheduleTaskCreate } from "./ScheduleTaskCreate";
 import { WorkflowLogicDialog } from "./WorkflowLogicDialog";
 import "./workflows.css";
 
@@ -38,7 +38,7 @@ export function SchedulesSurface({
   const [control, setControl] = useState<WorkflowSchedule | null>(null);
   const [runOpen, setRunOpen] = useState(false);
   const [logicOpen, setLogicOpen] = useState(false);
-  const [dialog, setDialog] = useState<"create" | "import" | null>(null);
+  const [dialog, setDialog] = useState<"create" | "task" | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -212,7 +212,7 @@ export function SchedulesSurface({
         <div>
           <p className="surface-breadcrumb">Workspace / {workspaceName}</p>
           <h2>Schedules</h2>
-          <p>Run registered workflows at a fixed cadence.</p>
+          <p>Schedule an agent task or run an existing workflow on repeat.</p>
         </div>
         <div className="workflow-actions">
           <button
@@ -223,19 +223,19 @@ export function SchedulesSurface({
             Refresh
           </button>
           <button
-            className="button secondary"
+            className="button primary"
             disabled={
               loading ||
               busy ||
-              !context?.workflows_register ||
-              !context.workflows_read
+              !context?.task_schedules ||
+              !context.calendar_schedules
             }
-            onClick={() => setDialog("import")}
+            onClick={() => setDialog("task")}
           >
-            Import workflow
+            Schedule a task
           </button>
           <button
-            className="button primary"
+            className="button secondary"
             disabled={
               loading ||
               busy ||
@@ -244,7 +244,7 @@ export function SchedulesSurface({
             }
             onClick={() => setDialog("create")}
           >
-            Create schedule
+            Schedule a workflow
           </button>
         </div>
       </header>
@@ -303,8 +303,8 @@ export function SchedulesSurface({
         <div className="workflow-empty">
           <h3>No schedules in this Workspace</h3>
           <p>
-            Import an existing workflow YAML into this runtime, then create a
-            schedule. CLI registrations use separate state.
+            Schedule a task with instructions, or choose a reusable workflow
+            from the Workflows library.
           </p>
         </div>
       )}
@@ -321,10 +321,14 @@ export function SchedulesSurface({
                     disabled={busy || loading}
                     onClick={() => void inspect(schedule.record.schedule_id)}
                   >
-                    <strong>{schedule.record.schedule_id}</strong>
+                    <strong>
+                      {schedule.record.task?.name ||
+                        schedule.record.schedule_id}
+                    </strong>
                     <span>
-                      {schedule.record.workflow_name} ·{" "}
-                      {schedule.record.workflow_version}
+                      {schedule.record.task
+                        ? "Agent task"
+                        : `${schedule.record.workflow_name} · ${schedule.record.workflow_version}`}
                     </span>
                     <span className="workflow-status">
                       {schedule.record.blocked_reason
@@ -334,7 +338,7 @@ export function SchedulesSurface({
                           : "Paused"}
                       {!schedule.controllable && " · Legacy"}
                     </span>
-                    <span>{cadence(schedule.record.cadence_seconds)}</span>
+                    <span>{recurrence(schedule.record)}</span>
                     <span>
                       {schedule.record.enabled
                         ? "Next boundary"
@@ -370,9 +374,9 @@ export function SchedulesSurface({
             {record && detail && (
               <>
                 <header className="workflow-detail-header">
-                  <h3>{record.schedule_id}</h3>
+                  <h3>{record.task?.name || record.schedule_id}</h3>
                   <div className="workflow-actions">
-                    {context.workflows_read && (
+                    {context.workflows_read && !record.task && (
                       <button
                         className="button secondary"
                         disabled={busy || loading}
@@ -397,21 +401,46 @@ export function SchedulesSurface({
                       ? "Enabled"
                       : "Paused"}
                 </strong>
+                {record.task && (
+                  <section aria-label="Task instructions">
+                    <h4>Instructions</h4>
+                    <pre className="workflow-task-instructions">
+                      {record.task.instructions}
+                    </pre>
+                    <p>
+                      Model:{" "}
+                      {record.task.options.model_profile || "Workspace primary"}{" "}
+                      · Effort:{" "}
+                      {record.task.options.reasoning_effort || "Model default"}
+                    </p>
+                  </section>
+                )}
                 <dl className="workflow-facts">
-                  <dt>Workflow</dt>
+                  {!record.task && (
+                    <>
+                      <dt>Workflow</dt>
+                      <dd>
+                        {record.workflow_name} · {record.workflow_version}
+                      </dd>
+                      <dt>Pinned hash</dt>
+                      <dd>
+                        <code>{record.workflow_hash}</code>
+                      </dd>
+                    </>
+                  )}
+                  <dt>{record.calendar ? "Repeat" : "Cadence"}</dt>
                   <dd>
-                    {record.workflow_name} · {record.workflow_version}
-                  </dd>
-                  <dt>Pinned hash</dt>
-                  <dd>
-                    <code>{record.workflow_hash}</code>
-                  </dd>
-                  <dt>Cadence</dt>
-                  <dd>
-                    {cadence(record.cadence_seconds)} (fixed elapsed time)
+                    {recurrence(record)}
+                    {!record.calendar && " (fixed elapsed time)"}
                   </dd>
                   <dt>First occurrence</dt>
                   <dd>{occurrence(record.starts_at)}</dd>
+                  <dt>Missed runs</dt>
+                  <dd>
+                    {record.misfire_policy === "fire_once"
+                      ? "Run latest once"
+                      : "Skip catch-up runs"}
+                  </dd>
                   <dt>Next boundary</dt>
                   <dd>{occurrence(record.next_fire_at)}</dd>
                   <dt>Last evaluated</dt>
@@ -459,12 +488,13 @@ export function SchedulesSurface({
                     registered version. This schedule will not be repinned.
                   </p>
                 )}
-                {detail.controllable ? (
+                {detail.controllable && !record.task && (
                   <details>
                     <summary>Immutable input snapshot</summary>
                     <pre>{JSON.stringify(record.inputs, null, 2)}</pre>
                   </details>
-                ) : (
+                )}
+                {!detail.controllable && (
                   <p>
                     Legacy inputs and run details are unavailable. Application
                     control is disabled.
@@ -541,16 +571,16 @@ export function SchedulesSurface({
           }}
         />
       )}
-      {targetId && context && dialog === "import" && (
-        <WorkflowImport
+      {targetId && context && dialog === "task" && (
+        <ScheduleTaskCreate
           targetId={targetId}
           context={context}
           onClose={() => setDialog(null)}
-          onRegistered={() => {
-            setMessage(
-              "Workflow registered in this Workspace. It is ready for schedule creation.",
-            );
-            void load();
+          onCreated={(schedule) => {
+            setDialog(null);
+            setItems((items) => [schedule, ...items]);
+            setDetail(schedule);
+            setMessage("Task schedule created.");
           }}
         />
       )}

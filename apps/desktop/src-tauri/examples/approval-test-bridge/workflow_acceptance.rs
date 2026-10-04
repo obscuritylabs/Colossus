@@ -1,7 +1,15 @@
 //! Opt-in renderer acceptance over Desktop's production managed SDK and real sidecar.
 use super::*;
 
-pub(super) async fn serve(client: &Colossus) -> anyhow::Result<()> {
+pub(super) async fn serve(client: &Colossus, instance: &Path) -> anyhow::Result<()> {
+    // This isolated fixture deliberately authorizes agent.run so model-option
+    // acceptance can reach the loopback provider. Production policy is unchanged.
+    WorkerControlClient::new(
+        worker_ipc_endpoint(&instance.join("state.redb"))?,
+        zeroize::Zeroizing::new([0x5a; 32]),
+    )?
+    .set_approval_mode(WorkerApprovalMode::FullAccess)
+    .await?;
     let (send, mut receive) = tokio::sync::mpsc::channel(2);
     std::thread::spawn(move || {
         for line in std::io::BufReader::new(std::io::stdin().take(512 * 1024)).lines() {
@@ -40,7 +48,7 @@ async fn handle(client: &Colossus, message: &Value) -> anyhow::Result<Value> {
     };
     Ok(match message["command"].as_str() {
         Some("workflow_context") => {
-            json!({"selection_epoch": 1, "workflows_read": true, "workflows_register": true, "schedules_read": true, "schedules_create": true, "schedules_control": true, "workflow_runs_read": true, "managed": true})
+            json!({"selection_epoch": 1, "workflows_read": true, "workflows_register": true, "schedules_read": true, "schedules_create": true, "schedules_control": true, "workflow_runs_read": true, "workflow_runs_start": client.capabilities().contains("workflow_runs.start"), "workflow_run_history": client.capabilities().contains("workflow_runs.history"), "calendar_schedules": client.capabilities().contains("schedules.calendar"), "task_schedules": client.capabilities().contains("schedules.tasks"), "managed": true})
         }
         Some("validate_workflow_definition") => {
             serde_json::to_value(api.validate_definition(text("yaml")?).await?)?
@@ -73,6 +81,18 @@ async fn handle(client: &Colossus, message: &Value) -> anyhow::Result<Value> {
         )?,
         Some("set_workflow_schedule_enabled") => serde_json::to_value(
             api.set_schedule_enabled(serde_json::from_value(args["request"].clone())?)
+                .await?,
+        )?,
+        Some("list_workflow_runs") => serde_json::to_value(
+            api.list_runs(
+                text("workflowId")?,
+                args["after"].as_str().map(str::to_owned),
+                16,
+            )
+            .await?,
+        )?,
+        Some("start_workflow_run") => serde_json::to_value(
+            api.start_run(serde_json::from_value(args["request"].clone())?)
                 .await?,
         )?,
         Some("get_scheduled_workflow_run") => {

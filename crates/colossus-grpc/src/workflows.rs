@@ -179,6 +179,8 @@ impl AutomationService for AutomationServiceAdapter {
                     expected_hash: value.expected_definition_hash.clone(),
                     inputs: wire::json(value.input.clone())?,
                     cadence_seconds: value.cadence_seconds,
+                    calendar: wire::decode_calendar(value.calendar.clone())?,
+                    task: wire::decode_optional(value.task.clone())?,
                     starts_at: wire::instant(value.starts_at)?,
                     misfire_policy: wire::misfire(value.misfire_policy)?,
                     enabled: value.enabled,
@@ -250,6 +252,29 @@ impl AutomationService for AutomationServiceAdapter {
             .map_err(api_status)?;
         bounded(proto::StartWorkflowRunResponse {
             workflow_run: Some(wire::run(value).map_err(mutation_output)?),
+        })
+    }
+    async fn list_workflow_runs(
+        &self,
+        request: Request<proto::ListWorkflowRunsRequest>,
+    ) -> Result<Response<proto::ListWorkflowRunsResponse>, Status> {
+        let caller = caller_context(&request)?;
+        let value = request.get_ref();
+        let (after, limit) = page(value.page.clone())?;
+        let result = self
+            .api()?
+            .list_runs(caller, value.workflow_id.clone(), after, limit)
+            .await
+            .map_err(api_status)?;
+        bounded(proto::ListWorkflowRunsResponse {
+            runs: result
+                .items
+                .into_iter()
+                .map(wire::run)
+                .collect::<Result<_, _>>()?,
+            page: Some(proto::PageResponse {
+                next_page_token: result.next_cursor.unwrap_or_default(),
+            }),
         })
     }
     async fn get_workflow_run(

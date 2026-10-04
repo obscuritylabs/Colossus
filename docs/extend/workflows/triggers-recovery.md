@@ -15,7 +15,7 @@ worker, and recover interrupted work without replaying an uncertain external eff
 
 ## Prerequisites
 
-Desktop operators can use [Workflow schedules](../../desktop/schedules.md) to register
+Desktop operators can use [Workflows and schedules](../../desktop/schedules.md) to register
 existing YAML and control schedules in their private Workspace partition. The
 authenticated application API exposes the same canonical scheduler with owner-bound
 resources, exact definition hashes, durable request receipts, and revision-bound
@@ -144,7 +144,11 @@ due-time behavior without changing the system clock.
   do not blindly resume the effect.
 - **Schedule backlog is unexpected:** inspect its `fire-once` or `skip` misfire policy.
 
-Cadence is fixed elapsed time from 60 seconds through 31 days, with UTC boundaries.
+The CLI command above uses fixed elapsed time from 60 seconds through 31 days, with
+UTC boundaries. Desktop and authenticated applications also support daily/weekly
+calendar recurrence in an IANA timezone and plain-language agent tasks. Calendar timing
+keeps its local hour across DST, skips missing times, and runs repeated times once.
+See the [Schedule contract](../../reference/workflow-schema.md#schedule-contract).
 One due boundary queues under either policy. Multiple due boundaries fire the latest
 once or skip all and advance into the future. Pause does not cancel existing runs;
 re-enable preserves the boundary. Application controls serialize their exact canonical

@@ -549,6 +549,8 @@ fn public_approval_prompt(request: &EffectRequest) -> String {
                 expected_hash,
                 inputs,
                 cadence_seconds,
+                calendar,
+                task,
                 starts_at,
                 misfire_policy,
                 enabled,
@@ -560,8 +562,20 @@ fn public_approval_prompt(request: &EffectRequest) -> String {
                 } else {
                     "Input snapshot exceeds inline review size; deny and request a smaller reviewed schedule.".into()
                 };
+                let timing = calendar.map_or_else(|| format!("{cadence_seconds} seconds (fixed elapsed time)"), |calendar| format!("{} at {} in {} (ISO weekdays; empty means daily). Missing local times are skipped; repeated times run once.", serde_json::to_string(&calendar.weekdays).unwrap_or_default(), calendar.time, calendar.timezone));
+                let execution = if let Some(task) = task {
+                    let reviewed = serde_json::to_string(&task).unwrap_or_default();
+                    if reviewed.len() > 128 * 1024 {
+                        return "Task exceeds inline review size; deny and request smaller instructions.".into();
+                    }
+                    format!("One-step agent task (allocated atomically with schedule): {reviewed}")
+                } else {
+                    format!(
+                        "Workflow: {workflow_id}\nPinned definition: {expected_hash}\nImmutable inputs: {input}"
+                    )
+                };
                 format!(
-                    "Create persistent schedule {schedule_id} for {workflow_id}.\nPinned definition: {expected_hash}\nCadence: {cadence_seconds} seconds (fixed elapsed time)\nFirst UTC boundary: {starts_at}\nMultiple overdue occurrences: {misfire_policy:?}\nInitially enabled: {enabled}\nImmutable inputs: {input}\nOne due occurrence queues a run under either policy. Multiple due occurrences fire the latest once or skip all. A running worker is required. Each occurrence starts an independent workflow run."
+                    "Create persistent schedule {schedule_id}.\n{execution}\nRepeat: {timing}\nFirst UTC boundary: {starts_at}\nMultiple overdue occurrences: {misfire_policy:?}\nInitially enabled: {enabled}\nOne due occurrence queues a run under either policy. Multiple due occurrences fire the latest once or skip all. A running worker is required. Each occurrence starts an independent workflow run."
                 )
             }
             Operation::SetScheduleEnabled {
@@ -637,6 +651,54 @@ mod tests {
             resource,
             json!({}),
         )
+    }
+
+    #[test]
+    fn task_schedule_review_includes_exact_instructions_preferences_and_calendar() {
+        let operation = colossus_contracts::WorkflowControlOperation::CreateSchedule {
+            schedule_id: "monday-briefing".into(),
+            workflow_id: String::new(),
+            expected_hash: String::new(),
+            inputs: json!({}),
+            cadence_seconds: 0,
+            calendar: Some(colossus_contracts::WorkflowCalendar {
+                timezone: "America/New_York".into(),
+                time: "09:00".into(),
+                weekdays: vec![1],
+            }),
+            task: Some(Box::new(colossus_contracts::WorkflowTask {
+                name: "Briefing".into(),
+                instructions: "Review procurement and cite sources.".into(),
+                tools: vec!["web.search".into()],
+                options: colossus_contracts::WorkflowAgentOptions {
+                    model_profile: Some("configured-model".into()),
+                    reasoning_effort: Some(colossus_contracts::ReasoningEffort::High),
+                },
+            })),
+            starts_at: "2026-10-05T13:00:00Z".into(),
+            misfire_policy: colossus_contracts::WorkflowScheduleMisfirePolicy::FireOnce,
+            enabled: true,
+            idempotency_key: "task-review".into(),
+        };
+        let mut effect = request(operation.action(), &operation.resource());
+        effect.content = serde_json::to_value(operation).unwrap();
+        let prompt = public_approval_prompt(&effect);
+        for required in [
+            "Review procurement and cite sources.",
+            "configured-model",
+            "high",
+            "web.search",
+            "09:00",
+            "America/New_York",
+            "[1]",
+            "2026-10-05T13:00:00Z",
+        ] {
+            assert!(
+                prompt.contains(required),
+                "missing reviewed field: {required}"
+            );
+        }
+        assert!(!prompt.contains("0 seconds"));
     }
 
     #[test]

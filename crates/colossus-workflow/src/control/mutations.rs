@@ -74,6 +74,11 @@ impl WorkflowService {
                 ..
             } => {
                 let validated = validate_definition(yaml)?;
+                if validated.definition.metadata.scheduled_task {
+                    return Err(WorkflowError::InvalidDefinition(
+                        "scheduled tasks are allocated through schedules".into(),
+                    ));
+                }
                 let value = metadata(&validated.definition, &validated.content_hash)?;
                 if expected_hash != &validated.content_hash {
                     return Err(WorkflowError::Conflict(
@@ -107,6 +112,8 @@ impl WorkflowService {
                 expected_hash,
                 inputs,
                 cadence_seconds,
+                calendar,
+                task,
                 starts_at,
                 misfire_policy,
                 enabled,
@@ -121,8 +128,14 @@ impl WorkflowService {
                             .into(),
                     ));
                 }
-                if !(MIN_SCHEDULE_CADENCE_SECONDS..=MAX_SCHEDULE_CADENCE_SECONDS)
-                    .contains(cadence_seconds)
+                if calendar.is_some() && *cadence_seconds != 0 {
+                    return Err(WorkflowError::InvalidDefinition(
+                        "calendar and elapsed cadence are exclusive".into(),
+                    ));
+                }
+                if calendar.is_none()
+                    && !(MIN_SCHEDULE_CADENCE_SECONDS..=MAX_SCHEDULE_CADENCE_SECONDS)
+                        .contains(cadence_seconds)
                 {
                     return Err(WorkflowError::InvalidDefinition(
                         "cadence must be 60 seconds through 31 days".into(),
@@ -136,13 +149,56 @@ impl WorkflowService {
                         "schedule limit reached".into(),
                     ));
                 }
-                let metadata = self.control_workflow(workflow_id, Some(expected_hash))?;
-                let (definition, _) = self
-                    .repository
-                    .definition(&metadata.name, &metadata.version)?
-                    .ok_or_else(|| WorkflowError::NotFound("registered workflow".into()))?;
-                validate_call_graph(self.repository.as_ref(), &definition, true)?;
-                validate_instance(&definition.inputs, inputs, "schedule input")?;
+                let metadata = if let Some(task) = task {
+                    if !workflow_id.is_empty() || !expected_hash.is_empty() || inputs != &json!({})
+                    {
+                        return Err(WorkflowError::InvalidDefinition(
+                            "task and existing workflow selection are exclusive".into(),
+                        ));
+                    }
+                    if task.name.trim().is_empty()
+                        || task.name.len() > 128
+                        || task.instructions.trim().is_empty()
+                        || task.instructions.len() > 64 * 1024
+                        || task.tools.len() > 128
+                        || task
+                            .tools
+                            .iter()
+                            .any(|tool| tool.is_empty() || tool.len() > 128)
+                        || task
+                            .options
+                            .model_profile
+                            .as_ref()
+                            .is_some_and(|profile| profile.is_empty() || profile.len() > 128)
+                    {
+                        return Err(WorkflowError::InvalidDefinition(
+                            "task name, instructions, or configured model exceeds its bounds"
+                                .into(),
+                        ));
+                    }
+                    if self.control_streams("workflow-definition:")?.len() >= MAX_WORKFLOW_SCHEDULES
+                    {
+                        return Err(WorkflowError::InvalidTransition(
+                            "workflow catalog limit reached".into(),
+                        ));
+                    }
+                    let name = format!("scheduled-task-{}", Uuid::now_v7());
+                    let validated = crate::validation::validate_task_definition(
+                        json!({"apiVersion": "colossus.dev/v1alpha1", "kind": "Workflow", "metadata": {"name": name, "version": "1.0.0", "description": "Scheduled task", "scheduled_task": true}, "inputs": {"type":"object", "additionalProperties":false}, "outputs": {}, "capabilities": task.tools, "maxConcurrency":1, "stepBudget":1, "steps":[{"type":"agent", "id":"task", "prompt":task.instructions, "options":task.options, "idempotency":null}]}),
+                    )?;
+                    let value = metadata(&validated.definition, &validated.content_hash)?;
+                    events.push(control_event(format!("workflow-definition:{}", value.workflow_id), 0, "workflow.definition.registered.v1", &actor, &origin, json!({"definition": validated.definition, "content_hash": validated.content_hash, "provenance": "authenticated-scheduled-task", "origin": &origin, "trust_invalidated": false})));
+                    value
+                } else {
+                    let value = self.control_workflow(workflow_id, Some(expected_hash))?;
+                    let (definition, _) = self
+                        .repository
+                        .definition(&value.name, &value.version)?
+                        .ok_or_else(|| WorkflowError::NotFound("registered workflow".into()))?;
+                    validate_call_graph(self.repository.as_ref(), &definition, true)?;
+                    validate_instance(&definition.inputs, inputs, "schedule input")?;
+                    value
+                };
                 let starts_at =
                     format_schedule_time(parse_schedule_time(starts_at, "schedule start")?)?;
                 let record = WorkflowSchedule {
@@ -152,6 +208,8 @@ impl WorkflowService {
                     workflow_hash: metadata.workflow_hash,
                     inputs: inputs.clone(),
                     cadence_seconds: *cadence_seconds,
+                    calendar: calendar.clone(),
+                    task: task.as_deref().cloned(),
                     misfire_policy: *misfire_policy,
                     enabled: *enabled,
                     starts_at: starts_at.clone(),
@@ -276,7 +334,8 @@ impl WorkflowService {
         if result.get("etag").is_some() {
             result["etag"] = json!(
                 committed
-                    .first()
+                    .iter()
+                    .find(|event| event.stream_id.starts_with("workflow-schedule:"))
                     .map(|event| event.record_hash.clone())
                     .unwrap_or_default()
             );

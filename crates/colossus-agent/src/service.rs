@@ -829,6 +829,36 @@ impl AgentService {
         attempt: u32,
         allowed_tools: &[String],
     ) -> Result<AgentRunResult, AgentError> {
+        self.run_workflow_step_with_options(
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            workflow_id,
+            workflow_hash,
+            step_id,
+            attempt,
+            allowed_tools,
+            Default::default(),
+        )
+        .await
+    }
+
+    /// Run a pinned workflow step using explicit configured model preferences.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_workflow_step_with_options(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        workflow_id: &str,
+        workflow_hash: &str,
+        step_id: &str,
+        attempt: u32,
+        allowed_tools: &[String],
+        options: colossus_contracts::WorkflowAgentOptions,
+    ) -> Result<AgentRunResult, AgentError> {
         self.run_with_lineage(
             role,
             instructions,
@@ -841,6 +871,7 @@ impl AgentService {
                 step_id: Some(step_id),
                 attempt: Some(attempt),
                 allowed_tools: Some(allowed_tools),
+                agent_options: options,
                 ..RunScope::default()
             },
             Actor {

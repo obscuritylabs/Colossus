@@ -43,6 +43,9 @@ service AutomationService {
   // StartWorkflowRun starts one idempotent durable workflow run.
   rpc StartWorkflowRun(StartWorkflowRunRequest) returns (StartWorkflowRunResponse);
 
+  // ListWorkflowRuns reads bounded caller-owned history for one definition.
+  rpc ListWorkflowRuns(ListWorkflowRunsRequest) returns (ListWorkflowRunsResponse);
+
   // GetWorkflowRun returns one durable workflow run.
   rpc GetWorkflowRun(GetWorkflowRunRequest) returns (GetWorkflowRunResponse);
 
@@ -419,6 +422,9 @@ message WorkflowRun {
   // step_states contains only recorded step identities, states, and completion counts.
   // The object has a steps array; raw effect payloads and outputs are withheld.
   google.protobuf.Struct step_states = 10;
+
+  // result_json preserves exact bounded final JSON values; history summaries omit it.
+  optional string result_json = 11;
 }
 
 // GetWorkflowRequest selects one workflow.
@@ -596,6 +602,12 @@ message WorkflowSchedule {
 
   // last_dispatch distinguishes queuing, skipping, and blocking.
   ScheduleDispatchStatus last_dispatch = 18;
+
+  // calendar contains strict timezone, time, and ISO weekdays; absent for elapsed cadence.
+  google.protobuf.Struct calendar = 19;
+
+  // task contains owner-visible simple-task intent; list summaries omit instructions.
+  google.protobuf.Struct task = 20;
 }
 // ValidateWorkflowDefinitionRequest is a typed bounded workflow resource.
 message ValidateWorkflowDefinitionRequest {
@@ -674,6 +686,12 @@ message CreateWorkflowScheduleRequest {
 
   // idempotency_key binds allocation retries to the normalized reviewed intent.
   string idempotency_key = 9;
+
+  // calendar is exclusive with nonzero cadence_seconds.
+  google.protobuf.Struct calendar = 10;
+
+  // task is exclusive with an existing workflow reference.
+  google.protobuf.Struct task = 11;
 }
 // CreateWorkflowScheduleResponse is a typed bounded workflow resource.
 message CreateWorkflowScheduleResponse {
@@ -1026,4 +1044,19 @@ message InspectDistributionArtifactRequest {
 message InspectDistributionArtifactResponse {
   // inspection contains released verification metadata.
   DistributionInspection inspection = 1;
+}
+
+// ListWorkflowRunsRequest selects one definition and a bounded history page.
+message ListWorkflowRunsRequest {
+  // workflow_id is the exact registered name:version identity.
+  string workflow_id = 1;
+  // page bounds owner-authorized canonical history discovery.
+  PageRequest page = 2;
+}
+// ListWorkflowRunsResponse omits private step output and effect evidence.
+message ListWorkflowRunsResponse {
+  // runs contains only caller-owned independent executions.
+  repeated WorkflowRun runs = 1;
+  // page supplies an exclusive stable identity cursor.
+  PageResponse page = 2;
 }

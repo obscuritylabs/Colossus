@@ -68,10 +68,26 @@ export async function processRuntimeHost(
           ],
         }
       : { content: "Acceptance turn completed." };
-    response.writeHead(200, { "content-type": "text/event-stream" });
-    response.end(
-      `data: ${JSON.stringify({ id: "process-turn", choices: [{ index: 0, delta, finish_reason: call ? "tool_calls" : "stop" }] })}\n\ndata: [DONE]\n\n`,
-    );
+    if (parsed.stream) {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        `data: ${JSON.stringify({ id: "process-turn", choices: [{ index: 0, delta, finish_reason: call ? "tool_calls" : "stop" }] })}\n\ndata: [DONE]\n\n`,
+      );
+    } else {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          id: "process-turn",
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", ...delta },
+              finish_reason: call ? "tool_calls" : "stop",
+            },
+          ],
+        }),
+      );
+    }
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();

@@ -215,6 +215,9 @@ impl WorkflowClient for GrpcWorkflowClient {
                 expected_definition_hash: request.expected_hash,
                 input: wire::object(&request.inputs).map_err(|_| invalid_workflow())?,
                 cadence_seconds: request.cadence_seconds,
+                calendar: wire::encode_optional(&request.calendar)
+                    .map_err(|_| invalid_workflow())?,
+                task: wire::encode_optional(&request.task).map_err(|_| invalid_workflow())?,
                 starts_at: Some(request.starts_at.parse().map_err(|_| invalid_workflow())?),
                 misfire_policy: wire::encode_misfire(request.misfire_policy),
                 enabled: request.enabled,
@@ -259,6 +262,41 @@ impl WorkflowClient for GrpcWorkflowClient {
             return Err(unconfirmed_mutation());
         }
         Ok(value)
+    }
+    async fn list_runs(
+        &self,
+        workflow_id: String,
+        after: Option<String>,
+        limit: usize,
+    ) -> ApiResult<WorkflowPage<WorkflowRunSnapshot>> {
+        let request = self
+            .transport
+            .request(proto::ListWorkflowRunsRequest {
+                workflow_id: workflow_id.clone(),
+                page: page(after, limit)?,
+            })
+            .await?;
+        let value = self
+            .client()
+            .list_workflow_runs(request)
+            .await
+            .map_err(api_error_from_status)?
+            .into_inner();
+        if value.runs.len() > limit {
+            return Err(protocol_error());
+        }
+        let items = value
+            .runs
+            .into_iter()
+            .map(|value| wire::decode_run(value).map_err(|_| protocol_error()))
+            .collect::<ApiResult<Vec<_>>>()?;
+        if items.iter().any(|run| run.workflow_id != workflow_id) {
+            return Err(protocol_error());
+        }
+        Ok(WorkflowPage {
+            items,
+            next_cursor: cursor(value.page)?,
+        })
     }
     async fn get_run(&self, id: String) -> ApiResult<WorkflowRunSnapshot> {
         let request = self

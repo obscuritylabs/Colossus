@@ -31,16 +31,32 @@ impl WorkflowService {
             if now < next_fire {
                 continue;
             }
-            let elapsed_seconds = (now - next_fire).whole_seconds();
-            let cadence = i64::try_from(schedule.cadence_seconds)
-                .map_err(|error| WorkflowError::InvalidTransition(error.to_string()))?;
-            let due_count = u64::try_from(elapsed_seconds / cadence + 1)
-                .map_err(|error| WorkflowError::InvalidTransition(error.to_string()))?;
-            let latest_due = add_schedule_occurrences(
-                next_fire,
-                schedule.cadence_seconds,
-                due_count.saturating_sub(1),
-            )?;
+            let (due_count, latest_due, next_fire) = match calendar::due(&schedule, next_fire, now)
+            {
+                Ok(due) => due,
+                Err(_) => {
+                    schedule.enabled = false;
+                    schedule.blocked_reason = Some("Calendar recurrence cannot advance safely; inspect or replace this schedule.".into());
+                    schedule.updated_at = now_text.clone();
+                    let version = self.schedule_version(&schedule.schedule_id)?;
+                    self.journal.append(schedule_event(
+                        &schedule,
+                        version,
+                        "workflow.schedule.blocked.v1",
+                        json!({"record": &schedule, "reason": &schedule.blocked_reason}),
+                    ))?;
+                    dispatches.push(WorkflowScheduleDispatch {
+                        schedule_id: schedule.schedule_id.clone(),
+                        status: WorkflowScheduleDispatchStatus::Blocked,
+                        scheduled_at: None,
+                        next_fire_at: schedule.next_fire_at.clone(),
+                        missed_occurrences: 0,
+                        run_id: None,
+                        reason: schedule.blocked_reason.clone(),
+                    });
+                    continue;
+                }
+            };
             let latest_due_text = format_schedule_time(latest_due)?;
 
             let definition = self
@@ -94,8 +110,6 @@ impl WorkflowService {
                 continue;
             }
 
-            let next_fire =
-                add_schedule_occurrences(next_fire, schedule.cadence_seconds, due_count)?;
             let next_fire_text = format_schedule_time(next_fire)?;
             let skip =
                 due_count > 1 && schedule.misfire_policy == WorkflowScheduleMisfirePolicy::Skip;

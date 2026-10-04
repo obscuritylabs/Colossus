@@ -89,6 +89,7 @@ flate2 = "1.1.9"
 fs4 = "0.13.1"
 globset = "0.4.18"
 ignore = "0.4.28"
+jiff = { version = "0.2.32", default-features = false, features = ["std", "tzdb-bundle-always"] }
 jsonschema = "0.33.0"
 keyring = "4.1.4"
 nono = { version = "=0.67.1", default-features = false }

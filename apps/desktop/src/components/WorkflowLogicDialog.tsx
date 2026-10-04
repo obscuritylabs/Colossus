@@ -38,7 +38,7 @@ export function WorkflowLogicDialog({
         if (cancelled) return;
         if (value.workflow_hash !== expectedHash)
           throw new Error(
-            "The registered definition differs from this schedule's pinned hash. Its graph cannot be shown.",
+            "The registered definition differs from the reviewed hash. Its graph cannot be shown.",
           );
         setWorkflow(value);
       })

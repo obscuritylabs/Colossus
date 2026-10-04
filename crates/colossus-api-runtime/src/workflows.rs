@@ -208,6 +208,10 @@ impl WorkflowApi for RuntimeWorkflowApi {
         request: CreateWorkflowScheduleRequest,
     ) -> ApiResult<WorkflowScheduleSnapshot> {
         caller.require_scope(scopes::SCHEDULES_READ)?;
+        if request.task.is_some() {
+            caller.require_scope(scopes::WORKFLOWS_REGISTER)?;
+            caller.require_scope(scopes::WORKFLOWS_READ)?;
+        }
         self.control(
             caller,
             scopes::SCHEDULES_CREATE,
@@ -217,6 +221,8 @@ impl WorkflowApi for RuntimeWorkflowApi {
                 expected_hash: request.expected_hash,
                 inputs: request.inputs,
                 cadence_seconds: request.cadence_seconds,
+                calendar: request.calendar,
+                task: request.task.map(Box::new),
                 starts_at: request.starts_at,
                 misfire_policy: request.misfire_policy,
                 enabled: request.enabled,
@@ -238,6 +244,24 @@ impl WorkflowApi for RuntimeWorkflowApi {
                 schedule_id: request.schedule_id,
                 enabled: request.enabled,
                 etag: request.etag,
+            },
+        )
+        .await
+    }
+    async fn list_runs(
+        &self,
+        caller: &CallerContext,
+        workflow_id: String,
+        after: Option<String>,
+        limit: usize,
+    ) -> ApiResult<WorkflowPage<WorkflowRunSnapshot>> {
+        self.control(
+            caller,
+            scopes::WORKFLOW_RUNS_READ,
+            Operation::ListRuns {
+                workflow_id,
+                after,
+                limit,
             },
         )
         .await

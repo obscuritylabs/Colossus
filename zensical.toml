@@ -59,7 +59,7 @@ nav = [
     { "Work in Desktop" = [
       { "Work and threads" = "desktop/work.md" },
       { "Session views" = "desktop/session-views.md" },
-      { "Workflow schedules" = "desktop/schedules.md" },
+      { "Workflows and schedules" = "desktop/schedules.md" },
       { "Tools beside your work" = "desktop/tools.md" },
     ] },
     { "Configure and extend" = [

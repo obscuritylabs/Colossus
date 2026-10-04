@@ -116,6 +116,8 @@ const COMMANDS: &[&str] = &[
     "create_workflow_schedule",
     "set_workflow_schedule_enabled",
     "get_scheduled_workflow_run",
+    "list_workflow_runs",
+    "start_workflow_run",
     "read_shell_session",
     "stop_shell_session",
     "list_session_activity",
