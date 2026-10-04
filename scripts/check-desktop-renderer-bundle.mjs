@@ -4,7 +4,9 @@ import { join, relative, resolve } from "node:path";
 const desktop = resolve(process.argv[2] ?? "apps/desktop");
 const dist = join(desktop, "dist");
 const maximumJavaScriptChunkBytes = 700_000;
-const maximumRendererBytes = 4_000_000;
+// Regular dictation adds its native controls, meter, and lazy Settings page (~27 KB).
+// Keep a bounded 50 KB allowance; model weights remain outside the renderer.
+const maximumRendererBytes = 4_050_000;
 const forbiddenFixtureStrings = [
   "Offline dictation preview",
   "fixture-run-desktop-release",

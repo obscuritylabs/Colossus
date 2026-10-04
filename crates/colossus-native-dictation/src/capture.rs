@@ -6,7 +6,7 @@ use std::sync::{
 
 use cpal::{
     FromSample, Sample as _, SampleFormat, SizedSample, Stream, StreamConfig,
-    traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _},
+    traits::{DeviceTrait as _, StreamTrait as _},
 };
 use zeroize::Zeroizing;
 
@@ -82,9 +82,14 @@ impl Capture {
     }
 
     pub(crate) fn start_with_meter(meter: Arc<InputMeter>) -> Result<Self, DictationError> {
-        let device = cpal::default_host()
-            .default_input_device()
-            .ok_or(DictationError::MicrophoneMissing)?;
+        Self::start_selected(meter, None)
+    }
+
+    pub(crate) fn start_selected(
+        meter: Arc<InputMeter>,
+        microphone: Option<&str>,
+    ) -> Result<Self, DictationError> {
+        let device = crate::devices::selected(microphone)?;
         let supported = device
             .default_input_config()
             .map_err(|_| DictationError::CaptureUnavailable)?;

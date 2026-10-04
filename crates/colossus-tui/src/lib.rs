@@ -99,6 +99,8 @@ mod browser;
 mod completion;
 mod composer;
 mod contract;
+mod dictation;
+pub use dictation::{DictationAction, DictationUpdate, LocalDictation};
 mod footer;
 mod header;
 mod history_search;

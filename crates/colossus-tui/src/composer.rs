@@ -14,6 +14,24 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area:
         composer_inner_width(area.width),
     );
     let mut text = pending_thumbnail_lines(state);
+    if state.dictation.active {
+        let status = if state.dictation.pending {
+            "Processing"
+        } else if state.dictation.paused {
+            "Paused"
+        } else {
+            "Listening"
+        };
+        let bars = usize::from(state.dictation.level).saturating_mul(12) / 255;
+        text.push(Line::from(Span::styled(
+            format!(
+                " {status} {}{} · F4 pause/resume · Shift+F4 stop",
+                "▰".repeat(bars),
+                "▱".repeat(12 - bars)
+            ),
+            Style::default().fg(Color::Cyan),
+        )));
+    }
     let preview_rows = text.len();
     let visible_rows = usize::from(area.height.saturating_sub(2)).saturating_sub(preview_rows);
     let first_visible_row = layout
@@ -144,6 +162,9 @@ fn composer_hint(
         return truncate_width_with_ellipsis(" Draft preserved · respond above ", width);
     }
     let mut hints = Vec::new();
+    if state.dictation.port.is_some() {
+        hints.push("F4 dictation".to_owned());
+    }
     if state.preferences.multiline {
         hints.push("Enter newline".to_owned());
     } else {
@@ -247,7 +268,10 @@ pub(super) fn composer_height(state: &TuiState, width: u16) -> u16 {
     } else {
         6
     };
-    u16::try_from(layout.lines.len().clamp(1, 6) + preview_rows + 2).unwrap_or(14)
+    u16::try_from(
+        layout.lines.len().clamp(1, 6) + preview_rows + 2 + usize::from(state.dictation.active),
+    )
+    .unwrap_or(14)
 }
 
 pub(super) fn composer_inner_width(width: u16) -> usize {

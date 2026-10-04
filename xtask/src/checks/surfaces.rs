@@ -25,6 +25,10 @@ pub(super) fn sidecar(repository: &Repository) -> Result<(), String> {
 
 pub(super) fn desktop(repository: &Repository) -> Result<(), String> {
     repository
+        .task("node")
+        .arg("scripts/stage-dictation-model.mjs")
+        .run()?;
+    repository
         .task(cargo_program())
         .args([
             "fmt",
@@ -39,8 +43,6 @@ pub(super) fn desktop(repository: &Repository) -> Result<(), String> {
         .args([
             "test",
             "--locked",
-            "--manifest-path",
-            "apps/desktop/src-tauri/Cargo.toml",
             "--package",
             "colossus-native-dictation",
             "--lib",

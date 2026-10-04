@@ -21,6 +21,7 @@ import {
   IconShield,
   IconWorld,
   IconX,
+  IconMicrophone,
 } from "@tabler/icons-react";
 import { Fragment, type ReactNode } from "react";
 import colossusMark from "../assets/colossus-mark.svg";
@@ -41,6 +42,7 @@ const sectionIcons = {
   effective: IconFileCode,
   defaults: IconAdjustments,
   appearance: IconPalette,
+  dictation: IconMicrophone,
   git: IconGitBranch,
   browser: IconWorld,
   connections: IconNetwork,

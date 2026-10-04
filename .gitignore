@@ -23,3 +23,4 @@ apps/desktop/artifact-audit/
 
 # Local planning notes and task handoffs.
 /.local
+/apps/desktop/src-tauri/dictation-assets/

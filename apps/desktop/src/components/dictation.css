@@ -4,41 +4,33 @@
   align-items: center;
   gap: 4px;
 }
+.dictation-settings-page .desktop-preferences-card > button {
+  margin: 0 16px 16px;
+}
+.dictation-settings-page .settings-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 16px 16px;
+}
+.dictation-settings-page .desktop-preferences-card > strong {
+  display: block;
+  padding: 16px 16px 8px;
+}
+.dictation-settings-page .desktop-preferences-card > [role="status"] {
+  min-height: 1.5em;
+  margin: 0 0 16px;
+  padding: 0 16px;
+}
+.dictation-settings-page [aria-label="Test transcript"] {
+  padding: 16px;
+  border-top: 1px solid var(--border);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .dictation-control .is-recording {
   color: var(--red);
   background: var(--red-soft);
-}
-.dictation-settings {
-  position: absolute;
-  z-index: 30;
-  bottom: calc(100% + 12px);
-  left: 0;
-  width: min(330px, calc(100vw - 48px));
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface);
-  box-shadow: var(--shadow);
-  font-size: 13px;
-}
-.dictation-settings-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.dictation-settings p {
-  margin: 8px 0;
-}
-.dictation-settings-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 12px;
-}
-.dictation-punctuation-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 .dictation-recording {
   margin: 0 0 12px;

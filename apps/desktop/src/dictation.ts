@@ -28,6 +28,7 @@ export type DictationAction =
 export interface DictationStatus {
   enabled: boolean;
   model: string | null;
+  spokenPunctuation?: boolean;
 }
 export interface DictationApi {
   status(): Promise<DictationStatus>;
@@ -339,10 +340,16 @@ export class DictationController {
     }
   }
   async inspect() {
+    const generation = this.generation;
     try {
-      this.change(await this.serialized(() => this.api.status()));
+      const status = await this.serialized(() => this.api.status());
+      if (generation !== this.generation) return false;
+      this.change(status);
+      return true;
     } catch (error) {
-      this.change({ error: this.message(error) });
+      if (generation === this.generation)
+        this.change({ error: this.message(error) });
+      return false;
     }
   }
   async choose() {

@@ -76,6 +76,7 @@ const RESEARCH_SOURCE_OPTIONS = [
 ] as const;
 
 interface WorkComposerProps {
+  onOpenDictationSettings?: (() => void) | undefined;
   dictation?:
     { controller: DictationController; state: DictationSnapshot } | undefined;
   contextActions?: ReactNode;
@@ -139,6 +140,7 @@ interface WorkComposerProps {
 
 export function WorkComposer({
   dictation: requestedDictation,
+  onOpenDictationSettings,
   contextActions,
   pluginSkills = null,
   pluginSelections = [],
@@ -197,9 +199,7 @@ export function WorkComposer({
   onRedirect,
   onSubmit,
 }: WorkComposerProps) {
-  // The native hardware feasibility gate is still open. Keep the experimental
-  // UI out of ordinary release bundles while allowing live development tests.
-  const dictation = import.meta.env.DEV ? requestedDictation : undefined;
+  const dictation = requestedDictation;
   const draftReadOnly = Boolean(
     dictation?.state.phase === "recording" ||
     dictation?.state.busy ||
@@ -566,6 +566,7 @@ export function WorkComposer({
           <DictationRecordingBar {...dictation}>
             <DictationControl
               {...dictation}
+              onSettings={onOpenDictationSettings}
               disabled={!canCompose || submitting}
             />
           </DictationRecordingBar>
@@ -912,6 +913,7 @@ export function WorkComposer({
           dictation.state.phase !== "starting" ? (
             <DictationControl
               {...dictation}
+              onSettings={onOpenDictationSettings}
               disabled={!canCompose || submitting}
             />
           ) : null}

@@ -34,6 +34,12 @@ pub struct TranscriptUpdate {
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DictationError {
+    /// A model transfer failed or was cancelled before publication.
+    Download,
+    /// Native preferences cannot be safely read or saved.
+    Settings,
+    /// The user has not enabled microphone dictation.
+    Disabled,
     /// Invalid probe invocation.
     Arguments,
     /// A model could not be read as a bounded regular file.
@@ -63,6 +69,9 @@ pub enum DictationError {
 impl fmt::Display for DictationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::Download => "model download failed or cancelled; check the connection and retry",
+            Self::Settings => "dictation settings are unavailable or invalid",
+            Self::Disabled => "enable dictation in Settings before recording",
             Self::Arguments => "usage: dictation-probe MODEL SHA256 [--show-text] [--wav FILE]",
             Self::ModelUnavailable => {
                 "model unavailable: select a regular model file of at most 200 MiB"
@@ -71,11 +80,13 @@ impl fmt::Display for DictationError {
                 "model integrity check failed: obtain the expected SHA-256 from trusted provenance"
             }
             Self::ModelUnsupported => "verified model is unsupported by this local runtime",
-            Self::MicrophoneMissing => "no default microphone is available",
+            Self::MicrophoneMissing => {
+                "microphone unavailable: reconnect it or choose another input in Settings"
+            }
             Self::CaptureUnavailable => {
                 "microphone unavailable: check OS permission and input device settings"
             }
-            Self::CaptureUnsupported => "microphone format is unsupported by this probe",
+            Self::CaptureUnsupported => "microphone format is unsupported by this local recorder",
             Self::CaptureOverrun => {
                 "capture exceeded its bounded queue: recording stopped; try a smaller local model"
             }

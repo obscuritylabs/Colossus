@@ -82,7 +82,7 @@ use colossus_contracts::{
 };
 use ratatui::{Terminal, backend::TestBackend};
 
-fn snapshot() -> InteractiveSnapshot {
+pub(super) fn snapshot() -> InteractiveSnapshot {
     InteractiveSnapshot {
         session_id: "019f-test".into(),
         fresh_session: false,

@@ -96,6 +96,16 @@ impl Session {
     /// # Errors
     /// Returns a categorical error if the recording thread cannot start.
     pub fn start(model: InstalledModel) -> Result<Self, DictationError> {
+        Self::start_selected(model, None)
+    }
+
+    /// Start an explicitly selected microphone, retaining that choice across Pause/Resume.
+    /// # Errors
+    /// Reports unavailable resources, model failures, or missing input devices.
+    pub fn start_selected(
+        model: InstalledModel,
+        microphone: Option<String>,
+    ) -> Result<Self, DictationError> {
         let (commands, receiver) = mpsc::sync_channel(4);
         let (sender, events) = mpsc::sync_channel(MAX_EVENTS);
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -107,7 +117,14 @@ impl Session {
         let thread = thread::Builder::new()
             .name("offline-dictation".into())
             .spawn(move || {
-                let result = record(&model, &receiver, &sender, &thread_cancelled, &thread_meter);
+                let result = record(
+                    &model,
+                    &receiver,
+                    &sender,
+                    &thread_cancelled,
+                    &thread_meter,
+                    microphone.as_deref(),
+                );
                 if let Ok(mut outcome) = thread_outcome.lock() {
                     *outcome = Some(result);
                 }
@@ -254,6 +271,7 @@ fn record(
     events: &SyncSender<SessionEvent>,
     cancelled: &Arc<AtomicBool>,
     meter: &Arc<InputMeter>,
+    microphone: Option<&str>,
 ) -> Result<(), DictationError> {
     emit(
         events,
@@ -266,7 +284,7 @@ fn record(
         return Ok(());
     }
     let mut pipeline = Pipeline::new(decoder);
-    let mut capture = Some(Capture::start_with_meter(meter.clone())?);
+    let mut capture = Some(Capture::start_selected(meter.clone(), microphone)?);
     emit(
         events,
         SessionEvent::State {
@@ -309,7 +327,7 @@ fn record(
                     }
                     SessionAction::Resume => {
                         if capture.is_none() {
-                            capture = Some(Capture::start_with_meter(meter.clone())?);
+                            capture = Some(Capture::start_selected(meter.clone(), microphone)?);
                         }
                         emit(
                             events,

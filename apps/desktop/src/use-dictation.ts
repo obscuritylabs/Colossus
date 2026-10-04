@@ -12,13 +12,12 @@ export function useDictation(
 ) {
   const drafts = useRef({ read, write });
   drafts.current = { read, write };
-  const [controller] = useState(() =>
-    import.meta.env.DEV
-      ? new DictationController(nativeDictationApi, {
-          read: () => drafts.current.read(),
-          write: (draft) => drafts.current.write(draft),
-        })
-      : null,
+  const [controller] = useState(
+    () =>
+      new DictationController(nativeDictationApi, {
+        read: () => drafts.current.read(),
+        write: (draft) => drafts.current.write(draft),
+      }),
   );
   const state = useSyncExternalStore(
     controller?.subscribe ?? noSubscribe,

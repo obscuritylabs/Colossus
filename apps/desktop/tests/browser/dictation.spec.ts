@@ -8,13 +8,43 @@ test.beforeEach(async ({ page }) => {
       calls: [] as string[],
       turn: 1,
       segment: 1,
-      model: null as string | null,
+      model: "Tiny English" as string | null,
+      preferences: {
+        enabled: true,
+        modelId: "tiny_english",
+        microphoneId: null as string | null,
+        spokenPunctuation: true,
+      },
+      baseInstalled: false,
       denied: false,
       initialText: "Check Linux",
       level: null as number | null,
       levelIndex: 0,
       starting: false,
     };
+    const settings = () => ({
+      ...fixture.preferences,
+      available: true,
+      active: false,
+      microphoneMissing: false,
+      microphones: [{ id: "a".repeat(64), name: "USB microphone" }],
+      models: [
+        {
+          id: "tiny_english",
+          name: "Tiny English",
+          bytes: 77704715,
+          installed: true,
+          bundled: true,
+        },
+        {
+          id: "base_english",
+          name: "Base English",
+          bytes: 147964211,
+          installed: fixture.baseInstalled,
+          bundled: false,
+        },
+      ],
+    });
     const transcript = (text: string, final: boolean) => ({
       type: "transcript",
       turn_id: fixture.turn,
@@ -32,16 +62,57 @@ test.beforeEach(async ({ page }) => {
       __TAURI_INTERNALS__: {
         invoke: async (
           command: string,
-          args: { request?: { action: string } },
+          args: { request?: Record<string, unknown>; modelId?: string },
         ) => {
           fixture.calls.push(
             command + (args?.request ? `:${args.request.action}` : ""),
           );
+          if (command === "list_setup_packages") return [];
+          if (command === "get_managed_configuration") {
+            const modulePath = "/src/components/ManagedSettingsPane.tsx";
+            const { buildManagedSettingsFixture } = await import(modulePath);
+            return buildManagedSettingsFixture({
+              selectedSpaceId: "fixture-managed-local",
+              spaces: [
+                {
+                  spaceId: "fixture-managed-local",
+                  displayName: "Colossus",
+                  displayPath: "~/Colossus",
+                  archived: false,
+                },
+              ],
+              managedModelConfiguration: {
+                providers: [],
+                models: [],
+                roles: {},
+              },
+              accessProfile: "development",
+              executionBoundary: "workspace_isolated",
+            });
+          }
+          if (command === "get_dictation_settings") return settings();
+          if (command === "save_dictation_settings") {
+            Object.assign(fixture.preferences, args.request);
+            return settings();
+          }
+          if (command === "download_dictation_model") {
+            fixture.baseInstalled = true;
+            return settings();
+          }
+          if (command === "cancel_dictation_download") return;
           if (command === "dictation_status")
-            return { enabled: true, model: fixture.model };
+            return {
+              enabled: fixture.preferences.enabled,
+              model: fixture.model,
+              spokenPunctuation: fixture.preferences.spokenPunctuation,
+            };
           if (command === "choose_dictation_model") {
             fixture.model = "Tiny English";
-            return { enabled: true, model: fixture.model };
+            return {
+              enabled: fixture.preferences.enabled,
+              model: fixture.model,
+              spokenPunctuation: fixture.preferences.spokenPunctuation,
+            };
           }
           if (command === "start_dictation") {
             fixture.events = fixture.denied
@@ -105,15 +176,76 @@ test.beforeEach(async ({ page }) => {
 
 async function startRecording(page: import("@playwright/test").Page) {
   await page
-    .getByRole("button", { name: "Start offline dictation", exact: true })
-    .click();
-  await page
-    .getByRole("button", { name: "Choose model…", exact: true })
-    .click();
-  await page
-    .getByRole("button", { name: "Start recording", exact: true })
+    .getByRole("button", { name: "Start dictation", exact: true })
     .click();
 }
+
+test("disabled microphone opens Settings and preferences survive page navigation", async ({
+  page,
+}) => {
+  await page.goto("/?fixture=interaction-question");
+  await page.evaluate(() => {
+    (
+      window as unknown as {
+        dictationFixture: { preferences: { enabled: boolean } };
+      }
+    ).dictationFixture.preferences.enabled = false;
+  });
+  await startRecording(page);
+  await expect(
+    page.getByRole("heading", { name: "Dictation", exact: true }),
+  ).toBeVisible();
+  const enabled = page.getByRole("switch", { name: /Enable dictation/ });
+  await expect(enabled).not.toBeChecked();
+  await enabled.check();
+  await expect(
+    page.getByRole("status").filter({ hasText: "Saved" }),
+  ).toBeVisible();
+  await page.locator("#dictation-input").click();
+  await page
+    .getByRole("option", { name: "USB microphone", exact: true })
+    .click();
+  await expect(page.locator("#dictation-input")).toContainText(
+    "USB microphone",
+  );
+  const calls = await page.evaluate(
+    () =>
+      (window as unknown as { dictationFixture: { calls: string[] } })
+        .dictationFixture.calls,
+  );
+  await expect(
+    page.getByText(
+      "The desktop request failed. Retry after checking the connection.",
+      { exact: true },
+    ),
+    calls.join(", "),
+  ).not.toBeVisible();
+  await page.getByRole("switch", { name: /Spoken punctuation/ }).uncheck();
+  await page.getByRole("button", { name: /Download Base English/ }).click();
+  await expect(
+    page.getByText("Model installed", { exact: true }),
+  ).toBeVisible();
+  await page.locator("#dictation-model").click();
+  await page.getByRole("option", { name: "Base English", exact: true }).click();
+  await expect(page.locator("#dictation-model")).toContainText("Base English");
+  await page.getByRole("button", { name: "Appearance", exact: true }).click();
+  await page.getByRole("button", { name: "Dictation", exact: true }).click();
+  await expect(enabled).toBeChecked();
+  await expect(
+    page.getByRole("switch", { name: /Spoken punctuation/ }),
+  ).not.toBeChecked();
+  await expect(page.locator("#dictation-input")).toContainText(
+    "USB microphone",
+  );
+  expect(
+    (await new AxeBuilder({ page }).include(".desktop-settings").analyze())
+      .violations,
+  ).toEqual([]);
+  await page
+    .getByRole("heading", { name: "Dictation", exact: true })
+    .scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "output/playwright/dictation-settings.png" });
+});
 
 test("the recording strip follows input, freezes on pause, and remains usable with reduced motion", async ({
   page,
@@ -293,21 +425,15 @@ for (const enabled of [true, false]) {
         window as unknown as { dictationFixture: { initialText: string } }
       ).dictationFixture.initialText = "Ready question mark.";
     });
-    await page
-      .getByRole("button", { name: "Start offline dictation", exact: true })
-      .click();
-    const setting = page.getByRole("checkbox", {
-      name: "Spoken punctuation",
-      exact: true,
-    });
-    await expect(setting).toBeChecked();
-    if (!enabled) await setting.uncheck();
-    await page
-      .getByRole("button", { name: "Choose model…", exact: true })
-      .click();
-    await page
-      .getByRole("button", { name: "Start recording", exact: true })
-      .click();
+    await page.evaluate((spokenPunctuation) => {
+      (
+        window as unknown as {
+          dictationFixture: { preferences: { spokenPunctuation: boolean } };
+        }
+      ).dictationFixture.preferences.spokenPunctuation = spokenPunctuation;
+    }, enabled);
+    await startRecording(page);
+
     await expect(
       page.getByRole("textbox", { name: "Prompt", exact: true }),
     ).toHaveValue(enabled ? "Ready?" : "Ready question mark.");

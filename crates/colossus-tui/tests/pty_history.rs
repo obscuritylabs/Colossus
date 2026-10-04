@@ -27,6 +27,42 @@ use tokio::sync::{mpsc, oneshot};
 
 struct FixtureHost;
 
+struct FixtureDictation;
+#[async_trait]
+impl colossus_tui::LocalDictation for FixtureDictation {
+    async fn control(
+        &self,
+        action: colossus_tui::DictationAction,
+    ) -> Result<Vec<colossus_tui::DictationUpdate>, String> {
+        use colossus_tui::{DictationAction, DictationUpdate};
+        let transcript = |revision, settled, text: &str| DictationUpdate::Transcript {
+            segment: 1,
+            revision,
+            settled,
+            text: text.into(),
+        };
+        Ok(match action {
+            DictationAction::Start => vec![
+                DictationUpdate::Listening,
+                transcript(1, false, "voice draft"),
+                DictationUpdate::Level(180),
+            ],
+            DictationAction::Stop => {
+                vec![transcript(2, true, "voice final"), DictationUpdate::Stopped]
+            }
+            DictationAction::Pause => vec![DictationUpdate::Paused],
+            DictationAction::Resume => vec![DictationUpdate::Listening],
+        })
+    }
+    async fn poll(&self) -> Result<Vec<colossus_tui::DictationUpdate>, String> {
+        Ok(vec![])
+    }
+    async fn configure(&self, _: &str) -> Result<String, String> {
+        Ok("Saved".into())
+    }
+    fn cancel(&self) {}
+}
+
 #[async_trait]
 impl InteractiveHost for FixtureHost {
     async fn bootstrap(&self, _request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
@@ -228,10 +264,14 @@ impl InteractiveHost for FixtureHost {
         if std::env::var_os("COLOSSUS_TUI_STREAM_FIXTURE").is_none() {
             return Err("fixture does not run model turns".into());
         }
-        let output = (1..=30)
-            .map(|row| format!("stream-final-row-{row:02}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let output = if std::env::var_os("COLOSSUS_TUI_DICTATION_FIXTURE").is_some() {
+            format!("Dictation accepted: {}", request.prompt)
+        } else {
+            (1..=30)
+                .map(|row| format!("stream-final-row-{row:02}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
         let call = ToolCall {
             call_id: "call-scrollback".into(),
             name: "filesystem.search".into(),
@@ -560,6 +600,8 @@ fn fixture_process() {
         .block_on(run_tui(
             Arc::new(FixtureHost),
             TuiOptions {
+                dictation: std::env::var_os("COLOSSUS_TUI_DICTATION_FIXTURE")
+                    .map(|_| Arc::new(FixtureDictation) as Arc<dyn colossus_tui::LocalDictation>),
                 bootstrap: BootstrapRequest::default(),
                 screen_mode,
                 background_notice: None,
@@ -1694,6 +1736,67 @@ fn typing_tab_completion_and_resize_never_erase_visible_transcript_rows() {
             || raw_contains(raw.as_slice(), b"\x1b[?1003;1006l"),
         "alternate-screen mouse capture was not restored"
     );
+}
+
+#[test]
+fn f4_dictation_displays_a_meter_and_enter_submits_the_final_revision() {
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("PTY");
+    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    command.cwd(std::env::current_dir().expect("fixture directory"));
+    command.args(["--exact", "fixture_process", "--nocapture"]);
+    command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
+    command.env("COLOSSUS_TUI_DICTATION_FIXTURE", "1");
+    command.env("COLOSSUS_TUI_STREAM_FIXTURE", "1");
+    let mut child = pair.slave.spawn_command(command).expect("spawn fixture");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("PTY reader");
+    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let reader_output = Arc::clone(&output);
+    let reader_thread = thread::spawn(move || {
+        let mut buffer = [0_u8; 8192];
+        while let Ok(read) = reader.read(&mut buffer) {
+            if read == 0 {
+                break;
+            }
+            reader_output
+                .lock()
+                .expect("output")
+                .extend_from_slice(&buffer[..read]);
+        }
+    });
+    let mut writer = pair.master.take_writer().expect("PTY writer");
+    #[cfg(windows)]
+    answer_cursor_position_query(&output, &mut writer);
+    wait_for_screen(&output, 24, 80, "durable-row-01");
+    writer
+        .write_all(b"Typed \x1bOS")
+        .expect("type prefix and F4");
+    writer.flush().expect("flush start");
+    wait_for_screen(&output, 24, 80, "Listening");
+    wait_for_screen(&output, 24, 80, "Typed voice draft");
+    writer.write_all(b"\r").expect("finish and submit");
+    writer.flush().expect("flush send");
+    wait_for_screen(&output, 24, 80, "Dictation accepted: Typed voice final");
+    let final_screen = screen_contents(&output, 24, 80);
+    assert!(final_screen.contains("Typed voice final"), "{final_screen}");
+    assert!(
+        !final_screen.contains("Typed voice draft"),
+        "{final_screen}"
+    );
+    writer.write_all(&[3, 3]).expect("exit");
+    writer.flush().expect("flush exit");
+    let status = child.wait().expect("fixture status");
+    drop(writer);
+    drop(pair.master);
+    reader_thread.join().expect("reader thread");
+    assert!(status.success());
 }
 
 fn wait_for_raw(output: &Arc<Mutex<Vec<u8>>>, needle: &[u8]) {

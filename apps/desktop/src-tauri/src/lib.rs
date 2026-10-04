@@ -73,7 +73,9 @@ use desktop_commands::{
 };
 use diagnostics::{desktop_release_metadata, export_diagnostics};
 use dictation::{
-    choose_dictation_model, control_dictation, dictation_status, poll_dictation, start_dictation,
+    cancel_dictation_download, choose_dictation_model, control_dictation, dictation_status,
+    download_dictation_model, get_dictation_settings, poll_dictation, save_dictation_settings,
+    start_dictation,
 };
 use managed_configuration_commands::catalog_deletion::{
     delete_global_model, delete_global_provider,
@@ -125,7 +127,7 @@ use workspace_git::commands::{
 // Composition-only registration list: native command implementations stay in modules.
 #[allow(clippy::too_many_lines)]
 pub fn run() {
-    #[cfg(feature = "dictation-preview")]
+    #[cfg(feature = "dictation")]
     if let Some(code) = colossus_native_dictation::run_if_requested() {
         std::process::exit(code);
     }
@@ -198,6 +200,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             dictation_status,
+            get_dictation_settings,
+            download_dictation_model,
+            cancel_dictation_download,
+            save_dictation_settings,
             choose_dictation_model,
             start_dictation,
             poll_dictation,

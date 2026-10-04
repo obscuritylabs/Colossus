@@ -1152,12 +1152,16 @@ dependencies = [
 name = "colossus-native-dictation"
 version = "0.1.0"
 dependencies = [
+ "colossus-home",
  "cpal",
  "hound",
+ "regex",
+ "reqwest 0.12.28",
  "rubato",
  "serde",
  "serde_json",
  "sha2",
+ "tokio",
  "whisper-rs",
  "zeroize",
 ]
@@ -2900,6 +2904,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "rustls",
+ "rustls-native-certs",
  "tokio",
  "tokio-rustls",
  "tower-service",
@@ -5181,6 +5186,7 @@ dependencies = [
  "pin-project-lite",
  "quinn",
  "rustls",
+ "rustls-native-certs",
  "rustls-pki-types",
  "serde",
  "serde_json",

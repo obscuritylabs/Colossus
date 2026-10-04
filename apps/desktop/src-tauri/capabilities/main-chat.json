@@ -6,6 +6,10 @@
   "webviews": ["main"],
   "permissions": [
     "allow-dictation-status",
+    "allow-get-dictation-settings",
+    "allow-download-dictation-model",
+    "allow-cancel-dictation-download",
+    "allow-save-dictation-settings",
     "allow-choose-dictation-model",
     "allow-start-dictation",
     "allow-poll-dictation",

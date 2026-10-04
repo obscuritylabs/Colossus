@@ -1,30 +1,85 @@
 ---
-title: Evaluate offline Desktop dictation
-description: Run the native Whisper probe and collect the evidence required before enabling Desktop microphone dictation.
+title: Use and evaluate offline dictation
+description: Configure Desktop and TUI dictation, bundle reviewed models, and evaluate native accuracy and latency.
 audience: developer
 type: how-to
 ---
 
-# Evaluate offline Desktop dictation
+# Use and evaluate offline dictation
 
-`apps/desktop/native-dictation` provides a standalone probe and an opt-in development
-Desktop recording preview for [issue 212](https://github.com/obscuritylabs/Colossus/issues/212).
-The microphone UI is available in development builds with the `dictation-preview`
-native feature. Ordinary release renderer bundles exclude the preview, and ordinary
-native builds do not link its capture or inference dependencies. Run it on representative
-macOS and Windows devices before selecting a production model, inference backend,
-or delivery method. Dictated text uses the existing composer and agent protocol.
+Desktop includes local Whisper dictation. Open **Settings → Global → Dictation**, enable
+it, and choose the microphone, speech model, and spoken punctuation preference. The
+composer microphone starts recording; Pause permits edits; Stop releases capture.
+The Settings microphone test discards its text when you leave. Recording requires an
+explicit action and OS microphone permission. Audio stays on the machine and is
+discarded after transcription. Recognized text remains a draft until Send.
+
+Tiny English (~78 MB) ships with Desktop for offline first use. Base English (~148 MB)
+is optional: download it from Settings or choose a verified local model file. Transfers
+use fixed URLs, sizes, and SHA-256 checks; partial files are never published as models.
+An unplugged selected microphone produces an error instead of switching inputs.
+
+Preferences and models live in `COLOSSUS_HOME/dictation` (normally `~/.colossus/dictation`).
+Desktop and the local TUI share these device-local choices. They apply to the next
+recording, independently of workspaces and external agent targets. Model paths and
+audio never enter the renderer or agent protocol. The shared native engine lives in
+`crates/colossus-native-dictation`.
+
+## Dictate in the local TUI
+
+The Desktop-bundled CLI includes dictation. Enable it explicitly for source builds:
+
+```bash
+GGML_NATIVE=OFF cargo build --locked -p colossus-cli --features dictation
+./target/debug/colossus tui
+```
+
+Use `/dictate on`, then **F4** to start, pause, or resume. **Shift+F4** stops. **Enter**
+finalizes pending speech before sending; multiline mode uses **Ctrl+D**. Active speech
+updates cannot overwrite manual edits. Pause before editing. Escape or Ctrl+C cancels
+recording; exit, session navigation, and operator decisions release the microphone.
+
+Use `/dictate settings` for current choices and command help:
+
+- `/dictate microphones` lists inputs; `/dictate microphone NUMBER` selects one.
+- `/dictate microphone default` restores the OS default.
+- `/dictate install tiny` or `/dictate install base` explicitly downloads a pinned model.
+- `/dictate model tiny` or `/dictate model base` selects an installed model.
+- `/dictate punctuation on` or `/dictate punctuation off` controls spoken commands.
+- `/dictate off` disables future recording.
+
+Headless CLI builds omit native audio dependencies. A CLI running over SSH captures
+on the machine running the CLI. Microphone access is not forwarded through the worker
+or agent connection. Native permissions, input devices, and latency still need live
+acceptance on each supported platform.
+
+## Package the included model
+
+Desktop dev/build and macOS/Windows packaging stage Tiny English before native
+assembly. `release/dictation/models.json` pins the immutable revision, size, and digest;
+`release/dictation/LICENSE-MIT` retains the upstream license. Weights are ignored build
+assets, never Git source or renderer assets. Stage a reviewed file without networking:
+
+```bash
+node scripts/stage-dictation-model.mjs --model-file /absolute/path/ggml-tiny.en.bin
+```
+
+Downloaded and cached bytes are verified. Native resources include the model, license,
+and provenance. Cargo defaults to `GGML_NATIVE=OFF` for CPU portability; an explicit
+environment value can override it for local profiling. macOS signing grants audio
+input to the app and bundled CLI. Renderer
+chunk and fixture checks remain active, with a 4,050,000-byte total budget including the
+regular dictation controls and lazy Settings page.
 
 ## Build and install a candidate
 
 Use the [source toolchain](setup-testing.md), a C++ compiler, CMake, and libclang.
 Windows needs the MSVC C++ build tools; macOS needs Xcode command-line tools. Linux
 also needs ALSA development headers for the capture adapter. Dependencies come from
-the locked Desktop Cargo graph. Build a portable CPU baseline from the repository root:
+the locked root Cargo graph. Build a portable CPU baseline from the repository root:
 
 ```bash
 GGML_NATIVE=OFF cargo build --locked --release \
-  --manifest-path apps/desktop/src-tauri/Cargo.toml \
   --package colossus-native-dictation --features probe --bin dictation-probe
 ```
 
@@ -55,39 +110,26 @@ exact verified bytes, without reopening the pathname. An operator-supplied hash
 checks integrity; authenticity depends on reviewing the pinned source above. Hashing
 an arbitrary downloaded file and supplying that result does not establish provenance.
 The probe creates no model store. Remove its model by deleting that exact installed
-file. Maintainers must own a reviewed, pinned model manifest and its updates before
-adding a production installer; bundling versus explicit download is still undecided.
+file. Desktop and TUI use the reviewed catalog in `release/dictation/models.json`:
+Tiny English is bundled with Desktop, and Base English is an explicit download.
 
 ## Open Desktop with a microphone control
 
-After downloading a pinned model, run this from the repository root on macOS or Linux:
+From the repository root on macOS or Linux:
 
 ```bash
-GGML_NATIVE=OFF ./scripts/desktop-dev --dictation
+GGML_NATIVE=OFF ./scripts/desktop-dev
 ```
 
-On Windows, use PowerShell from the repository root:
+On Windows, set `$env:GGML_NATIVE = 'OFF'`, run `npm ci --ignore-scripts` in
+`apps/desktop`, then `npm run tauri:dev`. The historical `--dictation` and
+`tauri:dev:dictation` commands remain aliases. Building the probe alone does not launch
+Desktop. Close another Desktop instance before launching the development app.
 
-```powershell
-$env:GGML_NATIVE = 'OFF'
-Set-Location apps/desktop
-npm ci --ignore-scripts
-npm run tauri:dev:dictation
-```
+Enable dictation in **Settings → Global → Dictation**, use **Test dictation** to check
+your input, then return to the thread and click the composer microphone.
 
-These commands prepare the matching sidecar/CLI, start the renderer, and open the
-development Desktop app with the opt-in native recorder. Building `dictation-probe`
-alone does not open Desktop or add a microphone control to an installed release.
-Close any other Colossus Desktop instance before launching the development preview.
-
-In the composer, click the microphone, choose **Choose model…**, and select the
-downloaded `ggml-tiny.en.bin` or `ggml-base.en.bin`. Native code verifies the pinned
-digest; the renderer receives only the fixed model name. Selection stays in memory
-for this application session, so choose the file again after restarting Desktop.
-Click **Start recording**, accept the native recording confirmation, and allow OS
-microphone access if prompted. Speak and watch partial text appear in the draft.
-
-**Spoken punctuation** is enabled by default in the microphone settings. Say
+**Spoken punctuation** is enabled by default in Dictation Settings. Say
 “period” or “full stop” for `.`, “comma” for `,`, “question mark” for `?`,
 “exclamation mark” or “exclamation point” for `!`, “colon” for `:`, “semicolon”
 for `;`, and “new line” or “new paragraph” for line breaks. For example,
@@ -105,7 +147,7 @@ an edit. This is formatting after local transcription, so it cannot recover a
 spoken command that the model did not recognize.
 
 The microphone control pauses and resumes recording. Pause finalizes captured speech
-and releases the input device before the draft becomes editable; this preview protects
+and releases the input device before the draft becomes editable; the composer protects
 an active partial from competing edits. Resume continues with the edited draft. The
 adjacent stop control finalizes speech and closes the recording session. A clear
 recording strip remains visible while capture is active. Its cyan waveform shows
@@ -141,18 +183,18 @@ Speech never submits a turn without an explicit Send or Redirect action.
 Check pause/edit/resume, successive sends, failed submission, permission denial and
 recovery, device removal, model failure, renderer reload, and application close on each
 native platform. If capture is unavailable, check the system's default input device and
-microphone privacy settings for Colossus or the launching terminal. The preview includes
+microphone privacy settings for Colossus or the launching terminal. The app includes
 a macOS microphone usage description and an audio-input entitlement configuration;
 actual platform permission prompts and hardened packaging still need acceptance.
 
 ## Exercise offline inference and capture
 
-The release executable is under `apps/desktop/src-tauri/target/release/` unless
+The release executable is under `target/release/` unless
 `CARGO_TARGET_DIR` overrides it. Windows adds `.exe`. With the model installed,
 disconnect networking and run:
 
 ```bash
-apps/desktop/src-tauri/target/release/dictation-probe \
+target/release/dictation-probe \
   /path/to/ggml-tiny.en.bin \
   921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f
 ```
@@ -171,7 +213,7 @@ Speak continuously, then enter these commands on stdin:
   EOF also stops; Ctrl+C terminates the console process.
 
 `flush` is a probe segmentation control, not an agent submission. Audio still queued
-at that instant belongs to subsequent updates. The Desktop preview instead inserts a
+at that instant belongs to subsequent updates. Desktop instead inserts a
 FIFO capture marker and settles the current draft before using the existing Send path.
 
 Stdout contains JSON cold-start and per-revision metrics. It omits transcript text by
@@ -258,15 +300,12 @@ substitute for native permission and shutdown acceptance.
 Run deterministic checks with:
 
 ```bash
-cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml \
-  --package colossus-native-dictation --lib
-cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml \
-  --package colossus-native-dictation --features probe --lib
-cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml \
-  --package colossus-native-dictation --features probe --all-targets -- -D warnings
+cargo test --locked --package colossus-native-dictation --lib
+cargo test --locked --package colossus-native-dictation --features probe --lib
+cargo clippy --locked --package colossus-native-dictation --features probe --all-targets -- -D warnings
 ```
 
-The ordinary Desktop gate runs the first suite without audio/model build dependencies.
+The root Rust gate runs the first suite without audio/model build dependencies.
 The feature-enabled suite additionally tests capture bounds, resampler tails, continuous
 send boundaries, and cancellation. Renderer tests cover ordered revisions, settled
 drafts, failed sends, bounded output, and stale-session replies. Production enablement

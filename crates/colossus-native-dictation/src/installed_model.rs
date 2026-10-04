@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::{DictationError, model};
+use crate::{DictationError, ModelId, model};
 
 /// A native-selected, verified candidate from the pinned Whisper conversion.
 /// The filename is not authority; the bytes must match a reviewed digest.
@@ -9,6 +9,7 @@ pub struct InstalledModel {
     pub(crate) path: PathBuf,
     pub(crate) digest: &'static str,
     name: &'static str,
+    id: ModelId,
 }
 
 impl InstalledModel {
@@ -23,24 +24,30 @@ impl InstalledModel {
         if !metadata.is_file() {
             return Err(DictationError::ModelUnavailable);
         }
-        let (name, digest) = match metadata.len() {
-            77_704_715 => (
-                "Tiny English",
-                "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
-            ),
-            147_964_211 => (
-                "Base English",
-                "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
-            ),
+        let id = match metadata.len() {
+            77_704_715 => ModelId::TinyEnglish,
+            147_964_211 => ModelId::BaseEnglish,
             _ => return Err(DictationError::ModelUnsupported),
         };
+        let (name, digest) = (id.name(), id.digest());
         drop(model::verify(&path, digest)?);
-        Ok(Self { path, digest, name })
+        Ok(Self {
+            path,
+            digest,
+            name,
+            id,
+        })
     }
 
     /// Bounded, fixed display name; never the selected filesystem path.
     #[must_use]
     pub fn name(&self) -> &'static str {
         self.name
+    }
+
+    /// Reviewed catalog identity of the verified asset.
+    #[must_use]
+    pub fn id(&self) -> ModelId {
+        self.id
     }
 }

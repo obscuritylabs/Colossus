@@ -725,6 +725,17 @@ pub struct InteractivePrompt {
 
 /// Typed background event consumed by the sole terminal owner.
 pub enum HostEvent {
+    /// Device-local recording result, isolated by recording generation.
+    Dictation {
+        /// Identity of the local draft's recording generation.
+        generation: u64,
+        /// Control completion, or a periodic drain.
+        action: Option<crate::DictationAction>,
+        /// Bounded transcript and meter updates.
+        result: Result<Vec<crate::DictationUpdate>, String>,
+    },
+    /// An explicit device-local settings command completed.
+    DictationSettings(Result<String, String>),
     /// Ordered policy-released agent runtime event.
     Run(RunEventEnvelope),
     /// Policy-released informational notice that does not take focus.
@@ -865,6 +876,8 @@ pub enum ScreenMode {
 /// User-visible TUI startup options.
 #[derive(Clone, Default)]
 pub struct TuiOptions {
+    /// Optional microphone adapter for this terminal machine.
+    pub dictation: Option<Arc<dyn crate::LocalDictation>>,
     /// Durable session selection.
     pub bootstrap: BootstrapRequest,
     /// Explicit screen mode.
@@ -883,6 +896,7 @@ impl std::fmt::Debug for TuiOptions {
             .field("screen_mode", &self.screen_mode)
             .field("background_notice", &self.background_notice.is_some())
             .field("lifecycle", &self.lifecycle.is_some())
+            .field("dictation", &self.dictation.is_some())
             .finish()
     }
 }

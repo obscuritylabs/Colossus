@@ -77,6 +77,23 @@ function fixture(byteLimit = 65_536) {
   };
 }
 
+it("a status reply after navigation cannot authorize recording", async () => {
+  const f = fixture();
+  let resolve!: (status: { enabled: boolean; model: string }) => void;
+  vi.mocked(f.api.status).mockImplementationOnce(
+    () =>
+      new Promise((reply) => {
+        resolve = reply;
+      }),
+  );
+  const pending = f.controller.inspect();
+  await Promise.resolve();
+  f.controller.reset();
+  resolve({ enabled: true, model: "Tiny English" });
+  expect(await pending).toBe(false);
+  expect(f.api.start).not.toHaveBeenCalled();
+});
+
 describe("dictation draft revisions", () => {
   it.each([
     [

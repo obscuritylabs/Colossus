@@ -1004,7 +1004,7 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [surface, setSurface] = useState<WorkspaceSurface>("work");
   const [settingsStartTab, setSettingsStartTab] = useState<
-    "runtime" | "providers" | "plugins" | "terminal"
+    "runtime" | "providers" | "plugins" | "terminal" | "dictation"
   >("runtime");
   const [workNavigationOpen, setWorkNavigationOpen] = useState(false);
   const [workspaceFileOpenRequest, setWorkspaceFileOpenRequest] =
@@ -5053,6 +5053,10 @@ export default function App() {
   const composer = (contextActions: ReactNode) => (
     <WorkComposer
       dictation={dictation ?? undefined}
+      onOpenDictationSettings={() => {
+        setSettingsStartTab("dictation");
+        setSurface("settings");
+      }}
       contextActions={contextActions}
       pluginSkills={completionSkills}
       pluginSelections={pluginSelections}

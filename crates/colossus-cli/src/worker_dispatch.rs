@@ -1193,6 +1193,7 @@ pub(super) async fn dispatch_to_worker_if_active(
                 run_tui(
                     host,
                     TuiOptions {
+                        dictation: crate::dictation::local_port(),
                         bootstrap: BootstrapRequest {
                             session_id: session.clone(),
                             resume_latest: *resume,
