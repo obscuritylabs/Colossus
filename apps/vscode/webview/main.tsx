@@ -9,7 +9,7 @@ import {
 import type { ViewAction, WorkView } from "../src/model.js";
 import { DEFAULT_PREFERENCES, type Preferences } from "../src/settings.js";
 import { brandMarks, element, icon, node } from "./ui.js";
-import { markdown } from "./markdown.js";
+import { Conversation } from "./conversation.js";
 
 declare function acquireVsCodeApi(): {
   postMessage(message: ViewAction): void;
@@ -23,7 +23,7 @@ app.innerHTML = `<header class="work-header"><div class="work-heading"><img data
 <button id="new" class="icon-button" aria-label="New conversation" title="New conversation"><span class="icon icon-plus" aria-hidden="true"></span></button>
 <button id="settings" class="icon-button" aria-label="Open Colossus settings" title="Settings"><span class="icon icon-settings" aria-hidden="true"></span></button></div></header>
 <main id="conversation" aria-label="Colossus work"><section id="empty" class="empty"><img data-brand-mark alt="" width="48" height="48"><h2>What would you like to work on?</h2><p>Plan a change, inspect code, or build something with Colossus.</p><button id="connect">Connect worker</button><p id="connect-hint" class="muted">Connect your enrolled local worker to get started.</p></section>
-<section id="messages" role="log" aria-label="Conversation messages"></section><details id="activity" class="activity" hidden><summary>Tool activity <span id="tool-count" class="muted"></span></summary><div id="tools"></div></details></main>
+<section id="messages" role="log" aria-label="Conversation messages"></section></main>
 <footer class="work-dock"><section id="interactions" aria-label="Pending interactions"></section><div id="error" class="error" role="alert" hidden></div>
 <div class="composer"><div id="context" class="context" hidden></div><div id="composer-fields"></div></div>
 <div id="context-actions" class="context-actions" hidden><button id="selection" class="text-button">Add selection</button><button id="file" class="text-button">Add file</button><button id="changes" class="text-button">Review changes</button></div>
@@ -163,8 +163,10 @@ function send() {
     mode: mode.value as "plan" | "execute",
   });
 }
-let messageSignature = "";
-let toolSignature = "";
+const conversation = new Conversation(
+  element("messages"),
+  element("conversation"),
+);
 let interactionSignature = "";
 function render(next: WorkView) {
   const changingSession = view?.sessionId !== next.sessionId;
@@ -208,54 +210,7 @@ function render(next: WorkView) {
     element<HTMLButtonElement>(id).disabled = !next.connected || next.busy;
   renderComposer();
   element<HTMLButtonElement>("changes").disabled = !next.connected;
-  const signature = JSON.stringify(next.messages);
-  if (signature !== messageSignature) {
-    messageSignature = signature;
-    const scroll = element("conversation");
-    const atBottom =
-      scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 100;
-    element("messages").replaceChildren(
-      ...next.messages.map((message) => {
-        const article = node("article", "", `message ${message.role}`);
-        const label =
-          message.role === "user"
-            ? message.summary
-              ? "Task summary"
-              : "You"
-            : message.role === "assistant"
-              ? "Colossus"
-              : "Notice";
-        article.append(node("p", label, "message-author"));
-        article.append(
-          message.role === "assistant"
-            ? markdown(message.text)
-            : node("div", message.text, "plain-text"),
-        );
-        return article;
-      }),
-    );
-    if (changingSession || atBottom) scroll.scrollTop = scroll.scrollHeight;
-  }
-  element("activity").hidden =
-    !next.tools.length || !preferences.showToolActivity;
-  element("tool-count").textContent = `(${next.tools.length})`;
-  const tools = JSON.stringify(next.tools);
-  if (tools !== toolSignature) {
-    toolSignature = tools;
-    element("tools").replaceChildren(
-      ...next.tools.map((tool) => {
-        const row = node("div", "", "tool");
-        const heading = node("div", "", "tool-heading");
-        heading.append(
-          icon("terminal-2"),
-          node("strong", tool.name),
-          node("span", tool.state, "badge"),
-        );
-        row.append(heading, node("p", tool.summary, "muted plain-text"));
-        return row;
-      }),
-    );
-  }
+  conversation.render(next, preferences.showToolActivity, changingSession);
   const interactions = JSON.stringify(next.interactions);
   if (interactions !== interactionSignature) {
     interactionSignature = interactions;

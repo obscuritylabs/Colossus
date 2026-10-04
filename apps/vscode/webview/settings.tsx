@@ -215,7 +215,7 @@ function Settings() {
             >
               <div>
                 <label htmlFor="showToolActivity">Show tool activity</label>
-                <p>Show a collapsible activity summary in the conversation.</p>
+                <p>Show compact tool progress in each conversation turn.</p>
               </div>
               <input
                 id="showToolActivity"

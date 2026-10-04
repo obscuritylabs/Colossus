@@ -19,6 +19,8 @@ import {
   RunUpdate,
   RunResult,
   RunCancellation,
+  ToolActivity,
+  ToolActivityState,
   type AgentRunServiceServer,
   type WatchRunRequest,
   type WatchRunResponse,
@@ -61,6 +63,7 @@ async function fixture() {
   let answers = 0;
   let cancelRequests = 0;
   let watchStarts = 0;
+  let rejectHistory = false;
   let lists = 0;
   let listFailure: grpc.ServiceError | undefined;
   let listFailuresRemaining = 0;
@@ -110,6 +113,7 @@ async function fixture() {
     const event = RunUpdate.fromPartial({
       runId: run.runId,
       sequence: BigInt(history.length + 1),
+      createdAt: new Date(),
       update,
     });
     history.push(event);
@@ -199,6 +203,14 @@ async function fixture() {
     watchRun(call) {
       auth(call);
       watchStarts++;
+      if (rejectHistory && run.terminal) {
+        call.destroy(
+          Object.assign(new Error("private-history-error"), {
+            code: grpc.status.PERMISSION_DENIED,
+          }),
+        );
+        return;
+      }
       for (const event of history)
         if (event.sequence > call.request.afterSequence)
           call.write({ update: event });
@@ -337,6 +349,9 @@ async function fixture() {
     },
     finish,
     emit,
+    rejectToolHistory() {
+      rejectHistory = true;
+    },
     run,
     watchers,
     setUncertainCreate() {
@@ -541,6 +556,106 @@ test("an uncertain interaction response is reconciled without sending the action
     await until(() => !c.view.busy);
     await assert.rejects(c.respond("interaction-1"));
     assert.equal(f.answers, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("live tool lifecycle remains in its turn and is restored from a terminal feed without repeating effects", async () => {
+  const f = await fixture();
+  const activity = (state: ToolActivityState, summary: string, extra = {}) =>
+    f.emit({
+      $case: "toolActivity",
+      value: ToolActivity.fromPartial({
+        callId: "shell-1",
+        toolName: "shell.run",
+        state,
+        summary,
+        ...extra,
+      }),
+    });
+  try {
+    const first = await f.controller();
+    await first.send("Inspect code", "execute");
+    await until(() => first.view.messages.some((m) => m.text === "Working "));
+    activity(
+      ToolActivityState.TOOL_ACTIVITY_STATE_REQUESTED,
+      "Preparing command",
+    );
+    activity(
+      ToolActivityState.TOOL_ACTIVITY_STATE_WAITING_APPROVAL,
+      "Waiting for approval",
+    );
+    activity(ToolActivityState.TOOL_ACTIVITY_STATE_STARTED, "Command running", {
+      input: '{"command":"echo ready"}',
+    });
+    await until(() => first.view.tools[0]?.state === "started");
+    assert.equal(first.view.tools.length, 1);
+    assert.equal(first.view.tools[0]?.runId, "run-1");
+    first.detach();
+    const resumed = await f.controller(f.remembered);
+    await until(() => resumed.view.tools[0]?.state === "started");
+    assert.equal(resumed.view.tools[0]?.history?.length, 3);
+    activity(
+      ToolActivityState.TOOL_ACTIVITY_STATE_COMPLETED,
+      "Command exited",
+      { preview: "ready\n" },
+    );
+    f.finish();
+    await until(
+      () =>
+        !resumed.view.busy &&
+        resumed.view.messages.some((m) => m.text === "Working done."),
+    );
+    assert.equal(resumed.view.tools[0]?.state, "completed");
+    assert.equal(resumed.view.tools[0]?.history?.length, 4);
+    resumed.detach();
+    const restored = await f.controller(f.remembered);
+    assert.equal(restored.view.tools[0]?.preview, "ready\n");
+    assert.equal(restored.view.tools[0]?.input, '{"command":"echo ready"}');
+    assert.equal(restored.view.tools[0]?.history?.length, 4);
+    assert.equal(restored.view.tools.length, 1);
+    assert.equal(
+      restored.view.messages.every((m) => m.runId === "run-1"),
+      true,
+    );
+    assert.equal(f.creates, 1);
+    assert.equal(f.answers, 0);
+    assert.equal(f.cancelRequests, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("unavailable historical tool feeds leave the canonical response visible with an honest notice", async () => {
+  const f = await fixture();
+  try {
+    const first = await f.controller();
+    await first.send("Inspect code", "plan");
+    await until(() => first.view.messages.some((m) => m.text === "Working "));
+    f.finish();
+    await until(
+      () =>
+        !first.view.busy &&
+        first.view.messages.some((m) => m.text === "Working done."),
+    );
+    first.detach();
+    f.rejectToolHistory();
+    const restored = await f.controller(f.remembered);
+    assert.equal(
+      restored.view.messages.some((m) => m.text === "Working done."),
+      true,
+    );
+    assert.equal(
+      restored.view.messages.some(
+        (m) =>
+          m.role === "notice" &&
+          m.text.includes("tool progress could not be loaded"),
+      ),
+      true,
+    );
+    assert.equal(restored.view.error, "");
+    assert.equal(f.creates, 1);
   } finally {
     await f.close();
   }

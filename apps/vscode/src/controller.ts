@@ -4,7 +4,6 @@ import {
   InteractionStatus,
   RunMode,
   runStatusToJSON,
-  toolActivityStateToJSON,
   type Interaction,
   type RespondInteractionRequest,
   type Run,
@@ -14,6 +13,7 @@ import {
 import { safeError, type WorkerClient } from "./connection.js";
 import { initialView, type ContextView, type WorkView } from "./model.js";
 import { UserError } from "./errors.js";
+import { toolProgress } from "./tool-progress.js";
 import {
   runView,
   planView,
@@ -37,6 +37,8 @@ export class WorkController {
   private epoch = 0;
   private active: Run | undefined;
   private abort: AbortController | undefined;
+  private historyAbort: AbortController | undefined;
+  private toolHistory = new Map<string, string>();
   private interactions = new Map<string, Interaction>();
   private responding = new Set<string>();
   private uncertain = false;
@@ -86,6 +88,8 @@ export class WorkController {
     this.attachmentId++;
     this.epoch++;
     this.abort?.abort();
+    this.historyAbort?.abort();
+    this.toolHistory.clear();
     this.abort = undefined;
     this.client?.close();
     this.client = undefined;
@@ -278,6 +282,8 @@ export class WorkController {
       throw new UserError("Stop or reconcile the active run first.");
     this.epoch++;
     this.abort?.abort();
+    this.historyAbort?.abort();
+    this.toolHistory.clear();
     this.active = undefined;
     this.interactions.clear();
     this.view.sessionId = "";
@@ -300,6 +306,8 @@ export class WorkController {
     const client = this.requireClient();
     const epoch = ++this.epoch;
     this.abort?.abort();
+    this.historyAbort?.abort();
+    this.toolHistory.clear();
     this.interactions.clear();
     this.view.interactions = [];
     this.view.busy = true;
@@ -366,11 +374,11 @@ export class WorkController {
       throw new UserError("Enter a task of at most 64 KiB.");
     const epoch = ++this.epoch;
     this.abort?.abort();
+    this.historyAbort?.abort();
     this.view.watching = false;
     this.view.busy = true;
     this.view.mode = mode;
     this.view.error = "";
-    this.view.tools = [];
     this.view.status = "Starting run";
     const input = [
       prompt,
@@ -400,6 +408,7 @@ export class WorkController {
       this.view.sessionId = response.run.sessionId;
       this.view.messages.push({
         id: `user:${response.run.runId}`,
+        runId: response.run.runId,
         role: "user",
         text: input,
       });
@@ -450,7 +459,9 @@ export class WorkController {
     this.view.messages = this.view.messages.filter(
       (m) => m.id !== `assistant:${run.runId}`,
     );
-    this.view.tools = [];
+    this.view.tools = this.view.tools.filter(
+      (tool) => tool.runId !== run.runId,
+    );
     this.startWatch(run.runId, epoch);
     this.publish();
   }
@@ -541,6 +552,7 @@ export class WorkController {
         if (epoch !== this.epoch || abort.signal.aborted) return;
         this.recordRun(reconciled.run);
         if (reconciled.run?.terminal) {
+          this.toolHistory.set(id, "");
           this.active = undefined;
           this.view.busy = false;
           this.interactions.clear();
@@ -575,27 +587,14 @@ export class WorkController {
         const id = `assistant:${item.runId}`;
         let message = this.view.messages.find((m) => m.id === id);
         if (!message) {
-          message = { id, role: "assistant", text: "" };
+          message = { id, runId: item.runId, role: "assistant", text: "" };
           this.view.messages.push(message);
         }
         message.text = (message.text + update.value.text).slice(-512 * 1024);
         break;
       }
       case "toolActivity": {
-        const tool = update.value;
-        const view = {
-          id: tool.callId,
-          name: tool.toolName,
-          state: toolActivityStateToJSON(tool.state)
-            .replace("TOOL_ACTIVITY_STATE_", "")
-            .toLowerCase()
-            .replaceAll("_", " "),
-          summary: tool.summary,
-        };
-        const index = this.view.tools.findIndex((t) => t.id === tool.callId);
-        if (index < 0) this.view.tools.push(view);
-        else this.view.tools[index] = view;
-        this.view.tools = this.view.tools.slice(-100);
+        this.view.tools = toolProgress(this.view.tools, item);
         break;
       }
       case "interaction":
@@ -619,6 +618,7 @@ export class WorkController {
         else
           this.view.messages.push({
             id,
+            runId: item.runId,
             role: "assistant",
             text: update.value.output,
           });
@@ -670,12 +670,44 @@ export class WorkController {
       this.view.messages.map((message) => [message.id, message]),
     );
     const messages: WorkView["messages"] = [];
+    const historyDeadline = Date.now() + 5000;
+    const recent = listed.slice(0, 20);
+    const retained = new Set(recent.map((run) => run.runId));
+    this.view.tools = this.view.tools.filter(
+      (tool) => tool.runId && retained.has(tool.runId),
+    );
+    for (const id of this.toolHistory.keys())
+      if (!retained.has(id)) this.toolHistory.delete(id);
+    const terminals = new Map<string, Run["terminal"]>();
+    // Restore the most recent progress first within the read budget, then render
+    // chronological turns. A slow old feed cannot starve the latest task.
+    for (const summary of recent) {
+      if (
+        summary.runId === this.active?.runId &&
+        summary.terminal === undefined
+      )
+        continue;
+      const response = await client.get(summary.runId);
+      if (epoch !== this.epoch) return;
+      this.recordRun(response.run);
+      terminals.set(summary.runId, response.run?.terminal);
+      if (response.run?.terminal) {
+        await this.loadToolHistory(
+          client,
+          summary.runId,
+          epoch,
+          historyDeadline,
+        );
+        if (epoch !== this.epoch) return;
+      }
+    }
     // The current worker serves durable runs. SessionService is a schema-only future surface.
-    for (const summary of listed.slice(0, 20).reverse()) {
+    for (const summary of recent.reverse()) {
       const userId = `user:${summary.runId}`;
       messages.push(
         previous.get(userId) ?? {
           id: userId,
+          runId: summary.runId,
           role: "user",
           text: summary.title || "Earlier task",
           summary: true,
@@ -686,24 +718,84 @@ export class WorkController {
         summary.terminal === undefined
       )
         continue;
-      const response = await client.get(summary.runId);
-      if (epoch !== this.epoch) return;
-      this.recordRun(response.run);
-      const terminal = response.run?.terminal;
+      const terminal = terminals.get(summary.runId);
+      if (terminal) {
+        const warning = this.toolHistory.get(summary.runId);
+        if (warning)
+          messages.push({
+            id: `tools:${summary.runId}`,
+            runId: summary.runId,
+            role: "notice",
+            text: warning,
+          });
+      }
       if (terminal?.$case === "result")
         messages.push({
           id: `assistant:${summary.runId}`,
+          runId: summary.runId,
           role: "assistant",
           text: terminal.value.output,
         });
       else if (terminal)
         messages.push({
           id: `notice:${summary.runId}`,
+          runId: summary.runId,
           role: "notice",
           text: terminal.value.message,
         });
     }
     this.view.messages = messages;
+  }
+
+  private async loadToolHistory(
+    client: WorkerClient,
+    id: string,
+    epoch: number,
+    deadline: number,
+  ) {
+    if (this.toolHistory.has(id)) return;
+    const warning =
+      "Some earlier tool progress could not be loaded. The saved response is still available.";
+    if (Date.now() >= deadline) {
+      this.toolHistory.set(id, warning);
+      return;
+    }
+    const abort = new AbortController();
+    this.historyAbort = abort;
+    const timer = setTimeout(
+      () => abort.abort(),
+      Math.min(2000, deadline - Date.now()),
+    );
+    let count = 0;
+    let complete = false;
+    let tools: WorkView["tools"] = [];
+    try {
+      // Reading an already terminal run's feed restores released progress. It
+      // never creates a run, executes a tool, or responds to an interaction.
+      for await (const item of client.watch(id, abort.signal)) {
+        if (epoch !== this.epoch || abort.signal.aborted) return;
+        tools = toolProgress(tools, item.value);
+        const kind = item.value.update?.$case;
+        if (kind === "result" || kind === "failure" || kind === "cancellation")
+          complete = true;
+        if (++count >= 2000 && !complete) break;
+      }
+    } catch {
+      // History is supplementary; a failed read must not hide canonical output.
+    } finally {
+      clearTimeout(timer);
+      abort.abort();
+      if (this.historyAbort === abort) this.historyAbort = undefined;
+      if (epoch === this.epoch) {
+        // Older feeds load after recent feeds. Keep recent calls when the
+        // conversation-wide limit is reached, rather than evicting them.
+        this.view.tools = [
+          ...tools,
+          ...this.view.tools.filter((tool) => tool.runId !== id),
+        ].slice(-100);
+        this.toolHistory.set(id, complete ? "" : warning);
+      }
+    }
   }
 
   private requireClient() {

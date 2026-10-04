@@ -2,7 +2,7 @@
   "name": "colossus",
   "displayName": "Colossus",
   "description": "Work with the Colossus agent runtime from VS Code.",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "publisher": "obscuritylabs",
   "icon": "media/colossus.png",
   "type": "module",
@@ -170,7 +170,7 @@
           "type": "boolean",
           "default": true,
           "scope": "application",
-          "description": "Show a collapsible tool activity summary in Colossus conversations."
+          "description": "Show compact, expandable tool progress in each Colossus conversation turn."
         },
         "colossus.appearance.palette": {
           "type": "string",

@@ -131,9 +131,11 @@ test("long conversations scroll above a fixed composer and honor saved editor pr
     { view, preferences },
   );
   await expect(page.getByRole("radio", { name: "Execute" })).toBeChecked();
-  await expect(page.locator("#activity")).toBeHidden();
+  await expect(page.locator(".tool-thread")).toBeHidden();
   await expect(
-    page.locator("#messages a, #messages img, #messages script"),
+    page.locator(
+      "#messages a, #messages img:not([data-brand-mark]), #messages script",
+    ),
   ).toHaveCount(0);
   await expect(page.locator("#messages pre code")).toHaveText(
     "colossus worker",

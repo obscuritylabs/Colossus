@@ -1,14 +1,22 @@
 export interface MessageView {
   id: string;
+  runId?: string;
   role: "user" | "assistant" | "notice";
   text: string;
   summary?: boolean;
 }
 export interface ToolView {
   id: string;
+  runId?: string;
   name: string;
   state: string;
   summary: string;
+  sequence?: string;
+  startedAt?: string;
+  updatedAt?: string;
+  input?: string;
+  preview?: string;
+  history?: { state: string; summary: string; at: string }[];
 }
 export interface SessionView {
   id: string;

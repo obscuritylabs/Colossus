@@ -123,6 +123,16 @@ For existing installs, VS Code may retain a view's old location. Right-click its
 choose **Move View**, and select **Secondary Side Bar**, or drag the Colossus view there.
 Enable **View: Toggle Secondary Side Bar Visibility** if the right sidebar is hidden.
 Keep **Work** in the secondary sidebar and **Workspace** in the primary sidebar.
+Tool calls appear between the task and response in a compact, open progress thread.
+Each call updates in place from the worker’s recorded lifecycle; expand a row to
+inspect its states, timestamps, and policy-released input/output. Unknown outcomes
+stay explicit. Progress follows the bottom of the conversation while you are
+there and preserves your position when you scroll up. The tool-activity setting
+hides these threads. Reopening a session reads recorded progress without replaying
+actions; an unavailable or oversized historical feed shows a notice while keeping
+the saved response. The extension retains up to 100 calls across the latest 20
+turns, eight lifecycle entries per call, and bounded detail previews.
+
 The chat history button focuses the left workspace view. **Colossus: Open Workspace**
 also reveals it from the Command Palette, including when disconnected.
 

@@ -154,8 +154,7 @@ button.workspace-button:hover {
 .composer-actions,
 .composer-controls,
 .workspace-row,
-.status-row,
-.tool-heading {
+.status-row {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -317,30 +316,187 @@ h2 {
 .markdown .align-right {
   text-align: right;
 }
-.activity {
-  margin-top: 20px;
-  border-top: 1px solid var(--border);
-  color: var(--muted);
-}
-.activity summary {
-  cursor: pointer;
-  padding: 10px 0;
-}
-.tool {
-  padding: 8px 0;
-  overflow-wrap: anywhere;
-}
-.tool strong {
-  font-weight: 500;
-  color: var(--text);
-}
-.tool p {
-  margin: 4px 0 0 24px;
-  font-size: 0.9em;
-}
 .badge {
   font-size: 0.85em;
   margin-left: auto;
+}
+.tool-thread {
+  --progress-color: var(--cyan);
+  margin: 12px 0 2px;
+  min-width: 0;
+  font-size: var(--font-size-body-sm);
+}
+.tool-thread-heading,
+.tool-progress-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  cursor: pointer;
+  list-style: none;
+  min-width: 0;
+}
+.tool-thread summary::-webkit-details-marker {
+  display: none;
+}
+.tool-thread-heading strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+.tool-thread-heading img {
+  flex: 0 0 20px;
+}
+.tool-thread-meta {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.tool-thread-state {
+  margin-left: auto;
+  text-align: right;
+  color: var(--progress-color);
+  font-size: 0.9em;
+}
+.tool-chevron {
+  flex: 0 0 5px;
+  width: 5px;
+  height: 5px;
+  border-right: 1px solid var(--muted);
+  border-bottom: 1px solid var(--muted);
+  transform: rotate(-45deg);
+  margin: 0 3px;
+}
+details[open] > summary > .tool-chevron {
+  transform: rotate(45deg);
+}
+.tool-thread-list {
+  margin: 3px 0 0 12px;
+  padding-left: 17px;
+  border-left: 1px solid var(--border-strong);
+}
+.tool-progress {
+  --progress-color: var(--cyan);
+  position: relative;
+  min-width: 0;
+  margin: 2px 0;
+}
+.tool-progress::before {
+  content: "";
+  position: absolute;
+  left: -21px;
+  top: 12px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--progress-color);
+  box-shadow: 0 0 0 3px var(--main);
+}
+.tool-progress-heading {
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.tool-progress-heading .icon {
+  color: var(--blue-strong);
+  width: 14px;
+  height: 14px;
+  flex-basis: 14px;
+}
+.tool-progress-name {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.tool-progress-state {
+  color: var(--progress-color);
+  font-size: 0.85em;
+  text-align: right;
+  max-width: 45%;
+}
+.tool-progress-description {
+  display: block;
+  flex-basis: calc(100% - 20px);
+  margin-left: 20px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9em;
+}
+.tool-progress-body {
+  margin: 3px 0 8px 20px;
+  padding: 8px 10px;
+  background: var(--surface-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+}
+.tool-progress-body p {
+  margin: 6px 0 0;
+}
+.tool-lifecycle {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.tool-lifecycle li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  padding: 3px 0;
+}
+.tool-lifecycle strong {
+  font-weight: 500;
+}
+.tool-lifecycle span {
+  flex: 1;
+  min-width: 60px;
+  color: var(--muted);
+}
+.tool-lifecycle time {
+  font-size: 0.85em;
+  color: var(--muted);
+}
+.tool-released h2 {
+  font-size: 1em;
+  font-weight: 500;
+  margin: 10px 0 4px;
+}
+.tool-released pre {
+  font: 0.9em / 1.5 var(--font-mono);
+  white-space: pre-wrap;
+  max-height: 240px;
+  overflow: auto;
+  margin: 0;
+}
+.tool-thread [data-state="completed"],
+.tool-thread[data-state="completed"] {
+  --progress-color: var(--green);
+}
+.tool-thread [data-state="failed"],
+.tool-thread[data-state="failed"] {
+  --progress-color: var(--red);
+}
+.tool-thread [data-state="waiting approval"],
+.tool-thread [data-state="outcome unknown"],
+.tool-thread[data-state="waiting approval"] {
+  --progress-color: var(--amber);
+}
+.tool-thread [data-state="cancelled"],
+.tool-thread [data-state="requested"],
+.tool-thread [data-state="unspecified"],
+.tool-thread[data-state="cancelled"] {
+  --progress-color: var(--muted);
+}
+@media (max-width: 300px) {
+  .tool-thread-heading {
+    flex-wrap: wrap;
+  }
+  .tool-thread-meta {
+    margin-left: auto;
+  }
+  .tool-thread-state {
+    flex-basis: 100%;
+  }
 }
 .work-dock {
   flex: 0 0 auto;

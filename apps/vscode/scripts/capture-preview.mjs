@@ -411,11 +411,230 @@ async function combined(light = false, palette = "editor") {
 await combined();
 await combined(true);
 await combined(false, "hacker");
+const progressRun = {
+  ...run,
+  id: "run-checks",
+  title: "Inspect the workspace and run checks",
+  mode: "execute",
+  status: "running",
+  finishedAt: "",
+  createdAt: "2026-10-04T10:00:00Z",
+  startedAt: "2026-10-04T10:00:00Z",
+  updatedAt: "2026-10-04T10:00:18Z",
+};
+const progressTools = [
+  [
+    "filesystem.list",
+    "completed",
+    "Found the extension and shared UI packages.",
+  ],
+  ["filesystem.read", "completed", "Read the workspace configuration."],
+  ["git.diff", "completed", "Reviewed 4 changed files."],
+  ["shell.run", "started", "Running typecheck and focused tests…"],
+  ["plan.update", "requested", "Preparing the validation step."],
+].map(([name, state, summary], index) => ({
+  id: `progress-${index}`,
+  runId: progressRun.id,
+  name,
+  state,
+  summary,
+  startedAt: `2026-10-04T10:00:0${index}Z`,
+  updatedAt: "2026-10-04T10:00:18Z",
+  history: [
+    {
+      state: "requested",
+      summary: "Preparing tool call",
+      at: "2026-10-04T10:00:00Z",
+    },
+    { state, summary, at: "2026-10-04T10:00:18Z" },
+  ],
+  ...(name === "shell.run"
+    ? { input: '{"command":"npm run check","working_directory":"apps/vscode"}' }
+    : {}),
+}));
+const progressView = {
+  ...work,
+  busy: true,
+  watching: true,
+  mode: "execute",
+  status: "Working",
+  runs: [progressRun],
+  sessions: [{ id: run.sessionId, title: progressRun.title }],
+  messages: [
+    {
+      id: `user:${progressRun.id}`,
+      runId: progressRun.id,
+      role: "user",
+      text: "Inspect the workspace and run the extension checks.",
+    },
+  ],
+  tools: progressTools,
+};
+const completedProgress = {
+  ...progressView,
+  busy: false,
+  watching: false,
+  status: "Completed",
+  runs: [
+    { ...progressRun, status: "completed", finishedAt: "2026-10-04T10:00:24Z" },
+  ],
+  messages: [
+    ...progressView.messages,
+    {
+      id: `assistant:${progressRun.id}`,
+      runId: progressRun.id,
+      role: "assistant",
+      text: "The extension checks passed.\n\n- **Typecheck:** passed\n- **Host tests:** passed\n- **Browser checks:** passed\n\nThe saved plan now includes the validation results.",
+    },
+  ],
+  tools: progressTools.map((tool) => ({
+    ...tool,
+    state: "completed",
+    summary:
+      tool.name === "shell.run" ? "All extension checks passed." : tool.summary,
+    updatedAt: "2026-10-04T10:00:24Z",
+    history: [
+      ...tool.history,
+      {
+        state: "completed",
+        summary: "Finished successfully",
+        at: "2026-10-04T10:00:24Z",
+      },
+    ],
+    ...(tool.name === "shell.run"
+      ? {
+          preview:
+            "TypeScript: no errors\nHost tests: passed\nBrowser checks: passed\nExit code: 0",
+        }
+      : {}),
+  })),
+};
+for (const [name, view, palette, light] of [
+  ["tool-live", progressView, "editor", false],
+  ["tool-completed", completedProgress, "editor", false],
+  ["tool-live-blue", progressView, "colossus", false],
+  ["tool-live-hacker", progressView, "hacker", false],
+  ["tool-live-light", progressView, "editor", true],
+  [
+    "tool-approval",
+    {
+      ...progressView,
+      status: "Waiting for approval",
+      tools: [
+        ...progressTools.slice(0, 3),
+        {
+          ...progressTools[3],
+          state: "waiting approval",
+          summary: "Waiting for your approval before running checks.",
+          history: [
+            {
+              state: "requested",
+              summary: "Preparing checks",
+              at: "2026-10-04T10:00:01Z",
+            },
+            {
+              state: "waiting approval",
+              summary: "Waiting for approval",
+              at: "2026-10-04T10:00:18Z",
+            },
+          ],
+        },
+      ],
+      interactions: activeChat.view.interactions,
+    },
+    "editor",
+    false,
+  ],
+  [
+    "tool-unknown",
+    {
+      ...completedProgress,
+      status: "Failed",
+      runs: [
+        {
+          ...progressRun,
+          status: "failed",
+          finishedAt: "2026-10-04T10:00:24Z",
+        },
+      ],
+      tools: [
+        {
+          ...progressTools[3],
+          state: "outcome unknown",
+          summary: "The worker could not confirm the command outcome.",
+          history: [
+            ...progressTools[3].history,
+            {
+              state: "outcome unknown",
+              summary: "Execution outcome could not be confirmed",
+              at: "2026-10-04T10:00:24Z",
+            },
+          ],
+        },
+        {
+          ...progressTools[4],
+          state: "cancelled",
+          summary: "Plan update cancelled",
+        },
+      ],
+      messages: [
+        ...progressView.messages,
+        {
+          id: `notice:${progressRun.id}`,
+          runId: progressRun.id,
+          role: "notice",
+          text: "The command outcome is unknown. Inspect the recorded state before deciding what to do next.",
+        },
+      ],
+    },
+    "editor",
+    false,
+  ],
+  [
+    "tool-stop-blue",
+    {
+      ...completedProgress,
+      runs: [
+        {
+          ...progressRun,
+          status: "completed",
+          finishedAt: "2026-10-04T10:00:10Z",
+        },
+      ],
+      messages: [
+        { ...progressView.messages[0], text: "Stop the server process." },
+        {
+          ...completedProgress.messages[1],
+          text: "The server process is no longer running. The tool reports it had already exited with code 1; no error output was available.",
+        },
+      ],
+      tools: [
+        {
+          ...completedProgress.tools[3],
+          name: "shell.stop",
+          summary: "The process had already exited",
+          updatedAt: "2026-10-04T10:00:10Z",
+        },
+      ],
+    },
+    "colossus",
+    false,
+  ],
+])
+  await renderer(
+    name,
+    "webview",
+    { type: "state", view, preferences: { ...preferences, palette } },
+    light,
+  );
 const browser = await chromium.launch({ headless: true });
 const shots = [];
 const errors = [];
 async function shot(name, title, file, width, height, prepare) {
-  const page = await browser.newPage({ viewport: { width, height } });
+  const page = await browser.newPage({
+    viewport: { width, height },
+    timezoneId: "America/New_York",
+  });
   page.on("pageerror", (error) => errors.push(`${name}: ${error.message}`));
   await page.goto(pathToFileURL(`${directory}/${file}.html`).href);
   await page
@@ -683,6 +902,85 @@ await shot(
   1120,
   850,
 );
+for (const [number, title, file, width, height, expanded] of [
+  [
+    36,
+    "Live progress · compact calls in the conversation stream",
+    "tool-live",
+    430,
+    950,
+    false,
+  ],
+  [
+    37,
+    "Completed turn · recorded calls before the response",
+    "tool-completed",
+    430,
+    950,
+    false,
+  ],
+  [
+    38,
+    "Expanded call · lifecycle, released input and output",
+    "tool-completed",
+    700,
+    1100,
+    true,
+  ],
+  [39, "Colossus blue · live tool progress", "tool-live-blue", 430, 950, false],
+  [40, "Hacker · live tool progress", "tool-live-hacker", 430, 950, false],
+  [
+    41,
+    "Approval · pending execution with native review",
+    "tool-approval",
+    430,
+    950,
+    false,
+  ],
+  [
+    42,
+    "Unknown outcome · honest progress with no successful preview",
+    "tool-unknown",
+    700,
+    1000,
+    true,
+  ],
+  [
+    43,
+    "Narrow sidebar · compact progress at 260px",
+    "tool-live",
+    260,
+    950,
+    false,
+  ],
+  [44, "Light · live tool progress", "tool-live-light", 430, 950, false],
+  [
+    45,
+    "Colossus blue · shell.stop and the response",
+    "tool-stop-blue",
+    900,
+    650,
+    false,
+  ],
+])
+  await shot(
+    `${number}-${file}`,
+    title,
+    file,
+    width,
+    height,
+    expanded
+      ? async (page) => {
+          await page
+            .locator(".tool-progress-heading")
+            .nth(file === "tool-unknown" ? 0 : 3)
+            .click();
+          await page.locator("#conversation").evaluate((el) => {
+            el.scrollTop = 0;
+          });
+        }
+      : undefined,
+  );
 for (const [source, name, title] of [
   [
     "shared-ui-desktop-blue",
@@ -722,6 +1020,7 @@ const reviewShots = [...shots].sort((a, b) => {
   const aNumber = Number(a.name.slice(0, 2));
   const bNumber = Number(b.name.slice(0, 2));
   return (
+    Number(bNumber >= 36) - Number(aNumber >= 36) ||
     Number(bNumber >= 32) - Number(aNumber >= 32) ||
     Number(bNumber >= 23) - Number(aNumber >= 23) ||
     aNumber - bNumber
@@ -729,7 +1028,7 @@ const reviewShots = [...shots].sort((a, b) => {
 });
 await writeFile(
   `${directory}/index.html`,
-  `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Colossus ${version} screenshot review</title><style>body{max-width:1400px;margin:auto;padding:28px;background:#07101d;color:#e8eff8;font:15px/1.6 system-ui}a{color:#6aa2ff}h1{margin:0}p{color:#91a2b8}nav{display:flex;gap:20px;flex-wrap:wrap;margin:20px 0}figure{margin:40px 0;border-top:1px solid #203149;padding-top:18px}figcaption{font-size:20px;margin-bottom:14px}img{display:block;max-width:100%;height:auto;border:1px solid #203149;border-radius:10px}section{display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:28px}section figure{margin:12px 0}section img{max-height:900px;width:auto}</style></head><body><h1>Colossus ${version} · UI review</h1><p>${shots.length} browser screenshots of the actual extension and Desktop renderers, with sample data. These are not native VS Code/Tauri captures or live worker results. Click any image for full resolution.</p><nav><a href="#32-process-tables-wide">Process tables</a><a href="#23-hacker-layout">Hacker screenshots</a><a href="#30-desktop-hacker-settings">Desktop Hacker</a><a href="#01-full-layout">Other palettes</a><a href="layout.html">Open interactive renderer layout</a><a href="settings.html">Open settings renderer</a><a href="layout-light.html">Open light layout</a><a href="layout-hacker.html">Open Hacker layout</a><a href="settings-hacker.html">Open Hacker settings</a></nav>${reviewShots.map(({ name, title }) => `<figure id="${name}"><figcaption>${title}</figcaption><a href="${name}.png"><img src="${name}.png" alt="${title}" loading="lazy"></a></figure>`).join("")}</body></html>`,
+  `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Colossus ${version} screenshot review</title><style>body{max-width:1400px;margin:auto;padding:28px;background:#07101d;color:#e8eff8;font:15px/1.6 system-ui}a{color:#6aa2ff}h1{margin:0}p{color:#91a2b8}nav{display:flex;gap:20px;flex-wrap:wrap;margin:20px 0}figure{margin:40px 0;border-top:1px solid #203149;padding-top:18px}figcaption{font-size:20px;margin-bottom:14px}img{display:block;max-width:100%;height:auto;border:1px solid #203149;border-radius:10px}section{display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:28px}section figure{margin:12px 0}section img{max-height:900px;width:auto}</style></head><body><h1>Colossus ${version} · UI review</h1><p>${shots.length} browser screenshots of the actual extension and Desktop renderers, with sample data. These are not native VS Code/Tauri captures or live worker results. Click any image for full resolution.</p><nav><a href="#36-tool-live">Inline tool progress</a><a href="tool-live.html">Open live progress example</a><a href="#32-process-tables-wide">Process tables</a><a href="#23-hacker-layout">Hacker screenshots</a><a href="#30-desktop-hacker-settings">Desktop Hacker</a><a href="#01-full-layout">Other palettes</a><a href="layout.html">Open interactive renderer layout</a><a href="settings.html">Open settings renderer</a><a href="layout-light.html">Open light layout</a><a href="layout-hacker.html">Open Hacker layout</a><a href="settings-hacker.html">Open Hacker settings</a></nav>${reviewShots.map(({ name, title }) => `<figure id="${name}"><figcaption>${title}</figcaption><a href="${name}.png"><img src="${name}.png" alt="${title}" loading="lazy"></a></figure>`).join("")}</body></html>`,
 );
 process.stdout.write(
   `Captured ${shots.length} renderer screenshots: ${directory}/index.html\n`,
