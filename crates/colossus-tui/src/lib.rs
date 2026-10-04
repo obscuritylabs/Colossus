@@ -83,7 +83,7 @@ const MIN_PLAN_EXECUTION_DOCK_ROWS: u16 = 11;
 /// Number of transcript lines moved by one terminal mouse-wheel event.
 const MOUSE_SCROLL_LINES: usize = 3;
 /// Smallest inline viewport: the composer and status footer, with no reserved transcript gap.
-const MINIMUM_INLINE_VIEWPORT_HEIGHT: u16 = 5;
+const MINIMUM_INLINE_VIEWPORT_HEIGHT: u16 = 4;
 /// Maximum older durable pages eagerly restored into native terminal scrollback.
 const MAX_NATIVE_HISTORY_PAGES: usize = 10;
 /// Maximum durable messages restored into native scrollback, including the bootstrap page.

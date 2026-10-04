@@ -58,7 +58,7 @@ test("Desktop dropdowns use the app-owned accessible select control", () => {
     .map((path) => path.slice(repository.length + 1));
 
   assert.deepEqual(nativeSelects, []);
-  const dropdown = read("apps/desktop/src/components/DropdownSelect.tsx");
+  const dropdown = read("apps/ui/src/components/DropdownSelect.tsx");
   assert.match(dropdown, /role="combobox"/u);
   assert.match(dropdown, /role="listbox"/u);
   assert.match(dropdown, /role="option"/u);
@@ -67,7 +67,9 @@ test("Desktop dropdowns use the app-owned accessible select control", () => {
 
 test("Desktop surfaces use the shared theme and readable typography contracts", () => {
   const styles = read("apps/desktop/src/styles.css");
-  const theme = read("apps/desktop/src/theme/theme.css");
+  const theme = read("apps/ui/styles/theme.css");
+  const defaultDark = theme.match(/:root\s*\{([^}]+)\}/u)?.[1];
+  const defaultLight = theme.match(/:root\[data-theme="light"\]\s*\{([^}]+)\}/u)?.[1];
 
   for (const token of [
     "--surface-selected",
@@ -80,11 +82,9 @@ test("Desktop surfaces use the shared theme and readable typography contracts", 
     "--code-delete-surface",
     "--purple-soft",
   ]) {
-    assert.equal(
-      theme.match(new RegExp(`${token}:`, "gu"))?.length,
-      2,
-      `${token} must define dark and light values`,
-    );
+    for (const family of [defaultDark, defaultLight])
+      assert.match(family ?? "", new RegExp(`${token}:`, "u"),
+        `${token} must define dark and light values`);
   }
 
   assert.doesNotMatch(

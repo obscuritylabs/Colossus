@@ -7,7 +7,7 @@ import {
   IconTopologyStar3,
 } from "@tabler/icons-react";
 
-import colossusMark from "../assets/colossus-mark.svg";
+import colossusMark from "@colossus/ui/assets/colossus-mark.svg";
 import type { ConnectionState, DesktopCapabilities } from "../types";
 
 export type WorkspaceSurface =

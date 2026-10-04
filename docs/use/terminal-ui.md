@@ -29,10 +29,11 @@ alternate screen by default; use the mouse wheel or PageUp/PageDown to read olde
 output and End to return to live output. Exiting restores your prior terminal view.
 
 The top bar shows the workspace, session, and installed version when there is
-enough vertical space. Below the composer, highlighted badges identify the mode
-and security warnings; the status band shows readiness and approval handling.
-The model route and context budget appear on their own line. Compact terminals
-keep the conversation and composer visible by omitting the top bar.
+enough vertical space. The composer has a neutral background that separates your
+draft from the conversation. A single status row below it highlights the mode and
+security warnings, alongside readiness, approval handling, the model route, and
+context budget. Smaller widths shorten or omit runtime details to keep status
+and warnings readable. Compact terminals omit the top bar.
 
 Use `--no-alt-screen` for an inline interface that leaves completed output in your
 terminal's normal scrollback:

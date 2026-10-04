@@ -1,0 +1,123 @@
+body {
+  background: var(--main);
+}
+.settings-main {
+  padding: 20px 28px 40px;
+}
+.surface-breadcrumb {
+  font-size: 0.85em;
+  color: var(--muted);
+  margin: 0 0 16px;
+}
+.settings-page {
+  max-width: 1000px;
+  margin-bottom: 28px;
+}
+.settings-page h2 {
+  font-size: 1.6em;
+  margin: 0 0 5px;
+  font-weight: 600;
+}
+.settings-page h3 {
+  font-size: 1.05em;
+  font-weight: 600;
+  margin: 26px 0 12px;
+}
+.section-description {
+  margin: 0 0 20px;
+  color: var(--muted);
+}
+.settings-card {
+  padding: 0 16px;
+  background: var(--surface-control);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.setting-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 0;
+}
+.setting-row + .setting-row {
+  border-top: 1px solid var(--border);
+}
+.setting-row > div {
+  min-width: 0;
+}
+.setting-row label,
+.setting-row strong {
+  font-weight: 500;
+}
+.setting-row p {
+  font-size: 0.9em;
+  color: var(--muted);
+  margin: 4px 0 0;
+}
+.setting-row .app-select {
+  min-width: 120px;
+  max-width: 200px;
+}
+.setting-row input[role="switch"] {
+  width: 32px;
+  height: 18px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.setting-value {
+  color: var(--muted);
+  font-size: 0.9em;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.settings-note {
+  color: var(--muted);
+  max-width: 750px;
+  line-height: 1.6;
+}
+@media (max-width: 800px) {
+  .settings-frame-layout {
+    grid-template-columns: 185px minmax(0, 1fr);
+  }
+  .settings-main {
+    padding: 20px;
+  }
+  .setting-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  .setting-row > :last-child {
+    justify-self: start;
+  }
+}
+@media (max-width: 520px) {
+  .settings-frame-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .settings-sidebar {
+    padding: 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .managed-scope-switch {
+    grid-template-columns: 1fr 1fr;
+  }
+  .sidebar-nav-item small,
+  .settings-scope-context,
+  .settings-nav-heading,
+  .settings-sidebar-footer {
+    display: none;
+  }
+  .managed-settings-tabs {
+    display: flex;
+    flex-wrap: wrap;
+  }
+  .managed-settings-tabs button {
+    width: auto;
+  }
+  .settings-main {
+    padding: 16px;
+  }
+}

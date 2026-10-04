@@ -162,3 +162,139 @@ test("light and dark colors preview, apply, persist, and reset independently", a
     )
     .toBe("");
 });
+
+for (const preset of [
+  {
+    value: "neutral",
+    label: "Neutral dark (Dark+)",
+    main: "#1f1f1f",
+    accent: "#4389ff",
+  },
+  {
+    value: "hacker",
+    label: "Hacker (TUI)",
+    main: "#080d0a",
+    accent: "#00ff66",
+  },
+])
+  test(`${preset.value} is opt-in and preserves custom Colossus colors across reloads`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 850 });
+    await page.goto("/?fixture=operations-studio");
+    const openAppearance = async () => {
+      await page.getByRole("button", { name: "Settings", exact: true }).click();
+      await page.getByRole("button", { name: "Global", exact: true }).click();
+      await page
+        .getByRole("button", { name: "Appearance", exact: true })
+        .click();
+    };
+    await openAppearance();
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-palette",
+      "colossus",
+    );
+    await page.getByRole("combobox", { name: /Color theme/u }).click();
+    await page.getByRole("option", { name: "Dark", exact: true }).click();
+    await page.getByRole("button", { name: "Dark colors" }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await page.screenshot({
+      path: "output/playwright/shared-ui-desktop-blue.png",
+    });
+    await page
+      .getByLabel("Dark background color", { exact: true })
+      .fill("#121827");
+    await page.getByRole("combobox", { name: /Dark palette/u }).click();
+    await page.getByRole("option", { name: preset.label, exact: true }).click();
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-palette",
+      preset.value,
+    );
+    await expect(
+      page.getByRole("heading", { name: "Saved Colossus colors" }),
+    ).toBeVisible();
+    await expect
+      .poll(() =>
+        page
+          .locator("html")
+          .evaluate((root) =>
+            getComputedStyle(root).getPropertyValue("--main").trim(),
+          ),
+      )
+      .toBe(preset.main);
+    await expect
+      .poll(() =>
+        page
+          .locator("html")
+          .evaluate((root) =>
+            getComputedStyle(root).getPropertyValue("--blue").trim(),
+          ),
+      )
+      .toBe(preset.accent);
+    expect(
+      (
+        await new AxeBuilder({ page })
+          .include(".appearance-settings-card")
+          .analyze()
+      ).violations,
+    ).toEqual([]);
+    await page.screenshot({
+      path: `output/playwright/shared-ui-desktop-${preset.value}-settings.png`,
+    });
+    await expect(
+      page.getByLabel("Dark background color", { exact: true }),
+    ).toBeDisabled();
+    await page.getByRole("button", { name: "Light colors" }).click();
+    await expect(
+      page.getByLabel("Light background color", { exact: true }),
+    ).toBeEnabled();
+    await page.getByRole("button", { name: "Dark colors" }).click();
+    await page.reload();
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-palette",
+      preset.value,
+    );
+    await expect(
+      page.getByRole("button", { name: "Settings", exact: true }),
+    ).toBeVisible();
+    await page.screenshot({
+      path: `output/playwright/shared-ui-desktop-${preset.value}-work.png`,
+    });
+    await openAppearance();
+    await page.getByRole("combobox", { name: /Color theme/u }).click();
+    await page.getByRole("option", { name: "Light", exact: true }).click();
+    await expect
+      .poll(() =>
+        page
+          .locator("html")
+          .evaluate((root) =>
+            getComputedStyle(root).getPropertyValue("--blue").trim(),
+          ),
+      )
+      .toBe("#2563d9");
+    await page.getByRole("combobox", { name: /Color theme/u }).click();
+    await page.getByRole("option", { name: "Dark", exact: true }).click();
+    await expect
+      .poll(() =>
+        page
+          .locator("html")
+          .evaluate((root) =>
+            getComputedStyle(root).getPropertyValue("--blue").trim(),
+          ),
+      )
+      .toBe(preset.accent);
+    await page.getByRole("combobox", { name: /Dark palette/u }).click();
+    await page
+      .getByRole("option", { name: "Colossus blue", exact: true })
+      .click();
+    await expect(
+      page.getByLabel("Dark background color", { exact: true }),
+    ).toHaveValue("#121827");
+    await expect
+      .poll(() =>
+        page
+          .locator("html")
+          .evaluate((root) => root.style.getPropertyValue("--main")),
+      )
+      .toBe("#121827");
+  });

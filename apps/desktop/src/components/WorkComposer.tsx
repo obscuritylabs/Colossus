@@ -11,7 +11,6 @@ import {
   IconPlayerStopFilled,
   IconPlugConnected,
   IconRouteAltLeft,
-  IconSend2,
   IconShieldCheck,
   IconWorld,
   IconX,
@@ -36,7 +35,12 @@ import { DropdownSelect } from "./DropdownSelect";
 import { NextUpQueue } from "./NextUpQueue";
 import { PluginIcon } from "./PluginIcon";
 import type { ComposerModelContext } from "../composer-model";
-import { useComposerAutosize } from "./useComposerAutosize";
+import {
+  ComposerInput,
+  ComposerModeSwitch,
+  ComposerSendButton,
+  isComposerSendKey,
+} from "@colossus/ui";
 import type { ComposerEditIntent } from "../composer-paste";
 import type { DictationController, DictationSnapshot } from "../dictation";
 import { DictationControl } from "./DictationControl";
@@ -205,7 +209,6 @@ export function WorkComposer({
     dictation?.state.busy ||
     dictation?.state.sending,
   );
-  useComposerAutosize(textareaRef, prompt);
   const [selectedSlashCommand, setSelectedSlashCommand] = useState<
     string | null
   >(null);
@@ -259,9 +262,10 @@ export function WorkComposer({
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (draftReadOnly) {
       if (
-        event.key === "Enter" &&
-        !event.shiftKey &&
-        !event.nativeEvent.isComposing
+        isComposerSendKey(
+          { ...event, isComposing: event.nativeEvent.isComposing },
+          "enter",
+        )
       ) {
         event.preventDefault();
         formRef.current?.requestSubmit();
@@ -313,9 +317,10 @@ export function WorkComposer({
       return;
     }
     if (
-      event.key === "Enter" &&
-      !event.shiftKey &&
-      !event.nativeEvent.isComposing
+      isComposerSendKey(
+        { ...event, isComposing: event.nativeEvent.isComposing },
+        "enter",
+      )
     ) {
       event.preventDefault();
       if (
@@ -743,7 +748,7 @@ export function WorkComposer({
             </footer>
           </div>
         ) : null}
-        <textarea
+        <ComposerInput
           ref={textareaRef}
           value={prompt}
           rows={2}
@@ -933,52 +938,23 @@ export function WorkComposer({
               </button>
             </div>
           ) : null}
-          <fieldset className="mode-switch">
-            <legend className="sr-only">Run mode</legend>
-            <label>
-              <input
-                type="radio"
-                name="mode"
-                value="plan"
-                checked={mode === "plan"}
-                disabled={submitting || planRevision !== null}
-                onChange={() => onModeChange("plan")}
-              />
-              <span>Plan</span>
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="mode"
-                value="execute"
-                checked={mode === "execute"}
-                disabled={submitting || planRevision !== null}
-                onChange={() => onModeChange("execute")}
-              />
-              <span>Execute</span>
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="mode"
-                value="research"
-                checked={mode === "research"}
-                disabled={
-                  submitting || planRevision !== null || !researchAvailable
-                }
-                onChange={() => onModeChange("research")}
-              />
-              <span
-                title={
-                  researchAvailable
-                    ? undefined
-                    : "Research is unavailable for this target"
-                }
-              >
-                Research
-              </span>
-            </label>
-          </fieldset>
+          <ComposerModeSwitch<RunMode>
+            value={mode}
+            onChange={onModeChange}
+            disabled={submitting || planRevision !== null}
+            options={[
+              { value: "plan", label: "Plan" },
+              { value: "execute", label: "Execute" },
+              {
+                value: "research",
+                label: "Research",
+                disabled: !researchAvailable,
+                ...(researchAvailable
+                  ? {}
+                  : { title: "Research is unavailable for this target" }),
+              },
+            ]}
+          />
           {activeWorkRunning && !slashCommandDraft ? (
             <button
               className="redirect-button"
@@ -999,7 +975,7 @@ export function WorkComposer({
             </button>
           ) : null}
           {!activeWorkRunning || prompt.trim().length > 0 ? (
-            <button
+            <ComposerSendButton
               className={`send-button${queueing && !slashCommandDraft ? " is-queue" : ""}`}
               type="submit"
               aria-label={
@@ -1027,10 +1003,8 @@ export function WorkComposer({
                   <IconPlaylistAdd size={18} stroke={1.9} aria-hidden="true" />
                   <span>Queue</span>
                 </>
-              ) : (
-                <IconSend2 size={19} stroke={2} aria-hidden="true" />
-              )}
-            </button>
+              ) : undefined}
+            </ComposerSendButton>
           ) : null}
           {activeWorkRunning ? (
             <button

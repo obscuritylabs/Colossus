@@ -3,6 +3,7 @@ import { useState, type CSSProperties } from "react";
 
 import type {
   ColorThemePreference,
+  DarkPalettePreference,
   TextSizePreference,
 } from "../theme/appearance";
 import { useAppearance } from "../theme/AppearanceProvider";
@@ -12,8 +13,8 @@ import { DropdownSelect } from "./DropdownSelect";
 
 const COLOR_THEME_COPY: Record<ColorThemePreference, string> = {
   system: "Match your operating system and update automatically.",
-  dark: "Use the dark Colossus palette on this device.",
-  light: "Use the light Colossus palette on this device.",
+  dark: "Use dark mode on this device.",
+  light: "Use light mode on this device.",
 };
 
 const TEXT_SIZE_COPY: Record<TextSizePreference, string> = {
@@ -40,6 +41,8 @@ const PALETTE_COLORS: ReadonlyArray<{
 export function AppearanceSettings() {
   const {
     colorTheme,
+    darkPalette,
+    setDarkPalette,
     resolvedColorTheme,
     setColorTheme,
     setTextSize,
@@ -54,6 +57,7 @@ export function AppearanceSettings() {
     useState<PaletteTheme>(resolvedColorTheme);
   const [paletteError, setPaletteError] = useState<string | null>(null);
   const palette = palettes[editedTheme];
+  const presetPreview = darkPalette !== "colossus" && editedTheme === "dark";
   const previewStyle = {
     ...paletteCssVariables(editedTheme, palette),
     "--text": editedTheme === "dark" ? "#e8eff8" : "#25364a",
@@ -102,6 +106,30 @@ export function AppearanceSettings() {
               <option value="light">Light</option>
             </DropdownSelect>
           </label>
+          <label htmlFor="appearance-dark-palette">
+            <span className="appearance-control-icon">
+              <IconPalette size={18} aria-hidden="true" />
+            </span>
+            <span className="appearance-control-copy">
+              <strong>Dark palette</strong>
+              <small id="appearance-dark-palette-help">
+                Choose Colossus blue, neutral dark, or the TUI’s Hacker palette.
+                Your custom Colossus colors are kept.
+              </small>
+            </span>
+            <DropdownSelect
+              id="appearance-dark-palette"
+              value={darkPalette}
+              aria-describedby="appearance-dark-palette-help"
+              onChange={(event) =>
+                setDarkPalette(event.target.value as DarkPalettePreference)
+              }
+            >
+              <option value="colossus">Colossus blue</option>
+              <option value="neutral">Neutral dark (Dark+)</option>
+              <option value="hacker">Hacker (TUI)</option>
+            </DropdownSelect>
+          </label>
           <label htmlFor="appearance-text-size">
             <span className="appearance-control-icon">
               <IconTypography size={18} aria-hidden="true" />
@@ -126,13 +154,22 @@ export function AppearanceSettings() {
             </DropdownSelect>
           </label>
         </div>
+        {presetPreview ? (
+          <p className="appearance-palette-notice">
+            {darkPalette === "hacker" ? "Hacker" : "Neutral dark"} uses preset
+            colors. Choose Colossus blue to edit your saved custom palette.
+          </p>
+        ) : null}
         <div className="appearance-palette-editor">
           <div className="appearance-palette-heading">
             <div>
-              <h4>Theme colors</h4>
+              <h4>
+                {presetPreview ? "Saved Colossus colors" : "Theme colors"}
+              </h4>
               <p>
-                Edit light and dark colors separately. The active theme updates
-                immediately; the other palette is ready when you switch.
+                {presetPreview
+                  ? "These are your saved custom colors. Choose Colossus blue to edit or apply them."
+                  : "Edit light and dark colors separately. The active theme updates immediately; the other palette is ready when you switch."}
               </p>
             </div>
             <div
@@ -164,6 +201,7 @@ export function AppearanceSettings() {
                 </span>
                 <input
                   type="color"
+                  disabled={presetPreview}
                   aria-label={`${editedTheme === "dark" ? "Dark" : "Light"} ${label.toLowerCase()} color`}
                   value={palette[slot]}
                   onChange={(event) => {
@@ -193,7 +231,7 @@ export function AppearanceSettings() {
             <button
               type="button"
               className="button secondary compact"
-              disabled={isDefaultPalette(editedTheme, palette)}
+              disabled={presetPreview || isDefaultPalette(editedTheme, palette)}
               onClick={() => {
                 resetPalette(editedTheme);
                 setPaletteError(null);
@@ -207,8 +245,10 @@ export function AppearanceSettings() {
         <div
           className="appearance-theme-preview"
           data-preview-theme={editedTheme}
+          data-colossus-theme={editedTheme}
+          data-palette={editedTheme === "dark" ? darkPalette : "colossus"}
           aria-label={`${editedTheme} theme preview`}
-          style={previewStyle}
+          style={presetPreview ? undefined : previewStyle}
         >
           <div className="appearance-preview-rail" aria-hidden="true">
             <span />
