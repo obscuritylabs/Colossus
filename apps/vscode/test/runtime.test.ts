@@ -334,6 +334,35 @@ async function fixture() {
         report,
       );
     },
+    pauseFeed() {
+      for (const watcher of watchers)
+        watcher.emit("error", {
+          code: grpc.status.UNAVAILABLE,
+          details: "Observation interrupted",
+        });
+      watchers.clear();
+    },
+    async moveEndpoint() {
+      const nextPort = await new Promise<number>((resolve, reject) =>
+        server.bindAsync(
+          "127.0.0.1:0",
+          grpc.ServerCredentials.createSsl(null, [
+            { cert_chain: certificate, private_key: key },
+          ]),
+          (error, port) => (error ? reject(error) : resolve(port)),
+        ),
+      );
+      server.unbind(`127.0.0.1:${port}`);
+      const path = join(discovery, "endpoint.json");
+      const endpoint = JSON.parse(await readFile(path, "utf8"));
+      await writeFile(
+        path,
+        JSON.stringify({
+          ...endpoint,
+          endpoint: `https://127.0.0.1:${nextPort}`,
+        }),
+      );
+    },
     rejectAuthentication() {
       rejectAuthentication = true;
     },
@@ -656,6 +685,41 @@ test("unavailable historical tool feeds leave the canonical response visible wit
     );
     assert.equal(restored.view.error, "");
     assert.equal(f.creates, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a paused durable run reconnects through a changed endpoint without replaying effects", async () => {
+  const f = await fixture();
+  try {
+    const c = await f.controller();
+    assert.equal(c.canReconnect, true);
+    const starting = c.send("Inspect code", "execute");
+    assert.equal(c.canReconnect, false);
+    await starting;
+    await until(() => f.watchers.size > 0);
+    assert.equal(c.canReconnect, false);
+    f.pauseFeed();
+    await f.moveEndpoint();
+    await until(() => !c.view.watching);
+    assert.equal(c.view.busy, true);
+    assert.equal(c.canReconnect, true);
+    assert.equal(c.view.reconnectable, true);
+    const session = f.remembered;
+    c.detach();
+    assert.equal(f.cancelRequests, 0);
+    await c.attach(await f.connect(), "primary", session);
+    await until(() => f.watchers.size > 0);
+    assert.equal(c.view.sessionId, session);
+    assert.equal(c.view.busy, true);
+    assert.equal(c.view.watching, true);
+    assert.equal(c.view.interactions.length, 1);
+    assert.equal(f.creates, 1);
+    assert.equal(f.answers, 0);
+    assert.equal(f.cancelRequests, 0);
+    f.finish();
+    await until(() => !c.view.busy);
   } finally {
     await f.close();
   }

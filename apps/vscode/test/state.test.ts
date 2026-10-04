@@ -6,6 +6,8 @@ import {
   RunStatus,
   PlanStatus,
   RunResult,
+  RunUpdate,
+  ToolActivityState,
   SessionActivity,
   SessionActivityStatus,
 } from "@obscuritylabs/colossus-sdk/gen/colossus/api/v1alpha1/agent_run";
@@ -244,4 +246,87 @@ test("older history uses a native cursor and merges sessions without duplicating
   assert.equal(c.view.runs.length, 2);
   assert.equal(c.view.historyHasMore, false);
   c.detach();
+});
+
+test("session restoration follows three-run pages and retains the latest 20 turns and their progress", async () => {
+  const runs = Array.from({ length: 23 }, (_, i) => planRun(`run-${23 - i}`));
+  const c = controller();
+  const w = worker(runs);
+  const cursors: string[] = [];
+  w.client.listRuns = async (sessionId = "", cursor = "") => {
+    if (!sessionId) return { runs: runs.slice(0, 3), page: undefined };
+    cursors.push(cursor);
+    const offset = Number(cursor || "0");
+    return {
+      runs: runs.slice(offset, offset + 3),
+      page: {
+        nextPageToken: offset + 3 < runs.length ? String(offset + 3) : "",
+      },
+    };
+  };
+  w.client.watch = async function* (id) {
+    yield {
+      runId: id,
+      sequence: 1n,
+      value: RunUpdate.fromPartial({
+        runId: id,
+        sequence: 1n,
+        update: {
+          $case: "toolActivity",
+          value: {
+            callId: `tool:${id}`,
+            toolName: "filesystem.read",
+            state: ToolActivityState.TOOL_ACTIVITY_STATE_COMPLETED,
+          },
+        },
+      }),
+    };
+    yield {
+      runId: id,
+      sequence: 2n,
+      value: RunUpdate.fromPartial({
+        runId: id,
+        sequence: 2n,
+        update: { $case: "result", value: { output: "Saved answer" } },
+      }),
+    };
+  };
+  await c.attach(w.client, "primary", "session-1");
+  assert.deepEqual(cursors, ["", "3", "6", "9", "12", "15", "18"]);
+  assert.deepEqual(
+    c.view.messages.filter((m) => m.role === "user").map((m) => m.runId),
+    Array.from({ length: 20 }, (_, i) => `run-${i + 4}`),
+  );
+  assert.equal(
+    c.view.messages.filter((m) => m.role === "assistant").length,
+    20,
+  );
+  assert.equal(c.view.tools.length, 20);
+  assert.ok(c.view.tools.some((t) => t.runId === "run-4"));
+  assert.ok(!w.reads.includes("run-3"));
+  c.detach();
+});
+
+test("session pagination rejects repeating cursors and discards pages received after detaching", async () => {
+  const c = controller();
+  const w = worker([planRun()]);
+  w.client.listRuns = async () => ({
+    runs: [planRun()],
+    page: { nextPageToken: "same" },
+  });
+  await c.attach(w.client, "primary");
+  await c.selectSession("session-1");
+  assert.match(c.view.error, /could not be paginated/);
+  let resolve!: (value: { runs: Run[]; page: undefined }) => void;
+  w.client.listRuns = () =>
+    new Promise((r) => {
+      resolve = r;
+    });
+  const pending = c.selectSession("session-1");
+  c.detach();
+  resolve({ runs: [planRun()], page: undefined });
+  await pending;
+  assert.equal(c.view.connected, false);
+  assert.deepEqual(c.view.messages, []);
+  assert.equal(w.reads.length, 0);
 });

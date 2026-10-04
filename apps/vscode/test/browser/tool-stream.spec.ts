@@ -266,3 +266,31 @@ test("new tool calls follow the conversation bottom without moving someone readi
   await expect(page.locator(".tool-progress")).toHaveCount(16);
   expect(await scroll.evaluate((el) => el.scrollTop)).toBe(100);
 });
+
+test("paused chat observation offers worker discovery reconnect without submitting another task", async ({
+  page,
+}) => {
+  await open(page, base);
+  const reconnect = page.getByRole("button", {
+    name: "Reconnect worker",
+    exact: true,
+  });
+  await expect(reconnect).toBeHidden();
+  await update(page, {
+    ...base,
+    watching: false,
+    reconnectable: true,
+    status: "Observation paused",
+  });
+  await expect(reconnect).toBeVisible();
+  await reconnect.click();
+  const actions = await page.evaluate(
+    () => (window as unknown as { actions: { type: string }[] }).actions,
+  );
+  expect(actions).toContainEqual({ type: "connect" });
+  expect(
+    actions.some((action) =>
+      ["send", "stop", "respond", "resume"].includes(action.type),
+    ),
+  ).toBe(false);
+});

@@ -149,15 +149,17 @@ packaging checks now validate container IDs and view bindings before producing a
   argument boundaries. **Allow once** and **Reject** are native host decisions bound to
   the current run, obligation, revision token, and request binding.
 - **Stop** requests cancellation once; the run remains busy until terminal evidence
-  arrives. While idle, **Disconnect** stops observation and leaves the independent worker running.
+  arrives. While idle or after observation pauses, **Disconnect** stops observation and leaves the independent worker running.
 - Connect again to recover the remembered conversation, or choose a recent conversation
   from the left Sessions view. **Load older history** reads another bounded page of
   caller-owned runs. Chat shows the latest 20 runs in that session
   with their released results and task summaries. Full prompts remain in canonical
   runtime state; the current public API exposes run titles rather than session message
   history. Prompts entered during this extension session remain visible in memory.
-  **Reconnect feed** replays the selected run's durable feed and
-  restores unanswered interactions; it does not re-execute the task.
+  **Reconnect worker** rereads the trusted worker’s discovery endpoint, restores the
+  selected conversation and unanswered interactions, and resumes its durable feed.
+  It can recover a paused active run after a worker restart changes the port; it
+  does not create another run, cancel the run, or replay an interaction response.
 - **Plans** lists canonical plan IDs, exact revisions, and lifecycle states from loaded
   terminal run metadata. It never infers a saved plan from assistant prose. Inspection
   shows the released plan output when a matching Plan run is in loaded history.

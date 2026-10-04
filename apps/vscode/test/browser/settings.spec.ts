@@ -189,6 +189,33 @@ test("desktop-style settings navigate, search and request validated host changes
   await expect(
     page.getByRole("button", { name: "Forget connection" }),
   ).toBeDisabled();
+  await page.evaluate(
+    (view) =>
+      window.postMessage(
+        {
+          type: "settings",
+          view: { ...view, busy: true, reconnectable: true },
+        },
+        "*",
+      ),
+    view,
+  );
+  const reconnect = page.getByRole("button", {
+    name: "Reconnect worker",
+    exact: true,
+  });
+  await expect(reconnect).toBeEnabled();
+  await reconnect.click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as unknown as { actions: unknown[] }).actions,
+      ),
+    )
+    .toContainEqual({ type: "connect" });
+  await expect(
+    page.getByRole("button", { name: "Forget connection" }),
+  ).toBeDisabled();
 });
 
 test("a rejected palette write restores the saved palette and shows settings recovery without a worker error", async ({

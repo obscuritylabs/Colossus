@@ -123,6 +123,7 @@ export function activate(context: vscode.ExtensionContext) {
       connected: lastView.connected,
       connecting,
       busy: lastView.busy,
+      reconnectable: controller.canReconnect,
       hasSavedConnection: !!profile,
       version: lastView.version,
       role: profile?.role ?? "",
@@ -594,11 +595,12 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   async function connect() {
-    if (connecting || configuringCredential || controller.view.busy) return;
+    if (connecting || configuringCredential || !controller.canReconnect) return;
+    const recovering = controller.view.busy;
     connecting = true;
     publishViews();
     try {
-      const selected = await chooseFolder();
+      const selected = recovering ? folder : await chooseFolder();
       if (!selected) return;
       const canonical = await workspaceIdentity(selected.uri.fsPath);
       const stored = await connectionStep(
@@ -606,13 +608,15 @@ export function activate(context: vscode.ExtensionContext) {
         () => context.secrets.get(storageKey(canonical.path)),
         report,
       );
-      const enrolled = stored
-        ? await connectionStep(
-            "saved-profile",
-            async () => parseProfile(JSON.parse(stored)),
-            report,
-          )
-        : await configure(selected);
+      const enrolled = recovering
+        ? profile
+        : stored
+          ? await connectionStep(
+              "saved-profile",
+              async () => parseProfile(JSON.parse(stored)),
+              report,
+            )
+          : await configure(selected);
       if (!enrolled) return;
       folder = selected;
       profile = enrolled;
@@ -733,8 +737,10 @@ export function activate(context: vscode.ExtensionContext) {
   const commands: Record<string, () => Promise<unknown> | unknown> = {
     "colossus.connect": connect,
     "colossus.disconnect": () => {
-      if (controller.view.busy)
-        throw new UserError("Stop the current run before disconnecting.");
+      if (connecting || configuringCredential || !controller.canReconnect)
+        throw new UserError(
+          "Wait for the current action or pause observation before disconnecting.",
+        );
       controller.detach();
     },
     "colossus.openSettings": openSettings,

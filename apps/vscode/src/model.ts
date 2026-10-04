@@ -103,6 +103,7 @@ export interface WorkView {
   interactions: InteractionView[];
   context: ContextView[];
   busy: boolean;
+  reconnectable?: boolean;
   watching: boolean;
   status: string;
   error: string;

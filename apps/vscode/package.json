@@ -2,7 +2,7 @@
   "name": "colossus",
   "displayName": "Colossus",
   "description": "Work with the Colossus agent runtime from VS Code.",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "publisher": "obscuritylabs",
   "icon": "media/colossus.png",
   "type": "module",

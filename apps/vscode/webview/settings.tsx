@@ -322,16 +322,21 @@ function Settings() {
               </div>
               <button
                 id="connect"
-                disabled={view.connecting || view.busy}
+                disabled={view.connecting || (view.busy && !view.reconnectable)}
                 onClick={() =>
-                  post({ type: view.connected ? "disconnect" : "connect" })
+                  post({
+                    type:
+                      view.connected && !view.busy ? "disconnect" : "connect",
+                  })
                 }
               >
                 {view.connecting
                   ? "Connecting…"
-                  : view.connected
-                    ? "Disconnect"
-                    : "Connect worker"}
+                  : view.busy && view.reconnectable
+                    ? "Reconnect worker"
+                    : view.connected
+                      ? "Disconnect"
+                      : "Connect worker"}
               </button>
             </div>
             <div

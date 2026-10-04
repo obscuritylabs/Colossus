@@ -87,8 +87,29 @@ try {
   assert.match(controller.view.inspection!.output, /VS_CODE_FOLLOW_UP/);
   assert.equal(controller.view.inspection!.run.status, "completed");
   assert.ok(!JSON.stringify(controller.view.inspection).includes("etag"));
+  // The real API clamps history pages to three entries. Restore a longer
+  // conversation to prove older turns survive worker pagination.
+  for (let i = 3; i <= 5; i++) {
+    await controller.send(`VS_CODE_HISTORY_${i}`, "execute");
+    const historyDeadline = Date.now() + 20_000;
+    while (controller.view.busy) {
+      if (Date.now() > historyDeadline || controller.view.error)
+        throw new Error(controller.view.error || "History run did not finish.");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+  await controller.selectSession(existingSession, true);
+  assert.equal(
+    controller.view.messages.filter((m) => m.role === "assistant").length,
+    5,
+  );
+  assert.ok(
+    controller.view.messages.some(
+      (m) => m.role === "assistant" && m.text.includes(prompt),
+    ),
+  );
   process.stdout.write(
-    "VS_CODE_RUNTIME_OK: run, stream, released history, recovery, follow-up in the same session, and run inspection\n",
+    "VS_CODE_RUNTIME_OK: run, stream, released history, recovery, follow-up in the same session, run inspection, and multi-page history\n",
   );
 } finally {
   controller.detach();

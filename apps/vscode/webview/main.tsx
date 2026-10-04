@@ -27,7 +27,7 @@ app.innerHTML = `<header class="work-header"><div class="work-heading"><img data
 <footer class="work-dock"><section id="interactions" aria-label="Pending interactions"></section><div id="error" class="error" role="alert" hidden></div>
 <div class="composer"><div id="context" class="context" hidden></div><div id="composer-fields"></div></div>
 <div id="context-actions" class="context-actions" hidden><button id="selection" class="text-button">Add selection</button><button id="file" class="text-button">Add file</button><button id="changes" class="text-button">Review changes</button></div>
-<div class="workspace-row"><button id="workspace" class="workspace-button" title="Worker connection settings"><span class="icon icon-folder" aria-hidden="true"></span><span id="workspace-name">Select a workspace</span></button><span id="connection-status" class="muted">Disconnected</span></div><div class="status-row"><span id="status" role="status">Connect a Colossus worker to start.</span><button id="resume" class="text-button" hidden>Reconnect feed</button></div></footer>`;
+<div class="workspace-row"><button id="workspace" class="workspace-button" title="Worker connection settings"><span class="icon icon-folder" aria-hidden="true"></span><span id="workspace-name">Select a workspace</span></button><span id="connection-status" class="muted">Disconnected</span></div><div class="status-row"><span id="status" role="status">Connect a Colossus worker to start.</span><button id="resume" class="text-button" hidden>Reconnect worker</button></div></footer>`;
 brandMarks(app);
 const composerRoot = createRoot(element("composer-fields"));
 const persisted = api.getState();
@@ -143,7 +143,7 @@ function button(id: string, type: ViewAction["type"]) {
   element(id).addEventListener("click", () => post({ type } as ViewAction));
 }
 button("new", "newSession");
-button("resume", "resume");
+button("resume", "connect");
 button("selection", "addSelection");
 button("file", "addFile");
 button("changes", "reviewChanges");
@@ -205,7 +205,7 @@ function render(next: WorkView) {
   element("connect").hidden = next.connected;
   element("connect-hint").hidden = next.connected;
   element<HTMLButtonElement>("connect").disabled = next.connecting;
-  element("resume").hidden = !next.busy || next.watching;
+  element("resume").hidden = !next.busy || !next.reconnectable;
   for (const id of ["new", "selection", "file"])
     element<HTMLButtonElement>(id).disabled = !next.connected || next.busy;
   renderComposer();

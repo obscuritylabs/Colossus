@@ -501,10 +501,20 @@ export class WorkerClient {
   }
   watch(runId: string, signal: AbortSignal) {
     const client = this;
+    let unavailableRetries = 0;
     return watchRun<RunUpdate>({
       runId,
       signal,
       isTerminal: isTerminalRunUpdate,
+      // A restarted worker can publish a different port. Pause after a bounded
+      // outage so the host can reread discovery instead of retrying the old
+      // channel forever. These retries affect only the read-only cursor feed.
+      isRetryable: (error) =>
+        !!error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === grpc.status.UNAVAILABLE &&
+        unavailableRetries++ < 3,
       open: async function* (id, afterSequence, abort) {
         const stream = client.runs.watchRun({ runId: id, afterSequence });
         const cancel = () => stream.cancel();
@@ -512,6 +522,7 @@ export class WorkerClient {
         if (abort?.aborted) stream.cancel();
         try {
           for await (const response of stream as AsyncIterable<WatchRunResponse>) {
+            unavailableRetries = 0;
             if (!response.update) throw new UserError("Empty run feed item.");
             yield {
               runId: response.update.runId,

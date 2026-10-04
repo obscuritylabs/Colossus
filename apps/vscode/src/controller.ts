@@ -42,9 +42,18 @@ export class WorkController {
   private interactions = new Map<string, Interaction>();
   private responding = new Set<string>();
   private uncertain = false;
+  private cancelling = false;
   private attachmentId = 0;
   get connectionGeneration() {
     return this.attachmentId;
+  }
+  get canReconnect() {
+    return (
+      this.responding.size === 0 &&
+      !this.cancelling &&
+      (!this.view.busy ||
+        (!this.view.watching && (!!this.active || this.uncertain)))
+    );
   }
   private knownRuns = new Map<string, Run>();
   private historyCursor = "";
@@ -58,6 +67,7 @@ export class WorkController {
     this.view = initialView(workspace);
   }
   publish() {
+    this.view.reconnectable = this.canReconnect;
     this.host.publish(structuredClone(this.view));
   }
   error(error: unknown) {
@@ -315,16 +325,16 @@ export class WorkController {
     this.view.error = "";
     this.publish();
     try {
-      const listed = await client.listRuns(id);
-      if (epoch !== this.epoch) return;
-      this.active = listed.runs.find((run) => run.terminal === undefined);
+      const listed = await this.listSessionRuns(client, id, epoch);
+      if (!listed) return;
+      this.active = listed.find((run) => run.terminal === undefined);
       if (this.active)
         this.view.mode =
           this.active.mode === RunMode.RUN_MODE_PLAN ? "plan" : "execute";
       this.view.sessionId = id;
       this.view.tools = [];
-      for (const run of listed.runs) this.recordRun(run);
-      await this.loadMessages(client, epoch, listed.runs);
+      for (const run of listed) this.recordRun(run);
+      await this.loadMessages(client, epoch, listed);
       if (epoch !== this.epoch) return;
       await this.host.remember(id);
       this.view.busy = this.active !== undefined;
@@ -436,13 +446,16 @@ export class WorkController {
     const epoch = this.epoch;
     if (!run)
       throw new UserError("No known active run. Reconnect to reconcile it.");
+    this.cancelling = true;
     this.view.status = "Requesting cancellation";
     this.publish();
     // A cancellation is sent once. The watch remains open until durable terminal evidence.
-    await client.cancel(run.runId, randomUUID());
-    if (epoch === this.epoch) {
-      this.view.status = "Cancellation requested";
-      this.publish();
+    try {
+      await client.cancel(run.runId, randomUUID());
+      if (epoch === this.epoch) this.view.status = "Cancellation requested";
+    } finally {
+      this.cancelling = false;
+      if (epoch === this.epoch) this.publish();
     }
   }
 
@@ -474,6 +487,7 @@ export class WorkController {
     if (!run || !this.interactions.has(id))
       throw new UserError("Interaction is no longer pending.");
     this.responding.add(id);
+    this.publish();
     try {
       // Reconcile the exact caller-owned pending obligation before presenting native UI.
       const current = await client.get(run.runId);
@@ -512,7 +526,7 @@ export class WorkController {
           this.abort?.abort();
           this.view.watching = false;
           this.view.status =
-            "Response outcome could not be confirmed. Reconnect the feed to reconcile it.";
+            "Response outcome could not be confirmed. Reconnect the worker to reconcile it.";
         }
         this.interactions.clear();
         for (const interaction of current?.pendingInteractions ?? [])
@@ -522,6 +536,7 @@ export class WorkController {
       }
     } finally {
       this.responding.delete(id);
+      if (epoch === this.epoch) this.publish();
     }
   }
 
@@ -566,7 +581,7 @@ export class WorkController {
         if (epoch === this.epoch && !abort.signal.aborted) {
           this.view.watching = false;
           this.view.status =
-            "Observation paused. Reconnect the feed to reconcile the run.";
+            "Observation paused. Reconnect the worker to reconcile the run.";
           this.error(error);
         }
       }
@@ -658,14 +673,46 @@ export class WorkController {
     this.publish();
   }
 
+  private async listSessionRuns(
+    client: WorkerClient,
+    sessionId: string,
+    epoch: number,
+  ): Promise<Run[] | undefined> {
+    const runs = new Map<string, Run>();
+    const cursors = new Set<string>();
+    let cursor = "";
+    // The worker caps each page at three runs. Keep the latest 20 turns,
+    // with a bounded traversal even if a malformed server repeats a cursor.
+    for (let page = 0; page < 20; page++) {
+      const response = await client.listRuns(sessionId, cursor);
+      if (epoch !== this.epoch) return undefined;
+      for (const run of response.runs) {
+        if (run.sessionId !== sessionId)
+          throw new UserError(
+            "Conversation history belongs to another session.",
+          );
+        runs.set(run.runId, run);
+        if (runs.size === 20) return [...runs.values()];
+      }
+      const next = response.page?.nextPageToken ?? "";
+      if (!next) return [...runs.values()];
+      if (cursors.has(next) || response.runs.length === 0)
+        throw new UserError("Conversation history could not be paginated.");
+      cursors.add(next);
+      cursor = next;
+    }
+    throw new UserError("Conversation history exceeded its page limit.");
+  }
+
   private async loadMessages(
     client: WorkerClient,
     epoch: number,
     runs?: Run[],
   ) {
     const sessionId = this.view.sessionId;
-    const listed = runs ?? (await client.listRuns(sessionId)).runs;
-    if (epoch !== this.epoch) return;
+    const listed =
+      runs ?? (await this.listSessionRuns(client, sessionId, epoch));
+    if (!listed || epoch !== this.epoch) return;
     const previous = new Map(
       this.view.messages.map((message) => [message.id, message]),
     );

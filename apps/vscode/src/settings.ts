@@ -26,6 +26,7 @@ export interface SettingsView {
   connected: boolean;
   connecting: boolean;
   busy: boolean;
+  reconnectable?: boolean;
   hasSavedConnection: boolean;
   version: string;
   role: string;
