@@ -2,7 +2,7 @@
   "name": "colossus",
   "displayName": "Colossus",
   "description": "Work with the Colossus agent runtime from VS Code.",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "publisher": "obscuritylabs",
   "icon": "media/colossus.png",
   "type": "module",
@@ -205,10 +205,10 @@
     "preview:capture": "node scripts/capture-preview.mjs"
   },
   "dependencies": {
+    "@colossus/ui": "file:../ui",
     "@grpc/grpc-js": "1.14.5",
     "@napi-rs/keyring": "2.1.0",
     "@obscuritylabs/colossus-sdk": "file:../../sdk/typescript",
-    "@colossus/ui": "file:../ui",
     "react": "19.2.7",
     "react-dom": "19.2.7"
   },
@@ -218,14 +218,16 @@
     "@tabler/icons": "3.45.0",
     "@types/mdast": "4.0.4",
     "@types/node": "22.18.0",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
     "@types/vscode": "1.101.0",
     "@vscode/vsce": "4.0.0",
     "esbuild": "0.25.12",
     "mdast-util-from-markdown": "2.0.3",
+    "mdast-util-gfm-table": "2.0.0",
+    "micromark-extension-gfm-table": "2.1.1",
     "prettier": "3.9.5",
-    "typescript": "5.9.3",
-    "@types/react": "19.2.17",
-    "@types/react-dom": "19.2.3"
+    "typescript": "5.9.3"
   },
   "overrides": {
     "playwright-core": "1.62.0"

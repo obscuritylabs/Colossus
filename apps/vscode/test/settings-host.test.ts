@@ -24,6 +24,8 @@ test("settings use one editor panel, persist user preferences, and never read cr
   >();
   const commands = new Map<string, () => unknown>();
   const executed: unknown[][] = [];
+  const errors: string[] = [];
+  let themeFailure = false;
   const messages: unknown[] = [];
   const config = new Map<string, unknown>();
   const updates: unknown[][] = [];
@@ -93,7 +95,10 @@ test("settings use one editor panel, persist user preferences, and never read cr
           dispose() {},
         };
       },
-      showErrorMessage: () => Promise.resolve(undefined),
+      showErrorMessage: (message: string) => {
+        errors.push(message);
+        return Promise.resolve(undefined);
+      },
       showInputBox: async (options: { value: string }) => {
         prompts.push(options);
         return inputs.shift();
@@ -124,6 +129,8 @@ test("settings use one editor panel, persist user preferences, and never read cr
       },
       executeCommand: async (...args: unknown[]) => {
         executed.push(args);
+        if (themeFailure && args[0] === "workbench.action.selectTheme")
+          throw new Error("private-path sensitive-token-fixture");
       },
     },
   };
@@ -200,10 +207,22 @@ test("settings use one editor panel, persist user preferences, and never read cr
     await send({ type: "openThemeSettings" });
     await send({ type: "openWork" });
     assert.deepEqual(executed, [
-      ["workbench.action.openSettings", "workbench.colorTheme"],
+      ["workbench.action.selectTheme"],
       ["colossus.work.focus"],
     ]);
     assert.equal(secretReads, 0);
+    const beforeThemeFailure = messages.length;
+    themeFailure = true;
+    await send({ type: "openThemeSettings" });
+    assert.equal(messages.length, beforeThemeFailure);
+    assert.equal(errors.length, 1);
+    assert.match(errors[0]!, /VS Code’s theme picker/u);
+    assert.doesNotMatch(
+      errors[0]!,
+      /worker|reconnect|private-path|sensitive-token/u,
+    );
+    assert.equal(secretReads, 0);
+    themeFailure = false;
     await commands.get("colossus.openWorkspace")!();
     assert.deepEqual(executed.at(-1), ["colossus.workspace.focus"]);
     assert.equal(secretReads, 0);

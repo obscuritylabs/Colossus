@@ -1,6 +1,10 @@
 import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmTableFromMarkdown } from "mdast-util-gfm-table";
+import { gfmTable } from "micromark-extension-gfm-table";
 import type { RootContent, Root, Nodes } from "mdast";
 import { node } from "./ui.js";
+
+let tableNumber = 0;
 
 // Match Desktop's response budget. Only create known DOM elements; HTML, images,
 // links and code never receive navigation, resource-loading or executable authority.
@@ -14,7 +18,10 @@ export function markdown(text: string): HTMLElement {
   if (text.length > 16_384) return plain();
   let root: Root;
   try {
-    root = fromMarkdown(text);
+    root = fromMarkdown(text, {
+      extensions: [gfmTable()],
+      mdastExtensions: [gfmTableFromMarkdown()],
+    });
   } catch {
     return plain();
   }
@@ -41,6 +48,34 @@ export function markdown(text: string): HTMLElement {
       return pre;
     }
     if (n.type === "inlineCode") return node("code", n.value);
+    if (n.type === "table") {
+      const scroll = node("div", "", "markdown-table-scroll");
+      scroll.tabIndex = 0;
+      scroll.setAttribute("role", "region");
+      scroll.setAttribute(
+        "aria-label",
+        `Scrollable Markdown table ${++tableNumber}`,
+      );
+      const table = node("table");
+      const head = node("thead");
+      const body = node("tbody");
+      n.children.forEach((row, index) => {
+        const tr = node("tr");
+        row.children.forEach((cell, column) => {
+          const el = node(index === 0 ? "th" : "td");
+          if (index === 0) el.setAttribute("scope", "col");
+          const align = n.align?.[column];
+          if (align === "left" || align === "right" || align === "center")
+            el.className = `align-${align}`;
+          for (const child of cell.children) el.append(render(child));
+          tr.append(el);
+        });
+        (index === 0 ? head : body).append(tr);
+      });
+      table.append(head, body);
+      scroll.append(table);
+      return scroll;
+    }
     const tag =
       n.type === "paragraph"
         ? "p"

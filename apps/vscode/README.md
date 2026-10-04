@@ -14,7 +14,8 @@ Desktop's Global/Workspace layout. Desktop and the webviews now consume the priv
 tokens, branding, the settings frame, accessible dropdowns, and composer controls.
 VS Code defaults to neutral Dark+ surfaces with Colossus accents. Light/dark theme
 selection follows VS Code, with a native high contrast bridge. The composer grows automatically, uses Desktop's segmented Plan/Execute
-controls, and retains a draft while a run is active. Drafts are sent only by the user.
+controls, and retains a draft while a run is active. Replies support bounded Markdown
+including scrollable tables; model HTML, links, and images remain inert. Drafts are sent only by the user.
 
 Models, tools, plugins, policy, sandboxing, and canonical state remain in the runtime.
 This extension does not start a worker or connect to Desktop's private Managed Local

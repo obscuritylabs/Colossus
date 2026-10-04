@@ -166,7 +166,7 @@ function Settings() {
                 onClick={() => post({ type: "openThemeSettings" })}
                 className="secondary"
               >
-                Change theme
+                Change VS Code theme
               </button>
             </div>
             <div

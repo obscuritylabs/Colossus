@@ -364,6 +364,34 @@ await renderer("active-chat-hacker", "webview", {
   ...activeChat,
   preferences: hackerPreferences,
 });
+const processTables = await readFile(
+  "test/fixtures/process-tables.txt",
+  "utf8",
+);
+const tableView = {
+  ...work,
+  mode: "execute",
+  tools: [],
+  sessions: [{ ...work.sessions[0], title: "Inspect running processes" }],
+  messages: [
+    {
+      id: "table-user",
+      role: "user",
+      text: "List the top processes by CPU and memory.",
+    },
+    { id: "table-assistant", role: "assistant", text: processTables },
+  ],
+};
+await renderer("chat-tables", "webview", {
+  type: "state",
+  view: tableView,
+  preferences,
+});
+await renderer("chat-tables-hacker", "webview", {
+  type: "state",
+  view: tableView,
+  preferences: hackerPreferences,
+});
 async function combined(light = false, palette = "editor") {
   const suffix = palette === "hacker" ? "-hacker" : light ? "-light" : "";
   await writeFile(
@@ -618,6 +646,27 @@ await shot(
   360,
   850,
 );
+await shot(
+  "32-process-tables-wide",
+  "Chat · process tables with column headers and numeric alignment",
+  "chat-tables",
+  700,
+  1100,
+);
+await shot(
+  "33-process-tables-sidebar",
+  "Right sidebar · tables scroll within the conversation",
+  "chat-tables",
+  430,
+  1100,
+);
+await shot(
+  "34-process-tables-hacker",
+  "Hacker · safely rendered process tables",
+  "chat-tables-hacker",
+  430,
+  1100,
+);
 for (const [source, name, title] of [
   [
     "shared-ui-desktop-blue",
@@ -656,11 +705,15 @@ if (errors.length) throw new Error(errors.join("\n"));
 const reviewShots = [...shots].sort((a, b) => {
   const aNumber = Number(a.name.slice(0, 2));
   const bNumber = Number(b.name.slice(0, 2));
-  return Number(bNumber >= 23) - Number(aNumber >= 23) || aNumber - bNumber;
+  return (
+    Number(bNumber >= 32) - Number(aNumber >= 32) ||
+    Number(bNumber >= 23) - Number(aNumber >= 23) ||
+    aNumber - bNumber
+  );
 });
 await writeFile(
   `${directory}/index.html`,
-  `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Colossus ${version} screenshot review</title><style>body{max-width:1400px;margin:auto;padding:28px;background:#07101d;color:#e8eff8;font:15px/1.6 system-ui}a{color:#6aa2ff}h1{margin:0}p{color:#91a2b8}nav{display:flex;gap:20px;flex-wrap:wrap;margin:20px 0}figure{margin:40px 0;border-top:1px solid #203149;padding-top:18px}figcaption{font-size:20px;margin-bottom:14px}img{display:block;max-width:100%;height:auto;border:1px solid #203149;border-radius:10px}section{display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:28px}section figure{margin:12px 0}section img{max-height:900px;width:auto}</style></head><body><h1>Colossus ${version} · UI review</h1><p>${shots.length} browser screenshots of the actual extension and Desktop renderers, with sample data. These are not native VS Code/Tauri captures or live worker results. Click any image for full resolution.</p><nav><a href="#23-hacker-layout">Hacker screenshots</a><a href="#30-desktop-hacker-settings">Desktop Hacker</a><a href="#01-full-layout">Other palettes</a><a href="layout.html">Open interactive renderer layout</a><a href="settings.html">Open settings renderer</a><a href="layout-light.html">Open light layout</a><a href="layout-hacker.html">Open Hacker layout</a><a href="settings-hacker.html">Open Hacker settings</a></nav>${reviewShots.map(({ name, title }) => `<figure id="${name}"><figcaption>${title}</figcaption><a href="${name}.png"><img src="${name}.png" alt="${title}" loading="lazy"></a></figure>`).join("")}</body></html>`,
+  `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Colossus ${version} screenshot review</title><style>body{max-width:1400px;margin:auto;padding:28px;background:#07101d;color:#e8eff8;font:15px/1.6 system-ui}a{color:#6aa2ff}h1{margin:0}p{color:#91a2b8}nav{display:flex;gap:20px;flex-wrap:wrap;margin:20px 0}figure{margin:40px 0;border-top:1px solid #203149;padding-top:18px}figcaption{font-size:20px;margin-bottom:14px}img{display:block;max-width:100%;height:auto;border:1px solid #203149;border-radius:10px}section{display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:28px}section figure{margin:12px 0}section img{max-height:900px;width:auto}</style></head><body><h1>Colossus ${version} · UI review</h1><p>${shots.length} browser screenshots of the actual extension and Desktop renderers, with sample data. These are not native VS Code/Tauri captures or live worker results. Click any image for full resolution.</p><nav><a href="#32-process-tables-wide">Process tables</a><a href="#23-hacker-layout">Hacker screenshots</a><a href="#30-desktop-hacker-settings">Desktop Hacker</a><a href="#01-full-layout">Other palettes</a><a href="layout.html">Open interactive renderer layout</a><a href="settings.html">Open settings renderer</a><a href="layout-light.html">Open light layout</a><a href="layout-hacker.html">Open Hacker layout</a><a href="settings-hacker.html">Open Hacker settings</a></nav>${reviewShots.map(({ name, title }) => `<figure id="${name}"><figcaption>${title}</figcaption><a href="${name}.png"><img src="${name}.png" alt="${title}" loading="lazy"></a></figure>`).join("")}</body></html>`,
 );
 process.stdout.write(
   `Captured ${shots.length} renderer screenshots: ${directory}/index.html\n`,

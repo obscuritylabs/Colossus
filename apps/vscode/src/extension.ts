@@ -258,10 +258,17 @@ export function activate(context: vscode.ExtensionContext) {
             await vscode.commands.executeCommand("colossus.work.focus");
             break;
           case "openThemeSettings":
-            await vscode.commands.executeCommand(
-              "workbench.action.openSettings",
-              "workbench.colorTheme",
-            );
+            try {
+              await vscode.commands.executeCommand(
+                "workbench.action.selectTheme",
+              );
+            } catch {
+              // A workbench command failure is not a worker failure. Keep it out
+              // of run state and never expose raw command/extension errors.
+              await vscode.window.showErrorMessage(
+                "VS Code’s theme picker could not be opened. Use Preferences: Color Theme from the Command Palette.",
+              );
+            }
             break;
           default:
             await commands[`colossus.${action.type}`]?.();

@@ -40,6 +40,16 @@ test("desktop-style settings navigate, search and request validated host changes
     view,
   );
   await expect(page.locator("html")).toHaveAttribute("data-palette", "neutral");
+  await page
+    .getByRole("button", { name: "Change VS Code theme", exact: true })
+    .click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as unknown as { actions: unknown[] }).actions,
+      ),
+    )
+    .toContainEqual({ type: "openThemeSettings" });
   await choose(page, "Surface palette", "Colossus blue");
   await expect(page.locator("html")).toHaveAttribute(
     "data-palette",
