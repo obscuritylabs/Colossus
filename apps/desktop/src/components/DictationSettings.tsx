@@ -88,10 +88,10 @@ export function DictationSettings() {
     wasTesting.current = testing;
   }, [testing, refresh]);
   useEffect(() => {
-    if (!settings?.downloadActive) return;
+    if (!settings?.active && !settings?.downloadActive) return;
     const timer = setInterval(() => void refresh(), 1500);
     return () => clearInterval(timer);
-  }, [settings?.downloadActive, refresh]);
+  }, [settings?.active, settings?.downloadActive, refresh]);
 
   async function save(change: Partial<DictationSettingsDraft>) {
     if (!settings) return;

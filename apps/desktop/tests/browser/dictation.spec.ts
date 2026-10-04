@@ -21,11 +21,13 @@ test.beforeEach(async ({ page }) => {
       level: null as number | null,
       levelIndex: 0,
       starting: false,
+      active: false,
+      delayedAbort: false,
     };
     const settings = () => ({
       ...fixture.preferences,
       available: true,
-      active: false,
+      active: fixture.active,
       microphoneMissing: false,
       microphones: [{ id: "a".repeat(64), name: "USB microphone" }],
       models: [
@@ -115,6 +117,7 @@ test.beforeEach(async ({ page }) => {
             };
           }
           if (command === "start_dictation") {
+            fixture.active = true;
             fixture.events = fixture.denied
               ? [{ type: "failure", error: "capture_unavailable" }]
               : fixture.starting
@@ -157,12 +160,15 @@ test.beforeEach(async ({ page }) => {
                 transcript("Next turn", false),
               ];
             }
-            if (action === "stop")
+            if (action === "stop") {
+              fixture.active = false;
               return [
                 transcript("Next turn finalized.", true),
                 { type: "state", phase: "stopped" },
               ];
+            }
             if (action === "abort") {
+              if (!fixture.delayedAbort) fixture.active = false;
               fixture.events = [];
               return [{ type: "state", phase: "stopped" }];
             }
@@ -179,6 +185,45 @@ async function startRecording(page: import("@playwright/test").Page) {
     .getByRole("button", { name: "Start dictation", exact: true })
     .click();
 }
+
+test("settings unlock after a composer recording finishes shutting down", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 950 });
+  await page.goto("/?fixture=interaction-question");
+  await startRecording(page);
+  await expect(page.getByText("Listening", { exact: true })).toBeVisible();
+  await page.evaluate(() => {
+    (
+      window as unknown as { dictationFixture: { delayedAbort: boolean } }
+    ).dictationFixture.delayedAbort = true;
+  });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page.getByRole("button", { name: "Dictation", exact: true }).click();
+  const enabled = page.getByRole("switch", { name: /Enable dictation/ });
+  const refresh = page.getByRole("button", { name: "Refresh microphones" });
+  await expect(enabled).toBeDisabled();
+  await expect(refresh).toBeDisabled();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { dictationFixture: { calls: string[] } })
+            .dictationFixture.calls,
+      ),
+    )
+    .toContain("control_dictation:abort");
+  await page.evaluate(() => {
+    (
+      window as unknown as { dictationFixture: { active: boolean } }
+    ).dictationFixture.active = false;
+  });
+  await expect(enabled).toBeEnabled();
+  await expect(refresh).toBeEnabled();
+  await page.getByRole("switch", { name: /Spoken punctuation/ }).uncheck();
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+});
 
 test("disabled microphone opens Settings and preferences survive page navigation", async ({
   page,
