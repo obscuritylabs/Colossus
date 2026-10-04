@@ -28,6 +28,7 @@ const labels: Record<Section, string> = {
 };
 const initialView: SettingsView = {
   preferences: DEFAULT_PREFERENCES,
+  preferenceError: "",
   workspace: "Select a workspace",
   connected: false,
   connecting: false,
@@ -100,6 +101,7 @@ function Settings() {
   ) {
     setView((current) => ({
       ...current,
+      preferenceError: "",
       preferences: { ...current.preferences, [action.name]: action.value },
     }));
     post(action);
@@ -144,6 +146,17 @@ function Settings() {
             ? "Search settings"
             : `${scope === "global" ? "Global" : "Workspace"} / ${labels[section]}`}
         </p>
+        {view.preferenceError && (
+          <div className="error" role="alert">
+            <p>{view.preferenceError}</p>
+            <button
+              className="secondary"
+              onClick={() => post({ type: "openUserSettings" })}
+            >
+              Open user settings
+            </button>
+          </div>
+        )}
         <section
           data-section="appearance"
           hidden={!query && section !== "appearance"}

@@ -26,6 +26,7 @@ test("desktop-style settings navigate, search and request validated host changes
   await page.goto("/settings");
   const view: SettingsView = {
     preferences: DEFAULT_PREFERENCES,
+    preferenceError: "",
     workspace: "Colossus",
     connected: true,
     connecting: false,
@@ -188,4 +189,81 @@ test("desktop-style settings navigate, search and request validated host changes
   await expect(
     page.getByRole("button", { name: "Forget connection" }),
   ).toBeDisabled();
+});
+
+test("a rejected palette write restores the saved palette and shows settings recovery without a worker error", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const host = window as unknown as {
+      acquireVsCodeApi: () => unknown;
+      actions: unknown[];
+    };
+    host.actions = [];
+    host.acquireVsCodeApi = () => ({
+      postMessage: (action: unknown) => host.actions.push(action),
+      getState: () => undefined,
+      setState: () => undefined,
+    });
+  });
+  await page.goto("/settings");
+  const view: SettingsView = {
+    preferences: DEFAULT_PREFERENCES,
+    preferenceError: "",
+    workspace: "Colossus",
+    connected: true,
+    connecting: false,
+    busy: true,
+    hasSavedConnection: true,
+    version: "0.11.7",
+    role: "primary",
+    error: "",
+  };
+  await page.evaluate(
+    (view) => window.postMessage({ type: "settings", view }, "*"),
+    view,
+  );
+  await choose(page, "Surface palette", "Colossus blue");
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-palette",
+    "colossus",
+  );
+  await page.evaluate(
+    (view) => window.postMessage({ type: "settings", view }, "*"),
+    {
+      ...view,
+      preferenceError:
+        "Could not save Surface palette. VS Code has not registered this setting. Reload Window after installing Colossus, then try again.",
+    },
+  );
+  await expect(
+    page.getByRole("combobox", { name: "Surface palette", exact: true }),
+  ).toHaveText("Editor (Dark+)");
+  await expect(page.locator("html")).toHaveAttribute("data-palette", "neutral");
+  await expect(page.getByRole("alert")).toContainText("Reload Window");
+  await expect(page.locator("#error")).toBeHidden();
+  await page
+    .getByRole("button", { name: "Open user settings", exact: true })
+    .click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as unknown as { actions: unknown[] }).actions,
+      ),
+    )
+    .toContainEqual({ type: "openUserSettings" });
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({ path: "artifacts/settings-save-error.png" });
+  await page.evaluate(
+    (view) => window.postMessage({ type: "settings", view }, "*"),
+    {
+      ...view,
+      preferences: { ...view.preferences, palette: "colossus" },
+    },
+  );
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-palette",
+    "colossus",
+  );
+  await expect(page.getByRole("alert")).toHaveCount(0);
 });

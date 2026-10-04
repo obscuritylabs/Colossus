@@ -223,6 +223,7 @@ const preferences = {
 };
 const settings = {
   preferences,
+  preferenceError: "",
   workspace: "Colossus",
   connected: true,
   connecting: false,
@@ -391,6 +392,14 @@ await renderer("chat-tables-hacker", "webview", {
   type: "state",
   view: tableView,
   preferences: hackerPreferences,
+});
+await renderer("settings-save-error", "settings", {
+  type: "settings",
+  view: {
+    ...settings,
+    preferenceError:
+      "Could not save Surface palette. VS Code has not registered this setting. Reload Window after installing Colossus, then try again.",
+  },
 });
 async function combined(light = false, palette = "editor") {
   const suffix = palette === "hacker" ? "-hacker" : light ? "-light" : "";
@@ -666,6 +675,13 @@ await shot(
   "chat-tables-hacker",
   430,
   1100,
+);
+await shot(
+  "35-settings-save-error",
+  "Settings · missing registration explains reload and restores the saved palette",
+  "settings-save-error",
+  1120,
+  850,
 );
 for (const [source, name, title] of [
   [

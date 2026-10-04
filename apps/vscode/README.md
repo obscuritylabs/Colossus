@@ -42,7 +42,10 @@ Windows. To cross-package after building, run `node scripts/package.mjs darwin-a
 locked registry URL and verifies its SHA-512 integrity before staging it. On Windows,
 replace shell directory commands as appropriate; packaging needs `tar` on PATH.
 VS Code 1.104 or newer is required for the secondary-sidebar contribution. Install the VSIX using **Extensions: Install from
-VSIX…**. For source development, open `apps/vscode` in VS Code and launch the
+VSIX…**, then run **Developer: Reload Window** after installing or updating so VS Code
+registers the contributed views and settings. If **Appearance: Palette** is missing
+from VS Code's standard Colossus settings, reload the window before choosing a palette.
+For source development, open `apps/vscode` in VS Code and launch the
 **Colossus Extension** debug configuration after installing dependencies and building
 the SDK. The extension runs in the workspace extension host; with Remote SSH or a
 devcontainer, the worker and credential store must be available on that remote host.

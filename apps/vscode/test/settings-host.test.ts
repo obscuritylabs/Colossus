@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
 import { build } from "esbuild";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { workspaceIdentity } from "../src/connection.js";
@@ -26,6 +26,14 @@ test("settings use one editor panel, persist user preferences, and never read cr
   const executed: unknown[][] = [];
   const errors: string[] = [];
   let themeFailure = false;
+  let userSettingsFailure = false;
+  let preferenceFailure: Error | undefined;
+  let missingPalette = false;
+  const properties = JSON.parse(await readFile("package.json", "utf8"))
+    .contributes.configuration.properties as Record<
+    string,
+    { default: unknown }
+  >;
   const messages: unknown[] = [];
   const config = new Map<string, unknown>();
   const updates: unknown[][] = [];
@@ -115,8 +123,13 @@ test("settings use one editor panel, persist user preferences, and never read cr
         assert.equal(namespace, "colossus");
         return {
           get: (key: string) => config.get(key),
+          inspect: (key: string) =>
+            missingPalette && key === "appearance.palette"
+              ? undefined
+              : { defaultValue: properties[`colossus.${key}`]?.default },
           update: async (key: string, value: unknown, target: number) => {
             updates.push([key, value, target]);
+            if (preferenceFailure) throw preferenceFailure;
             config.set(key, value);
           },
         };
@@ -130,6 +143,11 @@ test("settings use one editor panel, persist user preferences, and never read cr
       executeCommand: async (...args: unknown[]) => {
         executed.push(args);
         if (themeFailure && args[0] === "workbench.action.selectTheme")
+          throw new Error("private-path sensitive-token-fixture");
+        if (
+          userSettingsFailure &&
+          args[0] === "workbench.action.openSettingsJson"
+        )
           throw new Error("private-path sensitive-token-fixture");
       },
     },
@@ -223,6 +241,83 @@ test("settings use one editor panel, persist user preferences, and never read cr
     );
     assert.equal(secretReads, 0);
     themeFailure = false;
+    missingPalette = true;
+    const beforeMissingPalette = updates.length;
+    await send({ type: "setPreference", name: "palette", value: "colossus" });
+    const unregistered = (
+      messages.at(-1) as {
+        view: {
+          preferenceError: string;
+          error: string;
+          preferences: { palette: string };
+        };
+      }
+    ).view;
+    assert.equal(updates.length, beforeMissingPalette);
+    assert.match(unregistered.preferenceError, /Reload Window/u);
+    assert.equal(unregistered.error, "");
+    assert.equal(unregistered.preferences.palette, "hacker");
+    missingPalette = false;
+    preferenceFailure = new Error(
+      "Unable to write into user settings. Please open the user settings to correct errors/warnings in it and try again. private-path sensitive-token-fixture",
+    );
+    await send({ type: "setPreference", name: "palette", value: "colossus" });
+    const rejected = (
+      messages.at(-1) as {
+        view: {
+          preferences: { palette: string };
+          preferenceError: string;
+          error: string;
+          connected: boolean;
+        };
+      }
+    ).view;
+    assert.equal(rejected.preferences.palette, "hacker");
+    assert.match(rejected.preferenceError, /Could not save Surface palette/u);
+    assert.match(
+      rejected.preferenceError,
+      /user settings file contains errors/u,
+    );
+    assert.doesNotMatch(
+      rejected.preferenceError,
+      /worker|reconnect|private-path|sensitive-token/u,
+    );
+    assert.equal(rejected.error, "");
+    assert.equal(rejected.connected, false);
+    assert.equal(errors.length, 1);
+    assert.equal(secretReads, 0);
+    await send({ type: "openUserSettings" });
+    assert.deepEqual(executed.at(-1), ["workbench.action.openSettingsJson"]);
+    const beforeUserSettingsFailure = messages.length;
+    userSettingsFailure = true;
+    await send({ type: "openUserSettings" });
+    assert.equal(messages.length, beforeUserSettingsFailure);
+    assert.match(
+      errors.at(-1)!,
+      /VS Code’s user settings could not be opened/u,
+    );
+    assert.doesNotMatch(
+      errors.at(-1)!,
+      /worker|reconnect|private-path|sensitive-token/u,
+    );
+    userSettingsFailure = false;
+    preferenceFailure = undefined;
+    for (const palette of ["colossus", "editor", "hacker"]) {
+      await send({ type: "setPreference", name: "palette", value: palette });
+      const saved = (
+        messages.at(-1) as {
+          view: {
+            preferences: { palette: string };
+            preferenceError: string;
+            error: string;
+          };
+        }
+      ).view;
+      assert.equal(saved.preferences.palette, palette);
+      assert.equal(saved.preferenceError, "");
+      assert.equal(saved.error, "");
+    }
+    assert.equal(secretReads, 0);
     await commands.get("colossus.openWorkspace")!();
     assert.deepEqual(executed.at(-1), ["colossus.workspace.focus"]);
     assert.equal(secretReads, 0);

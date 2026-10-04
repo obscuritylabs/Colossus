@@ -19,6 +19,7 @@ import {
 import { parseAction, type WorkView } from "./model.js";
 import {
   parseSettingsAction,
+  preferenceSaveError,
   PREFERENCE_KEYS,
   readPreferences,
   type SettingsView,
@@ -69,6 +70,7 @@ export function activate(context: vscode.ExtensionContext) {
       }
     | undefined;
   let settingsPanel: vscode.WebviewPanel | undefined;
+  let preferenceError = "";
   let connecting = false;
   let configuringCredential = false;
   let controller = makeController("Select a workspace");
@@ -116,6 +118,7 @@ export function activate(context: vscode.ExtensionContext) {
     });
     const settings: SettingsView = {
       preferences: preferences(),
+      preferenceError,
       workspace: lastView.workspace,
       connected: lastView.connected,
       connecting,
@@ -239,19 +242,13 @@ export function activate(context: vscode.ExtensionContext) {
     const listener = panel.webview.onDidReceiveMessage((value) => {
       const action = parseSettingsAction(value);
       if (!action) return;
+      if (action.type === "setPreference") {
+        void savePreference(action);
+        return;
+      }
       void run(async () => {
         switch (action.type) {
           case "ready":
-            publishViews();
-            break;
-          case "setPreference":
-            await vscode.workspace
-              .getConfiguration("colossus")
-              .update(
-                PREFERENCE_KEYS[action.name],
-                action.value,
-                vscode.ConfigurationTarget.Global,
-              );
             publishViews();
             break;
           case "openWork":
@@ -270,6 +267,9 @@ export function activate(context: vscode.ExtensionContext) {
               );
             }
             break;
+          case "openUserSettings":
+            await openUserSettings();
+            break;
           default:
             await commands[`colossus.${action.type}`]?.();
             publishViews();
@@ -286,6 +286,37 @@ export function activate(context: vscode.ExtensionContext) {
       context.subscriptions,
     );
     context.subscriptions.push(panel);
+  }
+
+  async function savePreference(
+    action: Extract<
+      ReturnType<typeof parseSettingsAction>,
+      { type: "setPreference" }
+    >,
+  ) {
+    try {
+      const config = vscode.workspace.getConfiguration("colossus");
+      const key = PREFERENCE_KEYS[action.name];
+      if (config.inspect(key)?.defaultValue === undefined)
+        throw new UserError("This is not a registered configuration.");
+      await config.update(key, action.value, vscode.ConfigurationTarget.Global);
+      preferenceError = "";
+    } catch (error) {
+      preferenceError = preferenceSaveError(action.name, error);
+    }
+    // Publish the values actually saved by VS Code, including rollback after a
+    // rejected write. A presentation preference never mutates worker/run state.
+    publishViews();
+  }
+
+  async function openUserSettings() {
+    try {
+      await vscode.commands.executeCommand("workbench.action.openSettingsJson");
+    } catch {
+      await vscode.window.showErrorMessage(
+        "VS Code’s user settings could not be opened. Use Preferences: Open User Settings (JSON) from the Command Palette.",
+      );
+    }
   }
 
   context.subscriptions.push(
