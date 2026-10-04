@@ -140,3 +140,44 @@ fn malformed_audio_and_oversized_transcripts_fail_closed() {
         Err(DictationError::TranscriptLimit)
     );
 }
+
+#[test]
+fn silence_markers_are_removed_without_discarding_speech_or_final_revisions() {
+    struct Revising(u8);
+    impl Decoder for Revising {
+        fn decode(&mut self, _: &[f32]) -> Result<String, DictationError> {
+            self.0 += 1;
+            Ok(match self.0 {
+                1 => "[BLANK_AUDIO]",
+                2 => " Keep this speech. [BLANK_AUDIO] ",
+                _ => "[BLANK_AUDIO] [BLANK_AUDIO]",
+            }
+            .into())
+        }
+    }
+    let mut pipeline = Pipeline::new(Revising(0));
+    let mut updates = Vec::new();
+    let mut emit = |update| {
+        updates.push(update);
+        Ok(())
+    };
+    for _ in 0..5 {
+        pipeline.push(&vec![0.0; SAMPLE_RATE], &mut emit).unwrap();
+    }
+    pipeline.finish(&mut emit).unwrap();
+    assert_eq!(
+        updates
+            .iter()
+            .map(|update| update.text.as_str())
+            .collect::<Vec<_>>(),
+        ["", "Keep this speech.", ""]
+    );
+    assert_eq!(
+        updates
+            .iter()
+            .map(|update| update.revision)
+            .collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
+    assert!(updates[2].is_final);
+}

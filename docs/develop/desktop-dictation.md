@@ -112,7 +112,11 @@ recording strip remains visible while capture is active. Its cyan waveform shows
 recent microphone loudness, with a glow that follows the input level and a clock
 counting active recording time. Silence settles into dots; Pause freezes and dims
 the waveform and stops the clock. Starting shows a loading indicator. Reduced
-motion keeps a stationary input meter and disables decorative animation.
+motion keeps a stationary input meter and disables decorative animation. The display
+estimates a quiet background from recent input levels and suppresses activity near
+that level, so steady room noise usually settles into dots after a short warmup.
+This affects only the visualization; it does not gate recording or recognition.
+Loud or changing background noise can still move the meter.
 
 The native callback coalesces RMS loudness into one byte from 0 to 255. The existing
 session poll delivers at most one level update alongside its bounded transcript
@@ -122,6 +126,8 @@ of composer updates. Samples and model data stay in native code. The level histo
 is not a recording or a frequency spectrum; it measures input strength, including
 background noise. Stale levels decay visually, and Pause, Stop, navigation, or a
 failure clears the input meter. Stopping during model initialization cancels it.
+Native transcript updates remove Whisper's exact `[BLANK_AUDIO]` silence marker,
+including empty final revisions that replace an earlier partial.
 
 **Send** settles a FIFO audio boundary before using the existing prompt/run or Next up
 path. The same microphone stream stays open. Audio queued after the boundary goes into

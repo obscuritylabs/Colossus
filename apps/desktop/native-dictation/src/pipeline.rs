@@ -79,6 +79,7 @@ impl<D: Decoder> Pipeline<D> {
         if text.len() > MAX_TEXT_BYTES {
             return Err(DictationError::TranscriptLimit);
         }
+        let text = text.replace("[BLANK_AUDIO]", " ").trim().to_owned();
         self.revision += 1;
         Ok(TranscriptUpdate {
             segment_id: self.segment_id,

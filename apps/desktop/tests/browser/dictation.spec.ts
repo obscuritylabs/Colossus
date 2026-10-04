@@ -215,6 +215,42 @@ test("the recording strip follows input, freezes on pause, and remains usable wi
   expect(errors).toEqual([]);
 });
 
+test("steady room noise settles into dots while louder speech still moves the meter", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 950 });
+  await page.goto("/?fixture=interaction-question");
+  await page.evaluate(() => {
+    (
+      window as unknown as { dictationFixture: { level: number } }
+    ).dictationFixture.level = 84;
+  });
+  await startRecording(page);
+  const meter = page.getByRole("meter", {
+    name: "Microphone input level",
+    exact: true,
+  });
+  await expect
+    .poll(async () => Number(await meter.getAttribute("aria-valuenow")))
+    .toBeGreaterThan(0);
+  await expect(meter).toHaveAttribute("aria-valuenow", "0");
+  await expect(page.getByText("Listening", { exact: true })).toBeVisible();
+  await page.evaluate(() => {
+    (
+      window as unknown as { dictationFixture: { level: number } }
+    ).dictationFixture.level = 200;
+  });
+  await expect
+    .poll(async () => Number(await meter.getAttribute("aria-valuenow")))
+    .toBeGreaterThan(40);
+  await page.evaluate(() => {
+    (
+      window as unknown as { dictationFixture: { level: number } }
+    ).dictationFixture.level = 84;
+  });
+  await expect(meter).toHaveAttribute("aria-valuenow", "0");
+});
+
 test("the starting strip shows a quiet meter and Stop cancels model startup", async ({
   page,
 }) => {

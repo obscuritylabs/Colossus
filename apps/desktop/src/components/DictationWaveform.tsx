@@ -1,5 +1,6 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { DictationController, DictationPhase } from "../dictation";
+import { DictationLevelMeter } from "../dictation-level";
 
 const HISTORY_LENGTH = 96;
 const SAMPLE_MS = 100;
@@ -22,6 +23,8 @@ export function DictationWaveform({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const history = useRef(new Array<number>(HISTORY_LENGTH).fill(0));
   const smoothed = useRef(0);
+  const levelMeter = useRef(new DictationLevelMeter());
+  const processed = useRef({ receivedAt: 0, level: 0 });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -39,7 +42,17 @@ export function DictationWaveform({
       if (!active) return;
       const recording = phase === "recording";
       const fresh = now - inputRef.current.receivedAt < 400;
-      const target = recording && fresh ? inputRef.current.level / 255 : 0;
+      if (
+        recording &&
+        fresh &&
+        processed.current.receivedAt !== inputRef.current.receivedAt
+      ) {
+        processed.current = {
+          receivedAt: inputRef.current.receivedAt,
+          level: levelMeter.current.update(inputRef.current.level),
+        };
+      }
+      const target = recording && fresh ? processed.current.level : 0;
       const elapsed = Math.min(100, now - previous);
       previous = now;
       if (recording) {
@@ -73,7 +86,7 @@ export function DictationWaveform({
           motion.matches && recording
             ? target
             : history.current[HISTORY_LENGTH - bars + index]!;
-        const size = 1 + Math.pow(value, 1.4) * (height - 9);
+        const size = 1 + Math.pow(value, 0.8) * (height - 9);
         const x = (index + 0.5 - shift) * step;
         context.globalAlpha = 0.28 + (index / Math.max(1, bars - 1)) * 0.72;
         context.beginPath();
@@ -123,9 +136,7 @@ export function DictationWaveform({
       aria-label="Microphone input level"
       aria-valuemin={0}
       aria-valuemax={100}
-      aria-valuenow={
-        phase === "recording" ? Math.round((input.level / 255) * 100) : 0
-      }
+      aria-valuenow={0}
     >
       <canvas ref={canvasRef} aria-hidden="true" />
     </div>
