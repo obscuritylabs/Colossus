@@ -864,7 +864,7 @@ test("Managed Local trusted tool ceiling exactly matches declared built-ins", ()
   );
   assert.match(builtinSource, /specs\.extend\(super::workflows::workflow_specs\(\)\)/u);
   builtinNames.push(
-    ...[...read("crates/colossus-tools/src/workflows.rs").matchAll(/\("(workflow\.[a-z_.]+)"\s*,/gu)]
+    ...[...read("crates/colossus-tools/src/workflows.rs").matchAll(/(?:\(|name:\s*)"(workflow\.[a-z_.]+)"/gu)]
       .map((match) => match[1]),
   );
 
