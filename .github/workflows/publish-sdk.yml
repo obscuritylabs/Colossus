@@ -28,7 +28,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.release.draft == false && github.event.release.prerelease == false)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       actions: read
@@ -42,7 +42,7 @@ jobs:
       version: ${{ steps.release.outputs.version }}
     steps:
       - name: Check out the exact stable release tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -162,7 +162,7 @@ jobs:
     name: Publish missing SDK artifacts
     if: needs.validate.outputs.authorize_publish == 'true'
     needs: validate
-    runs-on: ubuntu-latest-m
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     environment: sdk-production
     env:
@@ -174,7 +174,7 @@ jobs:
       id-token: write
     steps:
       - name: Check out the exact stable release tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1.8.1
         with:
           fetch-depth: 0
           fetch-tags: true

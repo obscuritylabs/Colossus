@@ -61,19 +61,28 @@ flowchart LR
 
 | Tier | Trigger | Hosted coverage | Stable gate | Runner cost |
 |---|---|---|---|---|
-| PR validation | Open, edit, reopen, synchronize, or mark ready | Parallel standard Linux formatting, lint, unit, SDK, Desktop, documentation, and dependency jobs selected by changed paths | `Colossus PR gate` | Free standard public runners |
-| Pre-merge acceptance | Apply `ci:full` | macOS 14 ARM, Windows 2025 x64, Linux integration, bounded fuzzing, supply chain, Chroma, PostgreSQL, OCI, OPA, and mTLS | `Colossus pre-merge gate` | Larger Linux and Windows Desktop runners are billed; standard public runners are free |
-| Release | Push an annotated stable or approved prerelease tag | Six CLI targets; signed Windows CLI and Desktop; stable SDK or macOS Developer Preview | `Colossus release gate` | Larger runners are billed |
+| PR validation | Open, edit, reopen, synchronize, or mark ready | Parallel standard Linux formatting, lint, unit, SDK, Desktop, documentation, and dependency jobs selected by changed paths | `Colossus PR gate` | Rust, SDK, and Desktop jobs use free standard public runners; control, documentation, and dependency jobs use billed Blacksmith runners |
+| Pre-merge acceptance | Apply `ci:full` | macOS 15 ARM, Windows 2025 x64, Linux integration, bounded fuzzing, supply chain, Chroma, PostgreSQL, OCI, OPA, and mTLS | `Colossus pre-merge gate` | Blacksmith runners and larger Linux and Windows Desktop runners are billed; standard public runners are free |
+| Release | Push an annotated stable or approved prerelease tag | Six CLI targets; signed Windows CLI and Desktop; stable SDK or macOS Developer Preview | `Colossus release gate` | Blacksmith and larger runners are billed |
 
 A job timeout remains mandatory for every hosted job.
-The four-core `ubuntu-latest-m` larger runner is reserved for final Linux integration,
-live OCI/OPA acceptance, release
-readiness, and the x86_64 Linux release artifact. Short control jobs, documentation,
-dependency inspection, service-backed integration tests, and bounded single-process
-fuzzing stay on standard or slim runners so larger-runner capacity is not spent where it
-does not materially shorten the critical path. The repository's
-`.github/actionlint.yaml` registers the provisioned larger-runner name so local workflow
-linting recognizes it.
+Most Linux, macOS ARM, and x64 Windows pre-merge and release jobs, plus the PR classifier,
+documentation, dependency, and gate jobs, run on Blacksmith runners
+(`blacksmith-4vcpu-ubuntu-2404`, `blacksmith-6vcpu-macos-15`, and
+`blacksmith-4vcpu-windows-2025` or `blacksmith-8vcpu-windows-2025` for the x64 Windows
+release lanes). The PR formatting, lint, unit, SDK, and Desktop jobs stay on free
+standard `ubuntu-latest` runners. The representative Windows runtime and Desktop
+pre-merge lanes stay on the GitHub-hosted `windows-2025` and `windows-latest-l` runners
+because the native credential-entry tests create an isolated window station, which the
+Blacksmith Windows runner session does not permit. Linux lanes that exercise the native
+kernel sandbox (final Linux integration, release readiness, and both Linux release
+artifacts) stay on the GitHub-hosted `ubuntu-latest-m` and `ubuntu-24.04-arm` runners
+because the Blacksmith Linux kernel does not provide Landlock. The x86_64 macOS and
+aarch64 Windows release artifacts likewise stay on the GitHub-hosted `macos-15-intel` and
+`windows-11-arm` runners so every CLI target is built and tested natively. The
+repository's `.github/actionlint.yaml` registers the Blacksmith runner labels and the
+provisioned `ubuntu-latest-m` and `windows-latest-l` larger runners so local workflow
+linting recognizes them.
 
 ## Rust build caches
 
