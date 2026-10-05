@@ -367,6 +367,7 @@ const (
 	AutomationService_GetWorkflowSchedule_FullMethodName        = "/colossus.api.v1alpha1.AutomationService/GetWorkflowSchedule"
 	AutomationService_CreateWorkflowSchedule_FullMethodName     = "/colossus.api.v1alpha1.AutomationService/CreateWorkflowSchedule"
 	AutomationService_SetWorkflowScheduleEnabled_FullMethodName = "/colossus.api.v1alpha1.AutomationService/SetWorkflowScheduleEnabled"
+	AutomationService_DeleteWorkflowSchedule_FullMethodName     = "/colossus.api.v1alpha1.AutomationService/DeleteWorkflowSchedule"
 	AutomationService_GetWorkflowWorkState_FullMethodName       = "/colossus.api.v1alpha1.AutomationService/GetWorkflowWorkState"
 )
 
@@ -400,6 +401,8 @@ type AutomationServiceClient interface {
 	CreateWorkflowSchedule(ctx context.Context, in *CreateWorkflowScheduleRequest, opts ...grpc.CallOption) (*CreateWorkflowScheduleResponse, error)
 	// SetWorkflowScheduleEnabled performs one bounded authenticated workflow operation.
 	SetWorkflowScheduleEnabled(ctx context.Context, in *SetWorkflowScheduleEnabledRequest, opts ...grpc.CallOption) (*SetWorkflowScheduleEnabledResponse, error)
+	// DeleteWorkflowSchedule removes an exact owned revision from future ticking.
+	DeleteWorkflowSchedule(ctx context.Context, in *DeleteWorkflowScheduleRequest, opts ...grpc.CallOption) (*DeleteWorkflowScheduleResponse, error)
 	// GetWorkflowWorkState performs one bounded authenticated workflow operation.
 	GetWorkflowWorkState(ctx context.Context, in *GetWorkflowWorkStateRequest, opts ...grpc.CallOption) (*GetWorkflowWorkStateResponse, error)
 }
@@ -541,6 +544,16 @@ func (c *automationServiceClient) SetWorkflowScheduleEnabled(ctx context.Context
 	return out, nil
 }
 
+func (c *automationServiceClient) DeleteWorkflowSchedule(ctx context.Context, in *DeleteWorkflowScheduleRequest, opts ...grpc.CallOption) (*DeleteWorkflowScheduleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteWorkflowScheduleResponse)
+	err := c.cc.Invoke(ctx, AutomationService_DeleteWorkflowSchedule_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *automationServiceClient) GetWorkflowWorkState(ctx context.Context, in *GetWorkflowWorkStateRequest, opts ...grpc.CallOption) (*GetWorkflowWorkStateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetWorkflowWorkStateResponse)
@@ -581,6 +594,8 @@ type AutomationServiceServer interface {
 	CreateWorkflowSchedule(context.Context, *CreateWorkflowScheduleRequest) (*CreateWorkflowScheduleResponse, error)
 	// SetWorkflowScheduleEnabled performs one bounded authenticated workflow operation.
 	SetWorkflowScheduleEnabled(context.Context, *SetWorkflowScheduleEnabledRequest) (*SetWorkflowScheduleEnabledResponse, error)
+	// DeleteWorkflowSchedule removes an exact owned revision from future ticking.
+	DeleteWorkflowSchedule(context.Context, *DeleteWorkflowScheduleRequest) (*DeleteWorkflowScheduleResponse, error)
 	// GetWorkflowWorkState performs one bounded authenticated workflow operation.
 	GetWorkflowWorkState(context.Context, *GetWorkflowWorkStateRequest) (*GetWorkflowWorkStateResponse, error)
 	mustEmbedUnimplementedAutomationServiceServer()
@@ -628,6 +643,9 @@ func (UnimplementedAutomationServiceServer) CreateWorkflowSchedule(context.Conte
 }
 func (UnimplementedAutomationServiceServer) SetWorkflowScheduleEnabled(context.Context, *SetWorkflowScheduleEnabledRequest) (*SetWorkflowScheduleEnabledResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetWorkflowScheduleEnabled not implemented")
+}
+func (UnimplementedAutomationServiceServer) DeleteWorkflowSchedule(context.Context, *DeleteWorkflowScheduleRequest) (*DeleteWorkflowScheduleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteWorkflowSchedule not implemented")
 }
 func (UnimplementedAutomationServiceServer) GetWorkflowWorkState(context.Context, *GetWorkflowWorkStateRequest) (*GetWorkflowWorkStateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetWorkflowWorkState not implemented")
@@ -862,6 +880,24 @@ func _AutomationService_SetWorkflowScheduleEnabled_Handler(srv interface{}, ctx 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutomationService_DeleteWorkflowSchedule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteWorkflowScheduleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutomationServiceServer).DeleteWorkflowSchedule(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AutomationService_DeleteWorkflowSchedule_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutomationServiceServer).DeleteWorkflowSchedule(ctx, req.(*DeleteWorkflowScheduleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AutomationService_GetWorkflowWorkState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetWorkflowWorkStateRequest)
 	if err := dec(in); err != nil {
@@ -930,6 +966,10 @@ var AutomationService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetWorkflowScheduleEnabled",
 			Handler:    _AutomationService_SetWorkflowScheduleEnabled_Handler,
+		},
+		{
+			MethodName: "DeleteWorkflowSchedule",
+			Handler:    _AutomationService_DeleteWorkflowSchedule_Handler,
 		},
 		{
 			MethodName: "GetWorkflowWorkState",

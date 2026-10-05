@@ -2,8 +2,9 @@
 use async_trait::async_trait;
 use colossus_api::{
     ApiError, ApiErrorReason, ApiResult, CallerContext, CreateWorkflowScheduleRequest,
-    RegisteredWorkflow, SetWorkflowScheduleEnabledRequest, StartWorkflowRunRequest, WorkflowApi,
-    WorkflowOrigin, WorkflowPage, WorkflowRunSnapshot, WorkflowScheduleSnapshot, scopes,
+    DeleteWorkflowScheduleRequest, DeletedWorkflowSchedule, RegisteredWorkflow,
+    SetWorkflowScheduleEnabledRequest, StartWorkflowRunRequest, WorkflowApi, WorkflowOrigin,
+    WorkflowPage, WorkflowRunSnapshot, WorkflowScheduleSnapshot, scopes,
 };
 use colossus_contracts::WorkflowControlOperation as Operation;
 use colossus_runtime::Runtime;
@@ -52,6 +53,7 @@ impl RuntimeWorkflowApi {
             Operation::RegisterDefinition { .. }
                 | Operation::CreateSchedule { .. }
                 | Operation::SetScheduleEnabled { .. }
+                | Operation::DeleteSchedule { .. }
                 | Operation::StartRun { .. }
         );
         let result = tokio::task::spawn_blocking(move || {
@@ -243,6 +245,22 @@ impl WorkflowApi for RuntimeWorkflowApi {
             Operation::SetScheduleEnabled {
                 schedule_id: request.schedule_id,
                 enabled: request.enabled,
+                etag: request.etag,
+            },
+        )
+        .await
+    }
+    async fn delete_schedule(
+        &self,
+        caller: &CallerContext,
+        request: DeleteWorkflowScheduleRequest,
+    ) -> ApiResult<DeletedWorkflowSchedule> {
+        caller.require_scope(scopes::SCHEDULES_READ)?;
+        self.control(
+            caller,
+            scopes::SCHEDULES_CONTROL,
+            Operation::DeleteSchedule {
+                schedule_id: request.schedule_id,
                 etag: request.etag,
             },
         )

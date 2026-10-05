@@ -150,6 +150,7 @@ impl SystemService for SystemServiceAdapter {
                 ("schedules.read", scopes::SCHEDULES_READ),
                 ("schedules.create", scopes::SCHEDULES_CREATE),
                 ("schedules.control", scopes::SCHEDULES_CONTROL),
+                ("schedules.delete", scopes::SCHEDULES_CONTROL),
                 ("schedules.calendar", scopes::SCHEDULES_READ),
                 ("schedules.tasks", scopes::SCHEDULES_CREATE),
                 ("workflow_runs.history", scopes::WORKFLOW_RUNS_READ),
@@ -171,7 +172,7 @@ impl SystemService for SystemServiceAdapter {
                                 && caller.principal().has_scope(scopes::WORKFLOWS_READ)
                                 && caller.principal().has_scope(scopes::WORKFLOWS_REGISTER)
                         }
-                        "schedules.create" | "schedules.control" => {
+                        "schedules.create" | "schedules.control" | "schedules.delete" => {
                             caller.principal().has_scope(scopes::SCHEDULES_READ)
                         }
                         _ => true,

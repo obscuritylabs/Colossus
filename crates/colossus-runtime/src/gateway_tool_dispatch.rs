@@ -34,7 +34,8 @@ impl ToolExecutor for GatewayToolExecutor {
             | "workflow.schedule.get"
             | "workflow.schedule.create"
             | "workflow.task.schedule"
-            | "workflow.schedule.set_enabled" => {
+            | "workflow.schedule.set_enabled"
+            | "workflow.schedule.delete" => {
                 let output = Box::pin(self.execute_workflow_tool(&call, context)).await?;
                 Ok(ToolResult {
                     call_id: call.call_id,

@@ -194,7 +194,9 @@ export function WorkflowsSurface({
           administrator to enable the workflow read scope.
         </div>
       ) : (
-        <div className="workflow-layout">
+        <div
+          className={`workflow-layout ${runId ? "workflow-layout-has-run" : ""}`}
+        >
           <div>
             {!items.length && (
               <div className="workflow-empty">
@@ -339,25 +341,34 @@ export function WorkflowsSurface({
                     </button>
                   )}
                 </section>
-                {runId && targetId && (
-                  <>
-                    <ScheduledRunDetail
-                      key={runId}
-                      targetId={targetId}
-                      context={context}
-                      runId={runId}
-                    />
-                    <button
-                      className="button secondary"
-                      onClick={() => setDialog("graph")}
-                    >
-                      View run in graph
-                    </button>
-                  </>
-                )}
               </>
             )}
           </article>
+          {runId && targetId && context && (
+            <aside
+              className="workflow-output-panel"
+              aria-label="Selected run output"
+            >
+              <button
+                className="button secondary compact"
+                onClick={() => setRunId(null)}
+              >
+                Close output
+              </button>
+              <ScheduledRunDetail
+                key={runId}
+                targetId={targetId}
+                context={context}
+                runId={runId}
+              />
+              <button
+                className="button secondary"
+                onClick={() => setDialog("graph")}
+              >
+                View run in graph
+              </button>
+            </aside>
+          )}
         </div>
       )}
       {targetId && context && dialog === "import" && (

@@ -1,9 +1,9 @@
 //! Resolve the current supervised transport for each request without mutation retries.
 use super::*;
 use crate::{
-    CreateWorkflowScheduleRequest, RegisteredWorkflow, SetWorkflowScheduleEnabledRequest,
-    StartWorkflowRunRequest, WorkflowClient, WorkflowPage, WorkflowRunSnapshot,
-    WorkflowScheduleSnapshot,
+    CreateWorkflowScheduleRequest, DeleteWorkflowScheduleRequest, DeletedWorkflowSchedule,
+    RegisteredWorkflow, SetWorkflowScheduleEnabledRequest, StartWorkflowRunRequest, WorkflowClient,
+    WorkflowPage, WorkflowRunSnapshot, WorkflowScheduleSnapshot,
 };
 
 pub(super) struct ManagedWorkflowClient {
@@ -71,6 +71,12 @@ impl WorkflowClient for ManagedWorkflowClient {
         request: SetWorkflowScheduleEnabledRequest,
     ) -> ApiResult<WorkflowScheduleSnapshot> {
         self.current().await?.set_schedule_enabled(request).await
+    }
+    async fn delete_schedule(
+        &self,
+        request: DeleteWorkflowScheduleRequest,
+    ) -> ApiResult<DeletedWorkflowSchedule> {
+        self.current().await?.delete_schedule(request).await
     }
     async fn list_runs(
         &self,

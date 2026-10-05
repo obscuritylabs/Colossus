@@ -42,6 +42,8 @@ fn automatic_compaction_is_visible_deterministic_and_preserves_raw_history() {
     let workflows = directory.path().join("workflows");
     fs::create_dir_all(&workflows).expect("workflows");
     let config = directory.path().join("config.yaml");
+    // Compaction has a deliberately small budget; bundled skill discovery is
+    // covered separately and must not change this fixture's fixed overhead.
     fs::write(
         &config,
         format!(
@@ -69,6 +71,8 @@ policy:
 workflows:
   repository: {workflows}
   user: {workflows}
+plugins:
+  enabled: false
 providers:
   profiles:
     echo:

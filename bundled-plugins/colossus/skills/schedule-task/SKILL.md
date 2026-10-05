@@ -1,7 +1,7 @@
 ---
 name: schedule-task
-description: Create, inspect, pause, or enable recurring plain-language tasks and workflow schedules with exact local timing, workspace permissions, and durable confirmation.
-allowed-tools: workflow.task.schedule workflow.definition.list workflow.definition.get workflow.schedule.list workflow.schedule.get workflow.schedule.create workflow.schedule.set_enabled user.ask
+description: Create, inspect, pause, enable, or delete recurring plain-language tasks and workflow schedules with exact local timing, workspace permissions, and durable confirmation.
+allowed-tools: workflow.task.schedule workflow.definition.list workflow.definition.get workflow.schedule.list workflow.schedule.get workflow.schedule.create workflow.schedule.set_enabled workflow.schedule.delete user.ask
 ---
 # Schedule a task
 
@@ -76,3 +76,12 @@ Pause/enable uses `workflow.schedule.set_enabled` after fresh inspection and the
 current `etag`. A stale revision requires another inspection and review. Pause stops
 future ticks; it does not cancel queued/running work. To change immutable instructions
 or timing, create a reviewed replacement and pause the previous schedule.
+
+When the user requests deletion, inspect the schedule and call
+`workflow.schedule.delete` with its `schedule_id` and exact current `etag`, following
+the ordinary approval flow. Deletion removes it from the active catalog and stops
+future ticks; it preserves queued/running work and owned run history. Deleted IDs
+cannot be reused. A stale revision requires fresh inspection and review. After an
+uncertain response, inspect the active catalog before reporting success; do not
+automatically retry or substitute another task. Unknown-owner legacy schedules cannot
+be claimed or deleted by this skill.

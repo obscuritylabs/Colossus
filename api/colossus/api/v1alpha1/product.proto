@@ -70,6 +70,9 @@ service AutomationService {
   // SetWorkflowScheduleEnabled performs one bounded authenticated workflow operation.
   rpc SetWorkflowScheduleEnabled(SetWorkflowScheduleEnabledRequest) returns (SetWorkflowScheduleEnabledResponse);
 
+  // DeleteWorkflowSchedule removes an exact owned revision from future ticking.
+  rpc DeleteWorkflowSchedule(DeleteWorkflowScheduleRequest) returns (DeleteWorkflowScheduleResponse);
+
   // GetWorkflowWorkState performs one bounded authenticated workflow operation.
   rpc GetWorkflowWorkState(GetWorkflowWorkStateRequest) returns (GetWorkflowWorkStateResponse);
 }
@@ -713,6 +716,18 @@ message SetWorkflowScheduleEnabledRequest {
 message SetWorkflowScheduleEnabledResponse {
   // schedule is the confirmed canonical control result.
   WorkflowSchedule schedule = 1;
+}
+// DeleteWorkflowScheduleRequest binds deletion to an owned canonical revision.
+message DeleteWorkflowScheduleRequest {
+  // schedule_id identifies the caller-owned schedule.
+  string schedule_id = 1;
+  // etag must match the exact revision reviewed before deletion.
+  string etag = 2;
+}
+// DeleteWorkflowScheduleResponse confirms durable removal; run history is retained.
+message DeleteWorkflowScheduleResponse {
+  // schedule_id is the deleted identity; it cannot be reused.
+  string schedule_id = 1;
 }
 // GetWorkflowWorkStateRequest is a typed bounded workflow resource.
 message GetWorkflowWorkStateRequest {

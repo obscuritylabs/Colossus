@@ -48,6 +48,62 @@
   gap: 16px;
   margin-top: 16px;
 }
+.workflow-layout-has-run {
+  grid-template-columns: minmax(160px, 0.5fr) minmax(0, 1fr) minmax(0, 1.1fr);
+  align-items: start;
+}
+.schedule-detail-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 20px;
+  max-width: 1280px;
+  margin-top: 20px;
+}
+.workflow-output-panel {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.workflow-output-panel .workflow-run {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+.workflow-output-panel .workflow-json {
+  max-height: min(45vh, 28rem);
+  overflow: auto;
+}
+.workflow-output-panel > .workflow-run + .button {
+  margin-top: 12px;
+}
+.workflow-task-result {
+  max-height: min(45vh, 28rem);
+  overflow: auto;
+}
+.workflow-run-metadata,
+.schedule-metadata {
+  margin-top: 20px;
+}
+.schedule-delete-action.button.secondary {
+  color: var(--red-text);
+}
+@container (max-width: 960px) {
+  .workflow-layout-has-run {
+    grid-template-columns: minmax(180px, 0.7fr) minmax(0, 1fr);
+  }
+  .workflow-layout-has-run .workflow-output-panel {
+    grid-column: 1 / -1;
+  }
+}
+@container (max-width: 720px) {
+  .schedule-detail-layout,
+  .workflow-layout-has-run {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .workflow-list {
   list-style: none;
   padding: 0;

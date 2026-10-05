@@ -244,6 +244,55 @@ async fn authenticated_sdk_roundtrip_uses_canonical_resources_and_shared_watch_h
             .items
             .is_empty()
     );
+    let deletion = DeleteWorkflowScheduleRequest {
+        schedule_id: "health".into(),
+        etag: current.etag.clone(),
+    };
+    assert_eq!(
+        denied
+            .delete_schedule(deletion.clone())
+            .await
+            .unwrap_err()
+            .code,
+        ApiErrorCode::PermissionDenied
+    );
+    assert_eq!(
+        other
+            .delete_schedule(deletion.clone())
+            .await
+            .unwrap_err()
+            .code,
+        ApiErrorCode::NotFound
+    );
+    let stale = DeleteWorkflowScheduleRequest {
+        etag: created.etag.clone(),
+        ..deletion.clone()
+    };
+    assert_eq!(
+        owner.delete_schedule(stale).await.unwrap_err().code,
+        ApiErrorCode::Conflict
+    );
+    assert_eq!(
+        owner
+            .delete_schedule(deletion.clone())
+            .await
+            .unwrap()
+            .schedule_id,
+        "health"
+    );
+    assert_eq!(
+        owner.delete_schedule(deletion).await.unwrap().schedule_id,
+        "health"
+    );
+    assert_eq!(
+        owner.get_schedule("health".into()).await.unwrap_err().code,
+        ApiErrorCode::NotFound
+    );
+    assert_eq!(
+        owner.list_schedules(None, 100).await.unwrap().items.len(),
+        1
+    );
+    assert_eq!(owner.get_run(run_id.clone()).await.unwrap().run_id, run_id);
     let mut stream = AutomationServiceClient::new(channel.clone())
         .watch_workflow_run(
             owner
@@ -261,7 +310,7 @@ async fn authenticated_sdk_roundtrip_uses_canonical_resources_and_shared_watch_h
     assert!(stream.message().await.unwrap().is_some());
     assert_eq!(watches.available_permits(), 0);
     assert!(
-        owner.get_schedule("health".into()).await.is_ok(),
+        owner.get_schedule("task-briefing".into()).await.is_ok(),
         "unary headroom remains while watching"
     );
     drop(stream);

@@ -212,17 +212,19 @@ impl WorkflowRepository for EventSourcedWorkflowRepository {
     }
 
     fn schedules(&self, limit: usize) -> Result<Vec<WorkflowSchedule>, StoreError> {
-        self.stream_ids("workflow-schedule:")?
-            .into_iter()
-            .take(limit)
-            .map(|schedule_id| {
-                fold_schedule(self.journal.as_ref(), &schedule_id)?.ok_or_else(|| {
-                    StoreError::Verification(format!(
-                        "workflow schedule {schedule_id} cannot be reconstructed"
-                    ))
-                })
-            })
-            .collect()
+        let mut schedules = Vec::new();
+        if limit == 0 {
+            return Ok(schedules);
+        }
+        for schedule_id in self.stream_ids("workflow-schedule:")? {
+            if let Some(schedule) = fold_schedule(self.journal.as_ref(), &schedule_id)? {
+                schedules.push(schedule);
+                if schedules.len() == limit {
+                    break;
+                }
+            }
+        }
+        Ok(schedules)
     }
 
     fn create_webhook(
@@ -454,6 +456,14 @@ pub(super) fn fold_schedule(
             "schedule stream {schedule_id} contains record {}",
             schedule.schedule_id
         )));
+    }
+    if last.event_type == "workflow.schedule.deleted.v1" {
+        if schedule.enabled {
+            return Err(StoreError::Verification(
+                "deleted schedule remains enabled".into(),
+            ));
+        }
+        return Ok(None);
     }
     Ok(Some(schedule))
 }

@@ -53,14 +53,18 @@ impl WorkflowService {
                     .ok_or_else(|| {
                         StoreError::Verification("schedule receipt identity is absent".into())
                     })?;
-                let creation = self
-                    .journal
-                    .read_stream(&schedule_stream(id))?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| {
-                        StoreError::Verification("schedule receipt has no allocation".into())
-                    })?;
+                let allocations = self.journal.read_stream(&schedule_stream(id))?;
+                if allocations
+                    .last()
+                    .is_some_and(|event| event.event_type == "workflow.schedule.deleted.v1")
+                {
+                    return Err(WorkflowError::Conflict(
+                        "schedule was deleted; its allocation cannot be recreated".into(),
+                    ));
+                }
+                let creation = allocations.into_iter().next().ok_or_else(|| {
+                    StoreError::Verification("schedule receipt has no allocation".into())
+                })?;
                 result["etag"] = json!(creation.record_hash);
             }
             return Ok(result);
@@ -141,7 +145,11 @@ impl WorkflowService {
                         "cadence must be 60 seconds through 31 days".into(),
                     ));
                 }
-                if self.repository.schedule(schedule_id)?.is_some() {
+                if !self
+                    .journal
+                    .read_stream(&schedule_stream(schedule_id))?
+                    .is_empty()
+                {
                     return Err(WorkflowError::Conflict("schedule ID already exists".into()));
                 }
                 if self.control_streams("workflow-schedule:")?.len() >= MAX_WORKFLOW_SCHEDULES {
@@ -236,6 +244,49 @@ impl WorkflowService {
                     last_dispatch: None,
                 })
                 .map_err(control_encoding)?
+            }
+            WorkflowControlOperation::DeleteSchedule { schedule_id, etag } => {
+                token(schedule_id)?;
+                let stream = schedule_stream(schedule_id);
+                let existing = self.journal.read_stream(&stream)?;
+                let first = existing.first().ok_or(WorkflowError::PermissionDenied)?;
+                let payload = self.journal.decrypt_payload(first)?;
+                let recorded: Option<WorkflowOrigin> = payload
+                    .get("origin")
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(control_encoding)?;
+                if recorded.as_ref().map(|origin| &origin.owner) != Some(&origin.owner) {
+                    return Err(WorkflowError::PermissionDenied);
+                }
+                let last = existing.last().ok_or(WorkflowError::PermissionDenied)?;
+                if last.event_type == "workflow.schedule.deleted.v1" {
+                    let payload = self.journal.decrypt_payload(last)?;
+                    if payload.get("reviewed_etag").and_then(Value::as_str) != Some(etag) {
+                        return Err(WorkflowError::Conflict(
+                            "deletion revision differs; inspect the active catalog".into(),
+                        ));
+                    }
+                    return Ok(json!({"schedule_id": schedule_id}));
+                }
+                let mut snapshot = self.control_schedule(schedule_id, &origin.owner)?;
+                if etag != &snapshot.etag {
+                    return Err(WorkflowError::Conflict(
+                        "schedule changed; refresh before reviewing deletion".into(),
+                    ));
+                }
+                snapshot.record.enabled = false;
+                snapshot.record.updated_at = now;
+                events.push(control_event(
+                    stream,
+                    last.stream_version,
+                    "workflow.schedule.deleted.v1",
+                    &actor,
+                    &origin,
+                    json!({"record": snapshot.record, "reviewed_etag": etag}),
+                ));
+                json!({"schedule_id": schedule_id})
             }
             WorkflowControlOperation::SetScheduleEnabled {
                 schedule_id,

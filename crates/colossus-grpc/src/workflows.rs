@@ -215,6 +215,27 @@ impl AutomationService for AutomationServiceAdapter {
             schedule: Some(wire::schedule(value).map_err(mutation_output)?),
         })
     }
+    async fn delete_workflow_schedule(
+        &self,
+        request: Request<proto::DeleteWorkflowScheduleRequest>,
+    ) -> Result<Response<proto::DeleteWorkflowScheduleResponse>, Status> {
+        let caller = caller_context(&request)?;
+        let value = request.get_ref();
+        let deleted = self
+            .api()?
+            .delete_schedule(
+                caller,
+                colossus_api::DeleteWorkflowScheduleRequest {
+                    schedule_id: value.schedule_id.clone(),
+                    etag: value.etag.clone(),
+                },
+            )
+            .await
+            .map_err(api_status)?;
+        bounded(proto::DeleteWorkflowScheduleResponse {
+            schedule_id: deleted.schedule_id,
+        })
+    }
     async fn get_workflow_work_state(
         &self,
         request: Request<proto::GetWorkflowWorkStateRequest>,

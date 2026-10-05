@@ -63,7 +63,7 @@ async fn handle(client: &Colossus, instance: &Path, message: &Value) -> anyhow::
         }
 
         Some("workflow_context") => {
-            json!({"selection_epoch": 1, "workflows_read": true, "workflows_register": true, "schedules_read": true, "schedules_create": true, "schedules_control": true, "workflow_runs_read": true, "workflow_runs_start": client.capabilities().contains("workflow_runs.start"), "workflow_run_history": client.capabilities().contains("workflow_runs.history"), "calendar_schedules": client.capabilities().contains("schedules.calendar"), "task_schedules": client.capabilities().contains("schedules.tasks"), "managed": true})
+            json!({"selection_epoch": 1, "workflows_read": true, "workflows_register": true, "schedules_read": true, "schedules_create": true, "schedules_control": true, "schedules_delete": client.capabilities().contains("schedules.delete"), "workflow_runs_read": true, "workflow_runs_start": client.capabilities().contains("workflow_runs.start"), "workflow_run_history": client.capabilities().contains("workflow_runs.history"), "calendar_schedules": client.capabilities().contains("schedules.calendar"), "task_schedules": client.capabilities().contains("schedules.tasks"), "managed": true})
         }
         Some("validate_workflow_definition") => {
             serde_json::to_value(api.validate_definition(text("yaml")?).await?)?
@@ -92,6 +92,10 @@ async fn handle(client: &Colossus, instance: &Path, message: &Value) -> anyhow::
         }
         Some("create_workflow_schedule") => serde_json::to_value(
             api.create_schedule(serde_json::from_value(args["request"].clone())?)
+                .await?,
+        )?,
+        Some("delete_workflow_schedule") => serde_json::to_value(
+            api.delete_schedule(serde_json::from_value(args["request"].clone())?)
                 .await?,
         )?,
         Some("set_workflow_schedule_enabled") => serde_json::to_value(

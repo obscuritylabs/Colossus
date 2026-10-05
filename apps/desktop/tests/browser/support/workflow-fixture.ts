@@ -1,5 +1,13 @@
 import type { Page } from "@playwright/test";
 
+type FixtureTask = {
+  name: string;
+  instructions: string;
+  tools: string[];
+  options: { model_profile?: string | null; reasoning_effort?: string | null };
+};
+type FixtureCalendar = { timezone: string; time: string; weekdays: number[] };
+
 export async function installWorkflowFixture(
   page: Page,
   options: { empty?: boolean; supported?: boolean; modern?: boolean } = {},
@@ -13,6 +21,7 @@ export async function installWorkflowFixture(
       workflowBadInput?: boolean;
       workflowRunStatus?: string;
       workflowRunUncertain?: boolean;
+      workflowDeleteUncertain?: boolean;
     };
     host.workflowCalls = [];
     const hash = "a".repeat(64);
@@ -52,6 +61,8 @@ export async function installWorkflowFixture(
         unknown
       > | null,
       cadence_seconds: 3600,
+      calendar: null as FixtureCalendar | null,
+      task: null as FixtureTask | null,
       misfire_policy: "fire_once" as "fire_once" | "skip",
       enabled: true,
       starts_at: "2026-10-03T09:00:00Z",
@@ -119,6 +130,7 @@ export async function installWorkflowFixture(
             schedules_read: options.supported !== false,
             schedules_create: options.supported !== false,
             schedules_control: options.supported !== false,
+            schedules_delete: !!options.modern && options.supported !== false,
             workflow_runs_read: true,
             workflow_runs_start: !!options.modern,
             workflow_run_history: !!options.modern,
@@ -183,10 +195,12 @@ export async function installWorkflowFixture(
             misfire_policy: "fire_once" | "skip";
             enabled: boolean;
             idempotency_key: string;
+            task?: FixtureTask;
+            calendar?: FixtureCalendar | null;
           };
           if (
             host.workflowBadInput ||
-            typeof request.inputs.message !== "string"
+            (!request.task && typeof request.inputs.message !== "string")
           )
             throw {
               code: "invalid_argument",
@@ -209,6 +223,8 @@ export async function installWorkflowFixture(
                 ...record,
                 schedule_id: request.schedule_id,
                 inputs: request.inputs,
+                task: request.task ?? null,
+                calendar: request.calendar ?? null,
                 cadence_seconds: request.cadence_seconds,
                 starts_at: request.starts_at,
                 next_fire_at: request.starts_at,
@@ -242,6 +258,37 @@ export async function installWorkflowFixture(
             };
           }
           return structuredClone(schedule);
+        }
+        if (command === "delete_workflow_schedule") {
+          const request = args.request as { schedule_id: string; etag: string };
+          const index = schedules.findIndex(
+            (schedule) => schedule.record.schedule_id === request.schedule_id,
+          );
+          if (
+            index < 0 ||
+            host.workflowConflict ||
+            schedules[index]!.etag !== request.etag
+          )
+            throw {
+              code: "conflict",
+              message:
+                "The canonical schedule changed. Inspect and review again.",
+              retryable: false,
+              outcomeUnknown: false,
+              violations: [],
+            };
+          schedules.splice(index, 1);
+          if (host.workflowDeleteUncertain) {
+            host.workflowDeleteUncertain = false;
+            throw {
+              code: "outcome_unknown",
+              message: "Deletion could not be confirmed.",
+              retryable: false,
+              outcomeUnknown: true,
+              violations: [],
+            };
+          }
+          return { schedule_id: request.schedule_id };
         }
         if (command === "set_workflow_schedule_enabled") {
           const request = args.request as {
@@ -327,6 +374,8 @@ export async function installWorkflowFixture(
             workflow_id: workflow.workflow_id,
             workflow_hash: hash,
             status: host.workflowRunStatus || "waiting",
+            result_json:
+              host.workflowRunStatus === "completed" ? '{"ok":true}' : null,
             created_at: record.last_scheduled_at,
             updated_at: record.updated_at,
             last_sequence: 4,
@@ -335,7 +384,9 @@ export async function installWorkflowFixture(
                 ? "Workflow failed; inspect authorized runtime evidence."
                 : null,
             waiting_reason:
-              "Workflow is waiting for operator input or a dependency.",
+              !host.workflowRunStatus || host.workflowRunStatus === "waiting"
+                ? "Workflow is waiting for operator input or a dependency."
+                : null,
           };
         throw new Error(`Unexpected workflow command: ${command}`);
       },

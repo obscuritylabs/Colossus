@@ -145,7 +145,9 @@ impl WorkflowService {
                     }
                     let mut snapshot = match self.control_schedule(id, &origin.owner) {
                         Ok(snapshot) => snapshot,
-                        Err(WorkflowError::PermissionDenied) => continue,
+                        Err(WorkflowError::PermissionDenied | WorkflowError::NotFound(_)) => {
+                            continue;
+                        }
                         Err(error) => return Err(error),
                     };
                     snapshot.record.inputs = Value::Null;
@@ -280,8 +282,16 @@ impl WorkflowService {
                     .trigger_id
                     .as_deref()
                     .ok_or(WorkflowError::PermissionDenied)?;
-                self.control_schedule(id, owner)?
-                    .origin
+                // Retained allocation provenance remains valid after schedule deletion.
+                let events = self.journal.read_stream(&schedule_stream(id))?;
+                let first = events.first().ok_or(WorkflowError::PermissionDenied)?;
+                let payload = self.journal.decrypt_payload(first)?;
+                payload
+                    .get("origin")
+                    .cloned()
+                    .map(serde_json::from_value::<WorkflowOrigin>)
+                    .transpose()
+                    .map_err(control_encoding)?
                     .map(|origin| origin.owner)
             }
             None => None,

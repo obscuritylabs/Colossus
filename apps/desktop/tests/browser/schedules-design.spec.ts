@@ -224,6 +224,7 @@ test("schedule inventory uses the settings table and filters loaded schedules", 
     page.getByRole("region", { name: "Selected schedule" }),
   ).toContainText("hourly-health");
   await capture(page, "07-schedule-inventory.png");
+  await page.getByRole("button", { name: "Back to schedules" }).click();
   await page
     .getByRole("textbox", { name: "Search loaded schedules", exact: true })
     .fill("no-match");

@@ -6,9 +6,9 @@ use crate::{
     state::{AppState, SelectedTargetLease, TargetConsentContext},
 };
 use colossus_sdk::{
-    CreateWorkflowScheduleRequest, RegisteredWorkflow, SetWorkflowScheduleEnabledRequest,
-    StartWorkflowRunRequest, WorkflowClient, WorkflowPage, WorkflowRunSnapshot,
-    WorkflowScheduleSnapshot,
+    CreateWorkflowScheduleRequest, DeleteWorkflowScheduleRequest, DeletedWorkflowSchedule,
+    RegisteredWorkflow, SetWorkflowScheduleEnabledRequest, StartWorkflowRunRequest, WorkflowClient,
+    WorkflowPage, WorkflowRunSnapshot, WorkflowScheduleSnapshot,
 };
 use serde::Serialize;
 use std::sync::Arc;
@@ -25,6 +25,7 @@ pub(crate) struct WorkflowContext {
     schedules_read: bool,
     schedules_create: bool,
     schedules_control: bool,
+    schedules_delete: bool,
     workflow_runs_read: bool,
     workflow_runs_start: bool,
     calendar_schedules: bool,
@@ -46,6 +47,7 @@ pub(crate) async fn workflow_context(
         schedules_read: capabilities.contains("schedules.read"),
         schedules_create: capabilities.contains("schedules.create"),
         schedules_control: capabilities.contains("schedules.control"),
+        schedules_delete: capabilities.contains("schedules.delete"),
         workflow_runs_read: capabilities.contains("workflow_runs.read"),
         workflow_runs_start: capabilities.contains("workflow_runs.start"),
         calendar_schedules: capabilities.contains("schedules.calendar"),
@@ -232,6 +234,21 @@ pub(crate) async fn set_workflow_schedule_enabled(
     let _slot = unary_slot(&lease.target)?;
     client(&lease)?
         .set_schedule_enabled(request)
+        .await
+        .map_err(CommandErrorDto::from_api)
+}
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn delete_workflow_schedule(
+    state: State<'_, AppState>,
+    target_id: String,
+    selection_epoch: u64,
+    request: DeleteWorkflowScheduleRequest,
+) -> Result<DeletedWorkflowSchedule, CommandErrorDto> {
+    let lease = selected(&state, &target_id, selection_epoch).await?;
+    let _guard = mutation_guard(&state, &lease, &target_id).await?;
+    let _slot = unary_slot(&lease.target)?;
+    client(&lease)?
+        .delete_schedule(request)
         .await
         .map_err(CommandErrorDto::from_api)
 }

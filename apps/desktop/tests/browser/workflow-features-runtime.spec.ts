@@ -39,11 +39,26 @@ test("Workflows and Schedules use real manual runs, calendar tasks, model prefer
         workflowBridge: (command: string, args: unknown) => Promise<unknown>;
         __TAURI_INTERNALS__: unknown;
         loseTaskResponse: boolean;
+        loseDeletionResponse: boolean;
       };
       host.loseTaskResponse = false;
+      host.loseDeletionResponse = false;
       host.__TAURI_INTERNALS__ = {
         invoke: async (command: string, args: unknown) => {
           const result = await host.workflowBridge(command, args);
+          if (
+            command === "delete_workflow_schedule" &&
+            host.loseDeletionResponse
+          ) {
+            host.loseDeletionResponse = false;
+            throw {
+              code: "outcome_unknown",
+              message: "Deletion could not be confirmed.",
+              retryable: false,
+              outcomeUnknown: true,
+              violations: [],
+            };
+          }
           if (command === "create_workflow_schedule" && host.loseTaskResponse) {
             host.loseTaskResponse = false;
             throw {
@@ -127,12 +142,15 @@ test("Workflows and Schedules use real manual runs, calendar tasks, model prefer
     await page.locator(".workflow-surface").evaluate((element) => {
       element.scrollTop = 0;
     });
-    await capture(page, "03-workflows-library-and-history.png");
     await page
       .getByRole("region", { name: "Workflow run history" })
       .getByRole("button")
       .filter({ hasText: "completed" })
       .click();
+    await expect(
+      page.getByRole("complementary", { name: "Selected run output" }),
+    ).toContainText("Result");
+    await capture(page, "03-workflows-library-and-history.png");
     await page
       .getByRole("button", { name: "View run in graph", exact: true })
       .click();
@@ -196,6 +214,7 @@ test("Workflows and Schedules use real manual runs, calendar tasks, model prefer
       .click();
     await expect(page.getByRole("dialog")).toContainText(
       "Creation is unconfirmed",
+      { timeout: 30_000 },
     );
     await page
       .getByRole("button", { name: "Check stored schedule", exact: true })
@@ -294,10 +313,71 @@ test("Workflows and Schedules use real manual runs, calendar tasks, model prefer
       after: null,
     })) as { items: unknown[] };
     expect(library.items).toHaveLength(1);
+    const storedAgent = (await host.invoke("get_workflow_schedule", {
+      scheduleId: agentTask.schedule_id,
+    })) as { etag: string };
+    const deletion = await host.runTool("workflow_schedule_delete", {
+      schedule_id: agentTask.schedule_id,
+      etag: storedAgent.etag,
+    });
+    expect(deletion.approvals).toBe(1);
+    const remaining = (await host.invoke("list_workflow_schedules", {
+      after: null,
+    })) as { items: { record: { schedule_id: string } }[] };
+    expect(
+      remaining.items.map((item) => item.record.schedule_id),
+    ).not.toContain(agentTask.schedule_id);
+    await page
+      .getByRole("button", { name: "Refresh history", exact: true })
+      .click();
+    await page
+      .getByRole("region", { name: "Task run history" })
+      .getByRole("button")
+      .filter({ hasText: queued.run_id })
+      .click();
+    await expect(
+      page.getByRole("complementary", { name: "Selected run output" }),
+    ).toContainText("completed");
+    await expect(
+      page.getByRole("region", { name: "Task result", exact: true }),
+    ).toContainText("Acceptance turn completed.");
     await page.locator(".workflow-surface").evaluate((element) => {
       element.scrollTop = 0;
     });
     await capture(page, "08-schedules-task-detail.png");
+    await page
+      .getByRole("button", { name: "Delete task", exact: true })
+      .click();
+    await expect(page.getByRole("dialog")).toContainText(
+      "run history is retained",
+    );
+    await capture(page, "11-delete-task-review.png");
+    await page.evaluate(() => {
+      (
+        window as unknown as { loseDeletionResponse: boolean }
+      ).loseDeletionResponse = true;
+    });
+    await page
+      .getByRole("button", { name: "Confirm deletion", exact: true })
+      .click();
+    await expect(page.getByRole("alert")).toContainText(
+      "Deletion could not be confirmed",
+      { timeout: 30_000 },
+    );
+    await page
+      .getByRole("button", { name: "Refresh schedules", exact: true })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Schedules", exact: true, level: 2 }),
+    ).toBeFocused();
+    const deletedCatalog = (await host.invoke("list_workflow_schedules", {
+      after: null,
+    })) as { items: unknown[] };
+    expect(deletedCatalog.items).toHaveLength(0);
+    const retainedRun = (await host.invoke("get_scheduled_workflow_run", {
+      runId: queued.run_id,
+    })) as { status: string };
+    expect(retainedRun.status).toBe("completed");
     await page
       .getByRole("button", { name: "Schedule a task", exact: true })
       .click();

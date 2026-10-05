@@ -81,6 +81,7 @@ async fn main() -> anyhow::Result<()> {
                 "workflow.task.schedule".into(),
                 "workflow.schedule.list".into(),
                 "workflow.schedule.get".into(),
+                "workflow.schedule.delete".into(),
             ]
         } else {
             vec!["shell.run".into()]

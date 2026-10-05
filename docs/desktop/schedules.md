@@ -32,7 +32,9 @@ sidecar; surrounding Workspace navigation uses the Desktop test fixture.
 
 History lists this application's runs for the selected definition, newest first.
 Selecting a run shows its status, recorded step states, and bounded final JSON result
-when available. A result larger than 64 KiB is omitted. Run allocation preserves the
+in the output panel on the right. At compact widths the panel appears below the
+details. **Close output** returns to the definition and history. A result larger
+than 64 KiB is omitted. Run allocation preserves the
 reviewed definition hash and a durable retry identity. If its response is unconfirmed,
 **Confirm same run request** repeats that exact identity after an explicit action.
 
@@ -61,7 +63,14 @@ runs on this computer; an external target runs on its configured host.
 
 A task uses an internal one-step workflow. Its definition and schedule are allocated
 atomically, and internal task definitions stay out of the reusable Workflows library.
-Select the schedule to inspect its instructions and next occurrence.
+Select the schedule to open its own task detail page, with instructions, timing,
+controls, and run history. **Back to schedules** returns to the inventory.
+
+Select a run to read the agent's response in the output panel on the right.
+**Raw result (JSON)** exposes its exact released result; run metadata stays in
+**Run details**. **Refresh history** loads newer executions.
+
+![Task detail and readable run output](../assets/screenshots/desktop-schedule-detail.png)
 
 ## Start with an example or an agent
 
@@ -138,7 +147,9 @@ hash against the selected schedule or run before displaying an execution overlay
 ## Control future work
 
 Select a schedule to inspect its timing, ownership, next occurrence, last dispatch, and
-last independent run. **Queued** describes dispatch rather than execution success.
+last independent run on a dedicated detail page. The overview and examples stay in the
+inventory. Select a past run to see its output beside the task; **Schedule details**
+expands additional metadata. **Queued** describes dispatch rather than execution success.
 **Inspect last workflow run** shows queued, running, waiting, completed, failed,
 cancelled, or interrupted state.
 
@@ -146,6 +157,19 @@ cancelled, or interrupted state.
 preserves the retained boundary and can reconcile overdue occurrences. A tick or control
 change invalidates a stale review: refresh and review again. To change immutable fields,
 create a replacement schedule and pause the previous one.
+
+**Delete task** or **Delete schedule** opens a confirmation using the latest stored
+revision. Confirming removes it from the inventory and stops future ticks. Already
+queued or running executions continue, and owned run history remains available through
+the run API. Reusable workflow history also remains in Workflows. A stale review requires another inspection and
+confirmation; Desktop never automatically retries deletion. External runtimes must
+advertise `schedules.delete` before the control is available. Legacy records cannot
+be deleted through application control.
+
+If deletion is unconfirmed, **Refresh schedules** reloads the owned inventory without
+repeating the mutation. Confirm the stored state before taking another action.
+
+![Task deletion confirmation](../assets/screenshots/desktop-schedule-delete.png)
 
 A blocked definition is never repinned automatically. Restore its exact definition and
 dependencies, or register a new version and create a new schedule. Legacy schedules
@@ -162,7 +186,7 @@ in the macOS menu bar or Windows system tray; shutting down Colossus stops worke
 Resume reconciles missed occurrences using the selected policy.
 
 Agent schedule requests use the ordinary policy and approval path. Default policy
-requires review for creation, including paused schedules, and enabled-state changes.
+requires review for creation, including paused schedules, enabled-state changes, and deletion.
 Ask and Risk auto prompt; Deny rejects approval obligations. Explicitly elevated Full
 access can satisfy an approval obligation, while policy denials continue to deny.
 Future occurrences undergo current workflow and effect authorization independently.

@@ -142,6 +142,189 @@ fn display_projection_withholds_prompts_arguments_inputs_and_emitted_values() {
 
 const YAML: &str = "apiVersion: colossus.dev/v1alpha1\nkind: Workflow\nmetadata:\n  name: scheduled\n  version: 1.0.0\n  description: Deterministic scheduled work\ninputs:\n  type: object\n  additionalProperties: false\n  required: [message]\n  properties:\n    message: {type: string}\noutputs: {type: object}\ncapabilities: []\nmaxConcurrency: 1\nstepBudget: 2\nsteps:\n  - id: result\n    type: emit\n    value: {ok: true}\n";
 
+#[test]
+fn deletion_is_owned_revision_bound_durable_and_preserves_allocated_runs() {
+    let (journal, service) = setup();
+    let allocated = execute(&service, &create(), "app:a").unwrap();
+    service.tick_schedules_at("2026-10-03T12:00:00Z").unwrap();
+    let current = execute(
+        &service,
+        &WorkflowControlOperation::GetSchedule {
+            schedule_id: "daily".into(),
+        },
+        "app:a",
+    )
+    .unwrap();
+    let delete = WorkflowControlOperation::DeleteSchedule {
+        schedule_id: "daily".into(),
+        etag: current["etag"].as_str().unwrap().into(),
+    };
+    let stale = WorkflowControlOperation::DeleteSchedule {
+        schedule_id: "daily".into(),
+        etag: allocated["etag"].as_str().unwrap().into(),
+    };
+    assert!(matches!(
+        execute(&service, &stale, "app:a"),
+        Err(WorkflowError::Conflict(_))
+    ));
+    assert!(matches!(
+        execute(&service, &delete, "app:b"),
+        Err(WorkflowError::PermissionDenied)
+    ));
+    let before = journal
+        .read_stream("workflow-schedule:daily")
+        .unwrap()
+        .len();
+    let deleted = execute(&service, &delete, "app:a").unwrap();
+    assert_eq!(deleted["schedule_id"], "daily");
+    assert_eq!(execute(&service, &delete, "app:a").unwrap(), deleted);
+    assert_eq!(
+        journal
+            .read_stream("workflow-schedule:daily")
+            .unwrap()
+            .len(),
+        before + 1
+    );
+    let reopened = super::tests::service(journal.clone());
+    assert_eq!(execute(&reopened, &delete, "app:a").unwrap(), deleted);
+    assert!(matches!(
+        reopened.get_schedule("daily"),
+        Err(WorkflowError::NotFound(_))
+    ));
+    assert!(reopened.list_schedules(100).unwrap().is_empty());
+    let catalog = execute(
+        &reopened,
+        &WorkflowControlOperation::ListSchedules {
+            after: None,
+            limit: 1,
+        },
+        "app:a",
+    )
+    .unwrap();
+    assert_eq!(catalog["items"], json!([]));
+    assert!(
+        reopened
+            .tick_schedules_at("2026-10-04T12:00:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    let run_id = current["record"]["last_run_id"].as_str().unwrap();
+    let inspect = WorkflowControlOperation::GetRun {
+        run_id: run_id.into(),
+    };
+    assert_eq!(
+        execute(&reopened, &inspect, "app:a").unwrap()["run_id"],
+        run_id
+    );
+    assert!(matches!(
+        execute(&reopened, &inspect, "app:b"),
+        Err(WorkflowError::PermissionDenied)
+    ));
+    assert!(matches!(
+        execute(&reopened, &create(), "app:a"),
+        Err(WorkflowError::Conflict(_))
+    ));
+    let mut replacement = create();
+    if let WorkflowControlOperation::CreateSchedule {
+        idempotency_key, ..
+    } = &mut replacement
+    {
+        *idempotency_key = "new-key".into();
+    }
+    assert!(matches!(
+        execute(&reopened, &replacement, "app:a"),
+        Err(WorkflowError::Conflict(_))
+    ));
+    assert_eq!(reopened.repository.runs(100).unwrap().len(), 1);
+}
+
+#[test]
+fn deleted_streams_do_not_consume_the_live_schedule_page() {
+    let (_, service) = setup();
+    let first = execute(&service, &create(), "app:a").unwrap();
+    execute(
+        &service,
+        &WorkflowControlOperation::DeleteSchedule {
+            schedule_id: "daily".into(),
+            etag: first["etag"].as_str().unwrap().into(),
+        },
+        "app:a",
+    )
+    .unwrap();
+    let mut next = create();
+    if let WorkflowControlOperation::CreateSchedule {
+        schedule_id,
+        idempotency_key,
+        ..
+    } = &mut next
+    {
+        *schedule_id = "second".into();
+        *idempotency_key = "second-key".into();
+    }
+    execute(&service, &next, "app:a").unwrap();
+    assert_eq!(service.list_schedules(1).unwrap()[0].schedule_id, "second");
+    let page = execute(
+        &service,
+        &WorkflowControlOperation::ListSchedules {
+            after: None,
+            limit: 1,
+        },
+        "app:a",
+    )
+    .unwrap();
+    assert_eq!(page["items"][0]["record"]["schedule_id"], "second");
+    assert!(page["next_cursor"].is_null());
+}
+
+#[test]
+fn simultaneous_tick_and_reviewed_delete_have_one_writer_order() {
+    for _ in 0..12 {
+        let (_, service) = setup();
+        let created = execute(&service, &create(), "app:a").unwrap();
+        let service = Arc::new(service);
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let tick = {
+            let service = service.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                service.tick_schedules_at("2026-10-03T12:00:00Z").unwrap();
+            })
+        };
+        let delete = {
+            let service = service.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                execute(
+                    &service,
+                    &WorkflowControlOperation::DeleteSchedule {
+                        schedule_id: "daily".into(),
+                        etag: created["etag"].as_str().unwrap().into(),
+                    },
+                    "app:a",
+                )
+            })
+        };
+        barrier.wait();
+        tick.join().unwrap();
+        match delete.join().unwrap() {
+            Ok(_) => {
+                assert!(matches!(
+                    service.get_schedule("daily"),
+                    Err(WorkflowError::NotFound(_))
+                ));
+                assert!(service.repository.runs(100).unwrap().is_empty());
+            }
+            Err(error) => {
+                assert!(matches!(error, WorkflowError::Conflict(_)));
+                assert!(service.get_schedule("daily").unwrap().last_run_id.is_some());
+                assert_eq!(service.repository.runs(100).unwrap().len(), 1);
+            }
+        }
+    }
+}
+
 fn owner(id: &str) -> WorkflowOrigin {
     WorkflowOrigin {
         owner: Actor {
@@ -388,6 +571,17 @@ fn legacy_schedules_have_metadata_without_claiming_origin_or_inputs() {
     assert_eq!(snapshot["controllable"], false);
     assert!(snapshot["origin"].is_null());
     assert!(snapshot["record"]["inputs"].is_null());
+    assert!(matches!(
+        execute(
+            &service,
+            &WorkflowControlOperation::DeleteSchedule {
+                schedule_id: "legacy".into(),
+                etag: snapshot["etag"].as_str().unwrap().into(),
+            },
+            "app:a"
+        ),
+        Err(WorkflowError::PermissionDenied)
+    ));
     assert!(matches!(
         execute(
             &service,

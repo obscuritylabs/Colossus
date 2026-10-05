@@ -124,6 +124,7 @@ const COMMANDS: &[&str] = &[
     "get_workflow_schedule",
     "create_workflow_schedule",
     "set_workflow_schedule_enabled",
+    "delete_workflow_schedule",
     "get_scheduled_workflow_run",
     "list_workflow_runs",
     "start_workflow_run",

@@ -63,7 +63,11 @@ fn persistent_schedule_mutations_default_to_review_and_preserve_explicit_policy(
             Some(AccessDecision::Allow)
         );
     }
-    for action in ["workflow.schedule.create", "workflow.schedule.set_enabled"] {
+    for action in [
+        "workflow.schedule.create",
+        "workflow.schedule.set_enabled",
+        "workflow.schedule.delete",
+    ] {
         assert_eq!(
             defaults.action_decision(action),
             Some(AccessDecision::RequireApproval)

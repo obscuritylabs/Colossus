@@ -5,6 +5,7 @@ export interface WorkflowContext {
   schedules_read: boolean;
   schedules_create: boolean;
   schedules_control: boolean;
+  schedules_delete?: boolean;
   workflow_runs_read: boolean;
   workflow_runs_start?: boolean;
   calendar_schedules?: boolean;
@@ -47,6 +48,25 @@ export interface ScheduleRecord {
   created_at: string;
   updated_at: string;
 }
+/** Read only the released agent text; keep exact JSON bytes for raw inspection. */
+export function scheduledTaskText(resultJson: string): string | null {
+  if (resultJson.length > 64 * 1024) return null;
+  try {
+    const result = JSON.parse(resultJson);
+    if (
+      result?.task?.media_type !== "application/json" ||
+      typeof result.task.text !== "string"
+    )
+      return null;
+    const response = JSON.parse(result.task.text);
+    return typeof response?.output === "string" && response.output.trim()
+      ? response.output
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface WorkflowSchedule {
   record: ScheduleRecord;
   origin: {

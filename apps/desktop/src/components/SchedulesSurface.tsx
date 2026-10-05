@@ -1,19 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getWorkflowSchedule,
+  deleteWorkflowSchedule,
   listWorkflowSchedules,
   setWorkflowScheduleEnabled,
   workflowContext,
 } from "../api";
-import {
-  recurrence,
-  MISFIRE_GUIDANCE,
-  occurrence,
-  workflowFailure,
-} from "../workflows";
+import { occurrence, workflowFailure } from "../workflows";
 import type { WorkflowContext, WorkflowSchedule } from "../workflows";
 import { ScheduleCreate } from "./ScheduleCreate";
-import { ScheduledRunDetail } from "./ScheduledRunDetail";
+import { ScheduleDetail } from "./ScheduleDetail";
 import { WorkflowDialog } from "./WorkflowDialog";
 import { ScheduleTaskCreate } from "./ScheduleTaskCreate";
 import { WorkflowLogicDialog } from "./WorkflowLogicDialog";
@@ -39,7 +35,7 @@ export function SchedulesSurface({
   const [after, setAfter] = useState<string | null>(null);
   const [detail, setDetail] = useState<WorkflowSchedule | null>(null);
   const [control, setControl] = useState<WorkflowSchedule | null>(null);
-  const [runOpen, setRunOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [logicOpen, setLogicOpen] = useState(false);
   const [dialog, setDialog] = useState<"create" | "task" | null>(null);
   const [example, setExample] = useState<ScheduleExample | null>(null);
@@ -50,18 +46,26 @@ export function SchedulesSurface({
   const [message, setMessage] = useState("");
   const request = useRef(0);
   const alive = useRef(true);
-  const controlTrigger = useRef<HTMLButtonElement>(null);
+  const overviewHeading = useRef<HTMLHeadingElement>(null);
+  const controlReturnFocus = useRef<HTMLElement | null>(null);
   const load = useCallback(async () => {
+    const generation = ++request.current;
+    setContext(null);
+    setItems([]);
+    setDetail(null);
+    setAfter(null);
+    setControl(null);
+    setDialog(null);
+    setLogicOpen(false);
+    setBusy(false);
+    setError("");
+    setDetailError("");
+    setMessage("");
     if (!targetId || !runtimeReady) {
       setLoading(false);
       return;
     }
-    const generation = ++request.current;
     setLoading(true);
-    setError("");
-    setControl(null);
-    setDialog(null);
-    setLogicOpen(false);
     try {
       const context = await workflowContext(targetId);
       const page = context.schedules_read
@@ -72,7 +76,6 @@ export function SchedulesSurface({
         setItems(page.items);
         setAfter(page.next_cursor);
         setDetail(null);
-        setRunOpen(false);
       }
     } catch (error) {
       if (alive.current && generation === request.current)
@@ -91,6 +94,7 @@ export function SchedulesSurface({
   }, [load]);
   useEffect(() => {
     if (!targetId || !context || !initialInspection) return;
+    const generation = request.current;
     let cancelled = false;
     void getWorkflowSchedule(
       targetId,
@@ -98,15 +102,13 @@ export function SchedulesSurface({
       initialInspection.scheduleId,
     )
       .then((schedule) => {
-        if (!cancelled) {
+        if (!cancelled && generation === request.current) {
           setDetail(schedule);
-          setRunOpen(
-            initialInspection.showRun && !!schedule.record.last_run_id,
-          );
         }
       })
       .catch((error: unknown) => {
-        if (!cancelled) setDetailError(workflowFailure(error));
+        if (!cancelled && generation === request.current)
+          setDetailError(workflowFailure(error));
       });
     return () => {
       cancelled = true;
@@ -114,6 +116,7 @@ export function SchedulesSurface({
   }, [targetId, context, initialInspection]);
   async function more() {
     if (!targetId || !context || !after) return;
+    const generation = request.current;
     setBusy(true);
     setError("");
     try {
@@ -122,14 +125,15 @@ export function SchedulesSurface({
         context.selection_epoch,
         after,
       );
-      if (alive.current) {
+      if (alive.current && generation === request.current) {
         setItems((items) => [...items, ...page.items]);
         setAfter(page.next_cursor);
       }
     } catch (error) {
-      if (alive.current) setError(workflowFailure(error));
+      if (alive.current && generation === request.current)
+        setError(workflowFailure(error));
     } finally {
-      if (alive.current) setBusy(false);
+      if (alive.current && generation === request.current) setBusy(false);
     }
   }
   async function inspect(id: string) {
@@ -137,7 +141,6 @@ export function SchedulesSurface({
     const generation = ++request.current;
     setBusy(true);
     setDetailError("");
-    setRunOpen(false);
     try {
       const schedule = await getWorkflowSchedule(
         targetId,
@@ -152,8 +155,13 @@ export function SchedulesSurface({
       if (alive.current && generation === request.current) setBusy(false);
     }
   }
-  async function reviewControl() {
+  async function reviewControl(remove = false) {
     if (!targetId || !context || !detail) return;
+    controlReturnFocus.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const generation = request.current;
     setBusy(true);
     setDetailError("");
     try {
@@ -162,21 +170,46 @@ export function SchedulesSurface({
         context.selection_epoch,
         detail.record.schedule_id,
       );
-      if (alive.current) {
+      if (alive.current && generation === request.current) {
         setDetail(schedule);
+        setDeleting(remove);
         setControl(schedule);
       }
     } catch (error) {
-      if (alive.current) setDetailError(workflowFailure(error));
+      if (alive.current && generation === request.current)
+        setDetailError(workflowFailure(error));
     } finally {
-      if (alive.current) setBusy(false);
+      if (alive.current && generation === request.current) setBusy(false);
     }
   }
   async function applyControl() {
     if (!targetId || !context || !control) return;
     setBusy(true);
     setDetailError("");
+    const generation = request.current;
     try {
+      if (deleting) {
+        const deleted = await deleteWorkflowSchedule(
+          targetId,
+          context.selection_epoch,
+          control.record.schedule_id,
+          control.etag,
+        );
+        if (alive.current && generation === request.current) {
+          setItems((items) =>
+            items.filter(
+              (item) => item.record.schedule_id !== deleted.schedule_id,
+            ),
+          );
+          setDetail(null);
+          setControl(null);
+          setMessage(
+            `${control.record.task?.name || deleted.schedule_id} was deleted. Existing run history is retained.`,
+          );
+          requestAnimationFrame(() => overviewHeading.current?.focus());
+        }
+        return;
+      }
       const updated = await setWorkflowScheduleEnabled(
         targetId,
         context.selection_epoch,
@@ -184,7 +217,7 @@ export function SchedulesSurface({
         !control.record.enabled,
         control.etag,
       );
-      if (alive.current) {
+      if (alive.current && generation === request.current) {
         setDetail(updated);
         setItems((items) =>
           items.map((item) =>
@@ -199,93 +232,130 @@ export function SchedulesSurface({
         );
       }
     } catch (error) {
-      if (alive.current) {
+      if (alive.current && generation === request.current) {
         setDetailError(
-          `${workflowFailure(error)} Refresh the schedule and review again; controls are never retried automatically.`,
+          `${workflowFailure(error)} Refresh schedules to reconcile the stored state, then review again; controls are never retried automatically.`,
         );
         setControl(null);
       }
     } finally {
-      if (alive.current) setBusy(false);
+      if (alive.current && generation === request.current) setBusy(false);
     }
   }
   const record = detail?.record;
+  useEffect(() => {
+    if (record) requestAnimationFrame(() => overviewHeading.current?.focus());
+  }, [record?.schedule_id]);
   return (
     <section className="workflow-surface" aria-label="Workspace schedules">
       <header className="workflow-page-header">
         <div>
-          <p className="surface-breadcrumb">Workspace / {workspaceName}</p>
-          <h2>Schedules</h2>
-          <p>Schedule an agent task or run an existing workflow on repeat.</p>
+          <p className="surface-breadcrumb">
+            Workspace / {workspaceName}
+            {detail ? " / Schedules" : ""}
+          </p>
+          <h2 ref={overviewHeading} tabIndex={-1}>
+            {detail
+              ? detail.record.task?.name || detail.record.schedule_id
+              : "Schedules"}
+          </h2>
+          <p>
+            {detail
+              ? `${detail.record.task ? "Scheduled agent task" : "Workflow schedule"} · ${detail.record.enabled ? "Enabled" : "Paused"}`
+              : "Schedule an agent task or run an existing workflow on repeat."}
+          </p>
         </div>
         <div className="workflow-actions">
+          {detail && (
+            <button
+              className="button secondary"
+              disabled={busy}
+              onClick={() => {
+                request.current++;
+                setDetail(null);
+                setDetailError("");
+                setLogicOpen(false);
+                requestAnimationFrame(() => overviewHeading.current?.focus());
+              }}
+            >
+              Back to schedules
+            </button>
+          )}
           <button
             className="button secondary"
             disabled={loading || busy || !runtimeReady}
-            onClick={() => void load()}
+            onClick={() =>
+              detail ? void inspect(detail.record.schedule_id) : void load()
+            }
           >
             Refresh
           </button>
-          <button
-            className="button primary"
-            disabled={
-              loading ||
-              busy ||
-              !context?.task_schedules ||
-              !context.calendar_schedules
-            }
-            onClick={() => {
-              setExample(null);
-              setDialog("task");
-            }}
-          >
-            Schedule a task
-          </button>
-          <button
-            className="button secondary"
-            disabled={
-              loading ||
-              busy ||
-              !context?.schedules_create ||
-              !context.workflows_read
-            }
-            onClick={() => setDialog("create")}
-          >
-            Schedule a workflow
-          </button>
+          {!detail && (
+            <>
+              <button
+                className="button primary"
+                disabled={
+                  loading ||
+                  busy ||
+                  !context?.task_schedules ||
+                  !context.calendar_schedules
+                }
+                onClick={() => {
+                  setExample(null);
+                  setDialog("task");
+                }}
+              >
+                Schedule a task
+              </button>
+              <button
+                className="button secondary"
+                disabled={
+                  loading ||
+                  busy ||
+                  !context?.schedules_create ||
+                  !context.workflows_read
+                }
+                onClick={() => setDialog("create")}
+              >
+                Schedule a workflow
+              </button>
+            </>
+          )}
         </div>
       </header>
-      <aside className="workflow-availability">
-        <strong>
-          {!runtimeReady
-            ? "Runtime unavailable"
-            : loading
-              ? "Checking runtime capabilities…"
+      {!detail && (
+        <aside className="workflow-availability">
+          <strong>
+            {!runtimeReady
+              ? "Runtime unavailable"
+              : loading
+                ? "Checking runtime capabilities…"
+                : context?.managed
+                  ? "Managed Local worker is running"
+                  : "Connected External runtime"}
+          </strong>
+          <p>
+            {loading
+              ? "Checking availability in the selected Workspace."
               : context?.managed
-                ? "Managed Local worker is running"
-                : "Connected External runtime"}
-        </strong>
-        <p>
-          {loading
-            ? "Checking availability in the selected Workspace."
-            : context?.managed
-              ? "Schedules tick while this Workspace's worker is running. Future schedules do not pin or wake sleeping Workspaces."
-              : "Scheduling follows this runtime's own availability. Desktop does not start or enroll an External runtime automatically."}
-        </p>
-        {context?.managed && (
-          <details>
-            <summary>Background and shutdown behavior</summary>
-            <p>
-              Retained unselected workers keep ticking. Desktop retains up to
-              four workers; an idle Workspace can sleep when another needs
-              capacity. Closing the window keeps Colossus in the macOS menu bar
-              or Windows system tray. Shut Down Colossus stops workers and
-              ticks. Resume reconciles missed occurrences with the selected
-              policy.
-            </p>
-          </details>
-        )}
-      </aside>
+                ? "Schedules tick while this Workspace's worker is running. Future schedules do not pin or wake sleeping Workspaces."
+                : "Scheduling follows this runtime's own availability. Desktop does not start or enroll an External runtime automatically."}
+          </p>
+          {context?.managed && (
+            <details>
+              <summary>Background and shutdown behavior</summary>
+              <p>
+                Retained unselected workers keep ticking. Desktop retains up to
+                four workers; an idle Workspace can sleep when another needs
+                capacity. Closing the window keeps Colossus in the macOS menu
+                bar or Windows system tray. Shut Down Colossus stops workers and
+                ticks. Resume reconciles missed occurrences with the selected
+                policy.
+              </p>
+            </details>
+          )}
+        </aside>
+      )}
       {!targetId || !runtimeReady ? (
         <p role="status">
           Select and connect this Workspace's runtime to inspect its schedules.
@@ -306,226 +376,82 @@ export function SchedulesSurface({
         </p>
       )}
       {message && <p role="status">{message}</p>}
-      {!loading && context?.schedules_read && !items.length && !error && (
-        <div className="workflow-empty">
-          <h3>No schedules in this Workspace</h3>
-          <p>
-            Schedule a task with instructions, or choose a reusable workflow
-            from the Workflows library.
-          </p>
-        </div>
-      )}
-      {context?.schedules_read && (items.length > 0 || detailError) && (
-        <div className="workflow-layout workflow-schedule-layout">
-          <div>
-            <ScheduleInventory
-              items={items}
-              selectedId={detail?.record.schedule_id}
-              busy={busy || loading}
-              onInspect={(id) => void inspect(id)}
-            />
-            {after && (
-              <button
-                className="button secondary"
-                disabled={busy}
-                onClick={() => void more()}
-              >
-                Load more schedules
-              </button>
-            )}
+      {!detail &&
+        !loading &&
+        context?.schedules_read &&
+        !items.length &&
+        !error && (
+          <div className="workflow-empty">
+            <h3>No schedules in this Workspace</h3>
+            <p>
+              Schedule a task with instructions, or choose a reusable workflow
+              from the Workflows library.
+            </p>
           </div>
-          <section className="workflow-detail" aria-label="Selected schedule">
-            {detailError && <p role="alert">{detailError}</p>}
-            {!detail && (
-              <p>
-                Select a schedule to inspect its canonical details and last
-                workflow run.
-              </p>
-            )}
-            {record && detail && (
-              <>
-                <header className="workflow-detail-header">
-                  <h3>{record.task?.name || record.schedule_id}</h3>
-                  <div className="workflow-actions">
-                    {context.workflows_read && !record.task && (
-                      <button
-                        className="button secondary"
-                        disabled={busy || loading}
-                        onClick={() => setLogicOpen(true)}
-                      >
-                        View workflow logic
-                      </button>
-                    )}
-                    <button
-                      className="button secondary"
-                      disabled={busy}
-                      onClick={() => void inspect(record.schedule_id)}
-                    >
-                      Refresh detail
-                    </button>
-                  </div>
-                </header>
-                <strong className="workflow-status">
-                  {record.blocked_reason
-                    ? "Blocked"
-                    : record.enabled
-                      ? "Enabled"
-                      : "Paused"}
-                </strong>
-                {record.task && (
-                  <section aria-label="Task instructions">
-                    <h4>Instructions</h4>
-                    <pre className="workflow-task-instructions">
-                      {record.task.instructions}
-                    </pre>
-                    <p>
-                      Model:{" "}
-                      {record.task.options.model_profile || "Workspace primary"}{" "}
-                      · Effort:{" "}
-                      {record.task.options.reasoning_effort || "Model default"}
-                    </p>
-                  </section>
-                )}
-                <dl className="workflow-facts">
-                  {!record.task && (
-                    <>
-                      <dt>Workflow</dt>
-                      <dd>
-                        {record.workflow_name} · {record.workflow_version}
-                      </dd>
-                      <dt>Pinned hash</dt>
-                      <dd>
-                        <code>{record.workflow_hash}</code>
-                      </dd>
-                    </>
-                  )}
-                  <dt>{record.calendar ? "Repeat" : "Cadence"}</dt>
-                  <dd>
-                    {recurrence(record)}
-                    {!record.calendar && " (fixed elapsed time)"}
-                  </dd>
-                  <dt>First occurrence</dt>
-                  <dd>{occurrence(record.starts_at)}</dd>
-                  <dt>Missed runs</dt>
-                  <dd>
-                    {record.misfire_policy === "fire_once"
-                      ? "Run latest once"
-                      : "Skip catch-up runs"}
-                  </dd>
-                  <dt>Next boundary</dt>
-                  <dd>{occurrence(record.next_fire_at)}</dd>
-                  <dt>Last evaluated</dt>
-                  <dd>{occurrence(record.last_scheduled_at)}</dd>
-                  <dt>Last dispatch</dt>
-                  <dd>
-                    {detail.last_dispatch || "None yet"}
-                    {detail.last_dispatch === "skipped"
-                      ? " — no run was queued for that occurrence"
-                      : detail.last_dispatch === "queued"
-                        ? " — inspect execution state below"
-                        : ""}
-                  </dd>
-                  <dt>Created</dt>
-                  <dd>{occurrence(record.created_at)}</dd>
-                  <dt>Updated</dt>
-                  <dd>{occurrence(record.updated_at)}</dd>
-                  <dt>Origin</dt>
-                  <dd>
-                    {detail.origin ? (
-                      <>
-                        {detail.origin.owner.id}
-                        {detail.origin.session_id && (
-                          <>
-                            <br />
-                            Session: <code>{detail.origin.session_id}</code>
-                          </>
-                        )}
-                        {detail.origin.run_id && (
-                          <>
-                            <br />
-                            Chat run: <code>{detail.origin.run_id}</code>
-                          </>
-                        )}
-                      </>
-                    ) : (
-                      "Unknown — legacy record; ownership cannot be claimed"
-                    )}
-                  </dd>
-                </dl>
-                {record.blocked_reason && (
-                  <p role="status">
-                    {record.blocked_reason} Restore the exact pinned definition
-                    and review re-enabling, or create a schedule for a newly
-                    registered version. This schedule will not be repinned.
-                  </p>
-                )}
-                {detail.controllable && !record.task && (
-                  <details>
-                    <summary>Immutable input snapshot</summary>
-                    <pre>{JSON.stringify(record.inputs, null, 2)}</pre>
-                  </details>
-                )}
-                {!detail.controllable && (
-                  <p>
-                    Legacy inputs and run details are unavailable. Application
-                    control is disabled.
-                  </p>
-                )}
-                <p>{MISFIRE_GUIDANCE}</p>
-                <p>
-                  Pausing affects future ticks and does not cancel queued or
-                  running workflows. Re-enabling retains the next boundary and
-                  may reconcile missed occurrences. To change immutable fields,
-                  create a new schedule and pause this one.
-                </p>
-                {detail.controllable && context.schedules_control && (
-                  <button
-                    ref={controlTrigger}
-                    className="button secondary"
-                    disabled={busy}
-                    onClick={() => void reviewControl()}
-                  >
-                    {record.enabled ? "Review pause" : "Review enable"}
-                  </button>
-                )}
-                {record.last_run_id && context.workflow_runs_read && (
-                  <>
-                    <button
-                      className="button secondary"
-                      onClick={() => setRunOpen((open) => !open)}
-                    >
-                      {runOpen
-                        ? "Hide workflow run"
-                        : "Inspect last workflow run"}
-                    </button>
-                    {runOpen && (
-                      <ScheduledRunDetail
-                        key={record.last_run_id}
-                        targetId={targetId!}
-                        context={context}
-                        runId={record.last_run_id}
-                      />
-                    )}
-                  </>
-                )}
-              </>
-            )}
-          </section>
+        )}
+      {detailError && (
+        <div>
+          <p role="alert">{detailError}</p>
+          <button
+            className="button secondary"
+            disabled={busy || loading}
+            onClick={() =>
+              void load().then(() =>
+                requestAnimationFrame(() => overviewHeading.current?.focus()),
+              )
+            }
+          >
+            Refresh schedules
+          </button>
         </div>
       )}
-      <ScheduleExamples
-        disabled={
-          loading ||
-          busy ||
-          !runtimeReady ||
-          !context?.task_schedules ||
-          !context.calendar_schedules
-        }
-        onUse={(example) => {
-          setExample(example);
-          setDialog("task");
-        }}
-      />
+      {context?.schedules_read && !detail && items.length > 0 && (
+        <div className="workflow-inventory-view">
+          <ScheduleInventory
+            items={items}
+            selectedId={undefined}
+            busy={busy || loading}
+            onInspect={(id) => void inspect(id)}
+          />
+          {after && (
+            <button
+              className="button secondary"
+              disabled={busy}
+              onClick={() => void more()}
+            >
+              Load more schedules
+            </button>
+          )}
+        </div>
+      )}
+      {detail && targetId && context && (
+        <ScheduleDetail
+          key={`${context.selection_epoch}:${detail.record.schedule_id}`}
+          targetId={targetId}
+          context={context}
+          schedule={detail}
+          busy={busy || loading}
+          onRefresh={() => void inspect(detail.record.schedule_id)}
+          onControl={() => void reviewControl()}
+          onDelete={() => void reviewControl(true)}
+          onLogic={() => setLogicOpen(true)}
+        />
+      )}
+      {!detail && (
+        <ScheduleExamples
+          disabled={
+            loading ||
+            busy ||
+            !runtimeReady ||
+            !context?.task_schedules ||
+            !context.calendar_schedules
+          }
+          onUse={(example) => {
+            setExample(example);
+            setDialog("task");
+          }}
+        />
+      )}
       {logicOpen && targetId && context && record && (
         <WorkflowLogicDialog
           targetId={targetId}
@@ -572,23 +498,29 @@ export function SchedulesSurface({
       )}
       {control && (
         <WorkflowDialog
-          returnFocus={controlTrigger.current}
-          title={`${control.record.enabled ? "Pause" : "Enable"} ${control.record.schedule_id}?`}
+          returnFocus={controlReturnFocus.current}
+          title={`${deleting ? "Delete" : control.record.enabled ? "Pause" : "Enable"} ${control.record.task?.name || control.record.schedule_id}?`}
           busy={busy}
           onClose={() => setControl(null)}
         >
-          <p>
-            Workflow: {control.record.workflow_name} ·{" "}
-            {control.record.workflow_version}
-          </p>
-          <p>
-            Pinned hash: <code>{control.record.workflow_hash}</code>
-          </p>
+          {!control.record.task && (
+            <p>
+              Workflow: {control.record.workflow_name} ·{" "}
+              {control.record.workflow_version}
+            </p>
+          )}
+          {!control.record.task && (
+            <p>
+              Pinned hash: <code>{control.record.workflow_hash}</code>
+            </p>
+          )}
           <p>Next boundary: {occurrence(control.record.next_fire_at)}</p>
           <p>
-            {control.record.enabled
-              ? "Pausing stops future ticks. Already queued or running workflows continue."
-              : `Enabling preserves the next boundary. Multiple overdue occurrences use ${control.record.misfire_policy}; one due occurrence always queues a run. A running worker is required.`}
+            {deleting
+              ? "Deleting stops future ticks and removes this schedule from the list. Already queued or running workflows continue, and run history is retained."
+              : control.record.enabled
+                ? "Pausing stops future ticks. Already queued or running workflows continue."
+                : `Enabling preserves the next boundary. Multiple overdue occurrences use ${control.record.misfire_policy}; one due occurrence always queues a run. A running worker is required.`}
           </p>
           <footer className="workflow-actions">
             <button
@@ -599,15 +531,17 @@ export function SchedulesSurface({
               Cancel
             </button>
             <button
-              className="button primary"
+              className={`button primary ${deleting ? "schedule-delete-action" : ""}`}
               disabled={busy}
               onClick={() => void applyControl()}
             >
               {busy
                 ? "Saving…"
-                : control.record.enabled
-                  ? "Pause future ticks"
-                  : "Enable schedule"}
+                : deleting
+                  ? "Confirm deletion"
+                  : control.record.enabled
+                    ? "Pause future ticks"
+                    : "Enable schedule"}
             </button>
           </footer>
         </WorkflowDialog>

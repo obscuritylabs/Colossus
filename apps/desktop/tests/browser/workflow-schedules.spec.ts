@@ -66,9 +66,11 @@ test("inspects canonical detail, independent waiting runs, pause, and legacy met
   await expect(
     page.getByRole("button", { name: "Review enable" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Back to schedules" }).click();
   await page
     .getByRole("button", { name: /legacy-report workspace-health/u })
     .click();
+  await page.getByText("Schedule details", { exact: true }).click();
   await expect(
     page.getByRole("region", { name: "Selected schedule" }),
   ).toContainText("ownership cannot be claimed");
@@ -174,7 +176,7 @@ test("rejects stale control reviews without retrying the mutation", async ({
   });
   await page.getByRole("button", { name: "Pause future ticks" }).click();
   await expect(page.getByRole("alert")).toContainText(
-    "Refresh the schedule and review again",
+    "Refresh schedules to reconcile the stored state, then review again",
   );
   const calls = await page.evaluate(() =>
     (

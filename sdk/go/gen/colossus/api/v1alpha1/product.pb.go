@@ -3201,6 +3201,107 @@ func (x *SetWorkflowScheduleEnabledResponse) GetSchedule() *WorkflowSchedule {
 	return nil
 }
 
+// DeleteWorkflowScheduleRequest binds deletion to an owned canonical revision.
+type DeleteWorkflowScheduleRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// schedule_id identifies the caller-owned schedule.
+	ScheduleId string `protobuf:"bytes,1,opt,name=schedule_id,json=scheduleId,proto3" json:"schedule_id,omitempty"`
+	// etag must match the exact revision reviewed before deletion.
+	Etag          string `protobuf:"bytes,2,opt,name=etag,proto3" json:"etag,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteWorkflowScheduleRequest) Reset() {
+	*x = DeleteWorkflowScheduleRequest{}
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteWorkflowScheduleRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteWorkflowScheduleRequest) ProtoMessage() {}
+
+func (x *DeleteWorkflowScheduleRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteWorkflowScheduleRequest.ProtoReflect.Descriptor instead.
+func (*DeleteWorkflowScheduleRequest) Descriptor() ([]byte, []int) {
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *DeleteWorkflowScheduleRequest) GetScheduleId() string {
+	if x != nil {
+		return x.ScheduleId
+	}
+	return ""
+}
+
+func (x *DeleteWorkflowScheduleRequest) GetEtag() string {
+	if x != nil {
+		return x.Etag
+	}
+	return ""
+}
+
+// DeleteWorkflowScheduleResponse confirms durable removal; run history is retained.
+type DeleteWorkflowScheduleResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// schedule_id is the deleted identity; it cannot be reused.
+	ScheduleId    string `protobuf:"bytes,1,opt,name=schedule_id,json=scheduleId,proto3" json:"schedule_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteWorkflowScheduleResponse) Reset() {
+	*x = DeleteWorkflowScheduleResponse{}
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteWorkflowScheduleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteWorkflowScheduleResponse) ProtoMessage() {}
+
+func (x *DeleteWorkflowScheduleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteWorkflowScheduleResponse.ProtoReflect.Descriptor instead.
+func (*DeleteWorkflowScheduleResponse) Descriptor() ([]byte, []int) {
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *DeleteWorkflowScheduleResponse) GetScheduleId() string {
+	if x != nil {
+		return x.ScheduleId
+	}
+	return ""
+}
+
 // GetWorkflowWorkStateRequest is a typed bounded workflow resource.
 type GetWorkflowWorkStateRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -3210,7 +3311,7 @@ type GetWorkflowWorkStateRequest struct {
 
 func (x *GetWorkflowWorkStateRequest) Reset() {
 	*x = GetWorkflowWorkStateRequest{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[39]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3222,7 +3323,7 @@ func (x *GetWorkflowWorkStateRequest) String() string {
 func (*GetWorkflowWorkStateRequest) ProtoMessage() {}
 
 func (x *GetWorkflowWorkStateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[39]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3235,7 +3336,7 @@ func (x *GetWorkflowWorkStateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetWorkflowWorkStateRequest.ProtoReflect.Descriptor instead.
 func (*GetWorkflowWorkStateRequest) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{39}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{41}
 }
 
 // GetWorkflowWorkStateResponse is a typed bounded workflow resource.
@@ -3249,7 +3350,7 @@ type GetWorkflowWorkStateResponse struct {
 
 func (x *GetWorkflowWorkStateResponse) Reset() {
 	*x = GetWorkflowWorkStateResponse{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[40]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3261,7 +3362,7 @@ func (x *GetWorkflowWorkStateResponse) String() string {
 func (*GetWorkflowWorkStateResponse) ProtoMessage() {}
 
 func (x *GetWorkflowWorkStateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[40]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3274,7 +3375,7 @@ func (x *GetWorkflowWorkStateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetWorkflowWorkStateResponse.ProtoReflect.Descriptor instead.
 func (*GetWorkflowWorkStateResponse) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{40}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *GetWorkflowWorkStateResponse) GetActive() bool {
@@ -3307,7 +3408,7 @@ type ExtensionSummary struct {
 
 func (x *ExtensionSummary) Reset() {
 	*x = ExtensionSummary{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[41]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3319,7 +3420,7 @@ func (x *ExtensionSummary) String() string {
 func (*ExtensionSummary) ProtoMessage() {}
 
 func (x *ExtensionSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[41]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3332,7 +3433,7 @@ func (x *ExtensionSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExtensionSummary.ProtoReflect.Descriptor instead.
 func (*ExtensionSummary) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{41}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *ExtensionSummary) GetExtensionId() string {
@@ -3395,7 +3496,7 @@ type GetExtensionRequest struct {
 
 func (x *GetExtensionRequest) Reset() {
 	*x = GetExtensionRequest{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[42]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3407,7 +3508,7 @@ func (x *GetExtensionRequest) String() string {
 func (*GetExtensionRequest) ProtoMessage() {}
 
 func (x *GetExtensionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[42]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3420,7 +3521,7 @@ func (x *GetExtensionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetExtensionRequest.ProtoReflect.Descriptor instead.
 func (*GetExtensionRequest) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{42}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *GetExtensionRequest) GetExtensionId() string {
@@ -3443,7 +3544,7 @@ type GetExtensionResponse struct {
 
 func (x *GetExtensionResponse) Reset() {
 	*x = GetExtensionResponse{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[43]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3455,7 +3556,7 @@ func (x *GetExtensionResponse) String() string {
 func (*GetExtensionResponse) ProtoMessage() {}
 
 func (x *GetExtensionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[43]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3468,7 +3569,7 @@ func (x *GetExtensionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetExtensionResponse.ProtoReflect.Descriptor instead.
 func (*GetExtensionResponse) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{43}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *GetExtensionResponse) GetExtension() *ExtensionSummary {
@@ -3500,7 +3601,7 @@ type ListExtensionsRequest struct {
 
 func (x *ListExtensionsRequest) Reset() {
 	*x = ListExtensionsRequest{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[44]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3512,7 +3613,7 @@ func (x *ListExtensionsRequest) String() string {
 func (*ListExtensionsRequest) ProtoMessage() {}
 
 func (x *ListExtensionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[44]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3525,7 +3626,7 @@ func (x *ListExtensionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListExtensionsRequest.ProtoReflect.Descriptor instead.
 func (*ListExtensionsRequest) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{44}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *ListExtensionsRequest) GetKinds() []ExtensionKind {
@@ -3564,7 +3665,7 @@ type ListExtensionsResponse struct {
 
 func (x *ListExtensionsResponse) Reset() {
 	*x = ListExtensionsResponse{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[45]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3576,7 +3677,7 @@ func (x *ListExtensionsResponse) String() string {
 func (*ListExtensionsResponse) ProtoMessage() {}
 
 func (x *ListExtensionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[45]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3589,7 +3690,7 @@ func (x *ListExtensionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListExtensionsResponse.ProtoReflect.Descriptor instead.
 func (*ListExtensionsResponse) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{45}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *ListExtensionsResponse) GetExtensions() []*ExtensionSummary {
@@ -3650,7 +3751,7 @@ type AgentPlugin struct {
 
 func (x *AgentPlugin) Reset() {
 	*x = AgentPlugin{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[46]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3662,7 +3763,7 @@ func (x *AgentPlugin) String() string {
 func (*AgentPlugin) ProtoMessage() {}
 
 func (x *AgentPlugin) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[46]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3675,7 +3776,7 @@ func (x *AgentPlugin) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentPlugin.ProtoReflect.Descriptor instead.
 func (*AgentPlugin) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{46}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *AgentPlugin) GetName() string {
@@ -3793,7 +3894,7 @@ type PluginTrust struct {
 
 func (x *PluginTrust) Reset() {
 	*x = PluginTrust{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[47]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3805,7 +3906,7 @@ func (x *PluginTrust) String() string {
 func (*PluginTrust) ProtoMessage() {}
 
 func (x *PluginTrust) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[47]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3818,7 +3919,7 @@ func (x *PluginTrust) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginTrust.ProtoReflect.Descriptor instead.
 func (*PluginTrust) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{47}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *PluginTrust) GetTrusted() bool {
@@ -3868,7 +3969,7 @@ type PluginSkill struct {
 
 func (x *PluginSkill) Reset() {
 	*x = PluginSkill{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[48]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3880,7 +3981,7 @@ func (x *PluginSkill) String() string {
 func (*PluginSkill) ProtoMessage() {}
 
 func (x *PluginSkill) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[48]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3893,7 +3994,7 @@ func (x *PluginSkill) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginSkill.ProtoReflect.Descriptor instead.
 func (*PluginSkill) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{48}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *PluginSkill) GetId() string {
@@ -3950,7 +4051,7 @@ type PluginMcpServer struct {
 
 func (x *PluginMcpServer) Reset() {
 	*x = PluginMcpServer{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[49]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3962,7 +4063,7 @@ func (x *PluginMcpServer) String() string {
 func (*PluginMcpServer) ProtoMessage() {}
 
 func (x *PluginMcpServer) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[49]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3975,7 +4076,7 @@ func (x *PluginMcpServer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginMcpServer.ProtoReflect.Descriptor instead.
 func (*PluginMcpServer) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{49}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *PluginMcpServer) GetId() string {
@@ -4030,7 +4131,7 @@ type PluginDiagnostic struct {
 
 func (x *PluginDiagnostic) Reset() {
 	*x = PluginDiagnostic{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[50]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4042,7 +4143,7 @@ func (x *PluginDiagnostic) String() string {
 func (*PluginDiagnostic) ProtoMessage() {}
 
 func (x *PluginDiagnostic) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[50]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4055,7 +4156,7 @@ func (x *PluginDiagnostic) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginDiagnostic.ProtoReflect.Descriptor instead.
 func (*PluginDiagnostic) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{50}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *PluginDiagnostic) GetKind() string {
@@ -4099,7 +4200,7 @@ type ReadPluginSkillRequest struct {
 
 func (x *ReadPluginSkillRequest) Reset() {
 	*x = ReadPluginSkillRequest{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[51]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4111,7 +4212,7 @@ func (x *ReadPluginSkillRequest) String() string {
 func (*ReadPluginSkillRequest) ProtoMessage() {}
 
 func (x *ReadPluginSkillRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[51]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4124,7 +4225,7 @@ func (x *ReadPluginSkillRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadPluginSkillRequest.ProtoReflect.Descriptor instead.
 func (*ReadPluginSkillRequest) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{51}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *ReadPluginSkillRequest) GetSkillId() string {
@@ -4156,7 +4257,7 @@ type ReadPluginSkillResponse struct {
 
 func (x *ReadPluginSkillResponse) Reset() {
 	*x = ReadPluginSkillResponse{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[52]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4168,7 +4269,7 @@ func (x *ReadPluginSkillResponse) String() string {
 func (*ReadPluginSkillResponse) ProtoMessage() {}
 
 func (x *ReadPluginSkillResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[52]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4181,7 +4282,7 @@ func (x *ReadPluginSkillResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadPluginSkillResponse.ProtoReflect.Descriptor instead.
 func (*ReadPluginSkillResponse) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{52}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *ReadPluginSkillResponse) GetSkill() *PluginSkill {
@@ -4218,7 +4319,7 @@ type ListPluginResourcesRequest struct {
 
 func (x *ListPluginResourcesRequest) Reset() {
 	*x = ListPluginResourcesRequest{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[53]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4230,7 +4331,7 @@ func (x *ListPluginResourcesRequest) String() string {
 func (*ListPluginResourcesRequest) ProtoMessage() {}
 
 func (x *ListPluginResourcesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[53]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4243,7 +4344,7 @@ func (x *ListPluginResourcesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPluginResourcesRequest.ProtoReflect.Descriptor instead.
 func (*ListPluginResourcesRequest) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{53}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *ListPluginResourcesRequest) GetSkillId() string {
@@ -4277,7 +4378,7 @@ type PluginResource struct {
 
 func (x *PluginResource) Reset() {
 	*x = PluginResource{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[54]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4289,7 +4390,7 @@ func (x *PluginResource) String() string {
 func (*PluginResource) ProtoMessage() {}
 
 func (x *PluginResource) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[54]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4302,7 +4403,7 @@ func (x *PluginResource) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginResource.ProtoReflect.Descriptor instead.
 func (*PluginResource) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{54}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *PluginResource) GetSkillId() string {
@@ -4344,7 +4445,7 @@ type ListPluginResourcesResponse struct {
 
 func (x *ListPluginResourcesResponse) Reset() {
 	*x = ListPluginResourcesResponse{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[55]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4356,7 +4457,7 @@ func (x *ListPluginResourcesResponse) String() string {
 func (*ListPluginResourcesResponse) ProtoMessage() {}
 
 func (x *ListPluginResourcesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[55]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4369,7 +4470,7 @@ func (x *ListPluginResourcesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPluginResourcesResponse.ProtoReflect.Descriptor instead.
 func (*ListPluginResourcesResponse) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{55}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *ListPluginResourcesResponse) GetResources() []*PluginResource {
@@ -4394,7 +4495,7 @@ type ReadPluginResourceRequest struct {
 
 func (x *ReadPluginResourceRequest) Reset() {
 	*x = ReadPluginResourceRequest{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[56]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4406,7 +4507,7 @@ func (x *ReadPluginResourceRequest) String() string {
 func (*ReadPluginResourceRequest) ProtoMessage() {}
 
 func (x *ReadPluginResourceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[56]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4419,7 +4520,7 @@ func (x *ReadPluginResourceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadPluginResourceRequest.ProtoReflect.Descriptor instead.
 func (*ReadPluginResourceRequest) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{56}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *ReadPluginResourceRequest) GetSkillId() string {
@@ -4458,7 +4559,7 @@ type ReadPluginResourceResponse struct {
 
 func (x *ReadPluginResourceResponse) Reset() {
 	*x = ReadPluginResourceResponse{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[57]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4470,7 +4571,7 @@ func (x *ReadPluginResourceResponse) String() string {
 func (*ReadPluginResourceResponse) ProtoMessage() {}
 
 func (x *ReadPluginResourceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[57]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4483,7 +4584,7 @@ func (x *ReadPluginResourceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadPluginResourceResponse.ProtoReflect.Descriptor instead.
 func (*ReadPluginResourceResponse) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{57}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *ReadPluginResourceResponse) GetResource() *PluginResource {
@@ -4522,7 +4623,7 @@ type DiagnosticSummary struct {
 
 func (x *DiagnosticSummary) Reset() {
 	*x = DiagnosticSummary{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[58]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4534,7 +4635,7 @@ func (x *DiagnosticSummary) String() string {
 func (*DiagnosticSummary) ProtoMessage() {}
 
 func (x *DiagnosticSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[58]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4547,7 +4648,7 @@ func (x *DiagnosticSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiagnosticSummary.ProtoReflect.Descriptor instead.
 func (*DiagnosticSummary) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{58}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *DiagnosticSummary) GetArea() string {
@@ -4582,7 +4683,7 @@ type ListDiagnosticsRequest struct {
 
 func (x *ListDiagnosticsRequest) Reset() {
 	*x = ListDiagnosticsRequest{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[59]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4594,7 +4695,7 @@ func (x *ListDiagnosticsRequest) String() string {
 func (*ListDiagnosticsRequest) ProtoMessage() {}
 
 func (x *ListDiagnosticsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[59]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4607,7 +4708,7 @@ func (x *ListDiagnosticsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDiagnosticsRequest.ProtoReflect.Descriptor instead.
 func (*ListDiagnosticsRequest) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{59}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *ListDiagnosticsRequest) GetAreas() []string {
@@ -4628,7 +4729,7 @@ type ListDiagnosticsResponse struct {
 
 func (x *ListDiagnosticsResponse) Reset() {
 	*x = ListDiagnosticsResponse{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[60]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4640,7 +4741,7 @@ func (x *ListDiagnosticsResponse) String() string {
 func (*ListDiagnosticsResponse) ProtoMessage() {}
 
 func (x *ListDiagnosticsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[60]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4653,7 +4754,7 @@ func (x *ListDiagnosticsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDiagnosticsResponse.ProtoReflect.Descriptor instead.
 func (*ListDiagnosticsResponse) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{60}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *ListDiagnosticsResponse) GetDiagnostics() []*DiagnosticSummary {
@@ -4684,7 +4785,7 @@ type DistributionInspection struct {
 
 func (x *DistributionInspection) Reset() {
 	*x = DistributionInspection{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[61]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4696,7 +4797,7 @@ func (x *DistributionInspection) String() string {
 func (*DistributionInspection) ProtoMessage() {}
 
 func (x *DistributionInspection) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[61]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4709,7 +4810,7 @@ func (x *DistributionInspection) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DistributionInspection.ProtoReflect.Descriptor instead.
 func (*DistributionInspection) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{61}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *DistributionInspection) GetArtifact() *ArtifactReference {
@@ -4765,7 +4866,7 @@ type InspectDistributionArtifactRequest struct {
 
 func (x *InspectDistributionArtifactRequest) Reset() {
 	*x = InspectDistributionArtifactRequest{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[62]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4777,7 +4878,7 @@ func (x *InspectDistributionArtifactRequest) String() string {
 func (*InspectDistributionArtifactRequest) ProtoMessage() {}
 
 func (x *InspectDistributionArtifactRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[62]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4790,7 +4891,7 @@ func (x *InspectDistributionArtifactRequest) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use InspectDistributionArtifactRequest.ProtoReflect.Descriptor instead.
 func (*InspectDistributionArtifactRequest) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{62}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *InspectDistributionArtifactRequest) GetArtifactId() string {
@@ -4811,7 +4912,7 @@ type InspectDistributionArtifactResponse struct {
 
 func (x *InspectDistributionArtifactResponse) Reset() {
 	*x = InspectDistributionArtifactResponse{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[63]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4823,7 +4924,7 @@ func (x *InspectDistributionArtifactResponse) String() string {
 func (*InspectDistributionArtifactResponse) ProtoMessage() {}
 
 func (x *InspectDistributionArtifactResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[63]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4836,7 +4937,7 @@ func (x *InspectDistributionArtifactResponse) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use InspectDistributionArtifactResponse.ProtoReflect.Descriptor instead.
 func (*InspectDistributionArtifactResponse) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{63}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *InspectDistributionArtifactResponse) GetInspection() *DistributionInspection {
@@ -4859,7 +4960,7 @@ type ListWorkflowRunsRequest struct {
 
 func (x *ListWorkflowRunsRequest) Reset() {
 	*x = ListWorkflowRunsRequest{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[64]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4871,7 +4972,7 @@ func (x *ListWorkflowRunsRequest) String() string {
 func (*ListWorkflowRunsRequest) ProtoMessage() {}
 
 func (x *ListWorkflowRunsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[64]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4884,7 +4985,7 @@ func (x *ListWorkflowRunsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWorkflowRunsRequest.ProtoReflect.Descriptor instead.
 func (*ListWorkflowRunsRequest) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{64}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *ListWorkflowRunsRequest) GetWorkflowId() string {
@@ -4914,7 +5015,7 @@ type ListWorkflowRunsResponse struct {
 
 func (x *ListWorkflowRunsResponse) Reset() {
 	*x = ListWorkflowRunsResponse{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[65]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4926,7 +5027,7 @@ func (x *ListWorkflowRunsResponse) String() string {
 func (*ListWorkflowRunsResponse) ProtoMessage() {}
 
 func (x *ListWorkflowRunsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[65]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4939,7 +5040,7 @@ func (x *ListWorkflowRunsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWorkflowRunsResponse.ProtoReflect.Descriptor instead.
 func (*ListWorkflowRunsResponse) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{65}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *ListWorkflowRunsResponse) GetRuns() []*WorkflowRun {
@@ -5181,7 +5282,14 @@ const file_colossus_api_v1alpha1_product_proto_rawDesc = "" +
 	"\aenabled\x18\x02 \x01(\bR\aenabled\x12\x12\n" +
 	"\x04etag\x18\x03 \x01(\tR\x04etag\"i\n" +
 	"\"SetWorkflowScheduleEnabledResponse\x12C\n" +
-	"\bschedule\x18\x01 \x01(\v2'.colossus.api.v1alpha1.WorkflowScheduleR\bschedule\"\x1d\n" +
+	"\bschedule\x18\x01 \x01(\v2'.colossus.api.v1alpha1.WorkflowScheduleR\bschedule\"T\n" +
+	"\x1dDeleteWorkflowScheduleRequest\x12\x1f\n" +
+	"\vschedule_id\x18\x01 \x01(\tR\n" +
+	"scheduleId\x12\x12\n" +
+	"\x04etag\x18\x02 \x01(\tR\x04etag\"A\n" +
+	"\x1eDeleteWorkflowScheduleResponse\x12\x1f\n" +
+	"\vschedule_id\x18\x01 \x01(\tR\n" +
+	"scheduleId\"\x1d\n" +
 	"\x1bGetWorkflowWorkStateRequest\"6\n" +
 	"\x1cGetWorkflowWorkStateResponse\x12\x16\n" +
 	"\x06active\x18\x01 \x01(\bR\x06active\"\xfa\x01\n" +
@@ -5362,7 +5470,7 @@ const file_colossus_api_v1alpha1_product_proto_rawDesc = "" +
 	"\x10KnowledgeService\x12^\n" +
 	"\tGetMemory\x12'.colossus.api.v1alpha1.GetMemoryRequest\x1a(.colossus.api.v1alpha1.GetMemoryResponse\x12g\n" +
 	"\fListMemories\x12*.colossus.api.v1alpha1.ListMemoriesRequest\x1a+.colossus.api.v1alpha1.ListMemoriesResponse\x12p\n" +
-	"\x0fSearchKnowledge\x12-.colossus.api.v1alpha1.SearchKnowledgeRequest\x1a..colossus.api.v1alpha1.SearchKnowledgeResponse2\xfd\f\n" +
+	"\x0fSearchKnowledge\x12-.colossus.api.v1alpha1.SearchKnowledgeRequest\x1a..colossus.api.v1alpha1.SearchKnowledgeResponse2\x85\x0e\n" +
 	"\x11AutomationService\x12d\n" +
 	"\vGetWorkflow\x12).colossus.api.v1alpha1.GetWorkflowRequest\x1a*.colossus.api.v1alpha1.GetWorkflowResponse\x12j\n" +
 	"\rListWorkflows\x12+.colossus.api.v1alpha1.ListWorkflowsRequest\x1a,.colossus.api.v1alpha1.ListWorkflowsResponse\x12s\n" +
@@ -5375,7 +5483,8 @@ const file_colossus_api_v1alpha1_product_proto_rawDesc = "" +
 	"\x15ListWorkflowSchedules\x123.colossus.api.v1alpha1.ListWorkflowSchedulesRequest\x1a4.colossus.api.v1alpha1.ListWorkflowSchedulesResponse\x12|\n" +
 	"\x13GetWorkflowSchedule\x121.colossus.api.v1alpha1.GetWorkflowScheduleRequest\x1a2.colossus.api.v1alpha1.GetWorkflowScheduleResponse\x12\x85\x01\n" +
 	"\x16CreateWorkflowSchedule\x124.colossus.api.v1alpha1.CreateWorkflowScheduleRequest\x1a5.colossus.api.v1alpha1.CreateWorkflowScheduleResponse\x12\x91\x01\n" +
-	"\x1aSetWorkflowScheduleEnabled\x128.colossus.api.v1alpha1.SetWorkflowScheduleEnabledRequest\x1a9.colossus.api.v1alpha1.SetWorkflowScheduleEnabledResponse\x12\x7f\n" +
+	"\x1aSetWorkflowScheduleEnabled\x128.colossus.api.v1alpha1.SetWorkflowScheduleEnabledRequest\x1a9.colossus.api.v1alpha1.SetWorkflowScheduleEnabledResponse\x12\x85\x01\n" +
+	"\x16DeleteWorkflowSchedule\x124.colossus.api.v1alpha1.DeleteWorkflowScheduleRequest\x1a5.colossus.api.v1alpha1.DeleteWorkflowScheduleResponse\x12\x7f\n" +
 	"\x14GetWorkflowWorkState\x122.colossus.api.v1alpha1.GetWorkflowWorkStateRequest\x1a3.colossus.api.v1alpha1.GetWorkflowWorkStateResponse2\xd5\x04\n" +
 	"\x10ExtensionService\x12g\n" +
 	"\fGetExtension\x12*.colossus.api.v1alpha1.GetExtensionRequest\x1a+.colossus.api.v1alpha1.GetExtensionResponse\x12m\n" +
@@ -5402,7 +5511,7 @@ func file_colossus_api_v1alpha1_product_proto_rawDescGZIP() []byte {
 }
 
 var file_colossus_api_v1alpha1_product_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
-var file_colossus_api_v1alpha1_product_proto_msgTypes = make([]protoimpl.MessageInfo, 66)
+var file_colossus_api_v1alpha1_product_proto_msgTypes = make([]protoimpl.MessageInfo, 68)
 var file_colossus_api_v1alpha1_product_proto_goTypes = []any{
 	(WorkItemKind)(0),                           // 0: colossus.api.v1alpha1.WorkItemKind
 	(WorkItemStatus)(0),                         // 1: colossus.api.v1alpha1.WorkItemStatus
@@ -5452,127 +5561,129 @@ var file_colossus_api_v1alpha1_product_proto_goTypes = []any{
 	(*CreateWorkflowScheduleResponse)(nil),      // 45: colossus.api.v1alpha1.CreateWorkflowScheduleResponse
 	(*SetWorkflowScheduleEnabledRequest)(nil),   // 46: colossus.api.v1alpha1.SetWorkflowScheduleEnabledRequest
 	(*SetWorkflowScheduleEnabledResponse)(nil),  // 47: colossus.api.v1alpha1.SetWorkflowScheduleEnabledResponse
-	(*GetWorkflowWorkStateRequest)(nil),         // 48: colossus.api.v1alpha1.GetWorkflowWorkStateRequest
-	(*GetWorkflowWorkStateResponse)(nil),        // 49: colossus.api.v1alpha1.GetWorkflowWorkStateResponse
-	(*ExtensionSummary)(nil),                    // 50: colossus.api.v1alpha1.ExtensionSummary
-	(*GetExtensionRequest)(nil),                 // 51: colossus.api.v1alpha1.GetExtensionRequest
-	(*GetExtensionResponse)(nil),                // 52: colossus.api.v1alpha1.GetExtensionResponse
-	(*ListExtensionsRequest)(nil),               // 53: colossus.api.v1alpha1.ListExtensionsRequest
-	(*ListExtensionsResponse)(nil),              // 54: colossus.api.v1alpha1.ListExtensionsResponse
-	(*AgentPlugin)(nil),                         // 55: colossus.api.v1alpha1.AgentPlugin
-	(*PluginTrust)(nil),                         // 56: colossus.api.v1alpha1.PluginTrust
-	(*PluginSkill)(nil),                         // 57: colossus.api.v1alpha1.PluginSkill
-	(*PluginMcpServer)(nil),                     // 58: colossus.api.v1alpha1.PluginMcpServer
-	(*PluginDiagnostic)(nil),                    // 59: colossus.api.v1alpha1.PluginDiagnostic
-	(*ReadPluginSkillRequest)(nil),              // 60: colossus.api.v1alpha1.ReadPluginSkillRequest
-	(*ReadPluginSkillResponse)(nil),             // 61: colossus.api.v1alpha1.ReadPluginSkillResponse
-	(*ListPluginResourcesRequest)(nil),          // 62: colossus.api.v1alpha1.ListPluginResourcesRequest
-	(*PluginResource)(nil),                      // 63: colossus.api.v1alpha1.PluginResource
-	(*ListPluginResourcesResponse)(nil),         // 64: colossus.api.v1alpha1.ListPluginResourcesResponse
-	(*ReadPluginResourceRequest)(nil),           // 65: colossus.api.v1alpha1.ReadPluginResourceRequest
-	(*ReadPluginResourceResponse)(nil),          // 66: colossus.api.v1alpha1.ReadPluginResourceResponse
-	(*DiagnosticSummary)(nil),                   // 67: colossus.api.v1alpha1.DiagnosticSummary
-	(*ListDiagnosticsRequest)(nil),              // 68: colossus.api.v1alpha1.ListDiagnosticsRequest
-	(*ListDiagnosticsResponse)(nil),             // 69: colossus.api.v1alpha1.ListDiagnosticsResponse
-	(*DistributionInspection)(nil),              // 70: colossus.api.v1alpha1.DistributionInspection
-	(*InspectDistributionArtifactRequest)(nil),  // 71: colossus.api.v1alpha1.InspectDistributionArtifactRequest
-	(*InspectDistributionArtifactResponse)(nil), // 72: colossus.api.v1alpha1.InspectDistributionArtifactResponse
-	(*ListWorkflowRunsRequest)(nil),             // 73: colossus.api.v1alpha1.ListWorkflowRunsRequest
-	(*ListWorkflowRunsResponse)(nil),            // 74: colossus.api.v1alpha1.ListWorkflowRunsResponse
-	(*timestamppb.Timestamp)(nil),               // 75: google.protobuf.Timestamp
-	(*PageRequest)(nil),                         // 76: colossus.api.v1alpha1.PageRequest
-	(*PageResponse)(nil),                        // 77: colossus.api.v1alpha1.PageResponse
-	(*structpb.Struct)(nil),                     // 78: google.protobuf.Struct
-	(*ArtifactReference)(nil),                   // 79: colossus.api.v1alpha1.ArtifactReference
+	(*DeleteWorkflowScheduleRequest)(nil),       // 48: colossus.api.v1alpha1.DeleteWorkflowScheduleRequest
+	(*DeleteWorkflowScheduleResponse)(nil),      // 49: colossus.api.v1alpha1.DeleteWorkflowScheduleResponse
+	(*GetWorkflowWorkStateRequest)(nil),         // 50: colossus.api.v1alpha1.GetWorkflowWorkStateRequest
+	(*GetWorkflowWorkStateResponse)(nil),        // 51: colossus.api.v1alpha1.GetWorkflowWorkStateResponse
+	(*ExtensionSummary)(nil),                    // 52: colossus.api.v1alpha1.ExtensionSummary
+	(*GetExtensionRequest)(nil),                 // 53: colossus.api.v1alpha1.GetExtensionRequest
+	(*GetExtensionResponse)(nil),                // 54: colossus.api.v1alpha1.GetExtensionResponse
+	(*ListExtensionsRequest)(nil),               // 55: colossus.api.v1alpha1.ListExtensionsRequest
+	(*ListExtensionsResponse)(nil),              // 56: colossus.api.v1alpha1.ListExtensionsResponse
+	(*AgentPlugin)(nil),                         // 57: colossus.api.v1alpha1.AgentPlugin
+	(*PluginTrust)(nil),                         // 58: colossus.api.v1alpha1.PluginTrust
+	(*PluginSkill)(nil),                         // 59: colossus.api.v1alpha1.PluginSkill
+	(*PluginMcpServer)(nil),                     // 60: colossus.api.v1alpha1.PluginMcpServer
+	(*PluginDiagnostic)(nil),                    // 61: colossus.api.v1alpha1.PluginDiagnostic
+	(*ReadPluginSkillRequest)(nil),              // 62: colossus.api.v1alpha1.ReadPluginSkillRequest
+	(*ReadPluginSkillResponse)(nil),             // 63: colossus.api.v1alpha1.ReadPluginSkillResponse
+	(*ListPluginResourcesRequest)(nil),          // 64: colossus.api.v1alpha1.ListPluginResourcesRequest
+	(*PluginResource)(nil),                      // 65: colossus.api.v1alpha1.PluginResource
+	(*ListPluginResourcesResponse)(nil),         // 66: colossus.api.v1alpha1.ListPluginResourcesResponse
+	(*ReadPluginResourceRequest)(nil),           // 67: colossus.api.v1alpha1.ReadPluginResourceRequest
+	(*ReadPluginResourceResponse)(nil),          // 68: colossus.api.v1alpha1.ReadPluginResourceResponse
+	(*DiagnosticSummary)(nil),                   // 69: colossus.api.v1alpha1.DiagnosticSummary
+	(*ListDiagnosticsRequest)(nil),              // 70: colossus.api.v1alpha1.ListDiagnosticsRequest
+	(*ListDiagnosticsResponse)(nil),             // 71: colossus.api.v1alpha1.ListDiagnosticsResponse
+	(*DistributionInspection)(nil),              // 72: colossus.api.v1alpha1.DistributionInspection
+	(*InspectDistributionArtifactRequest)(nil),  // 73: colossus.api.v1alpha1.InspectDistributionArtifactRequest
+	(*InspectDistributionArtifactResponse)(nil), // 74: colossus.api.v1alpha1.InspectDistributionArtifactResponse
+	(*ListWorkflowRunsRequest)(nil),             // 75: colossus.api.v1alpha1.ListWorkflowRunsRequest
+	(*ListWorkflowRunsResponse)(nil),            // 76: colossus.api.v1alpha1.ListWorkflowRunsResponse
+	(*timestamppb.Timestamp)(nil),               // 77: google.protobuf.Timestamp
+	(*PageRequest)(nil),                         // 78: colossus.api.v1alpha1.PageRequest
+	(*PageResponse)(nil),                        // 79: colossus.api.v1alpha1.PageResponse
+	(*structpb.Struct)(nil),                     // 80: google.protobuf.Struct
+	(*ArtifactReference)(nil),                   // 81: colossus.api.v1alpha1.ArtifactReference
 }
 var file_colossus_api_v1alpha1_product_proto_depIdxs = []int32{
 	0,   // 0: colossus.api.v1alpha1.WorkItem.kind:type_name -> colossus.api.v1alpha1.WorkItemKind
 	1,   // 1: colossus.api.v1alpha1.WorkItem.status:type_name -> colossus.api.v1alpha1.WorkItemStatus
-	75,  // 2: colossus.api.v1alpha1.WorkItem.created_at:type_name -> google.protobuf.Timestamp
-	75,  // 3: colossus.api.v1alpha1.WorkItem.updated_at:type_name -> google.protobuf.Timestamp
+	77,  // 2: colossus.api.v1alpha1.WorkItem.created_at:type_name -> google.protobuf.Timestamp
+	77,  // 3: colossus.api.v1alpha1.WorkItem.updated_at:type_name -> google.protobuf.Timestamp
 	9,   // 4: colossus.api.v1alpha1.GetWorkItemResponse.work_item:type_name -> colossus.api.v1alpha1.WorkItem
 	0,   // 5: colossus.api.v1alpha1.ListWorkItemsRequest.kinds:type_name -> colossus.api.v1alpha1.WorkItemKind
 	1,   // 6: colossus.api.v1alpha1.ListWorkItemsRequest.statuses:type_name -> colossus.api.v1alpha1.WorkItemStatus
-	76,  // 7: colossus.api.v1alpha1.ListWorkItemsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
+	78,  // 7: colossus.api.v1alpha1.ListWorkItemsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
 	9,   // 8: colossus.api.v1alpha1.ListWorkItemsResponse.work_items:type_name -> colossus.api.v1alpha1.WorkItem
-	77,  // 9: colossus.api.v1alpha1.ListWorkItemsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
+	79,  // 9: colossus.api.v1alpha1.ListWorkItemsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
 	2,   // 10: colossus.api.v1alpha1.MemorySummary.scope_kind:type_name -> colossus.api.v1alpha1.MemoryScopeKind
-	75,  // 11: colossus.api.v1alpha1.MemorySummary.created_at:type_name -> google.protobuf.Timestamp
-	75,  // 12: colossus.api.v1alpha1.MemorySummary.updated_at:type_name -> google.protobuf.Timestamp
+	77,  // 11: colossus.api.v1alpha1.MemorySummary.created_at:type_name -> google.protobuf.Timestamp
+	77,  // 12: colossus.api.v1alpha1.MemorySummary.updated_at:type_name -> google.protobuf.Timestamp
 	14,  // 13: colossus.api.v1alpha1.GetMemoryResponse.memory:type_name -> colossus.api.v1alpha1.MemorySummary
 	2,   // 14: colossus.api.v1alpha1.ListMemoriesRequest.scope_kind:type_name -> colossus.api.v1alpha1.MemoryScopeKind
-	76,  // 15: colossus.api.v1alpha1.ListMemoriesRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
+	78,  // 15: colossus.api.v1alpha1.ListMemoriesRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
 	14,  // 16: colossus.api.v1alpha1.ListMemoriesResponse.memories:type_name -> colossus.api.v1alpha1.MemorySummary
-	77,  // 17: colossus.api.v1alpha1.ListMemoriesResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
+	79,  // 17: colossus.api.v1alpha1.ListMemoriesResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
 	2,   // 18: colossus.api.v1alpha1.SearchKnowledgeRequest.scope_kind:type_name -> colossus.api.v1alpha1.MemoryScopeKind
-	76,  // 19: colossus.api.v1alpha1.SearchKnowledgeRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
+	78,  // 19: colossus.api.v1alpha1.SearchKnowledgeRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
 	14,  // 20: colossus.api.v1alpha1.KnowledgeSearchResult.memory:type_name -> colossus.api.v1alpha1.MemorySummary
 	20,  // 21: colossus.api.v1alpha1.SearchKnowledgeResponse.results:type_name -> colossus.api.v1alpha1.KnowledgeSearchResult
-	77,  // 22: colossus.api.v1alpha1.SearchKnowledgeResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
-	75,  // 23: colossus.api.v1alpha1.WorkflowSummary.created_at:type_name -> google.protobuf.Timestamp
-	75,  // 24: colossus.api.v1alpha1.WorkflowSummary.updated_at:type_name -> google.protobuf.Timestamp
-	78,  // 25: colossus.api.v1alpha1.WorkflowSummary.input_schema:type_name -> google.protobuf.Struct
-	78,  // 26: colossus.api.v1alpha1.WorkflowSummary.logic:type_name -> google.protobuf.Struct
+	79,  // 22: colossus.api.v1alpha1.SearchKnowledgeResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
+	77,  // 23: colossus.api.v1alpha1.WorkflowSummary.created_at:type_name -> google.protobuf.Timestamp
+	77,  // 24: colossus.api.v1alpha1.WorkflowSummary.updated_at:type_name -> google.protobuf.Timestamp
+	80,  // 25: colossus.api.v1alpha1.WorkflowSummary.input_schema:type_name -> google.protobuf.Struct
+	80,  // 26: colossus.api.v1alpha1.WorkflowSummary.logic:type_name -> google.protobuf.Struct
 	3,   // 27: colossus.api.v1alpha1.WorkflowRun.status:type_name -> colossus.api.v1alpha1.WorkflowRunStatus
-	75,  // 28: colossus.api.v1alpha1.WorkflowRun.created_at:type_name -> google.protobuf.Timestamp
-	75,  // 29: colossus.api.v1alpha1.WorkflowRun.updated_at:type_name -> google.protobuf.Timestamp
-	78,  // 30: colossus.api.v1alpha1.WorkflowRun.step_states:type_name -> google.protobuf.Struct
+	77,  // 28: colossus.api.v1alpha1.WorkflowRun.created_at:type_name -> google.protobuf.Timestamp
+	77,  // 29: colossus.api.v1alpha1.WorkflowRun.updated_at:type_name -> google.protobuf.Timestamp
+	80,  // 30: colossus.api.v1alpha1.WorkflowRun.step_states:type_name -> google.protobuf.Struct
 	22,  // 31: colossus.api.v1alpha1.GetWorkflowResponse.workflow:type_name -> colossus.api.v1alpha1.WorkflowSummary
-	76,  // 32: colossus.api.v1alpha1.ListWorkflowsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
+	78,  // 32: colossus.api.v1alpha1.ListWorkflowsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
 	22,  // 33: colossus.api.v1alpha1.ListWorkflowsResponse.workflows:type_name -> colossus.api.v1alpha1.WorkflowSummary
-	77,  // 34: colossus.api.v1alpha1.ListWorkflowsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
-	78,  // 35: colossus.api.v1alpha1.StartWorkflowRunRequest.input:type_name -> google.protobuf.Struct
+	79,  // 34: colossus.api.v1alpha1.ListWorkflowsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
+	80,  // 35: colossus.api.v1alpha1.StartWorkflowRunRequest.input:type_name -> google.protobuf.Struct
 	23,  // 36: colossus.api.v1alpha1.StartWorkflowRunResponse.workflow_run:type_name -> colossus.api.v1alpha1.WorkflowRun
 	23,  // 37: colossus.api.v1alpha1.GetWorkflowRunResponse.workflow_run:type_name -> colossus.api.v1alpha1.WorkflowRun
-	75,  // 38: colossus.api.v1alpha1.WatchWorkflowRunResponse.created_at:type_name -> google.protobuf.Timestamp
+	77,  // 38: colossus.api.v1alpha1.WatchWorkflowRunResponse.created_at:type_name -> google.protobuf.Timestamp
 	23,  // 39: colossus.api.v1alpha1.WatchWorkflowRunResponse.workflow_run:type_name -> colossus.api.v1alpha1.WorkflowRun
-	78,  // 40: colossus.api.v1alpha1.WorkflowSchedule.input:type_name -> google.protobuf.Struct
+	80,  // 40: colossus.api.v1alpha1.WorkflowSchedule.input:type_name -> google.protobuf.Struct
 	4,   // 41: colossus.api.v1alpha1.WorkflowSchedule.misfire_policy:type_name -> colossus.api.v1alpha1.ScheduleMisfirePolicy
-	75,  // 42: colossus.api.v1alpha1.WorkflowSchedule.starts_at:type_name -> google.protobuf.Timestamp
-	75,  // 43: colossus.api.v1alpha1.WorkflowSchedule.next_fire_at:type_name -> google.protobuf.Timestamp
-	75,  // 44: colossus.api.v1alpha1.WorkflowSchedule.last_scheduled_at:type_name -> google.protobuf.Timestamp
-	75,  // 45: colossus.api.v1alpha1.WorkflowSchedule.created_at:type_name -> google.protobuf.Timestamp
-	75,  // 46: colossus.api.v1alpha1.WorkflowSchedule.updated_at:type_name -> google.protobuf.Timestamp
+	77,  // 42: colossus.api.v1alpha1.WorkflowSchedule.starts_at:type_name -> google.protobuf.Timestamp
+	77,  // 43: colossus.api.v1alpha1.WorkflowSchedule.next_fire_at:type_name -> google.protobuf.Timestamp
+	77,  // 44: colossus.api.v1alpha1.WorkflowSchedule.last_scheduled_at:type_name -> google.protobuf.Timestamp
+	77,  // 45: colossus.api.v1alpha1.WorkflowSchedule.created_at:type_name -> google.protobuf.Timestamp
+	77,  // 46: colossus.api.v1alpha1.WorkflowSchedule.updated_at:type_name -> google.protobuf.Timestamp
 	34,  // 47: colossus.api.v1alpha1.WorkflowSchedule.origin:type_name -> colossus.api.v1alpha1.WorkflowScheduleOrigin
 	5,   // 48: colossus.api.v1alpha1.WorkflowSchedule.last_dispatch:type_name -> colossus.api.v1alpha1.ScheduleDispatchStatus
-	78,  // 49: colossus.api.v1alpha1.WorkflowSchedule.calendar:type_name -> google.protobuf.Struct
-	78,  // 50: colossus.api.v1alpha1.WorkflowSchedule.task:type_name -> google.protobuf.Struct
+	80,  // 49: colossus.api.v1alpha1.WorkflowSchedule.calendar:type_name -> google.protobuf.Struct
+	80,  // 50: colossus.api.v1alpha1.WorkflowSchedule.task:type_name -> google.protobuf.Struct
 	22,  // 51: colossus.api.v1alpha1.ValidateWorkflowDefinitionResponse.workflow:type_name -> colossus.api.v1alpha1.WorkflowSummary
 	22,  // 52: colossus.api.v1alpha1.RegisterWorkflowDefinitionResponse.workflow:type_name -> colossus.api.v1alpha1.WorkflowSummary
-	76,  // 53: colossus.api.v1alpha1.ListWorkflowSchedulesRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
+	78,  // 53: colossus.api.v1alpha1.ListWorkflowSchedulesRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
 	35,  // 54: colossus.api.v1alpha1.ListWorkflowSchedulesResponse.schedules:type_name -> colossus.api.v1alpha1.WorkflowSchedule
-	77,  // 55: colossus.api.v1alpha1.ListWorkflowSchedulesResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
+	79,  // 55: colossus.api.v1alpha1.ListWorkflowSchedulesResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
 	35,  // 56: colossus.api.v1alpha1.GetWorkflowScheduleResponse.schedule:type_name -> colossus.api.v1alpha1.WorkflowSchedule
-	78,  // 57: colossus.api.v1alpha1.CreateWorkflowScheduleRequest.input:type_name -> google.protobuf.Struct
-	75,  // 58: colossus.api.v1alpha1.CreateWorkflowScheduleRequest.starts_at:type_name -> google.protobuf.Timestamp
+	80,  // 57: colossus.api.v1alpha1.CreateWorkflowScheduleRequest.input:type_name -> google.protobuf.Struct
+	77,  // 58: colossus.api.v1alpha1.CreateWorkflowScheduleRequest.starts_at:type_name -> google.protobuf.Timestamp
 	4,   // 59: colossus.api.v1alpha1.CreateWorkflowScheduleRequest.misfire_policy:type_name -> colossus.api.v1alpha1.ScheduleMisfirePolicy
-	78,  // 60: colossus.api.v1alpha1.CreateWorkflowScheduleRequest.calendar:type_name -> google.protobuf.Struct
-	78,  // 61: colossus.api.v1alpha1.CreateWorkflowScheduleRequest.task:type_name -> google.protobuf.Struct
+	80,  // 60: colossus.api.v1alpha1.CreateWorkflowScheduleRequest.calendar:type_name -> google.protobuf.Struct
+	80,  // 61: colossus.api.v1alpha1.CreateWorkflowScheduleRequest.task:type_name -> google.protobuf.Struct
 	35,  // 62: colossus.api.v1alpha1.CreateWorkflowScheduleResponse.schedule:type_name -> colossus.api.v1alpha1.WorkflowSchedule
 	35,  // 63: colossus.api.v1alpha1.SetWorkflowScheduleEnabledResponse.schedule:type_name -> colossus.api.v1alpha1.WorkflowSchedule
 	6,   // 64: colossus.api.v1alpha1.ExtensionSummary.kind:type_name -> colossus.api.v1alpha1.ExtensionKind
-	50,  // 65: colossus.api.v1alpha1.GetExtensionResponse.extension:type_name -> colossus.api.v1alpha1.ExtensionSummary
-	55,  // 66: colossus.api.v1alpha1.GetExtensionResponse.plugin:type_name -> colossus.api.v1alpha1.AgentPlugin
+	52,  // 65: colossus.api.v1alpha1.GetExtensionResponse.extension:type_name -> colossus.api.v1alpha1.ExtensionSummary
+	57,  // 66: colossus.api.v1alpha1.GetExtensionResponse.plugin:type_name -> colossus.api.v1alpha1.AgentPlugin
 	6,   // 67: colossus.api.v1alpha1.ListExtensionsRequest.kinds:type_name -> colossus.api.v1alpha1.ExtensionKind
-	76,  // 68: colossus.api.v1alpha1.ListExtensionsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
-	50,  // 69: colossus.api.v1alpha1.ListExtensionsResponse.extensions:type_name -> colossus.api.v1alpha1.ExtensionSummary
-	77,  // 70: colossus.api.v1alpha1.ListExtensionsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
-	55,  // 71: colossus.api.v1alpha1.ListExtensionsResponse.plugins:type_name -> colossus.api.v1alpha1.AgentPlugin
-	56,  // 72: colossus.api.v1alpha1.AgentPlugin.trust:type_name -> colossus.api.v1alpha1.PluginTrust
-	57,  // 73: colossus.api.v1alpha1.AgentPlugin.skills:type_name -> colossus.api.v1alpha1.PluginSkill
-	58,  // 74: colossus.api.v1alpha1.AgentPlugin.mcp_servers:type_name -> colossus.api.v1alpha1.PluginMcpServer
-	59,  // 75: colossus.api.v1alpha1.AgentPlugin.diagnostics:type_name -> colossus.api.v1alpha1.PluginDiagnostic
-	57,  // 76: colossus.api.v1alpha1.ReadPluginSkillResponse.skill:type_name -> colossus.api.v1alpha1.PluginSkill
-	63,  // 77: colossus.api.v1alpha1.ListPluginResourcesResponse.resources:type_name -> colossus.api.v1alpha1.PluginResource
-	63,  // 78: colossus.api.v1alpha1.ReadPluginResourceResponse.resource:type_name -> colossus.api.v1alpha1.PluginResource
+	78,  // 68: colossus.api.v1alpha1.ListExtensionsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
+	52,  // 69: colossus.api.v1alpha1.ListExtensionsResponse.extensions:type_name -> colossus.api.v1alpha1.ExtensionSummary
+	79,  // 70: colossus.api.v1alpha1.ListExtensionsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
+	57,  // 71: colossus.api.v1alpha1.ListExtensionsResponse.plugins:type_name -> colossus.api.v1alpha1.AgentPlugin
+	58,  // 72: colossus.api.v1alpha1.AgentPlugin.trust:type_name -> colossus.api.v1alpha1.PluginTrust
+	59,  // 73: colossus.api.v1alpha1.AgentPlugin.skills:type_name -> colossus.api.v1alpha1.PluginSkill
+	60,  // 74: colossus.api.v1alpha1.AgentPlugin.mcp_servers:type_name -> colossus.api.v1alpha1.PluginMcpServer
+	61,  // 75: colossus.api.v1alpha1.AgentPlugin.diagnostics:type_name -> colossus.api.v1alpha1.PluginDiagnostic
+	59,  // 76: colossus.api.v1alpha1.ReadPluginSkillResponse.skill:type_name -> colossus.api.v1alpha1.PluginSkill
+	65,  // 77: colossus.api.v1alpha1.ListPluginResourcesResponse.resources:type_name -> colossus.api.v1alpha1.PluginResource
+	65,  // 78: colossus.api.v1alpha1.ReadPluginResourceResponse.resource:type_name -> colossus.api.v1alpha1.PluginResource
 	7,   // 79: colossus.api.v1alpha1.DiagnosticSummary.status:type_name -> colossus.api.v1alpha1.DiagnosticStatus
-	67,  // 80: colossus.api.v1alpha1.ListDiagnosticsResponse.diagnostics:type_name -> colossus.api.v1alpha1.DiagnosticSummary
-	79,  // 81: colossus.api.v1alpha1.DistributionInspection.artifact:type_name -> colossus.api.v1alpha1.ArtifactReference
+	69,  // 80: colossus.api.v1alpha1.ListDiagnosticsResponse.diagnostics:type_name -> colossus.api.v1alpha1.DiagnosticSummary
+	81,  // 81: colossus.api.v1alpha1.DistributionInspection.artifact:type_name -> colossus.api.v1alpha1.ArtifactReference
 	8,   // 82: colossus.api.v1alpha1.DistributionInspection.kind:type_name -> colossus.api.v1alpha1.DistributionArtifactKind
-	70,  // 83: colossus.api.v1alpha1.InspectDistributionArtifactResponse.inspection:type_name -> colossus.api.v1alpha1.DistributionInspection
-	76,  // 84: colossus.api.v1alpha1.ListWorkflowRunsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
+	72,  // 83: colossus.api.v1alpha1.InspectDistributionArtifactResponse.inspection:type_name -> colossus.api.v1alpha1.DistributionInspection
+	78,  // 84: colossus.api.v1alpha1.ListWorkflowRunsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
 	23,  // 85: colossus.api.v1alpha1.ListWorkflowRunsResponse.runs:type_name -> colossus.api.v1alpha1.WorkflowRun
-	77,  // 86: colossus.api.v1alpha1.ListWorkflowRunsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
+	79,  // 86: colossus.api.v1alpha1.ListWorkflowRunsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
 	10,  // 87: colossus.api.v1alpha1.WorkService.GetWorkItem:input_type -> colossus.api.v1alpha1.GetWorkItemRequest
 	12,  // 88: colossus.api.v1alpha1.WorkService.ListWorkItems:input_type -> colossus.api.v1alpha1.ListWorkItemsRequest
 	15,  // 89: colossus.api.v1alpha1.KnowledgeService.GetMemory:input_type -> colossus.api.v1alpha1.GetMemoryRequest
@@ -5581,7 +5692,7 @@ var file_colossus_api_v1alpha1_product_proto_depIdxs = []int32{
 	24,  // 92: colossus.api.v1alpha1.AutomationService.GetWorkflow:input_type -> colossus.api.v1alpha1.GetWorkflowRequest
 	26,  // 93: colossus.api.v1alpha1.AutomationService.ListWorkflows:input_type -> colossus.api.v1alpha1.ListWorkflowsRequest
 	28,  // 94: colossus.api.v1alpha1.AutomationService.StartWorkflowRun:input_type -> colossus.api.v1alpha1.StartWorkflowRunRequest
-	73,  // 95: colossus.api.v1alpha1.AutomationService.ListWorkflowRuns:input_type -> colossus.api.v1alpha1.ListWorkflowRunsRequest
+	75,  // 95: colossus.api.v1alpha1.AutomationService.ListWorkflowRuns:input_type -> colossus.api.v1alpha1.ListWorkflowRunsRequest
 	30,  // 96: colossus.api.v1alpha1.AutomationService.GetWorkflowRun:input_type -> colossus.api.v1alpha1.GetWorkflowRunRequest
 	32,  // 97: colossus.api.v1alpha1.AutomationService.WatchWorkflowRun:input_type -> colossus.api.v1alpha1.WatchWorkflowRunRequest
 	36,  // 98: colossus.api.v1alpha1.AutomationService.ValidateWorkflowDefinition:input_type -> colossus.api.v1alpha1.ValidateWorkflowDefinitionRequest
@@ -5590,41 +5701,43 @@ var file_colossus_api_v1alpha1_product_proto_depIdxs = []int32{
 	42,  // 101: colossus.api.v1alpha1.AutomationService.GetWorkflowSchedule:input_type -> colossus.api.v1alpha1.GetWorkflowScheduleRequest
 	44,  // 102: colossus.api.v1alpha1.AutomationService.CreateWorkflowSchedule:input_type -> colossus.api.v1alpha1.CreateWorkflowScheduleRequest
 	46,  // 103: colossus.api.v1alpha1.AutomationService.SetWorkflowScheduleEnabled:input_type -> colossus.api.v1alpha1.SetWorkflowScheduleEnabledRequest
-	48,  // 104: colossus.api.v1alpha1.AutomationService.GetWorkflowWorkState:input_type -> colossus.api.v1alpha1.GetWorkflowWorkStateRequest
-	51,  // 105: colossus.api.v1alpha1.ExtensionService.GetExtension:input_type -> colossus.api.v1alpha1.GetExtensionRequest
-	53,  // 106: colossus.api.v1alpha1.ExtensionService.ListExtensions:input_type -> colossus.api.v1alpha1.ListExtensionsRequest
-	60,  // 107: colossus.api.v1alpha1.ExtensionService.ReadPluginSkill:input_type -> colossus.api.v1alpha1.ReadPluginSkillRequest
-	62,  // 108: colossus.api.v1alpha1.ExtensionService.ListPluginResources:input_type -> colossus.api.v1alpha1.ListPluginResourcesRequest
-	65,  // 109: colossus.api.v1alpha1.ExtensionService.ReadPluginResource:input_type -> colossus.api.v1alpha1.ReadPluginResourceRequest
-	68,  // 110: colossus.api.v1alpha1.OperationsService.ListDiagnostics:input_type -> colossus.api.v1alpha1.ListDiagnosticsRequest
-	71,  // 111: colossus.api.v1alpha1.DistributionService.InspectDistributionArtifact:input_type -> colossus.api.v1alpha1.InspectDistributionArtifactRequest
-	11,  // 112: colossus.api.v1alpha1.WorkService.GetWorkItem:output_type -> colossus.api.v1alpha1.GetWorkItemResponse
-	13,  // 113: colossus.api.v1alpha1.WorkService.ListWorkItems:output_type -> colossus.api.v1alpha1.ListWorkItemsResponse
-	16,  // 114: colossus.api.v1alpha1.KnowledgeService.GetMemory:output_type -> colossus.api.v1alpha1.GetMemoryResponse
-	18,  // 115: colossus.api.v1alpha1.KnowledgeService.ListMemories:output_type -> colossus.api.v1alpha1.ListMemoriesResponse
-	21,  // 116: colossus.api.v1alpha1.KnowledgeService.SearchKnowledge:output_type -> colossus.api.v1alpha1.SearchKnowledgeResponse
-	25,  // 117: colossus.api.v1alpha1.AutomationService.GetWorkflow:output_type -> colossus.api.v1alpha1.GetWorkflowResponse
-	27,  // 118: colossus.api.v1alpha1.AutomationService.ListWorkflows:output_type -> colossus.api.v1alpha1.ListWorkflowsResponse
-	29,  // 119: colossus.api.v1alpha1.AutomationService.StartWorkflowRun:output_type -> colossus.api.v1alpha1.StartWorkflowRunResponse
-	74,  // 120: colossus.api.v1alpha1.AutomationService.ListWorkflowRuns:output_type -> colossus.api.v1alpha1.ListWorkflowRunsResponse
-	31,  // 121: colossus.api.v1alpha1.AutomationService.GetWorkflowRun:output_type -> colossus.api.v1alpha1.GetWorkflowRunResponse
-	33,  // 122: colossus.api.v1alpha1.AutomationService.WatchWorkflowRun:output_type -> colossus.api.v1alpha1.WatchWorkflowRunResponse
-	37,  // 123: colossus.api.v1alpha1.AutomationService.ValidateWorkflowDefinition:output_type -> colossus.api.v1alpha1.ValidateWorkflowDefinitionResponse
-	39,  // 124: colossus.api.v1alpha1.AutomationService.RegisterWorkflowDefinition:output_type -> colossus.api.v1alpha1.RegisterWorkflowDefinitionResponse
-	41,  // 125: colossus.api.v1alpha1.AutomationService.ListWorkflowSchedules:output_type -> colossus.api.v1alpha1.ListWorkflowSchedulesResponse
-	43,  // 126: colossus.api.v1alpha1.AutomationService.GetWorkflowSchedule:output_type -> colossus.api.v1alpha1.GetWorkflowScheduleResponse
-	45,  // 127: colossus.api.v1alpha1.AutomationService.CreateWorkflowSchedule:output_type -> colossus.api.v1alpha1.CreateWorkflowScheduleResponse
-	47,  // 128: colossus.api.v1alpha1.AutomationService.SetWorkflowScheduleEnabled:output_type -> colossus.api.v1alpha1.SetWorkflowScheduleEnabledResponse
-	49,  // 129: colossus.api.v1alpha1.AutomationService.GetWorkflowWorkState:output_type -> colossus.api.v1alpha1.GetWorkflowWorkStateResponse
-	52,  // 130: colossus.api.v1alpha1.ExtensionService.GetExtension:output_type -> colossus.api.v1alpha1.GetExtensionResponse
-	54,  // 131: colossus.api.v1alpha1.ExtensionService.ListExtensions:output_type -> colossus.api.v1alpha1.ListExtensionsResponse
-	61,  // 132: colossus.api.v1alpha1.ExtensionService.ReadPluginSkill:output_type -> colossus.api.v1alpha1.ReadPluginSkillResponse
-	64,  // 133: colossus.api.v1alpha1.ExtensionService.ListPluginResources:output_type -> colossus.api.v1alpha1.ListPluginResourcesResponse
-	66,  // 134: colossus.api.v1alpha1.ExtensionService.ReadPluginResource:output_type -> colossus.api.v1alpha1.ReadPluginResourceResponse
-	69,  // 135: colossus.api.v1alpha1.OperationsService.ListDiagnostics:output_type -> colossus.api.v1alpha1.ListDiagnosticsResponse
-	72,  // 136: colossus.api.v1alpha1.DistributionService.InspectDistributionArtifact:output_type -> colossus.api.v1alpha1.InspectDistributionArtifactResponse
-	112, // [112:137] is the sub-list for method output_type
-	87,  // [87:112] is the sub-list for method input_type
+	48,  // 104: colossus.api.v1alpha1.AutomationService.DeleteWorkflowSchedule:input_type -> colossus.api.v1alpha1.DeleteWorkflowScheduleRequest
+	50,  // 105: colossus.api.v1alpha1.AutomationService.GetWorkflowWorkState:input_type -> colossus.api.v1alpha1.GetWorkflowWorkStateRequest
+	53,  // 106: colossus.api.v1alpha1.ExtensionService.GetExtension:input_type -> colossus.api.v1alpha1.GetExtensionRequest
+	55,  // 107: colossus.api.v1alpha1.ExtensionService.ListExtensions:input_type -> colossus.api.v1alpha1.ListExtensionsRequest
+	62,  // 108: colossus.api.v1alpha1.ExtensionService.ReadPluginSkill:input_type -> colossus.api.v1alpha1.ReadPluginSkillRequest
+	64,  // 109: colossus.api.v1alpha1.ExtensionService.ListPluginResources:input_type -> colossus.api.v1alpha1.ListPluginResourcesRequest
+	67,  // 110: colossus.api.v1alpha1.ExtensionService.ReadPluginResource:input_type -> colossus.api.v1alpha1.ReadPluginResourceRequest
+	70,  // 111: colossus.api.v1alpha1.OperationsService.ListDiagnostics:input_type -> colossus.api.v1alpha1.ListDiagnosticsRequest
+	73,  // 112: colossus.api.v1alpha1.DistributionService.InspectDistributionArtifact:input_type -> colossus.api.v1alpha1.InspectDistributionArtifactRequest
+	11,  // 113: colossus.api.v1alpha1.WorkService.GetWorkItem:output_type -> colossus.api.v1alpha1.GetWorkItemResponse
+	13,  // 114: colossus.api.v1alpha1.WorkService.ListWorkItems:output_type -> colossus.api.v1alpha1.ListWorkItemsResponse
+	16,  // 115: colossus.api.v1alpha1.KnowledgeService.GetMemory:output_type -> colossus.api.v1alpha1.GetMemoryResponse
+	18,  // 116: colossus.api.v1alpha1.KnowledgeService.ListMemories:output_type -> colossus.api.v1alpha1.ListMemoriesResponse
+	21,  // 117: colossus.api.v1alpha1.KnowledgeService.SearchKnowledge:output_type -> colossus.api.v1alpha1.SearchKnowledgeResponse
+	25,  // 118: colossus.api.v1alpha1.AutomationService.GetWorkflow:output_type -> colossus.api.v1alpha1.GetWorkflowResponse
+	27,  // 119: colossus.api.v1alpha1.AutomationService.ListWorkflows:output_type -> colossus.api.v1alpha1.ListWorkflowsResponse
+	29,  // 120: colossus.api.v1alpha1.AutomationService.StartWorkflowRun:output_type -> colossus.api.v1alpha1.StartWorkflowRunResponse
+	76,  // 121: colossus.api.v1alpha1.AutomationService.ListWorkflowRuns:output_type -> colossus.api.v1alpha1.ListWorkflowRunsResponse
+	31,  // 122: colossus.api.v1alpha1.AutomationService.GetWorkflowRun:output_type -> colossus.api.v1alpha1.GetWorkflowRunResponse
+	33,  // 123: colossus.api.v1alpha1.AutomationService.WatchWorkflowRun:output_type -> colossus.api.v1alpha1.WatchWorkflowRunResponse
+	37,  // 124: colossus.api.v1alpha1.AutomationService.ValidateWorkflowDefinition:output_type -> colossus.api.v1alpha1.ValidateWorkflowDefinitionResponse
+	39,  // 125: colossus.api.v1alpha1.AutomationService.RegisterWorkflowDefinition:output_type -> colossus.api.v1alpha1.RegisterWorkflowDefinitionResponse
+	41,  // 126: colossus.api.v1alpha1.AutomationService.ListWorkflowSchedules:output_type -> colossus.api.v1alpha1.ListWorkflowSchedulesResponse
+	43,  // 127: colossus.api.v1alpha1.AutomationService.GetWorkflowSchedule:output_type -> colossus.api.v1alpha1.GetWorkflowScheduleResponse
+	45,  // 128: colossus.api.v1alpha1.AutomationService.CreateWorkflowSchedule:output_type -> colossus.api.v1alpha1.CreateWorkflowScheduleResponse
+	47,  // 129: colossus.api.v1alpha1.AutomationService.SetWorkflowScheduleEnabled:output_type -> colossus.api.v1alpha1.SetWorkflowScheduleEnabledResponse
+	49,  // 130: colossus.api.v1alpha1.AutomationService.DeleteWorkflowSchedule:output_type -> colossus.api.v1alpha1.DeleteWorkflowScheduleResponse
+	51,  // 131: colossus.api.v1alpha1.AutomationService.GetWorkflowWorkState:output_type -> colossus.api.v1alpha1.GetWorkflowWorkStateResponse
+	54,  // 132: colossus.api.v1alpha1.ExtensionService.GetExtension:output_type -> colossus.api.v1alpha1.GetExtensionResponse
+	56,  // 133: colossus.api.v1alpha1.ExtensionService.ListExtensions:output_type -> colossus.api.v1alpha1.ListExtensionsResponse
+	63,  // 134: colossus.api.v1alpha1.ExtensionService.ReadPluginSkill:output_type -> colossus.api.v1alpha1.ReadPluginSkillResponse
+	66,  // 135: colossus.api.v1alpha1.ExtensionService.ListPluginResources:output_type -> colossus.api.v1alpha1.ListPluginResourcesResponse
+	68,  // 136: colossus.api.v1alpha1.ExtensionService.ReadPluginResource:output_type -> colossus.api.v1alpha1.ReadPluginResourceResponse
+	71,  // 137: colossus.api.v1alpha1.OperationsService.ListDiagnostics:output_type -> colossus.api.v1alpha1.ListDiagnosticsResponse
+	74,  // 138: colossus.api.v1alpha1.DistributionService.InspectDistributionArtifact:output_type -> colossus.api.v1alpha1.InspectDistributionArtifactResponse
+	113, // [113:139] is the sub-list for method output_type
+	87,  // [87:113] is the sub-list for method input_type
 	87,  // [87:87] is the sub-list for extension type_name
 	87,  // [87:87] is the sub-list for extension extendee
 	0,   // [0:87] is the sub-list for field type_name
@@ -5646,14 +5759,14 @@ func file_colossus_api_v1alpha1_product_proto_init() {
 	file_colossus_api_v1alpha1_product_proto_msgTypes[14].OneofWrappers = []any{}
 	file_colossus_api_v1alpha1_product_proto_msgTypes[25].OneofWrappers = []any{}
 	file_colossus_api_v1alpha1_product_proto_msgTypes[26].OneofWrappers = []any{}
-	file_colossus_api_v1alpha1_product_proto_msgTypes[61].OneofWrappers = []any{}
+	file_colossus_api_v1alpha1_product_proto_msgTypes[63].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_colossus_api_v1alpha1_product_proto_rawDesc), len(file_colossus_api_v1alpha1_product_proto_rawDesc)),
 			NumEnums:      9,
-			NumMessages:   66,
+			NumMessages:   68,
 			NumExtensions: 0,
 			NumServices:   6,
 		},

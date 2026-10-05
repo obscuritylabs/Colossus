@@ -229,7 +229,9 @@ fn profile_decision(profile: AccessProfile, descriptor: &ActionDescriptor) -> Ac
         AccessProfile::AllowAll => {
             if matches!(
                 descriptor.name.as_str(),
-                "workflow.schedule.create" | "workflow.schedule.set_enabled"
+                "workflow.schedule.create"
+                    | "workflow.schedule.set_enabled"
+                    | "workflow.schedule.delete"
             ) {
                 AccessDecision::RequireApproval
             } else {

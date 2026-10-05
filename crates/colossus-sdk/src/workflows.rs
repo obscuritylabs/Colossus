@@ -2,11 +2,11 @@
 use crate::{ApiResult, Colossus};
 use async_trait::async_trait;
 pub use colossus_api::{
-    CreateWorkflowScheduleRequest, RegisteredWorkflow, SetWorkflowScheduleEnabledRequest,
-    StartWorkflowRunRequest, WorkflowAgentOptions, WorkflowCalendar, WorkflowLogic,
-    WorkflowLogicBranch, WorkflowLogicKind, WorkflowLogicStep, WorkflowPage, WorkflowRunSnapshot,
-    WorkflowScheduleMisfirePolicy, WorkflowScheduleSnapshot, WorkflowStatus, WorkflowStepState,
-    WorkflowStepStatus, WorkflowTask,
+    CreateWorkflowScheduleRequest, DeleteWorkflowScheduleRequest, DeletedWorkflowSchedule,
+    RegisteredWorkflow, SetWorkflowScheduleEnabledRequest, StartWorkflowRunRequest,
+    WorkflowAgentOptions, WorkflowCalendar, WorkflowLogic, WorkflowLogicBranch, WorkflowLogicKind,
+    WorkflowLogicStep, WorkflowPage, WorkflowRunSnapshot, WorkflowScheduleMisfirePolicy,
+    WorkflowScheduleSnapshot, WorkflowStatus, WorkflowStepState, WorkflowStepStatus, WorkflowTask,
 };
 use std::sync::Arc;
 
@@ -48,6 +48,11 @@ pub trait WorkflowClient: Send + Sync {
         &self,
         request: SetWorkflowScheduleEnabledRequest,
     ) -> ApiResult<WorkflowScheduleSnapshot>;
+    /// Delete a reviewed schedule; uncertain responses require explicit reconciliation.
+    async fn delete_schedule(
+        &self,
+        request: DeleteWorkflowScheduleRequest,
+    ) -> ApiResult<DeletedWorkflowSchedule>;
     /// Read bounded caller-owned history for one definition.
     async fn list_runs(
         &self,
@@ -132,6 +137,12 @@ impl WorkflowClient for ContextBoundWorkflowClient {
         request: SetWorkflowScheduleEnabledRequest,
     ) -> ApiResult<WorkflowScheduleSnapshot> {
         self.api.set_schedule_enabled(&self.caller, request).await
+    }
+    async fn delete_schedule(
+        &self,
+        request: DeleteWorkflowScheduleRequest,
+    ) -> ApiResult<DeletedWorkflowSchedule> {
+        self.api.delete_schedule(&self.caller, request).await
     }
     async fn list_runs(
         &self,

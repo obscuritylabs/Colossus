@@ -53,6 +53,24 @@ pub struct SetWorkflowScheduleEnabledRequest {
     pub etag: String,
 }
 
+/// Exact reviewed deletion of an owned schedule; retained runs are unaffected.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteWorkflowScheduleRequest {
+    /// Caller-owned active schedule identity.
+    pub schedule_id: String,
+    /// Canonical revision inspected before confirming deletion.
+    pub etag: String,
+}
+
+/// Confirmed durable removal from active scheduling.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeletedWorkflowSchedule {
+    /// Removed schedule identity, reserved permanently by retained audit history.
+    pub schedule_id: String,
+}
+
 /// One explicit independently queued workflow run.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -122,6 +140,12 @@ pub trait WorkflowApi: Send + Sync {
         caller: &CallerContext,
         request: SetWorkflowScheduleEnabledRequest,
     ) -> ApiResult<WorkflowScheduleSnapshot>;
+    /// Delete an exact reviewed schedule; never cancels its previously allocated runs.
+    async fn delete_schedule(
+        &self,
+        caller: &CallerContext,
+        request: DeleteWorkflowScheduleRequest,
+    ) -> ApiResult<DeletedWorkflowSchedule>;
     /// Owner-authorized history for one registered definition.
     async fn list_runs(
         &self,

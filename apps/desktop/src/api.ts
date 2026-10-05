@@ -86,6 +86,18 @@ export function createWorkflowSchedule(
     request,
   });
 }
+export function deleteWorkflowSchedule(
+  targetId: string,
+  selectionEpoch: number,
+  scheduleId: string,
+  etag: string,
+): Promise<{ schedule_id: string }> {
+  return call("delete_workflow_schedule", {
+    targetId,
+    selectionEpoch,
+    request: { schedule_id: scheduleId, etag },
+  });
+}
 export function setWorkflowScheduleEnabled(
   targetId: string,
   selectionEpoch: number,

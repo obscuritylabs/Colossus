@@ -25,7 +25,7 @@ try {
         $plugins = @(& $binaryPath --config config.yaml plugins list | ConvertFrom-Json)
         if ($plugins.Count -ne 1 -or $plugins[0].manifest.name -ne "colossus" -or
             $plugins[0].origin -ne "bundled" -or -not $plugins[0].available -or
-            $plugins[0].skills.Count -ne 4) {
+            $plugins[0].skills.Count -ne 5) {
             throw "private release fixture did not bootstrap the embedded core"
         }
     } finally {

@@ -162,6 +162,13 @@ pub enum WorkflowControlOperation {
         /// Exact canonical schedule revision reviewed for control.
         etag: String,
     },
+    /// Permanently stop future ticks and remove the schedule from active discovery.
+    DeleteSchedule {
+        /// Exact caller-owned schedule identity; deleted identities cannot be reused.
+        schedule_id: String,
+        /// Exact revision reviewed for deletion; also binds uncertain retries.
+        etag: String,
+    },
     /// Read a bounded owner-authorized run history for one definition.
     ListRuns {
         /// Exact registered name:version.
@@ -203,6 +210,7 @@ impl WorkflowControlOperation {
             Self::GetSchedule { .. } => "workflow.schedule.get",
             Self::CreateSchedule { .. } => "workflow.schedule.create",
             Self::SetScheduleEnabled { .. } => "workflow.schedule.set_enabled",
+            Self::DeleteSchedule { .. } => "workflow.schedule.delete",
             Self::GetRun { .. } | Self::ListRuns { .. } | Self::ActiveWork => "workflow.run.read",
             Self::StartRun { .. } => "workflow.run.start",
         }
@@ -213,7 +221,8 @@ impl WorkflowControlOperation {
         match self {
             Self::GetSchedule { schedule_id }
             | Self::CreateSchedule { schedule_id, .. }
-            | Self::SetScheduleEnabled { schedule_id, .. } => {
+            | Self::SetScheduleEnabled { schedule_id, .. }
+            | Self::DeleteSchedule { schedule_id, .. } => {
                 format!("workflow-schedule:{schedule_id}")
             }
             Self::GetRun { run_id } => format!("workflow-run:{run_id}"),

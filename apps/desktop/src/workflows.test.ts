@@ -4,7 +4,36 @@ import {
   canonicalJson,
   firstOccurrence,
   scheduleInputs,
+  scheduledTaskText,
 } from "./workflows";
+
+describe("released task output", () => {
+  it("extracts the agent response without rewriting the exact raw result", () => {
+    const task = {
+      media_type: "application/json",
+      text: JSON.stringify({ output: "## Briefing\nReady." }),
+    };
+    const raw = `{"task":${JSON.stringify(task)},"exact":18446744073709551615}`;
+    expect(scheduledTaskText(raw)).toBe("## Briefing\nReady.");
+    expect(raw).toContain("18446744073709551615");
+  });
+  it("leaves unknown, malformed, empty, and oversized results in raw inspection", () => {
+    for (const raw of [
+      "null",
+      "[]",
+      "{",
+      '{"task":{"text":"{}"}}',
+      JSON.stringify({
+        task: { media_type: "application/json", text: "null" },
+      }),
+      JSON.stringify({
+        task: { media_type: "application/json", text: '{"output":9}' },
+      }),
+      " ".repeat(65537),
+    ])
+      expect(scheduledTaskText(raw)).toBeNull();
+  });
+});
 
 describe("reviewed schedule intent", () => {
   it("freezes UTC and rejects invalid dates and non-object inputs", () => {

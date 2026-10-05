@@ -1,9 +1,9 @@
 //! One-attempt authenticated workflow requests; callers reconcile uncertain mutations.
 use super::*;
 use crate::{
-    CreateWorkflowScheduleRequest, RegisteredWorkflow, SetWorkflowScheduleEnabledRequest,
-    StartWorkflowRunRequest, WorkflowClient, WorkflowPage, WorkflowRunSnapshot,
-    WorkflowScheduleSnapshot,
+    CreateWorkflowScheduleRequest, DeleteWorkflowScheduleRequest, DeletedWorkflowSchedule,
+    RegisteredWorkflow, SetWorkflowScheduleEnabledRequest, StartWorkflowRunRequest, WorkflowClient,
+    WorkflowPage, WorkflowRunSnapshot, WorkflowScheduleSnapshot,
 };
 use colossus_grpc::workflow_wire as wire;
 use proto::automation_service_client::AutomationServiceClient;
@@ -262,6 +262,31 @@ impl WorkflowClient for GrpcWorkflowClient {
             return Err(unconfirmed_mutation());
         }
         Ok(value)
+    }
+    async fn delete_schedule(
+        &self,
+        request: DeleteWorkflowScheduleRequest,
+    ) -> ApiResult<DeletedWorkflowSchedule> {
+        let id = request.schedule_id.clone();
+        let request = self
+            .transport
+            .request(proto::DeleteWorkflowScheduleRequest {
+                schedule_id: request.schedule_id,
+                etag: request.etag,
+            })
+            .await?;
+        let value = self
+            .client()
+            .delete_workflow_schedule(request)
+            .await
+            .map_err(mutation_status)?
+            .into_inner();
+        if value.schedule_id != id {
+            return Err(unconfirmed_mutation());
+        }
+        Ok(DeletedWorkflowSchedule {
+            schedule_id: value.schedule_id,
+        })
     }
     async fn list_runs(
         &self,

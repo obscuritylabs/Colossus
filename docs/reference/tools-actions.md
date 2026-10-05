@@ -32,7 +32,7 @@ and output bounds.
 | Search and fetch | `web.search`, `web.fetch`, `docs.fetch`, `network.http` | Search needs an explicit route; generic fetch needs host activation plus declared or ambient HTTP(S) authority; quarantined output |
 | MCP | `mcp.servers`, `mcp.search`, `mcp.tools`, `mcp.call` | Configured stdio or Streamable HTTP servers and exact-name or star-pattern tool allowlists |
 | Integrations | Connected operation names | Configured, trusted, and selected only |
-| Workflows | `workflow.definition.list`, `workflow.definition.get`, `workflow.schedule.list`, `workflow.schedule.get`, `workflow.schedule.create`, `workflow.task.schedule`, `workflow.schedule.set_enabled` | Registered hash-pinned definitions; caller-owned calendar/interval workflow schedules and plain-language tasks; persistent mutations use policy, review, one-use permits, and quarantined results |
+| Workflows | `workflow.definition.list`, `workflow.definition.get`, `workflow.schedule.list`, `workflow.schedule.get`, `workflow.schedule.create`, `workflow.task.schedule`, `workflow.schedule.set_enabled`, `workflow.schedule.delete` | Registered hash-pinned definitions; caller-owned calendar/interval workflow schedules and plain-language tasks; persistent mutations use policy, review, one-use permits, and quarantined results |
 
 Schedule create and enabled-state control are Administration actions. Both require
 approval under Allow all and Development defaults, including initially paused creation
@@ -309,3 +309,12 @@ Use `workflow.schedule.list` to check for an existing request and
 `workflow.schedule.get` to confirm the stored task. Retry identities are scoped to
 the application owner and exact canonical request. Retain them across uncertain
 responses. The bundled `colossus/schedule-task` skill documents this flow.
+
+`workflow.schedule.delete` accepts only `schedule_id` and the freshly inspected
+64-character `etag`. It uses the `workflow.schedule.delete` effect action and normal
+approval obligations; application callers need `schedules:read`, `schedules:control`,
+and an explicit tool grant. It rejects foreign and unknown-owner legacy records.
+Deletion appends a durable tombstone, stops future ticks, and removes the schedule
+from the active catalog. Already allocated runs and their ownership remain intact.
+The same reviewed deletion can be reconciled without another append, but deleted
+IDs cannot be allocated again. Lost mutation responses are never retried automatically.

@@ -77,7 +77,9 @@ fn scope(operation: &Operation) -> &'static [&'static str] {
             "workflows:register",
         ],
         Operation::CreateSchedule { .. } => &["schedules:read", "schedules:create"],
-        Operation::SetScheduleEnabled { .. } => &["schedules:read", "schedules:control"],
+        Operation::SetScheduleEnabled { .. } | Operation::DeleteSchedule { .. } => {
+            &["schedules:read", "schedules:control"]
+        }
         _ => &[],
     }
 }
@@ -140,6 +142,7 @@ impl GatewayToolExecutor {
             "workflow.schedule.get" => "get_schedule",
             "workflow.schedule.create" | "workflow.task.schedule" => "create_schedule",
             "workflow.schedule.set_enabled" => "set_schedule_enabled",
+            "workflow.schedule.delete" => "delete_schedule",
             _ => return Err(ToolError::Denied("unsupported workflow operation".into())),
         };
         let mut arguments = call.arguments.as_object().cloned().ok_or_else(|| {

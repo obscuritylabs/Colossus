@@ -501,7 +501,7 @@ fn public_approval_resource(request: &EffectRequest) -> String {
     let action = request.action.as_str();
     if matches!(
         action,
-        "workflow.schedule.create" | "workflow.schedule.set_enabled"
+        "workflow.schedule.create" | "workflow.schedule.set_enabled" | "workflow.schedule.delete"
     ) {
         "persistent schedule".into()
     } else if action.starts_with("filesystem.")
@@ -542,7 +542,7 @@ fn public_approval_prompt(request: &EffectRequest) -> String {
     use colossus_contracts::WorkflowControlOperation as Operation;
     if matches!(
         request.action.as_str(),
-        "workflow.schedule.create" | "workflow.schedule.set_enabled"
+        "workflow.schedule.create" | "workflow.schedule.set_enabled" | "workflow.schedule.delete"
     ) && let Ok(operation) = serde_json::from_value::<Operation>(request.content.clone())
         && operation.action() == request.action
         && operation.resource() == request.resource
@@ -591,6 +591,9 @@ fn public_approval_prompt(request: &EffectRequest) -> String {
                 "{} persistent schedule {schedule_id}.\nReviewed canonical revision: {etag}\nPausing affects future ticks; already queued or running workflows continue. Enabling retains its next boundary and may reconcile missed occurrences. Inspect the schedule before approving.",
                 if enabled { "Enable" } else { "Pause" }
             ),
+            Operation::DeleteSchedule { schedule_id, etag } => format!(
+                "Delete persistent schedule {schedule_id}.\nReviewed canonical revision: {etag}\nFuture ticks stop and the schedule leaves the active catalog. Existing runs and retained history remain. The identity cannot be reused. Inspect the schedule before approving."
+            ),
             _ => return PUBLIC_APPROVAL_PROMPT.into(),
         };
         return summary;
@@ -602,7 +605,7 @@ fn public_approval_action(request: &EffectRequest) -> String {
     let action = request.action.as_str();
     if matches!(
         action,
-        "workflow.schedule.create" | "workflow.schedule.set_enabled"
+        "workflow.schedule.create" | "workflow.schedule.set_enabled" | "workflow.schedule.delete"
     ) {
         "workflow.schedule.control".into()
     } else if action.starts_with("filesystem.")

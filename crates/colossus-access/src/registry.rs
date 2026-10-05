@@ -42,7 +42,8 @@ pub fn builtin_tool_descriptor(name: &str) -> Result<ToolDescriptor, AccessError
         | "workflow.schedule.get"
         | "workflow.schedule.create"
         | "workflow.task.schedule"
-        | "workflow.schedule.set_enabled" => simple_tool("workflows"),
+        | "workflow.schedule.set_enabled"
+        | "workflow.schedule.delete" => simple_tool("workflows"),
         "task.create" | "task.update" | "task.list" => simple_tool("tasks"),
         "decision.create" | "decision.update" | "decision.list" | "decision.archive"
         | "decision.supersede" => simple_tool("decisions"),
@@ -246,6 +247,7 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
         &[
             "workflow.schedule.create",
             "workflow.schedule.set_enabled",
+            "workflow.schedule.delete",
             "workflow.definition.register",
             "workflow.run.start",
             "plan.approve_request",
