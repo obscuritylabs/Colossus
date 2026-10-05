@@ -15,12 +15,34 @@ impl Drop for NativeKeys {
             format!("signing-key:checkpoint-{}", self.0),
             format!("journal-anchor:journal-{}", self.0),
         ] {
-            if let Ok(entry) =
-                keyring::Entry::new("com.obscuritylabs.colossus.managed-runtime", &account)
-            {
-                let _ = entry.delete_credential();
-            }
+            delete_native_test_key(&account);
         }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn delete_native_test_key(account: &str) {
+    // The keyring delete implementation first reads the secret, which can open
+    // an access prompt for keys created by the sidecar. Delete only this test's
+    // UUID-scoped metadata, matching native_lifecycle's macOS cleanup.
+    let _ = std::process::Command::new("/usr/bin/security")
+        .env_clear()
+        .args([
+            "delete-generic-password",
+            "-s",
+            "com.obscuritylabs.colossus.managed-runtime",
+            "-a",
+            account,
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn delete_native_test_key(account: &str) {
+    if let Ok(entry) = keyring::Entry::new("com.obscuritylabs.colossus.managed-runtime", account) {
+        let _ = entry.delete_credential();
     }
 }
 
