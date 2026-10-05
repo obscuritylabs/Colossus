@@ -50,7 +50,12 @@ export default function CloudPreview() {
   }
   return (
     <main style={{ maxWidth: 850, margin: "32px auto", padding: "0 24px" }}>
-      <p style={{ color: "var(--muted)", fontSize: 12 }}>
+      <p
+        style={{
+          color: "var(--muted)",
+          fontSize: "var(--font-size-caption)",
+        }}
+      >
         Desktop visual preview · Native enrollment is tested separately.
       </p>
       <CloudConnectionPane targetId="preview-workspace" />

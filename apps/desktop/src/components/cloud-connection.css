@@ -1,7 +1,10 @@
 .cloud-settings {
-  max-width: 720px;
-  padding: 16px 8px;
+  max-width: var(--settings-content-max);
+  padding: var(--settings-section-gap) 0;
   color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
 }
 .cloud-settings header {
   display: flex;
@@ -12,39 +15,44 @@
 .cloud-settings-icon {
   display: flex;
   padding: 13px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: var(--surface-raised);
   color: var(--blue);
 }
 .cloud-settings h2 {
-  font-size: 20px;
+  font-size: var(--font-size-heading);
+  line-height: var(--line-height-tight);
   margin: 0 0 7px;
 }
 .cloud-settings header p {
-  font-size: 12px;
+  font-size: var(--font-size-body-sm);
   color: var(--muted);
   margin: 0;
 }
 .cloud-settings-state {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 9px;
   padding: 15px 18px;
   background: var(--surface-muted);
   border: 1px solid var(--border);
-  border-radius: 9px;
-  font-size: 12px;
+  border-radius: var(--radius);
+  font-size: var(--font-size-body-sm);
 }
 .cloud-settings-state > span:last-child:not(.cloud-state-dot) {
   margin-left: auto;
   color: var(--muted);
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 .cloud-state-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--faint);
+  flex-shrink: 0;
 }
 .cloud-state-dot.connected {
   background: var(--green);
@@ -54,7 +62,7 @@
   grid-template-columns: 130px minmax(0, 1fr);
   gap: 14px;
   margin: 22px 0;
-  font-size: 12px;
+  font-size: var(--font-size-body-sm);
 }
 .cloud-settings dt {
   color: var(--muted);
@@ -63,7 +71,7 @@
   margin: 0;
   overflow-wrap: anywhere;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .cloud-settings-actions {
   display: flex;
@@ -71,8 +79,8 @@
   flex-wrap: wrap;
 }
 .cloud-settings-note {
-  font-size: 11px;
-  line-height: 1.7;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
   color: var(--muted);
   margin: 18px 0;
 }
@@ -84,16 +92,20 @@
 .cloud-settings label {
   display: grid;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--font-size-control);
+  font-weight: 500;
 }
 .cloud-settings input {
   background: var(--surface-control);
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   color: var(--text);
   padding: 11px 12px;
   width: 100%;
   font: inherit;
+  font-weight: 400;
+  min-height: var(--control-height);
+  min-width: 0;
 }
 .cloud-settings input:focus-visible {
   outline: 2px solid var(--blue);
@@ -107,7 +119,7 @@
   gap: 11px;
   padding: 17px 18px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--radius);
   background: var(--surface-muted);
   color: var(--muted);
   margin-top: 26px;
@@ -117,8 +129,8 @@
   margin-top: 2px;
 }
 .cloud-settings aside p {
-  font-size: 11px;
-  line-height: 1.8;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
   margin: 0;
 }
 .cloud-settings-error {
@@ -126,6 +138,15 @@
   border: 1px solid var(--red-border);
   background: var(--red-soft);
   padding: 13px;
-  border-radius: 8px;
-  font-size: 12px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-body-sm);
+}
+@media (max-width: 520px) {
+  .cloud-settings dl {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+  .cloud-settings dd + dt {
+    margin-top: 8px;
+  }
 }
