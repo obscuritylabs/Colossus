@@ -7,7 +7,8 @@ use colossus_cloud_protocol::{
     },
 };
 use colossus_sdk::{
-    AgentRunClient, ApiErrorCode, CancelRunRequest, GetRunRequest, WatchRunRequest,
+    AgentRunClient, ApiErrorCode, CancelRunRequest, GetRunRequest, ListRunsRequest, PageRequest,
+    WatchRunRequest,
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,9 @@ use tonic::{
     transport::{Certificate, ClientTlsConfig, Endpoint, Identity},
 };
 use zeroize::Zeroizing;
+
+#[cfg(test)]
+mod readiness_tests;
 
 /// Non-secret persisted enrollment and local runtime identity binding.
 #[derive(Clone, Serialize, Deserialize)]
@@ -184,6 +188,7 @@ impl RuntimeConnector {
         }
     }
     async fn connect_once(&self, status: &watch::Sender<ConnectorStatus>) -> Result<(), Status> {
+        check_local_readiness(self.runs.as_ref()).await?;
         let tls = ClientTlsConfig::new()
             .ca_certificate(Certificate::from_pem(self.config.ca_pem.clone()))
             .identity(Identity::from_pem(
@@ -239,9 +244,9 @@ impl RuntimeConnector {
         loop {
             tokio::select! {
                 _=heartbeat.tick()=>{
-                    if self.runs.is_closed() { return Err(Status::unavailable("local runtime closed")); }
+                    check_local_readiness(self.runs.as_ref()).await?;
                     if self.enrollment.is_some() && crate::enrollment::certificate_due(&self.config.certificate_pem).map_err(|_|Status::failed_precondition("invalid connector certificate"))? { return Ok(()); }
-                    send(&sender,runtime_frame::Body::Heartbeat(wire::RuntimeHeartbeat{ready:!self.runs.is_closed()})).await?;
+                    send(&sender,runtime_frame::Body::Heartbeat(wire::RuntimeHeartbeat{ready:true})).await?;
                 },
                 finished=watchers.join_next(),if !watchers.is_empty()=>{
                     finished.ok_or_else(||Status::internal("watch lost"))?.map_err(|_|Status::internal("watch failed"))??;
@@ -282,6 +287,34 @@ impl RuntimeConnector {
             }
         }
     }
+}
+
+// An external daemon's SDK client stays open across daemon outages. Probe its
+// authenticated, caller-scoped read API before advertising execution readiness.
+// The one-item page is discarded locally and never forwarded to the cloud.
+async fn check_local_readiness(runs: &dyn AgentRunClient) -> Result<(), Status> {
+    if runs.is_closed() {
+        return Err(Status::unavailable("local runtime closed"));
+    }
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        runs.list_runs(ListRunsRequest {
+            session_id: None,
+            statuses: Vec::new(),
+            page: Some(PageRequest {
+                page_size: 1,
+                page_token: String::new(),
+            }),
+            include_archived: false,
+        }),
+    )
+    .await
+    .map_err(|_| Status::deadline_exceeded("local readiness timeout"))?
+    .map_err(|_| Status::unavailable("local runtime unavailable"))?;
+    if runs.is_closed() {
+        return Err(Status::unavailable("local runtime closed"));
+    }
+    Ok(())
 }
 async fn execute(runs: &dyn AgentRunClient, command: Command) -> CloudReply {
     let result = match command {

@@ -1053,12 +1053,7 @@ impl Backend for ManagedSidecarBackend {
         // managed tree even while the aborted supervisor is still being joined.
         let running = self.state.process.lock().await.take();
         self.state.closing.store(true, Ordering::Release);
-        if let Some(client) = &self.state.connector_runs {
-            client.mark_closed();
-            client.release().await;
-        }
-        self.agent_runs.mark_closed();
-        self.agent_runs.release().await;
+        close_run_clients(&self.agent_runs, self.state.connector_runs.as_deref()).await;
         if let Some(artifacts) = &self.artifacts {
             artifacts.release().await;
         }
@@ -1174,7 +1169,7 @@ impl Drop for ManagedSidecarBackend {
             .status
             .send_replace(NativeSidecarStatus::Stopping);
         self.state.closing.store(true, Ordering::Release);
-        self.agent_runs.mark_closed();
+        mark_run_clients_closed(&self.agent_runs, self.state.connector_runs.as_deref());
         if let Ok(mut monitor) = self.state.monitor.lock()
             && let Some(task) = monitor.take()
         {
@@ -1194,6 +1189,27 @@ struct SwitchingAgentRunClient {
     closed: watch::Sender<bool>,
 }
 
+fn mark_run_clients_closed(
+    primary: &SwitchingAgentRunClient,
+    connector: Option<&SwitchingAgentRunClient>,
+) {
+    primary.mark_closed();
+    if let Some(connector) = connector {
+        connector.mark_closed();
+    }
+}
+
+async fn close_run_clients(
+    primary: &SwitchingAgentRunClient,
+    connector: Option<&SwitchingAgentRunClient>,
+) {
+    mark_run_clients_closed(primary, connector);
+    primary.release().await;
+    if let Some(connector) = connector {
+        connector.release().await;
+    }
+}
+
 impl SwitchingAgentRunClient {
     fn new(initial: AgentRunTransports) -> Self {
         let (closed, _) = watch::channel(false);
@@ -1204,12 +1220,21 @@ impl SwitchingAgentRunClient {
     }
 
     async fn current(&self) -> ApiResult<AgentRunTransports> {
+        if self.is_closed() {
+            return Err(sidecar_closed_error());
+        }
         let current = self.current.read().await;
+        if self.is_closed() {
+            return Err(sidecar_closed_error());
+        }
         current.clone().ok_or_else(sidecar_closed_error)
     }
 
     async fn replace(&self, next: AgentRunTransports) {
-        *self.current.write().await = Some(next);
+        let mut current = self.current.write().await;
+        if !self.is_closed() {
+            *current = Some(next);
+        }
     }
 
     async fn release(&self) {
@@ -1218,6 +1243,11 @@ impl SwitchingAgentRunClient {
 
     fn mark_closed(&self) {
         self.closed.send_replace(true);
+        // Drop cannot await, but normally owns no competing transport read. If
+        // a read is in flight, the closed signal still rejects every later call.
+        if let Ok(mut current) = self.current.try_write() {
+            current.take();
+        }
     }
 }
 
@@ -1401,8 +1431,7 @@ async fn supervise(state: Arc<ManagedSidecarState>) {
         exited.guardian.take();
         if exited.force_kill_and_cleanup().is_err() {
             exited.close_transports().await;
-            state.agent_runs.mark_closed();
-            state.agent_runs.release().await;
+            close_run_clients(&state.agent_runs, state.connector_runs.as_deref()).await;
             if let Some(artifacts) = &state.artifacts {
                 artifacts.release().await;
             }
@@ -1467,8 +1496,7 @@ async fn supervise(state: Arc<ManagedSidecarState>) {
             // During a recoverable crash, the transport must fail naturally with a
             // retryable UNAVAILABLE so durable watches reopen against the replacement.
             exited.close_transports().await;
-            state.agent_runs.mark_closed();
-            state.agent_runs.release().await;
+            close_run_clients(&state.agent_runs, state.connector_runs.as_deref()).await;
             if let Some(artifacts) = &state.artifacts {
                 artifacts.release().await;
             }
@@ -3142,6 +3170,82 @@ mod tests {
             .await
             .expect("terminal supervisor state must wake waiters");
         assert!(client.is_closed());
+    }
+
+    #[tokio::test]
+    async fn terminal_shutdown_closes_both_run_clients_and_rejects_late_replacement() {
+        let primary_transport = Arc::new(UnusedAgentRuns);
+        let connector_transport = Arc::new(UnusedAgentRuns);
+        let primary_weak = Arc::downgrade(&primary_transport);
+        let connector_weak = Arc::downgrade(&connector_transport);
+        let primary = SwitchingAgentRunClient::new(AgentRunTransports {
+            primary: primary_transport,
+            approval_broker: None,
+        });
+        let connector = SwitchingAgentRunClient::new(AgentRunTransports {
+            primary: connector_transport,
+            approval_broker: None,
+        });
+
+        close_run_clients(&primary, Some(&connector)).await;
+
+        assert!(primary_weak.upgrade().is_none());
+        assert!(connector_weak.upgrade().is_none());
+        for client in [&primary, &connector] {
+            timeout(Duration::from_millis(100), client.wait_closed())
+                .await
+                .expect("permanent shutdown must wake both clients");
+            let replacement = Arc::new(UnusedAgentRuns);
+            let replacement_weak = Arc::downgrade(&replacement);
+            client
+                .replace(AgentRunTransports {
+                    primary: replacement,
+                    approval_broker: None,
+                })
+                .await;
+            assert!(replacement_weak.upgrade().is_none());
+            assert!(client.is_closed());
+            assert_eq!(
+                client.current().await.err().expect("closed client").code,
+                ApiErrorCode::Unavailable
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn drop_shutdown_signals_both_clients_even_when_transports_are_in_use() {
+        let primary = SwitchingAgentRunClient::new(AgentRunTransports {
+            primary: Arc::new(UnusedAgentRuns),
+            approval_broker: None,
+        });
+        let connector = SwitchingAgentRunClient::new(AgentRunTransports {
+            primary: Arc::new(UnusedAgentRuns),
+            approval_broker: None,
+        });
+        // Drop cannot await these locks. Its closed signal must still prevent
+        // callers from acquiring a surviving transport after permanent shutdown.
+        let primary_guard = primary.current.write().await;
+        let connector_guard = connector.current.write().await;
+        mark_run_clients_closed(&primary, Some(&connector));
+
+        for client in [&primary, &connector] {
+            timeout(Duration::from_millis(100), client.wait_closed())
+                .await
+                .expect("Drop must wake both clients despite lock contention");
+            let result = timeout(Duration::from_millis(100), client.current())
+                .await
+                .expect("closed client must not wait for a transport lock");
+            assert_eq!(
+                result.err().expect("closed client").code,
+                ApiErrorCode::Unavailable
+            );
+        }
+
+        drop(primary_guard);
+        drop(connector_guard);
+        close_run_clients(&primary, Some(&connector)).await;
+        assert!(primary.current.read().await.is_none());
+        assert!(connector.current.read().await.is_none());
     }
 
     #[tokio::test]

@@ -68,6 +68,12 @@ first welcome have separate ten-second deadlines; an established stream remains 
 under heartbeat and backpressure bounds. An authenticated peer withholding HTTP/2
 progress must return the same connector to bounded retry without changing run identity.
 
+Before connecting and every five-second heartbeat, the connector probes the local
+runtime's authenticated caller-scoped read API with a three-second deadline and a
+one-item page. It discards the page locally. An open SDK client alone does not establish
+daemon readiness: unavailable or stalled local service closes the cloud stream and
+returns to bounded reconnect, retaining the same enrollment and accepted work.
+
 Desktop-managed sidecars stop with Desktop. Persistent work uses an independently
 supervised daemon and connector under one explicitly chosen OS-user identity. Windows
 uses protected discovery and native credentials; macOS uses Keychain; graphical Linux

@@ -13,6 +13,7 @@ printf 'colossus-local-native-acceptance' | gnome-keyring-daemon --unlock --comp
 cargo test --locked --release -p colossus-credentials --test native_linux \
     native_secret_service_survives_process_restart -- --ignored --exact --test-threads=1
 cargo test --locked --release -p colossus-sdk --features sidecar --lib linux_credential_session
+cargo test --locked --release -p colossus-sdk --features sidecar --lib native_sidecar::tests::
 cargo test --locked --release -p colossus-sidecar --test native_lifecycle \
     verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof -- --ignored --exact
 COLOSSUS_ACCEPTANCE_SIDECAR=/build/target/release/colossus-sidecar \
