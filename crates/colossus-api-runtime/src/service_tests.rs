@@ -43,6 +43,7 @@ use uuid::Uuid;
 
 mod plan_interaction;
 mod process_sessions;
+mod schedule_approval;
 
 struct RuntimeFixture {
     runtime: Arc<Runtime>,

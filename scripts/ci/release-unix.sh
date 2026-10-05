@@ -92,7 +92,7 @@ cp release/smoke-config.yaml "$installed_smoke/config.yaml"
         exit 1
     fi
     "$prefix/bin/colossus" --config config.yaml plugins list >plugins.json
-    jq -e '.[0].origin == "bundled" and .[0].available and (.[0].skills | length) == 4' plugins.json >/dev/null
+    jq -e '.[0].origin == "bundled" and .[0].available and (.[0].skills | length) == 5' plugins.json >/dev/null
     "$prefix/bin/colossus" --config config.yaml run installed-offline >result.json
     jq -e '.output == "installed-offline" and .profile == "echo" and .event_count >= 3' result.json >/dev/null
     "$prefix/bin/colossus" --config config.yaml audit verify >audit.json

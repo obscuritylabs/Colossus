@@ -378,6 +378,11 @@ pub trait Backend: Send + Sync {
         None
     }
 
+    /// Caller-bound workflow resources when explicitly advertised.
+    fn workflows(&self) -> Option<Arc<dyn crate::WorkflowClient>> {
+        None
+    }
+
     /// Close this client or isolated runtime idempotently.
     async fn close(&self) -> SdkResult<()>;
 }

@@ -38,6 +38,56 @@ fn default_access_is_allow_all() {
     assert_eq!(AccessProfile::default(), AccessProfile::AllowAll);
     assert_eq!(AccessConfig::default().profile, AccessProfile::AllowAll);
 }
+
+#[test]
+fn persistent_schedule_mutations_default_to_review_and_preserve_explicit_policy() {
+    let resolve = |config: &AccessConfig, external| {
+        resolve_access(
+            config,
+            &[],
+            builtin_action_descriptors(),
+            [],
+            &AccessContext::default(),
+            external,
+        )
+        .unwrap()
+    };
+    let defaults = resolve(&AccessConfig::default(), false);
+    for action in [
+        "workflow.definition.read",
+        "workflow.schedule.list",
+        "workflow.schedule.get",
+    ] {
+        assert_eq!(
+            defaults.action_decision(action),
+            Some(AccessDecision::Allow)
+        );
+    }
+    for action in [
+        "workflow.schedule.create",
+        "workflow.schedule.set_enabled",
+        "workflow.schedule.delete",
+    ] {
+        assert_eq!(
+            defaults.action_decision(action),
+            Some(AccessDecision::RequireApproval)
+        );
+    }
+    let mut config = AccessConfig::default();
+    config
+        .actions
+        .deny
+        .push("workflow.schedule.set_enabled".into());
+    assert_eq!(
+        resolve(&config, false).action_decision("workflow.schedule.set_enabled"),
+        Some(AccessDecision::Deny)
+    );
+    let external = resolve(&AccessConfig::default(), true);
+    assert_eq!(
+        external.action_decision("workflow.schedule.create"),
+        Some(AccessDecision::ExternalPolicy)
+    );
+}
 use colossus_contracts::ToolSpec;
 
 fn tool(name: &str, action: Option<&str>) -> ToolSpec {

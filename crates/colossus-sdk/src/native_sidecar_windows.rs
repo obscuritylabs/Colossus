@@ -625,6 +625,10 @@ impl Backend for WindowsSidecarBackend {
         self.primary.artifacts()
     }
 
+    fn workflows(&self) -> Option<Arc<dyn crate::WorkflowClient>> {
+        self.primary.workflows()
+    }
+
     async fn close(&self) -> SdkResult<()> {
         if self.closed.swap(true, Ordering::AcqRel) {
             return Ok(());

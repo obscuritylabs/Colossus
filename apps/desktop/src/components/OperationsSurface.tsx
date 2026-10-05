@@ -29,9 +29,13 @@ import type { AgentParticipant } from "./AgentFlow";
 import { AgentFlow } from "./AgentFlow";
 import { ManagedSettingsPane } from "./ManagedSettingsPane";
 import { PluginsSurface } from "./PluginsSurface";
+import { WorkflowsSurface } from "./WorkflowsSurface";
+import { SchedulesSurface } from "./SchedulesSurface";
 import type { WorkspaceSurface } from "./ProductRail";
 
 interface OperationsSurfaceProps {
+  scheduleInspection?:
+    { scheduleId: string; showRun: boolean } | null | undefined;
   initialSettingsTab?:
     "runtime" | "providers" | "plugins" | "terminal" | "dictation" | undefined;
   onConfigurePluginConnection?: () => void;
@@ -1014,6 +1018,33 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
         </button>
       ) : null}
       {props.surface === "fleet" ? <FleetView {...props} /> : null}
+      {props.surface === "workflows" ? (
+        <WorkflowsSurface
+          key={props.desktop.selectedTargetId}
+          targetId={props.desktop.selectedTargetId}
+          workspaceName={
+            props.desktop.workspace?.displayName || "Selected runtime"
+          }
+          runtimeReady={
+            props.connection.state === "connected" &&
+            props.connection.targetId === props.desktop.selectedTargetId
+          }
+        />
+      ) : null}
+      {props.surface === "schedules" ? (
+        <SchedulesSurface
+          key={props.desktop.selectedTargetId}
+          targetId={props.desktop.selectedTargetId}
+          workspaceName={
+            props.desktop.workspace?.displayName || "Selected runtime"
+          }
+          runtimeReady={
+            props.connection.state === "connected" &&
+            props.connection.targetId === props.desktop.selectedTargetId
+          }
+          initialInspection={props.scheduleInspection}
+        />
+      ) : null}
       {props.surface === "plugins" ? (
         <PluginsSurface
           key={props.desktop.selectedTargetId}

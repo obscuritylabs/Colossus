@@ -134,6 +134,10 @@ pub struct AgentRunServiceAdapter {
 }
 
 impl AgentRunServiceAdapter {
+    pub(crate) fn with_watch_slots(mut self, slots: Arc<Semaphore>) -> Self {
+        self.watch_slots = slots;
+        self
+    }
     /// Wrap a transport-neutral run API.
     pub fn new(api: Arc<dyn AgentRunApi>) -> Self {
         Self {

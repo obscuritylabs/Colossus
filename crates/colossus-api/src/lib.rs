@@ -14,6 +14,8 @@ mod process_sessions;
 mod repository;
 mod runs;
 mod validation;
+mod workflows;
+pub use workflows::*;
 
 pub use artifacts::{
     ARTIFACT_CHUNK_BYTES, ArtifactApi, ArtifactChunk, ArtifactDownload, ArtifactPurpose,

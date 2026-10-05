@@ -521,7 +521,7 @@ export function DropdownSelect({
                 </button>
               ))}
             </div>,
-            document.body,
+            triggerRef.current?.closest("dialog") ?? document.body,
           )
         : null}
     </span>

@@ -28,6 +28,22 @@ impl ToolExecutor for GatewayToolExecutor {
                 Box::pin(self.execute_process_session(call, context)).await
             }
             "shell.run" => Box::pin(self.execute_process(call, context)).await,
+            "workflow.definition.list"
+            | "workflow.definition.get"
+            | "workflow.schedule.list"
+            | "workflow.schedule.get"
+            | "workflow.schedule.create"
+            | "workflow.task.schedule"
+            | "workflow.schedule.set_enabled"
+            | "workflow.schedule.delete" => {
+                let output = Box::pin(self.execute_workflow_tool(&call, context)).await?;
+                Ok(ToolResult {
+                    call_id: call.call_id,
+                    name: call.name,
+                    output,
+                    exit_code: 0,
+                })
+            }
             "session.set_title"
             | "task.create"
             | "task.update"

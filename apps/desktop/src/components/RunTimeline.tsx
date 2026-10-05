@@ -49,7 +49,13 @@ import { DropdownSelect } from "./DropdownSelect";
 import { MarkdownContent } from "./MarkdownContent";
 import { researchSources } from "./ResearchSourcesPanel";
 
+import {
+  ScheduleActivityCard,
+  type InspectSchedule,
+} from "./ScheduleActivityCard";
+
 interface RunTimelineProps {
+  onInspectSchedule?: InspectSchedule | undefined;
   view: RunView;
   activityComparison?: boolean;
   planContinuationAvailable?: boolean;
@@ -464,7 +470,13 @@ function toolActivityPreview(activity: ToolActivity): string {
   }
 }
 
-function ToolActivityItem({ group }: { group: ToolActivityGroup }) {
+function ToolActivityItem({
+  group,
+  onInspectSchedule,
+}: {
+  group: ToolActivityGroup;
+  onInspectSchedule?: InspectSchedule | undefined;
+}) {
   const latest = group.updates.at(-1);
   if (latest === undefined || latest.update.type !== "tool_activity") {
     return null;
@@ -475,64 +487,71 @@ function ToolActivityItem({ group }: { group: ToolActivityGroup }) {
     releasedInput === null ? null : formatToolActivityText(releasedInput);
   const label = presentToolActivity(activity, releasedInput);
   return (
-    <details
-      className={`compact-tool-activity activity-tool-thread activity-state-${activity.state} activity-kind-${label.kind}`}
-    >
-      <summary>
-        <span className="feed-marker" aria-hidden="true">
-          <ToolActivityIcon kind={label.kind} />
-        </span>
-        <span className="compact-tool-copy">
-          <span className="compact-tool-heading">
-            <strong>{label.title}</strong>
-            <span className="compact-tool-name">{activity.toolName}</span>
-            <span className={`event-state tool-state-${activity.state}`}>
-              {readable(activity.state)}
-            </span>
-            <time dateTime={latest.createdAt}>
-              {compactTime(latest.createdAt)}
-            </time>
-          </span>
-        </span>
-        <IconChevronDown
-          className="compact-tool-chevron"
-          size={16}
-          stroke={1.8}
-          aria-hidden="true"
-        />
-      </summary>
-      <ol className="tool-activity-history">
-        {group.updates.map((item) => {
-          const update = item.update;
-          return (
-            <li key={item.sequence}>
-              <span
-                className={`tool-history-state state-${update.activity.state}`}
-              >
-                {readable(update.activity.state)}
-              </span>
-              <span>{update.activity.summary}</span>
-              <time dateTime={item.createdAt}>
-                {compactTime(item.createdAt)}
-              </time>
-            </li>
-          );
-        })}
-      </ol>
-      {input !== null ? (
-        <section className="tool-activity-input" aria-label="Tool input">
-          <strong>Input</strong>
-          <pre>{input}</pre>
-        </section>
-      ) : null}
-      <section
-        className="tool-activity-preview"
-        aria-label="Tool output preview"
+    <>
+      <ScheduleActivityCard
+        activity={activity}
+        input={releasedInput}
+        onInspect={onInspectSchedule}
+      />
+      <details
+        className={`compact-tool-activity activity-tool-thread activity-state-${activity.state} activity-kind-${label.kind}`}
       >
-        <strong>Preview</strong>
-        <pre>{toolActivityPreview(activity)}</pre>
-      </section>
-    </details>
+        <summary>
+          <span className="feed-marker" aria-hidden="true">
+            <ToolActivityIcon kind={label.kind} />
+          </span>
+          <span className="compact-tool-copy">
+            <span className="compact-tool-heading">
+              <strong>{label.title}</strong>
+              <span className="compact-tool-name">{activity.toolName}</span>
+              <span className={`event-state tool-state-${activity.state}`}>
+                {readable(activity.state)}
+              </span>
+              <time dateTime={latest.createdAt}>
+                {compactTime(latest.createdAt)}
+              </time>
+            </span>
+          </span>
+          <IconChevronDown
+            className="compact-tool-chevron"
+            size={16}
+            stroke={1.8}
+            aria-hidden="true"
+          />
+        </summary>
+        <ol className="tool-activity-history">
+          {group.updates.map((item) => {
+            const update = item.update;
+            return (
+              <li key={item.sequence}>
+                <span
+                  className={`tool-history-state state-${update.activity.state}`}
+                >
+                  {readable(update.activity.state)}
+                </span>
+                <span>{update.activity.summary}</span>
+                <time dateTime={item.createdAt}>
+                  {compactTime(item.createdAt)}
+                </time>
+              </li>
+            );
+          })}
+        </ol>
+        {input !== null ? (
+          <section className="tool-activity-input" aria-label="Tool input">
+            <strong>Input</strong>
+            <pre>{input}</pre>
+          </section>
+        ) : null}
+        <section
+          className="tool-activity-preview"
+          aria-label="Tool output preview"
+        >
+          <strong>Preview</strong>
+          <pre>{toolActivityPreview(activity)}</pre>
+        </section>
+      </details>
+    </>
   );
 }
 
@@ -624,9 +643,20 @@ function ActivityThought({ item }: { item: RunUpdate }) {
   );
 }
 
-function ActivityItem({ item }: { item: TimelineItem }) {
+function ActivityItem({
+  item,
+  onInspectSchedule,
+}: {
+  item: TimelineItem;
+  onInspectSchedule?: InspectSchedule | undefined;
+}) {
   if (item.type === "tool_activity") {
-    return <ToolActivityItem group={item.group} />;
+    return (
+      <ToolActivityItem
+        group={item.group}
+        onInspectSchedule={onInspectSchedule}
+      />
+    );
   }
   if (item.update.update.type === "reasoning_summary") {
     return <ActivityThought item={item.update} />;
@@ -638,10 +668,12 @@ function RunActivity({
   view,
   items,
   comparison,
+  onInspectSchedule,
 }: {
   view: RunView;
   items: readonly TimelineItem[];
   comparison: boolean;
+  onInspectSchedule?: InspectSchedule | undefined;
 }) {
   const toolActionCount = items.filter(
     (item) => item.type === "tool_activity",
@@ -711,6 +743,7 @@ function RunActivity({
       <div className="run-activity-body">
         {items.map((item) => (
           <ActivityItem
+            onInspectSchedule={onInspectSchedule}
             item={item}
             key={
               item.type === "tool_activity"
@@ -1143,6 +1176,7 @@ function PlanResultCard({
 
 export function RunTimeline({
   view,
+  onInspectSchedule,
   activityComparison = false,
   planContinuationAvailable = false,
   planWorkflowAvailable = false,
@@ -1213,6 +1247,7 @@ export function RunTimeline({
           view={view}
           items={activityItems}
           comparison={activityComparison}
+          onInspectSchedule={onInspectSchedule}
         />
       ) : null}
       {showLiveStatus ? <LiveRunStatus view={view} /> : null}

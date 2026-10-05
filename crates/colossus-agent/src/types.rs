@@ -22,6 +22,7 @@ pub(super) struct RunScope<'a> {
     pub(super) active_skills: &'a [String],
     pub(super) allowed_tools: Option<&'a [String]>,
     pub(super) mode: AgentRunMode,
+    pub(super) agent_options: colossus_contracts::WorkflowAgentOptions,
     pub(super) create_requested_session: bool,
     pub(super) include_provider_response_diagnostics: bool,
 }

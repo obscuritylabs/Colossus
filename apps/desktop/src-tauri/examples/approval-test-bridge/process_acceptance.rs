@@ -77,7 +77,7 @@ async fn dispatch(client: &Colossus, message: &Value) -> anyhow::Result<Value> {
     }
 }
 
-async fn run(client: &Colossus, session_id: Option<String>) -> anyhow::Result<Value> {
+pub(super) async fn run(client: &Colossus, session_id: Option<String>) -> anyhow::Result<Value> {
     let created = client
         .create_run(CreateRunRequest {
             input: vec![InputContentPart::Text(

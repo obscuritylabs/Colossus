@@ -11,6 +11,7 @@ pub use builtin::*;
 
 mod process_limits;
 mod process_sessions;
+mod workflows;
 pub use process_limits::with_process_limits;
 
 mod registry;

@@ -15,10 +15,20 @@ Read the relevant guide before editing its area; follow its links for deeper det
 | Persistence, projections or recovery | [State and recovery](docs/develop/state-recovery.md) |
 | Adding, moving or removing tests | [Test strategy](docs/develop/testing.md) |
 | Public API, SDK or Desktop transport | [Application SDK](docs/develop/application-sdk.md) |
+| Front-end screens, components, CSS or themes | [Front-end development](docs/develop/frontend.md); [shared UI package](apps/ui/README.md) |
 | Documentation | [Documentation authoring](docs/develop/documentation.md) |
 | CI or release automation | [CI/CD](docs/develop/ci-cd.md); [releasing](docs/develop/releasing.md) |
 | Legacy configuration or state | [Rust cutover decision](docs/develop/adr/0001-rust-runtime-cutover.md) |
 | Commits, PRs or merge readiness | [Contributing](docs/develop/contributing.md) |
+
+## Front-end development
+
+Prioritize `@colossus/ui` components and design tokens. Match existing settings surfaces
+(such as Providers) before introducing new presentation patterns. Use shared typography,
+color, radius, and control-size tokens; do not hardcode font sizes, font families, or
+palette colors in feature CSS. Keep transport and capability decisions in the host.
+Verify text-size preferences, supported palettes, compact layouts, keyboard behavior,
+and the rendered screens as described in the [front-end guide](docs/develop/frontend.md).
 
 ## Validation and handoff
 

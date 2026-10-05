@@ -32,6 +32,24 @@ and output bounds.
 | Search and fetch | `web.search`, `web.fetch`, `docs.fetch`, `network.http` | Search needs an explicit route; generic fetch needs host activation plus declared or ambient HTTP(S) authority; quarantined output |
 | MCP | `mcp.servers`, `mcp.search`, `mcp.tools`, `mcp.call` | Configured stdio or Streamable HTTP servers and exact-name or star-pattern tool allowlists |
 | Integrations | Connected operation names | Configured, trusted, and selected only |
+| Workflows | `workflow.definition.list`, `workflow.definition.get`, `workflow.schedule.list`, `workflow.schedule.get`, `workflow.schedule.create`, `workflow.task.schedule`, `workflow.schedule.set_enabled`, `workflow.schedule.delete` | Registered hash-pinned definitions; caller-owned calendar/interval workflow schedules and plain-language tasks; persistent mutations use policy, review, one-use permits, and quarantined results |
+
+Schedule create and enabled-state control are Administration actions. Both require
+approval under Allow all and Development defaults, including initially paused creation
+and disable. Reads remain Read actions. Exact overrides and external policy retain
+their authority. Risk auto does not automatically approve persistent schedule controls.
+The strict tools accept no owner, application, Workspace, session, or run provenance;
+the host binds these from active authenticated run and delegation evidence. Application
+scopes remain an independent requirement. Schedule fields are immutable except enabled
+state, and controls require the canonical revision returned by an authorized read.
+Agent schedule input snapshots are limited to 48 KiB so the complete immutable inputs
+fit in the approval review.
+`workflow.definition.read` is the Read action shared by registered-definition listing
+and inspection.
+`workflow.definition.register` is an Administration action for validated definition
+registration; Desktop operators use the separately scoped authenticated import API.
+`workflow.run.read` and `workflow.run.start` describe independent workflow-run
+inspection and allocation; their authenticated API scopes are distinct from chat runs.
 
 Every tool schema denies unknown fields. Tool availability does not imply permission.
 The access profile and exact overrides decide visibility and the built-in decision;
@@ -269,3 +287,34 @@ metadata HTTP(S) origins.
 - A missing terminal event after start becomes `outcome_unknown`.
 - Unknown external effects are not silently retried.
 - Credentials remain references and raw values are hard-redacted.
+
+## Plain-language task scheduling
+
+`workflow.task.schedule` is the agent-facing calendar-task tool. Its strict arguments
+are `schedule_id`, `task`, `calendar`, `starts_at`, `misfire_policy`, `enabled`, and
+`idempotency_key`. `task` contains a name, instructions, explicit tool ceiling, and
+optional configured model/effort preferences. `calendar` contains an IANA timezone,
+`HH:mm` local time, and ISO weekdays; an empty weekday list means daily. `starts_at`
+must be the exact first UTC occurrence matching those calendar fields. Serialized
+task content must fit the 48 KiB inline approval review bound.
+
+The trusted runtime derives the internal definition and empty workflow inputs. The
+tool rejects workflow identifiers, hashes, elapsed cadence, origin, session, and
+run fields. Its effect action and policy capability are `workflow.schedule.create`;
+it does not introduce a separate approval exemption. Application runs require
+`schedules:read`, `schedules:create`, `workflows:read`, and `workflows:register` plus an
+explicit tool grant. Task tool names do not grant their own action permissions.
+
+Use `workflow.schedule.list` to check for an existing request and
+`workflow.schedule.get` to confirm the stored task. Retry identities are scoped to
+the application owner and exact canonical request. Retain them across uncertain
+responses. The bundled `colossus/schedule-task` skill documents this flow.
+
+`workflow.schedule.delete` accepts only `schedule_id` and the freshly inspected
+64-character `etag`. It uses the `workflow.schedule.delete` effect action and normal
+approval obligations; application callers need `schedules:read`, `schedules:control`,
+and an explicit tool grant. It rejects foreign and unknown-owner legacy records.
+Deletion appends a durable tombstone, stops future ticks, and removes the schedule
+from the active catalog. Already allocated runs and their ownership remain intact.
+The same reviewed deletion can be reconciled without another append, but deleted
+IDs cannot be allocated again. Lost mutation responses are never retried automatically.

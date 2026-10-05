@@ -862,6 +862,11 @@ test("Managed Local trusted tool ceiling exactly matches declared built-ins", ()
     ...[...sessionDeclarations.groups.names.matchAll(/"([a-z][a-z0-9_.-]+)"/gu)]
       .map((match) => match[1]),
   );
+  assert.match(builtinSource, /specs\.extend\(super::workflows::workflow_specs\(\)\)/u);
+  builtinNames.push(
+    ...[...read("crates/colossus-tools/src/workflows.rs").matchAll(/(?:\(|name:\s*)"(workflow\.[a-z_.]+)"/gu)]
+      .map((match) => match[1]),
+  );
 
   const runtimeSource = read("apps/desktop/src-tauri/src/managed_runtime.rs");
   const grantStart = runtimeSource.indexOf("const TRUSTED_BUILTIN_TOOL_GRANT");

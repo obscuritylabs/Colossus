@@ -68,6 +68,7 @@ mod subagents;
 mod tool_arguments;
 mod trace_tools;
 mod work;
+mod workflow_tools;
 mod workflows_research;
 mod workspace;
 use process_sessions::ProcessSessions;

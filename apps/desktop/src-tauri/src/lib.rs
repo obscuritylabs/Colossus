@@ -7,7 +7,15 @@ mod command_review;
 mod command_review_protocol;
 mod commands;
 mod process_session_commands;
+mod workflow_commands;
 use process_session_commands::{list_shell_sessions, read_shell_session, stop_shell_session};
+use workflow_commands::{
+    create_workflow_schedule, delete_workflow_schedule, get_registered_workflow,
+    get_scheduled_workflow_run, get_workflow_schedule, list_registered_workflows,
+    list_workflow_runs, list_workflow_schedules, register_workflow_definition,
+    set_workflow_schedule_enabled, start_workflow_run, validate_workflow_definition,
+    workflow_context,
+};
 mod configuration_import;
 mod connection;
 mod desktop_commands;
@@ -305,6 +313,19 @@ pub fn run() {
             get_run,
             list_runs,
             list_shell_sessions,
+            workflow_context,
+            list_registered_workflows,
+            get_registered_workflow,
+            validate_workflow_definition,
+            register_workflow_definition,
+            list_workflow_schedules,
+            get_workflow_schedule,
+            create_workflow_schedule,
+            set_workflow_schedule_enabled,
+            delete_workflow_schedule,
+            get_scheduled_workflow_run,
+            list_workflow_runs,
+            start_workflow_run,
             read_shell_session,
             stop_shell_session,
             list_session_activity,

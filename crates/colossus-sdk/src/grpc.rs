@@ -138,12 +138,15 @@ pub struct GrpcBackend {
     agent_runs: Arc<GrpcAgentRunClient>,
     artifacts: Arc<GrpcArtifactClient>,
     plugins: Arc<plugins::GrpcPluginClient>,
+    workflows: Arc<workflows::GrpcWorkflowClient>,
     capabilities: ServerCapabilities,
     closed: watch::Sender<bool>,
 }
 
 #[path = "grpc_plugins.rs"]
 mod plugins;
+#[path = "grpc_workflows.rs"]
+mod workflows;
 
 impl GrpcBackend {
     /// Establish a real bounded gRPC channel from already security-validated material.
@@ -198,6 +201,9 @@ impl GrpcBackend {
             kind: options.backend_kind,
             agent_runs,
             plugins: Arc::new(plugins::GrpcPluginClient {
+                transport: Arc::clone(&artifacts),
+            }),
+            workflows: Arc::new(workflows::GrpcWorkflowClient {
                 transport: Arc::clone(&artifacts),
             }),
             artifacts,
@@ -261,6 +267,13 @@ impl Backend for GrpcBackend {
         self.capabilities
             .contains("plugins.discovery")
             .then(|| self.plugins.clone() as Arc<dyn crate::PluginClient>)
+    }
+
+    fn workflows(&self) -> Option<Arc<dyn crate::WorkflowClient>> {
+        (self.capabilities.contains("workflows.read")
+            || self.capabilities.contains("schedules.read")
+            || self.capabilities.contains("workflow_runs.read"))
+        .then(|| self.workflows.clone() as Arc<dyn crate::WorkflowClient>)
     }
 
     async fn close(&self) -> SdkResult<()> {

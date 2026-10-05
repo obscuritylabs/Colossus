@@ -1,0 +1,478 @@
+.workflow-surface {
+  padding: 20px var(--settings-gutter);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+  container-type: inline-size;
+  overflow: auto;
+  color: var(--text);
+}
+.workflow-page-header,
+.workflow-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.workflow-page-header h2 {
+  margin: 0 0 4px;
+  font-size: var(--font-size-heading);
+  color: var(--text-strong);
+  line-height: var(--line-height-tight);
+  letter-spacing: 0;
+}
+.workflow-page-header p,
+.workflow-availability p {
+  color: var(--muted);
+  line-height: var(--line-height-body);
+  margin: 8px 0;
+}
+.workflow-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.workflow-availability,
+.workflow-empty {
+  margin: 16px 0;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+}
+.workflow-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.5fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+.workflow-layout-has-run {
+  grid-template-columns: minmax(160px, 0.5fr) minmax(0, 1fr) minmax(0, 1.1fr);
+  align-items: start;
+}
+.schedule-detail-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 20px;
+  max-width: 1280px;
+  margin-top: 20px;
+}
+.workflow-output-panel {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.workflow-output-panel .workflow-run {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+.workflow-output-panel .workflow-json {
+  max-height: min(45vh, 28rem);
+  overflow: auto;
+}
+.workflow-output-panel > .workflow-run + .button {
+  margin-top: 12px;
+}
+.workflow-task-result {
+  max-height: min(45vh, 28rem);
+  overflow: auto;
+}
+.workflow-run-metadata,
+.schedule-metadata {
+  margin-top: 20px;
+}
+.schedule-delete-action.button.secondary {
+  color: var(--red-text);
+}
+@container (max-width: 960px) {
+  .workflow-layout-has-run {
+    grid-template-columns: minmax(180px, 0.7fr) minmax(0, 1fr);
+  }
+  .workflow-layout-has-run .workflow-output-panel {
+    grid-column: 1 / -1;
+  }
+}
+@container (max-width: 720px) {
+  .schedule-detail-layout,
+  .workflow-layout-has-run {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.workflow-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 16px;
+  display: grid;
+  gap: 10px;
+}
+.workflow-list button {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  gap: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  padding: 16px;
+  border-radius: var(--radius);
+  color: var(--text);
+  cursor: pointer;
+}
+.workflow-list button[aria-pressed="true"] {
+  border-color: var(--blue);
+  box-shadow: inset 3px 0 var(--blue);
+}
+.workflow-list button span {
+  font-size: var(--font-size-caption);
+  color: var(--muted);
+}
+.workflow-status {
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--surface-control);
+  font-size: var(--font-size-caption);
+  text-transform: capitalize;
+}
+.workflow-detail {
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+.workflow-detail p,
+.workflow-dialog-content p,
+.workflow-run p {
+  line-height: var(--line-height-body);
+}
+.workflow-detail h3 {
+  margin-top: 0;
+}
+.workflow-facts {
+  display: grid;
+  grid-template-columns: minmax(105px, 0.45fr) minmax(0, 1fr);
+  gap: 10px 16px;
+  margin: 20px 0;
+  font-size: var(--font-size-body-sm);
+}
+.workflow-facts dt {
+  color: var(--muted);
+}
+.workflow-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.workflow-surface code,
+.workflow-dialog code {
+  overflow-wrap: anywhere;
+}
+.workflow-surface pre,
+.workflow-dialog pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 14px;
+  background: var(--surface-control);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  max-height: 260px;
+  overflow: auto;
+  font-size: var(--font-size-caption);
+}
+.workflow-surface details,
+.workflow-dialog details {
+  margin: 16px 0;
+}
+.workflow-surface summary,
+.workflow-dialog summary {
+  cursor: pointer;
+  padding: 7px 0;
+}
+.workflow-detail > .button {
+  margin: 8px 8px 8px 0;
+}
+.workflow-run {
+  margin-top: 20px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.workflow-dialog {
+  color: var(--text);
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100dvh - 40px);
+  padding: 0;
+  overflow: auto;
+}
+.workflow-dialog header {
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--border);
+}
+.workflow-dialog header h3 {
+  margin: 0;
+}
+.workflow-dialog-content {
+  padding: 20px 22px;
+}
+.workflow-dialog-content > .workflow-dialog-content {
+  padding: 0;
+}
+.workflow-dialog label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 15px 0;
+  font-size: var(--font-size-body-sm);
+}
+.workflow-dialog input,
+.workflow-dialog textarea,
+.workflow-dialog select {
+  padding: 10px 12px;
+  min-width: 0;
+  width: 100%;
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: var(--surface-control);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-weight: 400;
+}
+.workflow-dialog textarea {
+  resize: vertical;
+  font-family: var(--font-mono, monospace);
+  line-height: 1.5;
+}
+.workflow-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.workflow-dialog .workflow-checkbox {
+  flex-direction: row;
+  align-items: center;
+}
+.workflow-checkbox input {
+  width: auto;
+}
+.workflow-dialog footer {
+  margin-top: 24px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  justify-content: flex-end;
+}
+.workflow-surface button:focus-visible,
+.workflow-dialog :is(button, input, select, textarea, summary):focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+.workflow-surface [role="alert"],
+.workflow-dialog [role="alert"] {
+  border-left: 3px solid var(--danger, var(--blue));
+  padding: 10px 14px;
+  background: var(--surface-control);
+  overflow-wrap: anywhere;
+}
+@media (max-width: 850px) {
+  .workflow-layout {
+    grid-template-columns: 1fr;
+  }
+  .workflow-list {
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  }
+}
+@media (max-width: 980px) {
+  .workflow-page-header {
+    padding-top: 40px;
+  }
+}
+@media (max-width: 500px) {
+  .workflow-columns,
+  .workflow-facts {
+    grid-template-columns: 1fr;
+  }
+  .workflow-facts {
+    gap: 5px;
+  }
+  .workflow-facts dd {
+    margin-bottom: 10px;
+  }
+}
+
+.schedule-activity-card {
+  margin: 8px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+.schedule-activity-card p {
+  margin: 6px 0;
+}
+
+.workflow-form {
+  display: grid;
+  gap: 18px;
+}
+.workflow-form label,
+.workflow-inputs label {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  font-size: var(--font-size-body-sm);
+  font-weight: 500;
+  color: var(--muted);
+}
+.workflow-form small,
+.workflow-help {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  font-weight: 400;
+}
+.workflow-form textarea,
+.workflow-inputs textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 120px;
+}
+.workflow-json,
+.workflow-task-instructions {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 360px;
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-control);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+}
+.workflow-task-instructions {
+  font-family: inherit;
+  font-size: var(--font-size-body);
+}
+.workflow-weekdays {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.workflow-weekdays label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+}
+.workflow-weekdays input,
+.workflow-form .workflow-checkbox input {
+  width: auto;
+}
+.workflow-advanced {
+  padding: 14px;
+  background: var(--surface-control);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.workflow-advanced summary {
+  cursor: pointer;
+}
+.workflow-advanced > .workflow-form {
+  margin-top: 14px;
+}
+.workflow-dialog textarea.workflow-instructions-input {
+  font-family: inherit;
+}
+.workflow-history {
+  border-top: 1px solid var(--border);
+  margin-top: 24px;
+  padding-top: 16px;
+}
+.workflow-history .workflow-list button {
+  padding: 12px;
+}
+.workflow-list strong,
+.workflow-list span {
+  overflow-wrap: anywhere;
+}
+.workflow-form .workflow-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workflow-surface .surface-breadcrumb {
+  margin: 0 0 16px;
+  font-size: var(--font-size-caption);
+}
+.workflow-surface :is(h3, h4) {
+  font-size: var(--font-size-heading-sm);
+  line-height: var(--line-height-tight);
+  color: var(--text-strong);
+}
+.workflow-dialog {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+.workflow-dialog h3 {
+  font-size: var(--font-size-heading);
+  color: var(--text-strong);
+}
+.workflow-dialog h4 {
+  font-size: var(--font-size-heading-sm);
+  color: var(--text-strong);
+}
+.workflow-dialog :is(input, textarea, .app-select-trigger) {
+  font-size: var(--font-size-control);
+  font-weight: 400;
+}
+.workflow-dialog :is(input:not([type="checkbox"]), .app-select-trigger) {
+  min-height: var(--control-height);
+}
+.workflow-surface :is(pre, code),
+.workflow-dialog :is(pre, code) {
+  font-family: var(--font-mono);
+}
+.workflow-surface pre.workflow-task-instructions,
+.workflow-dialog pre.workflow-task-instructions {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-body-sm);
+}
+.workflow-schedule-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+.workflow-inventory .catalog-name-column {
+  width: 30%;
+}
+.workflow-inventory small {
+  display: block;
+  margin-top: 3px;
+  font-size: var(--font-size-caption);
+  color: var(--muted);
+  font-weight: 400;
+}
+.workflow-status[data-state="enabled"] {
+  color: var(--green-text);
+  border-color: var(--green-border);
+}
+.workflow-status[data-state="blocked"] {
+  color: var(--amber-text);
+  border-color: var(--amber-border);
+}
+@container (max-width: 640px) {
+  .workflow-inventory .catalog-inventory-row > td[data-label] {
+    padding-left: 0;
+    flex-wrap: wrap;
+  }
+}

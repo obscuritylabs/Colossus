@@ -6,6 +6,8 @@ mod approval_adapter;
 mod diagnostics;
 #[path = "approval-test-bridge/process_acceptance.rs"]
 mod process_acceptance;
+#[path = "approval-test-bridge/workflow_acceptance.rs"]
+mod workflow_acceptance;
 
 use anyhow::Context as _;
 use colossus_sdk::{
@@ -29,7 +31,12 @@ use std::{
 async fn main() -> anyhow::Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     anyhow::ensure!(
-        args.len() == 3 || (args.len() == 4 && args[3] == "process-acceptance"),
+        args.len() == 3
+            || (args.len() == 4
+                && matches!(
+                    args[3].as_str(),
+                    "process-acceptance" | "workflow-acceptance"
+                )),
         "expected sidecar, private fixture root, loopback provider URL"
     );
     let root = std::fs::canonicalize(&args[1])?;
@@ -42,18 +49,43 @@ async fn main() -> anyhow::Result<()> {
     runtime.providers[0].base_url = Some(args[2].clone());
     runtime.providers[0].timeout_ms = 5000;
     runtime.models[0].model = "approval-fixture".into();
+    let workflow_acceptance = args
+        .get(3)
+        .is_some_and(|mode| mode == "workflow-acceptance");
+    let mut primary_scopes = vec![
+        scopes::RUNS_EXECUTE,
+        scopes::RUNS_READ,
+        scopes::RUNS_CONTROL,
+    ];
+    if workflow_acceptance {
+        primary_scopes.extend([
+            scopes::WORKFLOWS_READ,
+            scopes::WORKFLOWS_REGISTER,
+            scopes::SCHEDULES_READ,
+            scopes::SCHEDULES_CREATE,
+            scopes::SCHEDULES_CONTROL,
+            scopes::WORKFLOW_RUNS_READ,
+            scopes::WORKFLOW_RUNS_START,
+        ]);
+    }
     let grant = SidecarApplicationGrant::new(
         "app:approval-acceptance",
-        [
-            scopes::RUNS_EXECUTE,
-            scopes::RUNS_READ,
-            scopes::RUNS_CONTROL,
-        ]
-        .into_iter()
-        .map(ApiScope::new)
-        .collect::<Result<Vec<_>, _>>()?,
+        primary_scopes
+            .into_iter()
+            .map(ApiScope::new)
+            .collect::<Result<Vec<_>, _>>()?,
         ["primary".into()],
-        ["shell.run".into()],
+        if workflow_acceptance {
+            vec![
+                "shell.run".into(),
+                "workflow.task.schedule".into(),
+                "workflow.schedule.list".into(),
+                "workflow.schedule.get".into(),
+                "workflow.schedule.delete".into(),
+            ]
+        } else {
+            vec!["shell.run".into()]
+        },
     )?;
     let bootstrap = SidecarBootstrapConfig::new(&workspace, runtime, grant)?
         .with_colossus_home(root.join("home"))?
@@ -73,7 +105,9 @@ async fn main() -> anyhow::Result<()> {
         ApiMajor::new(1)?,
     )?;
     let client = Colossus::start_sidecar(&NativeSidecarLifecycle::new(bootstrap), options).await?;
-    let result = if args.len() == 4 {
+    let result = if workflow_acceptance {
+        workflow_acceptance::serve(&client, &instance).await
+    } else if args.len() == 4 {
         process_acceptance::serve(&client, &instance).await
     } else {
         serve(&client, &instance).await

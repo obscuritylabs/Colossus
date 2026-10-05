@@ -59,6 +59,7 @@ nav = [
     { "Work in Desktop" = [
       { "Work and threads" = "desktop/work.md" },
       { "Session views" = "desktop/session-views.md" },
+      { "Workflows and schedules" = "desktop/schedules.md" },
       { "Tools beside your work" = "desktop/tools.md" },
     ] },
     { "Configure and extend" = [
@@ -147,6 +148,7 @@ nav = [
   { "Develop" = [
     { "Overview" = "develop/index.md" },
     { "Contributing" = "develop/contributing.md" },
+    { "Front-end development" = "develop/frontend.md" },
     { "Source setup and test tiers" = "develop/setup-testing.md" },
     { "Tiered CI/CD" = "develop/ci-cd.md" },
     { "Toolchain inventory" = "develop/toolchain-inventory.md" },
