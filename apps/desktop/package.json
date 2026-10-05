@@ -30,6 +30,7 @@
     "tauri:build": "npm run prepare:sidecars:release && tauri build --no-bundle -- --locked",
     "tauri:bundle:macos": "../../scripts/package-desktop-macos",
     "tauri:bundle:windows": "pwsh -File ../../scripts/package-desktop-windows.ps1",
+    "tauri:bundle:linux": "sh ../../scripts/package-desktop-linux",
     "prepare:dictation": "node ../../scripts/stage-dictation-model.mjs"
   },
   "dependencies": {

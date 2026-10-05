@@ -276,10 +276,17 @@ impl SidecarLifecycle for NativeSidecarLifecycle {
             let agent_runs = Arc::new(SwitchingAgentRunClient::new(
                 running.transports().agent_runs(),
             ));
+            let connector_runs = running.transports().connector.as_ref().map(|transport| {
+                Arc::new(SwitchingAgentRunClient::new(AgentRunTransports {
+                    primary: transport.agent_runs(),
+                    approval_broker: None,
+                }))
+            });
             let state = Arc::new(ManagedSidecarState {
                 options: options.clone(),
                 bootstrap: Arc::clone(&self.bootstrap),
                 agent_runs: Arc::clone(&agent_runs),
+                connector_runs,
                 artifacts: artifacts.clone(),
                 process: tokio::sync::Mutex::new(Some(running)),
                 close_guard: tokio::sync::Mutex::new(()),
@@ -882,6 +889,7 @@ fn validate_discovery_leaf_absent(directory: &File, name: &str) -> SdkResult<()>
 struct ConnectedTransports {
     primary: Arc<GrpcBackend>,
     approval_broker: Option<Arc<GrpcBackend>>,
+    connector: Option<Arc<GrpcBackend>>,
 }
 
 impl ConnectedTransports {
@@ -897,6 +905,9 @@ impl ConnectedTransports {
 
     async fn close(&self) {
         let _ = self.primary.close().await;
+        if let Some(connector) = &self.connector {
+            let _ = connector.close().await;
+        }
         if let Some(approval_broker) = &self.approval_broker {
             let _ = approval_broker.close().await;
         }
@@ -973,6 +984,7 @@ struct ManagedSidecarState {
     options: SidecarOptions,
     bootstrap: Arc<SidecarBootstrapConfig>,
     agent_runs: Arc<SwitchingAgentRunClient>,
+    connector_runs: Option<Arc<SwitchingAgentRunClient>>,
     artifacts: Option<Arc<SwitchingArtifactClient>>,
     process: tokio::sync::Mutex<Option<RunningChild>>,
     close_guard: tokio::sync::Mutex<()>,
@@ -1007,6 +1019,17 @@ impl Backend for ManagedSidecarBackend {
         self.agent_runs.clone()
     }
 
+    fn instance_id(&self) -> Option<crate::InstanceId> {
+        Some(self.state.options.instance_id())
+    }
+
+    fn connector_runs(&self) -> Option<Arc<dyn AgentRunClient>> {
+        self.state
+            .connector_runs
+            .as_ref()
+            .map(|client| client.clone() as Arc<dyn AgentRunClient>)
+    }
+
     fn capabilities(&self) -> ServerCapabilities {
         self.capabilities.clone()
     }
@@ -1030,6 +1053,10 @@ impl Backend for ManagedSidecarBackend {
         // managed tree even while the aborted supervisor is still being joined.
         let running = self.state.process.lock().await.take();
         self.state.closing.store(true, Ordering::Release);
+        if let Some(client) = &self.state.connector_runs {
+            client.mark_closed();
+            client.release().await;
+        }
         self.agent_runs.mark_closed();
         self.agent_runs.release().await;
         if let Some(artifacts) = &self.artifacts {
@@ -1406,6 +1433,16 @@ async fn supervise(state: Arc<ManagedSidecarState>) {
                 state.status.send_replace(NativeSidecarStatus::Stopping);
                 return;
             }
+            if let (Some(client), Some(transport)) =
+                (&state.connector_runs, &restarted.transports().connector)
+            {
+                client
+                    .replace(AgentRunTransports {
+                        primary: transport.agent_runs(),
+                        approval_broker: None,
+                    })
+                    .await;
+            }
             state
                 .agent_runs
                 .replace(restarted.transports().agent_runs())
@@ -1513,6 +1550,16 @@ async fn launch_child(
         };
         validate_ready(options, &ready)?;
         provisional.bind_discovery()?;
+        if ready.connector_bearer.is_some() != bootstrap.has_connector_grant() {
+            return Err(SdkError::IdentityMismatch);
+        }
+        let connector_credential: Option<Arc<dyn CredentialProvider>> =
+            ready.connector_bearer.as_ref().map(|bearer| {
+                Arc::new(MemoryCredentialProvider {
+                    bearer: Zeroizing::new(bearer.expose().as_bytes().to_vec()),
+                }) as Arc<dyn CredentialProvider>
+            });
+        let connector_credential_id = ready.connector_credential_id.clone();
         let credential_id = ready.credential_id.clone();
         let approval_broker_credential_id = ready.approval_broker_credential_id.clone();
         let exchange_id = ready.exchange_id.clone();
@@ -1551,6 +1598,7 @@ async fn launch_child(
                 exchange_id: exchange_id.clone(),
                 credential_id: credential_id.clone(),
                 approval_broker_credential_id: approval_broker_credential_id.clone(),
+                connector_credential_id: connector_credential_id.clone(),
             }),
         )
         .await?;
@@ -1559,6 +1607,9 @@ async fn launch_child(
             ChildFrame::Failed(failure) => return Err(map_child_failure(failure.code)),
             ChildFrame::Ready(_) => return Err(SdkError::IdentityMismatch),
         };
+        if activated.connector_credential_id != connector_credential_id {
+            return Err(SdkError::IdentityMismatch);
+        }
         validate_activated(
             &activated,
             &exchange_id,
@@ -1596,7 +1647,22 @@ async fn launch_child(
         } else {
             None
         };
+        let connector = match connector_credential {
+            Some(credential) => Some(
+                connect_sidecar_transport(
+                    options,
+                    &endpoint,
+                    fingerprint,
+                    &certificate_pem,
+                    credential,
+                    deadline,
+                )
+                .await?,
+            ),
+            None => None,
+        };
         Ok(ConnectedTransports {
+            connector,
             primary,
             approval_broker,
         })
@@ -1679,6 +1745,7 @@ async fn spawn_verified_sidecar(
 )> {
     use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
+    let credential_session = crate::linux_credential_session::verified_address().await?;
     // The manifest-matching bytes live in a sealed anonymous file. Clearing only
     // FD_CLOEXEC lets the child resolve this exact kernel object through procfs;
     // replacement of the bundle path is therefore irrelevant to execution.
@@ -1689,6 +1756,7 @@ async fn spawn_verified_sidecar(
     command
         .arg("__managed-sidecar-v1")
         .env_clear()
+        .env("DBUS_SESSION_BUS_ADDRESS", credential_session)
         .current_dir(canonical_instance)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -2905,6 +2973,7 @@ mod tests {
             exchange_id: exchange.clone(),
             credential_id: primary.clone(),
             approval_broker_credential_id: Some(broker.clone()),
+            connector_credential_id: None,
         };
         validate_activated(&activated, &exchange, &primary, Some(&broker))
             .expect("exact activation");

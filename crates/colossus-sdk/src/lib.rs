@@ -20,6 +20,8 @@ mod error;
 mod grpc;
 #[cfg(feature = "keyring")]
 mod keyring_provider;
+#[cfg(all(feature = "sidecar", target_os = "linux"))]
+mod linux_credential_session;
 #[cfg(all(feature = "sidecar", target_os = "macos"))]
 mod macos_code_identity;
 #[cfg(all(feature = "sidecar", target_os = "macos"))]

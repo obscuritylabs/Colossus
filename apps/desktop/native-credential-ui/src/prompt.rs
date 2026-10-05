@@ -1,12 +1,12 @@
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use std::sync::{Arc, atomic::AtomicBool};
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use crate::ColorScheme;
 use crate::DialogAppearance;
 use colossus_contracts::HostSecret;
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use crate::lifecycle::{CancelOnDrop, Completion};
 
 /// Categorical native errors; never contain credential data or platform errors.
@@ -44,12 +44,12 @@ pub async fn prompt(
     parent: tauri::Window,
     appearance: DialogAppearance,
 ) -> Result<HostSecret, PromptError> {
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
         let _ = (parent, appearance);
         return Err(PromptError::Unsupported);
     }
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     {
         let mut appearance = appearance;
         if appearance.color_scheme == ColorScheme::System {
@@ -69,6 +69,8 @@ pub async fn prompt(
                 crate::windows::open(&native_parent, cancelled, completion, appearance);
                 #[cfg(target_os = "macos")]
                 crate::macos::open(&native_parent, cancelled, completion, appearance);
+                #[cfg(target_os = "linux")]
+                crate::linux::open(&native_parent, cancelled, completion, appearance);
             })
             .map_err(|_| PromptError::Unavailable)?;
         receiver.await.map_err(|_| PromptError::Cancelled)?

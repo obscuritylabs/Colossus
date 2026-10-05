@@ -238,6 +238,13 @@ CodeDirectory identity to match before `SIGCONT`. On Linux, it executes the veri
 bytes from a sealed, non-writable `memfd`. Platforms without an equivalent mechanism
 fail Managed Local startup closed.
 
+Linux native startup retains only the host's local Unix D-Bus session locator after
+clearing the child's environment. The SDK accepts one filesystem or abstract Unix
+socket and verifies the bus peer's OS user before launch; it rejects remote transports,
+autolaunch, aliases, and ambiguous addresses. Without an explicit session locator it
+uses `/run/user/<uid>/bus`. This locator carries no secret. The native Secret Service
+remains required; missing session authority fails startup without a credential fallback.
+
 The selected macOS workspace is also persistent object authority rather than a saved
 path. Desktop hashes the device, inode, and birth timestamp obtained from a securely
 opened directory descriptor and includes that versioned identity in its private state

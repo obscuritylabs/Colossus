@@ -49,6 +49,9 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std", "NSDate", "NSFormatter", "NSGeometry", "NSNotification", "NSObject", "NSString", "NSThread", "NSTimer",
 ] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "=0.18.2"
+
 [lints.clippy]
 all = "warn"
 pedantic = "warn"

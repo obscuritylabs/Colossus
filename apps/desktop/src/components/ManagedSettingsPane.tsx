@@ -1,3 +1,4 @@
+import { CloudConnectionPane } from "./CloudConnectionPane";
 import { ModelFeatureControl } from "./ModelFeatureControl";
 import type { ModelFeatureMode, ManagedModelCapabilities } from "../types";
 import { RememberedCommands } from "./RememberedCommands";
@@ -230,6 +231,7 @@ type GlobalTab =
   | "defaults"
   | DesktopTab;
 type SpaceTab =
+  | "cloud"
   | "runtime"
   | "providers"
   | "mcp"
@@ -382,6 +384,7 @@ const GLOBAL_TABS: ReadonlyArray<{
 
 const SPACE_TABS: ReadonlyArray<{ id: SpaceTab; label: string }> = [
   { id: "runtime", label: "Runtime" },
+  { id: "cloud", label: "Cloud" },
   { id: "providers", label: "Providers" },
   { id: "mcp", label: "MCP" },
   { id: "plugins", label: "Plugins" },
@@ -3068,79 +3071,90 @@ export function ManagedSettingsPane({
       ) : (
         <>
           {selectedSpace ? (
-            <SpaceSettingsBody
-              tab={spaceTab}
-              snapshot={snapshot}
-              selectedSpace={selectedSpace}
-              draft={space}
-              setDraft={setSpace}
-              descriptors={descriptors}
-              effective={effective}
-              focusedFieldId={focusedFieldId}
-              expandedAdvancedSections={expandedAdvancedSections}
-              onAdvancedSectionToggle={(section, open) => {
-                setExpandedAdvancedSections((current) => {
-                  if (current.has(section) === open) return current;
-                  const next = new Set(current);
-                  if (open) next.add(section);
-                  else next.delete(section);
-                  return next;
-                });
-                if (
-                  !open &&
-                  descriptors.find(({ id }) => id === focusedFieldId)
-                    ?.section === section
-                ) {
-                  setFocusedFieldId(null);
+            spaceTab === "cloud" ? (
+              <CloudConnectionPane
+                key={selectedSpace.id}
+                targetId={selectedSpace.id}
+              />
+            ) : (
+              <SpaceSettingsBody
+                tab={spaceTab}
+                snapshot={snapshot}
+                selectedSpace={selectedSpace}
+                draft={space}
+                setDraft={setSpace}
+                descriptors={descriptors}
+                effective={effective}
+                focusedFieldId={focusedFieldId}
+                expandedAdvancedSections={expandedAdvancedSections}
+                onAdvancedSectionToggle={(section, open) => {
+                  setExpandedAdvancedSections((current) => {
+                    if (current.has(section) === open) return current;
+                    const next = new Set(current);
+                    if (open) next.add(section);
+                    else next.delete(section);
+                    return next;
+                  });
+                  if (
+                    !open &&
+                    descriptors.find(({ id }) => id === focusedFieldId)
+                      ?.section === section
+                  ) {
+                    setFocusedFieldId(null);
+                  }
+                }}
+                busy={busy}
+                mcpDiagnostics={mcpDiagnostics}
+                mcpOauthStatuses={mcpOauthStatuses}
+                mcpOauthLogins={mcpOauthLogins}
+                mcpOauthCallbacks={mcpOauthCallbacks}
+                onMcpOauthCallback={(server, value) =>
+                  setMcpOauthCallbacks((current) => ({
+                    ...current,
+                    [server]: value,
+                  }))
                 }
-              }}
-              busy={busy}
-              mcpDiagnostics={mcpDiagnostics}
-              mcpOauthStatuses={mcpOauthStatuses}
-              mcpOauthLogins={mcpOauthLogins}
-              mcpOauthCallbacks={mcpOauthCallbacks}
-              onMcpOauthCallback={(server, value) =>
-                setMcpOauthCallbacks((current) => ({
-                  ...current,
-                  [server]: value,
-                }))
-              }
-              onTestMcp={testMcpServer}
-              onLoadMcpOAuthStatus={loadMcpOAuthStatus}
-              onLoginMcpOAuth={loginMcpOAuth}
-              onCompleteMcpOAuth={completeMcpOAuth}
-              onLogoutMcpOAuth={logoutMcpOAuth}
-              runtimeDiagnostics={runtimeDiagnostics}
-              testingRuntimeProfile={testingRuntimeProfile}
-              runtimeDiagnosticErrors={runtimeDiagnosticErrors}
-              onTestRuntimeProfile={testRuntimeProfile}
-              onTestSearchRole={testSearchRole}
-              onTestTelemetry={testTelemetry}
-              extensionInventory={extensionInventory}
-              extensionInventoryBusy={extensionInventoryBusy}
-              onRefreshExtensionInventory={() => void loadExtensionInventory()}
-            />
+                onTestMcp={testMcpServer}
+                onLoadMcpOAuthStatus={loadMcpOAuthStatus}
+                onLoginMcpOAuth={loginMcpOAuth}
+                onCompleteMcpOAuth={completeMcpOAuth}
+                onLogoutMcpOAuth={logoutMcpOAuth}
+                runtimeDiagnostics={runtimeDiagnostics}
+                testingRuntimeProfile={testingRuntimeProfile}
+                runtimeDiagnosticErrors={runtimeDiagnosticErrors}
+                onTestRuntimeProfile={testRuntimeProfile}
+                onTestSearchRole={testSearchRole}
+                onTestTelemetry={testTelemetry}
+                extensionInventory={extensionInventory}
+                extensionInventoryBusy={extensionInventoryBusy}
+                onRefreshExtensionInventory={() =>
+                  void loadExtensionInventory()
+                }
+              />
+            )
           ) : (
             <EmptySettings
               icon={<IconFolder size={24} />}
               title="No Workspace selected"
             />
           )}
-          <SettingsActionBar
-            dirty={spaceDirty}
-            busy={busy}
-            failure={failure}
-            label="Apply Workspace changes"
-            pending={
-              selectedSpace?.pendingGlobalRevision ? selectedSpace : undefined
-            }
-            onDiscard={() =>
-              selectedSpace && setSpace(spaceDraft(selectedSpace))
-            }
-            onApply={() =>
-              void (spaceDirty ? saveSpace() : applyPendingRevision())
-            }
-          />
+          {spaceTab !== "cloud" && (
+            <SettingsActionBar
+              dirty={spaceDirty}
+              busy={busy}
+              failure={failure}
+              label="Apply Workspace changes"
+              pending={
+                selectedSpace?.pendingGlobalRevision ? selectedSpace : undefined
+              }
+              onDiscard={() =>
+                selectedSpace && setSpace(spaceDraft(selectedSpace))
+              }
+              onApply={() =>
+                void (spaceDirty ? saveSpace() : applyPendingRevision())
+              }
+            />
+          )}
           {importProposal ? (
             <RepositoryImportDialog
               proposal={importProposal}

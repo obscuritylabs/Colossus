@@ -1,6 +1,10 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/colossus-cloud",
+    "crates/colossus-cloud-server",
+    "crates/colossus-connector",
+    "crates/colossus-cloud-protocol",
     "xtask",
     "crates/colossus-domain",
     "crates/colossus-contracts",
@@ -69,6 +73,13 @@ repository = "https://github.com/obscuritylabs/Colossus"
 publish-sdks = false
 
 [workspace.dependencies]
+chrono = "0.4.44"
+openidconnect = { version = "4.0.1", default-features = false, features = ["reqwest", "rustls-tls"] }
+colossus-connector = { version = "=0.11.7", path = "crates/colossus-connector" }
+colossus-cloud-server = { version = "=0.11.7", path = "crates/colossus-cloud-server" }
+axum = { version = "0.8.9", features = ["json", "tokio", "http1", "http2"] }
+colossus-cloud-protocol = { version = "=0.11.7", path = "crates/colossus-cloud-protocol" }
+colossus-cloud = { version = "=0.11.7", path = "crates/colossus-cloud" }
 agent-client-protocol = "=2.2.0"
 colossus-bundled-plugins = { version = "=0.11.7", path = "crates/colossus-bundled-plugins" }
 async-trait = "0.1.89"

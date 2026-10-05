@@ -69,6 +69,9 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         Err(error) => error.exit(),
     };
     set_output_mode(cli.output);
+    if let Command::Cloud(command) = cli.command {
+        return colossus_connector::run_cli(command).await;
+    }
     let home = ColossusHome::resolve_and_ensure()?;
     if let Command::Update(update) = &cli.command {
         match update.command.as_ref() {
@@ -235,20 +238,23 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                                 })
                             })
                     });
-            let (server, public_environment) =
-                if let Some(directory) = worker.public_api_dir.as_deref() {
-                    let environment = PublicApiEnvironment::open(directory, &OsCredentialStore)?;
-                    let credentials = environment.credential_manager(&server);
-                    let options = environment.host_options(&credentials)?;
-                    let server = server.enable_public_api(options).await?;
-                    eprintln!(
-                        "public API discovery published in {}",
-                        environment.directory().display()
-                    );
-                    (server, Some(environment))
-                } else {
-                    (server, None)
-                };
+            let (server, public_environment) = if let Some(directory) =
+                worker.public_api_dir.as_deref()
+            {
+                let store =
+                    credential_store(directory, worker.public_api_vault_key_variable.as_deref())?;
+                let environment = PublicApiEnvironment::open(directory, store.as_ref())?;
+                let credentials = environment.credential_manager(&server);
+                let options = environment.host_options(&credentials)?;
+                let server = server.enable_public_api(options).await?;
+                eprintln!(
+                    "public API discovery published in {}",
+                    environment.directory().display()
+                );
+                (server, Some(environment))
+            } else {
+                (server, None)
+            };
             eprintln!("worker listening on {}", server.endpoint());
             let result = server.serve().await;
             drop(public_environment);
@@ -290,7 +296,9 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 .public_api_dir
                 .as_deref()
                 .ok_or(PublicApiAdminError::InvalidDirectory)?;
-            let environment = PublicApiEnvironment::open(directory, &OsCredentialStore)?;
+            let store =
+                credential_store(directory, worker.public_api_vault_key_variable.as_deref())?;
+            let environment = PublicApiEnvironment::open(directory, store.as_ref())?;
             if let Some(application_id) = worker.enroll_application.as_deref() {
                 let destination_service = worker
                     .credential_keyring_service
@@ -313,7 +321,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 let metadata = enroll_application(
                     &environment,
                     &server,
-                    &OsCredentialStore,
+                    store.as_ref(),
                     EnrollmentRequest {
                         application_id,
                         scopes: &worker.scope,
@@ -417,6 +425,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             Arc::clone(&runtime), &acp_workspace,
             acp_approvals.as_ref().ok_or("ACP approval bridge is unavailable")?.clone(),
         ).await?,
+        Command::Cloud(_) => unreachable!("handled before runtime construction"),
         Command::Update(_) => unreachable!("handled before runtime construction"),
         Command::Config(ConfigCommand {
             command: ConfigAction::Effective,

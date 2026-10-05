@@ -21,7 +21,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 /// Exact bootstrap protocol version.
-pub const PROTOCOL_VERSION: u16 = 11;
+pub const PROTOCOL_VERSION: u16 = 12;
 /// Exact desktop-to-TUI inherited-channel protocol version.
 pub const DESKTOP_TUI_PROTOCOL_VERSION: u16 = 3;
 /// Fixed child descriptor from which the bundled TUI reads native authentication.
@@ -1459,6 +1459,8 @@ pub struct BootstrapRequest {
     pub grant: BootstrapGrant,
     /// Optional native-only credential allowed to answer effect approvals and nothing else.
     pub approval_broker_grant: Option<BootstrapGrant>,
+    /// Optional independent application grant for an explicitly enrolled cloud connector.
+    pub connector_grant: Option<BootstrapGrant>,
     /// Provider credentials referenced by opaque `host:` identifiers.
     pub host_credentials: Vec<HostCredential>,
     /// Optional worker IPC key supplied by a native host for its bundled TUI.
@@ -1498,6 +1500,26 @@ impl BootstrapRequest {
             return Err(ProtocolError::InvalidFrame);
         }
         self.grant.validate()?;
+        if let Some(connector) = &self.connector_grant {
+            connector.validate()?;
+            if connector.application_id == self.grant.application_id
+                || connector
+                    .allowed_roles
+                    .iter()
+                    .any(|role| !self.grant.allowed_roles.contains(role))
+                || connector
+                    .allowed_tools
+                    .iter()
+                    .any(|tool| !self.grant.allowed_tools.contains(tool))
+                || connector.scopes.iter().any(|scope| {
+                    !(self.grant.scopes.contains(scope)
+                        || scope == "approvals:respond" && self.approval_broker_grant.is_some())
+                })
+            {
+                return Err(ProtocolError::InvalidFrame);
+            }
+        }
+
         self.workspace_identity.validate()?;
         if let Some(grant) = &self.approval_broker_grant {
             grant.validate_approval_broker(&self.grant)?;
@@ -1756,6 +1778,8 @@ pub struct AckRequest {
     pub credential_id: String,
     /// Pending approval-broker credential identifier, when one was requested.
     pub approval_broker_credential_id: Option<String>,
+    /// Independent pending cloud connector credential identity.
+    pub connector_credential_id: Option<String>,
 }
 
 /// Child frames sent to the native host.
@@ -1796,8 +1820,12 @@ pub struct ReadyResponse {
     pub bearer: SecretString,
     /// Non-secret pending approval-broker credential identifier.
     pub approval_broker_credential_id: Option<String>,
+    /// Independent pending cloud connector credential identity.
+    pub connector_credential_id: Option<String>,
     /// Approval-broker bearer delivered once through this inherited channel.
     pub approval_broker_bearer: Option<SecretString>,
+    /// Independent connector bearer delivered only through native bootstrap IPC.
+    pub connector_bearer: Option<SecretString>,
 }
 
 impl ReadyResponse {
@@ -1819,6 +1847,10 @@ impl ReadyResponse {
                 &self.approval_broker_bearer,
             )
             || self.approval_broker_credential_id.as_deref() == Some(self.credential_id.as_str())
+            || !matching_optional_credential(&self.connector_credential_id, &self.connector_bearer)
+            || self.connector_credential_id.as_deref() == Some(self.credential_id.as_str())
+            || (self.connector_credential_id.is_some()
+                && self.connector_credential_id == self.approval_broker_credential_id)
         {
             return Err(ProtocolError::InvalidFrame);
         }
@@ -1861,6 +1893,8 @@ pub struct ActivatedResponse {
     pub credential_id: String,
     /// Activated approval-broker credential identifier, when one was requested.
     pub approval_broker_credential_id: Option<String>,
+    /// Independent pending cloud connector credential identity.
+    pub connector_credential_id: Option<String>,
 }
 
 /// Sanitized startup failure codes suitable for a native status surface.
@@ -2078,6 +2112,7 @@ mod tests {
                 allowed_roles: vec!["primary".into()],
                 allowed_tools: vec!["session.list".into()],
             },
+            connector_grant: None,
             approval_broker_grant: Some(BootstrapGrant {
                 application_id: "app:desktop".into(),
                 scopes: vec![APPROVALS_RESPOND_SCOPE.into()],
@@ -2862,7 +2897,9 @@ mod tests {
             credential_id: primary_id.clone(),
             bearer: SecretString::new("primary-secret").expect("secret"),
             approval_broker_credential_id: Some(broker_id),
+            connector_credential_id: None,
             approval_broker_bearer: Some(SecretString::new("approval-secret").expect("secret")),
+            connector_bearer: None,
         };
         ready.validate().expect("paired delivery");
         let debug = format!("{ready:?}");
@@ -2871,6 +2908,7 @@ mod tests {
 
         let duplicated = ReadyResponse {
             approval_broker_credential_id: Some(primary_id),
+            connector_credential_id: None,
             ..ready
         };
         assert_eq!(duplicated.validate(), Err(ProtocolError::InvalidFrame));

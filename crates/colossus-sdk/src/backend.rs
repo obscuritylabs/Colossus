@@ -361,6 +361,16 @@ pub trait Backend: Send + Sync {
     /// Caller-bound run service.
     fn agent_runs(&self) -> Arc<dyn AgentRunClient>;
 
+    /// Authenticated runtime instance, when this backend has a native identity.
+    fn instance_id(&self) -> Option<crate::InstanceId> {
+        None
+    }
+
+    /// Independent cloud run client, present only after native cloud grant provisioning.
+    fn connector_runs(&self) -> Option<Arc<dyn AgentRunClient>> {
+        None
+    }
+
     /// Cached authenticated server capabilities.
     ///
     /// Custom and preview-era embedded backends default to no optional behaviors.

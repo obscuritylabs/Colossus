@@ -1,0 +1,97 @@
+syntax = "proto3";
+package colossus.cloud.v1alpha1;
+
+// Connect is initiated by the machine. Both directions are authenticated and
+// bounded; stream loss never cancels a run or permits reassignment of a task.
+service RuntimeConnection {
+  rpc Connect(stream RuntimeFrame) returns (stream ControlFrame);
+  // Existing client certificate authorizes exact fixed-node certificate rotation.
+  rpc RenewCertificate(CertificateRenewal) returns (RenewedCertificate);
+  // A native enrollment can reduce only its own authority using its pinned leaf.
+  rpc RevokeEnrollment(EnrollmentIdentity) returns (EnrollmentRevoked);
+}
+
+message EnrollmentIdentity {
+  string project_id = 1;
+  string node_id = 2;
+  string instance_id = 3;
+}
+message EnrollmentRevoked {}
+
+message CertificateRenewal {
+  string project_id = 1;
+  string node_id = 2;
+  string instance_id = 3;
+  string renewal_id = 4;
+  string csr_pem = 5;
+}
+message RenewedCertificate {
+  string certificate_pem = 1;
+}
+
+message RuntimeFrame {
+  oneof body {
+    RuntimeHello hello = 1;
+    CommandReceipt receipt = 2;
+    ReleasedRunEvent event = 3;
+    RuntimeHeartbeat heartbeat = 4;
+    RuntimeSnapshot snapshot = 5;
+    ReleasedOutputLimit output_limit = 6;
+  }
+}
+// The local SDK released an event larger than the cloud frame budget. The host
+// retains its current exclusive cursor and continues snapshots/control only.
+message ReleasedOutputLimit {
+  string task_id = 1;
+  string run_id = 2;
+  uint64 after_sequence = 3;
+}
+message RuntimeHello {
+  uint32 protocol_major = 1;
+  string node_id = 2;
+  string instance_id = 3;
+  repeated string capabilities = 4;
+  string project_id = 5;
+}
+message RuntimeSnapshot {
+  string task_id = 1;
+  bytes snapshot_json = 2;
+}
+message RuntimeHeartbeat {
+  bool ready = 1;
+}
+message CommandReceipt {
+  string command_id = 1;
+  string task_id = 2;
+  // Versioned, strict JSON CloudReply. No credentials or unreleased output.
+  bytes reply_json = 3;
+}
+message ReleasedRunEvent {
+  string task_id = 1;
+  string run_id = 2;
+  uint64 sequence = 3;
+  // Versioned, strict JSON of the SDK's policy-released RunUpdate.
+  bytes update_json = 4;
+}
+message ControlFrame {
+  oneof body {
+    ConnectionWelcome welcome = 1;
+    CloudCommand command = 2;
+    EventAcknowledgement acknowledgement = 3;
+  }
+}
+message ConnectionWelcome {
+  uint32 protocol_major = 1;
+  string connection_id = 2;
+}
+message CloudCommand {
+  string command_id = 1;
+  string task_id = 2;
+  // Versioned, closed Command enum, never an arbitrary RPC or executable.
+  bytes command_json = 3;
+  uint64 after_sequence = 4;
+}
+message EventAcknowledgement {
+  string task_id = 1;
+  uint64 sequence = 2;
+}

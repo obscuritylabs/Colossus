@@ -8,5 +8,7 @@ mod vault;
 pub use platform::{PlatformKeyStore, SystemKeyStore};
 pub use vault::PlatformCredentialVault;
 
+mod environment;
 #[cfg(test)]
 mod tests;
+pub use environment::EnvironmentKeyStore;

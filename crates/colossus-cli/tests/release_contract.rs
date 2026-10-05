@@ -664,8 +664,8 @@ fn temporary_lru_advisory_exception_is_exact_documented_and_consistent() {
         );
     }
     assert!(
-        deny.contains("[advisories]\nignore = []"),
-        "cargo-deny must retain its fail-closed empty advisory ignore list"
+        !deny.contains(ADVISORY),
+        "cargo-deny must not ignore the informational lru advisory"
     );
     for required in ["LruCache<usize, Block>", "Tantivy PR #3034", "`lru` 0.18.2"] {
         assert!(
@@ -675,6 +675,32 @@ fn temporary_lru_advisory_exception_is_exact_documented_and_consistent() {
     }
     assert!(lock.contains("name = \"lru\"\nversion = \"0.18.2\""));
     assert!(!lock.contains("name = \"lru\"\nversion = \"0.18.1\""));
+}
+
+#[test]
+fn oidc_public_verification_exception_is_exact_and_scoped() {
+    const ADVISORY: &str = "RUSTSEC-2023-0071";
+    let root = repository_root();
+    let deny = fs::read_to_string(root.join("deny.toml")).unwrap();
+    assert_eq!(
+        deny.matches("RUSTSEC-").count(),
+        1,
+        "the policy permits only the reviewed RSA exception"
+    );
+    assert!(deny.contains(ADVISORY));
+    assert!(deny.contains("no application RSA private-key operations"));
+    for path in [
+        "xtask/src/checks/surfaces.rs",
+        "release/verify-release-readiness.sh",
+        "docs/develop/adr/0006-cloud-control-plane.md",
+    ] {
+        assert!(
+            fs::read_to_string(root.join(path))
+                .unwrap()
+                .contains(ADVISORY),
+            "{path} must document the exact exception"
+        );
+    }
 }
 
 #[test]

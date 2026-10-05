@@ -2,6 +2,9 @@ use super::*;
 
 #[derive(Subcommand)]
 pub(super) enum Command {
+    /// Enroll and manage an outbound cloud connector with its dedicated local application grant.
+    #[command(subcommand)]
+    Cloud(colossus_connector::ConnectorCommand),
     /// Check or apply an install-aware stable Colossus update.
     Update(UpdateCommand),
     /// Create or inspect fresh YAML configuration.
@@ -192,6 +195,10 @@ pub(super) struct WorkerCommand {
     /// Absolute current-user 0700 directory for public API discovery.
     #[arg(long, value_name = "ABS_OWNER_PRIVATE_DIR")]
     pub(super) public_api_dir: Option<PathBuf>,
+    /// Explicit headless wrapping-key reference for sealed public API credentials.
+    /// The bearer itself is never supplied in environment or argv.
+    #[arg(long, requires = "public_api_dir")]
+    pub(super) public_api_vault_key_variable: Option<String>,
     /// Enroll an application offline and write its bearer directly to a keyring.
     #[arg(
         long,

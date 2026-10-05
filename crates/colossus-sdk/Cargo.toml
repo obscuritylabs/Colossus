@@ -37,6 +37,7 @@ sidecar = [
     "dep:tempfile",
 ]
 embedded = []
+serialization = ["dep:serde"]
 
 [dependencies]
 async-trait.workspace = true
@@ -71,6 +72,9 @@ tempfile = { workspace = true, optional = true }
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["fs", "process", "signal"], optional = true }
 rustix = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { workspace = true, features = ["net"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 colossus-windows-native = { workspace = true, optional = true }

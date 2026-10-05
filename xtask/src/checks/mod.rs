@@ -72,6 +72,7 @@ fn component_check(
             sdk::check(repository, &base)
         }
         Component::Desktop => surfaces::desktop(repository),
+        Component::Web => surfaces::web(repository),
         Component::Docs => surfaces::docs(repository),
         Component::Dependencies => surfaces::dependencies(repository),
         Component::Workflows => surfaces::workflows(repository),

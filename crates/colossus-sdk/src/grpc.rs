@@ -134,6 +134,7 @@ impl fmt::Debug for GrpcConnectOptions {
 
 /// Concrete pinned-TLS, bearer-authenticated public gRPC backend.
 pub struct GrpcBackend {
+    instance_id: crate::InstanceId,
     kind: BackendKind,
     agent_runs: Arc<GrpcAgentRunClient>,
     artifacts: Arc<GrpcArtifactClient>,
@@ -195,6 +196,7 @@ impl GrpcBackend {
             std::sync::atomic::Ordering::Release,
         );
         Ok(Self {
+            instance_id: options.expected_instance_id,
             kind: options.backend_kind,
             agent_runs,
             plugins: Arc::new(plugins::GrpcPluginClient {
@@ -245,6 +247,10 @@ impl Backend for GrpcBackend {
 
     fn agent_runs(&self) -> Arc<dyn AgentRunClient> {
         self.agent_runs.clone()
+    }
+
+    fn instance_id(&self) -> Option<crate::InstanceId> {
+        Some(self.instance_id)
     }
 
     fn capabilities(&self) -> ServerCapabilities {

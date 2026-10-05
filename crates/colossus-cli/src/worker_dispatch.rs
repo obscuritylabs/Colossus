@@ -1238,7 +1238,8 @@ pub(super) async fn dispatch_to_worker_if_active(
         | Command::Worker(_)
         | Command::Config(_)
         | Command::Codex(_)
-        | Command::SandboxHelper => Ok(false),
+        | Command::SandboxHelper
+        | Command::Cloud(_) => Ok(false),
     }
 }
 

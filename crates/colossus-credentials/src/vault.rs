@@ -150,6 +150,7 @@ impl PlatformCredentialVault {
         {
             return Err(CredentialError::Busy);
         }
+        let lease = crate::database::VaultLease(lease);
         let file = if create {
             self.root.open_file(Path::new(DATABASE_FILE))
         } else {

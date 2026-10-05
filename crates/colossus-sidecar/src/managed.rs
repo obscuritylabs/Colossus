@@ -340,6 +340,17 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         .clone()
         .map(|grant| approval_broker_grant(&request.grant, grant))
         .transpose()?;
+    let connector_grant = request
+        .connector_grant
+        .clone()
+        .map(|grant| {
+            connector_application_grant(
+                &request.grant,
+                request.approval_broker_grant.is_some(),
+                grant,
+            )
+        })
+        .transpose()?;
     let public_directory = prepare_public_directory(&instance_dir)?;
     let tls =
         TlsIdentity::from_seed(TlsKeySeed::random().map_err(|_| FailureCode::PublicApiSetup)?)
@@ -365,19 +376,34 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         .map_err(|_| FailureCode::PublicApiSetup)?
         .to_owned();
     let grants = std::iter::once(primary_grant)
-        .chain(approval_broker_grant)
+        .chain(approval_broker_grant.clone())
+        .chain(connector_grant)
         .collect::<Vec<_>>();
     let mut issued = credentials
         .issue_pending_batch(&grants)
         .map_err(|_| FailureCode::PublicApiSetup)?;
     let primary_issued = issued.remove(0);
-    let approval_broker_issued = issued.pop();
+    let approval_broker_issued = if approval_broker_grant.is_some() {
+        Some(issued.remove(0))
+    } else {
+        None
+    };
+    let connector_issued = issued.pop();
+    let connector_credential_id = connector_issued
+        .as_ref()
+        .map(|credential| credential.credential_id().to_owned());
+    let connector_bearer = connector_issued
+        .as_ref()
+        .map(|credential| SecretString::new(credential.expose_token().to_owned()))
+        .transpose()
+        .map_err(|_| FailureCode::PublicApiSetup)?;
     let credential_id = primary_issued.credential_id().to_owned();
     let approval_broker_credential_id = approval_broker_issued
         .as_ref()
         .map(|credential| credential.credential_id().to_owned());
     let credential_ids = std::iter::once(credential_id.clone())
         .chain(approval_broker_credential_id.clone())
+        .chain(connector_credential_id.clone())
         .collect::<Vec<_>>();
     let bearer = match SecretString::new(primary_issued.expose_token().to_owned()) {
         Ok(bearer) => bearer,
@@ -409,7 +435,9 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         credential_id: credential_id.clone(),
         bearer,
         approval_broker_credential_id: approval_broker_credential_id.clone(),
+        connector_credential_id: connector_credential_id.clone(),
         approval_broker_bearer,
+        connector_bearer,
     };
     if ready.validate().is_err() {
         let _ = credentials.revoke_batch(&credential_ids);
@@ -425,6 +453,7 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     }
     drop(primary_issued);
     drop(approval_broker_issued);
+    drop(connector_issued);
 
     let ack = match read_frame::<_, ParentFrame>(input) {
         Ok(ParentFrame::Ack(ack)) => ack,
@@ -433,6 +462,10 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
             return Err(FailureCode::CredentialActivation);
         }
     };
+    if ack.connector_credential_id != connector_credential_id {
+        let _ = credentials.revoke_batch(&credential_ids);
+        return Err(FailureCode::CredentialActivation);
+    }
     if let Err(error) = validate_ack(
         &ack,
         &request.exchange_id,
@@ -482,6 +515,7 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
                 exchange_id: request.exchange_id,
                 credential_id: credential_id.clone(),
                 approval_broker_credential_id: approval_broker_credential_id.clone(),
+                connector_credential_id: connector_credential_id.clone(),
             }),
         )
     };
@@ -1200,6 +1234,30 @@ fn approval_broker_grant(
         return Err(FailureCode::InvalidBootstrap);
     }
     application_grant(broker)
+}
+
+fn connector_application_grant(
+    primary: &BootstrapGrant,
+    has_broker: bool,
+    connector: BootstrapGrant,
+) -> Result<ApplicationGrant, FailureCode> {
+    if connector.application_id == primary.application_id
+        || connector
+            .allowed_roles
+            .iter()
+            .any(|role| !primary.allowed_roles.contains(role))
+        || connector
+            .allowed_tools
+            .iter()
+            .any(|tool| !primary.allowed_tools.contains(tool))
+        || connector.scopes.iter().any(|scope| {
+            !(primary.scopes.contains(scope)
+                || scope == colossus_api::scopes::APPROVALS_RESPOND && has_broker)
+        })
+    {
+        return Err(FailureCode::InvalidBootstrap);
+    }
+    application_grant(connector)
 }
 
 fn validate_ack(
@@ -2203,6 +2261,7 @@ mod tests {
             exchange_id: exchange.clone(),
             credential_id: credential.clone(),
             approval_broker_credential_id: Some(broker.clone()),
+            connector_credential_id: None,
         };
         assert_eq!(
             validate_ack(&ack, &exchange, &credential, Some(&broker)),

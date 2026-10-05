@@ -14,6 +14,8 @@ path = "src/main.rs"
 dictation = ["dep:colossus-native-dictation"]
 
 [dependencies]
+colossus-connector.workspace = true
+colossus-credentials.workspace = true
 colossus-native-dictation = { version = "=0.1.0", path = "../colossus-native-dictation", optional = true, features = ["download"] }
 agent-client-protocol.workspace = true
 shell-words.workspace = true

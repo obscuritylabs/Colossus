@@ -593,6 +593,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     let gate_needs = strings(field(job(jobs, "gate"), "needs"), "pre-merge gate needs");
     for name in [
         "linux-rust-integration",
+        "linux-desktop",
         "macos-desktop-acceptance",
         "macos-desktop-bundle",
         "windows-runtime",
@@ -605,6 +606,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     }
     for name in [
         "linux-rust-integration",
+        "linux-desktop",
         "macos-native",
         "macos-desktop-acceptance",
         "macos-desktop-bundle",

@@ -1,0 +1,24 @@
+#!/bin/sh
+# Run only inside the disposable Linux Desktop builder, never a user session.
+set -eu
+umask 077
+[ "$(uname -s)" = Linux ]
+[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]
+native_fixture=$(mktemp -d)
+trap 'rm -rf -- "$native_fixture"' EXIT HUP INT TERM
+export XDG_DATA_HOME="$native_fixture/data"
+mkdir -p "$XDG_DATA_HOME"
+# This is a synthetic password for a new disposable keyring collection.
+printf 'colossus-local-native-acceptance' | gnome-keyring-daemon --unlock --components=secrets
+cargo test --locked --release -p colossus-credentials --test native_linux \
+    native_secret_service_survives_process_restart -- --ignored --exact --test-threads=1
+cargo test --locked --release -p colossus-sdk --features sidecar --lib linux_credential_session
+cargo test --locked --release -p colossus-sidecar --test native_lifecycle \
+    verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof -- --ignored --exact
+COLOSSUS_ACCEPTANCE_SIDECAR=/build/target/release/colossus-sidecar \
+    cargo test --locked --release -p colossus-cloud-server --lib \
+    managed_sidecar_cloud_run_isolated_and_application_exit_disconnects -- --ignored
+cargo clippy --locked --release -p colossus-sdk --features sidecar --all-targets -- -D warnings
+cargo test --locked --release --manifest-path apps/desktop/src-tauri/Cargo.toml \
+    -p colossus-native-credential-ui --lib linux::tests::native_linux_password_entry_and_cancel \
+    -- --ignored --exact --test-threads=1

@@ -1,3 +1,7 @@
+mod cloud_connector;
+use cloud_connector::{
+    cloud_connect, cloud_disconnect, cloud_enroll, cloud_forget, cloud_revoke, cloud_status,
+};
 mod app_context;
 mod approval_adapter;
 mod browser;
@@ -299,6 +303,12 @@ pub fn run() {
             set_terminal_enabled,
             connect_colossus,
             connection_status,
+            cloud_enroll,
+            cloud_connect,
+            cloud_status,
+            cloud_disconnect,
+            cloud_forget,
+            cloud_revoke,
             create_run,
             choose_run_attachment,
             read_artifact_content,

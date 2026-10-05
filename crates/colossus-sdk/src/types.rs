@@ -9,6 +9,11 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Capability names are credential-free stable identifiers. Absence always means the
 /// client must keep the corresponding operation unavailable.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct ServerCapabilities {
     enabled: BTreeSet<String>,
 }
@@ -33,6 +38,14 @@ impl ServerCapabilities {
 
 /// Requested public execution mode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum RunMode {
     /// Permit policy-authorized effects.
     Execute,
@@ -44,6 +57,14 @@ pub enum RunMode {
 
 /// Requested breadth for a durable Research run.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum ResearchDepth {
     /// Fast, narrow evidence pass.
     Quick,
@@ -56,6 +77,14 @@ pub enum ResearchDepth {
 
 /// Explicit evidence lane enabled for Research.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum ResearchSourceKind {
     /// Selected Workspace repository evidence.
     Repo,
@@ -67,6 +96,14 @@ pub enum ResearchSourceKind {
 
 /// Released canonical Plan lifecycle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum PlanStatus {
     /// The exact revision remains editable.
     Draft,
@@ -80,6 +117,14 @@ pub enum PlanStatus {
 
 /// Requested handoff for one exact Plan revision.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum PlanExecutionStrategy {
     /// Consume the Plan in one normal run.
     Direct,
@@ -92,6 +137,14 @@ pub enum PlanExecutionStrategy {
 
 /// Typed continuation of a Plan released by a caller-owned source run.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum PlanRunAction {
     /// Refine one exact draft revision in Plan Mode.
     Revise {
@@ -113,6 +166,14 @@ pub enum PlanRunAction {
 
 /// Durable public run lifecycle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum RunStatus {
     /// Durable but not yet executing.
     Queued,
@@ -136,6 +197,14 @@ pub enum RunStatus {
 
 /// Whether an effectful outcome is known.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum OutcomeCertainty {
     /// Durable evidence establishes the outcome.
     Known,
@@ -145,6 +214,14 @@ pub enum OutcomeCertainty {
 
 /// One v1alpha1 run input part.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum InputContentPart {
     /// Visible user text.
     Text(String),
@@ -154,6 +231,14 @@ pub enum InputContentPart {
 
 /// Projection used when a canonical session prefix starts a child conversation.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum RunBranchContextMode {
     /// Preserve the exact provider transcript, including tool-call correlation.
     #[default]
@@ -167,6 +252,11 @@ pub enum RunBranchContextMode {
 
 /// Canonical session prefix used to start a separate child conversation.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct RunBranch {
     /// Caller-owned run whose session supplies the canonical context.
     pub source_run_id: String,
@@ -179,6 +269,11 @@ pub struct RunBranch {
 
 /// Request to create one durable run.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct CreateRunRequest {
     /// Qualified Agent Plugin skills selected for this message; never a tool grant.
     pub plugin_skill_ids: Vec<String>,
@@ -210,6 +305,11 @@ pub struct CreateRunRequest {
 
 /// Bounded released terminal output.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct RunResult {
     /// Complete visible assistant output.
     pub output: String,
@@ -235,6 +335,11 @@ pub struct RunResult {
 
 /// Bounded user-safe terminal failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct RunFailure {
     /// Stable machine-readable reason.
     pub reason: String,
@@ -252,6 +357,11 @@ pub struct RunFailure {
 
 /// Durable cancellation evidence.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct RunCancellation {
     /// Turn at which cancellation became terminal; zero means before turn one.
     pub turn: u32,
@@ -269,6 +379,14 @@ pub struct RunCancellation {
 
 /// Exactly one terminal run payload.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum RunTerminal {
     /// Successful released result.
     Result(RunResult),
@@ -280,6 +398,11 @@ pub enum RunTerminal {
 
 /// Durable bounded run summary.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct Run {
     /// Qualified Agent Plugin skills requested for this run.
     pub plugin_skill_ids: Vec<String>,
@@ -317,6 +440,11 @@ pub struct Run {
 
 /// Response from durable run creation.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct CreateRunResponse {
     /// Allocated durable run.
     pub run: Run,
@@ -324,6 +452,11 @@ pub struct CreateRunResponse {
 
 /// Request for one run.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct GetRunRequest {
     /// Exact stable run identifier.
     pub run_id: String,
@@ -331,6 +464,11 @@ pub struct GetRunRequest {
 
 /// Response containing one run and its currently pending interactions.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct GetRunResponse {
     /// Current bounded run summary.
     pub run: Run,
@@ -340,6 +478,11 @@ pub struct GetRunResponse {
 
 /// Bounded stable page request.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct PageRequest {
     /// Requested page size; zero selects the server default.
     pub page_size: u32,
@@ -349,6 +492,11 @@ pub struct PageRequest {
 
 /// Stable page continuation.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct PageResponse {
     /// Opaque next-page token, empty when the page is terminal.
     pub next_page_token: String,
@@ -356,6 +504,11 @@ pub struct PageResponse {
 
 /// Stable run listing request.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct ListRunsRequest {
     /// Optional exact session filter.
     pub session_id: Option<String>,
@@ -369,6 +522,11 @@ pub struct ListRunsRequest {
 
 /// Stable page of run summaries.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct ListRunsResponse {
     /// Deterministically ordered run summaries.
     pub runs: Vec<Run>,
@@ -378,6 +536,14 @@ pub struct ListRunsResponse {
 
 /// Timeline lane used by a curated session activity.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum SessionActivityLane {
     /// User, assistant, and model-turn activity.
     Agent,
@@ -389,6 +555,14 @@ pub enum SessionActivityLane {
 
 /// Human-readable activity kind used by the event table.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum SessionActivityKind {
     /// Released human or application input.
     User,
@@ -402,6 +576,14 @@ pub enum SessionActivityKind {
 
 /// Released lifecycle state for a curated activity.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum SessionActivityStatus {
     /// Accepted but not started.
     Requested,
@@ -421,6 +603,11 @@ pub enum SessionActivityStatus {
 
 /// One bounded released inspector value.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct SessionActivityContent {
     /// Rendering hint: `text` or `json`.
     pub format: String,
@@ -430,6 +617,11 @@ pub struct SessionActivityContent {
 
 /// One curated logical activity for a caller-owned session.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct SessionActivity {
     /// Stable logical identifier used for live merging.
     pub activity_id: String,
@@ -471,6 +663,11 @@ pub struct SessionActivity {
 
 /// Caller-scoped session activity query addressed through an owned run.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct ListSessionActivityRequest {
     /// Any caller-owned run in the requested session.
     pub source_run_id: String,
@@ -488,6 +685,11 @@ pub struct ListSessionActivityRequest {
 
 /// One eventually consistent newest-first activity page.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct ListSessionActivityResponse {
     /// Curated activities matching the request.
     pub activities: Vec<SessionActivity>,
@@ -503,6 +705,11 @@ pub struct ListSessionActivityResponse {
 
 /// Replay-and-tail request.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct WatchRunRequest {
     /// Exact run identifier.
     pub run_id: String,
@@ -512,6 +719,11 @@ pub struct WatchRunRequest {
 
 /// Idempotent cooperative cancellation request.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct CancelRunRequest {
     /// Exact run identifier.
     pub run_id: String,
@@ -521,6 +733,11 @@ pub struct CancelRunRequest {
 
 /// Cancellation response.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct CancelRunResponse {
     /// Current durable run summary.
     pub run: Run,
@@ -528,6 +745,11 @@ pub struct CancelRunResponse {
 
 /// Idempotent request to archive one terminal thread.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct ArchiveThreadRequest {
     /// Any exact run identifier belonging to the thread.
     pub run_id: String,
@@ -537,6 +759,11 @@ pub struct ArchiveThreadRequest {
 
 /// Idempotent request to restore one archived thread.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct RestoreThreadRequest {
     /// Any exact run identifier belonging to the thread.
     pub run_id: String,
@@ -546,6 +773,11 @@ pub struct RestoreThreadRequest {
 
 /// Current archive lifecycle for one durable thread.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct ThreadLifecycle {
     /// Durable session identity shared by the thread's runs.
     pub session_id: String,
@@ -555,6 +787,14 @@ pub struct ThreadLifecycle {
 
 /// Caller-visible interaction class.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum InteractionKind {
     /// Ordinary user input.
     UserPrompt,
@@ -564,6 +804,14 @@ pub enum InteractionKind {
 
 /// Durable interaction lifecycle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum InteractionStatus {
     /// Awaiting one response.
     Pending,
@@ -577,6 +825,11 @@ pub enum InteractionStatus {
 
 /// Exact suggested prompt choice.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct PromptChoice {
     /// Opaque server-issued identifier that must be echoed unchanged.
     pub choice_id: String,
@@ -586,6 +839,11 @@ pub struct PromptChoice {
 
 /// Released ordinary prompt content.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct UserPromptInteraction {
     /// User-visible question.
     pub question: String,
@@ -597,6 +855,14 @@ pub struct UserPromptInteraction {
 
 /// Non-authoritative approval risk metadata.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum ApprovalRisk {
     /// Bounded reversible impact.
     Low,
@@ -611,6 +877,11 @@ pub use colossus_api::CommandApprovalContext;
 
 /// Released approval content.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct ApprovalInteraction {
     /// Prepared command display, absent on historical and non-command interactions.
     pub command_context: Option<CommandApprovalContext>,
@@ -629,6 +900,14 @@ pub struct ApprovalInteraction {
 
 /// Exactly one released interaction representation.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum InteractionContent {
     /// Ordinary user prompt.
     UserPrompt(UserPromptInteraction),
@@ -638,6 +917,11 @@ pub enum InteractionContent {
 
 /// Durable caller-bound prompt or approval.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct Interaction {
     /// Opaque one-use identifier.
     pub interaction_id: String,
@@ -661,6 +945,14 @@ pub struct Interaction {
 
 /// Prompt answer that preserves opaque choice integrity.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum PromptAnswer {
     /// Select and echo one exact displayed choice.
     Choice(PromptChoice),
@@ -670,6 +962,14 @@ pub enum PromptAnswer {
 
 /// One-use interaction answer.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum InteractionAnswer {
     /// Ordinary prompt answer.
     Prompt(PromptAnswer),
@@ -684,6 +984,11 @@ pub enum InteractionAnswer {
 
 /// Request that consumes one interaction exactly once.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct RespondInteractionRequest {
     /// Owning run.
     pub run_id: String,
@@ -699,6 +1004,11 @@ pub struct RespondInteractionRequest {
 
 /// Response after consuming one interaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct RespondInteractionResponse {
     /// Terminal interaction with an empty response etag.
     pub interaction: Interaction,
@@ -706,6 +1016,14 @@ pub struct RespondInteractionResponse {
 
 /// Released tool activity state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum ToolActivityState {
     /// Strict call validated.
     Requested,
@@ -725,6 +1043,11 @@ pub enum ToolActivityState {
 
 /// Bounded tool lifecycle metadata.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct ToolActivity {
     /// Provider call identifier.
     pub call_id: String,
@@ -742,6 +1065,11 @@ pub struct ToolActivity {
 
 /// Normalized provider accounting.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct TokenUsage {
     /// Input token count.
     pub input_tokens: u64,
@@ -757,6 +1085,14 @@ pub struct TokenUsage {
 
 /// Released message role.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum MessageRole {
     /// Human or application input.
     User,
@@ -770,6 +1106,14 @@ pub enum MessageRole {
 
 /// Public artifact purpose.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum ArtifactPurpose {
     /// Agent run input.
     RunInput,
@@ -785,6 +1129,14 @@ pub enum ArtifactPurpose {
 
 /// Public artifact state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum ArtifactState {
     /// Staged upload incomplete.
     Uploading,
@@ -800,6 +1152,11 @@ pub enum ArtifactState {
 
 /// Safe metadata for an opaque artifact.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct ArtifactReference {
     /// Stable opaque identifier.
     pub artifact_id: String,
@@ -821,6 +1178,11 @@ pub struct ArtifactReference {
 
 /// Complete bounded artifact upload supplied by an SDK caller.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct UploadArtifactRequest {
     /// Display name only; never interpreted as a server path.
     pub file_name: String,
@@ -836,6 +1198,11 @@ pub struct UploadArtifactRequest {
 
 /// Downloaded released artifact.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct DownloadedArtifact {
     /// Verified public metadata.
     pub artifact: ArtifactReference,
@@ -845,6 +1212,14 @@ pub struct DownloadedArtifact {
 
 /// Released message content part.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum MessageContentPart {
     /// Visible text.
     Text(String),
@@ -854,6 +1229,11 @@ pub enum MessageContentPart {
 
 /// Newly durable released session message.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct SessionMessage {
     /// Owning session.
     pub session_id: String,
@@ -871,6 +1251,11 @@ pub struct SessionMessage {
 
 /// One durable replayable run update.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct RunUpdate {
     /// Owning run identifier.
     pub run_id: String,
@@ -884,6 +1269,14 @@ pub struct RunUpdate {
 
 /// Released public run-feed update.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
 pub enum RunUpdateKind {
     /// Safe provider recovery progress.
     ProviderRetry(ProviderRetry),

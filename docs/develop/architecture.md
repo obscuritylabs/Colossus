@@ -75,9 +75,17 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 | Security and catalog | `colossus-access`, `colossus-policy`, `colossus-tools` | Capability metadata, decisions, permits, and strict tool schemas |
 | Infrastructure | `colossus-provider`, `colossus-codex-auth`, `colossus-credentials`, journal/projection crates, `colossus-sandbox`, `colossus-integrations`, `colossus-mcp`, `colossus-plugins`, `colossus-bundles`, `colossus-search` | External systems, authentication, plugin OCI/lifecycle, release bundles, and storage adapters |
 | Public API and SDK | `colossus-api-proto`, `colossus-api`, `colossus-api-runtime`, `colossus-grpc`, `colossus-sdk` | Version public resources, authenticate applications, host durable runs, and provide transport-neutral clients |
+| Cloud application | `colossus-cloud`, `colossus-cloud-protocol`, `colossus-cloud-server`, `colossus-connector` | Project authority, durable fixed-node placement, OIDC browser access, and native outbound connections through the public SDK |
 | Composition and interfaces | `colossus-runtime`, `colossus-worker-protocol`, `colossus-worker`, `colossus-cli`, `colossus-tui`, `colossus-presentation` | Narrow private transport contracts, wire services, host application contracts, and released-data rendering |
 
 ## Boundary rules
+
+The [cloud control plane](cloud-control-plane.md) is a separate application composition.
+Its journal and OIDC project authority are independent of runtime storage and policy.
+Each connector uses a dedicated native application grant; it cannot borrow the Desktop
+primary or approval-broker credential. Cloud roles intersect that grant and never
+expand local tool, policy, or sandbox authority. The closed remote operation set does
+not expose private worker RPC, arbitrary network forwarding, or renderer credentials.
 
 Manual Desktop credentials and platform-backed MCP OAuth share the
 `colossus-credentials` adapter. `HostSecret` (64 KiB) and `VaultRecord` (1 MiB) are

@@ -1,0 +1,36 @@
+{
+  "http_bind": "0.0.0.0:8080",
+  "grpc_bind": "0.0.0.0:8443",
+  "public_origin": "https://colossus.example.com",
+  "grpc_endpoint": "https://runtimes.colossus.example.com",
+  "ca_certificate": "/etc/colossus/tls/ca.pem",
+  "ca_key": "/etc/colossus/tls/ca-key.pem",
+  "server_certificate": "/etc/colossus/tls/server.pem",
+  "server_key": "/etc/colossus/tls/server-key.pem",
+  "oidc": {
+    "issuer": "https://identity.example.com/realms/colossus",
+    "client_id": "colossus-cloud",
+    "client_secret_file": "/etc/colossus/oidc/client-secret"
+  },
+  "memberships": [
+    {
+      "subject": "replace-with-oidc-subject",
+      "project_id": "engineering",
+      "permissions": ["read", "execute", "control", "approve", "administer"]
+    }
+  ],
+  "web_root": "/opt/colossus/web",
+  "storage": {
+    "kind": "postgres",
+    "config": {
+      "connectionVariable": "COLOSSUS_CLOUD_DATABASE",
+      "schema": "colossus_cloud",
+      "tls": {"kind": "webpki_roots"},
+      "statementTimeoutMs": 5000
+    },
+    "key_variable": "COLOSSUS_CLOUD_JOURNAL_KEY",
+    "anchor_path": "/var/lib/colossus/cloud.anchor"
+  },
+  "signing_key_variable": "COLOSSUS_CLOUD_SIGNING_KEY",
+  "local_development": false
+}

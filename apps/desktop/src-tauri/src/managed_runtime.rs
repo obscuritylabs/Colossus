@@ -920,6 +920,7 @@ fn managed_bootstrap(
     .with_colossus_home(paths.colossus_home)?
     .with_risk_auto_approvals()
     .with_approval_broker_grant(approval_broker_grant)?
+    .with_connector_grant(connector_application_grant(resolved.access_profile)?)?
     .with_host_credentials(host_credentials)?
     .with_worker_ipc_authentication(Secret::new(worker_authentication.to_vec())?)?;
     #[cfg(debug_assertions)]
@@ -1317,6 +1318,20 @@ fn managed_worker_endpoint(
 }
 
 fn application_grant(profile: AccessProfileSetting) -> Result<SidecarApplicationGrant, SdkError> {
+    application_grant_for(profile, APPLICATION_ID, false)
+}
+
+fn connector_application_grant(
+    profile: AccessProfileSetting,
+) -> Result<SidecarApplicationGrant, SdkError> {
+    application_grant_for(profile, "app:colossus-desktop-cloud", true)
+}
+
+fn application_grant_for(
+    profile: AccessProfileSetting,
+    application_id: &str,
+    cloud: bool,
+) -> Result<SidecarApplicationGrant, SdkError> {
     let scopes = PRIMARY_SCOPES
         .into_iter()
         .map(ApiScope::new)
@@ -1330,7 +1345,22 @@ fn application_grant(profile: AccessProfileSetting) -> Result<SidecarApplication
             .map(|tool| (*tool).to_owned())
             .collect()
     };
-    SidecarApplicationGrant::new(APPLICATION_ID, scopes, ["primary".to_owned()], tools)
+    let scopes = if cloud {
+        [
+            scopes::RUNS_EXECUTE,
+            scopes::RUNS_READ,
+            scopes::RUNS_CONTROL,
+            scopes::PROMPTS_RESPOND,
+            scopes::APPROVALS_RESPOND,
+        ]
+        .into_iter()
+        .map(ApiScope::new)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| SdkError::InvalidConfiguration("invalid cloud scope"))?
+    } else {
+        scopes
+    };
+    SidecarApplicationGrant::new(application_id, scopes, ["primary".to_owned()], tools)
 }
 
 fn approval_broker_grant() -> Result<SidecarApprovalBrokerGrant, SdkError> {

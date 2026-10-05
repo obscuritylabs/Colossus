@@ -1,0 +1,39 @@
+[package]
+name = "colossus-connector"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+clap.workspace = true
+colossus-cloud-protocol.workspace = true
+colossus-credentials.workspace = true
+colossus-cloud.workspace = true
+colossus-contracts.workspace = true
+colossus-home.workspace = true
+colossus-ports.workspace = true
+colossus-sdk = { workspace = true, features = ["serialization", "keyring"] }
+async-trait.workspace = true
+futures.workspace = true
+fs4.workspace = true
+hex.workspace = true
+rcgen.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic = { workspace = true, features = ["transport", "tls-ring"] }
+url.workspace = true
+uuid.workspace = true
+zeroize = { workspace = true, features = ["derive"] }
+x509-parser.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -252,6 +252,8 @@ pub(crate) struct AppState {
         >,
     >,
     pub(crate) browser: crate::browser::BrowserManager,
+    pub(crate) cloud_connections: Mutex<HashMap<String, crate::cloud_connector::CloudSession>>,
+    pub(crate) cloud_operation: Mutex<()>,
     pub(crate) credential_vault:
         StdMutex<Option<Arc<crate::desktop_credentials::DesktopCredentials>>>,
     pub(crate) mcp_health_history:
@@ -418,6 +420,8 @@ impl Default for AppState {
         let (selection_updates, _) = watch::channel(0);
         Self {
             browser: crate::browser::BrowserManager::default(),
+            cloud_connections: Mutex::new(HashMap::new()),
+            cloud_operation: Mutex::new(()),
             configuration_updates: Mutex::new(HashMap::new()),
             targets: RwLock::new(HashMap::new()),
             credential_vault: StdMutex::new(None),

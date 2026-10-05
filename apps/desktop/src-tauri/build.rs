@@ -109,6 +109,12 @@ const COMMANDS: &[&str] = &[
     "set_terminal_enabled",
     "connect_colossus",
     "connection_status",
+    "cloud_enroll",
+    "cloud_connect",
+    "cloud_status",
+    "cloud_disconnect",
+    "cloud_forget",
+    "cloud_revoke",
     "create_run",
     "choose_run_attachment",
     "read_artifact_content",
@@ -204,6 +210,18 @@ fn export_release_trust_configuration() {
             ),
             _ => panic!("{CHANNEL_VARIABLE} must be stable, developer_preview, or validation_only"),
         }
+    } else if target_os == "linux" {
+        assert!(
+            team_id == "UNSIGNED",
+            "Linux packaging requires {TEAM_VARIABLE}=UNSIGNED"
+        );
+        assert!(
+            matches!(
+                release_channel.as_str(),
+                "developer_preview" | "validation_only"
+            ),
+            "Linux packages require an explicit developer_preview or validation_only channel"
+        );
     } else {
         let canonical_team = team_id.len() == 10
             && team_id
@@ -222,7 +240,9 @@ fn export_release_trust_configuration() {
         }
     }
     let signing_status = match (target_os.as_str(), release_channel.as_str()) {
-        ("windows", "validation_only") => "unsigned",
+        ("windows", "validation_only") | ("linux", "developer_preview" | "validation_only") => {
+            "unsigned"
+        }
         ("windows", "stable" | "developer_preview") | ("macos", "stable") => "verified",
         ("macos", "developer_preview" | "validation_only") => "ad_hoc",
         _ => "unsupported",

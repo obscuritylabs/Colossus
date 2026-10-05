@@ -48,6 +48,19 @@ if (
   );
 } else if (
   import.meta.env.DEV &&
+  new URLSearchParams(window.location.search).get("fixture") === "cloud"
+) {
+  void import("./dev/cloud-connection-preview").then(
+    ({ default: CloudPreview }) => {
+      createRoot(root).render(
+        <AppearanceProvider initialPreference={initialAppearance}>
+          <CloudPreview />
+        </AppearanceProvider>,
+      );
+    },
+  );
+} else if (
+  import.meta.env.DEV &&
   new URLSearchParams(window.location.search).get("fixture") === "plugin-studio"
 ) {
   void import("./dev/plugin-studio").then(({ default: PluginStudio }) => {

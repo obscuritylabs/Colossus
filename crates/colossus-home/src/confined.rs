@@ -852,7 +852,8 @@ mod tests {
     #[test]
     fn retained_file_revalidation_rejects_missing_and_replaced_leaf_names() {
         let temporary = private_tempdir();
-        let root = ConfinedRoot::bind(temporary.path().join("private")).unwrap();
+        let root =
+            ConfinedRoot::bind(temporary.path().canonicalize().unwrap().join("private")).unwrap();
         let retained = root.open_file(Path::new("state.redb")).unwrap();
         retained.revalidate(&root).unwrap();
         fs::rename(retained.path(), root.path().join("moved.redb")).unwrap();
@@ -867,7 +868,8 @@ mod tests {
     fn existing_read_write_open_never_creates_a_missing_leaf_or_parent() {
         use std::io::{Read as _, Seek as _, Write as _};
         let temporary = private_tempdir();
-        let root = ConfinedRoot::bind(temporary.path().join("private")).unwrap();
+        let root =
+            ConfinedRoot::bind(temporary.path().canonicalize().unwrap().join("private")).unwrap();
         assert!(
             root.open_existing_file_read_write(Path::new("missing.redb"))
                 .is_err()
@@ -893,7 +895,8 @@ mod tests {
     #[test]
     fn existing_read_write_open_rejects_hard_links_and_escaping_paths() {
         let temporary = private_tempdir();
-        let root = ConfinedRoot::bind(temporary.path().join("private")).unwrap();
+        let root =
+            ConfinedRoot::bind(temporary.path().canonicalize().unwrap().join("private")).unwrap();
         drop(root.open_file(Path::new("state.redb")).unwrap());
         fs::hard_link(
             root.path().join("state.redb"),

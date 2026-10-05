@@ -69,7 +69,22 @@ pub(crate) struct OpenedVault {
     pub file: ConfinedFile,
     // The lease outlives the database. Never unlink the lock file: another owner may
     // already hold its inode/handle while this process releases its own lease.
-    pub lease: ConfinedFile,
+    pub lease: VaultLease,
+}
+
+/// Explicit unlock also releases a transient fork-inherited duplicate of the same
+/// open file description. This field drops after the database and its file handles.
+pub(crate) struct VaultLease(pub ConfinedFile);
+impl std::ops::Deref for VaultLease {
+    type Target = ConfinedFile;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl Drop for VaultLease {
+    fn drop(&mut self) {
+        let _ = fs4::fs_std::FileExt::unlock(self.0.file());
+    }
 }
 
 impl OpenedVault {

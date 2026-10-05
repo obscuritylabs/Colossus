@@ -44,6 +44,10 @@ impl CredentialAvailability {
 }
 
 impl DesktopCredentials {
+    pub(crate) fn native_vault(&self) -> Arc<dyn CredentialVault> {
+        self.vault.clone()
+    }
+
     /// Store a validated PEM identity in the native vault under an opaque ID.
     pub(crate) async fn write_client_identity(
         self: &Arc<Self>,

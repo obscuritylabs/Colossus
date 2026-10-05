@@ -360,6 +360,15 @@ async fn launch(
     let fingerprint = TlsFingerprint::from_hex(&ready.certificate_sha256)
         .map_err(|_| SdkError::IdentityMismatch)?;
     let certificate_pem = ready.certificate_pem.as_bytes().to_vec();
+    if ready.connector_bearer.is_some() != bootstrap.has_connector_grant() {
+        return Err(SdkError::IdentityMismatch);
+    }
+    let connector_credential: Option<Arc<dyn CredentialProvider>> =
+        ready.connector_bearer.as_ref().map(|bearer| {
+            Arc::new(MemoryCredentialProvider {
+                bearer: Zeroizing::new(bearer.expose().as_bytes().to_vec()),
+            }) as Arc<dyn CredentialProvider>
+        });
     let primary_credential: Arc<dyn CredentialProvider> = Arc::new(MemoryCredentialProvider {
         bearer: Zeroizing::new(ready.bearer.expose().as_bytes().to_vec()),
     });
@@ -382,6 +391,7 @@ async fn launch(
             exchange_id: ready.exchange_id.clone(),
             credential_id: ready.credential_id.clone(),
             approval_broker_credential_id: ready.approval_broker_credential_id.clone(),
+            connector_credential_id: ready.connector_credential_id.clone(),
         }),
     )
     .await?;
@@ -390,6 +400,9 @@ async fn launch(
         ChildFrame::Failed(failure) => return Err(map_child_failure(failure.code)),
         ChildFrame::Ready(_) => return Err(SdkError::IdentityMismatch),
     };
+    if activated.connector_credential_id != ready.connector_credential_id {
+        return Err(SdkError::IdentityMismatch);
+    }
     validate_activated(
         &activated,
         &ready.exchange_id,
@@ -422,7 +435,30 @@ async fn launch(
     } else {
         None
     };
+    let connector = match connector_credential {
+        Some(credential) => Some(
+            connect_sidecar(
+                options,
+                &endpoint,
+                fingerprint,
+                &certificate_pem,
+                credential,
+                deadline,
+            )
+            .await?,
+        ),
+        None => None,
+    };
     let (agent_runs_closed, _) = watch::channel(false);
+    let connector_runs = connector.as_ref().map(|transport| {
+        Arc::new(WindowsAgentRuns {
+            transports: AgentRunTransports {
+                primary: transport.agent_runs(),
+                approval_broker: None,
+            },
+            closed: agent_runs_closed.clone(),
+        })
+    });
     let agent_runs = Arc::new(WindowsAgentRuns {
         transports: AgentRunTransports {
             primary: primary.agent_runs(),
@@ -431,6 +467,8 @@ async fn launch(
         closed: agent_runs_closed,
     });
     Ok(WindowsSidecarBackend {
+        connector,
+        connector_runs,
         primary,
         approval,
         agent_runs,
@@ -587,6 +625,8 @@ impl AgentRunClient for WindowsAgentRuns {
 }
 
 struct WindowsSidecarBackend {
+    connector: Option<Arc<GrpcBackend>>,
+    connector_runs: Option<Arc<WindowsAgentRuns>>,
     primary: Arc<GrpcBackend>,
     approval: Option<Arc<GrpcBackend>>,
     agent_runs: Arc<WindowsAgentRuns>,
@@ -617,6 +657,15 @@ impl Backend for WindowsSidecarBackend {
         self.agent_runs.clone()
     }
 
+    fn instance_id(&self) -> Option<crate::InstanceId> {
+        self.primary.instance_id()
+    }
+
+    fn connector_runs(&self) -> Option<Arc<dyn AgentRunClient>> {
+        self.connector_runs
+            .as_ref()
+            .map(|client| client.clone() as Arc<dyn AgentRunClient>)
+    }
     fn capabilities(&self) -> ServerCapabilities {
         self.primary.capabilities()
     }
@@ -632,6 +681,9 @@ impl Backend for WindowsSidecarBackend {
         self.status.send_replace(NativeSidecarStatus::Stopping);
         self.agent_runs.closed.send_replace(true);
         let _ = self.primary.close().await;
+        if let Some(connector) = &self.connector {
+            let _ = connector.close().await;
+        }
         if let Some(approval) = &self.approval {
             let _ = approval.close().await;
         }
