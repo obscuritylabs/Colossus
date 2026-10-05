@@ -96,6 +96,10 @@ impl Colossus {
         self.backend.plugins()
     }
 
+    pub(crate) fn workflow_client(&self) -> Option<Arc<dyn crate::WorkflowClient>> {
+        self.backend.workflows()
+    }
+
     /// Upload one complete bounded artifact.
     pub async fn upload_artifact(
         &self,

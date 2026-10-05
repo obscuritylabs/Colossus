@@ -13,6 +13,20 @@ const MAX_AUTHORIZATION_ITEMS: usize = 512;
 
 /// Exact public API scope names.
 pub mod scopes {
+    /// Read canonical workflow definitions and schemas.
+    pub const WORKFLOWS_READ: &str = "workflows:read";
+    /// Import an existing reviewed versioned workflow definition.
+    pub const WORKFLOWS_REGISTER: &str = "workflows:register";
+    /// Inspect caller-owned independent workflow runs.
+    pub const WORKFLOW_RUNS_READ: &str = "workflow_runs:read";
+    /// Queue independent workflow runs.
+    pub const WORKFLOW_RUNS_START: &str = "workflow_runs:start";
+    /// Read schedules in the composed Workspace.
+    pub const SCHEDULES_READ: &str = "schedules:read";
+    /// Allocate reviewed immutable schedules.
+    pub const SCHEDULES_CREATE: &str = "schedules:create";
+    /// Pause or enable caller-owned schedules.
+    pub const SCHEDULES_CONTROL: &str = "schedules:control";
     /// Discover effective Agent Plugins and explicitly read their bounded content.
     pub const EXTENSIONS_READ: &str = "extensions:read";
     /// Create and execute agent runs.

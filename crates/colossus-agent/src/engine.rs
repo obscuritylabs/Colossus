@@ -195,7 +195,9 @@ impl AgentService {
             plan_observation.record_correlation(&run_id, &session_id);
         }
         let stream_id = format!("run:{run_id}");
-        let route = self.provider.route(role)?;
+        let route = self
+            .provider
+            .route_with_options(role, &scope.agent_options)?;
         let image_count = prompt.images().count();
         let image_bytes = prompt.images().try_fold(0_u64, |total, image| {
             total
@@ -424,16 +426,21 @@ impl AgentService {
                 )
                 .await?;
             }
-            let mut continuation_plan = self.provider.continuation_plan(
-                role,
-                &ModelRequest {
-                    instructions: instructions.clone(),
-                    messages: messages.clone(),
-                    tools: turn_definitions.clone(),
-                    max_output_tokens: None,
-                },
-                &context,
-            )?;
+            let mut continuation_plan =
+                if scope.agent_options == colossus_contracts::WorkflowAgentOptions::default() {
+                    self.provider.continuation_plan(
+                        role,
+                        &ModelRequest {
+                            instructions: instructions.clone(),
+                            messages: messages.clone(),
+                            tools: turn_definitions.clone(),
+                            max_output_tokens: None,
+                        },
+                        &context,
+                    )?
+                } else {
+                    None
+                };
             let prepared = if let Some(preparer) = &self.context_preparer {
                 let prepared = preparer
                     .prepare(ContextPreparationRequest {
@@ -604,6 +611,7 @@ impl AgentService {
                         request,
                         context.clone(),
                         ProviderTurnOptions {
+                            agent_options: scope.agent_options.clone(),
                             continuation: continuation_plan,
                             include_response_diagnostics: scope
                                 .include_provider_response_diagnostics,

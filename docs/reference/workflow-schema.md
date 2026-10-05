@@ -76,7 +76,7 @@ Definitions are at most 1 MiB, `maxConcurrency` is `1..=64`, and `stepBudget` is
 
 | Type | Purpose | Important fields |
 | --- | --- | --- |
-| `agent` | Bounded model work | `id`, `prompt`, `idempotency` |
+| `agent` | Bounded model work | `id`, `prompt`, optional `options`, `idempotency` |
 | `tool` | Call an active strict tool | `id`, `tool`, `arguments`, `idempotency` |
 | `workflow` | Start a pinned child workflow | `id`, `workflow`, `version`, `inputs` |
 | `approval` | Wait for explicit authorization | `id`, `prompt` |
@@ -90,6 +90,14 @@ Conditions support bounded JSON-pointer lookup, existence, equality, comparison,
 boolean composition. They cannot execute shell, language runtime code, Rego, or template
 expressions. A condition is at most 16 KiB, 4,096 tokens, 128 nested levels, and 128
 boolean-composition nodes. `foreach.max_items` is at most 1,000.
+
+Agent `options` can select a configured `model_profile` and `reasoning_effort`.
+Omitting them preserves the primary role's configured model and effort. They cannot
+supply provider endpoints or credentials. Model work and every offered tool remain
+subject to the ordinary effect gateway. Effort values are `none`, `minimal`, `low`,
+`medium`, `high`, `xhigh`, `max`, and `ultra`; provider support is required.
+`metadata.scheduled_task` is an internal marker reserved for atomic task creation;
+public definition import rejects it when true.
 
 `compensation` accepts only agent or tool steps with an explicit idempotency strategy.
 Each compensation effect is authorized independently through the normal effect gateway.
@@ -124,13 +132,27 @@ A schedule binds:
 - an operator-selected identifier;
 - exact registered workflow hash;
 - validated input snapshot;
-- fixed cadence from 60 seconds through 31 days;
+- either fixed cadence from 60 seconds through 31 days, or calendar recurrence;
 - UTC start timestamp;
 - `fire-once` or `skip` misfire policy;
 - enable state and next occurrence.
 
-Cron and local-time/DST semantics are outside this contract. Schedule transition and
-deterministically identified queued run commit in one journal batch.
+Calendar recurrence stores `timezone` (IANA identifier), `time` (`HH:mm`), and
+`weekdays` (unique ISO integers 1–7; empty means daily). Calendar records have
+`cadence_seconds: 0`. The reviewed UTC start must match an actual local occurrence.
+Missing local times are skipped, repeated times fire once at the earlier instant, and
+future boundaries preserve wall-clock time across DST. Catch-up is bounded to 10,000
+occurrences; excess backlog blocks and pauses the schedule. Cron is not supported.
+Legacy records without `calendar` retain their fixed elapsed-time semantics.
+
+Authenticated creation can alternatively provide a `task` with `name`, plain-language
+`instructions`, allowed `tools`, and optional agent `options`. Existing workflow ID and
+hash must be empty and inputs must be `{}`. The generated one-step definition, schedule,
+and owner-scoped receipt commit atomically. Task definitions stay out of the reusable
+catalog; lists omit task instructions and canonical inputs. Owned detail releases them.
+
+Schedule transition and deterministically identified queued run commit in one journal
+batch. Matching creation retries preserve the allocation across restart and ticks.
 
 ## Webhook contract
 

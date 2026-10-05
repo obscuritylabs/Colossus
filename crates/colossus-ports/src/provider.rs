@@ -7,6 +7,8 @@ pub struct ProviderTurnOptions {
     pub include_response_diagnostics: bool,
     /// Safe continuation reference selected by context preparation.
     pub continuation: Option<colossus_contracts::ProviderContinuationPlan>,
+    /// Configured per-step model preferences, bound into the provider effect.
+    pub agent_options: colossus_contracts::WorkflowAgentOptions,
 }
 
 /// Exact transient image bytes resolved only inside a permit-bearing provider adapter.
@@ -44,6 +46,20 @@ pub trait RunInputMediaResolver: Send + Sync {
 pub trait ModelProvider: Send + Sync {
     /// Resolve role metadata without performing an effect.
     fn route(&self, role: &str) -> Result<ModelRoute, ModelProviderError>;
+
+    /// Resolve explicit configured model preferences; unsupported adapters reject overrides.
+    fn route_with_options(
+        &self,
+        role: &str,
+        options: &colossus_contracts::WorkflowAgentOptions,
+    ) -> Result<ModelRoute, ModelProviderError> {
+        if options != &colossus_contracts::WorkflowAgentOptions::default() {
+            return Err(ModelProviderError::Configuration(
+                "model overrides are unsupported by this adapter".into(),
+            ));
+        }
+        self.route(role)
+    }
 
     /// Resolve safe continuation metadata against the exact canonical history.
     fn continuation_plan(
@@ -96,6 +112,11 @@ pub trait ModelProvider: Send + Sync {
         options: ProviderTurnOptions,
         observer: &mut dyn ProviderEventObserver,
     ) -> Result<ProviderTurn, ModelProviderError> {
+        if options.agent_options != colossus_contracts::WorkflowAgentOptions::default() {
+            return Err(ModelProviderError::Configuration(
+                "model overrides are unsupported by this adapter".into(),
+            ));
+        }
         if options.include_response_diagnostics {
             return Err(ModelProviderError::Configuration(
                 "provider response diagnostics are unsupported by this adapter".into(),

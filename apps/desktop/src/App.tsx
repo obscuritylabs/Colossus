@@ -896,12 +896,14 @@ export default function App() {
           ? developmentFixtures().buildActivityComparisonFixture()
           : FIXTURE_SCENARIO === "plan-workflow"
             ? developmentFixtures().buildPlanWorkflowFixture()
-            : developmentFixtures().buildOperationsStudioFixture(
-                FIXTURE_SCENARIO === "interaction-question"
-                  ? "user_prompt"
-                  : "approval",
-                FIXTURE_SCENARIO === "command-approval",
-              )
+            : FIXTURE_QUERY.get("scheduleActivity") === "1"
+              ? developmentFixtures().buildWorkflowScheduleFixture()
+              : developmentFixtures().buildOperationsStudioFixture(
+                  FIXTURE_SCENARIO === "interaction-question"
+                    ? "user_prompt"
+                    : "approval",
+                  FIXTURE_SCENARIO === "command-approval",
+                )
       : initialChatState,
   );
   const chatRef = useRef(chat);
@@ -5044,6 +5046,12 @@ export default function App() {
     [],
   );
   const openWorkNavigation = useCallback(() => setWorkNavigationOpen(true), []);
+  const [scheduleInspection, setScheduleInspection] = useState<{
+    targetId: string;
+    scheduleId: string;
+    showRun: boolean;
+  } | null>(null);
+
   const selectSurface = useCallback((nextSurface: WorkspaceSurface) => {
     setWorkNavigationOpen(false);
     if (nextSurface === "settings") setSettingsStartTab("runtime");
@@ -5364,6 +5372,16 @@ export default function App() {
         </Suspense>
       ) : surface === "work" ? (
         <WorkSurface
+          onInspectSchedule={(scheduleId, showRun) => {
+            if (desktop.selectedTargetId) {
+              setScheduleInspection({
+                targetId: desktop.selectedTargetId,
+                scheduleId,
+                showRun,
+              });
+              selectSurface("schedules");
+            }
+          }}
           gitWorkspaceId={desktop.workspace?.workspaceId ?? null}
           gitAvailable={desktop.capabilities.files}
           browserScope={desktop.selectedTargetId}
@@ -5541,6 +5559,11 @@ export default function App() {
         />
       ) : (
         <OperationsSurface
+          scheduleInspection={
+            scheduleInspection?.targetId === desktop.selectedTargetId
+              ? scheduleInspection
+              : null
+          }
           initialSettingsTab={settingsStartTab}
           onConfigurePluginConnection={() => {
             setSettingsStartTab("plugins");

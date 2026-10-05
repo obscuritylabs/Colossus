@@ -43,11 +43,38 @@ service AutomationService {
   // StartWorkflowRun starts one idempotent durable workflow run.
   rpc StartWorkflowRun(StartWorkflowRunRequest) returns (StartWorkflowRunResponse);
 
+  // ListWorkflowRuns reads bounded caller-owned history for one definition.
+  rpc ListWorkflowRuns(ListWorkflowRunsRequest) returns (ListWorkflowRunsResponse);
+
   // GetWorkflowRun returns one durable workflow run.
   rpc GetWorkflowRun(GetWorkflowRunRequest) returns (GetWorkflowRunResponse);
 
   // WatchWorkflowRun replays snapshots after an exclusive sequence and tails updates.
   rpc WatchWorkflowRun(WatchWorkflowRunRequest) returns (stream WatchWorkflowRunResponse);
+
+  // ValidateWorkflowDefinition performs one bounded authenticated workflow operation.
+  rpc ValidateWorkflowDefinition(ValidateWorkflowDefinitionRequest) returns (ValidateWorkflowDefinitionResponse);
+
+  // RegisterWorkflowDefinition performs one bounded authenticated workflow operation.
+  rpc RegisterWorkflowDefinition(RegisterWorkflowDefinitionRequest) returns (RegisterWorkflowDefinitionResponse);
+
+  // ListWorkflowSchedules performs one bounded authenticated workflow operation.
+  rpc ListWorkflowSchedules(ListWorkflowSchedulesRequest) returns (ListWorkflowSchedulesResponse);
+
+  // GetWorkflowSchedule performs one bounded authenticated workflow operation.
+  rpc GetWorkflowSchedule(GetWorkflowScheduleRequest) returns (GetWorkflowScheduleResponse);
+
+  // CreateWorkflowSchedule performs one bounded authenticated workflow operation.
+  rpc CreateWorkflowSchedule(CreateWorkflowScheduleRequest) returns (CreateWorkflowScheduleResponse);
+
+  // SetWorkflowScheduleEnabled performs one bounded authenticated workflow operation.
+  rpc SetWorkflowScheduleEnabled(SetWorkflowScheduleEnabledRequest) returns (SetWorkflowScheduleEnabledResponse);
+
+  // DeleteWorkflowSchedule removes an exact owned revision from future ticking.
+  rpc DeleteWorkflowSchedule(DeleteWorkflowScheduleRequest) returns (DeleteWorkflowScheduleResponse);
+
+  // GetWorkflowWorkState performs one bounded authenticated workflow operation.
+  rpc GetWorkflowWorkState(GetWorkflowWorkStateRequest) returns (GetWorkflowWorkStateResponse);
 }
 
 // ExtensionService exposes credential-free extension catalogs.
@@ -318,6 +345,22 @@ message WorkflowSummary {
 
   // etag is an opaque optimistic-concurrency token.
   string etag = 7;
+
+  // version is the exact registered definition version.
+  string version = 8;
+
+  // definition_hash pins the exact validated YAML bytes.
+  string definition_hash = 9;
+
+  // input_schema is included by detail and validation, omitted in list summaries.
+  google.protobuf.Struct input_schema = 10;
+
+  // unavailable_reason is safe guidance when pinned trust prevents scheduling.
+  optional string unavailable_reason = 11;
+
+  // logic is the bounded released structure, without prompts, arguments, or outputs.
+  // Detail/validation responses include it; catalog pages and older targets omit it.
+  google.protobuf.Struct logic = 12;
 }
 
 // WorkflowRunStatus is the durable automation lifecycle state.
@@ -372,6 +415,19 @@ message WorkflowRun {
 
   // failure_reason is a stable safe reason for terminal failures.
   optional string failure_reason = 7;
+
+  // waiting_reason is released categorical guidance without raw effect output.
+  optional string waiting_reason = 8;
+
+  // definition_hash is the exact hash pinned when the run was allocated.
+  string definition_hash = 9;
+
+  // step_states contains only recorded step identities, states, and completion counts.
+  // The object has a steps array; raw effect payloads and outputs are withheld.
+  google.protobuf.Struct step_states = 10;
+
+  // result_json preserves exact bounded final JSON values; history summaries omit it.
+  optional string result_json = 11;
 }
 
 // GetWorkflowRequest selects one workflow.
@@ -414,6 +470,9 @@ message StartWorkflowRunRequest {
 
   // idempotency_key is required and scoped to the authenticated caller.
   string idempotency_key = 3;
+
+  // expected_definition_hash binds the reviewed definition before allocation.
+  string expected_definition_hash = 4;
 }
 
 // StartWorkflowRunResponse returns the durable allocated run.
@@ -439,7 +498,7 @@ message WatchWorkflowRunRequest {
   // workflow_run_id is the exact opaque identifier.
   string workflow_run_id = 1;
 
-  // after_sequence is an exclusive cursor; zero replays from the beginning.
+  // after_sequence is exclusive; updates coalesce the latest canonical snapshot.
   uint64 after_sequence = 2;
 }
 
@@ -453,6 +512,231 @@ message WatchWorkflowRunResponse {
 
   // workflow_run is the current durable projection.
   WorkflowRun workflow_run = 3;
+}
+
+// ScheduleMisfirePolicy identifies fixed-cadence scheduling behavior.
+enum ScheduleMisfirePolicy {
+  // SCHEDULE_MISFIRE_POLICY_UNSPECIFIED is invalid for schedule creation.
+  SCHEDULE_MISFIRE_POLICY_UNSPECIFIED = 0;
+
+  // SCHEDULE_MISFIRE_POLICY_FIRE_ONCE is one latest occurrence for multiple due boundaries.
+  SCHEDULE_MISFIRE_POLICY_FIRE_ONCE = 1;
+
+  // SCHEDULE_MISFIRE_POLICY_SKIP is no catch-up run for multiple due boundaries.
+  SCHEDULE_MISFIRE_POLICY_SKIP = 2;
+}
+// ScheduleDispatchStatus identifies fixed-cadence scheduling behavior.
+enum ScheduleDispatchStatus {
+  // SCHEDULE_DISPATCH_STATUS_UNSPECIFIED is no evaluated occurrence.
+  SCHEDULE_DISPATCH_STATUS_UNSPECIFIED = 0;
+
+  // SCHEDULE_DISPATCH_STATUS_QUEUED is an allocated run, not confirmed execution success.
+  SCHEDULE_DISPATCH_STATUS_QUEUED = 1;
+
+  // SCHEDULE_DISPATCH_STATUS_SKIPPED is a reconciled boundary without a run.
+  SCHEDULE_DISPATCH_STATUS_SKIPPED = 2;
+
+  // SCHEDULE_DISPATCH_STATUS_BLOCKED is invalid pinned trust.
+  SCHEDULE_DISPATCH_STATUS_BLOCKED = 3;
+}
+// WorkflowScheduleOrigin is a typed bounded workflow resource.
+message WorkflowScheduleOrigin {
+  // application_id is the authenticated owner, never model-supplied.
+  string application_id = 1;
+
+  // session_id is the trusted originating session when known.
+  optional string session_id = 2;
+
+  // run_id is the trusted originating chat run when known.
+  optional string run_id = 3;
+}
+// WorkflowSchedule is a typed bounded workflow resource.
+message WorkflowSchedule {
+  // schedule_id is the Workspace-local immutable identity.
+  string schedule_id = 1;
+
+  // workflow_id identifies the exact registered name and version.
+  string workflow_id = 2;
+
+  // definition_hash pins exact validated YAML bytes.
+  string definition_hash = 3;
+
+  // input is authorized immutable detail, omitted from lists and legacy records.
+  google.protobuf.Struct input = 4;
+
+  // cadence_seconds is fixed elapsed cadence, 60 seconds through 31 days.
+  uint64 cadence_seconds = 5;
+
+  // misfire_policy reconciles multiple due boundaries.
+  ScheduleMisfirePolicy misfire_policy = 6;
+
+  // enabled permits future worker ticks.
+  bool enabled = 7;
+
+  // starts_at is the reviewed first UTC occurrence.
+  google.protobuf.Timestamp starts_at = 8;
+
+  // next_fire_at is the canonical next occurrence boundary.
+  google.protobuf.Timestamp next_fire_at = 9;
+
+  // last_scheduled_at is the last evaluated boundary, including skipped occurrences.
+  google.protobuf.Timestamp last_scheduled_at = 10;
+
+  // last_workflow_run_id identifies the last queued independent workflow run.
+  optional string last_workflow_run_id = 11;
+
+  // blocked_reason is bounded fail-closed guidance.
+  optional string blocked_reason = 12;
+
+  // created_at is the canonical allocation time.
+  google.protobuf.Timestamp created_at = 13;
+
+  // updated_at is the latest canonical transition time.
+  google.protobuf.Timestamp updated_at = 14;
+
+  // etag binds the exact canonical revision, including worker ticks.
+  string etag = 15;
+
+  // origin is absent for legacy schedules.
+  WorkflowScheduleOrigin origin = 16;
+
+  // controllable is false for legacy records whose ownership cannot be established.
+  bool controllable = 17;
+
+  // last_dispatch distinguishes queuing, skipping, and blocking.
+  ScheduleDispatchStatus last_dispatch = 18;
+
+  // calendar contains strict timezone, time, and ISO weekdays; absent for elapsed cadence.
+  google.protobuf.Struct calendar = 19;
+
+  // task contains owner-visible simple-task intent; list summaries omit instructions.
+  google.protobuf.Struct task = 20;
+}
+// ValidateWorkflowDefinitionRequest is a typed bounded workflow resource.
+message ValidateWorkflowDefinitionRequest {
+  // yaml contains a bounded existing declarative workflow definition.
+  string yaml = 1;
+}
+// ValidateWorkflowDefinitionResponse is a typed bounded workflow resource.
+message ValidateWorkflowDefinitionResponse {
+  // workflow is validated metadata for explicit registration review.
+  WorkflowSummary workflow = 1;
+}
+// RegisterWorkflowDefinitionRequest is a typed bounded workflow resource.
+message RegisterWorkflowDefinitionRequest {
+  // yaml contains the exact reviewed existing workflow definition.
+  string yaml = 1;
+
+  // expected_definition_hash binds the reviewed YAML bytes.
+  string expected_definition_hash = 2;
+
+  // idempotency_key is required and caller-scoped.
+  string idempotency_key = 3;
+}
+// RegisterWorkflowDefinitionResponse is a typed bounded workflow resource.
+message RegisterWorkflowDefinitionResponse {
+  // workflow is canonical registered metadata in the selected runtime partition.
+  WorkflowSummary workflow = 1;
+}
+// ListWorkflowSchedulesRequest is a typed bounded workflow resource.
+message ListWorkflowSchedulesRequest {
+  // page has a bounded size and exclusive cursor.
+  PageRequest page = 1;
+}
+// ListWorkflowSchedulesResponse is a typed bounded workflow resource.
+message ListWorkflowSchedulesResponse {
+  // schedules contains authorized summaries without full inputs.
+  repeated WorkflowSchedule schedules = 1;
+
+  // page identifies the next bounded page.
+  PageResponse page = 2;
+}
+// GetWorkflowScheduleRequest is a typed bounded workflow resource.
+message GetWorkflowScheduleRequest {
+  // schedule_id is the exact authorized schedule identity.
+  string schedule_id = 1;
+}
+// GetWorkflowScheduleResponse is a typed bounded workflow resource.
+message GetWorkflowScheduleResponse {
+  // schedule is the canonical authorized detail.
+  WorkflowSchedule schedule = 1;
+}
+// CreateWorkflowScheduleRequest is a typed bounded workflow resource.
+message CreateWorkflowScheduleRequest {
+  // schedule_id uses lowercase letters, digits, dots, and hyphens.
+  string schedule_id = 1;
+
+  // workflow_id selects a registered name and version.
+  string workflow_id = 2;
+
+  // expected_definition_hash is the exact reviewed workflow hash.
+  string expected_definition_hash = 3;
+
+  // input is snapshotted only after strict server schema validation.
+  google.protobuf.Struct input = 4;
+
+  // cadence_seconds must be 60 seconds through 31 days.
+  uint64 cadence_seconds = 5;
+
+  // starts_at is the exact reviewed UTC instant.
+  google.protobuf.Timestamp starts_at = 6;
+
+  // misfire_policy must be explicitly selected.
+  ScheduleMisfirePolicy misfire_policy = 7;
+
+  // enabled selects the initial future tick eligibility.
+  bool enabled = 8;
+
+  // idempotency_key binds allocation retries to the normalized reviewed intent.
+  string idempotency_key = 9;
+
+  // calendar is exclusive with nonzero cadence_seconds.
+  google.protobuf.Struct calendar = 10;
+
+  // task is exclusive with an existing workflow reference.
+  google.protobuf.Struct task = 11;
+}
+// CreateWorkflowScheduleResponse is a typed bounded workflow resource.
+message CreateWorkflowScheduleResponse {
+  // schedule is the durably allocated canonical record.
+  WorkflowSchedule schedule = 1;
+}
+// SetWorkflowScheduleEnabledRequest is a typed bounded workflow resource.
+message SetWorkflowScheduleEnabledRequest {
+  // schedule_id identifies the caller-owned record.
+  string schedule_id = 1;
+
+  // enabled controls future ticking and does not cancel queued work.
+  bool enabled = 2;
+
+  // etag must match the exact reviewed canonical schedule revision.
+  string etag = 3;
+}
+// SetWorkflowScheduleEnabledResponse is a typed bounded workflow resource.
+message SetWorkflowScheduleEnabledResponse {
+  // schedule is the confirmed canonical control result.
+  WorkflowSchedule schedule = 1;
+}
+// DeleteWorkflowScheduleRequest binds deletion to an owned canonical revision.
+message DeleteWorkflowScheduleRequest {
+  // schedule_id identifies the caller-owned schedule.
+  string schedule_id = 1;
+  // etag must match the exact revision reviewed before deletion.
+  string etag = 2;
+}
+// DeleteWorkflowScheduleResponse confirms durable removal; run history is retained.
+message DeleteWorkflowScheduleResponse {
+  // schedule_id is the deleted identity; it cannot be reused.
+  string schedule_id = 1;
+}
+// GetWorkflowWorkStateRequest is a typed bounded workflow resource.
+message GetWorkflowWorkStateRequest {
+
+}
+// GetWorkflowWorkStateResponse is a typed bounded workflow resource.
+message GetWorkflowWorkStateResponse {
+  // active reports queued, running, or waiting workflow work for lifecycle supervision.
+  bool active = 1;
 }
 
 // ExtensionKind identifies a catalog resource family.
@@ -775,4 +1059,19 @@ message InspectDistributionArtifactRequest {
 message InspectDistributionArtifactResponse {
   // inspection contains released verification metadata.
   DistributionInspection inspection = 1;
+}
+
+// ListWorkflowRunsRequest selects one definition and a bounded history page.
+message ListWorkflowRunsRequest {
+  // workflow_id is the exact registered name:version identity.
+  string workflow_id = 1;
+  // page bounds owner-authorized canonical history discovery.
+  PageRequest page = 2;
+}
+// ListWorkflowRunsResponse omits private step output and effect evidence.
+message ListWorkflowRunsResponse {
+  // runs contains only caller-owned independent executions.
+  repeated WorkflowRun runs = 1;
+  // page supplies an exclusive stable identity cursor.
+  PageResponse page = 2;
 }

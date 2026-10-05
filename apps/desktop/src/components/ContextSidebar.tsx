@@ -21,6 +21,16 @@ interface ContextSidebarProps {
 }
 
 const COPY = {
+  workflows: {
+    kicker: "Workspace automation",
+    title: "Workflows",
+    description: "Reusable definitions, logic graphs, and independent runs.",
+  },
+  schedules: {
+    kicker: "Workspace automation",
+    title: "Schedules",
+    description: "Recurring tasks and workflow schedules in this Workspace.",
+  },
   plugins: {
     kicker: "Agent Plugins",
     title: "Plugins",

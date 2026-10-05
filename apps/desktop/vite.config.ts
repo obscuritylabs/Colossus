@@ -3,11 +3,13 @@ import { defineConfig } from "vitest/config";
 
 import { d3ColorFrozenPrototypeCompatibility } from "./build/d3-color-frozen-prototype";
 import { xtermFrozenPrototypeCompatibility } from "./build/xterm-frozen-prototype";
+import { shikiGrammarLiterals } from "./build/shiki-grammar-literals";
 
 export default defineConfig({
   plugins: [
     d3ColorFrozenPrototypeCompatibility(),
     xtermFrozenPrototypeCompatibility(),
+    shikiGrammarLiterals(),
     react(),
   ],
   optimizeDeps: {

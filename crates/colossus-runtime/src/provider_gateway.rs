@@ -396,6 +396,25 @@ impl RiskEvaluator for GatewayRiskEvaluator {
 }
 
 impl GatewayModelProvider {
+    fn resolve_workflow_model(
+        &self,
+        role: &str,
+        options: &colossus_contracts::WorkflowAgentOptions,
+    ) -> Result<colossus_provider::ResolvedModel, ModelProviderError> {
+        match &options.model_profile {
+            Some(profile) if !profile.is_empty() && profile.len() <= 128 => {
+                self.providers.model(profile)
+            }
+            Some(_) => {
+                return Err(ModelProviderError::Configuration(
+                    "invalid configured model profile".into(),
+                ));
+            }
+            None => self.providers.resolve(role),
+        }
+        .map_err(|error| ModelProviderError::Configuration(error.to_string()))
+    }
+
     async fn turn_with_options(
         &self,
         role: &str,
@@ -403,11 +422,8 @@ impl GatewayModelProvider {
         context: ExecutionContext,
         options: ProviderTurnOptions,
     ) -> Result<ProviderTurn, ModelProviderError> {
-        let resolved = self
-            .providers
-            .resolve(role)
-            .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
-        let route = resolved.route();
+        let resolved = self.resolve_workflow_model(role, &options.agent_options)?;
+        let route = self.route_with_options(role, &options.agent_options)?;
         self.remember_candidate(context.session_id.as_deref(), None)?;
         let mut continuation_plan = options.continuation.clone();
         if let Some(plan) = &mut continuation_plan {
@@ -473,7 +489,7 @@ impl GatewayModelProvider {
         if let Ok(rejection) =
             serde_json::from_slice::<colossus_provider::ProviderFeatureRejection>(&released.bytes)
         {
-            return Err(self.rejection(role, &rejection));
+            return Err(self.rejection(&resolved, &rejection));
         }
         let output =
             serde_json::from_slice::<colossus_provider::ProviderAdapterTurn>(&released.bytes)
@@ -483,7 +499,7 @@ impl GatewayModelProvider {
                     )
                 })?;
         self.accepted(
-            role,
+            &resolved,
             &request_evidence,
             false,
             output.continuation_id.is_some(),
@@ -514,6 +530,23 @@ impl ModelProvider for GatewayModelProvider {
             })?;
         }
         Ok(())
+    }
+    fn route_with_options(
+        &self,
+        role: &str,
+        options: &colossus_contracts::WorkflowAgentOptions,
+    ) -> Result<ModelRoute, ModelProviderError> {
+        let resolved = self.resolve_workflow_model(role, options)?;
+        let mut route = resolved.route();
+        if let Some(effort) = options.reasoning_effort {
+            if route.provider == "echo" {
+                return Err(ModelProviderError::Configuration(
+                    "Echo does not support reasoning effort".into(),
+                ));
+            }
+            route.reasoning_effort = Some(effort);
+        }
+        Ok(route)
     }
     fn route(&self, role: &str) -> Result<ModelRoute, ModelProviderError> {
         let resolved = self
@@ -558,11 +591,8 @@ impl ModelProvider for GatewayModelProvider {
         options: ProviderTurnOptions,
         observer: &mut dyn ProviderEventObserver,
     ) -> Result<ProviderTurn, ModelProviderError> {
-        let resolved = self
-            .providers
-            .resolve(role)
-            .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
-        let route = resolved.route();
+        let resolved = self.resolve_workflow_model(role, &options.agent_options)?;
+        let route = self.route_with_options(role, &options.agent_options)?;
         self.remember_candidate(context.session_id.as_deref(), None)?;
         let mut continuation_plan = options.continuation.clone();
         if let Some(plan) = &mut continuation_plan {
@@ -619,12 +649,12 @@ impl ModelProvider for GatewayModelProvider {
             .await
             .map_err(model_gateway_error)?;
         if let Some(rejection) = &bridge.rejection {
-            return Err(self.rejection(role, rejection));
+            return Err(self.rejection(&resolved, rejection));
         }
         let candidate = bridge.continuation_id.clone();
         let turn = bridge.finish(&terminal.bytes, options.include_response_diagnostics)?;
         self.accepted(
-            role,
+            &resolved,
             &request_evidence,
             route.capabilities.streaming,
             candidate.is_some(),

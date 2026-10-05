@@ -29,7 +29,9 @@ async function removeFixture(path: string): Promise<void> {
 }
 
 /** A fresh home/workspace and real SDK/worker; never connects to a user's runtime. */
-export async function processRuntimeHost() {
+export async function processRuntimeHost(
+  mode: "process-acceptance" | "workflow-acceptance" = "process-acceptance",
+) {
   const root = await realpath(
     await mkdtemp(
       join(process.platform === "win32" ? homedir() : tmpdir(), "cp-"),
@@ -45,7 +47,8 @@ export async function processRuntimeHost() {
   );
   await cp(process.env.COLOSSUS_APPROVAL_TEST_SIDECAR!, sidecar);
   await chmod(sidecar, 0o500);
-  let pending: Record<string, unknown> | null = null;
+  let pending: { name: string; arguments: Record<string, unknown> } | null =
+    null;
   const observations: unknown[] = [];
   const server = createServer(async (request, response) => {
     let body = "";
@@ -61,15 +64,34 @@ export async function processRuntimeHost() {
               index: 0,
               id: "process-case",
               type: "function",
-              function: { name: "shell_run", arguments: JSON.stringify(call) },
+              function: {
+                name: call.name,
+                arguments: JSON.stringify(call.arguments),
+              },
             },
           ],
         }
       : { content: "Acceptance turn completed." };
-    response.writeHead(200, { "content-type": "text/event-stream" });
-    response.end(
-      `data: ${JSON.stringify({ id: "process-turn", choices: [{ index: 0, delta, finish_reason: call ? "tool_calls" : "stop" }] })}\n\ndata: [DONE]\n\n`,
-    );
+    if (parsed.stream) {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        `data: ${JSON.stringify({ id: "process-turn", choices: [{ index: 0, delta, finish_reason: call ? "tool_calls" : "stop" }] })}\n\ndata: [DONE]\n\n`,
+      );
+    } else {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          id: "process-turn",
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", ...delta },
+              finish_reason: call ? "tool_calls" : "stop",
+            },
+          ],
+        }),
+      );
+    }
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -78,12 +100,7 @@ export async function processRuntimeHost() {
   const processes = new AcceptanceProcesses();
   const bridge = processes.start(
     process.env.COLOSSUS_APPROVAL_TEST_BRIDGE!,
-    [
-      sidecar,
-      root,
-      `http://127.0.0.1:${address.port}/v1`,
-      "process-acceptance",
-    ],
+    [sidecar, root, `http://127.0.0.1:${address.port}/v1`, mode],
     {
       cwd: workspace,
       env: { ...process.env, HOME: root, COLOSSUS_HOME: join(root, "home") },
@@ -124,15 +141,25 @@ export async function processRuntimeHost() {
     async run(arguments_: Record<string, unknown> | null, sessionId?: string) {
       pending = arguments_
         ? {
-            cwd: ".",
-            justification: "Verify the isolated process acceptance fixture.",
-            ...arguments_,
+            name: "shell_run",
+            arguments: {
+              cwd: ".",
+              justification: "Verify the isolated process acceptance fixture.",
+              ...arguments_,
+            },
           }
         : null;
       return invoke("run", { sessionId }) as Promise<{
         run: { session_id: string };
         approvals: number;
         activity: { activity: { state: string; preview: string | null }[] };
+      }>;
+    },
+    async runTool(name: string, arguments_: Record<string, unknown>) {
+      pending = { name, arguments: arguments_ };
+      return invoke("run", {}) as Promise<{
+        run: { run_id: string; session_id: string };
+        approvals: number;
       }>;
     },
     async close() {

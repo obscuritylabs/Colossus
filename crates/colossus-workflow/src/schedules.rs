@@ -90,6 +90,8 @@ impl WorkflowService {
             workflow_hash,
             inputs,
             cadence_seconds,
+            calendar: None,
+            task: None,
             misfire_policy,
             enabled,
             starts_at: starts_at.clone(),

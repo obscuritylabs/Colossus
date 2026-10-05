@@ -1609,7 +1609,7 @@ impl WorkflowEffectRunner for ReturnAfterDurableMarkerEffects {
     }
 }
 
-fn process_kill_journal(root: &Path) -> Arc<dyn EventJournal> {
+pub(super) fn process_kill_journal(root: &Path) -> Arc<dyn EventJournal> {
     Arc::new(
         RedbEventJournal::open(
             root.join("workflow.redb"),
@@ -1623,6 +1623,13 @@ fn process_kill_journal(root: &Path) -> Arc<dyn EventJournal> {
         )
         .expect("open durable workflow journal"),
     )
+}
+
+pub(super) fn control_crash_journal(root: &Path) -> Arc<dyn EventJournal> {
+    Arc::new(CrashAfterEventJournal {
+        inner: process_kill_journal(root),
+        event_type: "workflow.schedule.registered.v1",
+    })
 }
 
 fn process_kill_definition(mode: &str) -> String {
