@@ -2,7 +2,8 @@ use super::*;
 
 #[derive(Subcommand)]
 pub(super) enum Command {
-    /// Enroll and manage an outbound cloud connector with its dedicated local application grant.
+    /// Enroll and manage an outbound Control Plane connector with its dedicated local grant.
+    #[command(name = "control-plane", alias = "cloud")]
     #[command(subcommand)]
     Cloud(colossus_connector::ConnectorCommand),
     /// Check or apply an install-aware stable Colossus update.

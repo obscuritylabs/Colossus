@@ -1,0 +1,48 @@
+/* Shared shadcn utility layer. No Preflight reset; existing hosts own base styles. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme) prefix(ui);
+@import "tailwindcss/utilities.css" layer(utilities) prefix(ui) source(none);
+@import "./controls.css";
+@import "./catalog.css";
+@import "./data-table.css";
+@import "./conversation.css";
+@import "./workspace-sidebar.css";
+@import "./charts.css";
+@source "../src";
+
+@custom-variant dark (&:where(:root:not([data-theme="light"]) *));
+
+/* Inline aliases keep all palettes and text-size preferences live, including portals. */
+@theme inline {
+  --color-*: initial;
+  --color-background: var(--surface);
+  --color-foreground: var(--text);
+  --color-primary: var(--blue);
+  --color-primary-foreground: var(--text-on-accent);
+  --color-secondary: var(--surface-muted);
+  --color-secondary-foreground: var(--text);
+  --color-muted: var(--surface-hover);
+  --color-muted-foreground: var(--muted);
+  --color-accent: var(--surface-selected);
+  --color-accent-foreground: var(--text);
+  --color-popover: var(--surface-raised);
+  --color-popover-foreground: var(--text);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--text);
+  --color-border: var(--border);
+  --color-input: var(--border-strong);
+  --color-ring: var(--cyan);
+  --color-destructive: var(--red-text);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --text-xs: var(--font-size-caption);
+  --text-xs--line-height: var(--line-height-body);
+  --text-sm: var(--font-size-body-sm);
+  --text-sm--line-height: var(--line-height-body);
+  --text-base: var(--font-size-body);
+  --text-base--line-height: var(--line-height-body);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius);
+  --radius-lg: var(--radius-lg);
+}
+@import "./control-plane.css";

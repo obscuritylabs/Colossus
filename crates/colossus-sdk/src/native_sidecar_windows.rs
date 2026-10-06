@@ -544,6 +544,21 @@ struct WindowsAgentRuns {
 
 #[async_trait]
 impl AgentRunClient for WindowsAgentRuns {
+    async fn get_runtime_policy_posture(&self) -> ApiResult<crate::RuntimePolicyPosture> {
+        self.transports.primary.get_runtime_policy_posture().await
+    }
+    async fn set_workspace_sharing(
+        &self,
+        request: crate::SetWorkspaceSharingRequest,
+    ) -> ApiResult<crate::WorkspaceSharingState> {
+        self.transports.primary.set_workspace_sharing(request).await
+    }
+    async fn list_visible_runs(
+        &self,
+        request: ListRunsRequest,
+    ) -> ApiResult<crate::ListVisibleRunsResponse> {
+        self.transports.primary.list_visible_runs(request).await
+    }
     async fn list_process_sessions(
         &self,
         request: crate::ListProcessSessionsRequest,

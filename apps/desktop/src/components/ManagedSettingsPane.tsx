@@ -1,4 +1,5 @@
 import { CloudConnectionPane } from "./CloudConnectionPane";
+import { ControlPlaneSettingsPane } from "./ControlPlaneSettingsPane";
 import { ModelFeatureControl } from "./ModelFeatureControl";
 import type { ModelFeatureMode, ManagedModelCapabilities } from "../types";
 import { RememberedCommands } from "./RememberedCommands";
@@ -221,6 +222,7 @@ type DesktopTab = (typeof DESKTOP_PAGES)[number]["id"];
 
 type SettingsScope = "global" | "space";
 type GlobalTab =
+  | "control-plane"
   | "providers"
   | "models"
   | "credentials"
@@ -372,6 +374,7 @@ const GLOBAL_TABS: ReadonlyArray<{
   group?: string;
 }> = [
   { id: "providers", label: "Providers", group: "Global settings" },
+  { id: "control-plane", label: "Control Plane", group: "Global settings" },
   { id: "models", label: "Models", group: "Global settings" },
   { id: "credentials", label: "Credentials", group: "Global settings" },
   { id: "mcp", label: "MCP", group: "Global settings" },
@@ -384,7 +387,7 @@ const GLOBAL_TABS: ReadonlyArray<{
 
 const SPACE_TABS: ReadonlyArray<{ id: SpaceTab; label: string }> = [
   { id: "runtime", label: "Runtime" },
-  { id: "cloud", label: "Cloud" },
+  { id: "cloud", label: "Control Plane" },
   { id: "providers", label: "Providers" },
   { id: "mcp", label: "MCP" },
   { id: "plugins", label: "Plugins" },
@@ -3330,6 +3333,8 @@ function GlobalSettingsBody({
     );
   };
   const global = snapshot.globalConfiguration;
+  if (tab === "control-plane") return <ControlPlaneSettingsPane />;
+
   if (tab === "plugins") {
     return (
       <PluginSettingsBody

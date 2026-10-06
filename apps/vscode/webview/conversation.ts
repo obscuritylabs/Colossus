@@ -1,6 +1,9 @@
 import type { MessageView, ToolView, WorkView } from "../src/model.js";
 import { brandMarks, icon, node } from "./ui.js";
-import { markdown } from "./markdown.js";
+import { createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { flushSync } from "react-dom";
+import { ConversationEntry } from "@colossus/ui/conversation";
 
 function runId(message: MessageView) {
   return (
@@ -206,7 +209,7 @@ class ToolThread {
 export class Conversation {
   private messages = new Map<
     string,
-    { signature: string; element: HTMLElement }
+    { signature: string; element: HTMLElement; renderer: Root }
   >();
   private threads = new Map<string, ToolThread>();
   constructor(
@@ -247,10 +250,12 @@ export class Conversation {
       const signature = JSON.stringify(message);
       let cached = this.messages.get(message.id);
       if (!cached) {
-        cached = {
-          signature: "",
-          element: node("article", "", `message ${message.role}`),
-        };
+        const element = node(
+          "div",
+          "",
+          `message ${message.role} shared-message-island`,
+        );
+        cached = { signature: "", element, renderer: createRoot(element) };
         this.messages.set(message.id, cached);
       }
       if (cached.signature !== signature) {
@@ -263,11 +268,20 @@ export class Conversation {
             : message.role === "assistant"
               ? "Colossus"
               : "Notice";
-        cached.element.replaceChildren(
-          node("p", label, "message-author"),
-          message.role === "assistant"
-            ? markdown(message.text)
-            : node("div", message.text, "plain-text"),
+        const role =
+          message.role === "user"
+            ? "user"
+            : message.role === "assistant"
+              ? "assistant"
+              : "system";
+        flushSync(() =>
+          cached!.renderer.render(
+            createElement(ConversationEntry, {
+              role,
+              author: label,
+              content: message.text,
+            }),
+          ),
         );
       }
       children.push(cached.element);
@@ -277,7 +291,10 @@ export class Conversation {
     reconcile(this.root, children);
     const retained = new Set(view.messages.map((m) => m.id));
     for (const id of this.messages.keys())
-      if (!retained.has(id)) this.messages.delete(id);
+      if (!retained.has(id)) {
+        this.messages.get(id)?.renderer.unmount();
+        this.messages.delete(id);
+      }
     for (const id of this.threads.keys())
       if (!rendered.has(id)) this.threads.delete(id);
     if (changingSession || atBottom)

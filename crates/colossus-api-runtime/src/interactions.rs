@@ -160,7 +160,7 @@ impl PublicInteractionRouter {
         self
     }
 
-    fn public_approval_mode(&self) -> PublicApprovalMode {
+    pub(crate) fn public_approval_mode(&self) -> PublicApprovalMode {
         self.public_approval_mode
             .as_ref()
             .map_or(PublicApprovalMode::Ask, |provider| {

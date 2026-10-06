@@ -88,6 +88,21 @@ impl Runtime {
         &self.sandbox_profile
     }
 
+    /// Resolved tool/action selection, without resource paths or credentials.
+    pub fn access_resolution(&self) -> &colossus_access::AccessResolution {
+        &self.access
+    }
+
+    /// Configured execution boundary identifier, without resource configuration.
+    pub fn sandbox_backend(&self) -> &str {
+        &self.sandbox_backend
+    }
+
+    /// Global boundary acknowledgment; session-specific acknowledgments are separate.
+    pub fn policy_boundary_acknowledged(&self) -> bool {
+        self.sandbox_boundary_gate.globally_acknowledged()
+    }
+
     /// Credential- and content-free hashes for currently discoverable AGENTS.md inputs.
     pub fn instruction_source_diagnostics(&self) -> Result<Value, RuntimeError> {
         self._workspace_lease.identity().revalidate()?;

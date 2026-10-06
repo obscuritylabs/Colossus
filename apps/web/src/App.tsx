@@ -1,154 +1,370 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ComposerInput, DropdownSelect } from "@colossus/ui";
 import {
-  IconActivity,
-  IconArrowRight,
-  IconCloud,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import { ControlPlaneFrame, Button, DropdownSelect } from "@colossus/ui";
+import colossusMark from "@colossus/ui/assets/colossus-mark.svg";
+import {
+  IconHome,
   IconServer,
-  IconListDetails,
+  IconFolder,
+  IconUsers,
+  IconSettings,
   IconLogout,
-  IconPlus,
-  IconSearch,
-  IconShieldLock,
-  IconLoader2,
   IconRefresh,
-  IconMoon,
-  IconSun,
-  IconSend2,
+  IconLoader2,
+  IconPlus,
+  IconX,
 } from "@tabler/icons-react";
+import {
+  AppearanceSettings,
+  SendShortcutContext,
+  useAppearance,
+} from "./Appearance";
 import {
   ApiFailure,
   request,
   projectPath,
-  taskTitle,
   taskStatus,
-  statusLabel,
   terminalStatuses,
-  type Membership,
   type FleetNode,
+  type Host,
   type Task,
+  type Thread,
+  type ThreadDetailResponse,
 } from "./api";
+import {
+  projectPermissions,
+  type Me,
+  type AuthConfig,
+  type PublicSettings,
+} from "./control-api";
 import { Fleet } from "./Fleet";
 import { TaskDetail } from "./TaskDetail";
+import { TaskTable } from "./TaskTable";
+import { RunComposer, type RunRequest } from "./RunComposer";
+import { Home, LoadState } from "./Home";
+import { Projects } from "./Projects";
+import { AgentSidebar, AgentWorkspace } from "./AgentScope";
+import { SignIn } from "./SignIn";
+import { DocumentationLink } from "./DocumentationLink";
+import { useResource } from "./resources";
+const ThreadDetail = lazy(() =>
+  import("./ThreadDetail").then((module) => ({ default: module.ThreadDetail })),
+);
+const Administration = lazy(() =>
+  import("./Administration").then((module) => ({
+    default: module.Administration,
+  })),
+);
+import {
+  NavigationProvider,
+  useNavigation,
+  restoreSignInReturn,
+  RouteLink,
+} from "./navigation";
+import {
+  agentHref,
+  globalHref,
+  projectHref,
+  routeSurface,
+  taskHref,
+  threadHref,
+  type Surface,
+} from "./routes";
 export function App() {
-  const [memberships, setMemberships] = useState<Membership[] | null>(null),
+  const [me, setMe] = useState<Me | null>(null),
     [auth, setAuth] = useState<"loading" | "signed_out" | "ready">("loading"),
-    [project, setProject] = useState(""),
-    [surface, setSurface] = useState<"tasks" | "fleet">("tasks"),
-    [nodes, setNodes] = useState<FleetNode[]>([]),
-    [tasks, setTasks] = useState<Task[]>([]),
-    [taskPages, setTaskPages] = useState(1),
-    [nodePages, setNodePages] = useState(1),
-    [selected, setSelected] = useState<Task | null>(null),
-    [error, setError] = useState(""),
-    [loading, setLoading] = useState(true),
-    [draft, setDraft] = useState(""),
-    [node, setNode] = useState(""),
-    [mode, setMode] = useState("execute"),
-    [role, setRole] = useState("primary"),
-    [busy, setBusy] = useState(false),
-    [query, setQuery] = useState(""),
-    [filter, setFilter] = useState("all"),
-    [light, setLight] = useState(
-      () => localStorage.getItem("colossus-cloud-theme") === "light",
-    );
-  const composer = useRef<HTMLTextAreaElement>(null),
-    attempt = useRef<{ signature: string; key: string } | null>(null);
-  const currentProject = useRef(project);
-  currentProject.current = project;
-  useEffect(() => {
-    document.documentElement.dataset.theme = light ? "light" : "dark";
-    document.documentElement.dataset.palette = "neutral";
-    localStorage.setItem("colossus-cloud-theme", light ? "light" : "dark");
-  }, [light]);
+    [authConfig, setAuthConfig] = useState<AuthConfig | null>(null),
+    [settings, setSettings] = useState<PublicSettings | null>(null),
+    [error, setError] = useState("");
+  const epoch = useRef(0);
+  const loadMe = useCallback(async (signal?: AbortSignal) => {
+    const generation = ++epoch.current;
+    try {
+      const response = await request<Me>("/api/me", undefined, signal);
+      if (signal?.aborted || generation !== epoch.current) return;
+      setMe(response);
+      setAuth("ready");
+      setError("");
+      restoreSignInReturn();
+    } catch (e) {
+      if (!signal?.aborted && generation === epoch.current) {
+        setMe(null);
+        setAuth("signed_out");
+        if (!(e instanceof ApiFailure && e.status === 403))
+          setError(e instanceof Error ? e.message : "Sign-in unavailable.");
+      }
+    }
+  }, []);
   useEffect(() => {
     const abort = new AbortController();
-    void request<{ memberships: Membership[] }>(
-      "/api/me",
-      undefined,
-      abort.signal,
-    )
-      .then((response) => {
-        setMemberships(response.memberships);
-        setProject(response.memberships[0]?.project_id ?? "");
-        setAuth("ready");
-      })
-      .catch((error) => {
-        if (!abort.signal.aborted) {
-          if (error instanceof ApiFailure && error.status === 403)
-            setAuth("signed_out");
-          else {
-            setError(
-              error instanceof Error ? error.message : "Sign-in unavailable.",
-            );
-            setAuth("signed_out");
-          }
-        }
+    let pending = false;
+    const reconcile = () => {
+      if (pending) return;
+      pending = true;
+      void loadMe(abort.signal).finally(() => {
+        pending = false;
       });
+    };
+    window.addEventListener("colossus:web:reconcile-identity", reconcile);
+    return () => {
+      abort.abort();
+      window.removeEventListener("colossus:web:reconcile-identity", reconcile);
+    };
+  }, [loadMe]);
+  useEffect(() => {
+    const abort = new AbortController();
+    void loadMe(abort.signal);
+    void request<AuthConfig>("/api/auth/config", undefined, abort.signal)
+      .then((value) => {
+        if (!abort.signal.aborted) setAuthConfig(value);
+      })
+      .catch(() => {
+        if (!abort.signal.aborted)
+          setError(
+            "Sign-in configuration could not be loaded. Refresh to retry.",
+          );
+      });
+    void request<PublicSettings>("/api/settings", undefined, abort.signal)
+      .then((value) => {
+        if (!abort.signal.aborted) setSettings(value);
+      })
+      .catch(() => {});
     return () => abort.abort();
+  }, [loadMe]);
+  async function signOut() {
+    try {
+      await request("/auth/logout", {});
+      epoch.current++;
+      setMe(null);
+      setAuth("signed_out");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Sign-out failed.");
+    }
+  }
+  if (auth === "loading")
+    return (
+      <main className="startup" aria-busy="true">
+        <img src={colossusMark} alt="Colossus" />
+        <IconLoader2 size={20} className="spin" aria-hidden="true" />
+        <p>Connecting to your Control Plane…</p>
+      </main>
+    );
+  if (auth === "signed_out")
+    return (
+      <SignIn
+        config={authConfig}
+        classification={settings?.classification}
+        error={error}
+        onSignedIn={() => void loadMe()}
+      />
+    );
+  if (!me) return null;
+  return (
+    <NavigationProvider>
+      <AuthenticatedApp
+        key={me.user.id}
+        me={me}
+        authConfig={authConfig}
+        settings={settings}
+        onSettings={setSettings}
+        loadMe={() => void loadMe()}
+        onSignOut={() => void signOut()}
+      />
+    </NavigationProvider>
+  );
+}
+
+function AuthenticatedApp({
+  me,
+  authConfig,
+  settings,
+  onSettings,
+  loadMe,
+  onSignOut,
+}: {
+  me: Me;
+  authConfig: AuthConfig | null;
+  settings: PublicSettings | null;
+  onSettings: (value: PublicSettings) => void;
+  loadMe: () => void;
+  onSignOut: () => void;
+}) {
+  const navigation = useNavigation(),
+    { route } = navigation;
+  const defaultProject =
+    me.projects.find((item) => !item.archived)?.id ?? me.projects[0]?.id ?? "";
+  const [preferredProject, setPreferredProject] = useState(defaultProject);
+  const requestedProject = route.kind !== "invalid" ? route.project : undefined;
+  const project =
+    requestedProject ??
+    (me.projects.some((item) => item.id === preferredProject)
+      ? preferredProject
+      : defaultProject);
+  const authorizedProject =
+    route.kind !== "invalid" && me.projects.some((item) => item.id === project);
+  useEffect(() => {
+    if (authorizedProject) setPreferredProject(project);
+  }, [authorizedProject, project]);
+  const surface = routeSurface(route);
+  const { appearance, setAppearance } = useAppearance();
+  const [nodeCache, setNodes] = useState<FleetNode[]>([]),
+    [hostCache, setHosts] = useState<Host[]>([]),
+    [taskCache, setTasks] = useState<Task[]>([]),
+    [loadedProject, setLoadedProject] = useState(""),
+    [nodePages, setNodePages] = useState(1),
+    [hostPages, setHostPages] = useState(1),
+    [taskPages, setTaskPages] = useState(1),
+    [loading, setLoading] = useState(true),
+    [error, setError] = useState(""),
+    [deniedProject, setDeniedProject] = useState(""),
+    [node, setNode] = useState(""),
+    [busy, setBusy] = useState(false),
+    [taskComposer, setTaskComposer] = useState(false);
+  const currentProject = useRef(project),
+    alive = useRef(true),
+    inventoryEpoch = useRef(0);
+  currentProject.current = project;
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
   }, []);
-  const membership = memberships?.find(
-      (member) => member.project_id === project,
-    ),
-    permissions = membership?.permissions ?? [];
+  const nodes = loadedProject === project ? nodeCache : [],
+    hosts = loadedProject === project ? hostCache : [],
+    tasks = loadedProject === project ? taskCache : [];
+  const permissions = authorizedProject ? projectPermissions(me, project) : [];
+  const threadResource = useResource<ThreadDetailResponse>(
+    route.kind === "thread" && authorizedProject
+      ? `${projectPath(project)}/threads/${encodeURIComponent(route.thread)}`
+      : null,
+    0,
+    me.user.id,
+  );
+  const taskResource = useResource<{ task: Task }>(
+    route.kind === "task" && authorizedProject
+      ? `${projectPath(project)}/tasks/${encodeURIComponent(route.task)}`
+      : null,
+    0,
+    me.user.id,
+  );
+  const selectedThread =
+    route.kind === "thread" &&
+    !threadResource.error &&
+    threadResource.data?.thread.project_id === project &&
+    threadResource.data.thread.thread_id === route.thread
+      ? threadResource.data.thread
+      : null;
+  const selectedTask =
+    route.kind === "task" &&
+    !taskResource.error &&
+    taskResource.data?.task.project_id === project &&
+    taskResource.data.task.task_id === route.task
+      ? taskResource.data.task
+      : null;
+  const agentId =
+    route.kind === "agent" ? route.node : (selectedThread?.node_id ?? "");
+  const selectedAgent = useResource<FleetNode>(
+    authorizedProject &&
+      agentId &&
+      !nodes.some((item) => item.node.node_id === agentId)
+      ? `${projectPath(project)}/nodes/${encodeURIComponent(agentId)}`
+      : null,
+    3000,
+    me.user.id,
+  );
+  const resolvedAgent =
+    !selectedAgent.error &&
+    selectedAgent.data?.node.project_id === project &&
+    selectedAgent.data.node.node_id === agentId
+      ? selectedAgent.data
+      : null;
+  const scopedNodes =
+    resolvedAgent &&
+    !nodes.some((item) => item.node.node_id === resolvedAgent.node.node_id)
+      ? [...nodes, resolvedAgent]
+      : nodes;
+  const agent = scopedNodes.find((item) => item.node.node_id === agentId);
   const refresh = useCallback(
     async (signal?: AbortSignal) => {
-      if (!project) return;
+      if (!project || !authorizedProject) return;
+      const generation = ++inventoryEpoch.current;
       async function pages<T>(
-        kind: "tasks" | "nodes",
+        kind: "tasks" | "nodes" | "hosts",
         count: number,
         id: (item: T) => string,
       ) {
         const items: T[] = [];
         let after = "";
         for (let page = 0; page < count; page++) {
-          const response = await request<Record<string, T[]>>(
-            `${projectPath(project)}/${kind}?limit=100${after ? `&after=${encodeURIComponent(after)}` : ""}`,
-            undefined,
-            signal,
-          );
-          const batch = response[kind] ?? [];
+          const response = await request<
+              Record<string, T[]> & { next_cursor?: string | null }
+            >(
+              `${projectPath(project)}/${kind}?limit=100${after ? `&after=${encodeURIComponent(after)}` : ""}`,
+              undefined,
+              signal,
+            ),
+            batch = response[kind] ?? [];
           items.push(...batch);
           if (batch.length < 100) break;
-          after = id(batch[batch.length - 1]!);
+          after = response.next_cursor ?? id(batch.at(-1)!);
         }
         return items;
       }
       try {
-        const [fleet, work] = await Promise.all([
+        const [fleet, work, inventory] = await Promise.all([
           pages<FleetNode>("nodes", nodePages, (item) => item.node.node_id),
           pages<Task>("tasks", taskPages, (item) => item.task_id),
+          pages<Host>("hosts", hostPages, (item) => item.host_id),
         ]);
-        if (signal?.aborted || currentProject.current !== project) return;
+        if (
+          signal?.aborted ||
+          !alive.current ||
+          currentProject.current !== project ||
+          generation !== inventoryEpoch.current
+        )
+          return;
         setNodes(fleet);
         setTasks(work);
+        setHosts(inventory);
+        setLoadedProject(project);
         setLoading(false);
-      } catch (error) {
-        if (!signal?.aborted && currentProject.current === project) {
+        setError("");
+        setDeniedProject("");
+      } catch (e) {
+        if (
+          !signal?.aborted &&
+          alive.current &&
+          currentProject.current === project &&
+          generation === inventoryEpoch.current
+        ) {
           setLoading(false);
-          if (error instanceof ApiFailure && error.status === 403)
-            setAuth("signed_out");
+          if (e instanceof ApiFailure && (e.status === 401 || e.status === 403))
+            setDeniedProject(project);
           setError(
-            error instanceof Error
-              ? error.message
-              : "Control plane unavailable.",
+            e instanceof Error ? e.message : "Control Plane unavailable.",
           );
         }
       }
     },
-    [project, taskPages, nodePages],
+    [project, authorizedProject, nodePages, taskPages, hostPages],
   );
   useEffect(() => {
-    if (auth !== "ready") return;
     const abort = new AbortController();
-    let refreshing = false;
+    let pending = false;
     const poll = async () => {
-      if (refreshing) return;
-      refreshing = true;
+      if (pending) return;
+      pending = true;
       try {
         await refresh(abort.signal);
       } finally {
-        refreshing = false;
+        pending = false;
       }
     };
     void poll();
@@ -159,563 +375,510 @@ export function App() {
       abort.abort();
       clearInterval(timer);
     };
-  }, [refresh, auth]);
+  }, [refresh]);
   useEffect(() => {
-    setTasks([]);
     setNodes([]);
-    setSelected(null);
-    setNode("");
-    setLoading(true);
-    setTaskPages(1);
+    setHosts([]);
+    setTasks([]);
+    setLoadedProject("");
     setNodePages(1);
+    setHostPages(1);
+    setTaskPages(1);
+    setLoading(true);
+    setNode("");
+    setBusy(false);
+    setTaskComposer(false);
+    setError("");
+    setDeniedProject("");
   }, [project]);
   useEffect(() => {
     if (
       !node ||
-      !nodes.some((fleet) => fleet.node.node_id === node && !fleet.node.revoked)
-    ) {
+      !nodes.some((item) => item.node.node_id === node && !item.node.revoked)
+    )
       setNode(
         (
-          nodes.find((fleet) => !fleet.node.revoked && fleet.presence?.ready) ??
-          nodes.find((fleet) => !fleet.node.revoked)
+          nodes.find((item) => !item.node.revoked && item.presence?.ready) ??
+          nodes.find((item) => !item.node.revoked)
         )?.node.node_id ?? "",
       );
-    }
   }, [nodes, node]);
-  const target = nodes.find((fleet) => fleet.node.node_id === node);
-  useEffect(() => {
-    if (target && !target.node.roles.includes(role))
-      setRole(target.node.roles[0] ?? "primary");
-  }, [target, role]);
-  async function create() {
-    if (!draft.trim() || !node || busy) return;
+  function openThread(thread: Thread) {
+    navigation.go(threadHref(thread.project_id, thread.thread_id));
+  }
+  function openTask(task: Task) {
+    navigation.go(
+      task.thread_id
+        ? threadHref(task.project_id, task.thread_id)
+        : taskHref(task.project_id, task.task_id),
+    );
+  }
+  function openAgent(id: string, view: "overview" | "policy" = "overview") {
+    navigation.go(agentHref(project, id, view));
+  }
+  function selectProject(id: string) {
+    setPreferredProject(id);
+    navigation.go(
+      route.kind === "project"
+        ? projectHref(id, route.view)
+        : surface === "projects"
+          ? projectHref(id)
+          : route.kind === "global"
+            ? globalHref(surface, id, route.view)
+            : globalHref("fleet", id),
+    );
+  }
+  async function createTask(runRequest: RunRequest) {
     setBusy(true);
     setError("");
-    const signature = JSON.stringify({ draft, node, mode, role });
-    if (attempt.current?.signature !== signature)
-      attempt.current = { signature, key: crypto.randomUUID() };
+    const originalProject = project;
     try {
       const response = await request<{ task: Task }>(
         `${projectPath(project)}/tasks`,
-        {
-          node_id: node,
-          request: {
-            plugin_skill_ids: [],
-            input: [{ text: draft }],
-            session_id: null,
-            end_user_id: null,
-            role,
-            mode,
-            research_depth: null,
-            research_sources: [],
-            plan_action: null,
-            branch: null,
-            max_turns: 24,
-            idempotency_key: attempt.current.key,
-          },
-        },
+        { node_id: node, request: runRequest },
       );
-      if (currentProject.current !== project) return;
-      setDraft("");
-      attempt.current = null;
-      setSelected(response.task);
+      if (!alive.current || currentProject.current !== originalProject)
+        return false;
+      openTask(response.task);
       void refresh();
-    } catch (error) {
-      if (currentProject.current === project)
+      return true;
+    } catch (e) {
+      if (alive.current && currentProject.current === originalProject)
         setError(
-          error instanceof Error
-            ? error.message
+          e instanceof Error
+            ? e.message
             : "Task submission failed. Retry to reconcile the same task.",
         );
+      return false;
     } finally {
-      setBusy(false);
+      if (alive.current && currentProject.current === originalProject)
+        setBusy(false);
     }
   }
-  async function signOut() {
+  async function createThread(runRequest: RunRequest) {
+    setBusy(true);
+    setError("");
+    const originalProject = project;
     try {
-      await request("/auth/logout", {});
-      setAuth("signed_out");
-      setProject("");
-      setMemberships(null);
-      setNodes([]);
-      setTasks([]);
-      setSelected(null);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "Sign-out failed.");
+      const response = await request<{ thread: Thread }>(
+        `${projectPath(project)}/threads`,
+        { node_id: agentId, request: runRequest },
+      );
+      if (!alive.current || currentProject.current !== originalProject)
+        return false;
+      openThread(response.thread);
+      void refresh();
+      return true;
+    } catch (e) {
+      if (alive.current && currentProject.current === originalProject)
+        setError(
+          e instanceof Error
+            ? e.message
+            : "Conversation submission failed. Retry to reconcile the same request.",
+        );
+      return false;
+    } finally {
+      if (alive.current && currentProject.current === originalProject)
+        setBusy(false);
     }
   }
-  if (auth === "loading")
-    return (
-      <div className="startup">
-        <IconCloud size={38} />
-        <IconLoader2 size={22} className="spin" />
-        <p>Connecting to Colossus Cloud…</p>
-      </div>
-    );
-  if (auth === "signed_out")
-    return (
-      <main className="sign-in">
-        <div className="sign-in-art" aria-hidden="true">
-          <div className="orbit orbit-one" />
-          <div className="orbit orbit-two" />
-          <div className="orbit orbit-three" />
-          <div className="cloud-mark">
-            <IconCloud size={52} />
-          </div>
-          <div className="orbit-node node-one">
-            <IconServer size={22} />
-          </div>
-          <div className="orbit-node node-two">
-            <IconActivity size={22} />
-          </div>
-          <div className="orbit-node node-three">
-            <IconShieldLock size={22} />
-          </div>
-        </div>
-        <div className="sign-in-copy">
-          <div className="brand">
-            <IconCloud size={24} />
-            <strong>Colossus</strong>
-            <span>CLOUD</span>
-          </div>
-          <p className="eyebrow">YOUR RUNTIMES. ONE CONTROL PLANE.</p>
-          <h1>
-            Work reaches <br />
-            beyond one machine.
-          </h1>
-          <p>
-            Connect your runtimes, start agent tasks, and follow every step from
-            one shared workspace.
-          </p>
-          {error && (
-            <div className="alert" role="alert">
-              {error}
-            </div>
-          )}
-          <a className="primary-link" href="/auth/login">
-            Sign in with your organization <IconArrowRight size={18} />
-          </a>
-          <div className="sign-in-foot">
-            <IconShieldLock size={16} />
-            <span>Organization sign-in · Explicit runtime authority</span>
-          </div>
-        </div>
-      </main>
-    );
-  const live = nodes.filter(
-      (fleet) => fleet.presence?.ready && !fleet.node.revoked,
-    ).length,
-    active = tasks.filter(
+  const active = tasks.filter(
       (task) => !terminalStatuses.has(taskStatus(task)),
+    ).length,
+    live = nodes.filter(
+      (item) => item.presence?.ready && !item.node.revoked,
     ).length;
-  const shown = tasks
-    .filter(
-      (task) =>
-        (filter === "all" ||
-          (filter === "active"
-            ? !terminalStatuses.has(taskStatus(task))
-            : terminalStatuses.has(taskStatus(task)))) &&
-        taskTitle(task).toLowerCase().includes(query.toLowerCase()),
-    )
-    .sort((a, b) =>
-      (b.snapshot?.run.created_at ?? b.task_id).localeCompare(
-        a.snapshot?.run.created_at ?? a.task_id,
-      ),
-    );
+  const taskView = (
+    <section
+      className="managed-settings-body catalog-settings tasks-settings"
+      aria-labelledby="tasks-heading"
+    >
+      <header className="catalog-heading">
+        <div>
+          <h2 id="tasks-heading">Tasks</h2>
+          <p>
+            Execution requests across this project’s agents. Open a task to view
+            its conversation.
+          </p>
+        </div>
+        <Button
+          variant="primary"
+          onClick={() => setTaskComposer((value) => !value)}
+          disabled={!permissions.includes("execute") || !node}
+        >
+          <IconPlus size={16} aria-hidden="true" />
+          {taskComposer ? "Close composer" : "New task"}
+        </Button>
+      </header>
+      <p className="catalog-summary">
+        {tasks.length} loaded tasks · {active} active
+      </p>
+      {taskComposer ? (
+        <RunComposer
+          onPolicy={() => openAgent(node, "policy")}
+          nodes={scopedNodes}
+          nodeId={node}
+          onNodeChange={setNode}
+          disabled={!permissions.includes("execute")}
+          busy={busy}
+          label="Create an agent task"
+          action="Start task"
+          onSubmit={createTask}
+        />
+      ) : null}
+      <TaskTable
+        key={project}
+        project={project}
+        tasks={tasks}
+        nodes={scopedNodes}
+        loading={loading}
+        hasMore={tasks.length === taskPages * 100}
+        onMore={() => setTaskPages((value) => value + 1)}
+        onOpen={openTask}
+        onFleet={() => navigation.go(globalHref("fleet", project))}
+      />
+    </section>
+  );
+  let unavailable = "";
+  if (route.kind === "invalid") unavailable = route.message;
+  else if (requestedProject && !authorizedProject)
+    unavailable =
+      "This project is unavailable or your signed-in identity does not have access. Choose an authorized project to continue.";
+  else if (
+    deniedProject === project &&
+    surface !== "home" &&
+    surface !== "admin" &&
+    surface !== "settings"
+  )
+    unavailable =
+      "Your project access is unavailable. Refresh your identity or select an authorized project.";
+  else if (surface === "admin" && !me.user.is_admin)
+    unavailable =
+      "Your signed-in identity does not have Control Plane administration access.";
+  else if (route.kind === "thread" && threadResource.error)
+    unavailable = threadResource.error;
+  else if (
+    route.kind === "thread" &&
+    !threadResource.loading &&
+    !selectedThread
+  )
+    unavailable =
+      "The requested conversation could not be found in this project.";
+  else if (route.kind === "task" && taskResource.error)
+    unavailable = taskResource.error;
+  else if (route.kind === "task" && !taskResource.loading && !selectedTask)
+    unavailable = "The requested task could not be found in this project.";
+  else if (route.kind === "agent" && selectedAgent.error)
+    unavailable = selectedAgent.error;
+  else if (
+    route.kind === "agent" &&
+    !selectedAgent.loading &&
+    !loading &&
+    !agent
+  )
+    unavailable = "The requested agent could not be found in this project.";
   return (
-    <div className="shell">
-      <aside className="rail">
-        <a className="brand" href="/" aria-label="Colossus Cloud home">
-          <IconCloud size={25} />
-          <strong>Colossus</strong>
-          <span>CLOUD</span>
-        </a>
-        <div className="project-picker">
-          <span className="eyebrow">PROJECT</span>
-          <DropdownSelect
-            aria-label="Select project"
-            value={project}
-            onChange={(event) => {
-              setSelected(null);
-              setNodes([]);
-              setTasks([]);
-              setNode("");
-              setError("");
-              setProject(event.target.value);
-            }}
-          >
-            {(memberships ?? []).map((member) => (
-              <option key={member.project_id} value={member.project_id}>
-                {member.project_id}
-              </option>
-            ))}
-          </DropdownSelect>
-        </div>
-        <nav aria-label="Main navigation">
-          <button
-            className={surface === "tasks" ? "nav-active" : ""}
-            onClick={() => {
-              setSurface("tasks");
-              setSelected(null);
-            }}
-          >
-            <IconListDetails size={19} />
-            Tasks<span className="nav-count">{active || ""}</span>
-          </button>
-          <button
-            className={surface === "fleet" ? "nav-active" : ""}
-            onClick={() => {
-              setSurface("fleet");
-              setSelected(null);
-            }}
-          >
-            <IconServer size={19} />
-            Runtime fleet
-            <span className="nav-count">
-              {live}/{nodes.filter((fleet) => !fleet.node.revoked).length}
-            </span>
-          </button>
-        </nav>
-        <div className="rail-bottom">
-          <div className="authority-note">
-            <IconShieldLock size={19} />
-            <div>
-              <strong>Local authority, always</strong>
-              <p>Project access and runtime grants are enforced together.</p>
-            </div>
-          </div>
-          <div className="rail-footer">
+    <SendShortcutContext value={appearance.sendShortcut}>
+      <ControlPlaneFrame
+        current={surface}
+        navigation={[
+          {
+            id: "home",
+            label: "Home",
+            href: globalHref("home"),
+            icon: <IconHome size={21} aria-hidden="true" />,
+          },
+          {
+            id: "fleet",
+            label: "Fleet",
+            href: globalHref("fleet", authorizedProject ? project : undefined),
+            icon: <IconServer size={21} aria-hidden="true" />,
+          },
+          {
+            id: "projects",
+            label: "Projects",
+            href: globalHref("projects"),
+            icon: <IconFolder size={21} aria-hidden="true" />,
+          },
+          ...(me.user.is_admin
+            ? [
+                {
+                  id: "admin",
+                  label: "Administration",
+                  shortLabel: "Admin",
+                  href: globalHref("admin"),
+                  icon: <IconUsers size={21} aria-hidden="true" />,
+                },
+              ]
+            : []),
+          {
+            id: "settings",
+            label: "Settings",
+            href: globalHref("settings"),
+            icon: <IconSettings size={21} aria-hidden="true" />,
+          },
+        ]}
+        onNavigate={(id) =>
+          navigation.go(
+            globalHref(
+              id as Surface,
+              id === "fleet" && authorizedProject ? project : undefined,
+            ),
+          )
+        }
+        classification={settings?.classification}
+        user={
+          <span className="rail-user" title={me.user.display_name}>
+            {me.user.display_name.slice(0, 2).toUpperCase()}
+          </span>
+        }
+        footer={
+          <>
+            <DocumentationLink />
             <button
-              className="icon-button"
-              aria-label={
-                light ? "Switch to dark theme" : "Switch to light theme"
-              }
-              onClick={() => setLight(!light)}
+              type="button"
+              className="ui-icon-button"
+              aria-label="Sign out"
+              title="Sign out"
+              onClick={onSignOut}
             >
-              {light ? <IconMoon size={18} /> : <IconSun size={18} />}
+              <IconLogout size={19} aria-hidden="true" />
             </button>
-            <button className="text-button" onClick={() => void signOut()}>
-              <IconLogout size={17} />
-              Sign out
-            </button>
-          </div>
-        </div>
-      </aside>
-      <div className="workspace">
-        <header className="topbar">
-          <div>
-            <span className="muted">{project}</span>
-            <span className="slash">/</span>
-            <strong>
-              {selected
-                ? "Task detail"
-                : surface === "fleet"
-                  ? "Runtime fleet"
-                  : "Tasks"}
-            </strong>
-          </div>
-          <div className="connection-indicator">
-            <span className={`dot ${live ? "live" : ""}`} />
-            {live} runtime{live === 1 ? "" : "s"} online
-            <button
-              className="icon-button"
-              aria-label="Refresh project"
-              onClick={() => void refresh()}
-            >
-              <IconRefresh size={16} />
-            </button>
-          </div>
-        </header>
-        <main className="content" id="main-content">
-          {error && (
-            <div role="alert" className="alert">
-              {error}
-              <button aria-label="Dismiss error" onClick={() => setError("")}>
-                ×
-              </button>
-            </div>
-          )}
-          {selected ? (
-            <TaskDetail
-              key={`${project}:${selected.task_id}`}
-              initial={selected}
+          </>
+        }
+        sidebar={
+          !unavailable && agentId ? (
+            <AgentSidebar
+              key={`${me.user.id}:${project}:${agentId}`}
               project={project}
-              permissions={permissions}
-              nodeLabel={
-                nodes.find((fleet) => fleet.node.node_id === selected.node_id)
-                  ?.node.label ?? selected.node_id
+              nodes={scopedNodes}
+              hosts={hosts}
+              agentId={agentId}
+              selected={selectedThread?.thread_id ?? ""}
+              tasks={tasks}
+              newDisabled={
+                !permissions.includes("execute") || Boolean(agent?.node.revoked)
               }
-              onBack={() => setSelected(null)}
+              onAgent={(id) => openAgent(id)}
+              onOpen={openThread}
+              onNew={() =>
+                navigation.go(agentHref(project, agentId, "threads", true))
+              }
+              onBack={() => navigation.back(globalHref("fleet", project))}
             />
-          ) : surface === "fleet" ? (
+          ) : undefined
+        }
+        header={
+          <>
+            <label className="header-project">
+              <span className="sr-only">Project scope</span>
+              <DropdownSelect
+                aria-label="Select project"
+                value={authorizedProject ? project : ""}
+                onChange={(event) => selectProject(event.target.value)}
+              >
+                {!authorizedProject ? (
+                  <option value="">Select an authorized project</option>
+                ) : null}
+                {me.projects.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                    {item.archived ? " · Archived" : ""}
+                  </option>
+                ))}
+              </DropdownSelect>
+            </label>
+            <span className="connection-indicator">
+              <span className={`dot ${live ? "live" : ""}`} />
+              {live} online
+            </span>
+            <button
+              type="button"
+              className="ui-icon-button"
+              aria-label="Refresh project"
+              onClick={() => {
+                void refresh();
+                loadMe();
+                threadResource.refresh();
+                taskResource.refresh();
+                selectedAgent.refresh();
+              }}
+            >
+              <IconRefresh size={16} aria-hidden="true" />
+            </button>
+          </>
+        }
+      >
+        {error && !unavailable ? (
+          <div role="alert" className="alert project-alert">
+            {error}
+            <button
+              type="button"
+              className="ui-icon-button"
+              aria-label="Dismiss error"
+              onClick={() => setError("")}
+            >
+              <IconX size={16} aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
+        <Suspense
+          key={me.user.id}
+          fallback={
+            <p className="control-page muted" role="status">
+              Loading view…
+            </p>
+          }
+        >
+          {unavailable ? (
+            <section className="control-page">
+              <header className="page-heading">
+                <div>
+                  <h1>Page unavailable</h1>
+                  <p role="alert">{unavailable}</p>
+                </div>
+              </header>
+              <RouteLink
+                className="ui-button ui-button--secondary"
+                href={globalHref("home")}
+              >
+                Go Home
+              </RouteLink>
+            </section>
+          ) : route.kind === "thread" ? (
+            selectedThread ? (
+              <ThreadDetail
+                key={`${project}:${selectedThread.thread_id}`}
+                initial={selectedThread}
+                project={project}
+                nodes={scopedNodes}
+                permissions={permissions}
+                onBack={() =>
+                  navigation.back(agentHref(project, selectedThread.node_id))
+                }
+                backHref={agentHref(project, selectedThread.node_id)}
+                backLabel="Back"
+                onChanged={() => void refresh()}
+                onPolicy={() => openAgent(selectedThread.node_id, "policy")}
+              />
+            ) : (
+              <LoadState {...threadResource} retry={threadResource.refresh} />
+            )
+          ) : route.kind === "task" ? (
+            selectedTask ? (
+              <TaskDetail
+                key={`${project}:${selectedTask.task_id}`}
+                initial={selectedTask}
+                project={project}
+                permissions={selectedTask.source_read_only ? [] : permissions}
+                nodeLabel={
+                  nodes.find(
+                    (item) => item.node.node_id === selectedTask.node_id,
+                  )?.node.label ?? selectedTask.node_id
+                }
+                onBack={() => navigation.back(projectHref(project, "tasks"))}
+                backHref={projectHref(project, "tasks")}
+              />
+            ) : (
+              <LoadState {...taskResource} retry={taskResource.refresh} />
+            )
+          ) : surface === "home" ? (
+            <Home
+              onOpen={openThread}
+              onFleet={() =>
+                navigation.go(globalHref("fleet", project || undefined))
+              }
+            />
+          ) : surface === "settings" ? (
+            <div className="control-page">
+              <header className="page-heading">
+                <div>
+                  <span className="eyebrow">Settings</span>
+                  <h1>Personal preferences</h1>
+                  <p>Customize the Control Plane for this browser.</p>
+                </div>
+              </header>
+              <AppearanceSettings
+                appearance={appearance}
+                onChange={setAppearance}
+              />
+              <section className="control-card">
+                <header>
+                  <h3>Signed-in identity</h3>
+                </header>
+                <p>{me.user.display_name}</p>
+                <p className="field-help">
+                  {me.user.email ?? ""}
+                  {me.user.is_admin ? " · Control Plane administrator" : ""}
+                </p>
+              </section>
+            </div>
+          ) : surface === "admin" ? (
+            <Administration
+              authConfig={authConfig}
+              onRefresh={loadMe}
+              onSettings={onSettings}
+              view={route.kind === "global" ? (route.view ?? "users") : "users"}
+              onView={(view) =>
+                navigation.go(globalHref("admin", undefined, view))
+              }
+            />
+          ) : surface === "projects" ? (
+            <Projects
+              key={project}
+              me={me}
+              selected={route.kind === "project" ? project : ""}
+              onSelect={(id) => navigation.go(projectHref(id))}
+              permissions={permissions}
+              onRefresh={loadMe}
+              tasks={taskView}
+              view={route.kind === "project" ? route.view : "overview"}
+              onView={(view) => navigation.go(projectHref(project, view))}
+            />
+          ) : !project ? (
+            <div className="empty-state">
+              <h2>No project access</h2>
+              <p>Ask your administrator for membership in a project.</p>
+            </div>
+          ) : route.kind === "agent" ? (
+            <AgentWorkspace
+              key={agentId}
+              project={project}
+              agent={agent}
+              nodes={scopedNodes}
+              permissions={permissions}
+              creating={route.compose}
+              busy={busy}
+              onCreate={createThread}
+              onNew={() =>
+                navigation.go(
+                  agentHref(project, agentId, route.view, !route.compose),
+                )
+              }
+              onOpen={openThread}
+              view={route.view}
+              onView={(view) =>
+                navigation.go(agentHref(project, agentId, view))
+              }
+            />
+          ) : (
             <Fleet
               key={project}
+              hosts={hosts}
               nodes={nodes}
               project={project}
               permissions={permissions}
               onRefresh={() => void refresh()}
               onError={setError}
               hasMore={nodes.length === nodePages * 100}
-              onMore={() => setNodePages((pages) => pages + 1)}
+              hasMoreHosts={hosts.length === hostPages * 100}
+              onMoreHosts={() => setHostPages((value) => value + 1)}
+              onMore={() => setNodePages((value) => value + 1)}
+              onOpenAgent={(id) => openAgent(id)}
             />
-          ) : (
-            <>
-              <div className="section-heading">
-                <div>
-                  <div className="eyebrow">PROJECT WORKSPACE</div>
-                  <h1>Your agent work, in motion.</h1>
-                  <p>
-                    Start a task on any enrolled runtime and follow it through.
-                  </p>
-                </div>
-                <button
-                  onClick={() => composer.current?.focus()}
-                  disabled={!permissions.includes("execute") || !node}
-                >
-                  <IconPlus size={17} />
-                  New task
-                </button>
-              </div>
-              <div className="stats-strip">
-                <div>
-                  <IconActivity size={20} />
-                  <span>
-                    Active tasks<strong>{active}</strong>
-                  </span>
-                </div>
-                <div>
-                  <IconServer size={20} />
-                  <span>
-                    Runtimes online
-                    <strong>
-                      {live}
-                      <small>
-                        {" "}
-                        / {nodes.filter((fleet) => !fleet.node.revoked).length}
-                      </small>
-                    </strong>
-                  </span>
-                </div>
-                <div>
-                  <IconShieldLock size={20} />
-                  <span>
-                    Project access
-                    <strong className="stat-text">
-                      {permissions.includes("administer")
-                        ? "Administrator"
-                        : permissions.includes("execute")
-                          ? "Contributor"
-                          : "Observer"}
-                    </strong>
-                  </span>
-                </div>
-              </div>
-              <section
-                className="new-task-panel"
-                aria-label="Create an agent task"
-              >
-                <ComposerInput
-                  ref={composer}
-                  aria-label="Describe your task"
-                  placeholder={
-                    node
-                      ? "What should your agent work on?"
-                      : "Enroll a runtime to start your first task…"
-                  }
-                  value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
-                  disabled={busy || !node || !permissions.includes("execute")}
-                  onKeyDown={(event) => {
-                    if (
-                      (event.metaKey || event.ctrlKey) &&
-                      event.key === "Enter"
-                    ) {
-                      event.preventDefault();
-                      void create();
-                    }
-                  }}
-                />
-                <div className="composer-controls">
-                  <DropdownSelect
-                    aria-label="Execution runtime"
-                    value={node}
-                    onChange={(event) => setNode(event.target.value)}
-                    disabled={busy}
-                  >
-                    {nodes
-                      .filter((fleet) => !fleet.node.revoked)
-                      .map((fleet) => (
-                        <option
-                          key={fleet.node.node_id}
-                          value={fleet.node.node_id}
-                        >
-                          {fleet.node.label}
-                          {fleet.presence?.ready ? "" : " · Offline"}
-                        </option>
-                      ))}
-                  </DropdownSelect>
-                  <DropdownSelect
-                    aria-label="Run mode"
-                    value={mode}
-                    onChange={(event) => setMode(event.target.value)}
-                    disabled={busy}
-                  >
-                    <option value="execute">Execute</option>
-                    <option value="plan">Plan</option>
-                  </DropdownSelect>
-                  <DropdownSelect
-                    aria-label="Agent role"
-                    value={role}
-                    onChange={(event) => setRole(event.target.value)}
-                    disabled={busy}
-                  >
-                    {(target?.node.roles ?? []).map((role) => (
-                      <option key={role} value={role}>
-                        {role}
-                      </option>
-                    ))}
-                  </DropdownSelect>
-                  <span className="composer-hint">⌘ / Ctrl ↵</span>
-                  <button
-                    aria-label="Start task"
-                    disabled={
-                      busy ||
-                      !draft.trim() ||
-                      !node ||
-                      !permissions.includes("execute")
-                    }
-                    onClick={() => void create()}
-                  >
-                    {busy ? (
-                      <IconLoader2 size={18} className="spin" />
-                    ) : (
-                      <IconSend2 size={18} />
-                    )}
-                    <span>{busy ? "Starting…" : "Start task"}</span>
-                  </button>
-                </div>
-              </section>
-              <section className="tasks-panel">
-                <div className="tasks-toolbar">
-                  <div className="filter-group" aria-label="Filter tasks">
-                    {["all", "active", "finished"].map((value) => (
-                      <button
-                        key={value}
-                        className={filter === value ? "selected" : ""}
-                        aria-pressed={filter === value}
-                        onClick={() => setFilter(value)}
-                      >
-                        {value === "all" ? "All tasks" : statusLabel(value)}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="search">
-                    <IconSearch size={16} />
-                    <input
-                      aria-label="Search tasks"
-                      placeholder="Search tasks…"
-                      value={query}
-                      onChange={(event) => setQuery(event.target.value)}
-                    />
-                  </div>
-                </div>
-                {loading ? (
-                  <div className="empty-state compact">
-                    <IconLoader2 size={24} className="spin" />
-                    <p>Loading project tasks…</p>
-                  </div>
-                ) : shown.length === 0 ? (
-                  <div className="empty-state">
-                    <div className="empty-icon">
-                      <IconListDetails size={29} />
-                    </div>
-                    <h2>
-                      {query || filter !== "all"
-                        ? "No matching tasks"
-                        : "Make room for your next idea"}
-                    </h2>
-                    <p>
-                      {query || filter !== "all"
-                        ? "Try another search or task filter."
-                        : node
-                          ? "Describe a task above. Your agent will handle it on the selected runtime."
-                          : "Start by enrolling a runtime, then send your first task."}
-                    </p>
-                    {!node && (
-                      <button
-                        className="secondary"
-                        onClick={() => setSurface("fleet")}
-                      >
-                        <IconServer size={17} />
-                        Set up a runtime
-                        <IconArrowRight size={16} />
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                  <div className="task-table">
-                    <div className="table-labels">
-                      <span>TASK</span>
-                      <span>RUNTIME</span>
-                      <span>STATUS</span>
-                      <span>CREATED</span>
-                      <span />
-                    </div>
-                    {shown.map((task) => (
-                      <button
-                        key={task.task_id}
-                        className="task-row"
-                        onClick={() => setSelected(task)}
-                      >
-                        <div className="task-title">
-                          <strong>{taskTitle(task)}</strong>
-                          <span>
-                            {task.request.role} · {task.request.mode}
-                          </span>
-                        </div>
-                        <span className="runtime-name">
-                          <IconServer size={15} />
-                          {nodes.find(
-                            (fleet) => fleet.node.node_id === task.node_id,
-                          )?.node.label ?? task.node_id.slice(0, 8)}
-                        </span>
-                        <span className={`status status-${taskStatus(task)}`}>
-                          {statusLabel(taskStatus(task))}
-                        </span>
-                        <time>
-                          {task.snapshot
-                            ? new Date(
-                                task.snapshot.run.created_at,
-                              ).toLocaleDateString(undefined, {
-                                month: "short",
-                                day: "numeric",
-                              })
-                            : "Just queued"}
-                        </time>
-                        <IconArrowRight size={16} />
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {tasks.length === taskPages * 100 && (
-                  <button
-                    className="secondary"
-                    onClick={() => setTaskPages((pages) => pages + 1)}
-                  >
-                    Load more tasks
-                  </button>
-                )}
-              </section>
-            </>
           )}
-        </main>
-        <footer className="workspace-footer">
-          <span>
-            <IconShieldLock size={13} /> Colossus runtime authority
-          </span>
-          <span>Cloud control plane · v1alpha1</span>
-        </footer>
-      </div>
-    </div>
+        </Suspense>
+      </ControlPlaneFrame>
+    </SendShortcutContext>
   );
 }

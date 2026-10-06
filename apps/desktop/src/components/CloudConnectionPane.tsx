@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Button, RadioGroup, TextInput } from "@colossus/ui";
 import {
   IconCloud,
   IconPlugConnected,
@@ -8,6 +9,7 @@ import {
   IconShieldLock,
 } from "@tabler/icons-react";
 import "./cloud-connection.css";
+import type { ControlPlaneProfiles } from "./ControlPlaneSettingsPane";
 interface CloudStatus {
   targetId: string;
   status:
@@ -15,6 +17,11 @@ interface CloudStatus {
   nodeId: string | null;
   projectId: string | null;
   endpoint: string | null;
+  hostId?: string | null;
+  workspaceId?: string | null;
+  sharedSessions?: boolean;
+  sharedContinuation?: boolean;
+  sharingSupported?: boolean;
 }
 export function CloudConnectionPane({ targetId }: { targetId: string }) {
   const [status, setStatus] = useState<CloudStatus | null>(null),
@@ -22,8 +29,27 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
     [token, setToken] = useState(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [sharing, setSharing] = useState("private");
   const operation = useRef(0),
     busyRef = useRef(false);
+  useEffect(() => {
+    let alive = true;
+    void invoke<ControlPlaneProfiles>("control_plane_profiles")
+      .then((catalog) => {
+        const profile = catalog.profiles.find(
+          (item) => item.id === catalog.defaultProfile,
+        );
+        if (alive && profile)
+          setUrl(
+            (current) =>
+              current || `${profile.endpoint.replace(/\/$/, "")}/api/enroll`,
+          );
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [targetId]);
   useEffect(() => {
     let alive = true,
       refreshing = false;
@@ -40,7 +66,7 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
             setError(
               typeof error === "object" && error !== null && "message" in error
                 ? String(error.message)
-                : "Cloud enrollment is unavailable.",
+                : "Control Plane enrollment is unavailable.",
             );
         })
         .finally(() => {
@@ -74,7 +100,7 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
         setError(
           typeof error === "object" && error !== null && "message" in error
             ? String(error.message)
-            : "The cloud connection could not be changed.",
+            : "The Control Plane connection could not be changed.",
         );
     } finally {
       busyRef.current = false;
@@ -84,6 +110,15 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
   const active =
     status &&
     ["connected", "connecting", "reconnecting"].includes(status.status);
+  useEffect(() => {
+    setSharing(
+      status?.sharedSessions
+        ? status.sharedContinuation
+          ? "continue"
+          : "read"
+        : "private",
+    );
+  }, [status?.sharedSessions, status?.sharedContinuation, targetId]);
   return (
     <section className="cloud-settings">
       <header>
@@ -91,10 +126,8 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
           <IconCloud size={26} />
         </div>
         <div>
-          <h2>Colossus Cloud</h2>
-          <p>
-            Make this runtime available to your project's cloud control plane.
-          </p>
+          <h2>Colossus Control Plane</h2>
+          <p>Make this runtime available to your project's Control Plane.</p>
         </div>
       </header>
       {error && (
@@ -116,62 +149,117 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
         {status?.projectId && <span>{status.projectId}</span>}
       </div>
       {!status && error && (
-        <button
-          className="button secondary"
+        <Button
+          variant="secondary"
           disabled={busy}
           onClick={() => void action("cloud_status")}
         >
           Retry status
-        </button>
+        </Button>
       )}
       {status?.nodeId ? (
         <>
           <dl>
-            <dt>Cloud endpoint</dt>
+            <dt>Control Plane endpoint</dt>
             <dd>{status.endpoint}</dd>
             <dt>Node identity</dt>
             <dd>{status.nodeId}</dd>
+            {status.hostId && (
+              <>
+                <dt>Host identity</dt>
+                <dd>{status.hostId}</dd>
+              </>
+            )}
           </dl>
           <div className="cloud-settings-actions">
             {active ? (
-              <button
-                className="button secondary"
+              <Button
+                variant="secondary"
                 disabled={busy}
                 onClick={() => void action("cloud_disconnect")}
               >
                 <IconPlugConnectedX size={17} />
                 Disconnect
-              </button>
+              </Button>
             ) : (
-              <button
-                className="button primary"
+              <Button
+                variant="primary"
                 disabled={busy || status.status === "revoked"}
                 onClick={() => void action("cloud_connect")}
               >
                 <IconRefresh size={17} />
                 Reconnect runtime
-              </button>
+              </Button>
             )}
-            <button
-              className="button danger"
+            <Button
+              variant="danger"
               disabled={busy || status.status === "revoked"}
               onClick={() => void action("cloud_revoke")}
             >
               Revoke enrollment
-            </button>
-            <button
-              className="button secondary"
+            </Button>
+            <Button
+              variant="secondary"
               disabled={busy || !!active}
               onClick={() => void action("cloud_forget")}
             >
               Forget enrollment
-            </button>
+            </Button>
           </div>
           <p className="cloud-settings-note">
             {status.status === "revoked"
               ? "Forget this enrollment, then use a new invitation to connect again. Accepted tasks remain under local runtime policy."
-              : "Disconnecting leaves accepted tasks running locally. Revocation removes this runtime's cloud authority until it is enrolled again."}
+              : "Disconnecting leaves accepted tasks running locally. Revocation removes this runtime's Control Plane authority until it is enrolled again."}
           </p>
+          {status.sharingSupported && (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void action("cloud_set_workspace_sharing", {
+                  targetId,
+                  enabled: sharing !== "private",
+                  allowContinuation: sharing === "continue",
+                });
+              }}
+            >
+              <div>
+                <p>Desktop conversation sharing</p>
+                <RadioGroup
+                  value={sharing}
+                  onValueChange={setSharing}
+                  disabled={busy || status.status === "revoked"}
+                  aria-label="Desktop conversation sharing"
+                  options={[
+                    {
+                      value: "private",
+                      label: "Control Plane conversations only",
+                    },
+                    {
+                      value: "read",
+                      label: "Share Desktop history for viewing",
+                    },
+                    {
+                      value: "continue",
+                      label: "Share history and allow continuation",
+                    },
+                  ]}
+                />
+              </div>
+              <p className="cloud-settings-note">
+                Sharing includes existing and future conversations in this
+                workspace. Enabling sharing requires local confirmation.
+                Disabling it stops future synchronization; history already
+                synchronized remains in the Control Plane.
+              </p>
+              <Button
+                type="submit"
+                variant="secondary"
+                disabled={busy || status.status === "revoked"}
+              >
+                Save conversation sharing
+              </Button>
+            </form>
+          )}
         </>
       ) : (
         <form
@@ -184,18 +272,18 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
         >
           <label>
             Enrollment URL
-            <input
+            <TextInput
               type="url"
               value={url}
               onChange={(event) => setUrl(event.target.value)}
-              placeholder="https://cloud.example.com/api/enroll"
+              placeholder="https://control-plane.example.com/api/enroll"
               required
               disabled={busy || !status}
             />
           </label>
           <label>
             One-use invitation
-            <input
+            <TextInput
               type="password"
               value={token}
               onChange={(event) => setToken(event.target.value)}
@@ -208,22 +296,23 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
               disabled={busy || !status}
             />
           </label>
-          <button
-            className="button primary"
+          <Button
+            type="submit"
+            variant="primary"
             disabled={busy || !status || !url || token.length !== 64}
           >
             <IconPlugConnected size={17} />
             {busy ? "Enrolling runtime…" : "Enroll and connect"}
-          </button>
+          </Button>
           {error && (
-            <button
+            <Button
               type="button"
-              className="button secondary"
+              variant="secondary"
               disabled={busy}
               onClick={() => void action("cloud_forget")}
             >
               Reset local enrollment
-            </button>
+            </Button>
           )}
         </form>
       )}

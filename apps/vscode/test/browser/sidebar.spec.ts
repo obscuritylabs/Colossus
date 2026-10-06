@@ -22,9 +22,14 @@ async function open(page: Page, view: WorkView) {
   );
 }
 
-test("sidebar works at narrow widths, retains a cancelled draft, and renders model content as text", async ({
+test("sidebar works at narrow widths, retains a cancelled draft, and sanitizes model Markdown", async ({
   page,
 }) => {
+  const outbound: string[] = [];
+  page.on("request", (request) => {
+    if (!request.url().startsWith("http://127.0.0.1:4312"))
+      outbound.push(request.url());
+  });
   const view = {
     ...initialView("project"),
     connected: true,
@@ -54,7 +59,9 @@ test("sidebar works at narrow widths, retains a cancelled draft, and renders mod
   await expect(
     page.getByRole("textbox", { name: "Task for Colossus" }),
   ).toHaveValue("Inspect this function");
-  const model = '<img src="https://example.invalid/steal" onerror="alert(1)">';
+  const unsafeHtml =
+    '<img src="https://example.invalid/steal" onerror="alert(1)">';
+  const model = `Function inspection complete.\n\n${unsafeHtml}`;
   await page.evaluate(
     (view) => window.postMessage({ type: "state", view }, "*"),
     {
@@ -65,8 +72,24 @@ test("sidebar works at narrow widths, retains a cancelled draft, and renders mod
       ],
     },
   );
-  await expect(page.getByText(model, { exact: true })).toBeVisible();
-  await expect(page.locator("#messages img")).toHaveCount(0);
+  await expect(
+    page.getByText("Function inspection complete.", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText(unsafeHtml, { exact: true })).toHaveCount(0);
+  await expect(
+    page.locator(
+      "#messages .shared-message-body img, #messages a, #messages script",
+    ),
+  ).toHaveCount(0);
+  const avatar = page.locator("#messages .shared-assistant-marker > img");
+  await expect(page.locator("#messages img")).toHaveCount(1);
+  await expect(avatar).toHaveAttribute(
+    "src",
+    /^data:image\/svg\+xml(?:;base64)?,/u,
+  );
+  await expect(avatar).toHaveCSS("width", "17px");
+  await expect(avatar).toHaveCSS("height", "17px");
+  expect(outbound).toEqual([]);
   await page.getByRole("button", { name: "Open Colossus settings" }).click();
   await expect
     .poll(() =>
@@ -134,9 +157,15 @@ test("long conversations scroll above a fixed composer and honor saved editor pr
   await expect(page.locator(".tool-thread")).toBeHidden();
   await expect(
     page.locator(
-      "#messages a, #messages img:not([data-brand-mark]), #messages script",
+      "#messages a, #messages .shared-message-body img, #messages script",
     ),
   ).toHaveCount(0);
+  // One shared response avatar and one host-owned tool-group mark remain.
+  await expect(page.locator("#messages img")).toHaveCount(2);
+  await expect(page.locator("#messages [data-brand-mark]")).toHaveCount(1);
+  await expect(
+    page.locator("#messages .shared-assistant-marker > img"),
+  ).toHaveAttribute("src", /^data:image\/svg\+xml(?:;base64)?,/u);
   await expect(page.locator("#messages pre code")).toHaveText(
     "colossus worker",
   );

@@ -23,6 +23,10 @@ pub(super) struct Report {
     pub node_id: Option<String>,
     pub project_id: Option<String>,
     pub endpoint: Option<String>,
+    #[serde(default)]
+    pub host_id: Option<String>,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
     pub status: ConnectorStatus,
     pub run_instance: Option<String>,
     pub reported_at_ms: u64,
@@ -34,6 +38,12 @@ impl Report {
             node_id: config.map(|config| config.node_id.clone()),
             project_id: config.map(|config| config.project_id.clone()),
             endpoint: config.map(|config| config.endpoint.clone()),
+            host_id: config
+                .and_then(|config| config.inventory.as_ref())
+                .map(|inventory| inventory.host_id.clone()),
+            workspace_id: config
+                .and_then(|config| config.inventory.as_ref())
+                .map(|inventory| inventory.workspace_id.clone()),
             status: if config.is_some_and(|config| config.revoked) {
                 ConnectorStatus::Revoked
             } else {

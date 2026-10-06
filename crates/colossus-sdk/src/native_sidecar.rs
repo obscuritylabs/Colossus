@@ -1322,6 +1322,33 @@ impl ArtifactClient for SwitchingArtifactClient {
 
 #[async_trait]
 impl AgentRunClient for SwitchingAgentRunClient {
+    async fn get_runtime_policy_posture(&self) -> ApiResult<crate::RuntimePolicyPosture> {
+        self.current()
+            .await?
+            .primary
+            .get_runtime_policy_posture()
+            .await
+    }
+    async fn set_workspace_sharing(
+        &self,
+        request: crate::SetWorkspaceSharingRequest,
+    ) -> ApiResult<crate::WorkspaceSharingState> {
+        self.current()
+            .await?
+            .primary
+            .set_workspace_sharing(request)
+            .await
+    }
+    async fn list_visible_runs(
+        &self,
+        request: ListRunsRequest,
+    ) -> ApiResult<crate::ListVisibleRunsResponse> {
+        self.current()
+            .await?
+            .primary
+            .list_visible_runs(request)
+            .await
+    }
     async fn list_process_sessions(
         &self,
         request: crate::ListProcessSessionsRequest,

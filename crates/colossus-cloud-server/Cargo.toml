@@ -1,5 +1,6 @@
 [package]
 name = "colossus-cloud-server"
+default-run = "colossus-control-plane"
 publish = false
 version.workspace = true
 edition.workspace = true
@@ -7,15 +8,20 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+argon2.workspace = true
 axum.workspace = true
 chrono.workspace = true
 async-trait.workspace = true
 colossus-cloud.workspace = true
+colossus-cloud-postgres.workspace = true
+colossus-journal-redb.workspace = true
+colossus-journal-postgres.workspace = true
+colossus-contracts.workspace = true
+colossus-network.workspace = true
+chacha20poly1305.workspace = true
 colossus-cloud-protocol.workspace = true
 colossus-ports.workspace = true
 colossus-home.workspace = true
-colossus-journal-redb.workspace = true
-colossus-journal-postgres.workspace = true
 colossus-sdk = { workspace = true, features = ["serialization"] }
 futures.workspace = true
 hex.workspace = true
@@ -38,7 +44,6 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-colossus-contracts.workspace = true
 tempfile.workspace = true
 tower.workspace = true
 colossus-connector.workspace = true

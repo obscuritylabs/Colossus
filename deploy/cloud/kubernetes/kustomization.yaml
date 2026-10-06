@@ -9,6 +9,7 @@ configMapGenerator:
   - name: colossus-cloud-config
     files:
       - cloud.json
+# Pin this image tag to a tested immutable release or replace it with a digest.
 images:
   - name: colossus-cloud
     newName: registry.example.com/colossus/cloud

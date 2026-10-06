@@ -37,6 +37,7 @@ message RuntimeFrame {
     RuntimeHeartbeat heartbeat = 4;
     RuntimeSnapshot snapshot = 5;
     ReleasedOutputLimit output_limit = 6;
+    ReleasedDiscoveryPage discovery = 7;
   }
 }
 // The local SDK released an event larger than the cloud frame budget. The host
@@ -52,6 +53,27 @@ message RuntimeHello {
   string instance_id = 3;
   repeated string capabilities = 4;
   string project_id = 5;
+  // Strict RuntimeInventory JSON. Informational grouping never grants authority.
+  bytes inventory_json = 6;
+}
+// Cloud requests only caller-visible runs beneath the dedicated native grant.
+message DiscoverRuns {
+  string sync_id = 1;
+  string page_token = 2;
+  uint32 page_size = 3;
+  bool include_archived = 4;
+}
+message ReleasedDiscoveryPage {
+  string sync_id = 1;
+  string page_token = 2;
+  // Strict JSON Vec<ReleasedRunInventory>, with runtime-derived authority flags.
+  bytes runs_json = 3;
+  string next_page_token = 4;
+}
+// Sent only after runs and their cloud source mappings commit durably.
+message DiscoveryAcknowledgement {
+  string sync_id = 1;
+  string page_token = 2;
 }
 message RuntimeSnapshot {
   string task_id = 1;
@@ -59,6 +81,8 @@ message RuntimeSnapshot {
 }
 message RuntimeHeartbeat {
   bool ready = 1;
+  // Current strict RuntimeInventory JSON after public metadata release. Old peers ignore this field.
+  bytes inventory_json = 2;
 }
 message CommandReceipt {
   string command_id = 1;
@@ -78,6 +102,8 @@ message ControlFrame {
     ConnectionWelcome welcome = 1;
     CloudCommand command = 2;
     EventAcknowledgement acknowledgement = 3;
+    DiscoverRuns discover = 4;
+    DiscoveryAcknowledgement discovery_acknowledgement = 5;
   }
 }
 message ConnectionWelcome {

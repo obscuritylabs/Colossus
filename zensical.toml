@@ -113,6 +113,7 @@ nav = [
     { "Sandbox" = "admin/sandbox.md" },
     { "Storage and worker" = "admin/storage-worker.md" },
     { "Cloud control plane" = "admin/cloud-control-plane.md" },
+    { "Host public documentation" = "admin/documentation-hosting.md" },
     { "Audit, telemetry, and recovery" = "admin/audit-telemetry-recovery.md" },
     { "Offline operation" = "admin/offline-airgap.md" },
     { "Troubleshooting" = "admin/troubleshooting.md" },

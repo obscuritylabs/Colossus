@@ -10,6 +10,10 @@ import {
   initializeAppearance,
 } from "./theme/AppearanceProvider";
 import "@colossus/ui/styles/theme.css";
+import "@colossus/ui/styles/shadcn.css";
+import "@colossus/ui/styles/conversation.css";
+import "@colossus/ui/styles/workspace-sidebar.css";
+import "@colossus/ui/styles/work-welcome.css";
 import "./styles.css";
 import "@colossus/ui/styles/composer.css";
 import "@colossus/ui/styles/select.css";

@@ -15,6 +15,7 @@ import {
   IconWorld,
   IconX,
 } from "@tabler/icons-react";
+import { ConversationComposerFrame } from "@colossus/ui/conversation";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, ReactNode, RefObject } from "react";
 
@@ -338,7 +339,7 @@ export function WorkComposer({
   }
 
   return (
-    <form
+    <ConversationComposerFrame
       ref={formRef}
       className={`work-composer${mode === "plan" ? " is-plan-mode" : ""}${mode === "research" ? " is-research-mode" : ""}`}
       id="work-composer"
@@ -1049,6 +1050,6 @@ export function WorkComposer({
           ) : null}
         </div>
       ) : null}
-    </form>
+    </ConversationComposerFrame>
   );
 }

@@ -17,11 +17,20 @@ without exposing the runtime's loopback API. A browser cannot hold runtime crede
 or inherit the Desktop caller's authority. Stream reconnection alone does not establish
 whether a mutation was accepted or whether output was retained durably.
 
+Fleet inventories and long-lived conversations need indexed project, host, workspace
+and history queries. Independent agents must commit their events concurrently without
+a cloud-wide journal head. Cloud metadata, connection ownership and browser sessions
+need their own lifecycle, while native execution journals retain their separate
+recovery boundary. Host grouping must not disclose unrelated applications' sessions.
+
 ## Decision
 
 Use a separate cloud application and a reusable native connector. `colossus-cloud`
-owns durable project/node/task operations; `colossus-cloud-server` composes OIDC,
-HTTP/JSON, SSE, certificate issuance and an independent redb/PostgreSQL journal.
+owns project/host/agent/workspace/thread operations and a cloud-owned asynchronous
+storage port. `colossus-cloud-postgres` implements that port with Diesel/diesel-async,
+a bounded pool and an independent relational PostgreSQL schema. `colossus-cloud-server`
+composes OIDC, HTTP/JSON, SSE and certificate issuance. Cloud storage does not implement
+the runtime journal port; local runtime journals retain their existing protections.
 `colossus-cloud-protocol` owns a separate major-versioned Protobuf bidirectional stream
 with closed typed SDK operations. `colossus-connector` implements enrollment and the
 outbound stream for CLI, standalone and native Desktop hosts.
@@ -30,6 +39,10 @@ Browser authentication uses OIDC authorization code with PKCE, verified issuer,
 audience, signature, nonce, expiry and access-token hash. Explicit subject/project
 memberships grant independent read, execution, control, approval and administration
 permissions. Opaque browser sessions use protected cookies and same-origin CSRF checks.
+Configured memberships form an authority ceiling and reconcile changed/removed persisted
+grants at startup. Every request intersects local configuration with database permissions;
+replicas share one configuration. Browser-session and PKCE-flow identities bind the issuer
+and client namespace so an identity-provider/client change cannot reuse old cookies.
 Browser code receives released views and one-use invitations, never native bearers,
 provider keys or machine private keys.
 
@@ -50,10 +63,36 @@ arbitrary filesystem/network tunnel or generic renderer capability crosses this 
 
 Allocate each task to one node and one local run, with caller/project-scoped stable
 idempotency keys and durable command receipts. Persist allocation, receipt and event
-cursor changes atomically, and checkpoint signed storage before acknowledging them.
+cursor changes atomically with per-resource audit and delivery-outbox records before
+acknowledging them. Entity revisions and per-feed ordering allow independent resources
+to progress without a cloud-wide journal-head lock.
 Exact retries reconcile existing state; changed duplicates and cursor gaps fail.
 Unknown outcomes stay explicit and retain their admission slot. They never cause
 automatic execution on another node.
+
+Group native-installation hosts, independently enrolled runtime agents and workspace
+identities without changing authority. A durable thread maps to one runtime and native
+session. Human turns allocate ordered immutable tasks/runs; cloud owns thread metadata
+and the queue while the runtime owns execution and released content. Default discovery
+contains only the connector application's own runs. Existing local sessions require
+explicit source-application workspace sharing. Imported source runs remain read-only;
+shared continuation creates recipient-owned runs beneath that recipient's native grant.
+Disabling sharing stops future release and continuation while retained cloud history
+remains available for authorized offline reads.
+
+Store browser sessions and encrypted OIDC sign-in flows in PostgreSQL so callback and
+browser requests may reach different replicas. All replicas share an independent
+OIDC-flow envelope key. Bind each runtime connection to an expiring database lease and
+monotonic fencing generation; validate that lease within runtime-output transactions.
+A replaced replica cannot commit under its earlier generation. PostgreSQL notifications
+wake consumers, while durable outbox/state reads and cursors establish recovery.
+
+Apply checksummed schema migrations transactionally under a schema-specific advisory
+lock. Ordinary cloud writes do not acquire that migration lock. Retained entity/event
+audit chains detect changed retained content, but do not protect against replacement,
+deletion or rollback of the database and its hashes together. Independent audit-head
+checkpoints, restricted database roles, encrypted backups and tested restore procedures
+are operator requirements; the cloud deployment does not retain a journal-anchor PVC.
 
 Output resumes after the highest contiguous acknowledged sequence. Bound frames,
 queued messages, active tasks, retained events and bytes, and connection/request
@@ -83,7 +122,7 @@ changed or unavailable authority fails closed.
 
 ## Consequences
 
-The web frontend reuses React/TypeScript and Colossus UI. Kubernetes manifests and
+The web frontend reuses React/TypeScript and shared shadcn-based Colossus UI. Kubernetes manifests and
 portable container images avoid a cloud-provider dependency. Linux Desktop preview
 packages bind the sealed executable manifest into the running ELF and verify every
 bundled executable digest. They report unsigned distribution accurately and do not
@@ -97,6 +136,7 @@ path. Keep the exact documented supply-chain exception limited to that use and r
 it when the dependency no longer contains the affected version. Adding any RSA
 private-key operation requires revisiting this decision and exception.
 
-Sandbox provisioning, scheduling, cloud artifact transfer and cross-run context
-mapping remain separate extensions. See [cloud development](../cloud-control-plane.md)
+Sandbox provisioning, scheduling and cloud artifact/context transfer remain separate
+extensions. Registered fleet size and replica count are not capacity evidence;
+representative concurrent stream, history-query and failover measurements are required. See [cloud development](../cloud-control-plane.md)
 and [operations](../../admin/cloud-control-plane.md) for current setup and acceptance.

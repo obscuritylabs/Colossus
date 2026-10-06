@@ -1,5 +1,4 @@
 use crate::ConnectionConfig;
-use colossus_cloud::CloudNode;
 use colossus_contracts::VaultRecord;
 use colossus_ports::{CredentialKey, CredentialVault};
 use rcgen::{CertificateParams, KeyPair};
@@ -36,10 +35,18 @@ struct Pending {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Enrolled {
-    node: CloudNode,
+    node: EnrolledNode,
     certificate_pem: String,
     ca_pem: String,
     grpc_endpoint: String,
+}
+// Only the enrollment binding crosses this native boundary. The cloud's
+// relational repository and fleet presentation types are not runtime dependencies.
+#[derive(Deserialize)]
+struct EnrolledNode {
+    project_id: String,
+    node_id: String,
+    instance_id: String,
 }
 impl EnrollmentStore {
     /// Bind an opaque enrollment record under the caller's protected native vault.
@@ -141,11 +148,17 @@ impl EnrollmentStore {
             endpoint: enrolled.grpc_endpoint,
             project_id: enrolled.node.project_id,
             node_id: enrolled.node.node_id,
-            instance_id,
+            instance_id: instance_id.clone(),
             certificate_pem: enrolled.certificate_pem,
             ca_pem: enrolled.ca_pem,
             capabilities,
             revoked: false,
+            inventory: Some(crate::native_inventory(
+                format!("workspace:{instance_id}"),
+                "CLI workspace".into(),
+                colossus_cloud_protocol::DeploymentKind::Cli,
+            )?),
+            shared_continuation: false,
         };
         record.config = Some(config.clone());
         record.pending.token.zeroize();
@@ -175,6 +188,57 @@ impl EnrollmentStore {
         self.vault
             .delete(&self.key)
             .map_err(|_| "enrollment cleanup failed")
+    }
+    /// Persist native-sourced presentation and sharing posture, without replacing authority.
+    pub async fn set_inventory(
+        &self,
+        inventory: colossus_cloud_protocol::RuntimeInventory,
+    ) -> Result<ConnectionConfig, &'static str> {
+        inventory
+            .validate()
+            .map_err(|_| "invalid connector inventory")?;
+        let store = self.clone();
+        let record = tokio::task::spawn_blocking(move || store.vault.read(&store.key))
+            .await
+            .map_err(|_| "enrollment vault unavailable")?
+            .map_err(|_| "enrollment vault unavailable")?
+            .ok_or("enrollment unavailable")?;
+        let mut record: Record =
+            serde_json::from_slice(record.expose()).map_err(|_| "enrollment record invalid")?;
+        let config = record.config.as_mut().ok_or("enrollment unavailable")?;
+        config.inventory = Some(inventory);
+        let config = config.clone();
+        self.save_async(&record).await?;
+        Ok(config)
+    }
+    /// Persist the confirmed native sharing posture after runtime authorization commits.
+    pub async fn set_sharing(
+        &self,
+        enabled: bool,
+        allow_continuation: bool,
+    ) -> Result<ConnectionConfig, &'static str> {
+        let store = self.clone();
+        let record = tokio::task::spawn_blocking(move || store.vault.read(&store.key))
+            .await
+            .map_err(|_| "enrollment vault unavailable")?
+            .map_err(|_| "enrollment vault unavailable")?
+            .ok_or("enrollment unavailable")?;
+        let mut record: Record =
+            serde_json::from_slice(record.expose()).map_err(|_| "enrollment record invalid")?;
+        let config = record.config.as_mut().ok_or("enrollment unavailable")?;
+        let inventory = config
+            .inventory
+            .as_mut()
+            .ok_or("native inventory unavailable")?;
+        inventory.sharing = if enabled {
+            crate::WorkspaceSharing::SharedVisibleSessions
+        } else {
+            crate::WorkspaceSharing::CloudOwned
+        };
+        config.shared_continuation = enabled && allow_continuation;
+        let config = config.clone();
+        self.save_async(&record).await?;
+        Ok(config)
     }
     async fn save_async(&self, record: &Record) -> Result<(), &'static str> {
         let encoded =

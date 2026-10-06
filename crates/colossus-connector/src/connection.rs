@@ -1,5 +1,5 @@
 use colossus_cloud_protocol::{
-    CloudReply, Command, MAX_ACTIVE_TASKS, MAX_PAYLOAD_BYTES, MAX_QUEUED_FRAMES, PROTOCOL_MAJOR,
+    CloudReply, Command, MAX_ACTIVE_TASKS, MAX_PAYLOAD_BYTES, PROTOCOL_MAJOR, RuntimeInventory,
     decode, encode,
     v1alpha1::{
         self as wire, control_frame, runtime_connection_client::RuntimeConnectionClient,
@@ -14,10 +14,9 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::{
-    sync::{Semaphore, mpsc, watch},
+    sync::{Semaphore, watch},
     task::JoinSet,
 };
-use tokio_stream::wrappers::ReceiverStream;
 use tonic::{
     Status,
     transport::{Certificate, ClientTlsConfig, Endpoint, Identity},
@@ -48,6 +47,12 @@ pub struct ConnectionConfig {
     /// Native acknowledgement that this enrollment has been revoked.
     #[serde(default)]
     pub revoked: bool,
+    /// Opaque host and workspace grouping, independent from authorization.
+    #[serde(default)]
+    pub inventory: Option<RuntimeInventory>,
+    /// Local acknowledgement that explicitly shared sessions may be continued.
+    #[serde(default)]
+    pub shared_continuation: bool,
 }
 /// Sanitized lifecycle state, suitable for CLI and Desktop projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -99,6 +104,11 @@ impl RuntimeConnector {
             || key.is_empty()
         {
             return Err("invalid connector enrollment");
+        }
+        if let Some(inventory) = &config.inventory {
+            inventory
+                .validate()
+                .map_err(|_| "invalid connector inventory")?;
         }
         Ok(Self {
             config,
@@ -169,6 +179,22 @@ impl RuntimeConnector {
                 ConnectorStatus::Reconnecting
             });
             let result = tokio::select! {result=self.connect_once(&status)=>result,_=shutdown.changed()=>{status.send_replace(ConnectorStatus::Disconnected);return Ok(());}};
+            if let Err(error) = &result {
+                // Transport categories are diagnostic metadata. Never log server
+                // messages, provider bodies, identifiers, or credential material.
+                let reason = match error.message() {
+                    "local runtime unavailable"
+                    | "local runtime closed"
+                    | "local readiness timeout" => "local readiness",
+                    "local snapshot unavailable" => "local snapshot",
+                    "local watch unavailable" => "local watch admission",
+                    "local feed unavailable" => "local event feed",
+                    "local discovery unavailable" | "local discovery timeout" => "local discovery",
+                    "cloud storage unavailable" => "cloud storage",
+                    _ => "cloud transport",
+                };
+                eprintln!("connector transport {:?} ({reason})", error.code());
+            }
             if self.runs.is_closed() {
                 status.send_replace(ConnectorStatus::Disconnected);
                 return Ok(());
@@ -208,7 +234,7 @@ impl RuntimeConnector {
         let mut client = RuntimeConnectionClient::new(channel)
             .max_decoding_message_size(MAX_PAYLOAD_BYTES + 16384)
             .max_encoding_message_size(MAX_PAYLOAD_BYTES + 16384);
-        let (sender, receiver) = mpsc::channel(MAX_QUEUED_FRAMES);
+        let (sender, receiver) = crate::outbound::channel();
         send(
             &sender,
             runtime_frame::Body::Hello(wire::RuntimeHello {
@@ -217,16 +243,25 @@ impl RuntimeConnector {
                 instance_id: self.config.instance_id.clone(),
                 capabilities: self.config.capabilities.clone(),
                 project_id: self.config.project_id.clone(),
+                inventory_json: self
+                    .config
+                    .inventory
+                    .as_ref()
+                    .map(|inventory| {
+                        let mut legacy = inventory.clone();
+                        legacy.policy = None;
+                        encode(&legacy)
+                    })
+                    .transpose()
+                    .map_err(|_| Status::invalid_argument("invalid native inventory"))?
+                    .unwrap_or_default(),
             }),
         )
         .await?;
-        let mut stream = tokio::time::timeout(
-            Duration::from_secs(10),
-            client.connect(ReceiverStream::new(receiver)),
-        )
-        .await
-        .map_err(|_| Status::deadline_exceeded("cloud response headers timeout"))??
-        .into_inner();
+        let mut stream = tokio::time::timeout(Duration::from_secs(10), client.connect(receiver))
+            .await
+            .map_err(|_| Status::deadline_exceeded("cloud response headers timeout"))??
+            .into_inner();
         let welcome = tokio::time::timeout(Duration::from_secs(10), stream.message())
             .await
             .map_err(|_| Status::deadline_exceeded("cloud welcome timeout"))??
@@ -241,12 +276,24 @@ impl RuntimeConnector {
         let permits = Arc::new(Semaphore::new(MAX_ACTIVE_TASKS));
         let mut watchers: JoinSet<Result<(), Status>> = JoinSet::new();
         let mut watched = HashSet::new();
+        let mut discovery: Option<wire::ReleasedDiscoveryPage> = None;
+        let mut acknowledged_discovery: Option<(String, String)> = None;
+        let mut policy_refresh = tokio::time::Instant::now() - Duration::from_secs(15);
         loop {
             tokio::select! {
                 _=heartbeat.tick()=>{
                     check_local_readiness(self.runs.as_ref()).await?;
                     if self.enrollment.is_some() && crate::enrollment::certificate_due(&self.config.certificate_pem).map_err(|_|Status::failed_precondition("invalid connector certificate"))? { return Ok(()); }
-                    send(&sender,runtime_frame::Body::Heartbeat(wire::RuntimeHeartbeat{ready:true})).await?;
+                    let mut inventory_json = Vec::new();
+                    if policy_refresh.elapsed() >= Duration::from_secs(15) {
+                        policy_refresh = tokio::time::Instant::now();
+                        if let Some(mut inventory) = self.config.inventory.clone()
+                            && let Ok(Ok(policy)) = tokio::time::timeout(Duration::from_secs(2), self.runs.get_runtime_policy_posture()).await {
+                            inventory.policy = Some(policy);
+                            inventory_json = encode(&inventory).map_err(|_| Status::failed_precondition("invalid native inventory"))?;
+                        }
+                    }
+                    send(&sender,runtime_frame::Body::Heartbeat(wire::RuntimeHeartbeat{ready:true,inventory_json})).await?;
                 },
                 finished=watchers.join_next(),if !watchers.is_empty()=>{
                     finished.ok_or_else(||Status::internal("watch lost"))?.map_err(|_|Status::internal("watch failed"))??;
@@ -281,6 +328,26 @@ impl RuntimeConnector {
                             }
                         }
                         Some(control_frame::Body::Acknowledgement(_))=>{},
+                        Some(control_frame::Body::Discover(request))=>{
+                            if let Some(page) = &discovery {
+                                if page.sync_id != request.sync_id || page.page_token != request.page_token {
+                                    return Err(Status::failed_precondition("discovery page not acknowledged"));
+                                }
+                                send(&sender, runtime_frame::Body::Discovery(page.clone())).await?;
+                            } else {
+                                let page = crate::discovery::discover(self.runs.as_ref(), request).await?;
+                                send(&sender, runtime_frame::Body::Discovery(page.clone())).await?;
+                                discovery = Some(page);
+                            }
+                        },
+                        Some(control_frame::Body::DiscoveryAcknowledgement(ack))=>{
+                            if discovery.as_ref().is_some_and(|page|page.sync_id == ack.sync_id && page.page_token == ack.page_token) {
+                                discovery = None;
+                                acknowledged_discovery = Some((ack.sync_id,ack.page_token));
+                            } else if !acknowledged_discovery.as_ref().is_some_and(|(sync_id,page_token)|sync_id == &ack.sync_id && page_token == &ack.page_token) {
+                                return Err(Status::invalid_argument("unexpected discovery acknowledgement"));
+                            }
+                        },
                         _=>return Err(Status::invalid_argument("unexpected cloud frame")),
                     }
                 }
@@ -296,28 +363,52 @@ async fn check_local_readiness(runs: &dyn AgentRunClient) -> Result<(), Status> 
     if runs.is_closed() {
         return Err(Status::unavailable("local runtime closed"));
     }
-    tokio::time::timeout(
-        Duration::from_secs(3),
-        runs.list_runs(ListRunsRequest {
-            session_id: None,
-            statuses: Vec::new(),
-            page: Some(PageRequest {
-                page_size: 1,
-                page_token: String::new(),
-            }),
-            include_archived: false,
-        }),
-    )
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let result = runs
+                .list_runs(ListRunsRequest {
+                    session_id: None,
+                    statuses: Vec::new(),
+                    page: Some(PageRequest {
+                        page_size: 1,
+                        page_token: String::new(),
+                    }),
+                    include_archived: false,
+                })
+                .await;
+            match result {
+                Ok(_) => return Ok(()),
+                Err(error) if error.code == ApiErrorCode::ResourceExhausted => {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+                Err(error) => return Err(local_read_error(error, "local runtime unavailable")),
+            }
+        }
+    })
     .await
-    .map_err(|_| Status::deadline_exceeded("local readiness timeout"))?
-    .map_err(|_| Status::unavailable("local runtime unavailable"))?;
+    .map_err(|_| Status::deadline_exceeded("local readiness timeout"))??;
     if runs.is_closed() {
         return Err(Status::unavailable("local runtime closed"));
     }
     Ok(())
 }
+fn local_read_error(error: colossus_sdk::ApiError, message: &'static str) -> Status {
+    match error.code {
+        ApiErrorCode::ResourceExhausted => Status::resource_exhausted(message),
+        ApiErrorCode::Unavailable => Status::unavailable(message),
+        ApiErrorCode::PermissionDenied | ApiErrorCode::Unauthenticated => {
+            Status::failed_precondition("local SDK grant rejected")
+        }
+        _ => Status::failed_precondition(message),
+    }
+}
 async fn execute(runs: &dyn AgentRunClient, command: Command) -> CloudReply {
     let result = match command {
+        Command::History {
+            source_run_id,
+            page_token,
+            page_size,
+        } => crate::history::read(runs, source_run_id, page_token, page_size).await,
         Command::Create { request } => match runs.create_run(*request).await {
             Ok(created) => runs
                 .get_run(GetRunRequest {
@@ -347,7 +438,7 @@ async fn execute(runs: &dyn AgentRunClient, command: Command) -> CloudReply {
 }
 async fn watch_task(
     runs: Arc<dyn AgentRunClient>,
-    sender: mpsc::Sender<wire::RuntimeFrame>,
+    sender: crate::outbound::FrameSender,
     task_id: String,
     run_id: String,
     after: u64,
@@ -358,7 +449,7 @@ async fn watch_task(
             run_id: run_id.clone(),
         })
         .await
-        .map_err(|_| Status::unavailable("local snapshot unavailable"))?;
+        .map_err(|error| local_read_error(error, "local snapshot unavailable"))?;
     let limited =
         crate::released::compact_snapshot(&mut snapshot).map_err(Status::resource_exhausted)?;
     send(
@@ -394,7 +485,7 @@ async fn watch_task(
                     run_id: run_id.clone(),
                 })
                 .await
-                .map_err(|_| Status::unavailable("local snapshot unavailable"))?;
+                .map_err(|error| local_read_error(error, "local snapshot unavailable"))?;
             crate::released::compact_snapshot(&mut snapshot).map_err(Status::resource_exhausted)?;
             send(
                 &sender,
@@ -413,9 +504,9 @@ async fn watch_task(
             after_sequence: after,
         })
         .await
-        .map_err(|_| Status::unavailable("local watch unavailable"))?;
+        .map_err(|error| local_read_error(error, "local watch unavailable"))?;
     while let Some(update) = stream.next().await {
-        let update = update.map_err(|_| Status::unavailable("local feed unavailable"))?;
+        let update = update.map_err(|error| local_read_error(error, "local feed unavailable"))?;
         let update_json = match encode(&update) {
             Ok(bytes) => bytes,
             Err(_) => {
@@ -448,7 +539,7 @@ async fn watch_task(
                 run_id: run_id.clone(),
             })
             .await
-            .map_err(|_| Status::unavailable("local snapshot unavailable"))?;
+            .map_err(|error| local_read_error(error, "local snapshot unavailable"))?;
         let limited =
             crate::released::compact_snapshot(&mut snapshot).map_err(Status::resource_exhausted)?;
         send(
@@ -476,7 +567,7 @@ async fn watch_task(
     Ok(())
 }
 async fn send(
-    sender: &mpsc::Sender<wire::RuntimeFrame>,
+    sender: &crate::outbound::FrameSender,
     body: runtime_frame::Body,
 ) -> Result<(), Status> {
     tokio::time::timeout(

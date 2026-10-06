@@ -11,6 +11,8 @@
 !dist/icons/**
 !dist/colossus-mark.svg
 !dist/THIRD_PARTY_NOTICES.txt
+!dist/shadcn.css
+!dist/shadcn-LICENSE.txt
 !dist/node_modules/**
 !dist/explorer.js
 !dist/inspector.js

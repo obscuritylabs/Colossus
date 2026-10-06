@@ -5,7 +5,7 @@ use crate::{
 
 impl CloudRepository {
     /// Allocate an expiring invitation beneath explicit administration authority.
-    pub fn invite(
+    pub async fn invite(
         &self,
         caller: &CloudCaller,
         invitation: Enrollment,
@@ -38,11 +38,12 @@ impl CloudRepository {
             "cloud.invitation.created.v1",
             &invitation,
         )
+        .await
     }
 
     /// Atomically consume an invitation and enroll its fixed placement. A repeated
     /// redeem with the same certificate/instance reconciles a lost HTTP response.
-    pub fn redeem(
+    pub async fn redeem(
         &self,
         token_hash: &str,
         instance_id: &str,
@@ -59,6 +60,7 @@ impl CloudRepository {
         let invitation_stream = format!("cloud.invitation:{token_hash}");
         let (mut invitation, revision) = self
             .read::<Enrollment>(&invitation_stream)
+            .await
             .map_err(|_| CloudError::PermissionDenied)?;
         if let Some(existing) = &invitation.redeemed_certificate {
             if invitation.redeemed_csr.as_deref() != Some(&certificate.csr_sha256) {
@@ -71,8 +73,8 @@ impl CloudRepository {
                     existing,
                     instance_id,
                 )
+                .await
                 .and_then(|node| {
-                    self.journal.checkpoint()?;
                     Ok((node, invitation.certificate_pem.ok_or(CloudError::Storage)?))
                 });
         }
@@ -87,6 +89,12 @@ impl CloudRepository {
             certificate_sha256: certificate.fingerprint.clone(),
             roles: invitation.roles.clone(),
             revoked: false,
+            host_id: None,
+            workspace_id: None,
+            workspace_label: None,
+            runtime_ready: false,
+            policy: None,
+            policy_observed_at: None,
             revision: 1,
         };
         invitation.redeemed_certificate = Some(certificate.fingerprint);
@@ -107,7 +115,8 @@ impl CloudRepository {
                 "cloud.node.enrolled.v1",
                 &node,
             )?,
-        ])?;
+        ])
+        .await?;
         Ok((node, certificate.certificate_pem))
     }
 }

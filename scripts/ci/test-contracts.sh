@@ -219,4 +219,6 @@ trap - EXIT HUP INT TERM
 "${NODE:-node}" --test "$script_dir/homebrew-formula.test.mjs"
 "${NODE:-node}" --test "$script_dir/ripgrep-pin.test.mjs"
 "${NODE:-node}" --test "$script_dir/release-oci.test.mjs"
+"${NODE:-node}" --test "$script_dir/control-plane-assets.test.mjs"
+"${NODE:-node}" --test "$script_dir/documentation-candidate.test.mjs"
 "${NODE:-node}" --test "$script_dir/release-source-version.test.mjs"

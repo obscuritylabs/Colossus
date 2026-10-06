@@ -15,7 +15,6 @@ import {
   IconPlugConnected,
   IconRefresh,
   IconShieldLock,
-  IconSparkles,
   IconX,
 } from "@tabler/icons-react";
 import {
@@ -32,7 +31,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { ActiveShells } from "./tools/ActiveShells";
 import { useShellSessions, shellIsActive } from "../shellSessions";
 
-import colossusMark from "@colossus/ui/assets/colossus-mark.svg";
+import { WorkWelcome } from "@colossus/ui";
 import {
   MAX_ASIDE_PANE_WIDTH,
   MIN_ASIDE_PANE_WIDTH,
@@ -191,12 +190,6 @@ interface WorkSurfaceProps {
   ) => Promise<void>;
   onCloseAside: (view: RunView | undefined) => Promise<boolean>;
 }
-
-const STARTERS = [
-  "Orient yourself in this repo",
-  "Plan a secure migration without making external changes",
-  "Coordinate an implementation and security review",
-];
 
 const IGNORE_SESSION_WORKSPACE_VIEW = () => undefined;
 
@@ -1287,31 +1280,7 @@ export function WorkSurface({
                   </div>
                 </section>
               ) : view === undefined ? (
-                <section className="work-welcome">
-                  <img src={colossusMark} alt="" />
-                  <p className="eyebrow">Local-first agent workspace</p>
-                  <h3>Give Colossus a goal. Keep control of every effect.</h3>
-                  <p>
-                    Start a task, switch to plan mode, or coordinate specialist
-                    work through one policy-bound local connection.
-                  </p>
-                  <div className="starter-list" aria-label="Example prompts">
-                    {STARTERS.map((suggestion) => (
-                      <button
-                        type="button"
-                        key={suggestion}
-                        onClick={() => onSuggestion(suggestion)}
-                      >
-                        <IconSparkles
-                          size={17}
-                          stroke={1.6}
-                          aria-hidden="true"
-                        />
-                        <span>{suggestion}</span>
-                      </button>
-                    ))}
-                  </div>
-                </section>
+                <WorkWelcome onSuggestion={onSuggestion} />
               ) : sessionWorkspaceView === "topology" ? (
                 <SessionTopology
                   views={conversationViews}

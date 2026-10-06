@@ -992,22 +992,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "colossus-cloud"
-version = "0.11.7"
-dependencies = [
- "colossus-cloud-protocol",
- "colossus-contracts",
- "colossus-ports",
- "colossus-sdk",
- "hex",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.19",
- "uuid",
-]
-
-[[package]]
 name = "colossus-cloud-protocol"
 version = "0.11.7"
 dependencies = [
@@ -1046,7 +1030,6 @@ version = "0.11.7"
 dependencies = [
  "async-trait",
  "clap",
- "colossus-cloud",
  "colossus-cloud-protocol",
  "colossus-contracts",
  "colossus-credentials",
@@ -1135,6 +1118,7 @@ dependencies = [
  "colossus-windows-native",
  "colossus-worker-protocol",
  "directories",
+ "fs4",
  "futures-util",
  "getrandom 0.4.3",
  "git2",
@@ -1415,6 +1399,7 @@ dependencies = [
  "rustls",
  "security-framework",
  "serde",
+ "serde_json",
  "sha2",
  "sysinfo",
  "tempfile",

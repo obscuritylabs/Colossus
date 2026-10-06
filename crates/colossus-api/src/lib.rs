@@ -10,9 +10,15 @@ mod artifacts;
 mod error;
 mod identity;
 mod plugins;
+mod posture;
 mod process_sessions;
 mod repository;
 mod runs;
+mod sharing;
+pub use posture::*;
+pub use sharing::{
+    ListVisibleRunsResponse, SetWorkspaceSharingRequest, VisibleRun, WorkspaceSharingState,
+};
 mod validation;
 mod workflows;
 pub use workflows::*;

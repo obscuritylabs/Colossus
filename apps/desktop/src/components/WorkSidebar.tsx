@@ -17,14 +17,20 @@ import {
   IconPlus,
   IconPointFilled,
   IconRestore,
-  IconSearch,
   IconSettings,
   IconTerminal2,
   IconTopologyStar3,
-  IconWorld,
   IconX,
 } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  WorkspaceSidebarGroupHeading,
+  WorkspaceSidebarHeading,
+  WorkspaceSidebarScope,
+  WorkspaceSidebarSearch,
+  WorkspaceSidebarThreadContent,
+  WorkspaceSidebarWorkspace,
+} from "@colossus/ui";
 
 import {
   presentRunStatus,
@@ -564,124 +570,133 @@ export function WorkSidebar({
       </button>
 
       <section className="space-shelves" aria-labelledby="spaces-heading">
-        <div className="space-shelves-heading">
-          <span id="spaces-heading">Workspaces</span>
-          <details
-            className="space-library-menu"
-            onBlur={(event) => {
-              if (!event.currentTarget.contains(event.relatedTarget)) {
-                event.currentTarget.removeAttribute("open");
-              }
-            }}
-          >
-            <summary
-              aria-label="Manage Workspaces"
-              title="Manage Workspaces"
-              role="button"
+        <WorkspaceSidebarHeading
+          id="spaces-heading"
+          className="space-shelves-heading"
+          actions={
+            <details
+              className="space-library-menu"
+              onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget)) {
+                  event.currentTarget.removeAttribute("open");
+                }
+              }}
             >
-              <IconDots size={16} stroke={1.9} aria-hidden="true" />
-            </summary>
-            <div className="space-library-popover">
-              <button
-                type="button"
-                disabled={actionsDisabled}
-                onClick={(event) => {
-                  event.currentTarget
-                    .closest("details")
-                    ?.removeAttribute("open");
-                  onCreateSpace();
-                }}
+              <summary
+                aria-label="Manage Workspaces"
+                title="Manage Workspaces"
+                role="button"
               >
-                <IconPlus size={15} stroke={1.8} aria-hidden="true" />
-                Add Workspace from folder
-              </button>
-              {selectedSpace !== undefined ? (
-                <>
-                  <div className="space-library-separator" />
-                  <span className="space-library-label">Current Workspace</span>
-                  <button
-                    type="button"
-                    disabled={actionsDisabled}
-                    onClick={(event) => {
-                      event.currentTarget
-                        .closest("details")
-                        ?.removeAttribute("open");
-                      beginRename(selectedSpace);
-                    }}
-                  >
-                    <IconPencil size={15} stroke={1.8} aria-hidden="true" />
-                    Rename {selectedSpace.displayName}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={actionsDisabled}
-                    onClick={(event) => {
-                      event.currentTarget
-                        .closest("details")
-                        ?.removeAttribute("open");
-                      onArchiveSpace(selectedSpace.spaceId);
-                    }}
-                  >
-                    <IconArchive size={15} stroke={1.8} aria-hidden="true" />
-                    Archive {selectedSpace.displayName}
-                  </button>
-                  {capabilities.tui ? (
+                <IconDots size={16} stroke={1.9} aria-hidden="true" />
+              </summary>
+              <div className="space-library-popover">
+                <button
+                  type="button"
+                  disabled={actionsDisabled}
+                  onClick={(event) => {
+                    event.currentTarget
+                      .closest("details")
+                      ?.removeAttribute("open");
+                    onCreateSpace();
+                  }}
+                >
+                  <IconPlus size={15} stroke={1.8} aria-hidden="true" />
+                  Add Workspace from folder
+                </button>
+                {selectedSpace !== undefined ? (
+                  <>
+                    <div className="space-library-separator" />
+                    <span className="space-library-label">
+                      Current Workspace
+                    </span>
                     <button
                       type="button"
-                      disabled={
-                        actionsDisabled ||
-                        !terminalAvailable ||
-                        (!terminalEnabled && !terminalConsentPending)
-                      }
-                      onClick={onOpenTerminal}
-                    >
-                      <IconTerminal2
-                        size={15}
-                        stroke={1.8}
-                        aria-hidden="true"
-                      />
-                      Open Colossus TUI
-                    </button>
-                  ) : null}
-                  {capabilities.shellTerminal ? (
-                    <button
-                      type="button"
-                      disabled={
-                        actionsDisabled ||
-                        (!terminalEnabled && !terminalConsentPending)
-                      }
-                      onClick={onOpenShell}
-                    >
-                      <IconTerminal2
-                        size={15}
-                        stroke={1.8}
-                        aria-hidden="true"
-                      />
-                      Open Shell
-                    </button>
-                  ) : null}
-                </>
-              ) : null}
-              {archivedSpaces.length > 0 ? (
-                <>
-                  <div className="space-library-separator" />
-                  <span className="space-library-label">Archived</span>
-                  {archivedSpaces.map((space) => (
-                    <button
-                      type="button"
-                      key={space.spaceId}
                       disabled={actionsDisabled}
-                      onClick={() => onRestoreSpace(space.spaceId)}
+                      onClick={(event) => {
+                        event.currentTarget
+                          .closest("details")
+                          ?.removeAttribute("open");
+                        beginRename(selectedSpace);
+                      }}
                     >
-                      <IconRestore size={15} stroke={1.8} aria-hidden="true" />
-                      Restore {space.displayName}
+                      <IconPencil size={15} stroke={1.8} aria-hidden="true" />
+                      Rename {selectedSpace.displayName}
                     </button>
-                  ))}
-                </>
-              ) : null}
-            </div>
-          </details>
-        </div>
+                    <button
+                      type="button"
+                      disabled={actionsDisabled}
+                      onClick={(event) => {
+                        event.currentTarget
+                          .closest("details")
+                          ?.removeAttribute("open");
+                        onArchiveSpace(selectedSpace.spaceId);
+                      }}
+                    >
+                      <IconArchive size={15} stroke={1.8} aria-hidden="true" />
+                      Archive {selectedSpace.displayName}
+                    </button>
+                    {capabilities.tui ? (
+                      <button
+                        type="button"
+                        disabled={
+                          actionsDisabled ||
+                          !terminalAvailable ||
+                          (!terminalEnabled && !terminalConsentPending)
+                        }
+                        onClick={onOpenTerminal}
+                      >
+                        <IconTerminal2
+                          size={15}
+                          stroke={1.8}
+                          aria-hidden="true"
+                        />
+                        Open Colossus TUI
+                      </button>
+                    ) : null}
+                    {capabilities.shellTerminal ? (
+                      <button
+                        type="button"
+                        disabled={
+                          actionsDisabled ||
+                          (!terminalEnabled && !terminalConsentPending)
+                        }
+                        onClick={onOpenShell}
+                      >
+                        <IconTerminal2
+                          size={15}
+                          stroke={1.8}
+                          aria-hidden="true"
+                        />
+                        Open Shell
+                      </button>
+                    ) : null}
+                  </>
+                ) : null}
+                {archivedSpaces.length > 0 ? (
+                  <>
+                    <div className="space-library-separator" />
+                    <span className="space-library-label">Archived</span>
+                    {archivedSpaces.map((space) => (
+                      <button
+                        type="button"
+                        key={space.spaceId}
+                        disabled={actionsDisabled}
+                        onClick={() => onRestoreSpace(space.spaceId)}
+                      >
+                        <IconRestore
+                          size={15}
+                          stroke={1.8}
+                          aria-hidden="true"
+                        />
+                        Restore {space.displayName}
+                      </button>
+                    ))}
+                  </>
+                ) : null}
+              </div>
+            </details>
+          }
+        />
 
         {spaceActionFeedback !== null ? (
           <p
@@ -704,37 +719,21 @@ export function WorkSidebar({
           </p>
         ) : null}
 
-        <div className="work-search">
-          <IconSearch size={17} stroke={1.7} aria-hidden="true" />
-          <input
-            ref={searchRef}
-            type="search"
-            aria-label="Search threads"
-            value={query}
-            placeholder="Search threads"
-            onChange={(event) => onQueryChange(event.target.value)}
-          />
-          <kbd aria-hidden="true">⌘K</kbd>
-        </div>
-        <div className="search-scope-switcher" aria-label="Thread search scope">
-          <button
-            type="button"
-            aria-pressed={searchScope === "all"}
-            onClick={() => chooseSearchScope("all")}
-          >
-            <IconWorld size={13} stroke={1.8} aria-hidden="true" />
-            All Workspaces
-          </button>
-          <button
-            type="button"
-            aria-pressed={searchScope === "space"}
-            disabled={selectedSpaceId === null}
-            onClick={() => chooseSearchScope("space")}
-          >
-            <IconFolder size={13} stroke={1.8} aria-hidden="true" />
-            This Workspace
-          </button>
-        </div>
+        <WorkspaceSidebarSearch
+          className="work-search"
+          inputRef={searchRef}
+          value={query}
+          onChange={onQueryChange}
+          shortcut="⌘K"
+        />
+        <WorkspaceSidebarScope
+          className="search-scope-switcher"
+          value={searchScope === "all" ? "all" : "workspace"}
+          workspaceDisabled={selectedSpaceId === null}
+          onChange={(scope) =>
+            chooseSearchScope(scope === "all" ? "all" : "space")
+          }
+        />
         {searchScope === "all" ? (
           <label className="include-archived-search">
             <input
@@ -765,61 +764,78 @@ export function WorkSidebar({
             className={`space-shelf is-active${spaceStartup !== null ? " is-starting" : ""}`}
             aria-busy={spaceStartup !== null}
           >
-            <div className="space-shelf-row">
-              <button
-                type="button"
-                className="space-shelf-identity"
-                aria-current="page"
-                title={displayedSpace.displayPath}
-                onClick={() => setThreadShelfOpen(true)}
-              >
-                <span className="space-shelf-folder" aria-hidden="true">
-                  {spaceStartup === null ? (
-                    <IconFolder size={17} stroke={1.7} />
-                  ) : (
-                    <IconLoader2 className="spin-icon" size={17} stroke={1.8} />
-                  )}
+            <WorkspaceSidebarWorkspace
+              className="space-shelf-row"
+              identity={
+                <button
+                  type="button"
+                  className="space-shelf-identity"
+                  aria-current="page"
+                  title={displayedSpace.displayPath}
+                  onClick={() => setThreadShelfOpen(true)}
+                >
+                  <span className="space-shelf-folder" aria-hidden="true">
+                    {spaceStartup === null ? (
+                      <IconFolder size={17} stroke={1.7} />
+                    ) : (
+                      <IconLoader2
+                        className="spin-icon"
+                        size={17}
+                        stroke={1.8}
+                      />
+                    )}
+                  </span>
+                  <strong>{displayedSpace.displayName}</strong>
+                </button>
+              }
+              state={
+                <span className="space-shelf-state">
+                  <i
+                    className={`space-health ${
+                      spaceStartup !== null
+                        ? "space-health-loading"
+                        : `space-health-${displayedSpace.state}`
+                    }`}
+                    aria-hidden="true"
+                  />
+                  {spaceStartup !== null
+                    ? "Starting"
+                    : runtimeLabel(displayedSpace)}
                 </span>
-                <strong>{displayedSpace.displayName}</strong>
-              </button>
-              <span className="space-shelf-state">
-                <i
-                  className={`space-health ${
-                    spaceStartup !== null
-                      ? "space-health-loading"
-                      : `space-health-${displayedSpace.state}`
-                  }`}
-                  aria-hidden="true"
-                />
-                {spaceStartup !== null
-                  ? "Starting"
-                  : runtimeLabel(displayedSpace)}
-              </span>
-              {displayedSpace.attentionCount > 0 ? (
-                <span className="space-attention-badge">
-                  {Math.min(displayedSpace.attentionCount, 99)}
-                </span>
-              ) : null}
-              <button
-                className="space-shelf-chevron"
-                type="button"
-                aria-label={`${threadShelfOpen ? "Collapse" : "Expand"} ${displayedSpace.displayName} threads`}
-                aria-expanded={threadShelfOpen}
-                onClick={() => setThreadShelfOpen((open) => !open)}
-              >
-                <IconChevronDown size={16} stroke={1.8} aria-hidden="true" />
-              </button>
-              <button
-                className="space-compose-action"
-                type="button"
-                aria-label={`New thread in ${displayedSpace.displayName}`}
-                title={`New thread in ${displayedSpace.displayName}`}
-                disabled={actionsDisabled || selectedSpace === undefined}
-                onClick={onNewWork}
-              >
-                <IconPencilPlus size={17} stroke={1.8} aria-hidden="true" />
-              </button>
-            </div>
+              }
+              actions={
+                <>
+                  {displayedSpace.attentionCount > 0 ? (
+                    <span className="space-attention-badge">
+                      {Math.min(displayedSpace.attentionCount, 99)}
+                    </span>
+                  ) : null}
+                  <button
+                    className="space-shelf-chevron"
+                    type="button"
+                    aria-label={`${threadShelfOpen ? "Collapse" : "Expand"} ${displayedSpace.displayName} threads`}
+                    aria-expanded={threadShelfOpen}
+                    onClick={() => setThreadShelfOpen((open) => !open)}
+                  >
+                    <IconChevronDown
+                      size={16}
+                      stroke={1.8}
+                      aria-hidden="true"
+                    />
+                  </button>
+                  <button
+                    className="space-compose-action"
+                    type="button"
+                    aria-label={`New thread in ${displayedSpace.displayName}`}
+                    title={`New thread in ${displayedSpace.displayName}`}
+                    disabled={actionsDisabled || selectedSpace === undefined}
+                    onClick={onNewWork}
+                  >
+                    <IconPencilPlus size={17} stroke={1.8} aria-hidden="true" />
+                  </button>
+                </>
+              }
+            />
             {renameSpaceId === displayedSpace.spaceId ? (
               <form
                 className="space-rename-form"
@@ -887,22 +903,26 @@ export function WorkSidebar({
                         disabled={actionsDisabled || result.threadArchived}
                         onClick={() => onSelectSearchResult(result)}
                       >
-                        <span className="work-item-copy">
-                          <strong>{title}</strong>
-                          <span>
-                            {result.spaceName} · {runModeLabel(result.mode)} ·{" "}
-                            {result.threadArchived
-                              ? "Archived"
-                              : shortDateLabel(result.updatedAt)}
-                          </span>
-                        </span>
-                        <span
-                          className={`work-item-state tone-${searchResultTone(result)}`}
-                          title={status.copy}
-                        >
-                          {statusIcon(status.tone)}
-                          <span className="sr-only">{status.label}</span>
-                        </span>
+                        <WorkspaceSidebarThreadContent
+                          title={title}
+                          metadata={
+                            <>
+                              {result.spaceName} · {runModeLabel(result.mode)} ·{" "}
+                              {result.threadArchived
+                                ? "Archived"
+                                : shortDateLabel(result.updatedAt)}
+                            </>
+                          }
+                          status={
+                            <span
+                              className={`work-item-state tone-${searchResultTone(result)}`}
+                              title={status.copy}
+                            >
+                              {statusIcon(status.tone)}
+                              <span className="sr-only">{status.label}</span>
+                            </span>
+                          }
+                        />
                       </button>
                       {result.threadArchived ? (
                         <button
@@ -925,9 +945,13 @@ export function WorkSidebar({
                 })
               : groups.map((group) => (
                   <section className="work-group" key={group.key}>
-                    <div className="work-group-heading">
-                      <h2>
-                        {group.key === "pinned" ? (
+                    <WorkspaceSidebarGroupHeading
+                      className="work-group-heading"
+                      headingLevel={2}
+                      label={group.label}
+                      count={group.items.length}
+                      icon={
+                        group.key === "pinned" ? (
                           <IconPin size={12} stroke={1.8} aria-hidden="true" />
                         ) : group.key === "attention" ? (
                           <IconAlertCircle
@@ -947,11 +971,9 @@ export function WorkSidebar({
                             stroke={1.8}
                             aria-hidden="true"
                           />
-                        )}
-                        {group.label}
-                      </h2>
-                      <span>{group.items.length}</span>
-                    </div>
+                        )
+                      }
+                    />
                     <div className="work-group-items">
                       {(group.key === "recent" && !showAllRecent
                         ? group.items.slice(0, 3)
@@ -1045,21 +1067,25 @@ export function WorkSidebar({
                                   disabled={actionsDisabled}
                                   onClick={() => onSelect(run)}
                                 >
-                                  <span className="work-item-copy">
-                                    <strong>{item.title}</strong>
-                                    <span>
-                                      {item.modeLabel} · {item.updatedLabel}
-                                    </span>
-                                  </span>
-                                  <span
-                                    className={`work-item-state tone-${item.statusTone}`}
-                                    title={item.statusCopy}
-                                  >
-                                    {statusIcon(item.statusTone)}
-                                    <span className="sr-only">
-                                      {item.statusLabel}
-                                    </span>
-                                  </span>
+                                  <WorkspaceSidebarThreadContent
+                                    title={item.title}
+                                    metadata={
+                                      <>
+                                        {item.modeLabel} · {item.updatedLabel}
+                                      </>
+                                    }
+                                    status={
+                                      <span
+                                        className={`work-item-state tone-${item.statusTone}`}
+                                        title={item.statusCopy}
+                                      >
+                                        {statusIcon(item.statusTone)}
+                                        <span className="sr-only">
+                                          {item.statusLabel}
+                                        </span>
+                                      </span>
+                                    }
+                                  />
                                 </button>
                                 <details
                                   className="thread-actions-menu"

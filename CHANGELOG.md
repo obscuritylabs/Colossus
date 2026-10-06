@@ -10,6 +10,15 @@ include breaking changes while the public API is still settling.
 
 ### Added
 
+- Colossus Control Plane with independent PostgreSQL persistence, users, named OIDC
+  and optional local sign-in, explicit project roles/hierarchy, and administration.
+- Fleet agents, workspace/thread navigation, retained realtime conversations, shared
+  Desktop/VS Code/web Markdown and composer components, and shadcn task tables.
+- Project analytics, runtime-reported policy inspection and monitoring baselines,
+  configurable classification markings, and global Desktop connection profiles.
+- Linux Control Plane server/web bundles and offline Docker images, six platform
+  VSIX packages, and verified multi-platform server container publication.
+
 - Workspace workflow schedule management with definition import, reviewed creation,
   pause/enable controls, and independent run inspection.
 - Separate Workflows library with manual runs, schema-based inputs, owned history, and

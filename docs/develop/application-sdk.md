@@ -167,6 +167,30 @@ and enforce resource scope again inside each command. Do not add generic “run 
 “read path,” “call URL,” or “invoke SDK method” commands; those would turn the WebView
 into a capability-confused deputy.
 
+## Explicit workspace conversation sharing
+
+Cloud enrollment creates an independent application grant. It does not make existing
+Desktop or CLI application conversations visible. `SetWorkspaceSharing` lets the
+authenticated source application explicitly release its own sessions in that runtime
+workspace to a named recipient application. It requires `runs:read` and `runs:control`;
+enabling continuation also requires `runs:execute`. The source owner is derived from
+authentication and cannot be selected in the request.
+
+`ListVisibleRuns` provides bounded, source-stable discovery of owned and explicitly
+shared runs. Each item carries runtime-derived `controllable` and `continuable` flags.
+Shared source runs remain read-only: their cancellation and interaction responses still
+require the original owner. Reads and live watches use only released public projections;
+revocation closes ongoing shared watches and invalidates discovery cursors. Cloud
+continuations create new recipient-owned runs using that recipient's captured scopes,
+roles, and tools. They never borrow the source application's execution grant.
+
+Managed Local exposes this opt-in in Desktop's Cloud settings with native confirmation.
+For an installed daemon, the source application can use `colossus cloud share-workspace`
+with its protected local connection configuration and the exact recipient application
+ID. `--allow-continuation` permits new recipient-owned runs; `--disable` revokes future
+disclosure. Previously synchronized cloud history is retained under cloud project
+access and retention policy.
+
 ## Managed shell inspection
 
 `AgentRunService` also exposes `ListProcessSessions`, `ReadProcessSession`, and

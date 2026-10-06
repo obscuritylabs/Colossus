@@ -1,5 +1,5 @@
 use colossus_cloud::CloudPermission;
-use colossus_journal_postgres::PostgresJournalConfig;
+use colossus_cloud_postgres::{CloudDatabaseConfig, CloudDatabaseTls};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, net::SocketAddr, path::PathBuf};
 
@@ -24,15 +24,28 @@ pub struct Config {
     /// PEM server private key.
     pub server_key: PathBuf,
     /// OIDC discovery and relying-party configuration.
-    pub oidc: OidcConfig,
-    /// Explicit issuer-bound subject/project memberships.
+    pub oidc: Option<OidcConfig>,
+    /// Local password authentication, disabled unless explicitly configured.
+    #[serde(default)]
+    pub local_auth: Option<LocalAuthConfig>,
+    /// One-time first-administrator provisioning; no default credential exists.
+    #[serde(default)]
+    pub bootstrap_admin: Option<BootstrapAdmin>,
+    /// Optional initial deployment marking; retained administrator edits take precedence.
+    #[serde(default)]
+    pub classification: Option<colossus_cloud::settings::ClassificationBanner>,
+    /// One-time legacy issuer-bound membership seeds; persisted roles are authoritative.
+    #[serde(default)]
     pub memberships: Vec<Membership>,
     /// Built web frontend directory served at the authenticated application origin.
     pub web_root: PathBuf,
-    /// Canonical cloud journal adapter.
-    pub storage: Storage,
-    /// Independent 32-byte Ed25519 checkpoint seed reference, required in production.
-    pub signing_key_variable: Option<String>,
+    /// Dedicated cloud relational database and bounded asynchronous pool.
+    pub database: CloudDatabaseConfig,
+    /// Independent 32-byte OIDC-flow envelope key reference, required in production.
+    pub auth_key_variable: Option<String>,
+    /// Bounded operational cleanup; conversation history and audit are retained.
+    #[serde(default)]
+    pub maintenance: colossus_cloud::storage::CloudMaintenancePolicy,
     /// Allow HTTP origins and plaintext state only on loopback for local acceptance.
     #[serde(default)]
     pub local_development: bool,
@@ -41,12 +54,44 @@ pub struct Config {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OidcConfig {
+    /// Human-readable sign-in provider name, never HTML.
+    #[serde(default = "default_oidc_label")]
+    pub label: String,
     /// Exact trusted issuer; discovered metadata must match it.
     pub issuer: String,
     /// Registered relying-party client identity.
     pub client_id: String,
     /// Optional mounted confidential-client secret.
     pub client_secret_file: Option<PathBuf>,
+}
+fn default_oidc_label() -> String {
+    "OpenID Connect".into()
+}
+/// Explicit local-authentication deployment switch.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalAuthConfig {
+    /// Default session duration, constrained to five minutes through eight hours.
+    #[serde(default = "default_session_seconds")]
+    pub session_seconds: u64,
+}
+fn default_session_seconds() -> u64 {
+    8 * 60 * 60
+}
+/// Administrator bootstrap, used only while no persisted global administrator exists.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BootstrapAdmin {
+    /// Initial administrator display name.
+    pub display_name: String,
+    /// Optional display-only contact address.
+    pub email: Option<String>,
+    /// Explicit issuer-bound subject under the configured provider.
+    pub oidc_subject: Option<String>,
+    /// Optional canonical local-login username.
+    pub username: Option<String>,
+    /// Reference to a one-time password secret; password values never enter config.
+    pub password_variable: Option<String>,
 }
 /// One explicitly configured authenticated project membership.
 #[derive(Clone, Deserialize, Serialize)]
@@ -59,33 +104,16 @@ pub struct Membership {
     /// Independent cloud permissions.
     pub permissions: BTreeSet<CloudPermission>,
 }
-/// Canonical storage selection, with credentials resolved only by its adapter.
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum Storage {
-    /// Owner-private local redb; plaintext requires local development opt-in.
-    Redb {
-        /// Owner-private canonical state path.
-        path: PathBuf,
-        /// Explicit injected journal encryption key reference.
-        key_variable: Option<String>,
-    },
-    /// Existing encrypted PostgreSQL journal for Kubernetes deployment.
-    Postgres {
-        /// Existing PostgreSQL adapter connection and TLS policy.
-        config: PostgresJournalConfig,
-        /// Injected journal encryption key reference.
-        key_variable: String,
-        /// Owner-private retained secure anchor path.
-        anchor_path: PathBuf,
-    },
-}
 impl Config {
     /// Validate origins and namespaces before network or credential access.
     pub fn validate(&self) -> Result<(), &'static str> {
         let origin = url::Url::parse(&self.public_origin).map_err(|_| "invalid public origin")?;
         let endpoint = url::Url::parse(&self.grpc_endpoint).map_err(|_| "invalid gRPC endpoint")?;
-        let issuer = url::Url::parse(&self.oidc.issuer).map_err(|_| "invalid OIDC issuer")?;
+        let issuer = self
+            .oidc
+            .as_ref()
+            .map(|oidc| url::Url::parse(&oidc.issuer).map_err(|_| "invalid OIDC issuer"))
+            .transpose()?;
         let loopback =
             |url: &url::Url| matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
         if endpoint.scheme() != "https"
@@ -94,12 +122,16 @@ impl Config {
             || endpoint.password().is_some()
             || endpoint.query().is_some()
             || endpoint.fragment().is_some()
-            || !issuer.username().is_empty()
-            || issuer.password().is_some()
-            || issuer.query().is_some()
-            || issuer.fragment().is_some()
+            || issuer.as_ref().is_some_and(|issuer| {
+                !issuer.username().is_empty()
+                    || issuer.password().is_some()
+                    || issuer.query().is_some()
+                    || issuer.fragment().is_some()
+            })
             || !matches!(origin.scheme(), "http" | "https")
-            || !matches!(issuer.scheme(), "http" | "https")
+            || issuer
+                .as_ref()
+                .is_some_and(|issuer| !matches!(issuer.scheme(), "http" | "https"))
             || origin.path() != "/"
             || origin.query().is_some()
             || origin.fragment().is_some()
@@ -112,23 +144,90 @@ impl Config {
             if !self.http_bind.ip().is_loopback()
                 || !self.grpc_bind.ip().is_loopback()
                 || !loopback(&origin)
-                || !loopback(&issuer)
+                || issuer.as_ref().is_some_and(|issuer| !loopback(issuer))
                 || !loopback(&endpoint)
             {
                 return Err("local development requires loopback endpoints");
             }
-        } else if origin.scheme() != "https" || issuer.scheme() != "https" {
-            return Err("production requires HTTPS and OIDC");
-        }
-        if !self.local_development
-            && matches!(&self.storage, Storage::Postgres{config,..} if matches!(config.tls,colossus_journal_postgres::PostgresTlsConfig::Disabled))
+        } else if origin.scheme() != "https"
+            || issuer
+                .as_ref()
+                .is_some_and(|issuer| issuer.scheme() != "https")
         {
+            return Err("production requires HTTPS authentication endpoints");
+        }
+        if !self.local_development && matches!(&self.database.tls, CloudDatabaseTls::Disabled) {
             return Err("production PostgreSQL requires verified TLS");
         }
-        if self.memberships.is_empty() || self.memberships.len() > 1024 {
+        if self.oidc.is_none() && self.local_auth.is_none() {
+            return Err("configure an OIDC provider or explicit local authentication");
+        }
+        if let Some(marking) = &self.classification {
+            marking
+                .validate()
+                .map_err(|_| "invalid deployment marking")?;
+        }
+        if self.oidc.as_ref().is_some_and(|oidc| {
+            oidc.client_id.is_empty()
+                || oidc.client_id.len() > 256
+                || oidc.label.trim().is_empty()
+                || oidc.label.len() > 128
+                || oidc.label.chars().any(char::is_control)
+        }) {
+            return Err("invalid OIDC provider");
+        }
+        if self
+            .local_auth
+            .as_ref()
+            .is_some_and(|local| !(300..=8 * 60 * 60).contains(&local.session_seconds))
+        {
+            return Err("invalid local session duration");
+        }
+        if let Some(bootstrap) = &self.bootstrap_admin {
+            if bootstrap.display_name.trim().is_empty()
+                || bootstrap.display_name.len() > 256
+                || bootstrap.display_name.chars().any(char::is_control)
+                || bootstrap
+                    .email
+                    .as_ref()
+                    .is_some_and(|s| s.len() > 320 || s.chars().any(char::is_control))
+            {
+                return Err("invalid administrator metadata");
+            }
+            if bootstrap
+                .oidc_subject
+                .as_ref()
+                .is_some_and(|s| s.is_empty() || s.len() > 256 || s.chars().any(char::is_control))
+                || bootstrap.oidc_subject.is_some() && self.oidc.is_none()
+            {
+                return Err("invalid administrator provider identity");
+            }
+            if let Some(username) = &bootstrap.username {
+                colossus_cloud::normalize_username(username)
+                    .map_err(|_| "invalid administrator username")?;
+                if self.local_auth.is_none()
+                    || bootstrap.password_variable.as_ref().is_none_or(|s| {
+                        s.is_empty()
+                            || s.len() > 128
+                            || !s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    })
+                {
+                    return Err("administrator local login requires a secret reference");
+                }
+            } else if bootstrap.password_variable.is_some() {
+                return Err("administrator password requires a username");
+            }
+            if bootstrap.username.is_none() && bootstrap.oidc_subject.is_none() {
+                return Err("administrator requires a login identity");
+            }
+        }
+        if self.memberships.len() > 1024 || (!self.memberships.is_empty() && self.oidc.is_none()) {
             return Err("invalid project memberships");
         }
         for member in &self.memberships {
+            if member.project_id.starts_with("__") {
+                return Err("reserved project namespace");
+            }
             colossus_cloud::CloudCaller::new(
                 member.subject.clone(),
                 member.project_id.clone(),
@@ -144,27 +243,16 @@ impl Config {
         if unique.len() != self.memberships.len() {
             return Err("duplicate project membership");
         }
-        if matches!(
-            &self.storage,
-            Storage::Redb {
-                key_variable: None,
-                ..
-            }
-        ) && !self.local_development
+        if !(1..=1024).contains(&self.maintenance.batch_limit)
+            || !(60..=30 * 86400).contains(&self.maintenance.delivered_outbox_retention_seconds)
         {
-            return Err("production state requires encryption");
+            return Err("invalid cloud maintenance policy");
         }
-        if !self.local_development && self.signing_key_variable.is_none() {
-            return Err("production state requires checkpoint signing");
-        }
-        if let Some(signing) = &self.signing_key_variable {
-            let journal = match &self.storage {
-                Storage::Redb { key_variable, .. } => key_variable.as_ref(),
-                Storage::Postgres { key_variable, .. } => Some(key_variable),
-            };
-            if Some(signing) == journal {
-                return Err("journal and signing keys must be independent");
-            }
+        self.database
+            .validate()
+            .map_err(|_| "invalid cloud database configuration")?;
+        if !self.local_development && self.oidc.is_some() && self.auth_key_variable.is_none() {
+            return Err("production requires an OIDC-flow encryption key reference");
         }
         Ok(())
     }

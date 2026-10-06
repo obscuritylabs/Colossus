@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{Membership, OidcConfig, Storage};
+use crate::config::{Membership, OidcConfig};
 use axum::{
     Form, Json, Router,
     extract::State,
@@ -10,6 +10,7 @@ use colossus_cloud::CloudPermission;
 use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, sync::Arc};
+use std::{collections::HashMap, sync::Mutex};
 mod transport;
 
 struct IssuerState {
@@ -77,7 +78,7 @@ fn signing_key(state: &IssuerState) -> SigningKey {
 async fn oidc_key_rotation_is_observed_without_host_restart() {
     let (auth, issuer, server) = fixture().await;
     *issuer.invalid.lock().unwrap() = "rotated-key";
-    let (headers, state) = flow(&auth, &issuer);
+    let (headers, state) = flow(&auth, &issuer).await;
     let cookie = auth
         .callback(&headers, &state, "code".into())
         .await
@@ -117,29 +118,38 @@ async fn fixture() -> (
         server_certificate: "server.pem".into(),
         server_key: "server-key.pem".into(),
         web_root: "dist".into(),
-        oidc: OidcConfig {
+        local_auth: None,
+        bootstrap_admin: None,
+        classification: None,
+        oidc: Some(OidcConfig {
+            label: "Local identity".into(),
             issuer,
             client_id: "colossus".into(),
             client_secret_file: None,
-        },
+        }),
         memberships: vec![Membership {
             subject: "alice".into(),
             project_id: "project-a".into(),
             permissions: BTreeSet::from([CloudPermission::Read, CloudPermission::Execute]),
         }],
-        storage: Storage::Redb {
-            path: "cloud.redb".into(),
-            key_variable: None,
+        database: colossus_cloud_postgres::CloudDatabaseConfig {
+            connection_variable: "COLOSSUS_CLOUD_TEST_DATABASE".into(),
+            schema: "cloud_auth_fixture".into(),
+            tls: colossus_cloud_postgres::CloudDatabaseTls::Disabled,
+            max_connections: 4,
+            connection_timeout_ms: 5000,
+            statement_timeout_ms: 5000,
         },
         local_development: true,
-        signing_key_variable: None,
+        auth_key_variable: None,
+        maintenance: Default::default(),
     })
     .await
     .unwrap();
     (auth, state, task)
 }
-fn flow(auth: &Authentication, issuer: &IssuerState) -> (HeaderMap, String) {
-    let (url, cookie) = auth.login().unwrap();
+async fn flow(auth: &Authentication, issuer: &IssuerState) -> (HeaderMap, String) {
+    let (url, cookie) = auth.login().await.unwrap();
     let url = url::Url::parse(&url).unwrap();
     let query: HashMap<_, _> = url.query_pairs().into_owned().collect();
     assert_eq!(query["code_challenge_method"], "S256");
@@ -155,7 +165,7 @@ fn flow(auth: &Authentication, issuer: &IssuerState) -> (HeaderMap, String) {
 #[tokio::test]
 async fn oidc_sign_in_binds_pkce_nonce_session_project_and_csrf() {
     let (auth, issuer, server) = fixture().await;
-    let (flow_headers, state) = flow(&auth, &issuer);
+    let (flow_headers, state) = flow(&auth, &issuer).await;
     assert_eq!(
         auth.callback(&HeaderMap::new(), &state, "code".into())
             .await
@@ -179,22 +189,27 @@ async fn oidc_sign_in_binds_pkce_nonce_session_project_and_csrf() {
         HeaderValue::from_str(cookie.to_str().unwrap().split(';').next().unwrap()).unwrap(),
     );
     assert_eq!(
-        auth.caller(&headers, "other-project", false).unwrap_err(),
+        auth.caller(&headers, "other-project", false)
+            .await
+            .unwrap_err(),
         CloudError::PermissionDenied
     );
     assert_eq!(
-        auth.caller(&headers, "project-a", true).unwrap_err(),
+        auth.caller(&headers, "project-a", true).await.unwrap_err(),
         CloudError::PermissionDenied
     );
     headers.insert("origin", HeaderValue::from_static("http://127.0.0.1:5180"));
     headers.insert("x-colossus-csrf", HeaderValue::from_static("1"));
     assert_eq!(
-        auth.caller(&headers, "project-a", true).unwrap().subject(),
-        "alice"
+        auth.caller(&headers, "project-a", true)
+            .await
+            .unwrap()
+            .subject(),
+        auth.user(&headers).await.unwrap().id
     );
-    auth.logout(&headers).unwrap();
+    auth.logout(&headers).await.unwrap();
     assert_eq!(
-        auth.caller(&headers, "project-a", false).unwrap_err(),
+        auth.caller(&headers, "project-a", false).await.unwrap_err(),
         CloudError::PermissionDenied
     );
     server.abort();
@@ -212,7 +227,7 @@ async fn invalid_oidc_tokens_never_create_sessions() {
         "signature",
     ] {
         *issuer.invalid.lock().unwrap() = invalid;
-        let (headers, state) = flow(&auth, &issuer);
+        let (headers, state) = flow(&auth, &issuer).await;
         assert_eq!(
             auth.callback(&headers, &state, "code".into())
                 .await
@@ -221,6 +236,160 @@ async fn invalid_oidc_tokens_never_create_sessions() {
             "{invalid}"
         );
     }
-    assert!(auth.sessions.lock().unwrap().is_empty());
+    assert!(
+        auth.store
+            .read_session(&"0".repeat(64), crate::http::now())
+            .await
+            .is_err()
+    );
     server.abort();
 }
+
+async fn signed_session(auth: &Authentication, issuer: &IssuerState) -> HeaderMap {
+    let (headers, state) = flow(auth, issuer).await;
+    let cookie = auth
+        .callback(&headers, &state, "code".into())
+        .await
+        .unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "cookie",
+        HeaderValue::from_str(cookie.to_str().unwrap().split(';').next().unwrap()).unwrap(),
+    );
+    headers
+}
+#[tokio::test]
+async fn persisted_roles_revoke_and_regrant_without_configuration_overwriting_admin_edits() {
+    let (auth, issuer, server) = fixture().await;
+    let headers = signed_session(&auth, &issuer).await;
+    let user = auth.user(&headers).await.unwrap();
+    assert!(
+        auth.caller(&headers, "project-a", false)
+            .await
+            .unwrap()
+            .require(CloudPermission::Execute)
+            .is_ok()
+    );
+    let manager = CloudCaller::new(
+        "fixture-administrator".into(),
+        "project-a".into(),
+        [CloudPermission::Read, CloudPermission::Administer].into(),
+    )
+    .unwrap();
+    let repo = auth.repository().unwrap();
+    let initial = repo.user_memberships(&user.id).await.unwrap().remove(0);
+    let viewer = repo
+        .save_membership(
+            &manager,
+            &user.id,
+            colossus_cloud::ProjectRole::Viewer,
+            initial.revision,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        auth.caller(&headers, "project-a", false)
+            .await
+            .unwrap()
+            .require(CloudPermission::Execute),
+        Err(CloudError::PermissionDenied)
+    );
+    let mut changed = auth.config.clone();
+    changed.memberships[0].permissions = [CloudPermission::Read, CloudPermission::Execute].into();
+    let restarted = Authentication::with_store(changed, auth.store.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        restarted
+            .caller(&headers, "project-a", false)
+            .await
+            .unwrap()
+            .require(CloudPermission::Execute),
+        Err(CloudError::PermissionDenied)
+    );
+    repo.remove_membership(&manager, &user.id, viewer.revision)
+        .await
+        .unwrap();
+    assert!(auth.memberships(&headers).await.unwrap().is_empty());
+    assert_eq!(
+        restarted
+            .caller(&headers, "project-a", false)
+            .await
+            .unwrap_err(),
+        CloudError::PermissionDenied
+    );
+    repo.save_membership(&manager, &user.id, colossus_cloud::ProjectRole::Operator, 0)
+        .await
+        .unwrap();
+    assert!(
+        restarted
+            .caller(&headers, "project-a", false)
+            .await
+            .unwrap()
+            .require(CloudPermission::Execute)
+            .is_ok()
+    );
+    assert!(
+        repo.save_membership(
+            &manager,
+            &user.id,
+            colossus_cloud::ProjectRole::ProjectAdmin,
+            viewer.revision
+        )
+        .await
+        .is_err()
+    );
+    server.abort();
+}
+#[tokio::test]
+async fn persistent_sessions_and_oidc_flows_are_bound_to_issuer_and_client() {
+    let (auth, issuer, server) = fixture().await;
+    let headers = signed_session(&auth, &issuer).await;
+    let (flow_headers, state) = flow(&auth, &issuer).await;
+    let mut different_client = auth.config.clone();
+    different_client.oidc.as_mut().unwrap().client_id = "another-client".into();
+    let different_client = Authentication::with_store(different_client, auth.store.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        different_client
+            .caller(&headers, "project-a", false)
+            .await
+            .unwrap_err(),
+        CloudError::PermissionDenied
+    );
+    assert_eq!(
+        different_client
+            .callback(&flow_headers, &state, "code".into())
+            .await
+            .unwrap_err(),
+        CloudError::PermissionDenied
+    );
+    let (other, _, other_server) = fixture().await;
+    let mut different_issuer = auth.config.clone();
+    different_issuer.oidc.as_mut().unwrap().issuer =
+        other.config.oidc.as_ref().unwrap().issuer.clone();
+    let different_issuer = Authentication::with_store(different_issuer, auth.store.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        different_issuer
+            .caller(&headers, "project-a", false)
+            .await
+            .unwrap_err(),
+        CloudError::PermissionDenied
+    );
+    assert_eq!(
+        different_issuer
+            .callback(&flow_headers, &state, "code".into())
+            .await
+            .unwrap_err(),
+        CloudError::PermissionDenied
+    );
+    server.abort();
+    other_server.abort();
+}
+
+mod local;
+
+mod markers;

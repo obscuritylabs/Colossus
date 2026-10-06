@@ -19,6 +19,10 @@ use zeroize::Zeroizing;
 /// Portable CLI and standalone connector lifecycle operations.
 #[derive(Subcommand)]
 pub enum ConnectorCommand {
+    /// Read metadata-only policy beneath the dedicated local application's authority.
+    Policy(LocalArguments),
+    /// Explicitly share the local application's workspace sessions with a dedicated cloud application.
+    ShareWorkspace(ShareWorkspaceArguments),
     /// Enroll one independently verified local daemon; invitation is read from stdin.
     Enroll(EnrollArguments),
     /// Maintain its outbound connection until Ctrl-C; accepted runs survive disconnect.
@@ -33,6 +37,22 @@ pub enum ConnectorCommand {
     Revoke(StorageArguments),
     /// Forget local enrollment after stopping the connector; remote authority remains revoked separately.
     Forget(StorageArguments),
+}
+/// Local operator disclosure beneath its own authenticated application credential.
+#[derive(Args)]
+pub struct ShareWorkspaceArguments {
+    /// Exact independently enrolled cloud application ID, such as app:colossus-cloud.
+    #[arg(long)]
+    pub recipient_application_id: String,
+    /// Revoke future reads and continuation; synchronized cloud history remains retained.
+    #[arg(long)]
+    pub disable: bool,
+    /// Allow new recipient-owned runs to continue source conversations under its own grant.
+    #[arg(long, conflicts_with = "disable")]
+    pub allow_continuation: bool,
+    /// Source application's protected native connection references.
+    #[command(flatten)]
+    pub local: LocalArguments,
 }
 /// Secret-storage references shared by all connector commands.
 #[derive(Args)]
@@ -143,10 +163,29 @@ async fn local(arguments: &LocalArguments) -> Result<Colossus, Box<dyn std::erro
     .with_certificate_path(config.certificate)?;
     Ok(Colossus::connect_installed(options).await?)
 }
-/// Execute the shared `colossus cloud` / `colossus-connector` command surface.
+/// Execute the shared `colossus control-plane` / `colossus-connector` command surface.
 /// Credentials and tokens never appear in status output or process arguments.
 pub async fn run_cli(command: ConnectorCommand) -> Result<(), Box<dyn std::error::Error>> {
     match command {
+        ConnectorCommand::Policy(arguments) => {
+            let client = local(&arguments).await?;
+            let result = client.agent_runs().get_runtime_policy_posture().await;
+            client.close().await?;
+            println!("{}", serde_json::to_string(&result?)?);
+        }
+        ConnectorCommand::ShareWorkspace(arguments) => {
+            let client = local(&arguments.local).await?;
+            let state = client
+                .agent_runs()
+                .set_workspace_sharing(colossus_sdk::SetWorkspaceSharingRequest {
+                    recipient_application_id: arguments.recipient_application_id,
+                    enabled: !arguments.disable,
+                    allow_continuation: arguments.allow_continuation,
+                })
+                .await?;
+            println!("{}", serde_json::to_string(&state)?);
+            client.close().await?;
+        }
         ConnectorCommand::Renew(arguments) => {
             Control::new(&arguments.name)?.disconnect().await?;
             let enrollment = store(&arguments)?;
@@ -155,7 +194,7 @@ pub async fn run_cli(command: ConnectorCommand) -> Result<(), Box<dyn std::error
         }
         ConnectorCommand::Enroll(arguments) => {
             let client = local(&arguments.local).await?;
-            eprint!("One-use cloud invitation: ");
+            eprint!("One-use Control Plane invitation: ");
             std::io::stderr().flush()?;
             let mut token = Zeroizing::new(String::new());
             BufReader::new(std::io::stdin())
@@ -189,10 +228,18 @@ pub async fn run_cli(command: ConnectorCommand) -> Result<(), Box<dyn std::error
             );
             let client = local(&arguments).await?;
             let enrollment = store(&arguments.storage)?;
-            let (config, key) = enrollment.load()?.ok_or("enroll this connector first")?;
+            let (mut config, key) = enrollment.load()?.ok_or("enroll this connector first")?;
             if client.instance_id().map(|id| id.to_string()).as_deref() != Some(&config.instance_id)
             {
                 return Err("local enrolled instance changed".into());
+            }
+            if config.inventory.is_none() {
+                let inventory = crate::native_inventory(
+                    format!("workspace:{}", config.instance_id),
+                    "CLI workspace".into(),
+                    crate::DeploymentKind::Cli,
+                )?;
+                config = enrollment.set_inventory(inventory).await?;
             }
             let mut report = Report::saved(Some(&config));
             report.run_instance = Some(uuid::Uuid::now_v7().simple().to_string());

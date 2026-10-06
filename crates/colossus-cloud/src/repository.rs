@@ -1,91 +1,208 @@
+use crate::storage::{
+    CloudStore, CloudTransaction, ConnectionLease, CursorMutation, EntityKey, EntityKind,
+    EntityMutation, EntityOrder, EntityQuery, ReleasedEvent,
+};
 use crate::{
     CloudCaller, CloudError, CloudNode, CloudPermission, CloudResult, CloudTask, PendingCommand,
 };
 use colossus_cloud_protocol::{CloudReply, Command};
-use colossus_contracts::{Actor, ActorType, EventClassification, ExecutionContext, NewEvent};
-use colossus_ports::EventJournal;
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
 
+mod accounts;
 mod delivery;
 mod enrollment;
+mod history;
+mod inventory;
 mod nodes;
+mod projects;
 mod renewal;
 mod tasks;
+mod threads;
 
-/// Durable cloud application operations; storage adapters remain replaceable.
+/// Project-scoped application services backed by cloud-owned relational storage.
 #[derive(Clone)]
 pub struct CloudRepository {
-    pub(super) journal: Arc<dyn EventJournal>,
+    pub(super) store: Arc<dyn CloudStore>,
+    lease: Option<ConnectionLease>,
+    ingest: Arc<tokio::sync::Semaphore>,
 }
-
+pub(super) enum Write {
+    Entity(EntityMutation),
+    Event(ReleasedEvent),
+    Cursor(CursorMutation),
+}
 impl CloudRepository {
-    /// Probe canonical storage without scanning or releasing project payloads.
-    pub fn check_readiness(&self) -> CloudResult<()> {
-        if self.journal.is_recovery_mode() {
-            return Err(CloudError::Storage);
-        }
-        self.journal.list_stream_ids("cloud.node:", None, 1)?;
-        Ok(())
-    }
-    /// Bind a cloud-specific canonical journal. Never share a worker's writer identity.
-    pub fn new(journal: Arc<dyn EventJournal>) -> CloudResult<Self> {
-        if journal.is_recovery_mode() {
-            return Err(CloudError::Storage);
-        }
-        Ok(Self { journal })
-    }
-
-    pub(super) fn read<T: DeserializeOwned>(&self, stream: &str) -> CloudResult<(T, u64)> {
-        let events = self.journal.read_stream_backwards(stream, None, 1)?;
-        let event = events.first().ok_or(CloudError::NotFound)?;
-        if event.event_version != 1 || !event.event_type.starts_with("cloud.") {
-            return Err(CloudError::Storage);
-        }
-        let value = self.journal.decrypt_payload(event)?;
-        Ok((
-            serde_json::from_value(value).map_err(|_| CloudError::Storage)?,
-            event.stream_version,
-        ))
-    }
-
-    pub(super) fn event<T: Serialize>(
-        &self,
-        subject: &str,
-        stream: String,
-        version: u64,
-        kind: &str,
-        value: &T,
-    ) -> CloudResult<NewEvent> {
-        Ok(NewEvent {
-            event_version: 1,
-            stream_id: stream,
-            expected_stream_version: version,
-            classification: EventClassification::Domain,
-            event_type: kind.into(),
-            actor: Actor {
-                actor_type: ActorType::Application,
-                id: subject.into(),
-            },
-            context: ExecutionContext::default(),
-            payload: serde_json::to_value(value).map_err(|_| CloudError::InvalidArgument)?,
+    /// Bind independent cloud persistence. Runtime journals never enter this boundary.
+    pub fn new(store: Arc<dyn CloudStore>) -> CloudResult<Self> {
+        Ok(Self {
+            store,
+            lease: None,
+            ingest: Arc::new(tokio::sync::Semaphore::new(12)),
         })
     }
-
-    pub(super) fn append<T: Serialize>(
+    /// Bind every mutation to the exact active connection generation.
+    pub fn with_lease(&self, lease: ConnectionLease) -> Self {
+        Self {
+            store: self.store.clone(),
+            lease: Some(lease),
+            ingest: self.ingest.clone(),
+        }
+    }
+    /// Probe cloud database readiness without releasing project payloads.
+    pub async fn check_readiness(&self) -> CloudResult<()> {
+        self.store.readiness().await
+    }
+    /// Retain the cloud persistence authority for host composition and coordination.
+    pub fn storage(&self) -> Arc<dyn CloudStore> {
+        self.store.clone()
+    }
+    async fn read<T: DeserializeOwned>(&self, identity: &str) -> CloudResult<(T, u64)> {
+        let record = self.store.read(&key(identity)?).await?;
+        Ok((
+            serde_json::from_value(record.value).map_err(|_| CloudError::Storage)?,
+            record.revision,
+        ))
+    }
+    async fn list<T: DeserializeOwned>(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> CloudResult<Vec<T>> {
+        let query = query(prefix, after, limit.min(100))?;
+        self.store
+            .list(&query)
+            .await?
+            .into_iter()
+            .map(|record| serde_json::from_value(record.value).map_err(|_| CloudError::Storage))
+            .collect()
+    }
+    fn event<T: Serialize>(
         &self,
         subject: &str,
-        stream: String,
+        identity: String,
         version: u64,
-        kind: &str,
+        operation: &str,
+        value: &T,
+    ) -> CloudResult<Write> {
+        let value = serde_json::to_value(value).map_err(|_| CloudError::InvalidArgument)?;
+        if let Some(scope) = identity.strip_prefix("cloud.output:") {
+            let (project_id, scope_id) =
+                scope.split_once(':').ok_or(CloudError::InvalidArgument)?;
+            return Ok(Write::Event(ReleasedEvent {
+                project_id: project_id.into(),
+                scope_id: scope_id.into(),
+                sequence: version + 1,
+                value,
+            }));
+        }
+        let mut key = key(&identity)?;
+        if key.kind == EntityKind::Invitation {
+            key.project_id = value
+                .get("project_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(CloudError::InvalidArgument)?
+                .into();
+        }
+        Ok(Write::Entity(EntityMutation {
+            key,
+            expected_revision: version,
+            value,
+            actor: subject.into(),
+            operation: operation.into(),
+        }))
+    }
+    async fn append<T: Serialize>(
+        &self,
+        subject: &str,
+        identity: String,
+        version: u64,
+        operation: &str,
         value: &T,
     ) -> CloudResult<()> {
-        self.commit(vec![self.event(subject, stream, version, kind, value)?])?;
+        self.commit(vec![
+            self.event(subject, identity, version, operation, value)?,
+        ])
+        .await?;
         Ok(())
     }
-    pub(super) fn commit(&self, events: Vec<NewEvent>) -> Result<(), colossus_ports::StoreError> {
-        self.journal.append_batch(events)?;
-        self.journal.checkpoint()?;
-        Ok(())
+    async fn commit(&self, writes: Vec<Write>) -> Result<(), colossus_ports::StoreError> {
+        let mut transaction = CloudTransaction {
+            lease: self.lease.clone(),
+            ..Default::default()
+        };
+        for write in writes {
+            match write {
+                Write::Entity(entity) => transaction.entities.push(entity),
+                Write::Event(event) => transaction.events.push(event),
+                Write::Cursor(cursor) => transaction.cursors.push(cursor),
+            }
+        }
+        self.store.commit(transaction).await
     }
+}
+// Transitional application identity syntax preserves existing receipts during migration;
+// storage receives explicit table kind, project, parent and entity identities.
+pub(super) fn key(identity: &str) -> CloudResult<EntityKey> {
+    let (kind, tail) = identity
+        .split_once(':')
+        .ok_or(CloudError::InvalidArgument)?;
+    let kind = match kind {
+        "cloud.node" => EntityKind::Node,
+        "cloud.host" => EntityKind::Host,
+        "cloud.workspace" => EntityKind::Workspace,
+        "cloud.thread" => EntityKind::Thread,
+        "cloud.task" => EntityKind::Task,
+        "cloud.command" => EntityKind::Command,
+        "cloud.run" => EntityKind::Run,
+        "cloud.session" => EntityKind::SessionMapping,
+        "cloud.invitation" => EntityKind::Invitation,
+        "cloud.renewal" => EntityKind::Renewal,
+        "cloud.admission" => EntityKind::Admission,
+        "cloud.node-task" => EntityKind::NodeTask,
+        "cloud.message" => EntityKind::ThreadMessage,
+        _ => return Err(CloudError::InvalidArgument),
+    };
+    if kind == EntityKind::Invitation {
+        return Ok(EntityKey {
+            kind,
+            project_id: String::new(),
+            parent_id: None,
+            id: tail.into(),
+        });
+    }
+    let (project_id, rest) = tail.split_once(':').ok_or(CloudError::InvalidArgument)?;
+    let (parent_id, id) = match kind {
+        EntityKind::Command
+        | EntityKind::Run
+        | EntityKind::SessionMapping
+        | EntityKind::NodeTask
+        | EntityKind::ThreadMessage => {
+            let (parent, id) = rest.split_once(':').ok_or(CloudError::InvalidArgument)?;
+            (Some(parent.into()), id)
+        }
+        _ => (None, rest),
+    };
+    Ok(EntityKey {
+        kind,
+        project_id: project_id.into(),
+        parent_id,
+        id: id.into(),
+    })
+}
+fn query(prefix: &str, after: Option<&str>, limit: usize) -> CloudResult<EntityQuery> {
+    let key = key(&format!("{prefix}__page"))?;
+    Ok(EntityQuery {
+        kind: key.kind,
+        project_id: key.project_id,
+        parent_id: key.parent_id,
+        after: after.map(str::to_owned),
+        limit,
+        node_id: None,
+        query: None,
+        status: None,
+        archived: None,
+        order: EntityOrder::IdAsc,
+    })
 }

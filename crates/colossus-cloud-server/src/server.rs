@@ -1,14 +1,6 @@
-use crate::{
-    auth::Authentication,
-    certificates::CertificateAuthority,
-    config::{Config, Storage},
-};
-use colossus_cloud::{CloudError, CloudRepository, CloudResult};
-use colossus_journal_redb::{
-    DisabledCheckpointSigner, Ed25519CheckpointSigner, EnvironmentKeyProvider,
-    PlaintextKeyProvider, RedbEventJournal,
-};
-use colossus_ports::{CheckpointSigner, EventJournal, KeyProvider};
+use crate::{auth::Authentication, certificates::CertificateAuthority, config::Config};
+use colossus_cloud::storage::CloudStore;
+use colossus_cloud::{CloudRepository, CloudResult};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -36,77 +28,87 @@ pub(crate) struct State {
     pub http_permits: Arc<tokio::sync::Semaphore>,
     pub sse_permits: Arc<tokio::sync::Semaphore>,
     pub shutdown: tokio::sync::watch::Sender<bool>,
+    pub replica_id: String,
 }
 /// Fully composed HTTP/OIDC and mutual-TLS runtime host.
-pub struct CloudServer {
+pub struct ControlPlaneServer {
     pub(crate) state: Arc<State>,
 }
-impl CloudServer {
-    /// Compose only after strict configuration, journal verification, and OIDC discovery.
+/// Source-compatible name retained for existing integrations.
+pub type CloudServer = ControlPlaneServer;
+impl ControlPlaneServer {
+    /// Compose after database migrations, verified TLS policy and OIDC discovery.
     pub async fn open(config: Config) -> Result<Self, &'static str> {
         config.validate()?;
-        let storage = config.storage.clone();
-        let signing_variable = config.signing_key_variable.clone();
-        let journal =
-            tokio::task::spawn_blocking(move || -> Result<Arc<dyn EventJournal>, &'static str> {
-                let signer: Arc<dyn CheckpointSigner> = match signing_variable {
-                    Some(variable) => {
-                        let value = zeroize::Zeroizing::new(
-                            std::env::var(variable).map_err(|_| "cloud signing key unavailable")?,
-                        );
-                        let mut secret = zeroize::Zeroizing::new([0u8; 32]);
-                        hex::decode_to_slice(value.trim(), secret.as_mut())
-                            .map_err(|_| "cloud signing key invalid")?;
-                        Arc::new(Ed25519CheckpointSigner::new("cloud-signing-v1", *secret))
-                    }
-                    None => Arc::new(DisabledCheckpointSigner),
-                };
-                match storage {
-                    Storage::Redb { path, key_variable } => {
-                        let keys: Arc<dyn KeyProvider> = match key_variable {
-                            Some(variable) => Arc::new(EnvironmentKeyProvider::new(
-                                variable,
-                                "cloud-v1",
-                                path.with_extension("anchor"),
-                            )),
-                            None => Arc::new(PlaintextKeyProvider),
-                        };
-                        Ok(Arc::new(
-                            RedbEventJournal::open(path, keys, signer)
-                                .map_err(|_| "cloud journal unavailable")?,
-                        ))
-                    }
-                    Storage::Postgres {
-                        config,
-                        key_variable,
-                        anchor_path,
-                    } => Ok(Arc::new(
-                        colossus_journal_postgres::PostgresEventJournal::open(
-                            config,
-                            Arc::new(EnvironmentKeyProvider::new(
-                                key_variable,
-                                "cloud-v1",
-                                anchor_path,
-                            )),
-                            signer,
-                        )
-                        .map_err(|_| "cloud PostgreSQL journal unavailable")?,
-                    )),
-                }
-            })
-            .await
-            .map_err(|_| "cloud journal initialization failed")??;
-        Self::with_journal(config, journal).await
+        let store = colossus_cloud_postgres::CloudPostgresStore::open(
+            config.database.clone(),
+            &colossus_network::AdditionalRootCertificates::default(),
+        )
+        .await
+        .map_err(|_| "cloud database unavailable")?;
+        Self::with_store(config, Arc::new(store)).await
     }
-    /// Compose with an independently owned canonical journal; useful for acceptance.
-    pub async fn with_journal(
+    /// Compose with cloud-owned persistence; deterministic acceptance can inject a test adapter.
+    pub async fn with_store(
         config: Config,
-        journal: Arc<dyn EventJournal>,
+        store: Arc<dyn CloudStore>,
     ) -> Result<Self, &'static str> {
         config.validate()?;
-        let repo = CloudRepository::new(journal).map_err(|_| "cloud journal is recovering")?;
+        store
+            .readiness()
+            .await
+            .map_err(|_| "cloud database unavailable")?;
+        let marker = colossus_cloud::storage::EntityKey {
+            kind: colossus_cloud::storage::EntityKind::AuthFlow,
+            project_id: "__migration".into(),
+            parent_id: None,
+            id: "journal-import".into(),
+        };
+        match store.read(&marker).await {
+            Ok(record)
+                if record
+                    .value
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    != Some("complete") =>
+            {
+                return Err("cloud journal migration is incomplete");
+            }
+            Ok(_) | Err(colossus_cloud::CloudError::NotFound) => {}
+            Err(_) => return Err("cloud database unavailable"),
+        }
+        let repo =
+            CloudRepository::new(store.clone()).map_err(|_| "cloud repository unavailable")?;
+        if let Some(classification) = &config.classification {
+            classification
+                .validate()
+                .map_err(|_| "classification banner invalid")?;
+            let key = colossus_cloud::storage::EntityKey {
+                kind: colossus_cloud::storage::EntityKind::Setting,
+                project_id: "__identity".into(),
+                parent_id: None,
+                id: "display".into(),
+            };
+            match store.read(&key).await {
+                Err(colossus_cloud::CloudError::NotFound) => {
+                    let settings = colossus_cloud::settings::ControlPlaneSettings {
+                        revision: 0,
+                        classification: classification.clone(),
+                    };
+                    match repo
+                        .replace_display_settings("operator-configuration", settings)
+                        .await
+                    {
+                        Ok(_) | Err(colossus_cloud::CloudError::Conflict) => {}
+                        Err(_) => return Err("classification banner storage unavailable"),
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => return Err("classification banner storage unavailable"),
+            }
+        }
         let ca = CertificateAuthority::load(&config)?;
-        let auth = Authentication::new(config.clone()).await?;
+        let auth = Authentication::with_store(config.clone(), store).await?;
         Ok(Self {
             state: Arc::new(State {
                 config,
@@ -114,9 +116,10 @@ impl CloudServer {
                 auth,
                 ca,
                 presence: Mutex::new(HashMap::new()),
-                http_permits: Arc::new(tokio::sync::Semaphore::new(128)),
-                sse_permits: Arc::new(tokio::sync::Semaphore::new(64)),
+                http_permits: Arc::new(tokio::sync::Semaphore::new(256)),
+                sse_permits: Arc::new(tokio::sync::Semaphore::new(1024)),
                 shutdown: tokio::sync::watch::channel(false).0,
+                replica_id: uuid::Uuid::now_v7().simple().to_string(),
             }),
         })
     }
@@ -166,8 +169,29 @@ impl CloudServer {
             state.shutdown.send_replace(true);
         };
         tokio::pin!(forward);
+        let maintenance_state = self.state.clone();
+        let upkeep = async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                if maintenance_state
+                    .repo
+                    .storage()
+                    .maintain(crate::http::now(), &maintenance_state.config.maintenance)
+                    .await
+                    .is_err()
+                {
+                    eprintln!(
+                        "Cloud operational maintenance unavailable; retained state remains authoritative."
+                    );
+                }
+            }
+        };
+        tokio::pin!(upkeep);
         tokio::select! {
             result = &mut drain => result?,
+            _ = &mut upkeep => return Err("cloud maintenance stopped"),
             _ = &mut forward => {
                 tokio::time::timeout(std::time::Duration::from_secs(30), &mut drain)
                     .await.map_err(|_| "cloud shutdown drain deadline exceeded")??;
@@ -186,20 +210,11 @@ async fn wait_shutdown(mut receiver: tokio::sync::watch::Receiver<bool>) {
         }
     }
 }
-pub(crate) async fn db<T: Send + 'static>(
+pub(crate) async fn db<T: Send, F: std::future::Future<Output = CloudResult<T>> + Send>(
     repo: CloudRepository,
-    action: impl FnOnce(CloudRepository) -> CloudResult<T> + Send + 'static,
+    action: impl FnOnce(CloudRepository) -> F + Send,
 ) -> CloudResult<T> {
-    static PERMITS: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
-    let permit = PERMITS
-        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(128)))
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| CloudError::ResourceExhausted)?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        action(repo)
-    })
-    .await
-    .map_err(|_| CloudError::Storage)?
+    // Database pooling bounds concurrency. No blocking PostgreSQL connection is
+    // opened on each service operation and no blocking task owns the transaction.
+    action(repo).await
 }

@@ -96,12 +96,12 @@ test("table cells preserve formatting and escaped pipes without loading or execu
   await expect(
     page.getByRole("cell", { name: "| pipe", exact: true }),
   ).toBeVisible();
-  await expect(
-    page.locator("#messages img, #messages a, #messages script"),
-  ).toHaveCount(0);
+  await expect(page.locator("#messages a, #messages script")).toHaveCount(0);
+  // The assistant avatar is the only image; generated remote images stay inert.
+  await expect(page.locator("#messages img")).toHaveCount(1);
   await expect(
     page.getByText('onerror="alert(1)"', { exact: false }),
-  ).toBeVisible();
+  ).toHaveCount(0);
   expect(outbound).toEqual([]);
 });
 
@@ -113,7 +113,7 @@ test("oversized and over-budget tables use the bounded plain-text fallback", asy
   const text = `${header}\n${separator}\n${header}`;
   expect(text.length).toBeLessThan(16_384);
   await show(page, text);
-  await expect(page.locator(".markdown.plain-text")).toHaveText(text);
+  await expect(page.locator(".shared-markdown pre code")).toHaveText(text);
   await expect(page.getByRole("table")).toHaveCount(0);
   await page.evaluate(
     (view) => window.postMessage({ type: "state", view }, "*"),
@@ -125,7 +125,7 @@ test("oversized and over-budget tables use the bounded plain-text fallback", asy
       ],
     },
   );
-  await expect(page.locator(".markdown.plain-text")).toHaveText(
+  await expect(page.locator(".markdown-plain-text")).toHaveText(
     processes.repeat(40),
   );
   await expect(page.getByRole("table")).toHaveCount(0);

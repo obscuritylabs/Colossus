@@ -3,7 +3,7 @@ use clap::Parser;
 #[derive(Parser)]
 #[command(
     name = "colossus-connector",
-    about = "Connect an independently enrolled Colossus runtime to its cloud control plane"
+    about = "Connect an independently enrolled Colossus runtime to its Control Plane"
 )]
 struct Arguments {
     #[command(subcommand)]

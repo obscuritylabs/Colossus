@@ -22,21 +22,26 @@ pub(super) fn command_stream(project: &str, node: &str, command: &str) -> String
 
 impl CloudRepository {
     /// Atomically allocate a fixed-node task and its dispatch command. Identical retries reuse both.
-    pub fn create_task(
+    pub(super) async fn allocate_task(
         &self,
         caller: &CloudCaller,
         node_id: &str,
         mut request: CreateRunRequest,
+        conversation: Option<(crate::CloudThread, u64)>,
     ) -> CloudResult<CloudTask> {
         caller.require(CloudPermission::Execute)?;
-        let node = self.node(caller.project_id(), node_id)?;
+        let node = self.node(caller.project_id(), node_id).await?;
         if node.revoked || !node.roles.contains(&request.role) {
             return Err(CloudError::PermissionDenied);
         }
         // Cross-run context and artifacts require separate cloud ownership mapping.
         // Refuse them until that mapping exists; never forward a guessed runtime ID.
-        if request.session_id.is_some()
-            || request.plan_action.is_some()
+        if request.session_id.as_ref().is_some_and(|session| {
+            conversation
+                .as_ref()
+                .and_then(|(thread, _)| thread.session_id.as_ref())
+                != Some(session)
+        }) || request.plan_action.is_some()
             || request.branch.is_some()
             || !request.plugin_skill_ids.is_empty()
             || request.input.is_empty()
@@ -72,13 +77,21 @@ impl CloudRepository {
         request.idempotency_key =
             IdempotencyKey::new(format!("cloud-{}-{task_id}", caller.project_id()))
                 .map_err(|_| CloudError::InvalidArgument)?;
-        request.end_user_id = None;
+        request.end_user_id = Some(caller.subject().into());
         let task = CloudTask {
             task_id: task_id.clone(),
             project_id: caller.project_id().into(),
             node_id: node_id.into(),
             subject: caller.subject().into(),
+            created_at: super::threads::timestamp()?,
+            updated_at: super::threads::timestamp()?,
             request: request.clone(),
+            thread_id: conversation
+                .as_ref()
+                .map(|(thread, _)| thread.thread_id.clone()),
+            source_read_only: false,
+            history_complete: true,
+            history_bounded: false,
             run_id: None,
             snapshot: None,
             dispatch_error: None,
@@ -99,13 +112,13 @@ impl CloudRepository {
         };
         let admission_stream = format!("cloud.admission:{}:{node_id}", caller.project_id());
         for _ in 0..8 {
-            match self.task(caller.project_id(), &task_id) {
+            match self.task(caller.project_id(), &task_id).await {
                 Ok(existing) => {
                     return if existing.request == task.request
                         && existing.node_id == task.node_id
                         && existing.subject == task.subject
+                        && existing.thread_id == task.thread_id
                     {
-                        self.journal.checkpoint()?;
                         Ok(existing)
                     } else {
                         Err(CloudError::Conflict)
@@ -114,21 +127,17 @@ impl CloudRepository {
                 Err(CloudError::NotFound) => {}
                 Err(error) => return Err(error),
             }
-            let (mut admission, revision) = match self.read::<Admission>(&admission_stream) {
+            let (mut admission, revision) = match self.read::<Admission>(&admission_stream).await {
                 Ok(value) => value,
                 Err(CloudError::NotFound) => (Admission::default(), 0),
                 Err(error) => return Err(error),
             };
             let mut active = BTreeSet::new();
             for id in &admission.active {
-                let existing = self.task(caller.project_id(), id)?;
+                let existing = self.task(caller.project_id(), id).await?;
                 let settled = existing.snapshot.as_ref().is_some_and(|snapshot| {
-                    matches!(
-                        snapshot.run.status,
-                        colossus_sdk::RunStatus::Completed
-                            | colossus_sdk::RunStatus::Failed
-                            | colossus_sdk::RunStatus::Cancelled
-                    )
+                    snapshot.run.terminal.is_some()
+                        && snapshot.run.status != colossus_sdk::RunStatus::OutcomeUnknown
                 }) || existing
                     .dispatch_error
                     .as_ref()
@@ -142,7 +151,7 @@ impl CloudRepository {
             }
             active.insert(task_id.clone());
             admission.active = active;
-            let events = vec![
+            let mut events = vec![
                 self.event(
                     caller.subject(),
                     admission_stream.clone(),
@@ -175,7 +184,29 @@ impl CloudRepository {
                     &command,
                 )?,
             ];
-            match self.commit(events) {
+            if let Some((mut thread, expected_revision)) = conversation.clone() {
+                if thread.revision != expected_revision {
+                    return Err(CloudError::Conflict);
+                }
+                if thread.queued_task_ids.len() >= 64 {
+                    return Err(CloudError::ResourceExhausted);
+                }
+                thread.queued_task_ids.push(task_id.clone());
+                if thread.active_task_id.is_none() {
+                    thread.active_task_id = Some(task_id.clone());
+                }
+                thread.revision = expected_revision + 1;
+                thread.updated_at = super::threads::timestamp()?;
+                events.push(self.queued_message(caller, &thread, &task)?);
+                events.push(self.event(
+                    caller.subject(),
+                    super::threads::thread_stream(caller.project_id(), &thread.thread_id),
+                    expected_revision,
+                    "cloud.thread.turn-queued.v2",
+                    &thread,
+                )?);
+            }
+            match self.commit(events).await {
                 Ok(_) => return Ok(task),
                 Err(colossus_ports::StoreError::Conflict { .. }) => {
                     continue;
@@ -187,13 +218,13 @@ impl CloudRepository {
     }
 
     /// Read the task's released state only inside the authenticated project.
-    pub fn get_task(&self, caller: &CloudCaller, task_id: &str) -> CloudResult<CloudTask> {
+    pub async fn get_task(&self, caller: &CloudCaller, task_id: &str) -> CloudResult<CloudTask> {
         caller.require(CloudPermission::Read)?;
-        self.task(caller.project_id(), task_id)
+        self.task(caller.project_id(), task_id).await
     }
 
     /// Read a bounded page of task identities using the journal's indexed project namespace.
-    pub fn list_tasks(
+    pub async fn list_tasks(
         &self,
         caller: &CloudCaller,
         after: Option<&str>,
@@ -204,23 +235,21 @@ impl CloudRepository {
             validate_identifier(after)?;
         }
         let prefix = format!("cloud.task:{}:", caller.project_id());
-        let cursor = after.map(|id| format!("{prefix}{id}"));
-        self.journal
-            .list_stream_ids(&prefix, cursor.as_deref(), limit.min(100))?
-            .into_iter()
-            .map(|stream| self.read::<CloudTask>(&stream).map(|(task, _)| task))
-            .collect()
+        self.list(&prefix, after, limit).await
     }
 
     /// Queue cooperative cancellation beneath explicit control permission.
-    pub fn cancel_task(
+    pub async fn cancel_task(
         &self,
         caller: &CloudCaller,
         task_id: &str,
         mutation_id: &str,
     ) -> CloudResult<PendingCommand> {
         caller.require(CloudPermission::Control)?;
-        let task = self.task(caller.project_id(), task_id)?;
+        let task = self.task(caller.project_id(), task_id).await?;
+        if task.source_read_only {
+            return Err(CloudError::PermissionDenied);
+        }
         let run_id = task.run_id.clone().ok_or(CloudError::Conflict)?;
         self.queue_mutation(
             caller,
@@ -234,10 +263,11 @@ impl CloudRepository {
                 .map_err(|_| CloudError::InvalidArgument)?,
             },
         )
+        .await
     }
 
     /// Queue an exact prompt/approval answer. Approval authority is independent of cancellation.
-    pub fn respond_task(
+    pub async fn respond_task(
         &self,
         caller: &CloudCaller,
         task_id: &str,
@@ -251,7 +281,10 @@ impl CloudRepository {
                 CloudPermission::Control
             },
         )?;
-        let task = self.task(caller.project_id(), task_id)?;
+        let task = self.task(caller.project_id(), task_id).await?;
+        if task.source_read_only {
+            return Err(CloudError::PermissionDenied);
+        }
         if task.run_id.as_deref() != Some(&request.run_id) {
             return Err(CloudError::PermissionDenied);
         }
@@ -266,9 +299,10 @@ impl CloudRepository {
                 request: Box::new(request),
             },
         )
+        .await
     }
 
-    fn queue_mutation(
+    async fn queue_mutation(
         &self,
         caller: &CloudCaller,
         task: &CloudTask,
@@ -276,7 +310,7 @@ impl CloudRepository {
         command: Command,
     ) -> CloudResult<PendingCommand> {
         validate_identifier(mutation_id)?;
-        if self.node(caller.project_id(), &task.node_id)?.revoked {
+        if self.node(caller.project_id(), &task.node_id).await?.revoked {
             return Err(CloudError::PermissionDenied);
         }
         let command_id = fingerprint(
@@ -293,16 +327,19 @@ impl CloudRepository {
             revision: 1,
         };
         let stream = command_stream(caller.project_id(), &task.node_id, &command_id);
-        match self.append(
-            caller.subject(),
-            stream.clone(),
-            0,
-            "cloud.command.created.v1",
-            &pending,
-        ) {
+        match self
+            .append(
+                caller.subject(),
+                stream.clone(),
+                0,
+                "cloud.command.created.v1",
+                &pending,
+            )
+            .await
+        {
             Ok(()) => Ok(pending),
             Err(CloudError::Conflict) => {
-                let (existing, _) = self.read::<PendingCommand>(&stream)?;
+                let (existing, _) = self.read::<PendingCommand>(&stream).await?;
                 if existing.command != pending.command || existing.task_id != pending.task_id {
                     return Err(CloudError::Conflict);
                 }
@@ -312,10 +349,10 @@ impl CloudRepository {
         }
     }
 
-    pub(super) fn task(&self, project: &str, task_id: &str) -> CloudResult<CloudTask> {
+    pub(super) async fn task(&self, project: &str, task_id: &str) -> CloudResult<CloudTask> {
         validate_identifier(project)?;
         validate_identifier(task_id)?;
-        let (task, revision) = self.read::<CloudTask>(&stream(project, task_id))?;
+        let (task, revision) = self.read::<CloudTask>(&stream(project, task_id)).await?;
         if task.project_id != project || task.task_id != task_id || task.revision != revision {
             return Err(CloudError::Storage);
         }

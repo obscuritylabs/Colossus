@@ -12,11 +12,99 @@ pub const MAX_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_QUEUED_FRAMES: usize = 32;
 /// Maximum concurrently watched tasks on one enrolled runtime.
 pub const MAX_ACTIVE_TASKS: usize = 16;
+/// Maximum runs released by one inventory discovery page.
+pub const MAX_DISCOVERY_PAGE_SIZE: u32 = 32;
+/// Caller-visible runtime metadata with authority derived by its public SDK.
+pub type ReleasedRunInventory = colossus_sdk::VisibleRun;
+
+/// Native placement advertised by an enrolled runtime, without machine paths.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeploymentKind {
+    /// An independently managed installed runtime.
+    #[default]
+    Cli,
+    /// A workspace runtime supervised by Colossus Desktop.
+    Desktop,
+}
+
+/// Explicit local disclosure posture; enrollment does not imply session sharing.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceSharing {
+    /// Only sessions owned by the independent cloud application are visible.
+    #[default]
+    CloudOwned,
+    /// Local ownership has explicitly released workspace sessions to the connector.
+    SharedVisibleSessions,
+}
+
+/// Non-secret native inventory. Grouping fields never change application authority.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeInventory {
+    /// Runtime-released caller-scoped configuration posture; absent means unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<colossus_sdk::RuntimePolicyPosture>,
+    /// Installation identity persisted in the owner-private native Colossus home.
+    pub host_id: String,
+    /// Operator-visible host label, never an automatically discovered hostname.
+    pub host_label: String,
+    /// Bounded native platform identifier such as linux, windows, or macos.
+    pub platform: String,
+    /// Independently supervised CLI or Desktop workspace runtime.
+    pub deployment_kind: DeploymentKind,
+    /// Opaque runtime/workspace identity; never a filesystem path.
+    pub workspace_id: String,
+    /// Native-sourced workspace presentation label.
+    pub workspace_label: String,
+    /// Explicit local disclosure posture.
+    pub sharing: WorkspaceSharing,
+}
+
+impl RuntimeInventory {
+    /// Validate grouping labels and opaque identities before persisting inventory.
+    pub fn validate(&self) -> Result<(), PayloadError> {
+        let identity = |value: &str| {
+            !value.is_empty()
+                && value.len() <= 128
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        };
+        let label = |value: &str| {
+            !value.trim().is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+        };
+        if self.policy.as_ref().is_none_or(|policy| policy.validate())
+            && identity(&self.host_id)
+            && identity(&self.workspace_id)
+            && label(&self.host_label)
+            && label(&self.workspace_label)
+            && matches!(
+                self.platform.as_str(),
+                "linux" | "windows" | "macos" | "freebsd" | "unknown"
+            )
+        {
+            Ok(())
+        } else {
+            Err(PayloadError)
+        }
+    }
+}
 
 /// Closed runtime operation set. The server assigns all durable idempotency keys.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    /// Read canonical released conversation history under local sharing authority.
+    History {
+        /// Runtime-owned source run already mapped by the controller to this node/session.
+        source_run_id: String,
+        /// Opaque SDK activity cursor; callers cannot select an application owner.
+        page_token: Option<String>,
+        /// At most 32 canonical activity records.
+        page_size: u32,
+    },
     /// Create or reconcile one exact caller-bound request, then watch its run.
     Create {
         /// Complete SDK request beneath the dedicated local application grant.
@@ -48,6 +136,11 @@ pub enum Command {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CloudReply {
+    /// Canonical caller-visible user/assistant activity page; no tools or system lanes.
+    History {
+        /// Released bounded SDK history and its continuation/projection watermark.
+        response: colossus_sdk::ListSessionActivityResponse,
+    },
     /// Full caller-visible snapshot, including the exact run identity and revision.
     Run {
         /// Released local run state.

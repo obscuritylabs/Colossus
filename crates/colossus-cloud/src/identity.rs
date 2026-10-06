@@ -20,8 +20,8 @@ pub enum CloudPermission {
 
 /// Project authority constructed only after the host authenticates an identity.
 ///
-/// Browser request bodies never supply this context. OIDC membership is resolved by
-/// trusted host configuration, not by an arbitrary project field or end_user_id.
+/// Browser request bodies never supply this context. Verified identity and persisted
+/// project membership are resolved by host authentication, never by request fields.
 #[derive(Clone, Debug)]
 pub struct CloudCaller {
     pub(crate) subject: String,

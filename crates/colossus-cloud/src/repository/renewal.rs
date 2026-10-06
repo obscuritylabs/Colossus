@@ -16,7 +16,7 @@ struct Renewal {
 impl CloudRepository {
     /// Rotate a fixed node's leaf beneath its existing mTLS authority. The key stays
     /// native. Exact retries reconcile a lost reply, including after host restart.
-    pub fn renew_certificate(
+    pub async fn renew_certificate(
         &self,
         identity: crate::RenewalIdentity<'_>,
         certificate: CertificateRedemption,
@@ -34,12 +34,12 @@ impl CloudRepository {
         if certificate.certificate_pem.len() > 16384 {
             return Err(CloudError::InvalidArgument);
         }
-        let mut node = self.node(project, node_id)?;
+        let mut node = self.node(project, node_id).await?;
         if node.revoked || node.instance_id != instance_id {
             return Err(CloudError::PermissionDenied);
         }
         let renewal_stream = format!("cloud.renewal:{project}:{node_id}");
-        let prior = match self.read::<Renewal>(&renewal_stream) {
+        let prior = match self.read::<Renewal>(&renewal_stream).await {
             Ok(value) => Some(value),
             Err(CloudError::NotFound) => None,
             Err(error) => return Err(error),
@@ -50,7 +50,6 @@ impl CloudRepository {
                     && prior.csr_sha256 == certificate.csr_sha256
                     && node.certificate_sha256 == prior.certificate_sha256
                 {
-                    self.journal.checkpoint()?;
                     Ok(prior.certificate_pem.clone())
                 } else {
                     Err(CloudError::Conflict)
@@ -89,7 +88,8 @@ impl CloudRepository {
                 "cloud.renewal.issued.v1",
                 &renewal,
             )?,
-        ])?;
+        ])
+        .await?;
         Ok(certificate.certificate_pem)
     }
 }

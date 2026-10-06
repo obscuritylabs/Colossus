@@ -66,3 +66,15 @@ carries the generated tree, output manifest, and build support forward so its ow
 build can repeat the output check without requiring repository-only schema inputs. The
 SDK relies on `googleapis-common-protos` for the canonical `google.rpc.Status`; it never
 packages a second `google.rpc` implementation.
+
+### Runtime policy metadata
+
+`await client.agent_runs.get_runtime_policy_posture()` returns the immutable, typed
+`RuntimePolicyPosture` dataclass. `decode_runtime_policy_posture` validates a released
+response independently. Closed enums, safe model labels, and bounded tool/role lists
+exclude private configuration. Configuration revisions use exact Python integers;
+missing counters remain `None`. Unknown or duplicate fields, unsafe identifiers,
+invalid UTF-8, oversized metadata, and unsupported schemas fail with a generic
+`ValueError` without revealing the payload. The getter makes one authenticated read
+and does not retry. This report describes native configuration and does not change
+policy or independently attest its enforcement.

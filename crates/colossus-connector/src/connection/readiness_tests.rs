@@ -12,6 +12,7 @@ const UNAVAILABLE: u8 = 1;
 const STALLED: u8 = 2;
 const CLOSE_DURING_READ: u8 = 3;
 const CLOSED: u8 = 4;
+const REJECTED_GRANT: u8 = 5;
 
 struct LocalClient {
     state: AtomicU8,
@@ -44,6 +45,16 @@ impl AgentRunClient for LocalClient {
         self.reads.fetch_add(1, Ordering::AcqRel);
         match self.state.load(Ordering::Acquire) {
             UNAVAILABLE => {
+                return Err(ApiError {
+                    code: ApiErrorCode::Unavailable,
+                    retryable: true,
+                    ..ApiError::failed_precondition(
+                        ApiErrorReason::InternalInvariant,
+                        "private adapter detail must not reach cloud status",
+                    )
+                });
+            }
+            REJECTED_GRANT => {
                 return Err(ApiError::permission_denied(
                     ApiErrorReason::ScopeDenied,
                     "private adapter detail must not reach cloud status",
@@ -88,6 +99,18 @@ async fn daemon_readiness_detects_outage_and_recovery_without_client_closure() {
     client.state.store(HEALTHY, Ordering::Release);
     check_local_readiness(&client).await.unwrap();
     assert_eq!(client.reads.load(Ordering::Acquire), 3);
+}
+
+#[tokio::test]
+async fn daemon_readiness_distinguishes_rejected_local_grant_from_transport_outage() {
+    let client = LocalClient::new(REJECTED_GRANT);
+    let error = check_local_readiness(&client).await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    assert_eq!(error.message(), "local SDK grant rejected");
+    assert!(!client.is_closed());
+    client.state.store(HEALTHY, Ordering::Release);
+    check_local_readiness(&client).await.unwrap();
+    assert_eq!(client.reads.load(Ordering::Acquire), 2);
 }
 
 #[tokio::test]

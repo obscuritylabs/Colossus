@@ -22,7 +22,21 @@ test("shared UI cannot import a host, transport, or runtime authority", () => {
       assert.ok(
         specifier.startsWith("./") ||
           specifier.startsWith("../") ||
-          ["react", "react-dom", "@tabler/icons-react"].includes(specifier),
+          [
+            "react",
+            "react-dom",
+            "@tabler/icons-react",
+            "@radix-ui/react-slot",
+            "@radix-ui/react-dropdown-menu",
+            "@tanstack/react-table",
+            "class-variance-authority",
+            "clsx",
+            "tailwind-merge",
+            "react-markdown",
+            "rehype-sanitize",
+            "remark-gfm",
+            "recharts",
+          ].includes(specifier),
         `${path}: forbidden dependency ${specifier}`,
       );
       if (specifier.startsWith("."))
@@ -39,7 +53,7 @@ test("shared UI cannot import a host, transport, or runtime authority", () => {
   }
   const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   assert.equal(manifest.private, true);
-  for (const app of ["desktop", "vscode"]) {
+  for (const app of ["desktop", "vscode", "web"]) {
     const consumer = JSON.parse(
       readFileSync(join(root, "..", app, "package.json"), "utf8"),
     );

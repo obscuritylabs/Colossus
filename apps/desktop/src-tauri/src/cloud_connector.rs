@@ -32,6 +32,11 @@ pub(crate) struct CloudStatus {
     node_id: Option<String>,
     project_id: Option<String>,
     endpoint: Option<String>,
+    host_id: Option<String>,
+    workspace_id: Option<String>,
+    shared_sessions: bool,
+    shared_continuation: bool,
+    sharing_supported: bool,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -57,16 +62,64 @@ fn dto(target: String, config: Option<&ConnectionConfig>, status: ConnectorStatu
         node_id: config.map(|config| config.node_id.clone()),
         project_id: config.map(|config| config.project_id.clone()),
         endpoint: config.map(|config| config.endpoint.clone()),
+        host_id: config
+            .and_then(|config| config.inventory.as_ref())
+            .map(|inventory| inventory.host_id.clone()),
+        workspace_id: config
+            .and_then(|config| config.inventory.as_ref())
+            .map(|inventory| inventory.workspace_id.clone()),
+        shared_sessions: config
+            .and_then(|config| config.inventory.as_ref())
+            .is_some_and(|inventory| {
+                inventory.sharing == colossus_connector::WorkspaceSharing::SharedVisibleSessions
+            }),
+        shared_continuation: config.is_some_and(|config| config.shared_continuation),
+        sharing_supported: config
+            .and_then(|config| config.inventory.as_ref())
+            .is_some_and(|inventory| {
+                inventory.deployment_kind == colossus_connector::DeploymentKind::Desktop
+            }),
     }
 }
+pub(crate) async fn global_connections(state: &AppState) -> Vec<CloudStatus> {
+    let sessions = state.cloud_connections.lock().await;
+    let mut connections = sessions
+        .iter()
+        .map(|(target, session)| {
+            dto(
+                target.clone(),
+                Some(&session.config),
+                *session.status.borrow(),
+            )
+        })
+        .collect::<Vec<_>>();
+    connections.sort_by(|left, right| left.target_id.cmp(&right.target_id));
+    connections
+}
 async fn confirm(app: &AppHandle, message: String) -> Result<(), CommandErrorDto> {
+    confirm_action(
+        app,
+        message,
+        "Connect runtime to Colossus Control Plane",
+        "Connect runtime",
+    )
+    .await
+}
+async fn confirm_action(
+    app: &AppHandle,
+    message: String,
+    title: &str,
+    action: &str,
+) -> Result<(), CommandErrorDto> {
     let app = app.clone();
+    let title = title.to_owned();
+    let action = action.to_owned();
     let accepted = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .message(message)
-            .title("Connect runtime to Colossus Cloud")
+            .title(title)
             .buttons(MessageDialogButtons::OkCancelCustom(
-                "Connect runtime".into(),
+                action,
                 "Cancel".into(),
             ))
             .blocking_show()
@@ -76,16 +129,28 @@ async fn confirm(app: &AppHandle, message: String) -> Result<(), CommandErrorDto
     if accepted {
         Ok(())
     } else {
-        Err(failure("Cloud connection was cancelled."))
+        Err(failure("The native confirmation was cancelled."))
     }
 }
 async fn start(
     state: &AppState,
     target: String,
-    config: ConnectionConfig,
+    mut config: ConnectionConfig,
     key: Zeroizing<String>,
     runs: Arc<dyn AgentRunClient>,
 ) -> Result<CloudStatus, CommandErrorDto> {
+    if config.inventory.is_none() {
+        let inventory = colossus_connector::native_inventory(
+            format!("workspace:{}", config.instance_id),
+            "Desktop workspace".into(),
+            colossus_connector::DeploymentKind::Desktop,
+        )
+        .map_err(failure)?;
+        config = store(state, &target)?
+            .set_inventory(inventory)
+            .await
+            .map_err(failure)?;
+    }
     let connector = RuntimeConnector::new(config.clone(), key, runs)
         .map_err(failure)?
         .with_enrollment_store((*store(state, &target)?).clone());
@@ -99,12 +164,14 @@ async fn start(
                 | ConnectorStatus::Connected
                 | ConnectorStatus::Reconnecting
         ) {
-            return Err(failure("Disconnect the existing cloud connection first."));
+            return Err(failure(
+                "Disconnect the existing Control Plane connection first.",
+            ));
         }
         connections.remove(&target);
     }
     if connections.len() >= 16 {
-        return Err(failure("Desktop cloud connection limit reached."));
+        return Err(failure("Desktop Control Plane connection limit reached."));
     }
     let task = tauri::async_runtime::spawn(async move {
         if connector.run(receiver, status.clone()).await.is_err()
@@ -136,7 +203,7 @@ pub(crate) async fn cloud_enroll(
         .selected_target(&request.target_id)
         .await
         .ok_or_else(|| failure("Select the connected runtime before enrolling it."))?;
-    let runs=lease.target.client.connector_runs().ok_or_else(||failure("This runtime has no dedicated cloud grant. Enroll a dedicated application with the CLI first."))?;
+    let runs=lease.target.client.connector_runs().ok_or_else(||failure("This runtime has no dedicated Control Plane grant. Enroll a dedicated application with the CLI first."))?;
     let instance = lease
         .target
         .client
@@ -163,6 +230,24 @@ pub(crate) async fn cloud_enroll(
         )
         .await
         .map_err(failure)?;
+    let (_, workspace, managed) = state.terminal_workspace_context().await;
+    let inventory = colossus_connector::native_inventory(
+        if managed {
+            request.target_id.clone()
+        } else {
+            format!("workspace:{}", config.instance_id)
+        },
+        workspace
+            .map(|workspace| workspace.display_name)
+            .unwrap_or_else(|| "Desktop workspace".into()),
+        if managed {
+            colossus_connector::DeploymentKind::Desktop
+        } else {
+            colossus_connector::DeploymentKind::Cli
+        },
+    )
+    .map_err(failure)?;
+    let config = store.set_inventory(inventory).await.map_err(failure)?;
     let (_, key) = tokio::task::spawn_blocking(move || store.load())
         .await
         .map_err(|_| failure("Enrollment vault unavailable."))?
@@ -241,6 +326,79 @@ pub(crate) async fn cloud_status(
     ))
 }
 #[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn cloud_set_workspace_sharing(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: String,
+    enabled: bool,
+    allow_continuation: bool,
+) -> Result<CloudStatus, CommandErrorDto> {
+    let _operation = state.cloud_operation.lock().await;
+    let lease = state
+        .selected_target(&target_id)
+        .await
+        .ok_or_else(|| failure("Select the workspace before changing sharing."))?;
+    if lease.target.consent != crate::state::TargetConsentContext::ManagedLocal {
+        return Err(failure(
+            "Configure sharing for an external daemon with its local CLI application.",
+        ));
+    }
+    let enrollment = store(&state, &target_id)?;
+    let reader = enrollment.clone();
+    let (config, _) = tokio::task::spawn_blocking(move || reader.load())
+        .await
+        .map_err(|_| failure("Enrollment vault unavailable."))?
+        .map_err(failure)?
+        .ok_or_else(|| failure("Enroll this workspace before sharing sessions."))?;
+    if enabled {
+        confirm_action(&app, format!("Share this workspace's existing and future Desktop conversations with project {} at {}? Released history will be retained in the Control Plane for authorized project members. {} Local roles, tools, policy, and approvals remain enforced. Disabling sharing stops future synchronization but does not erase previously synchronized history.",
+            config.project_id,config.endpoint,
+            if allow_continuation {"Members with execution permission may continue these conversations using the dedicated Control Plane grant."} else {"Existing Desktop runs remain read-only in the Control Plane."}),"Workspace sharing","Update sharing").await?;
+    }
+    lease
+        .target
+        .client
+        .agent_runs()
+        .set_workspace_sharing(colossus_sdk::SetWorkspaceSharingRequest {
+            recipient_application_id: "app:colossus-desktop-cloud".into(),
+            enabled,
+            allow_continuation: enabled && allow_continuation,
+        })
+        .await
+        .map_err(|_| failure("The runtime could not commit workspace sharing."))?;
+    let config = enrollment
+        .set_sharing(enabled, allow_continuation)
+        .await
+        .map_err(failure)?;
+    let mut sessions = state.cloud_connections.lock().await;
+    let status = sessions
+        .get(&target_id)
+        .map(|session| *session.status.borrow())
+        .unwrap_or(ConnectorStatus::Disconnected);
+    // Reconnect refreshes native inventory without cancelling any accepted work.
+    sessions.remove(&target_id);
+    drop(sessions);
+    if matches!(
+        status,
+        ConnectorStatus::Connected | ConnectorStatus::Connecting | ConnectorStatus::Reconnecting
+    ) {
+        let reader = enrollment.clone();
+        let (_, key) = tokio::task::spawn_blocking(move || reader.load())
+            .await
+            .map_err(|_| failure("Enrollment vault unavailable."))?
+            .map_err(failure)?
+            .ok_or_else(|| failure("Enrollment unavailable."))?;
+        let runs = lease
+            .target
+            .client
+            .connector_runs()
+            .ok_or_else(|| failure("Dedicated cloud grant unavailable."))?;
+        start(&state, target_id, config, key, runs).await
+    } else {
+        Ok(dto(target_id, Some(&config), ConnectorStatus::Disconnected))
+    }
+}
+#[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn cloud_revoke(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -255,7 +413,7 @@ pub(crate) async fn cloud_revoke(
         .map_err(failure)?
         .ok_or_else(|| failure("This runtime is not enrolled."))?;
     let message = format!(
-        "Revoke runtime {} in project {} at {}? This removes its cloud authority. Accepted tasks continue under local runtime policy.",
+        "Revoke runtime {} in project {} at {}? This removes its Control Plane authority. Accepted tasks continue under local runtime policy.",
         config.node_id, config.project_id, config.endpoint
     );
     let accepted = tauri::async_runtime::spawn_blocking(move || {

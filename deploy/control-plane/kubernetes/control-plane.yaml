@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: colossus-control-plane
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: colossus-control-plane
+  template:
+    metadata:
+      labels:
+        app: colossus-control-plane
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: control-plane
+          image: colossus-control-plane
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: connector, containerPort: 8443}
+          env:
+            - name: COLOSSUS_CONTROL_PLANE_DATABASE
+              valueFrom: {secretKeyRef: {name: colossus-control-plane-state, key: database}}
+            - name: COLOSSUS_CONTROL_PLANE_AUTH_KEY
+              valueFrom: {secretKeyRef: {name: colossus-control-plane-state, key: auth-key}}
+            - name: COLOSSUS_CONTROL_PLANE_BOOTSTRAP_PASSWORD
+              valueFrom: {secretKeyRef: {name: colossus-control-plane-state, key: bootstrap-password, optional: true}}
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {cpu: "2", memory: 1Gi}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          startupProbe:
+            httpGet: {path: /health/ready, port: http}
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /health/ready, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health/live, port: http}
+            periodSeconds: 10
+          volumeMounts:
+            - {name: config, mountPath: /etc/colossus/control-plane.json, subPath: control-plane.json, readOnly: true}
+            - {name: tls, mountPath: /etc/colossus/tls, readOnly: true}
+            - {name: oidc, mountPath: /etc/colossus/oidc, readOnly: true}
+            - {name: temporary, mountPath: /tmp}
+      volumes:
+        - name: config
+          configMap: {name: colossus-control-plane-config}
+        - name: tls
+          secret: {secretName: colossus-control-plane-tls, defaultMode: 288}
+        - name: oidc
+          secret: {secretName: colossus-control-plane-oidc, optional: true, defaultMode: 288}
+        - name: temporary
+          emptyDir: {sizeLimit: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: colossus-control-plane
+spec:
+  selector: {app: colossus-control-plane}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+    - {name: connector, port: 8443, targetPort: connector}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: colossus-control-plane
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: colossus-control-plane

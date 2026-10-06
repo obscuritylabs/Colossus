@@ -1571,6 +1571,52 @@ pub trait RunExecutor: Send + Sync {
 /// Public run application service implemented by embedded and remote backends.
 #[async_trait]
 pub trait AgentRunApi: Send + Sync {
+    /// Advertise this optional metadata contract only when implemented by composition.
+    fn supports_runtime_policy_posture(&self) -> bool {
+        false
+    }
+    /// Read caller-scoped metadata-only policy configuration, without effect authority.
+    async fn get_runtime_policy_posture(
+        &self,
+        _caller: &CallerContext,
+    ) -> ApiResult<crate::RuntimePolicyPosture> {
+        Err(ApiError::failed_precondition(
+            ApiErrorReason::InvalidRunTransition,
+            "runtime policy metadata is unavailable",
+        ))
+    }
+    /// Explicitly release only this application's workspace sessions to another application.
+    async fn set_workspace_sharing(
+        &self,
+        _caller: &CallerContext,
+        _request: crate::SetWorkspaceSharingRequest,
+    ) -> ApiResult<crate::WorkspaceSharingState> {
+        Err(ApiError::failed_precondition(
+            ApiErrorReason::InvalidRunTransition,
+            "workspace sharing is unavailable",
+        ))
+    }
+
+    /// List owned and locally shared runs, with runtime-derived mutation authority.
+    async fn list_visible_runs(
+        &self,
+        caller: &CallerContext,
+        request: ListRunsRequest,
+    ) -> ApiResult<crate::ListVisibleRunsResponse> {
+        let page = self.list_runs(caller, request).await?;
+        Ok(crate::ListVisibleRunsResponse {
+            runs: page
+                .runs
+                .into_iter()
+                .map(|run| crate::VisibleRun {
+                    run,
+                    controllable: false,
+                    continuable: false,
+                })
+                .collect(),
+            next_page_token: page.next_page_token,
+        })
+    }
     /// List caller-owned managed shells.
     async fn list_process_sessions(
         &self,

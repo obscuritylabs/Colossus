@@ -1,0 +1,200 @@
+.shared-workspace-sidebar-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.shared-workspace-search {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  padding: 0 4px 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  background: var(--surface-control);
+}
+.shared-workspace-search:focus-within {
+  border-color: var(--cyan);
+  outline: 1px solid var(--cyan);
+}
+.shared-workspace-search > svg {
+  flex: none;
+}
+.shared-workspace-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--font-size-body-sm);
+  font-weight: 400;
+}
+.shared-workspace-search input::placeholder {
+  color: var(--muted);
+}
+.shared-workspace-search kbd {
+  flex: none;
+  padding: 1px 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+}
+.shared-workspace-scope {
+  display: flex;
+  gap: 4px;
+}
+.shared-workspace-scope button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  min-height: 28px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--font-size-caption);
+  font-weight: 600;
+  line-height: var(--line-height-body);
+}
+.shared-workspace-scope button[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--surface-selected);
+  color: var(--accent-text);
+}
+.shared-workspace-scope button:disabled {
+  opacity: var(--disabled-opacity);
+}
+.shared-workspace-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 38px;
+  padding: 3px 6px 3px 8px;
+  background: var(--surface-selected);
+  border-radius: var(--radius-sm);
+}
+.shared-workspace-row-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-strong);
+  font: inherit;
+  font-size: var(--font-size-body-sm);
+  font-weight: 650;
+  text-align: left;
+  text-decoration: none;
+}
+.shared-workspace-row-identity > svg {
+  flex: none;
+  color: var(--blue-strong);
+}
+.shared-workspace-row-identity > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: inherit;
+}
+.shared-workspace-readiness {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+.shared-workspace-group-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 0 6px 5px 8px;
+  color: var(--muted);
+}
+.shared-workspace-group-heading :is(h2, h3) {
+  margin: 0;
+  flex: 1;
+  font-size: var(--font-size-body-sm);
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.shared-workspace-group-heading > span {
+  font-size: var(--font-size-caption);
+}
+.shared-workspace-thread-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+}
+.shared-workspace-thread-link:hover {
+  background: var(--surface-hover);
+}
+.shared-workspace-thread-link[aria-current="page"] {
+  background: var(--surface-selected);
+}
+.shared-workspace-thread-copy {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 3px;
+  min-width: 0;
+}
+.shared-workspace-thread-copy > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-strong);
+  font-size: var(--font-size-body-sm);
+  font-weight: 600;
+}
+.shared-workspace-thread-copy > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+.shared-workspace-thread-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.shared-workspace-scope button:focus-visible,
+.shared-workspace-row :is(button, a):focus-visible,
+.shared-workspace-thread-link:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}

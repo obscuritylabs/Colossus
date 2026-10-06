@@ -1,3 +1,4 @@
+import { Button, TextInput } from "@colossus/ui";
 import { useRef, useState } from "react";
 import { IconShieldCheck, IconMessageQuestion } from "@tabler/icons-react";
 import {
@@ -151,7 +152,8 @@ export function Interactions({
                     <dd>{approval.risk ?? "Unspecified"}</dd>
                   </dl>
                   <div className="actions">
-                    <button
+                    <Button
+                      variant="primary"
                       disabled={!allowed || busy !== null}
                       onClick={() =>
                         void respond(interaction, {
@@ -163,9 +165,9 @@ export function Interactions({
                       }
                     >
                       Approve this action
-                    </button>
-                    <button
-                      className="secondary"
+                    </Button>
+                    <Button
+                      variant="secondary"
                       disabled={!allowed || busy !== null}
                       onClick={() =>
                         void respond(interaction, {
@@ -177,7 +179,7 @@ export function Interactions({
                       }
                     >
                       Deny
-                    </button>
+                    </Button>
                   </div>
                 </>
               ) : prompt ? (
@@ -185,9 +187,9 @@ export function Interactions({
                   <p>{prompt.question}</p>
                   <div className="choice-actions">
                     {prompt.choices.map((choice) => (
-                      <button
+                      <Button
                         key={choice.choice_id}
-                        className="secondary"
+                        variant="secondary"
                         disabled={!allowed || busy !== null}
                         onClick={() =>
                           void respond(interaction, {
@@ -201,7 +203,7 @@ export function Interactions({
                         }
                       >
                         {choice.label}
-                      </button>
+                      </Button>
                     ))}
                   </div>
                   {prompt.allow_free_form && (
@@ -222,7 +224,7 @@ export function Interactions({
                       >
                         Your answer
                       </label>
-                      <input
+                      <TextInput
                         id={`answer-${interaction.interaction_id}`}
                         value={answers[interaction.interaction_id] ?? ""}
                         onChange={(event) =>
@@ -235,7 +237,9 @@ export function Interactions({
                         disabled={!allowed || busy !== null}
                         placeholder="Write your answer…"
                       />
-                      <button
+                      <Button
+                        type="submit"
+                        variant="primary"
                         disabled={
                           !allowed ||
                           busy !== null ||
@@ -243,7 +247,7 @@ export function Interactions({
                         }
                       >
                         Send answer
-                      </button>
+                      </Button>
                     </form>
                   )}
                 </>

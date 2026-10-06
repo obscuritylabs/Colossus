@@ -15,6 +15,29 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("browser authority and released data", () => {
+  it("reconciles identity after a project denial without creating an authentication loop", async () => {
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal("window", { dispatchEvent });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ error: "permission_denied" }), {
+            status: 403,
+          }),
+        ),
+      ),
+    );
+    await expect(request("/api/projects/p/tasks")).rejects.toBeInstanceOf(
+      ApiFailure,
+    );
+    expect(dispatchEvent).toHaveBeenCalledOnce();
+    expect(dispatchEvent.mock.calls[0]?.[0].type).toBe(
+      "colossus:web:reconcile-identity",
+    );
+    await expect(request("/api/me")).rejects.toBeInstanceOf(ApiFailure);
+    expect(dispatchEvent).toHaveBeenCalledOnce();
+  });
   it("reports a runtime rejection even when HTTP accepted the queued action", async () => {
     await expect(
       awaitReceipt("/api/projects/p/tasks/t", {

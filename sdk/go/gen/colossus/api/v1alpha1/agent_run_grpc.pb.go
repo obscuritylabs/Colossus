@@ -19,18 +19,21 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentRunService_ListProcessSessions_FullMethodName = "/colossus.api.v1alpha1.AgentRunService/ListProcessSessions"
-	AgentRunService_ReadProcessSession_FullMethodName  = "/colossus.api.v1alpha1.AgentRunService/ReadProcessSession"
-	AgentRunService_StopProcessSession_FullMethodName  = "/colossus.api.v1alpha1.AgentRunService/StopProcessSession"
-	AgentRunService_CreateRun_FullMethodName           = "/colossus.api.v1alpha1.AgentRunService/CreateRun"
-	AgentRunService_GetRun_FullMethodName              = "/colossus.api.v1alpha1.AgentRunService/GetRun"
-	AgentRunService_ListRuns_FullMethodName            = "/colossus.api.v1alpha1.AgentRunService/ListRuns"
-	AgentRunService_ListSessionActivity_FullMethodName = "/colossus.api.v1alpha1.AgentRunService/ListSessionActivity"
-	AgentRunService_WatchRun_FullMethodName            = "/colossus.api.v1alpha1.AgentRunService/WatchRun"
-	AgentRunService_CancelRun_FullMethodName           = "/colossus.api.v1alpha1.AgentRunService/CancelRun"
-	AgentRunService_ArchiveThread_FullMethodName       = "/colossus.api.v1alpha1.AgentRunService/ArchiveThread"
-	AgentRunService_RestoreThread_FullMethodName       = "/colossus.api.v1alpha1.AgentRunService/RestoreThread"
-	AgentRunService_RespondInteraction_FullMethodName  = "/colossus.api.v1alpha1.AgentRunService/RespondInteraction"
+	AgentRunService_ListProcessSessions_FullMethodName     = "/colossus.api.v1alpha1.AgentRunService/ListProcessSessions"
+	AgentRunService_ReadProcessSession_FullMethodName      = "/colossus.api.v1alpha1.AgentRunService/ReadProcessSession"
+	AgentRunService_StopProcessSession_FullMethodName      = "/colossus.api.v1alpha1.AgentRunService/StopProcessSession"
+	AgentRunService_CreateRun_FullMethodName               = "/colossus.api.v1alpha1.AgentRunService/CreateRun"
+	AgentRunService_GetRun_FullMethodName                  = "/colossus.api.v1alpha1.AgentRunService/GetRun"
+	AgentRunService_ListRuns_FullMethodName                = "/colossus.api.v1alpha1.AgentRunService/ListRuns"
+	AgentRunService_ListSessionActivity_FullMethodName     = "/colossus.api.v1alpha1.AgentRunService/ListSessionActivity"
+	AgentRunService_WatchRun_FullMethodName                = "/colossus.api.v1alpha1.AgentRunService/WatchRun"
+	AgentRunService_CancelRun_FullMethodName               = "/colossus.api.v1alpha1.AgentRunService/CancelRun"
+	AgentRunService_ArchiveThread_FullMethodName           = "/colossus.api.v1alpha1.AgentRunService/ArchiveThread"
+	AgentRunService_RestoreThread_FullMethodName           = "/colossus.api.v1alpha1.AgentRunService/RestoreThread"
+	AgentRunService_RespondInteraction_FullMethodName      = "/colossus.api.v1alpha1.AgentRunService/RespondInteraction"
+	AgentRunService_SetWorkspaceSharing_FullMethodName     = "/colossus.api.v1alpha1.AgentRunService/SetWorkspaceSharing"
+	AgentRunService_ListVisibleRuns_FullMethodName         = "/colossus.api.v1alpha1.AgentRunService/ListVisibleRuns"
+	AgentRunService_GetRuntimePolicyPosture_FullMethodName = "/colossus.api.v1alpha1.AgentRunService/GetRuntimePolicyPosture"
 )
 
 // AgentRunServiceClient is the client API for AgentRunService service.
@@ -63,6 +66,12 @@ type AgentRunServiceClient interface {
 	RestoreThread(ctx context.Context, in *RestoreThreadRequest, opts ...grpc.CallOption) (*RestoreThreadResponse, error)
 	// RespondInteraction answers one caller-bound prompt or approval exactly once.
 	RespondInteraction(ctx context.Context, in *RespondInteractionRequest, opts ...grpc.CallOption) (*RespondInteractionResponse, error)
+	// The local application explicitly releases its own workspace sessions.
+	SetWorkspaceSharing(ctx context.Context, in *SetWorkspaceSharingRequest, opts ...grpc.CallOption) (*SetWorkspaceSharingResponse, error)
+	// Discovery includes only owned or explicitly shared released runs.
+	ListVisibleRuns(ctx context.Context, in *ListVisibleRunsRequest, opts ...grpc.CallOption) (*ListVisibleRunsResponse, error)
+	// Caller-scoped configuration metadata; never an enforcement attestation or raw config.
+	GetRuntimePolicyPosture(ctx context.Context, in *GetRuntimePolicyPostureRequest, opts ...grpc.CallOption) (*GetRuntimePolicyPostureResponse, error)
 }
 
 type agentRunServiceClient struct {
@@ -202,6 +211,36 @@ func (c *agentRunServiceClient) RespondInteraction(ctx context.Context, in *Resp
 	return out, nil
 }
 
+func (c *agentRunServiceClient) SetWorkspaceSharing(ctx context.Context, in *SetWorkspaceSharingRequest, opts ...grpc.CallOption) (*SetWorkspaceSharingResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetWorkspaceSharingResponse)
+	err := c.cc.Invoke(ctx, AgentRunService_SetWorkspaceSharing_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentRunServiceClient) ListVisibleRuns(ctx context.Context, in *ListVisibleRunsRequest, opts ...grpc.CallOption) (*ListVisibleRunsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListVisibleRunsResponse)
+	err := c.cc.Invoke(ctx, AgentRunService_ListVisibleRuns_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentRunServiceClient) GetRuntimePolicyPosture(ctx context.Context, in *GetRuntimePolicyPostureRequest, opts ...grpc.CallOption) (*GetRuntimePolicyPostureResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetRuntimePolicyPostureResponse)
+	err := c.cc.Invoke(ctx, AgentRunService_GetRuntimePolicyPosture_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentRunServiceServer is the server API for AgentRunService service.
 // All implementations must embed UnimplementedAgentRunServiceServer
 // for forward compatibility.
@@ -232,6 +271,12 @@ type AgentRunServiceServer interface {
 	RestoreThread(context.Context, *RestoreThreadRequest) (*RestoreThreadResponse, error)
 	// RespondInteraction answers one caller-bound prompt or approval exactly once.
 	RespondInteraction(context.Context, *RespondInteractionRequest) (*RespondInteractionResponse, error)
+	// The local application explicitly releases its own workspace sessions.
+	SetWorkspaceSharing(context.Context, *SetWorkspaceSharingRequest) (*SetWorkspaceSharingResponse, error)
+	// Discovery includes only owned or explicitly shared released runs.
+	ListVisibleRuns(context.Context, *ListVisibleRunsRequest) (*ListVisibleRunsResponse, error)
+	// Caller-scoped configuration metadata; never an enforcement attestation or raw config.
+	GetRuntimePolicyPosture(context.Context, *GetRuntimePolicyPostureRequest) (*GetRuntimePolicyPostureResponse, error)
 	mustEmbedUnimplementedAgentRunServiceServer()
 }
 
@@ -277,6 +322,15 @@ func (UnimplementedAgentRunServiceServer) RestoreThread(context.Context, *Restor
 }
 func (UnimplementedAgentRunServiceServer) RespondInteraction(context.Context, *RespondInteractionRequest) (*RespondInteractionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RespondInteraction not implemented")
+}
+func (UnimplementedAgentRunServiceServer) SetWorkspaceSharing(context.Context, *SetWorkspaceSharingRequest) (*SetWorkspaceSharingResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetWorkspaceSharing not implemented")
+}
+func (UnimplementedAgentRunServiceServer) ListVisibleRuns(context.Context, *ListVisibleRunsRequest) (*ListVisibleRunsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListVisibleRuns not implemented")
+}
+func (UnimplementedAgentRunServiceServer) GetRuntimePolicyPosture(context.Context, *GetRuntimePolicyPostureRequest) (*GetRuntimePolicyPostureResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRuntimePolicyPosture not implemented")
 }
 func (UnimplementedAgentRunServiceServer) mustEmbedUnimplementedAgentRunServiceServer() {}
 func (UnimplementedAgentRunServiceServer) testEmbeddedByValue()                         {}
@@ -508,6 +562,60 @@ func _AgentRunService_RespondInteraction_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentRunService_SetWorkspaceSharing_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetWorkspaceSharingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentRunServiceServer).SetWorkspaceSharing(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentRunService_SetWorkspaceSharing_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentRunServiceServer).SetWorkspaceSharing(ctx, req.(*SetWorkspaceSharingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentRunService_ListVisibleRuns_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListVisibleRunsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentRunServiceServer).ListVisibleRuns(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentRunService_ListVisibleRuns_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentRunServiceServer).ListVisibleRuns(ctx, req.(*ListVisibleRunsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentRunService_GetRuntimePolicyPosture_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRuntimePolicyPostureRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentRunServiceServer).GetRuntimePolicyPosture(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentRunService_GetRuntimePolicyPosture_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentRunServiceServer).GetRuntimePolicyPosture(ctx, req.(*GetRuntimePolicyPostureRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentRunService_ServiceDesc is the grpc.ServiceDesc for AgentRunService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -558,6 +666,18 @@ var AgentRunService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RespondInteraction",
 			Handler:    _AgentRunService_RespondInteraction_Handler,
+		},
+		{
+			MethodName: "SetWorkspaceSharing",
+			Handler:    _AgentRunService_SetWorkspaceSharing_Handler,
+		},
+		{
+			MethodName: "ListVisibleRuns",
+			Handler:    _AgentRunService_ListVisibleRuns_Handler,
+		},
+		{
+			MethodName: "GetRuntimePolicyPosture",
+			Handler:    _AgentRunService_GetRuntimePolicyPosture_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -59,11 +59,11 @@ flowchart LR
 
 ## Tiers and cost ceilings
 
-| Tier | Trigger | Hosted coverage | Stable gate | Runner cost |
-|---|---|---|---|---|
-| PR validation | Open, edit, reopen, synchronize, or mark ready | Parallel standard Linux formatting, lint, unit, SDK, Desktop, documentation, and dependency jobs selected by changed paths | `Colossus PR gate` | Free standard public runners |
-| Pre-merge acceptance | Apply `ci:full` | macOS 14 ARM, Windows 2025 x64, Linux integration, bounded fuzzing, supply chain, Chroma, PostgreSQL, OCI, OPA, and mTLS | `Colossus pre-merge gate` | Larger Linux and Windows Desktop runners are billed; standard public runners are free |
-| Release | Push an annotated stable or approved prerelease tag | Six CLI targets; signed Windows CLI and Desktop; stable SDK or macOS Developer Preview | `Colossus release gate` | Larger runners are billed |
+| Tier                 | Trigger                                             | Hosted coverage                                                                                                            | Stable gate               | Runner cost                                                                           |
+| -------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------- |
+| PR validation        | Open, edit, reopen, synchronize, or mark ready      | Parallel standard Linux formatting, lint, unit, SDK, Desktop, documentation, and dependency jobs selected by changed paths | `Colossus PR gate`        | Free standard public runners                                                          |
+| Pre-merge acceptance | Apply `ci:full`                                     | macOS 14 ARM, Windows 2025 x64, Linux integration, bounded fuzzing, supply chain, Chroma, PostgreSQL, OCI, OPA, and mTLS   | `Colossus pre-merge gate` | Larger Linux and Windows Desktop runners are billed; standard public runners are free |
+| Release              | Push an annotated stable or approved prerelease tag | Six CLI targets; signed Windows CLI and Desktop; stable SDK or macOS Developer Preview                                     | `Colossus release gate`   | Larger runners are billed                                                             |
 
 A job timeout remains mandatory for every hosted job.
 The four-core `ubuntu-latest-m` larger runner is reserved for final Linux integration,
@@ -212,9 +212,9 @@ Apply `ci:full` only after the PR is ready to merge:
 3. Mark the PR ready for review if it is still a draft.
 4. As a repository writer, apply the label:
 
-    ```bash
-    gh pr edit PR_NUMBER --add-label ci:full
-    ```
+   ```bash
+   gh pr edit PR_NUMBER --add-label ci:full
+   ```
 
 Eligibility is checked on a cheap Linux runner before macOS or Windows is allocated. It
 rejects draft PRs, actors below write permission, and a missing or failed current-head PR
@@ -426,3 +426,32 @@ For a normal contribution, resolve review and follow
 [Request pre-merge acceptance](#request-pre-merge-acceptance). For repository rollout,
 follow [Bootstrap repository enforcement](#bootstrap-repository-enforcement) without
 skipping the evaluation run.
+
+## Control Plane and VSIX release artifacts
+
+The coordinated release gate also requires native Linux x64/arm64 Control Plane
+server/web and offline container bundles, plus six platform-targeted VSIX packages.
+`control-plane-image.yml` publishes the exact tested release images after release
+publication and verifies the two-platform index. It compares release assets against
+successful exact-tag Actions candidates before loading images; a conflicting immutable
+tag fails. See [release operations](releasing.md#control-plane-containers-and-vs-code-packages)
+for recovery and anonymous distribution verification.
+
+## Documentation container publication
+
+`documentation-candidate.yml` builds and smoke-tests the public documentation image
+on native Linux amd64 and arm64 runners. Documentation and container pull requests
+exercise the same build and HTTP smoke with their proposed source. Release candidates
+require an annotated stable or preview tag on `main`; only successful tag pushes retain
+the tested offline images and source-bound candidate manifests for 30 days. The
+candidate jobs have no registry write credentials.
+
+`documentation-image.yml` publishes after the reviewed GitHub Release is published,
+or retries an exact tag from `main`. Its contracts and publishing job use the same
+resolved protected-main publisher revision. Before any registry write, it requires
+successful exact-tag release and documentation candidate runs, verifies both retained
+image archives and source identities, and checks the published release channel. It
+refuses conflicting existing version tags and verifies the two-platform executable
+index by digest. Documentation publication is separate from the CLI release inventory;
+it adds no CLI assets. See [documentation image operations](releasing.md#documentation-container)
+for recovery and public-distribution verification.

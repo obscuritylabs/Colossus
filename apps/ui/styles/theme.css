@@ -95,6 +95,10 @@
   --shadow: 0 16px 38px rgba(0, 0, 0, 0.22);
   --disabled-opacity: 0.5;
 
+  --control-height-compact: 32px;
+  --icon-control-size: 28px;
+  --settings-sidebar-width: 260px;
+
   --settings-content-max: 1180px;
   --settings-gutter: 28px;
   --settings-section-gap: 20px;

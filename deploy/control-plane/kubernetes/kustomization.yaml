@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: colossus
+resources:
+  - namespace.yaml
+  - control-plane.yaml
+  - documentation.yaml
+  - ingress.yaml
+configMapGenerator:
+  - name: colossus-control-plane-config
+    files:
+      - control-plane.json
+# Pin this image tag to a tested immutable release or replace it with a digest.
+images:
+  - name: colossus-control-plane
+    newName: ghcr.io/obscuritylabs/colossus-control-plane
+    newTag: replace-with-your-built-image
+  - name: colossus-documentation
+    newName: ghcr.io/obscuritylabs/colossus-documentation
+    newTag: replace-with-your-built-image

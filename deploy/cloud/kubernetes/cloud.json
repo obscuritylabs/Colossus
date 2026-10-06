@@ -20,17 +20,20 @@
     }
   ],
   "web_root": "/opt/colossus/web",
-  "storage": {
-    "kind": "postgres",
-    "config": {
-      "connectionVariable": "COLOSSUS_CLOUD_DATABASE",
-      "schema": "colossus_cloud",
-      "tls": {"kind": "webpki_roots"},
-      "statementTimeoutMs": 5000
+  "database": {
+    "connectionVariable": "COLOSSUS_CLOUD_DATABASE",
+    "schema": "colossus_cloud",
+    "tls": {
+      "kind": "webpki_roots"
     },
-    "key_variable": "COLOSSUS_CLOUD_JOURNAL_KEY",
-    "anchor_path": "/var/lib/colossus/cloud.anchor"
+    "maxConnections": 16,
+    "connectionTimeoutMs": 5000,
+    "statementTimeoutMs": 15000
   },
-  "signing_key_variable": "COLOSSUS_CLOUD_SIGNING_KEY",
+  "auth_key_variable": "COLOSSUS_CLOUD_AUTH_KEY",
+  "maintenance": {
+    "batchLimit": 256,
+    "deliveredOutboxRetentionSeconds": 86400
+  },
   "local_development": false
 }

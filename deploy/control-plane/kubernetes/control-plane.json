@@ -1,0 +1,45 @@
+{
+  "http_bind": "0.0.0.0:8080",
+  "grpc_bind": "0.0.0.0:8443",
+  "public_origin": "https://colossus.example.com",
+  "grpc_endpoint": "https://runtimes.colossus.example.com",
+  "ca_certificate": "/etc/colossus/tls/ca.pem",
+  "ca_key": "/etc/colossus/tls/ca-key.pem",
+  "server_certificate": "/etc/colossus/tls/server.pem",
+  "server_key": "/etc/colossus/tls/server-key.pem",
+  "oidc": null,
+  "memberships": [],
+  "web_root": "/opt/colossus/web",
+  "database": {
+    "connectionVariable": "COLOSSUS_CONTROL_PLANE_DATABASE",
+    "schema": "colossus_control_plane",
+    "tls": {
+      "kind": "webpki_roots"
+    },
+    "maxConnections": 16,
+    "connectionTimeoutMs": 5000,
+    "statementTimeoutMs": 15000
+  },
+  "auth_key_variable": "COLOSSUS_CONTROL_PLANE_AUTH_KEY",
+  "maintenance": {
+    "batchLimit": 256,
+    "deliveredOutboxRetentionSeconds": 86400
+  },
+  "local_development": false,
+  "local_auth": {
+    "session_seconds": 28800
+  },
+  "bootstrap_admin": {
+    "display_name": "Administrator",
+    "email": null,
+    "oidc_subject": null,
+    "username": "admin",
+    "password_variable": "COLOSSUS_CONTROL_PLANE_BOOTSTRAP_PASSWORD"
+  },
+  "classification": {
+    "enabled": false,
+    "text": "",
+    "tone": "neutral",
+    "position": "top_and_bottom"
+  }
+}

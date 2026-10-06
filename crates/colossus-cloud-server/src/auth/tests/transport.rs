@@ -213,7 +213,7 @@ async fn oidc_to_runtime_prompt_approval_cancel_rotate_and_recover() {
 }
 
 #[tokio::test]
-#[ignore = "operator-owned: local PostgreSQL plus COLOSSUS_CLOUD_TEST_DATABASE, JOURNAL_KEY and SIGNING_KEY"]
+#[ignore = "operator-owned: local PostgreSQL plus COLOSSUS_CLOUD_TEST_DATABASE"]
 async fn postgres_oidc_to_runtime_and_recover() {
     acceptance(true).await;
 }
@@ -230,23 +230,21 @@ async fn acceptance(postgres: bool) {
     config.grpc_bind = grpc.local_addr().unwrap();
     config.public_origin = format!("http://{}", config.http_bind);
     config.grpc_endpoint = format!("https://localhost:{}", config.grpc_bind.port());
-    config.storage = Storage::Redb {
-        path: root.join("cloud.redb"),
-        key_variable: None,
-    };
-    if postgres {
-        config.storage = Storage::Postgres {
-            config: colossus_journal_postgres::PostgresJournalConfig::new(
-                "COLOSSUS_CLOUD_TEST_DATABASE",
-                format!("cloud_e2e_{}", uuid::Uuid::now_v7().simple()),
-                colossus_journal_postgres::PostgresTlsConfig::Disabled,
+    config.database.schema = format!("cloud_e2e_{}", uuid::Uuid::now_v7().simple());
+    config.database.tls = colossus_cloud_postgres::CloudDatabaseTls::Disabled;
+    config.auth_key_variable = None;
+    let cloud_store: Arc<dyn colossus_cloud::storage::CloudStore> = if postgres {
+        Arc::new(
+            colossus_cloud_postgres::CloudPostgresStore::open(
+                config.database.clone(),
+                &colossus_network::AdditionalRootCertificates::default(),
             )
+            .await
             .unwrap(),
-            key_variable: "COLOSSUS_CLOUD_TEST_JOURNAL_KEY".into(),
-            anchor_path: root.join("cloud.anchor"),
-        };
-        config.signing_key_variable = Some("COLOSSUS_CLOUD_TEST_SIGNING_KEY".into());
-    }
+        )
+    } else {
+        Arc::new(colossus_cloud::storage::MemoryCloudStore::default())
+    };
     config.memberships[0].permissions = BTreeSet::from([
         CloudPermission::Read,
         CloudPermission::Execute,
@@ -257,7 +255,7 @@ async fn acceptance(postgres: bool) {
     tls_files(&root, &mut config);
     drop(auth);
     let origin = config.public_origin.clone();
-    let server = crate::server::CloudServer::open(config.clone())
+    let server = crate::server::CloudServer::with_store(config.clone(), cloud_store.clone())
         .await
         .unwrap();
     let (stop, shutdown) = watch::channel(false);
@@ -545,7 +543,7 @@ async fn acceptance(postgres: bool) {
         .unwrap()
         .unwrap()
         .unwrap();
-    let server = crate::server::CloudServer::open(config.clone())
+    let server = crate::server::CloudServer::with_store(config.clone(), cloud_store.clone())
         .await
         .unwrap();
     let (stop, close) = watch::channel(false);
@@ -615,7 +613,7 @@ async fn acceptance(postgres: bool) {
     assert_eq!(*online.borrow(), ConnectorStatus::Reconnecting);
     stalled.abort();
     assert!(stalled.await.unwrap_err().is_cancelled());
-    let server = crate::server::CloudServer::open(config.clone())
+    let server = crate::server::CloudServer::with_store(config.clone(), cloud_store.clone())
         .await
         .unwrap();
     let (stop, close) = watch::channel(false);

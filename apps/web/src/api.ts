@@ -14,6 +14,74 @@ export interface Node {
   roles: string[];
   revoked: boolean;
   revision: number;
+  host_id?: string | null;
+  workspace_id?: string | null;
+  workspace_label?: string | null;
+  policy?: RuntimePolicyPosture | null;
+  policy_observed_at?: number | null;
+}
+export interface RuntimePolicyPosture {
+  schema_version: number;
+  provenance: string;
+  fingerprint: string;
+  configuration_revision: number | null;
+  access_profile: string;
+  sandbox_backend: string;
+  sandbox_profile: string;
+  boundary_acknowledged: boolean;
+  approval_mode: string;
+  allowed_roles: string[];
+  allowed_tools: string[];
+  capabilities: string[];
+  models: { profile: string; label: string }[];
+  findings: { code: string; severity: string }[];
+  telemetry: {
+    provenance: string;
+    denied_requests: number | null;
+    approval_requests: number | null;
+    outcome_unknown_runs: number | null;
+  };
+}
+export interface Host {
+  host_id: string;
+  project_id: string;
+  label: string;
+  platform: string;
+  deployment_kind: string;
+  revision: number;
+  last_seen_at: number | null;
+}
+export interface Thread {
+  thread_id: string;
+  project_id: string;
+  node_id: string;
+  host_id?: string | null;
+  workspace_id?: string | null;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  revision: number;
+  archived: boolean;
+  session_id?: string | null;
+  sync_status: "current" | "incomplete";
+  source: "cloud" | "runtime";
+  can_continue: boolean;
+  active_task_id?: string | null;
+  queued_task_ids?: string[];
+}
+export interface ThreadMessage {
+  message_id: string;
+  role: string;
+  text: string;
+  created_at: string;
+  task_id?: string | null;
+}
+export interface ThreadDetailResponse {
+  thread: Thread;
+  tasks: Task[];
+  messages: ThreadMessage[];
+  next_task_cursor?: string | null;
+  next_message_cursor?: string | null;
 }
 export interface FleetNode {
   node: Node;
@@ -68,6 +136,8 @@ export interface Task {
   project_id: string;
   node_id: string;
   subject: string;
+  created_at?: string;
+  updated_at?: string;
   request: { input: { text: string }[]; mode: string; role: string };
   run_id: string | null;
   snapshot: { run: Run; pending_interactions: Interaction[] } | null;
@@ -75,12 +145,17 @@ export interface Task {
   revision: number;
   dispatch_error?: { message: string; code: string } | null;
   output_limited?: boolean;
+  thread_id?: string | null;
+  source_read_only?: boolean;
+  history_bounded?: boolean;
+  history_complete?: boolean;
 }
 export interface Update {
   run_id: string;
   sequence: number;
   created_at: string;
   update: Record<string, unknown>;
+  task_id?: string;
 }
 export class ApiFailure extends Error {
   constructor(
@@ -138,18 +213,31 @@ export async function request<T>(
   path: string,
   body?: unknown,
   signal?: AbortSignal,
+  method?: "PATCH" | "DELETE",
 ): Promise<T> {
   const response = await fetch(path, {
-    method: body === undefined ? "GET" : "POST",
+    method: method ?? (body === undefined ? "GET" : "POST"),
     credentials: "same-origin",
     headers:
       body === undefined
-        ? {}
+        ? method === "DELETE"
+          ? { "X-Colossus-CSRF": "1" }
+          : {}
         : { "Content-Type": "application/json", "X-Colossus-CSRF": "1" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     ...(signal ? { signal } : {}),
   });
   if (!response.ok) {
+    // The web host reconciles identity after authorization failures. A project
+    // denial may only remove one role; it must not blindly log the user out.
+    if (
+      (response.status === 401 || response.status === 403) &&
+      typeof window !== "undefined" &&
+      path.startsWith("/api/") &&
+      !["/api/me", "/api/auth/config", "/api/settings"].includes(path)
+    ) {
+      window.dispatchEvent(new Event("colossus:web:reconcile-identity"));
+    }
     const error = (await response
       .json()
       .catch(() => ({ error: "storage" }))) as { error?: string };

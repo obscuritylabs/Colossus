@@ -9,7 +9,8 @@ const directory = resolve("artifacts/review");
 await mkdir(directory, { recursive: true });
 const { version } = JSON.parse(await readFile("package.json", "utf8"));
 const mark = `data:image/svg+xml;base64,${(await readFile("dist/colossus-mark.svg")).toString("base64")}`;
-let style = `${await readFile("dist/theme.css", "utf8")}\n${await readFile("dist/style.css", "utf8")}
+let style = `${await readFile("dist/theme.css", "utf8")}
+${await readFile("dist/shadcn.css", "utf8")}\n${await readFile("dist/style.css", "utf8")}
 ${await readFile("dist/composer.css", "utf8")}
 ${await readFile("dist/select.css", "utf8")}`;
 for (const name of await readdir("dist/icons")) {

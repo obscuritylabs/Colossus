@@ -561,6 +561,127 @@ fn cancel_watch_on_close(
 
 #[async_trait]
 impl AgentRunClient for GrpcAgentRunClient {
+    async fn get_runtime_policy_posture(&self) -> ApiResult<crate::RuntimePolicyPosture> {
+        let response = self
+            .client()
+            .get_runtime_policy_posture(
+                self.request(proto::GetRuntimePolicyPostureRequest {})
+                    .await?,
+            )
+            .await
+            .map_err(api_error_from_status)?
+            .into_inner();
+        if response.policy_json.is_empty() || response.policy_json.len() > 65536 {
+            return Err(protocol_error());
+        }
+        let posture: crate::RuntimePolicyPosture =
+            serde_json::from_slice(&response.policy_json).map_err(|_| protocol_error())?;
+        if !posture.validate() {
+            return Err(protocol_error());
+        }
+        Ok(posture)
+    }
+    async fn set_workspace_sharing(
+        &self,
+        request: crate::SetWorkspaceSharingRequest,
+    ) -> ApiResult<crate::WorkspaceSharingState> {
+        validate_identifier(&request.recipient_application_id)?;
+        let expected = request.clone();
+        let response = self
+            .client()
+            .set_workspace_sharing(
+                self.request(proto::SetWorkspaceSharingRequest {
+                    recipient_application_id: request.recipient_application_id,
+                    enabled: request.enabled,
+                    allow_continuation: request.allow_continuation,
+                })
+                .await?,
+            )
+            .await
+            .map_err(api_error_from_status)?
+            .into_inner();
+        validate_identifier(&response.recipient_application_id).map_err(|_| protocol_error())?;
+        if response.allow_continuation && !response.enabled
+            || response.recipient_application_id != expected.recipient_application_id
+            || response.enabled != expected.enabled
+            || response.allow_continuation != expected.allow_continuation
+        {
+            return Err(protocol_error());
+        }
+        Ok(crate::WorkspaceSharingState {
+            recipient_application_id: response.recipient_application_id,
+            enabled: response.enabled,
+            allow_continuation: response.allow_continuation,
+        })
+    }
+
+    async fn list_visible_runs(
+        &self,
+        request: ListRunsRequest,
+    ) -> ApiResult<crate::ListVisibleRunsResponse> {
+        let fallback = request.clone();
+        if let Some(session_id) = &request.session_id {
+            validate_identifier(session_id)?;
+        }
+        if request.statuses.len() > MAX_COLLECTION_ITEMS {
+            return Err(invalid_request("statuses", "too many status filters"));
+        }
+        let request = self
+            .request(proto::ListVisibleRunsRequest {
+                session_id: request.session_id,
+                statuses: request
+                    .statuses
+                    .into_iter()
+                    .map(proto_run_status)
+                    .map(|status| status as i32)
+                    .collect(),
+                page: request.page.map(|page| proto::PageRequest {
+                    page_size: page.page_size,
+                    page_token: page.page_token,
+                }),
+                include_archived: request.include_archived,
+            })
+            .await?;
+        let response = match self.client().list_visible_runs(request).await {
+            Ok(response) => response.into_inner(),
+            Err(status) if status.code() == tonic::Code::Unimplemented => {
+                let page = self.list_runs(fallback).await?;
+                return Ok(crate::ListVisibleRunsResponse {
+                    runs: page
+                        .runs
+                        .into_iter()
+                        .map(|run| crate::VisibleRun {
+                            run,
+                            controllable: false,
+                            continuable: false,
+                        })
+                        .collect(),
+                    page: page.page,
+                });
+            }
+            Err(status) => return Err(api_error_from_status(status)),
+        };
+        if response.runs.len() > MAX_COLLECTION_ITEMS {
+            return Err(protocol_error());
+        }
+        let runs = response
+            .runs
+            .into_iter()
+            .map(|value| {
+                Ok(crate::VisibleRun {
+                    run: run_from_proto(required(value.run)?)?,
+                    controllable: value.controllable,
+                    continuable: value.continuable,
+                })
+            })
+            .collect::<ApiResult<Vec<_>>>()?;
+        Ok(crate::ListVisibleRunsResponse {
+            runs,
+            page: response.page.map(|page| PageResponse {
+                next_page_token: page.next_page_token,
+            }),
+        })
+    }
     async fn list_process_sessions(
         &self,
         request: crate::ListProcessSessionsRequest,

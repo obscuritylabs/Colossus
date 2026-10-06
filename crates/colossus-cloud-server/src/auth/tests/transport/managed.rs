@@ -144,17 +144,18 @@ async fn managed_sidecar_cloud_run_isolated_and_application_exit_disconnects() {
     config.grpc_bind = grpc.local_addr().unwrap();
     config.public_origin = format!("http://{}", config.http_bind);
     config.grpc_endpoint = format!("https://localhost:{}", config.grpc_bind.port());
-    config.storage = Storage::Redb {
-        path: root.join("cloud.redb"),
-        key_variable: None,
-    };
     config.memberships[0]
         .permissions
         .insert(CloudPermission::Administer);
     tls_files(&root, &mut config);
     drop(auth);
     let origin = config.public_origin.clone();
-    let server = crate::server::CloudServer::open(config).await.unwrap();
+    let server = crate::server::CloudServer::with_store(
+        config,
+        Arc::new(colossus_cloud::storage::MemoryCloudStore::default()),
+    )
+    .await
+    .unwrap();
     let (stop, shutdown) = watch::channel(false);
     let host = tokio::spawn(server.serve_listeners(browser, grpc, shutdown));
     let browser_client = reqwest::Client::builder()

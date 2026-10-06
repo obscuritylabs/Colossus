@@ -1,31 +1,64 @@
-import { useEffect, useRef, useState } from "react";
+import { Badge } from "@colossus/ui/components/ui/badge";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   IconServer,
-  IconPlus,
   IconShieldX,
   IconCopy,
   IconCheck,
   IconX,
   IconArrowUpRight,
+  IconArrowLeft,
+  IconMessageCircle,
+  IconDeviceDesktop,
 } from "@tabler/icons-react";
-import { request, projectPath, type FleetNode, type Permission } from "./api";
+import { Button, TextInput } from "@colossus/ui";
+import { DataTable, type DataTableColumn } from "@colossus/ui/data-table";
+import {
+  request,
+  projectPath,
+  type FleetNode,
+  type Permission,
+  type Host,
+} from "./api";
+import { RouteLink } from "./navigation";
+import { agentHref } from "./routes";
+const platforms: Record<string, string> = {
+  macos: "macOS",
+  linux: "Linux",
+  windows: "Windows",
+};
+const platformLabel = (platform: string) => platforms[platform] ?? platform;
+
 export function Fleet({
   nodes,
+  hosts,
   project,
   permissions,
   onRefresh,
   onError,
   hasMore,
+  hasMoreHosts,
+  onMoreHosts,
   onMore,
+  onOpenAgent,
 }: {
   nodes: FleetNode[];
+  hosts: Host[];
   project: string;
   permissions: Permission[];
   onRefresh: () => void;
   onError: (error: string) => void;
   hasMore: boolean;
+  hasMoreHosts: boolean;
+  onMoreHosts: () => void;
   onMore: () => void;
+  onOpenAgent: (nodeId: string) => void;
 }) {
+  const [hostId, setHostId] = useState<string | null>(null);
+  const hostBack = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (hostId !== null) hostBack.current?.focus();
+  }, [hostId]);
   const [enrolling, setEnrolling] = useState(false),
     [label, setLabel] = useState(""),
     [roles, setRoles] = useState("primary"),
@@ -119,129 +152,341 @@ export function Fleet({
         onError(error instanceof Error ? error.message : "Revocation failed.");
     }
   }
-  return (
-    <>
-      <div className="section-heading">
-        <div>
-          <div className="eyebrow">EXECUTION INFRASTRUCTURE</div>
-          <h1>Runtime fleet</h1>
-          <p>
-            Bring your machines. Keep execution under their local authority.
-          </p>
-        </div>
-        <button
-          disabled={!permissions.includes("administer")}
-          onClick={beginEnrollment}
-        >
-          <IconPlus size={17} />
-          Enroll runtime
-        </button>
-      </div>
-      {nodes.length === 0 ? (
-        <div className="empty-state">
-          <div className="empty-icon">
-            <IconServer size={31} />
-          </div>
-          <h2>Your first runtime starts here</h2>
-          <p>
-            Enroll a CLI daemon or a Desktop runtime to give this project a
-            place to execute tasks.
-          </p>
-          <button
-            disabled={!permissions.includes("administer")}
-            onClick={beginEnrollment}
-          >
-            <IconPlus size={17} />
-            Enroll a runtime
-          </button>
-        </div>
-      ) : (
-        <div className="fleet-grid">
-          {nodes.map((fleet) => {
-            const status = fleet.node.revoked
-              ? "revoked"
-              : fleet.presence?.ready
-                ? "connected"
-                : fleet.presence
-                  ? "starting"
-                  : "offline";
-            return (
-              <article className="node-card" key={fleet.node.node_id}>
-                <div className="node-header">
-                  <div className="node-icon">
-                    <IconServer size={23} />
-                  </div>
-                  <span className={`status status-${status}`}>
-                    <span
-                      className={`dot ${status === "connected" ? "live" : ""}`}
-                    />
-                    {status[0]?.toUpperCase() + status.slice(1)}
-                  </span>
-                </div>
-                <h2>{fleet.node.label}</h2>
-                <p className="muted mono node-id" title={fleet.node.node_id}>
-                  {fleet.node.node_id}
-                </p>
-                <div className="node-divider" />
+  const visibleNodes = nodes.filter(
+    (item) =>
+      hostId === null ||
+      (hostId === "" ? !item.node.host_id : item.node.host_id === hostId),
+  );
+  const columns = useMemo<DataTableColumn<FleetNode>[]>(
+    () => [
+      {
+        id: "agent",
+        label: "Agent / workspace",
+        hideable: false,
+        rowHeader: true,
+        value: (item) =>
+          `${item.node.label} ${item.node.workspace_label ?? ""} ${item.node.node_id}`,
+        cell: (item) => (
+          <div className="catalog-identity">
+            <span className="resource-icon">
+              <IconServer size={16} aria-hidden="true" />
+            </span>
+            <div>
+              <RouteLink
+                href={agentHref(project, item.node.node_id)}
+                className="catalog-name"
+                onNavigate={() => onOpenAgent(item.node.node_id)}
+              >
+                {item.node.label}
+              </RouteLink>
+              <small>
+                {item.node.workspace_label ||
+                  item.node.workspace_id ||
+                  "Workspace inventory not reported"}
+              </small>
+              <details className="agent-details">
+                <summary>Connection details</summary>
                 <dl>
                   <dt>Local instance</dt>
-                  <dd className="mono truncate" title={fleet.node.instance_id}>
-                    {fleet.node.instance_id}
-                  </dd>
-                  <dt>Allowed roles</dt>
-                  <dd>
-                    {fleet.node.roles.map((role) => (
-                      <span className="tag" key={role}>
-                        {role}
-                      </span>
-                    ))}
-                  </dd>
-                  <dt>Connection</dt>
+                  <dd className="mono">{item.node.instance_id}</dd>
+                  <dt>Node</dt>
+                  <dd className="mono">{item.node.node_id}</dd>
+                  <dt>Transport</dt>
                   <dd>Outbound · mutual TLS</dd>
+                  <dt>Capabilities</dt>
+                  <dd>
+                    {item.presence?.capabilities.join(", ") || "Not reported"}
+                  </dd>
                 </dl>
-                <details className="node-capabilities">
-                  <summary>
-                    {fleet.presence?.capabilities.length ?? 0} runtime
-                    capabilities
-                  </summary>
-                  <ul>
-                    {fleet.presence?.capabilities.map((capability) => (
-                      <li key={capability} className="mono">
-                        {capability}
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-                <footer>
-                  <span className="muted">
-                    {status === "connected"
-                      ? "Ready for tasks"
-                      : status === "revoked"
-                        ? "Enrollment revoked"
-                        : "Tasks wait for reconnect"}
-                  </span>
+              </details>
+            </div>
+          </div>
+        ),
+      },
+      {
+        id: "host",
+        label: "Host",
+        value: (item) =>
+          hosts.find((host) => host.host_id === item.node.host_id)?.label ??
+          "Inventory pending",
+      },
+      {
+        id: "status",
+        label: "Connection",
+        value: (item) =>
+          item.node.revoked
+            ? "Revoked"
+            : item.presence?.ready
+              ? "Connected"
+              : item.presence
+                ? "Starting"
+                : "Offline",
+        cell: (item) => {
+          const status = item.node.revoked
+            ? "revoked"
+            : item.presence?.ready
+              ? "connected"
+              : item.presence
+                ? "starting"
+                : "offline";
+          return (
+            <Badge className={`status status-${status}`}>
+              <span className={`dot ${status === "connected" ? "live" : ""}`} />
+              {status[0]!.toUpperCase() + status.slice(1)}
+            </Badge>
+          );
+        },
+        filter: {
+          label: "Filter agents by connection",
+          options: [
+            { value: "", label: "All connections" },
+            { value: "online", label: "Online" },
+            { value: "offline", label: "Offline" },
+            { value: "revoked", label: "Revoked" },
+          ],
+          matches: (item, value) =>
+            !value ||
+            (value === "revoked"
+              ? item.node.revoked
+              : !item.node.revoked &&
+                (value === "online"
+                  ? Boolean(item.presence?.ready)
+                  : !item.presence?.ready)),
+        },
+      },
+      {
+        id: "roles",
+        label: "Allowed roles",
+        value: (item) => item.node.roles.join(", "),
+      },
+      {
+        id: "actions",
+        label: "Actions",
+        value: () => "",
+        sortable: false,
+        hideable: false,
+        cell: (item) => (
+          <div className="agent-row-actions">
+            <RouteLink
+              className="ui-button ui-button--tertiary"
+              href={agentHref(project, item.node.node_id, "threads")}
+              aria-label={`Open threads on ${item.node.label}`}
+              onNavigate={() => onOpenAgent(item.node.node_id)}
+            >
+              <IconMessageCircle size={16} aria-hidden="true" />
+            </RouteLink>
+            {permissions.includes("administer") ? (
+              <Button
+                variant="tertiary"
+                aria-label={`Revoke ${item.node.label}`}
+                disabled={item.node.revoked}
+                onClick={() => void revoke(item)}
+              >
+                <IconShieldX size={16} aria-hidden="true" />
+              </Button>
+            ) : null}
+          </div>
+        ),
+      },
+    ],
+    [hosts, onOpenAgent, permissions, project],
+  );
+  return (
+    <>
+      <section
+        className="managed-settings-body catalog-settings host-settings"
+        aria-labelledby="fleet-heading"
+      >
+        <header className="catalog-heading">
+          <div>
+            <h2 id="fleet-heading">Fleet</h2>
+            <p>
+              Hosts group your connected Desktop workspaces and independent CLI
+              agents.
+            </p>
+          </div>
+          {permissions.includes("administer") ? (
+            <Button variant="primary" onClick={beginEnrollment}>
+              Enroll agent
+            </Button>
+          ) : null}
+        </header>
+        <p className="catalog-summary">
+          {hosts.length} loaded hosts · {nodes.length} loaded agents ·{" "}
+          {
+            nodes.filter((item) => item.presence?.ready && !item.node.revoked)
+              .length
+          }{" "}
+          online
+        </p>
+        <details className="host-directory" open={hostId !== null}>
+          <summary>
+            Browse hosts{hostId !== null ? " · Host filter active" : ""}
+          </summary>
+          {hostId !== null ? (
+            <Button
+              ref={hostBack}
+              variant="tertiary"
+              className="back"
+              onClick={() => {
+                const previous = hostId;
+                setHostId(null);
+                requestAnimationFrame(() =>
+                  document
+                    .querySelector<HTMLButtonElement>(
+                      `[data-host-id="${CSS.escape(previous)}"]`,
+                    )
+                    ?.focus(),
+                );
+              }}
+            >
+              <IconArrowLeft size={16} aria-hidden="true" />
+              All hosts
+            </Button>
+          ) : null}
+          {hostId === null ? (
+            <div className="host-grid">
+              {hosts.map((host) => {
+                const agents = nodes.filter(
+                    (item) =>
+                      item.node.host_id === host.host_id && !item.node.revoked,
+                  ),
+                  online = agents.filter((item) => item.presence?.ready).length;
+                return (
                   <button
-                    className="icon-button danger"
-                    title="Revoke runtime enrollment"
-                    aria-label={`Revoke ${fleet.node.label}`}
-                    disabled={
-                      !permissions.includes("administer") || fleet.node.revoked
-                    }
-                    onClick={() => void revoke(fleet)}
+                    type="button"
+                    className="host-card"
+                    data-host-id={host.host_id}
+                    key={host.host_id}
+                    onClick={() => setHostId(host.host_id)}
                   >
-                    <IconShieldX size={18} />
+                    <span className="host-card-icon">
+                      <IconDeviceDesktop size={22} aria-hidden="true" />
+                    </span>
+                    <span className="host-card-body">
+                      <strong>{host.label}</strong>
+                      <small>
+                        {platformLabel(host.platform) ||
+                          "Platform not reported"}{" "}
+                        ·{" "}
+                        {host.deployment_kind === "cli"
+                          ? "CLI"
+                          : host.deployment_kind === "desktop"
+                            ? "Desktop"
+                            : host.deployment_kind || "Runtime host"}
+                      </small>
+                      <span>
+                        {agents.length} loaded agent
+                        {agents.length === 1 ? "" : "s"} · {online} online
+                      </span>
+                      {agents.length ? (
+                        <small>
+                          {agents
+                            .slice(0, 3)
+                            .map((item) => item.node.label)
+                            .join(" · ")}
+                          {agents.length > 3 ? "…" : ""}
+                        </small>
+                      ) : null}
+                      <small>
+                        {host.last_seen_at
+                          ? `Last seen ${new Date(host.last_seen_at * 1000).toLocaleString()}`
+                          : "Waiting for host inventory"}
+                      </small>
+                    </span>
+                    <IconArrowUpRight size={16} aria-hidden="true" />
                   </button>
-                </footer>
-              </article>
-            );
-          })}
-        </div>
-      )}
-      {hasMore && (
-        <button className="secondary" onClick={onMore}>
-          Load more runtimes
-        </button>
-      )}
+                );
+              })}
+              {nodes.some((item) => !item.node.host_id) ? (
+                <button
+                  type="button"
+                  className="host-card"
+                  data-host-id=""
+                  onClick={() => setHostId("")}
+                >
+                  <span className="host-card-icon">
+                    <IconServer size={22} aria-hidden="true" />
+                  </span>
+                  <span className="host-card-body">
+                    <strong>Agents without host inventory</strong>
+                    <small>
+                      Existing enrollments that have not reported a host
+                    </small>
+                    <span>
+                      {nodes.filter((item) => !item.node.host_id).length} agents
+                    </span>
+                  </span>
+                  <IconArrowUpRight size={16} aria-hidden="true" />
+                </button>
+              ) : null}
+              {!hosts.length && !nodes.length ? (
+                <div className="empty-state">
+                  <IconDeviceDesktop size={28} aria-hidden="true" />
+                  <h3>Connect your first host</h3>
+                  <p>
+                    Enroll a Desktop workspace or CLI agent. Its host and
+                    workspace inventory will appear after it connects.
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <p className="fleet-host-context">
+              <IconDeviceDesktop size={18} aria-hidden="true" />
+              {hosts.find((host) => host.host_id === hostId)?.label ??
+                "Agents without host inventory"}
+            </p>
+          )}
+          {hasMoreHosts && hostId === null ? (
+            <Button className="load-more" onClick={onMoreHosts}>
+              Load more hosts
+            </Button>
+          ) : null}
+        </details>
+      </section>
+      <section
+        className="managed-settings-body catalog-settings runtime-settings"
+        aria-labelledby="agents-heading"
+      >
+        <header className="catalog-heading">
+          <div>
+            <h2 id="agents-heading">Agents and workspaces</h2>
+            <p>
+              Open an agent to view its conversations. Each workspace keeps its
+              own execution authority.
+            </p>
+          </div>
+        </header>
+        <DataTable
+          key={hostId ?? "fleet"}
+          data={visibleNodes}
+          columns={columns}
+          getRowId={(item) => item.node.node_id}
+          label="Fleet agents"
+          itemLabel="agents"
+          search={{ columnId: "agent", label: "Search agents" }}
+          empty={
+            <div className="empty-state">
+              <h3>No matching agents</h3>
+              <p>
+                Connect an enrolled agent on this host or choose another host.
+              </p>
+            </div>
+          }
+          footer={
+            hasMore ? (
+              <div className="task-history-footer">
+                <p>
+                  Filters apply to loaded agents. Load more to include the rest
+                  of your fleet.
+                </p>
+                <Button onClick={onMore}>Load more agents</Button>
+              </div>
+            ) : undefined
+          }
+        />
+      </section>
       <dialog
         aria-label="Runtime enrollment"
         ref={dialog}
@@ -256,7 +501,7 @@ export function Fleet({
             <IconServer size={23} />
           </div>
           <button
-            className="icon-button"
+            className="ui-icon-button"
             aria-label="Close enrollment"
             onClick={closeEnrollment}
           >
@@ -273,14 +518,14 @@ export function Fleet({
           <>
             <label>
               Enrollment URL
-              <input readOnly value={invitation.enrollment_url} />
+              <TextInput readOnly value={invitation.enrollment_url} />
             </label>
             <label>
               One-use invitation
-              <input readOnly value={invitation.token} className="mono" />
+              <TextInput readOnly value={invitation.token} className="mono" />
             </label>
-            <button
-              className="secondary full-width"
+            <Button
+              className="full-width"
               onClick={() =>
                 void navigator.clipboard
                   .writeText(invitation.token)
@@ -294,12 +539,12 @@ export function Fleet({
             >
               {copied ? <IconCheck size={17} /> : <IconCopy size={17} />}{" "}
               {copied ? "Invitation copied" : "Copy invitation"}
-            </button>
+            </Button>
             <div className="enrollment-instructions">
               <h3>From Desktop</h3>
               <p>
-                Open Workspace settings → Cloud. Paste the URL and invitation,
-                then confirm the native connection dialog.
+                Open Workspace settings → Control Plane. Paste the URL and
+                invitation, then confirm the native connection dialog.
               </p>
               <h3>From the CLI</h3>
               <code>
@@ -312,7 +557,8 @@ export function Fleet({
                 <code>colossus cloud run --local-config LOCAL.json</code>.
               </p>
             </div>
-            <button
+            <Button
+              variant="primary"
               className="full-width"
               onClick={() => {
                 setEnrolling(false);
@@ -320,7 +566,7 @@ export function Fleet({
               }}
             >
               Done <IconArrowUpRight size={17} />
-            </button>
+            </Button>
           </>
         ) : (
           <form
@@ -331,7 +577,7 @@ export function Fleet({
           >
             <label htmlFor="node-label">
               Runtime name
-              <input
+              <TextInput
                 ref={input}
                 id="node-label"
                 required
@@ -344,7 +590,7 @@ export function Fleet({
             </label>
             <label htmlFor="node-roles">
               Allowed roles
-              <input
+              <TextInput
                 id="node-roles"
                 required
                 value={roles}
@@ -357,12 +603,14 @@ export function Fleet({
                 tools.
               </small>
             </label>
-            <button
+            <Button
+              type="submit"
+              variant="primary"
               className="full-width"
               disabled={busy || !label.trim() || !roles.trim()}
             >
               {busy ? "Creating invitation…" : "Create enrollment invitation"}
-            </button>
+            </Button>
           </form>
         )}
       </dialog>

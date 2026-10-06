@@ -1,3 +1,5 @@
+import { Button } from "@colossus/ui";
+import { Button as LinkButton } from "@colossus/ui/components/ui/button";
 import { useEffect, useRef, useState } from "react";
 import {
   IconArrowLeft,
@@ -26,12 +28,14 @@ export function TaskDetail({
   permissions,
   nodeLabel,
   onBack,
+  backHref,
 }: {
   initial: Task;
   project: string;
   permissions: Permission[];
   nodeLabel: string;
   onBack: () => void;
+  backHref?: string;
 }) {
   const [task, setTask] = useState(initial),
     [updates, setUpdates] = useState<Update[]>([]),
@@ -119,16 +123,40 @@ export function TaskDetail({
   }
   return (
     <div className="detail">
-      <button className="text-button back" onClick={onBack}>
-        <IconArrowLeft size={17} />
-        All tasks
-      </button>
+      {backHref ? (
+        <LinkButton asChild variant="ghost" className="back">
+          <a
+            href={backHref}
+            onClick={(event) => {
+              if (
+                event.defaultPrevented ||
+                event.button !== 0 ||
+                event.metaKey ||
+                event.ctrlKey ||
+                event.shiftKey ||
+                event.altKey
+              )
+                return;
+              event.preventDefault();
+              onBack();
+            }}
+          >
+            <IconArrowLeft size={17} aria-hidden="true" />
+            All tasks
+          </a>
+        </LinkButton>
+      ) : (
+        <Button variant="tertiary" className="back" onClick={onBack}>
+          <IconArrowLeft size={17} />
+          All tasks
+        </Button>
+      )}
       <div className="detail-header">
         <div>
           <div className="eyebrow">
             {nodeLabel} <span> / </span> {task.request.mode}
           </div>
-          <h1>{taskTitle(task)}</h1>
+          <h2>{taskTitle(task)}</h2>
         </div>
         <span className={`status status-${status}`}>{statusLabel(status)}</span>
       </div>
@@ -139,8 +167,8 @@ export function TaskDetail({
         </span>
         <span>{task.request.role}</span>
         <span title={task.task_id}>Task {task.task_id.slice(0, 8)}</span>
-        <button
-          className="secondary small"
+        <Button
+          variant="secondary"
           disabled={
             busy || finished || !task.run_id || !permissions.includes("control")
           }
@@ -148,14 +176,14 @@ export function TaskDetail({
         >
           <IconPlayerStop size={15} />
           {busy ? "Requesting…" : "Cancel task"}
-        </button>
+        </Button>
       </div>
       {error && (
         <div role="alert" className="alert">
           {error}
-          <button aria-label="Dismiss error" onClick={() => setError("")}>
+          <Button aria-label="Dismiss error" onClick={() => setError("")}>
             ×
-          </button>
+          </Button>
         </div>
       )}
       {notice && (

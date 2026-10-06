@@ -1,0 +1,109 @@
+.application-frame {
+  height: 100dvh;
+  background: var(--main);
+  color: var(--text);
+}
+.application-frame .managed-settings-header {
+  grid-template-columns: minmax(0, 1fr) auto;
+  background: var(--canvas);
+}
+.application-frame .settings-frame-layout {
+  grid-template-columns: var(--settings-sidebar-width) minmax(0, 1fr);
+}
+.application-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+.application-frame .sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  text-align: left;
+  font-family: var(--font-sans);
+}
+.application-nav-badge {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  font-weight: 400;
+}
+.application-skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 50;
+  padding: 8px 12px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--blue);
+  border-radius: var(--radius-sm);
+  transform: translateY(-200%);
+}
+.application-skip-link:focus {
+  transform: none;
+}
+@media (max-width: 900px) {
+  .application-frame .settings-frame-layout {
+    grid-template-columns: 200px minmax(0, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .application-frame {
+    height: auto;
+    min-height: 100dvh;
+  }
+  .application-frame .managed-settings-header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+  }
+  .application-frame .settings-frame-layout {
+    display: flex;
+    flex-direction: column;
+  }
+  .application-frame .settings-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    overflow: visible;
+  }
+  .application-frame .settings-sidebar-content {
+    overflow: visible;
+  }
+  .application-frame .managed-settings-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .application-frame .managed-settings-tabs > button {
+    flex: 1 1 auto;
+    min-height: var(--control-height-compact);
+    gap: 6px;
+    padding-inline: 6px;
+  }
+  .application-frame .application-nav-badge {
+    display: none;
+  }
+  .application-frame .sidebar-nav-item > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+  .application-frame .settings-sidebar-footer {
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+  .application-frame .settings-sidebar-footer button {
+    width: auto;
+  }
+  .application-frame .settings-main {
+    overflow: visible;
+  }
+  .application-header-actions {
+    flex: 1;
+  }
+}
