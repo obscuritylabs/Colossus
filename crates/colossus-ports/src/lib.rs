@@ -28,6 +28,9 @@ use thiserror::Error;
 mod control;
 pub use control::*;
 
+mod context_error;
+pub use context_error::*;
+
 mod run_provenance;
 pub use run_provenance::*;
 

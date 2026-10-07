@@ -63,6 +63,9 @@ pub enum StoreError {
 /// Provider-turn failure classification preserved across the application port.
 #[derive(Debug, Error)]
 pub enum ModelProviderError {
+    /// Provider reported a safe, categorized terminal rejection.
+    #[error(transparent)]
+    Rejected(colossus_contracts::ProviderFailure),
     /// Profile or request configuration is invalid.
     #[error("provider configuration failed: {0}")]
     Configuration(String),
@@ -93,6 +96,8 @@ pub enum ModelProviderError {
     /// value after the run has terminated.
     #[error("provider turn failed: endpoint returned HTTP {}", diagnostic.status)]
     ResponseDiagnostic {
+        /// Safe classification of the explicitly released diagnostic, when recognized.
+        failure: Option<colossus_contracts::ProviderFailure>,
         /// Post-policy, bounded provider request and response evidence.
         diagnostic: Box<ProviderResponseDiagnostic>,
     },
@@ -108,7 +113,7 @@ impl ModelProviderError {
     /// Return explicitly released provider response evidence without changing safe error text.
     pub fn response_diagnostic(&self) -> Option<&ProviderResponseDiagnostic> {
         match self {
-            Self::ResponseDiagnostic { diagnostic } => Some(diagnostic),
+            Self::ResponseDiagnostic { diagnostic, .. } => Some(diagnostic),
             _ => None,
         }
     }
@@ -157,20 +162,6 @@ pub enum ToolError {
     /// Tool effect may have occurred and cannot be retried implicitly.
     #[error("tool outcome is unknown: {0}")]
     OutcomeUnknown(String),
-}
-
-/// Context preparation or snapshot lifecycle failure.
-#[derive(Debug, Error)]
-pub enum ContextError {
-    /// Context configuration or request cannot satisfy the safety contract.
-    #[error("context configuration failed: {0}")]
-    Configuration(String),
-    /// Canonical snapshot persistence or session reconstruction failed.
-    #[error(transparent)]
-    Store(#[from] StoreError),
-    /// Optional model summarization failed before deterministic fallback could run.
-    #[error(transparent)]
-    Provider(#[from] ModelProviderError),
 }
 
 /// Result of full journal verification.

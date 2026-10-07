@@ -135,6 +135,11 @@ impl EffectExecutor for WorkflowAgentExecutor {
 
 fn workflow_agent_execution_error(error: AgentError) -> ExecutionError {
     match error {
+        AgentError::Provider(ModelProviderError::Rejected(failure))
+        | AgentError::Provider(ModelProviderError::ResponseDiagnostic {
+            failure: Some(failure),
+            ..
+        }) => ExecutionError::ProviderRejected(failure),
         AgentError::Provider(ModelProviderError::Recoverable {
             code,
             message,
@@ -149,7 +154,7 @@ fn workflow_agent_execution_error(error: AgentError) -> ExecutionError {
         AgentError::Provider(ModelProviderError::HttpStatus { status, message }) => {
             ExecutionError::HttpStatus { status, message }
         }
-        AgentError::Provider(ModelProviderError::ResponseDiagnostic { diagnostic }) => {
+        AgentError::Provider(ModelProviderError::ResponseDiagnostic { diagnostic, .. }) => {
             ExecutionError::HttpStatus {
                 status: diagnostic.status,
                 message: format!("provider endpoint returned HTTP {}", diagnostic.status),

@@ -43,34 +43,6 @@ pub struct ProviderEffectInput {
     pub include_response_diagnostics: bool,
 }
 
-/// Provider configuration, transport, credential, or normalization failure.
-#[derive(Debug, Error)]
-pub enum ProviderError {
-    /// Policy release or progress delivery failed; preserve its execution semantics.
-    #[error(transparent)]
-    Progress(Box<ExecutionError>),
-    /// Strict profile configuration failed.
-    #[error("provider configuration error: {0}")]
-    Configuration(String),
-    /// Credential reference could not be resolved.
-    #[error("provider credential unavailable: {0}")]
-    Credential(String),
-    /// Endpoint was unreachable or timed out.
-    #[error("provider transport failure: {0}")]
-    Transport(String),
-    /// Endpoint returned a non-success status.
-    #[error("provider endpoint returned HTTP {status}")]
-    Status {
-        /// HTTP status code only; response bodies are never included.
-        status: u16,
-        /// Bounded provider retry lower bound parsed from `Retry-After`.
-        retry_after_ms: Option<u64>,
-    },
-    /// Provider response failed the normalized contract.
-    #[error("malformed provider output: {0}")]
-    Malformed(String),
-}
-
 enum ProviderJsonResponse {
     Success(Vec<u8>),
     HttpError(ProviderResponseDiagnostic),
@@ -222,18 +194,6 @@ impl QuarantinedEffectObserver for CollectedProviderStream {
 
 fn is_false(value: &bool) -> bool {
     !*value
-}
-
-impl From<reqwest::Error> for ProviderError {
-    fn from(error: reqwest::Error) -> Self {
-        Self::Transport(error.to_string())
-    }
-}
-
-impl From<url::ParseError> for ProviderError {
-    fn from(error: url::ParseError) -> Self {
-        Self::Configuration(error.to_string())
-    }
 }
 
 use colossus_ports::CredentialResolutionError;
@@ -439,6 +399,7 @@ impl EffectExecutor for ProviderExecutor {
 
 pub(super) fn provider_execution_error(error: ProviderError) -> ExecutionError {
     match error {
+        ProviderError::Rejected(failure) => ExecutionError::ProviderRejected(failure),
         ProviderError::Progress(error) => *error,
         ProviderError::Transport(message) => ExecutionError::OutcomeUnknown(format!(
             "provider transport failed after execution began; outcome is unknown: {message}"
@@ -1041,6 +1002,11 @@ impl ProviderExecutor {
             if include_response_diagnostics {
                 return Ok(ProviderJsonResponse::HttpError(diagnostic));
             }
+            if !matches!(diagnostic.status, 502..=504)
+                && let Some(failure) = classify_response_diagnostic(&diagnostic)
+            {
+                return Err(ProviderError::Rejected(failure));
+            }
             return Err(error);
         }
         let limit = usize::try_from(permit.obligations().max_output_bytes)
@@ -1508,6 +1474,11 @@ impl ProviderExecutor {
                 )
                 .await;
             }
+            if !matches!(diagnostic.status, 502..=504)
+                && let Some(failure) = classify_response_diagnostic(&diagnostic)
+            {
+                return Err(ExecutionError::ProviderRejected(failure));
+            }
             return Err(provider_execution_error(error));
         }
         if !streaming {
@@ -1684,8 +1655,11 @@ pub(super) fn validate_serialized_provider_request(
         MAX_PROVIDER_REQUEST_BYTES
     };
     if body_len > body_limit || non_image_len > MAX_PROVIDER_REQUEST_BYTES {
-        return Err(ProviderError::Configuration(
-            "serialized provider request exceeds its bounded text or image request size".into(),
+        return Err(ProviderError::Rejected(
+            colossus_contracts::ProviderFailure {
+                reason: colossus_contracts::ProviderFailureReason::RequestTooLarge,
+                http_status: None,
+            },
         ));
     }
     Ok(())
