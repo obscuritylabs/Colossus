@@ -9,6 +9,8 @@ struct Tools {
     calls: Mutex<Vec<Value>>,
     discoveries: Mutex<usize>,
     change_schema: bool,
+    delay_ms: u64,
+    timeout_ms: u64,
 }
 
 #[async_trait]
@@ -18,6 +20,9 @@ impl EffectExecutor for Tools {
         request: &EffectRequest,
         _permit: ExecutionPermit,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        if self.delay_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(self.delay_ms)).await;
+        }
         let operation = &request.content["operation"];
         let output = if request.action == "mcp.tools" {
             let mut discoveries = self.discoveries.lock().expect("discoveries");
@@ -132,6 +137,8 @@ fn tools() -> Arc<Tools> {
         calls: Mutex::new(Vec::new()),
         discoveries: Mutex::new(0),
         change_schema: false,
+        delay_ms: 0,
+        timeout_ms: 30_000,
     })
 }
 
@@ -172,7 +179,7 @@ fn server(allowed: &[&str], projections: Vec<McpResearchToolConfig>) -> McpServe
     }
 }
 
-fn gateway(allow_call: bool) -> EffectGateway {
+fn gateway(allow_call: bool, timeout_ms: u64) -> EffectGateway {
     let decision = if allow_call {
         DecisionOutcome::Allow
     } else {
@@ -181,6 +188,8 @@ fn gateway(allow_call: bool) -> EffectGateway {
     let policy = BuiltInPolicy::offline_default()
         .with_action("mcp.tools", DecisionOutcome::Allow)
         .with_action("mcp.call", decision)
+        .with_action_timeout("mcp.tools", timeout_ms)
+        .with_action_timeout("mcp.call", timeout_ms)
         .with_post_effect(false)
         .with_sandbox("native", "mcp-research-test", false)
         .with_action_restrictions(
@@ -242,7 +251,7 @@ async fn collect(
         Arc::clone(&tools) as Arc<dyn EffectExecutor>,
     )
     .expect("executor");
-    let gateway = gateway(allow_call);
+    let gateway = gateway(allow_call, tools.timeout_ms);
     let model = GatewayResearchModel { provider: model };
     McpResearchCollector {
         gateway: &gateway,
@@ -252,6 +261,56 @@ async fn collect(
     }
     .collect(&run(), "event evidence", limit)
     .await
+}
+
+#[tokio::test]
+async fn slow_inherited_servers_and_invocation_fit_the_outer_research_deadline() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.sandbox.timeout_ms = 1_000;
+    config.research.max_sources = 1;
+    config.research.max_workers = 1;
+    let mut tools = tools();
+    let fixture = Arc::get_mut(&mut tools).expect("exclusive fixture");
+    fixture.advertised.clear();
+    fixture.delay_ms = 50;
+    fixture.timeout_ms = config.sandbox.timeout_ms;
+    // Each discovery is comfortably inside its own one-second deadline, but
+    // together these exceed the old two-second outer collection allowance.
+    for index in 0..64 {
+        let name = format!("fixture-{index:02}");
+        let mut advertised = tool("search_events");
+        advertised.server = name.clone();
+        fixture.advertised.push(advertised);
+        config
+            .mcp
+            .servers
+            .insert(name, server(&["search_events"], Vec::new()));
+    }
+    let timeout_ms = crate::composition::research_run_timeout_ms(0, &config);
+    let output = tokio::time::timeout(
+        Duration::from_millis(timeout_ms),
+        collect(
+            config.mcp.servers,
+            Arc::clone(&tools),
+            model(vec![selected(
+                "research_mcp_0",
+                json!({"query": "event evidence"}),
+            )]),
+            true,
+            1,
+        ),
+    )
+    .await
+    .expect("valid inner MCP effects must complete within the outer deadline");
+    assert_eq!(
+        output.status,
+        ResearchLaneStatus::Completed,
+        "{}",
+        output.message
+    );
+    assert_eq!(output.sources.len(), 1);
+    assert_eq!(*tools.discoveries.lock().expect("discoveries"), 65);
+    assert_eq!(tools.calls.lock().expect("calls").len(), 1);
 }
 
 #[tokio::test]

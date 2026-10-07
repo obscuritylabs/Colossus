@@ -59,8 +59,39 @@ use tempfile::tempdir;
 
 #[test]
 fn research_outer_timeout_contains_every_bounded_nested_operation() {
-    assert_eq!(research_run_timeout_ms(300_000, 30_000, 20, 4), 7_950_000);
-    assert!(research_run_timeout_ms(300_000, 30_000, 20, 4) > 30_000);
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.sandbox.timeout_ms = 30_000;
+    assert_eq!(research_run_timeout_ms(300_000, &config), 7_950_000);
+    assert!(research_run_timeout_ms(300_000, &config) > config.sandbox.timeout_ms);
+    assert_eq!(research_run_timeout_ms(u64::MAX, &config), u64::MAX);
+}
+
+#[test]
+fn research_outer_timeout_reserves_paginated_discovery_for_later_plugin_servers() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.sandbox.timeout_ms = 1_000;
+    config.research.max_sources = 1;
+    config.research.max_workers = 1;
+    config.mcp.servers.insert(
+        "standalone".into(),
+        serde_json::from_value(json!({"allowedTools": ["*"]})).expect("MCP config"),
+    );
+    let standalone_timeout = research_run_timeout_ms(0, &config);
+    config.plugins.mcp_servers.insert(
+        "later-installed/search".into(),
+        super::PluginMcpServerConfig {
+            enabled: true,
+            allowed_tools: vec!["*".into()],
+            ..super::PluginMcpServerConfig::default()
+        },
+    );
+    assert!(
+        research_run_timeout_ms(0, &config)
+            >= standalone_timeout
+                + u64::try_from(colossus_mcp::MAX_MCP_PAGES).expect("page bound")
+                    * config.sandbox.timeout_ms,
+        "every configured plugin server needs its full paginated discovery budget before installation"
+    );
 }
 
 #[test]

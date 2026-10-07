@@ -4,21 +4,37 @@ use super::*;
 /// execute sequentially. Its deadline must contain those inner deadlines; otherwise
 /// the generic sandbox timeout can interrupt a valid research run while an inner
 /// external effect is still active and force an `outcome_unknown` terminal state.
-pub(super) fn research_run_timeout_ms(
-    provider_timeout_ms: u64,
-    sandbox_timeout_ms: u64,
-    max_sources: usize,
-    max_workers: usize,
-) -> u64 {
-    let model_calls = u64::try_from(max_sources)
-        .unwrap_or(u64::MAX)
-        .saturating_add(u64::try_from(max_workers).unwrap_or(u64::MAX)) // MCP tool selection per lane
+pub(super) fn research_run_timeout_ms(provider_timeout_ms: u64, config: &RuntimeConfig) -> u64 {
+    let max_sources = u64::try_from(config.research.max_sources).unwrap_or(u64::MAX);
+    let max_workers = u64::try_from(config.research.max_workers).unwrap_or(u64::MAX);
+    // Include configured plugin overlays even before their components are installed:
+    // later run snapshots may expose them without rebuilding the outer effect policy.
+    let max_mcp_servers = u64::try_from(
+        config
+            .mcp
+            .servers
+            .len()
+            .saturating_add(config.plugins.mcp_servers.len()),
+    )
+    .unwrap_or(u64::MAX);
+    let mcp_pages = u64::try_from(MAX_MCP_PAGES).unwrap_or(u64::MAX);
+    let mcp_collection_calls = if max_mcp_servers == 0 {
+        0
+    } else {
+        // Initial inherited discovery visits every server. Every selected or
+        // projected call then rediscovers its complete schema before invocation.
+        max_mcp_servers
+            .saturating_mul(mcp_pages)
+            .saturating_add(max_sources.saturating_mul(mcp_pages.saturating_add(1)))
+    };
+    let model_calls = max_sources
+        .saturating_add(max_workers) // MCP tool selection per lane
         .saturating_add(2); // planning plus synthesis
-    let collection_calls = u64::try_from(max_workers).unwrap_or(u64::MAX);
+    let collection_calls = max_workers.saturating_mul(mcp_collection_calls.max(1));
     provider_timeout_ms
         .saturating_mul(model_calls)
-        .saturating_add(sandbox_timeout_ms.saturating_mul(collection_calls))
-        .saturating_add(sandbox_timeout_ms) // bounded orchestration overhead
+        .saturating_add(config.sandbox.timeout_ms.saturating_mul(collection_calls))
+        .saturating_add(config.sandbox.timeout_ms) // bounded orchestration overhead
 }
 
 struct StartupObservation {
