@@ -82,8 +82,16 @@ for (const width of [1586, 880, 700]) {
         }),
       );
     for (const style of sectionStyles) {
-      expect(style, "Settings navigation matches the main sidebar").toEqual(
-        navigationStyle,
+      const { iconWidth, ...sectionStyle } = style;
+      const { iconWidth: navigationIconWidth, ...sidebarStyle } =
+        navigationStyle;
+      expect(
+        sectionStyle,
+        "Settings navigation matches the main sidebar",
+      ).toEqual(sidebarStyle);
+      expect(iconWidth, "Settings icons match the main sidebar").toBeCloseTo(
+        navigationIconWidth,
+        4,
       );
     }
     const pageStyle = async () => {

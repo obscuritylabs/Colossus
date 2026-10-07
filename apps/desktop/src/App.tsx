@@ -1036,6 +1036,7 @@ export default function App() {
   const [settingsStartTab, setSettingsStartTab] = useState<
     | "runtime"
     | "providers"
+    | "models"
     | "plugins"
     | "terminal"
     | "dictation"
@@ -5379,7 +5380,7 @@ export default function App() {
         configuration: desktop.managedModelConfiguration,
       }}
       onOpenModelSettings={() => {
-        setSettingsStartTab("providers");
+        setSettingsStartTab("models");
         setWorkNavigationOpen(false);
         setSurface("settings");
       }}

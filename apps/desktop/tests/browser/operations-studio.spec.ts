@@ -3242,11 +3242,15 @@ test("fork draft opens the full composer at minimum size with Large text", async
         exact: true,
       })
       .click();
-    await page
-      .getByRole("menu", { name: "Actions for Audit ipc boundary" })
-      .screenshot({
-        path: `output/playwright/thread-actions-${colorTheme}-${darkPalette}.png`,
-      });
+    const actions = page.getByRole("menu", {
+      name: "Actions for Audit ipc boundary",
+    });
+    await expect(actions).toBeVisible();
+    await expect(actions).toBeInViewport();
+    // Capture the visible popup without an element screenshot's automatic scrolling.
+    await page.screenshot({
+      path: `output/playwright/thread-actions-${colorTheme}-${darkPalette}.png`,
+    });
     await page
       .getByRole("menuitem", { name: "Fork Audit ipc boundary", exact: true })
       .click();
@@ -3388,20 +3392,22 @@ test("follow-up prompts remain in the same work conversation", async ({
   const followUp = "Now check the Windows preview path";
   await prompt.fill(opening);
   await prompt.press("Enter");
-  await expect(page.locator(".message-user .message-body")).toContainText(
-    opening,
-  );
+  await expect(
+    page.locator('article[data-role="user"] .shared-message-body'),
+  ).toContainText(opening);
 
   await prompt.fill(followUp);
   await prompt.press("Enter");
-  await expect(page.locator(".message-user .message-body")).toHaveCount(2);
   await expect(
-    page.locator(".message-user .message-body").nth(0),
+    page.locator('article[data-role="user"] .shared-message-body'),
+  ).toHaveCount(2);
+  await expect(
+    page.locator('article[data-role="user"] .shared-message-body').nth(0),
   ).toContainText(opening);
   await expect(
-    page.locator(".message-user .message-body").nth(1),
+    page.locator('article[data-role="user"] .shared-message-body').nth(1),
   ).toContainText(followUp);
-  await expect(page.locator(".message-assistant")).toHaveCount(2);
+  await expect(page.locator('article[data-role="assistant"]')).toHaveCount(2);
   await expect(page.getByRole("heading", { name: opening })).toBeVisible();
 
   await page.getByRole("button", { name: "Open work navigation" }).click();

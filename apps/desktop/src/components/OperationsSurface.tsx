@@ -40,6 +40,7 @@ interface OperationsSurfaceProps {
   initialSettingsTab?:
     | "runtime"
     | "providers"
+    | "models"
     | "plugins"
     | "terminal"
     | "dictation"
