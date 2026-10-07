@@ -29,7 +29,7 @@ impl CloudRepository {
                 return Err(CloudError::Conflict);
             }
             let host_key = format!("cloud.host:{}:{}", node.project_id, inventory.host_id);
-            let (host_version, host) = match self.read::<CloudHost>(&host_key).await {
+            let (host_version, previous_host) = match self.read::<CloudHost>(&host_key).await {
                 Ok((host, revision)) => (revision, Some(host)),
                 Err(CloudError::NotFound) => (0, None),
                 Err(error) => return Err(error),
@@ -38,17 +38,20 @@ impl CloudRepository {
                 "cloud.workspace:{}:{}",
                 node.project_id, inventory.workspace_id
             );
-            let workspace_version = match self.read::<CloudWorkspace>(&workspace_key).await {
+            let (workspace_version, previous_workspace) = match self
+                .read::<CloudWorkspace>(&workspace_key)
+                .await
+            {
                 Ok((workspace, revision)) => {
                     if workspace.node_id != node.node_id || workspace.host_id != inventory.host_id {
                         return Err(CloudError::Conflict);
                     }
-                    revision
+                    (revision, Some(workspace))
                 }
-                Err(CloudError::NotFound) => 0,
+                Err(CloudError::NotFound) => (0, None),
                 Err(error) => return Err(error),
             };
-            let host = CloudHost {
+            let mut host = CloudHost {
                 host_id: inventory.host_id.clone(),
                 project_id: node.project_id.clone(),
                 label: inventory.host_label.clone(),
@@ -57,10 +60,12 @@ impl CloudRepository {
                     .ok()
                     .and_then(|value| value.as_str().map(str::to_owned))
                     .unwrap_or_else(|| "cli".into()),
-                last_seen_at: now.max(host.as_ref().map_or(0, |host| host.last_seen_at)),
-                revision: host_version + 1,
+                // Existing presence belongs to heartbeat_node, not repeated
+                // static inventory samples accompanying policy observations.
+                last_seen_at: previous_host.as_ref().map_or(now, |host| host.last_seen_at),
+                revision: host_version,
             };
-            let workspace = CloudWorkspace {
+            let mut workspace = CloudWorkspace {
                 workspace_id: inventory.workspace_id.clone(),
                 project_id: node.project_id.clone(),
                 host_id: inventory.host_id.clone(),
@@ -70,10 +75,10 @@ impl CloudRepository {
                     .ok()
                     .and_then(|value| value.as_str().map(str::to_owned))
                     .ok_or(CloudError::InvalidArgument)?,
-                revision: workspace_version + 1,
+                revision: workspace_version,
             };
+            let previous_node = fresh.clone();
             let node_version = fresh.revision;
-            fresh.revision += 1;
             fresh.host_id = Some(inventory.host_id.clone());
             fresh.workspace_id = Some(inventory.workspace_id.clone());
             fresh.workspace_label = Some(inventory.workspace_label.clone());
@@ -82,29 +87,39 @@ impl CloudRepository {
                 fresh.policy = Some(policy);
                 fresh.policy_observed_at = Some(now);
             }
-            let writes = vec![
-                self.event(
+            let mut writes = Vec::new();
+            if previous_host.as_ref() != Some(&host) {
+                host.revision += 1;
+                writes.push(self.event(
                     &node.node_id,
                     host_key,
                     host_version,
                     "cloud.host.observed.v2",
                     &host,
-                )?,
-                self.event(
+                )?);
+            }
+            if previous_workspace.as_ref() != Some(&workspace) {
+                workspace.revision += 1;
+                writes.push(self.event(
                     &node.node_id,
                     workspace_key,
                     workspace_version,
                     "cloud.workspace.observed.v2",
                     &workspace,
-                )?,
-                self.event(
+                )?);
+            }
+            if fresh != previous_node {
+                fresh.revision += 1;
+                writes.push(self.event(
                     &node.node_id,
                     format!("cloud.node:{}:{}", node.project_id, node.node_id),
                     node_version,
                     "cloud.node.inventory.v2",
                     &fresh,
-                )?,
-            ];
+                )?);
+            }
+            // A no-op still checks the bound connection generation atomically;
+            // it emits no entity audit/outbox entries or changed notifications.
             match self.commit(writes).await {
                 Ok(()) => return Ok(fresh),
                 Err(colossus_ports::StoreError::Conflict { .. }) => continue,

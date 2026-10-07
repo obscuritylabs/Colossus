@@ -4,6 +4,9 @@ use colossus_cloud_protocol::{CloudReply, Command};
 use colossus_sdk::*;
 use std::{collections::BTreeSet, sync::Arc};
 
+#[path = "tests/inventory.rs"]
+mod inventory;
+
 fn caller(project: &str, permissions: &[CloudPermission]) -> CloudCaller {
     CloudCaller::new(
         "alice".into(),
