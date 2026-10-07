@@ -1,4 +1,7 @@
-use colossus_sdk::{Colossus, NativeSidecarFailure, NativeSidecarStatus};
+use colossus_sdk::{
+    ApiError, Colossus, ListRunsRequest, ListRunsResponse, NativeSidecarFailure,
+    NativeSidecarStatus,
+};
 use colossus_worker_protocol::WorkerControlClient;
 use std::{
     collections::HashMap,
@@ -17,6 +20,7 @@ use tokio::sync::{
 
 use crate::{
     desktop_dto::{DesktopApprovalModeDto, ManagedRuntimeStateDto, RuntimeFailureCodeDto},
+    run_list::RunList,
     terminal::{TerminalKind, TerminalManager, TerminalPlanContext, TerminalWorkspace},
 };
 
@@ -78,6 +82,7 @@ impl SelectedTargetLease<'_> {
 struct TargetLimits {
     watch_slots: Arc<Semaphore>,
     unary_slots: Arc<Semaphore>,
+    run_list: RunList,
 }
 
 impl TargetHandle {
@@ -97,6 +102,13 @@ impl TargetHandle {
         self.limits.try_unary_slot()
     }
 
+    pub(crate) async fn list_runs(
+        &self,
+        request: ListRunsRequest,
+    ) -> Result<ListRunsResponse, ApiError> {
+        self.limits.run_list.list_runs(&self.client, request).await
+    }
+
     fn is_closed(&self) -> bool {
         self.client.agent_runs().is_closed()
     }
@@ -107,6 +119,7 @@ impl TargetLimits {
         Self {
             watch_slots: Arc::new(Semaphore::new(MAX_NATIVE_WATCHES_PER_TARGET)),
             unary_slots: Arc::new(Semaphore::new(MAX_NATIVE_UNARY_CALLS_PER_TARGET)),
+            run_list: RunList::default(),
         }
     }
 

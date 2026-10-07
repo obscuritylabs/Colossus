@@ -32,7 +32,7 @@ use crate::{
         read_client_key_source, revalidate_workspace, validate_workspace,
     },
     dto::{CommandErrorDto, ConnectionStateDto, ConnectionStatusDto, RunDto},
-    managed_runtime, provider_enrollment, run_list, space_search,
+    managed_runtime, provider_enrollment, space_search,
     state::{AppState, ExternalHealth, ManagedHealth, TargetConsentContext, TargetHandle},
 };
 
@@ -931,18 +931,15 @@ async fn refresh_live_space_search_index(state: &AppState, settings: &DesktopSet
                 let remaining = SPACE_SUMMARY_REFRESH_TIMEOUT.checked_sub(started.elapsed())?;
                 let response = tokio::time::timeout(
                     remaining,
-                    run_list::list_runs(
-                        &target.client,
-                        ListRunsRequest {
-                            session_id: None,
-                            statuses: Vec::new(),
-                            page: Some(PageRequest {
-                                page_size: SPACE_SEARCH_INDEX_PAGE_SIZE,
-                                page_token,
-                            }),
-                            include_archived: false,
-                        },
-                    ),
+                    target.list_runs(ListRunsRequest {
+                        session_id: None,
+                        statuses: Vec::new(),
+                        page: Some(PageRequest {
+                            page_size: SPACE_SEARCH_INDEX_PAGE_SIZE,
+                            page_token,
+                        }),
+                        include_archived: false,
+                    }),
                 )
                 .await
                 .ok()?
@@ -1740,9 +1737,8 @@ pub(crate) async fn reject_active_managed_runs_for(
     if !matches!(target.consent, TargetConsentContext::ManagedLocal) {
         return Ok(());
     }
-    let runs = run_list::list_runs(
-        &target.client,
-        ListRunsRequest {
+    let runs = target
+        .list_runs(ListRunsRequest {
             session_id: None,
             statuses: vec![
                 RunStatus::Queued,
@@ -1755,10 +1751,9 @@ pub(crate) async fn reject_active_managed_runs_for(
                 page_token: String::new(),
             }),
             include_archived: false,
-        },
-    )
-    .await
-    .map_err(CommandErrorDto::from_api)?;
+        })
+        .await
+        .map_err(CommandErrorDto::from_api)?;
     if runs.runs.is_empty() {
         Ok(())
     } else {
@@ -2713,7 +2708,7 @@ async fn probe_connected_external(
         // The permit lives with the actual request task. If the health deadline
         // expires, a non-cancellable platform-keychain read remains globally bounded.
         let _permit = permit;
-        run_list::list_runs(&existing.client, request).await
+        existing.list_runs(request).await
     });
     let result = tokio::time::timeout(EXTERNAL_PROBE_TIMEOUT, &mut probe).await;
     let health = match result {

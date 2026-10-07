@@ -153,7 +153,7 @@ async fn sync_space(
     // Unlike an explicit Apply action, automatic updates never wait for or cancel a run.
     let Some(drain) = idle_guard(state, space_id, async {
         match state.target(space_id).await {
-            Some(target) => managed_runtime::managed_target_has_active_work(&target.client).await,
+            Some(target) => managed_runtime::managed_target_has_active_work(&target).await,
             None => Ok(false),
         }
     })
