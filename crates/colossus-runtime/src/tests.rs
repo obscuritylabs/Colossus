@@ -59,7 +59,7 @@ use tempfile::tempdir;
 
 #[test]
 fn research_outer_timeout_contains_every_bounded_nested_operation() {
-    assert_eq!(research_run_timeout_ms(300_000, 30_000, 20, 4), 6_750_000);
+    assert_eq!(research_run_timeout_ms(300_000, 30_000, 20, 4), 7_950_000);
     assert!(research_run_timeout_ms(300_000, 30_000, 20, 4) > 30_000);
 }
 

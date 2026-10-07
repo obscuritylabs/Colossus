@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import {
   CreateRunRequest,
   InteractionStatus,
+  ResearchDepth,
+  ResearchSourceKind,
   RunMode,
   runStatusToJSON,
   type Interaction,
@@ -11,7 +13,16 @@ import {
 } from "@obscuritylabs/colossus-sdk/gen/colossus/api/v1alpha1/agent_run";
 
 import { safeError, type WorkerClient } from "./connection.js";
-import { initialView, type ContextView, type WorkView } from "./model.js";
+import {
+  initialView,
+  isResearchOptions,
+  isWorkMode,
+  supportsResearch,
+  type ContextView,
+  type ResearchOptions,
+  type WorkMode,
+  type WorkView,
+} from "./model.js";
 import { UserError } from "./errors.js";
 import { toolProgress } from "./tool-progress.js";
 import {
@@ -330,7 +341,11 @@ export class WorkController {
       this.active = listed.find((run) => run.terminal === undefined);
       if (this.active)
         this.view.mode =
-          this.active.mode === RunMode.RUN_MODE_PLAN ? "plan" : "execute";
+          this.active.mode === RunMode.RUN_MODE_RESEARCH
+            ? "research"
+            : this.active.mode === RunMode.RUN_MODE_PLAN
+              ? "plan"
+              : "execute";
       this.view.sessionId = id;
       this.view.tools = [];
       for (const run of listed) this.recordRun(run);
@@ -373,12 +388,25 @@ export class WorkController {
     }
   }
 
-  async send(text: string, mode: "plan" | "execute") {
+  async send(text: string, mode: WorkMode, research?: ResearchOptions) {
     if (this.view.busy || this.uncertain)
       throw new UserError(
         "Reconcile the current run before sending another task.",
       );
     const client = this.requireClient();
+    if (!isWorkMode(mode)) throw new UserError("Choose a supported run mode.");
+    if (mode === "research") {
+      if (!supportsResearch(client.info.capabilities))
+        throw new UserError(
+          "Research is unavailable for this worker connection.",
+        );
+      if (!isResearchOptions(research))
+        throw new UserError(
+          "Choose a Research depth and at least one unique evidence source.",
+        );
+    } else if (research !== undefined) {
+      throw new UserError("Research settings apply only in Research mode.");
+    }
     const prompt = text.trim();
     if (!prompt || Buffer.byteLength(prompt, "utf8") > 64 * 1024)
       throw new UserError("Enter a task of at most 64 KiB.");
@@ -405,7 +433,28 @@ export class WorkController {
           sessionId: this.view.sessionId || undefined,
           role: this.role,
           mode:
-            mode === "plan" ? RunMode.RUN_MODE_PLAN : RunMode.RUN_MODE_EXECUTE,
+            mode === "research"
+              ? RunMode.RUN_MODE_RESEARCH
+              : mode === "plan"
+                ? RunMode.RUN_MODE_PLAN
+                : RunMode.RUN_MODE_EXECUTE,
+          ...(mode === "research" && research
+            ? {
+                researchDepth: {
+                  quick: ResearchDepth.RESEARCH_DEPTH_QUICK,
+                  standard: ResearchDepth.RESEARCH_DEPTH_STANDARD,
+                  deep: ResearchDepth.RESEARCH_DEPTH_DEEP,
+                }[research.researchDepth],
+                researchSources: research.researchSources.map(
+                  (source) =>
+                    ({
+                      repo: ResearchSourceKind.RESEARCH_SOURCE_KIND_REPO,
+                      web: ResearchSourceKind.RESEARCH_SOURCE_KIND_WEB,
+                      mcp: ResearchSourceKind.RESEARCH_SOURCE_KIND_MCP,
+                    })[source],
+                ),
+              }
+            : {}),
           idempotencyKey: randomUUID(),
         }),
       );

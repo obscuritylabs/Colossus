@@ -1202,6 +1202,40 @@ test("managed settings expose complete catalog editors without horizontal overfl
       ["critical", "serious"].includes(violation.impact ?? ""),
     ),
   ).toEqual([]);
+  for (const [name, width, theme, size] of [
+    ["wide-dark", 880, "dark", "comfortable"],
+    ["compact-light", 440, "light", "large"],
+  ] as const) {
+    await page.setViewportSize({ width, height: 760 });
+    await page.evaluate(
+      ({ theme, size }) => {
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.dataset.textSize = size;
+      },
+      { theme, size },
+    );
+    await page.getByLabel("Research tool projections").scrollIntoViewIfNeeded();
+    const inheritanceHelp = page.getByText(/^Leave empty to use the tools/u);
+    await expect(inheritanceHelp).toBeVisible();
+    expect(
+      await inheritanceHelp.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      ),
+    ).toBe(true);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: `output/playwright/mcp-research-inheritance-${name}.png`,
+    });
+  }
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = "dark";
+    document.documentElement.dataset.textSize = "comfortable";
+  });
   await page.getByRole("button", { name: "Close MCP editor" }).click();
 
   await page.getByRole("button", { name: "Defaults", exact: true }).click();
@@ -2081,9 +2115,55 @@ test("Research settings expose depth and evidence choices and restore focus", as
     page.getByLabel("Research controls, sources This Workspace, Web"),
   ).toBeVisible();
 
+  await page
+    .locator(".research-source-option", { hasText: "MCP connections" })
+    .click();
+  await expect(
+    page.getByRole("checkbox", { name: /MCP connections/u }),
+  ).toBeChecked();
+  await expect(
+    page.getByText("Search enabled MCP tools or research projections"),
+  ).toBeVisible();
+  for (const [name, width, theme, size] of [
+    ["wide-dark", 880, "dark", "comfortable"],
+    ["compact-light", 440, "light", "large"],
+  ] as const) {
+    await page.setViewportSize({ width, height: 760 });
+    await page.evaluate(
+      ({ theme, size }) => {
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.dataset.textSize = size;
+      },
+      { theme, size },
+    );
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    const popover = await page
+      .locator(".run-controls-popover.is-research")
+      .boundingBox();
+    expect(popover).not.toBeNull();
+    expect(popover!.x).toBeGreaterThanOrEqual(0);
+    expect(popover!.x + popover!.width).toBeLessThanOrEqual(width);
+    expect(
+      await page
+        .getByText("Search enabled MCP tools or research projections")
+        .evaluate((element) => element.scrollWidth <= element.clientWidth),
+    ).toBe(true);
+    const accessibility = await new AxeBuilder({ page })
+      .include(".work-composer")
+      .analyze();
+    expect(accessibility.violations).toEqual([]);
+    await page.screenshot({
+      path: `output/playwright/research-mcp-${name}.png`,
+    });
+  }
+
   await page.getByRole("button", { name: "Close research settings" }).click();
   const updatedTrigger = page.getByLabel(
-    "Research controls, sources This Workspace, Web",
+    "Research controls, sources This Workspace, Web, MCP connections",
   );
   await expect(updatedTrigger).toBeFocused();
 

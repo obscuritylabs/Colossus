@@ -12,6 +12,7 @@ pub(super) fn research_run_timeout_ms(
 ) -> u64 {
     let model_calls = u64::try_from(max_sources)
         .unwrap_or(u64::MAX)
+        .saturating_add(u64::try_from(max_workers).unwrap_or(u64::MAX)) // MCP tool selection per lane
         .saturating_add(2); // planning plus synthesis
     let collection_calls = u64::try_from(max_workers).unwrap_or(u64::MAX);
     provider_timeout_ms
@@ -810,6 +811,9 @@ impl Runtime {
         });
         let weak_risk_evaluator: Weak<dyn RiskEvaluator> = Arc::downgrade(&risk_evaluator);
         gateway.bind_risk_evaluator(weak_risk_evaluator)?;
+        let research_model = Arc::new(GatewayResearchModel {
+            provider: Arc::clone(&model_provider),
+        });
         let research_collector: Arc<dyn ResearchCollector> = Arc::new(GatewayResearchCollector {
             gateway: Arc::clone(&gateway),
             filesystem: Arc::clone(&filesystem_executor),
@@ -817,15 +821,13 @@ impl Runtime {
             search: Arc::clone(&search_provider),
             plugins: Arc::clone(&plugin_catalog),
             identity: workspace_identity.clone(),
-        });
-        let research_model: Arc<dyn ResearchModel> = Arc::new(GatewayResearchModel {
-            provider: Arc::clone(&model_provider),
+            model: Arc::clone(&research_model),
         });
         let research_service = Arc::new(ResearchService::new_with_model(
             Arc::clone(&research),
             Arc::clone(&sessions),
             research_collector,
-            Some(research_model),
+            Some(research_model as Arc<dyn ResearchModel>),
             ResearchLimits {
                 max_sources: config.research.max_sources,
                 max_workers: config.research.max_workers,

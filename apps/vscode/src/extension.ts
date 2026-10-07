@@ -16,7 +16,7 @@ import {
   UserError,
   type ConnectionDiagnostic,
 } from "./errors.js";
-import { parseAction, type WorkView } from "./model.js";
+import { parseAction, type ViewAction, type WorkView } from "./model.js";
 import {
   parseSettingsAction,
   preferenceSaveError,
@@ -698,7 +698,8 @@ export function activate(context: vscode.ExtensionContext) {
     await vscode.commands.executeCommand("colossus.work.focus");
   }
 
-  async function send(text: string, mode: "plan" | "execute") {
+  async function send(action: Extract<ViewAction, { type: "send" }>) {
+    let { mode } = action;
     if (configuringCredential)
       throw new UserError(
         "Finish configuring the credential location before sending a task.",
@@ -731,7 +732,11 @@ export function activate(context: vscode.ExtensionContext) {
       }
     }
     await guard();
-    await controller.send(text, mode);
+    await controller.send(
+      action.text,
+      mode,
+      action.mode === "research" ? action : undefined,
+    );
   }
 
   const commands: Record<string, () => Promise<unknown> | unknown> = {
@@ -861,7 +866,7 @@ export function activate(context: vscode.ExtensionContext) {
                   openSettings();
                   break;
                 case "send":
-                  await send(action.text, action.mode);
+                  await send(action);
                   break;
                 case "addSelection":
                   await addContext(true);

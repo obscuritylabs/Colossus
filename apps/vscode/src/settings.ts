@@ -1,6 +1,8 @@
+import { isWorkMode, type WorkMode } from "./model.js";
+
 export interface Preferences {
   sendShortcut: "enter" | "modEnter";
-  defaultMode: "plan" | "execute";
+  defaultMode: WorkMode;
   showToolActivity: boolean;
   palette: "editor" | "colossus" | "hacker";
 }
@@ -47,7 +49,7 @@ export type SettingsAction =
         | "openUserSettings";
     }
   | { type: "setPreference"; name: "sendShortcut"; value: "enter" | "modEnter" }
-  | { type: "setPreference"; name: "defaultMode"; value: "plan" | "execute" }
+  | { type: "setPreference"; name: "defaultMode"; value: WorkMode }
   | { type: "setPreference"; name: "showToolActivity"; value: boolean }
   | { type: "setPreference"; name: "palette"; value: Preferences["palette"] };
 
@@ -76,8 +78,7 @@ export function parseSettingsAction(
   if (
     (input.name === "sendShortcut" &&
       (input.value === "enter" || input.value === "modEnter")) ||
-    (input.name === "defaultMode" &&
-      (input.value === "plan" || input.value === "execute")) ||
+    (input.name === "defaultMode" && isWorkMode(input.value)) ||
     (input.name === "showToolActivity" && typeof input.value === "boolean") ||
     (input.name === "palette" &&
       (input.value === "editor" ||
@@ -135,7 +136,7 @@ export function readPreferences(get: (key: string) => unknown): Preferences {
   const palette = get(PREFERENCE_KEYS.palette);
   return {
     sendShortcut: shortcut === "enter" ? "enter" : "modEnter",
-    defaultMode: mode === "execute" ? "execute" : "plan",
+    defaultMode: isWorkMode(mode) ? mode : "plan",
     showToolActivity: typeof activity === "boolean" ? activity : true,
     palette:
       palette === "colossus" || palette === "hacker" ? palette : "editor",
