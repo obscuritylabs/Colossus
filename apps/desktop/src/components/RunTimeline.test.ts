@@ -178,8 +178,8 @@ describe("RunTimeline assistant output", () => {
       "complete",
     );
 
-    expect(markup).toContain('class="markdown-content"');
-    expect(markup).toContain('<h3 class="feed-entry-title">Colossus</h3>');
+    expect(markup).toContain('class="shared-markdown markdown-content"');
+    expect(markup).toContain("<strong>Colossus</strong>");
     expect(markup).toContain("<h4>Ready</h4>");
     expect(markup).toContain("<strong>security</strong>");
   });

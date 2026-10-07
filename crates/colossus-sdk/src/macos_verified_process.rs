@@ -71,7 +71,20 @@ pub(super) async fn spawn_verified(
     path: &Path,
     expected: CodeDirectoryHash,
 ) -> SdkResult<(MacosChild, BootstrapPipes)> {
-    spawn_verified_mode(path, expected, OsStr::new("__managed-sidecar-v1")).await
+    let mut environment = Vec::new();
+    if let Some(path) = crate::development_selector::selector()? {
+        let mut selector = OsString::from(crate::development_selector::VARIABLE);
+        selector.push("=");
+        selector.push(path);
+        environment.push(selector);
+    }
+    spawn_verified_mode_with_environment(
+        path,
+        expected,
+        OsStr::new("__managed-sidecar-v1"),
+        &environment,
+    )
+    .await
 }
 
 /// Spawn an exact path in one fixed private mode, validating its dynamic code identity
@@ -81,9 +94,17 @@ pub(super) async fn spawn_verified_mode(
     expected: CodeDirectoryHash,
     mode: &OsStr,
 ) -> SdkResult<(MacosChild, BootstrapPipes)> {
+    spawn_verified_mode_with_environment(path, expected, mode, &[]).await
+}
+async fn spawn_verified_mode_with_environment(
+    path: &Path,
+    expected: CodeDirectoryHash,
+    mode: &OsStr,
+    environment: &[OsString],
+) -> SdkResult<(MacosChild, BootstrapPipes)> {
     let arguments = [mode.to_os_string()];
-    let mut spawned =
-        spawn_suspended_pipes(path, &arguments, &[]).map_err(|_| SdkError::SidecarFailed)?;
+    let mut spawned = spawn_suspended_pipes(path, &arguments, environment)
+        .map_err(|_| SdkError::SidecarFailed)?;
     let validation = validate_dynamic_identity(spawned.child.pid(), expected).and_then(|()| {
         spawned
             .child

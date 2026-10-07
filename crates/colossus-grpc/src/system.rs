@@ -87,6 +87,7 @@ pub struct SystemServiceAdapter {
     application_limits: Vec<ApiLimit>,
     plugin_discovery: bool,
     workflows: bool,
+    policy_posture: bool,
 }
 
 impl SystemServiceAdapter {
@@ -98,6 +99,7 @@ impl SystemServiceAdapter {
             application_limits: default_application_limits(),
             plugin_discovery: false,
             workflows: false,
+            policy_posture: false,
         }
     }
 
@@ -115,6 +117,10 @@ impl SystemServiceAdapter {
         self.workflows = true;
         self
     }
+    pub(crate) fn with_policy_posture(mut self) -> Self {
+        self.policy_posture = true;
+        self
+    }
 }
 
 #[tonic::async_trait]
@@ -127,6 +133,7 @@ impl SystemService for SystemServiceAdapter {
         let capabilities = [
             ("agent_runs.create", scopes::RUNS_EXECUTE),
             ("agent_runs.read", scopes::RUNS_READ),
+            ("runtime.policy_posture.v1", scopes::RUNS_READ),
             (SESSION_ACTIVITY_CAPABILITY, scopes::RUNS_READ),
             ("process_sessions.v1", scopes::RUNS_READ),
             ("agent_runs.cancel", scopes::RUNS_CONTROL),
@@ -138,7 +145,8 @@ impl SystemService for SystemServiceAdapter {
         .into_iter()
         .map(|(name, scope)| Capability {
             name: name.into(),
-            enabled: caller.principal().has_scope(scope),
+            enabled: caller.principal().has_scope(scope)
+                && (name != "runtime.policy_posture.v1" || self.policy_posture),
             detail: String::new(),
         })
         .chain(

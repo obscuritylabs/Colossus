@@ -46,7 +46,7 @@ mod keys;
 use keys::cached_platform_secret;
 pub use keys::{
     EnvironmentKeyProvider, PlaintextKeyProvider, PlatformKeyProvider, StaticKeyProvider,
-    platform_secret,
+    decode_secure_anchor, platform_secret,
 };
 
 mod crypto;
@@ -55,6 +55,8 @@ pub use crypto::{DisabledCheckpointSigner, Ed25519CheckpointSigner};
 
 mod journal;
 pub use journal::RedbEventJournal;
+mod key_metadata;
+pub use key_metadata::{JournalKeyMetadata, journal_key_metadata};
 
 #[cfg(test)]
 mod tests;

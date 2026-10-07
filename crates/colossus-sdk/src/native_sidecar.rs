@@ -276,10 +276,17 @@ impl SidecarLifecycle for NativeSidecarLifecycle {
             let agent_runs = Arc::new(SwitchingAgentRunClient::new(
                 running.transports().agent_runs(),
             ));
+            let connector_runs = running.transports().connector.as_ref().map(|transport| {
+                Arc::new(SwitchingAgentRunClient::new(AgentRunTransports {
+                    primary: transport.agent_runs(),
+                    approval_broker: None,
+                }))
+            });
             let state = Arc::new(ManagedSidecarState {
                 options: options.clone(),
                 bootstrap: Arc::clone(&self.bootstrap),
                 agent_runs: Arc::clone(&agent_runs),
+                connector_runs,
                 artifacts: artifacts.clone(),
                 process: tokio::sync::Mutex::new(Some(running)),
                 close_guard: tokio::sync::Mutex::new(()),
@@ -882,6 +889,7 @@ fn validate_discovery_leaf_absent(directory: &File, name: &str) -> SdkResult<()>
 struct ConnectedTransports {
     primary: Arc<GrpcBackend>,
     approval_broker: Option<Arc<GrpcBackend>>,
+    connector: Option<Arc<GrpcBackend>>,
 }
 
 impl ConnectedTransports {
@@ -897,6 +905,9 @@ impl ConnectedTransports {
 
     async fn close(&self) {
         let _ = self.primary.close().await;
+        if let Some(connector) = &self.connector {
+            let _ = connector.close().await;
+        }
         if let Some(approval_broker) = &self.approval_broker {
             let _ = approval_broker.close().await;
         }
@@ -973,6 +984,7 @@ struct ManagedSidecarState {
     options: SidecarOptions,
     bootstrap: Arc<SidecarBootstrapConfig>,
     agent_runs: Arc<SwitchingAgentRunClient>,
+    connector_runs: Option<Arc<SwitchingAgentRunClient>>,
     artifacts: Option<Arc<SwitchingArtifactClient>>,
     process: tokio::sync::Mutex<Option<RunningChild>>,
     close_guard: tokio::sync::Mutex<()>,
@@ -1010,6 +1022,17 @@ impl Backend for ManagedSidecarBackend {
         self.agent_runs.clone()
     }
 
+    fn instance_id(&self) -> Option<crate::InstanceId> {
+        Some(self.state.options.instance_id())
+    }
+
+    fn connector_runs(&self) -> Option<Arc<dyn AgentRunClient>> {
+        self.state
+            .connector_runs
+            .as_ref()
+            .map(|client| client.clone() as Arc<dyn AgentRunClient>)
+    }
+
     fn capabilities(&self) -> ServerCapabilities {
         self.capabilities.clone()
     }
@@ -1044,8 +1067,7 @@ impl Backend for ManagedSidecarBackend {
         // managed tree even while the aborted supervisor is still being joined.
         let running = self.state.process.lock().await.take();
         self.state.closing.store(true, Ordering::Release);
-        self.agent_runs.mark_closed();
-        self.agent_runs.release().await;
+        close_run_clients(&self.agent_runs, self.state.connector_runs.as_deref()).await;
         if let Some(artifacts) = &self.artifacts {
             artifacts.release().await;
         }
@@ -1161,7 +1183,7 @@ impl Drop for ManagedSidecarBackend {
             .status
             .send_replace(NativeSidecarStatus::Stopping);
         self.state.closing.store(true, Ordering::Release);
-        self.agent_runs.mark_closed();
+        mark_run_clients_closed(&self.agent_runs, self.state.connector_runs.as_deref());
         if let Ok(mut monitor) = self.state.monitor.lock()
             && let Some(task) = monitor.take()
         {
@@ -1181,6 +1203,27 @@ struct SwitchingAgentRunClient {
     closed: watch::Sender<bool>,
 }
 
+fn mark_run_clients_closed(
+    primary: &SwitchingAgentRunClient,
+    connector: Option<&SwitchingAgentRunClient>,
+) {
+    primary.mark_closed();
+    if let Some(connector) = connector {
+        connector.mark_closed();
+    }
+}
+
+async fn close_run_clients(
+    primary: &SwitchingAgentRunClient,
+    connector: Option<&SwitchingAgentRunClient>,
+) {
+    mark_run_clients_closed(primary, connector);
+    primary.release().await;
+    if let Some(connector) = connector {
+        connector.release().await;
+    }
+}
+
 impl SwitchingAgentRunClient {
     fn new(initial: AgentRunTransports) -> Self {
         let (closed, _) = watch::channel(false);
@@ -1191,12 +1234,21 @@ impl SwitchingAgentRunClient {
     }
 
     async fn current(&self) -> ApiResult<AgentRunTransports> {
+        if self.is_closed() {
+            return Err(sidecar_closed_error());
+        }
         let current = self.current.read().await;
+        if self.is_closed() {
+            return Err(sidecar_closed_error());
+        }
         current.clone().ok_or_else(sidecar_closed_error)
     }
 
     async fn replace(&self, next: AgentRunTransports) {
-        *self.current.write().await = Some(next);
+        let mut current = self.current.write().await;
+        if !self.is_closed() {
+            *current = Some(next);
+        }
     }
 
     async fn release(&self) {
@@ -1205,6 +1257,11 @@ impl SwitchingAgentRunClient {
 
     fn mark_closed(&self) {
         self.closed.send_replace(true);
+        // Drop cannot await, but normally owns no competing transport read. If
+        // a read is in flight, the closed signal still rejects every later call.
+        if let Ok(mut current) = self.current.try_write() {
+            current.take();
+        }
     }
 }
 
@@ -1265,6 +1322,33 @@ impl ArtifactClient for SwitchingArtifactClient {
 
 #[async_trait]
 impl AgentRunClient for SwitchingAgentRunClient {
+    async fn get_runtime_policy_posture(&self) -> ApiResult<crate::RuntimePolicyPosture> {
+        self.current()
+            .await?
+            .primary
+            .get_runtime_policy_posture()
+            .await
+    }
+    async fn set_workspace_sharing(
+        &self,
+        request: crate::SetWorkspaceSharingRequest,
+    ) -> ApiResult<crate::WorkspaceSharingState> {
+        self.current()
+            .await?
+            .primary
+            .set_workspace_sharing(request)
+            .await
+    }
+    async fn list_visible_runs(
+        &self,
+        request: ListRunsRequest,
+    ) -> ApiResult<crate::ListVisibleRunsResponse> {
+        self.current()
+            .await?
+            .primary
+            .list_visible_runs(request)
+            .await
+    }
     async fn list_process_sessions(
         &self,
         request: crate::ListProcessSessionsRequest,
@@ -1388,8 +1472,7 @@ async fn supervise(state: Arc<ManagedSidecarState>) {
         exited.guardian.take();
         if exited.force_kill_and_cleanup().is_err() {
             exited.close_transports().await;
-            state.agent_runs.mark_closed();
-            state.agent_runs.release().await;
+            close_run_clients(&state.agent_runs, state.connector_runs.as_deref()).await;
             if let Some(artifacts) = &state.artifacts {
                 artifacts.release().await;
             }
@@ -1420,6 +1503,16 @@ async fn supervise(state: Arc<ManagedSidecarState>) {
                 state.status.send_replace(NativeSidecarStatus::Stopping);
                 return;
             }
+            if let (Some(client), Some(transport)) =
+                (&state.connector_runs, &restarted.transports().connector)
+            {
+                client
+                    .replace(AgentRunTransports {
+                        primary: transport.agent_runs(),
+                        approval_broker: None,
+                    })
+                    .await;
+            }
             state
                 .agent_runs
                 .replace(restarted.transports().agent_runs())
@@ -1444,8 +1537,7 @@ async fn supervise(state: Arc<ManagedSidecarState>) {
             // During a recoverable crash, the transport must fail naturally with a
             // retryable UNAVAILABLE so durable watches reopen against the replacement.
             exited.close_transports().await;
-            state.agent_runs.mark_closed();
-            state.agent_runs.release().await;
+            close_run_clients(&state.agent_runs, state.connector_runs.as_deref()).await;
             if let Some(artifacts) = &state.artifacts {
                 artifacts.release().await;
             }
@@ -1527,6 +1619,16 @@ async fn launch_child(
         };
         validate_ready(options, &ready)?;
         provisional.bind_discovery()?;
+        if ready.connector_bearer.is_some() != bootstrap.has_connector_grant() {
+            return Err(SdkError::IdentityMismatch);
+        }
+        let connector_credential: Option<Arc<dyn CredentialProvider>> =
+            ready.connector_bearer.as_ref().map(|bearer| {
+                Arc::new(MemoryCredentialProvider {
+                    bearer: Zeroizing::new(bearer.expose().as_bytes().to_vec()),
+                }) as Arc<dyn CredentialProvider>
+            });
+        let connector_credential_id = ready.connector_credential_id.clone();
         let credential_id = ready.credential_id.clone();
         let approval_broker_credential_id = ready.approval_broker_credential_id.clone();
         let exchange_id = ready.exchange_id.clone();
@@ -1565,6 +1667,7 @@ async fn launch_child(
                 exchange_id: exchange_id.clone(),
                 credential_id: credential_id.clone(),
                 approval_broker_credential_id: approval_broker_credential_id.clone(),
+                connector_credential_id: connector_credential_id.clone(),
             }),
         )
         .await?;
@@ -1573,6 +1676,9 @@ async fn launch_child(
             ChildFrame::Failed(failure) => return Err(map_child_failure(failure.code)),
             ChildFrame::Ready(_) => return Err(SdkError::IdentityMismatch),
         };
+        if activated.connector_credential_id != connector_credential_id {
+            return Err(SdkError::IdentityMismatch);
+        }
         validate_activated(
             &activated,
             &exchange_id,
@@ -1610,7 +1716,22 @@ async fn launch_child(
         } else {
             None
         };
+        let connector = match connector_credential {
+            Some(credential) => Some(
+                connect_sidecar_transport(
+                    options,
+                    &endpoint,
+                    fingerprint,
+                    &certificate_pem,
+                    credential,
+                    deadline,
+                )
+                .await?,
+            ),
+            None => None,
+        };
         Ok(ConnectedTransports {
+            connector,
             primary,
             approval_broker,
         })
@@ -1693,6 +1814,12 @@ async fn spawn_verified_sidecar(
 )> {
     use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
+    let development_selector = crate::development_selector::selector()?;
+    let credential_session = if development_selector.is_none() {
+        Some(crate::linux_credential_session::verified_address().await?)
+    } else {
+        None
+    };
     // The manifest-matching bytes live in a sealed anonymous file. Clearing only
     // FD_CLOEXEC lets the child resolve this exact kernel object through procfs;
     // replacement of the bundle path is therefore irrelevant to execution.
@@ -1708,6 +1835,12 @@ async fn spawn_verified_sidecar(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
+    if let Some(address) = credential_session {
+        command.env("DBUS_SESSION_BUS_ADDRESS", address);
+    }
+    if let Some(path) = development_selector {
+        command.env(crate::development_selector::VARIABLE, path);
+    }
     let (mut child, process_tree) = spawn_managed_child(&mut command)?;
     let guardian = child.stdin.take().ok_or_else(|| {
         let _ = child.start_kill();
@@ -2919,6 +3052,7 @@ mod tests {
             exchange_id: exchange.clone(),
             credential_id: primary.clone(),
             approval_broker_credential_id: Some(broker.clone()),
+            connector_credential_id: None,
         };
         validate_activated(&activated, &exchange, &primary, Some(&broker))
             .expect("exact activation");
@@ -3087,6 +3221,82 @@ mod tests {
             .await
             .expect("terminal supervisor state must wake waiters");
         assert!(client.is_closed());
+    }
+
+    #[tokio::test]
+    async fn terminal_shutdown_closes_both_run_clients_and_rejects_late_replacement() {
+        let primary_transport = Arc::new(UnusedAgentRuns);
+        let connector_transport = Arc::new(UnusedAgentRuns);
+        let primary_weak = Arc::downgrade(&primary_transport);
+        let connector_weak = Arc::downgrade(&connector_transport);
+        let primary = SwitchingAgentRunClient::new(AgentRunTransports {
+            primary: primary_transport,
+            approval_broker: None,
+        });
+        let connector = SwitchingAgentRunClient::new(AgentRunTransports {
+            primary: connector_transport,
+            approval_broker: None,
+        });
+
+        close_run_clients(&primary, Some(&connector)).await;
+
+        assert!(primary_weak.upgrade().is_none());
+        assert!(connector_weak.upgrade().is_none());
+        for client in [&primary, &connector] {
+            timeout(Duration::from_millis(100), client.wait_closed())
+                .await
+                .expect("permanent shutdown must wake both clients");
+            let replacement = Arc::new(UnusedAgentRuns);
+            let replacement_weak = Arc::downgrade(&replacement);
+            client
+                .replace(AgentRunTransports {
+                    primary: replacement,
+                    approval_broker: None,
+                })
+                .await;
+            assert!(replacement_weak.upgrade().is_none());
+            assert!(client.is_closed());
+            assert_eq!(
+                client.current().await.err().expect("closed client").code,
+                ApiErrorCode::Unavailable
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn drop_shutdown_signals_both_clients_even_when_transports_are_in_use() {
+        let primary = SwitchingAgentRunClient::new(AgentRunTransports {
+            primary: Arc::new(UnusedAgentRuns),
+            approval_broker: None,
+        });
+        let connector = SwitchingAgentRunClient::new(AgentRunTransports {
+            primary: Arc::new(UnusedAgentRuns),
+            approval_broker: None,
+        });
+        // Drop cannot await these locks. Its closed signal must still prevent
+        // callers from acquiring a surviving transport after permanent shutdown.
+        let primary_guard = primary.current.write().await;
+        let connector_guard = connector.current.write().await;
+        mark_run_clients_closed(&primary, Some(&connector));
+
+        for client in [&primary, &connector] {
+            timeout(Duration::from_millis(100), client.wait_closed())
+                .await
+                .expect("Drop must wake both clients despite lock contention");
+            let result = timeout(Duration::from_millis(100), client.current())
+                .await
+                .expect("closed client must not wait for a transport lock");
+            assert_eq!(
+                result.err().expect("closed client").code,
+                ApiErrorCode::Unavailable
+            );
+        }
+
+        drop(primary_guard);
+        drop(connector_guard);
+        close_run_clients(&primary, Some(&connector)).await;
+        assert!(primary.current.read().await.is_none());
+        assert!(connector.current.read().await.is_none());
     }
 
     #[tokio::test]

@@ -1,0 +1,81 @@
+.graph-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 245px;
+  border-top: 1px solid var(--border);
+}
+.graph-workspace__canvas {
+  position: relative;
+  min-width: 0;
+  height: 660px;
+  background: var(--surface-control);
+}
+.graph-workspace__view {
+  position: absolute;
+  inset: 58px 0 42px;
+}
+.graph-workspace__toolbar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  z-index: 5;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.graph-workspace__hint {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  max-width: calc(100% - 24px);
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  pointer-events: none;
+}
+.graph-workspace__inspector {
+  min-width: 0;
+  padding: 18px;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--font-size-body-sm);
+  overflow-wrap: anywhere;
+}
+.graph-workspace__inspector label {
+  display: grid;
+  gap: 6px;
+  margin-top: 16px;
+}
+.graph-workspace__inspector h4 {
+  margin: 20px 0 10px;
+  font-size: var(--font-size-heading);
+}
+.graph-workspace__canvas .react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+.graph-workspace__canvas .react-flow__attribution {
+  background: var(--surface);
+}
+.graph-workspace__canvas .react-flow__attribution a {
+  color: var(--muted);
+}
+@media (max-width: 1050px) {
+  .graph-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .graph-workspace__canvas {
+    height: 600px;
+  }
+  .graph-workspace__inspector {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+}

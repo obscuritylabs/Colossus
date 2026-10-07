@@ -177,8 +177,33 @@ jobs:
         run: >-
           cargo test --locked -p colossus-sidecar
           --test native_lifecycle -- --ignored --nocapture
+      - name: Exercise cloud connection through the native Managed Local grant
+        env:
+          COLOSSUS_ACCEPTANCE_SIDECAR: ${{ github.workspace }}/apps/desktop/src-tauri/binaries/colossus-sidecar-aarch64-apple-darwin
+        run: cargo test --locked -p colossus-cloud-server --lib managed_sidecar_cloud_run_isolated_and_application_exit_disconnects -- --ignored
       - name: Run native isolation and escape acceptance
         run: cargo test --locked -p colossus-cli --test native_sandbox -- --nocapture
+
+  linux-desktop:
+    name: Linux Desktop package and native credential entry
+    if: needs.eligibility.result == 'success'
+    needs: eligibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build sealed Linux Desktop package and test native entry
+        run: docker build -f deploy/cloud/linux-desktop.Dockerfile --target artifacts --output type=local,dest=dist/desktop-linux .
+      - name: Verify Linux package checksums
+        working-directory: dist/desktop-linux
+        run: sha256sum --check ./*.sha256
+      - name: Retain Linux Desktop package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-desktop-preview
+          path: dist/desktop-linux
+          retention-days: 7
 
   credential-vault:
     name: Credential vault (${{ matrix.os }})
@@ -475,7 +500,7 @@ jobs:
     if: needs.eligibility.result == 'success'
     needs: eligibility
     runs-on: windows-latest-l
-    timeout-minutes: 65
+    timeout-minutes: 75
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_TARGET_DIR: ${{ github.workspace }}\apps\desktop\src-tauri\target
@@ -550,6 +575,20 @@ jobs:
         env:
           COLOSSUS_ACCEPTANCE_SIDECAR: ${{ github.workspace }}/apps/desktop/src-tauri/binaries/colossus-sidecar-x86_64-pc-windows-msvc.exe
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib managed_runtime::credential_acceptance::native_vault_restarts_reach_managed_sidecar_mcp -- --ignored --exact
+      - name: Exercise Windows cloud transport and native Managed Local lifetime
+        id: cloud_native
+        if: steps.desktop_prepare.outcome == 'success'
+        continue-on-error: true
+        env:
+          COLOSSUS_ACCEPTANCE_SIDECAR: ${{ github.workspace }}/apps/desktop/src-tauri/binaries/colossus-sidecar-x86_64-pc-windows-msvc.exe
+        run: |
+          cargo test --locked -p colossus-cloud-server --lib oidc_to_runtime_prompt_approval_cancel_rotate_and_recover
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p colossus-cloud-server --lib managed_sidecar_cloud_run_isolated_and_application_exit_disconnects -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p colossus-sidecar --test windows_lifecycle -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p colossus-cli --bin colossus public_api_admin::tests
       - name: Exercise Windows setup reset and uninstall credential cleanup
         if: steps.desktop_prepare.outcome == 'success'
         run: |
@@ -618,6 +657,7 @@ jobs:
           NATIVE_TEST_OUTCOME: ${{ steps.native_tests.outcome }}
           PLUGIN_RUNTIME_OUTCOME: ${{ steps.plugin_runtime.outcome }}
           APPROVAL_RUNTIME_OUTCOME: ${{ steps.approval_runtime.outcome }}
+          CLOUD_NATIVE_OUTCOME: ${{ steps.cloud_native.outcome }}
         run: |
           set -eu
           failed=
@@ -626,7 +666,8 @@ jobs:
             "desktop-clippy=$CLIPPY_OUTCOME" \
             "desktop-tests=$NATIVE_TEST_OUTCOME" \
             "desktop-plugin-runtime=$PLUGIN_RUNTIME_OUTCOME" \
-            "desktop-approval-runtime=$APPROVAL_RUNTIME_OUTCOME"
+            "desktop-approval-runtime=$APPROVAL_RUNTIME_OUTCOME" \
+            "desktop-cloud-native=$CLOUD_NATIVE_OUTCOME"
           do
             if test "${result#*=}" != success; then
               failed="$failed ${result%%=*}"
@@ -929,7 +970,7 @@ jobs:
   gate:
     name: Colossus pre-merge gate
     if: always()
-    needs: [eligibility, linux-rust-integration, macos-native, macos-desktop-acceptance, macos-desktop-bundle, windows-runtime, windows-desktop, credential-vault, fuzz, supply-chain, chroma, storage, live-security]
+    needs: [eligibility, linux-rust-integration, linux-desktop, macos-native, macos-desktop-acceptance, macos-desktop-bundle, windows-runtime, windows-desktop, credential-vault, fuzz, supply-chain, chroma, storage, live-security]
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
@@ -943,6 +984,7 @@ jobs:
           RESULTS: >-
             eligibility=${{ needs.eligibility.result }}
             linux-rust-integration=${{ needs['linux-rust-integration'].result }}
+            linux-desktop=${{ needs['linux-desktop'].result }}
             macos=${{ needs['macos-native'].result }}
             macos-desktop-acceptance=${{ needs['macos-desktop-acceptance'].result }}
             macos-desktop-bundle=${{ needs['macos-desktop-bundle'].result }}

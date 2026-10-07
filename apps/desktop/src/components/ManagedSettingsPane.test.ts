@@ -1,5 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { RadioGroup } from "@colossus/ui";
 import { describe, expect, it, vi } from "vitest";
 import { deleteMcpFixture, managedMcpConsumers } from "../mcp-deletion";
 import { McpDeleteDialog } from "./McpDeleteDialog";
@@ -267,7 +268,9 @@ function desktop(): DesktopStatus {
   };
 }
 
-function renderPane(): string {
+function renderPane(
+  overrides: Partial<Parameters<typeof ManagedSettingsPane>[0]> = {},
+): string {
   return renderToStaticMarkup(
     createElement(ManagedSettingsPane, {
       desktop: desktop(),
@@ -288,6 +291,7 @@ function renderPane(): string {
       onImportClientIdentity: vi.fn(),
       onRemoveClientIdentity: vi.fn(),
       onExportDiagnostics: vi.fn(),
+      ...overrides,
     }),
   );
 }
@@ -1601,4 +1605,47 @@ describe("MCP deletion", () => {
       deleteMcpFixture(source, { expectedRevision: 4, resourceId: "missing" }),
     ).toThrow(/unknown/);
   });
+});
+
+it("offers compact settings radio choices without changing the default cards or selection semantics", () => {
+  const options = [
+    { value: "private", label: "Control Plane conversations only" },
+    { value: "read", label: "Share Desktop history for viewing" },
+  ];
+  const compact = renderToStaticMarkup(
+    createElement(RadioGroup, {
+      value: "private",
+      onValueChange: () => undefined,
+      options,
+      variant: "compact",
+      "aria-label": "Desktop conversation sharing",
+    }),
+  );
+  expect(compact).toContain("ui-radio-group--compact");
+  expect(compact).toContain('role="radiogroup"');
+  expect(compact).toContain('aria-label="Desktop conversation sharing"');
+  expect(compact).toMatch(/aria-checked="true"[^>]*tabindex="0"/);
+  expect(compact).toMatch(/aria-checked="false"[^>]*tabindex="-1"/);
+  const cards = renderToStaticMarkup(
+    createElement(RadioGroup, {
+      value: "private",
+      onValueChange: () => undefined,
+      options,
+      "aria-label": "Desktop conversation sharing",
+    }),
+  );
+  expect(cards).not.toContain("ui-radio-group--compact");
+  expect(cards).toContain("ui:px-3 ui:py-3");
+});
+
+it("opens explicit Control Plane settings without falling through a missing workspace", () => {
+  expect(renderPane({ initialSpaceTab: "control-plane" })).toContain(
+    "Loading Control Plane connections",
+  );
+  const missing = renderPane({
+    initialSpaceTab: "cloud",
+    initialSpaceId: "missing-workspace",
+  });
+  expect(missing).not.toContain("cloud-settings-state");
+  expect(missing).not.toContain("Make this runtime available");
 });

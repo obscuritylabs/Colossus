@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
@@ -7,12 +9,30 @@ import { shikiGrammarLiterals } from "./build/shiki-grammar-literals";
 
 export default defineConfig({
   plugins: [
+    {
+      name: "shared-ui-attribution",
+      generateBundle() {
+        this.emitFile({
+          type: "asset",
+          fileName: "shadcn-LICENSE.txt",
+          source: readFileSync(
+            new URL("../ui/assets/shadcn-LICENSE.txt", import.meta.url),
+            "utf8",
+          ),
+        });
+      },
+    },
+    tailwindcss(),
     d3ColorFrozenPrototypeCompatibility(),
     xtermFrozenPrototypeCompatibility(),
     shikiGrammarLiterals(),
     react(),
   ],
   optimizeDeps: {
+    include: [
+      "use-sync-external-store/shim",
+      "use-sync-external-store/shim/with-selector",
+    ],
     // Dependency pre-bundling bypasses the compatibility transform above.
     exclude: [
       "@xterm/xterm",
@@ -49,6 +69,8 @@ export default defineConfig({
         ".npmrc",
         ".yarnrc.yml",
         "**/.git/**",
+        "**/development-credentials/**",
+        "**/.authority-key.env",
         "**/src-tauri/**",
       ],
     },

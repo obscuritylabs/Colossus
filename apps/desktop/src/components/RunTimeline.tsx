@@ -1,4 +1,8 @@
 import {
+  ConversationActivity,
+  ConversationEntry,
+} from "@colossus/ui/conversation";
+import {
   IconAlertTriangle,
   IconArrowRight,
   IconBrain,
@@ -13,7 +17,6 @@ import {
   IconInfoCircle,
   IconListDetails,
   IconLoader2,
-  IconMessageCircle,
   IconPencil,
   IconPlayerPlay,
   IconPlayerStop,
@@ -28,7 +31,6 @@ import type { ReactNode } from "react";
 
 import { RetryStatus, currentProviderRetry } from "./RetryStatus";
 
-import colossusMark from "@colossus/ui/assets/colossus-mark.svg";
 import {
   presentNotice,
   presentToolActivity,
@@ -281,29 +283,19 @@ function Message({ message }: { message: SessionMessage }) {
   if (message.role === "assistant") {
     return null;
   }
-  const label = message.role === "user" ? "You" : readable(message.role);
   return (
-    <article className={`feed-entry message message-${message.role}`}>
-      <div className="feed-marker" aria-hidden="true">
-        <IconMessageCircle size={17} stroke={1.7} />
-      </div>
-      <div className="feed-entry-content">
-        <header className="feed-entry-heading">
-          <strong>{label}</strong>
-          <time dateTime={message.createdAt}>
-            {compactTime(message.createdAt)}
-          </time>
-        </header>
-        <div className="message-body" data-aside-selectable="true">
-          {message.content.map((part, index) => (
-            <ContentPart key={`${message.sequence}-${index}`} part={part} />
-          ))}
-        </div>
-        <div className="message-actions">
-          <MessageCopyButton text={messageCopyText(message)} label="message" />
-        </div>
-      </div>
-    </article>
+    <ConversationEntry
+      role={message.role}
+      author={message.role === "user" ? "You" : readable(message.role)}
+      createdAt={message.createdAt}
+      actions={
+        <MessageCopyButton text={messageCopyText(message)} label="message" />
+      }
+    >
+      {message.content.map((part, index) => (
+        <ContentPart key={`${message.sequence}-${index}`} part={part} />
+      ))}
+    </ConversationEntry>
   );
 }
 
@@ -710,50 +702,26 @@ function RunActivity({
   ].filter((part): part is string => part !== null);
 
   return (
-    <details
-      className={`run-activity run-activity-thread run-state-${view.run.status}`}
+    <ConversationActivity
+      className={`run-state-${view.run.status}`}
+      description={summaryParts.join(" · ")}
+      statusLabel={status.label}
+      tone={status.tone}
+      exceptionCount={failedActionCount}
       open={comparison || active || failedActionCount > 0}
     >
-      <summary className="run-activity-summary">
-        <span className="run-activity-chevron" aria-hidden="true">
-          <IconChevronDown size={16} stroke={1.9} />
-        </span>
-        <span className="run-activity-mark" aria-hidden="true">
-          <img src={colossusMark} alt="" />
-        </span>
-        <span className="run-activity-title">
-          <strong>Colossus</strong>
-          <small>{summaryParts.join(" · ")}</small>
-        </span>
-        <span className={`run-activity-status tone-${status.tone}`}>
-          {status.tone === "success" ? (
-            <IconCheck size={15} stroke={2} aria-hidden="true" />
-          ) : status.tone === "danger" ? (
-            <IconAlertTriangle size={15} stroke={1.9} aria-hidden="true" />
-          ) : null}
-          {status.label}
-        </span>
-        {failedActionCount > 0 ? (
-          <span className="run-activity-exceptions">
-            <IconAlertTriangle size={14} stroke={1.8} aria-hidden="true" />
-            {failedActionCount}
-          </span>
-        ) : null}
-      </summary>
-      <div className="run-activity-body">
-        {items.map((item) => (
-          <ActivityItem
-            onInspectSchedule={onInspectSchedule}
-            item={item}
-            key={
-              item.type === "tool_activity"
-                ? `tool-${item.group.key}`
-                : item.update.sequence
-            }
-          />
-        ))}
-      </div>
-    </details>
+      {items.map((item) => (
+        <ActivityItem
+          onInspectSchedule={onInspectSchedule}
+          item={item}
+          key={
+            item.type === "tool_activity"
+              ? `tool-${item.group.key}`
+              : item.update.sequence
+          }
+        />
+      ))}
+    </ConversationActivity>
   );
 }
 
@@ -1217,25 +1185,14 @@ export function RunTimeline({
             : `Run ${readable(view.run.status)}.`}
       </p>
       {view.localPrompt !== null && !hasDurableUserMessage ? (
-        <article className="feed-entry message message-user">
-          <div className="feed-marker" aria-hidden="true">
-            <IconMessageCircle size={17} stroke={1.7} />
-          </div>
-          <div className="feed-entry-content">
-            <header className="feed-entry-heading">
-              <strong>You</strong>
-            </header>
-            <div
-              className="message-body preserve-lines"
-              data-aside-selectable="true"
-            >
-              {view.localPrompt}
-            </div>
-            <div className="message-actions">
-              <MessageCopyButton text={view.localPrompt} label="message" />
-            </div>
-          </div>
-        </article>
+        <ConversationEntry
+          role="user"
+          content={view.localPrompt}
+          markdown={false}
+          actions={
+            <MessageCopyButton text={view.localPrompt} label="message" />
+          }
+        />
       ) : null}
       {userTimelineItems.map((item) =>
         item.type === "update" ? (
@@ -1252,41 +1209,31 @@ export function RunTimeline({
       ) : null}
       {showLiveStatus ? <LiveRunStatus view={view} /> : null}
       {view.output !== "" ? (
-        <article className="feed-entry message message-assistant">
-          <div className="feed-marker assistant-marker" aria-hidden="true">
-            <img src={colossusMark} alt="" />
-          </div>
-          <div className="feed-entry-content">
-            <header className="feed-entry-heading">
-              <h3 className="feed-entry-title">Colossus</h3>
-              <span>
-                {isGenerating
-                  ? "Working"
-                  : partialResponse
-                    ? "Partial response"
-                    : "Response"}
-              </span>
-            </header>
-            <div
-              className={`message-body${isGenerating ? " preserve-lines" : ""}`}
-              data-aside-selectable="true"
-            >
-              {isGenerating ? (
-                view.output
-              ) : view.run.mode === "research" ? (
-                <ResearchResponse
-                  output={view.output}
-                  onOpenSources={onOpenResearchSources}
-                />
-              ) : (
-                <MarkdownContent content={view.output} />
-              )}
-              {isGenerating ? (
-                <span className="stream-caret" aria-hidden="true" />
-              ) : null}
+        <ConversationEntry
+          role="assistant"
+          streaming={isGenerating}
+          status={
+            isGenerating
+              ? "Working"
+              : partialResponse
+                ? "Partial response"
+                : "Response"
+          }
+        >
+          {isGenerating ? (
+            <div className="preserve-lines">
+              {view.output}
+              <span className="stream-caret" aria-hidden="true" />
             </div>
-          </div>
-        </article>
+          ) : view.run.mode === "research" ? (
+            <ResearchResponse
+              output={view.output}
+              onOpenSources={onOpenResearchSources}
+            />
+          ) : (
+            <MarkdownContent content={view.output} />
+          )}
+        </ConversationEntry>
       ) : null}
       {!hasTerminalFeedItem && view.run.terminal !== null ? (
         <TerminalSummary terminal={view.run.terminal} />

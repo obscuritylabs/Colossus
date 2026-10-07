@@ -37,6 +37,7 @@ protects a current boundary; it does not mean every future assertion is permanen
 | `colossus-api` | Keep server composition and public API lifecycle tests. |
 | `colossus-audit` | Keep journal export, retry, recovery, and live WORM acceptance tests. |
 | `colossus-cli` | Keep command-level smoke suites because they exercise public parsing and embedded/worker boundaries; remove a suite only when its command or contract is removed. |
+| `colossus-cloud`, `colossus-cloud-protocol`, `colossus-cloud-server`, `colossus-connector` | Keep project/placement/receipt/cursor/renewal invariants and the signed OIDC-to-runtime transport acceptance; run the operator-owned PostgreSQL variant described in [cloud development](cloud-control-plane.md). |
 | `colossus-codex-auth` | Keep OAuth/device-flow parsing, storage, and redaction tests. |
 | `colossus-context` | Keep compaction budgets, snapshots, and deterministic fallback unit tests. |
 | `colossus-contracts` | Keep serialization, validation, and stable contract-shape tests. |

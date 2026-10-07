@@ -1,8 +1,10 @@
 use crate::{CredentialProvider, SdkError, SdkResult, Secret};
 use async_trait::async_trait;
-use std::fmt;
+use std::{fmt, sync::Arc, time::Duration};
+use tokio::sync::Mutex;
 
 const MAX_KEYRING_ID_BYTES: usize = 256;
+const MAX_KEYRING_WAIT: Duration = Duration::from_secs(30);
 
 /// OS-keyring credential source for one enrolled application.
 ///
@@ -12,6 +14,7 @@ const MAX_KEYRING_ID_BYTES: usize = 256;
 pub struct KeyringCredentialProvider {
     service: String,
     account: String,
+    access: Arc<Mutex<()>>,
 }
 
 impl KeyringCredentialProvider {
@@ -21,7 +24,32 @@ impl KeyringCredentialProvider {
         let account = account.into();
         validate_keyring_id(&service)?;
         validate_keyring_id(&account)?;
-        Ok(Self { service, account })
+        Ok(Self {
+            service,
+            account,
+            access: Arc::new(Mutex::new(())),
+        })
+    }
+
+    async fn read_with(
+        &self,
+        wait: Duration,
+        reader: impl FnOnce() -> SdkResult<Secret> + Send + 'static,
+    ) -> SdkResult<Secret> {
+        let access = Arc::clone(&self.access);
+        tokio::time::timeout(wait, async move {
+            let guard = access.lock_owned().await;
+            tokio::task::spawn_blocking(move || {
+                // Cancellation cannot abort a running native read. Its guard must
+                // stay in that blocking task, not in the canceled async caller.
+                let _guard = guard;
+                reader()
+            })
+            .await
+            .map_err(|_| SdkError::Authentication)?
+        })
+        .await
+        .map_err(|_| SdkError::Authentication)?
     }
 }
 
@@ -40,14 +68,15 @@ impl CredentialProvider for KeyringCredentialProvider {
     async fn load(&self) -> SdkResult<Secret> {
         let service = self.service.clone();
         let account = self.account.clone();
-        let bytes = tokio::task::spawn_blocking(move || {
-            keyring::Entry::new(&service, &account)
+        self.read_with(MAX_KEYRING_WAIT, move || {
+            let bytes = keyring::Entry::new(&service, &account)
                 .and_then(|entry| entry.get_secret())
-                .map_err(|_| SdkError::Authentication)
+                .map_err(|_| SdkError::Authentication)?;
+            // Even if the caller has canceled, the completed task owns a
+            // zeroizing secret; no detached plaintext Vec outlives this read.
+            Secret::new(bytes)
         })
         .await
-        .map_err(|_| SdkError::Authentication)??;
-        Secret::new(bytes)
     }
 }
 
@@ -78,5 +107,68 @@ mod tests {
         assert!(!debug.contains("private-app-account"));
         assert!(KeyringCredentialProvider::new("", "account").is_err());
         assert!(KeyringCredentialProvider::new("service", " account").is_err());
+    }
+
+    #[tokio::test]
+    async fn canceled_native_read_keeps_its_guard_and_next_completed_read_is_fresh() {
+        use std::sync::{
+            Condvar,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let provider = Arc::new(KeyringCredentialProvider::new("test", "test").unwrap());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new((std::sync::Mutex::new(false), Condvar::new()));
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
+        let first = {
+            let provider = Arc::clone(&provider);
+            let calls = Arc::clone(&calls);
+            let release = Arc::clone(&release);
+            tokio::spawn(async move {
+                provider
+                    .read_with(Duration::from_secs(5), move || {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        let _ = entered_tx.send(());
+                        let (mutex, condition) = &*release;
+                        let mut guard = mutex.lock().unwrap();
+                        while !*guard {
+                            guard = condition.wait(guard).unwrap();
+                        }
+                        let _ = finished_tx.send(());
+                        Secret::new(b"first-token".to_vec())
+                    })
+                    .await
+            })
+        };
+        entered_rx.await.unwrap();
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        let result = {
+            let calls = Arc::clone(&calls);
+            provider
+                .read_with(Duration::from_millis(30), move || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Secret::new(b"must-not-start".to_vec())
+                })
+                .await
+        };
+        // Release before assertions so a failure cannot strand a native thread.
+        *release.0.lock().unwrap() = true;
+        release.1.notify_one();
+        finished_rx.await.unwrap();
+        assert!(matches!(result, Err(SdkError::Authentication)));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let fresh = {
+            let calls = Arc::clone(&calls);
+            provider
+                .read_with(Duration::from_secs(1), move || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Secret::new(b"rotated-token".to_vec())
+                })
+                .await
+                .unwrap()
+        };
+        assert_eq!(fresh.expose(), b"rotated-token");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

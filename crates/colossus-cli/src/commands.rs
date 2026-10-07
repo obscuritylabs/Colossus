@@ -2,6 +2,13 @@ use super::*;
 
 #[derive(Subcommand)]
 pub(super) enum Command {
+    /// Explicit offline development-only credential preparation and reviewed rewrap.
+    #[command(name = "dev-credentials", hide = !cfg!(debug_assertions))]
+    DevelopmentCredentials(DevelopmentCredentialsCommand),
+    /// Enroll and manage an outbound Control Plane connector with its dedicated local grant.
+    #[command(name = "control-plane", alias = "cloud")]
+    #[command(subcommand)]
+    Cloud(colossus_connector::ConnectorCommand),
     /// Check or apply an install-aware stable Colossus update.
     Update(UpdateCommand),
     /// Create or inspect fresh YAML configuration.
@@ -153,6 +160,20 @@ pub(super) enum UpdateAction {
 
 #[derive(Args)]
 pub(super) struct WorkerCommand {
+    /// Use one existing private Codex auth file for this serving worker only.
+    /// Credential contents stay late-bound inside the permitted provider adapter.
+    #[arg(
+        long,
+        value_name = "ABS_FILE",
+        conflicts_with_all = ["once", "shutdown", "status", "enroll_application", "revoke_credential"]
+    )]
+    pub(super) codex_auth_path: Option<PathBuf>,
+    /// Hide generic model fetch tools while retaining configured provider transport.
+    #[arg(
+        long,
+        conflicts_with_all = ["once", "shutdown", "status", "enroll_application", "revoke_credential"]
+    )]
+    pub(super) no_model_network_tools: bool,
     /// Recover and drain once instead of serving local IPC.
     #[arg(
         long,
@@ -192,6 +213,10 @@ pub(super) struct WorkerCommand {
     /// Absolute current-user 0700 directory for public API discovery.
     #[arg(long, value_name = "ABS_OWNER_PRIVATE_DIR")]
     pub(super) public_api_dir: Option<PathBuf>,
+    /// Explicit headless wrapping-key reference for sealed public API credentials.
+    /// The bearer itself is never supplied in environment or argv.
+    #[arg(long, requires = "public_api_dir")]
+    pub(super) public_api_vault_key_variable: Option<String>,
     /// Enroll an application offline and write its bearer directly to a keyring.
     #[arg(
         long,

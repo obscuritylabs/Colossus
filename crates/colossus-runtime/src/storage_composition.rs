@@ -14,6 +14,7 @@ pub(super) fn compose_storage(
     config: &RuntimeConfig,
     storage_path: &Path,
     tls_roots: &AdditionalRootCertificates,
+    home: Option<&ConfinedRoot>,
 ) -> Result<StorageComposition, RuntimeError> {
     if config.storage.adapter != StorageAdapter::Ephemeral
         && !config.has_resolved_home_workspace()
@@ -21,47 +22,61 @@ pub(super) fn compose_storage(
     {
         fs::create_dir_all(parent)?;
     }
+    let development = if matches!(config.storage.keys, KeyConfig::None) {
+        None
+    } else {
+        home.map(|home| colossus_credentials::DevelopmentAuthority::selected(home, &[]))
+            .transpose()
+            .map_err(|_| {
+                RuntimeError::Config("explicit development authority is unavailable".into())
+            })?
+            .flatten()
+    };
     let (keys, signer): (Arc<dyn KeyProvider>, Arc<dyn CheckpointSigner>) =
-        match &config.storage.keys {
-            KeyConfig::None => (
-                Arc::new(PlaintextKeyProvider),
-                Arc::new(DisabledCheckpointSigner),
-            ),
-            KeyConfig::Platform {
-                service,
-                journal_key_id,
-                signing_key_id,
-            } => {
-                let signing_key =
-                    platform_secret(service, &format!("signing-key:{signing_key_id}"))?;
-                (
-                    Arc::new(PlatformKeyProvider::new(service, journal_key_id)?),
-                    Arc::new(Ed25519CheckpointSigner::new(
-                        signing_key_id.clone(),
-                        signing_key,
-                    )),
-                )
-            }
-            KeyConfig::Environment {
-                journal_variable,
-                journal_key_id,
-                signing_variable,
-                anchor_path,
-            } => {
-                config.revalidate_resolved_home_file(anchor_path)?;
-                config.revalidate_resolved_home_file(&anchor_path.with_extension("tmp"))?;
-                let signing_key = explicit_secret(signing_variable)?;
-                (
-                    Arc::new(EnvironmentKeyProvider::new(
-                        journal_variable,
-                        journal_key_id,
-                        anchor_path,
-                    )),
-                    Arc::new(Ed25519CheckpointSigner::new(
-                        "environment-checkpoint-v1",
-                        signing_key,
-                    )),
-                )
+        if let Some(authority) = development.as_ref() {
+            super::development_journal::compose_development_keys(&config.storage.keys, authority)?
+        } else {
+            match &config.storage.keys {
+                KeyConfig::None => (
+                    Arc::new(PlaintextKeyProvider),
+                    Arc::new(DisabledCheckpointSigner),
+                ),
+                KeyConfig::Platform {
+                    service,
+                    journal_key_id,
+                    signing_key_id,
+                } => {
+                    let signing_key =
+                        platform_secret(service, &format!("signing-key:{signing_key_id}"))?;
+                    (
+                        Arc::new(PlatformKeyProvider::new(service, journal_key_id)?),
+                        Arc::new(Ed25519CheckpointSigner::new(
+                            signing_key_id.clone(),
+                            signing_key,
+                        )),
+                    )
+                }
+                KeyConfig::Environment {
+                    journal_variable,
+                    journal_key_id,
+                    signing_variable,
+                    anchor_path,
+                } => {
+                    config.revalidate_resolved_home_file(anchor_path)?;
+                    config.revalidate_resolved_home_file(&anchor_path.with_extension("tmp"))?;
+                    let signing_key = explicit_secret(signing_variable)?;
+                    (
+                        Arc::new(EnvironmentKeyProvider::new(
+                            journal_variable,
+                            journal_key_id,
+                            anchor_path,
+                        )),
+                        Arc::new(Ed25519CheckpointSigner::new(
+                            "environment-checkpoint-v1",
+                            signing_key,
+                        )),
+                    )
+                }
             }
         };
     Ok(match config.storage.adapter {

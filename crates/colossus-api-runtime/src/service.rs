@@ -46,6 +46,8 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
+mod posture;
+mod sharing;
 
 const WATCH_PAGE_SIZE: usize = 16;
 const WATCH_CHANNEL_SIZE: usize = 8;
@@ -295,7 +297,7 @@ impl RuntimeAgentRunApi {
                 && event.actor.actor_type == ActorType::Application
                 && event.actor.id == caller.principal().application_id()
         });
-        if !owned {
+        if !owned && !self.shared_session_continuable(caller, session_id)? {
             return Err(ApiError::not_found(
                 ApiErrorReason::RunNotFound,
                 "the requested session was not found",
@@ -1425,6 +1427,39 @@ impl RuntimeAgentRunApi {
 
 #[async_trait]
 impl AgentRunApi for RuntimeAgentRunApi {
+    fn supports_runtime_policy_posture(&self) -> bool {
+        true
+    }
+    async fn get_runtime_policy_posture(
+        &self,
+        caller: &CallerContext,
+    ) -> ApiResult<colossus_api::RuntimePolicyPosture> {
+        caller.require_scope(scopes::RUNS_READ)?;
+        let _permit = self
+            .lists
+            .acquire(caller.principal().application_id())
+            .map_err(|AdmissionLimitReached| capacity_error(caller))?;
+        self.released_policy_posture(caller)
+    }
+    async fn set_workspace_sharing(
+        &self,
+        caller: &CallerContext,
+        request: colossus_api::SetWorkspaceSharingRequest,
+    ) -> ApiResult<colossus_api::WorkspaceSharingState> {
+        self.persist_workspace_sharing(caller, request)
+    }
+
+    async fn list_visible_runs(
+        &self,
+        caller: &CallerContext,
+        request: ListRunsRequest,
+    ) -> ApiResult<colossus_api::ListVisibleRunsResponse> {
+        let _permit = self
+            .lists
+            .acquire(caller.principal().application_id())
+            .map_err(|AdmissionLimitReached| capacity_error(caller))?;
+        self.discover_visible_runs(caller, request)
+    }
     async fn list_process_sessions(
         &self,
         caller: &CallerContext,
@@ -1545,9 +1580,10 @@ impl AgentRunApi for RuntimeAgentRunApi {
     }
 
     async fn get_run(&self, caller: &CallerContext, request: GetRunRequest) -> ApiResult<Run> {
+        let source = self.visible_run_caller(caller, &request.run_id)?;
         let run = self
             .repository
-            .get_run(caller, &request.run_id)?
+            .get_run(&source, &request.run_id)?
             .ok_or_else(|| {
                 ApiError::not_found(
                     ApiErrorReason::RunNotFound,
@@ -1555,7 +1591,11 @@ impl AgentRunApi for RuntimeAgentRunApi {
                 )
                 .with_correlation_id(caller.request_id().clone())
             })?;
-        self.recover_orphan(caller, run)
+        if source.principal().application_id() == caller.principal().application_id() {
+            self.recover_orphan(caller, run)
+        } else {
+            Ok(run)
+        }
     }
 
     async fn list_runs(
@@ -1579,10 +1619,14 @@ impl AgentRunApi for RuntimeAgentRunApi {
         request
             .validate()
             .map_err(|error| error.with_correlation_id(caller.request_id().clone()))?;
+        let source_caller = self.visible_run_caller(caller, &request.source_run_id)?;
         let source = self
             .repository
-            .get_run(caller, &request.source_run_id)?
+            .get_run(&source_caller, &request.source_run_id)?
             .ok_or_else(|| missing_run(caller))?;
+        if !self.session_history_visible(caller, &source.session_id)? {
+            return Err(missing_run(caller));
+        }
         self.runtime
             .drain_projections_bounded(256, 16)
             .map_err(|error| activity_runtime_error(caller, error))?;
@@ -1671,9 +1715,10 @@ impl AgentRunApi for RuntimeAgentRunApi {
         caller: &CallerContext,
         request: WatchRunRequest,
     ) -> ApiResult<RunUpdateStream> {
+        let source = self.visible_run_caller(caller, &request.run_id)?;
         let run = self
             .repository
-            .get_run(caller, &request.run_id)?
+            .get_run(&source, &request.run_id)?
             .ok_or_else(|| {
                 ApiError::not_found(
                     ApiErrorReason::RunNotFound,
@@ -1681,7 +1726,12 @@ impl AgentRunApi for RuntimeAgentRunApi {
                 )
                 .with_correlation_id(caller.request_id().clone())
             })?;
-        let run = self.recover_orphan(caller, run)?;
+        let shared = source.principal().application_id() != caller.principal().application_id();
+        let run = if shared {
+            run
+        } else {
+            self.recover_orphan(caller, run)?
+        };
         let watch_permit = self
             .watches
             .acquire(caller.principal().application_id())
@@ -1689,13 +1739,27 @@ impl AgentRunApi for RuntimeAgentRunApi {
         let mut notifications = self.feeds.subscribe(&run.id, run.last_sequence);
         let repository = Arc::clone(&self.repository);
         let feeds = Arc::clone(&self.feeds);
-        let caller = caller.clone();
+        let recipient = caller.clone();
+        let caller = source;
+        let api = self.clone();
         let run_id = run.id;
         let mut cursor = request.after_sequence;
         let (sender, receiver) = mpsc::channel(WATCH_CHANNEL_SIZE);
         tokio::spawn(async move {
             let _watch_permit = watch_permit;
             loop {
+                if shared
+                    && !api
+                        .workspace_share_allowed(
+                            &recipient,
+                            caller.principal().application_id(),
+                            false,
+                        )
+                        .unwrap_or(false)
+                {
+                    let _ = sender.send(Err(missing_run(&recipient))).await;
+                    return;
+                }
                 match repository.updates_after(&caller, &run_id, cursor, WATCH_PAGE_SIZE) {
                     Ok(updates) => {
                         let had_updates = !updates.is_empty();
@@ -1740,6 +1804,7 @@ impl AgentRunApi for RuntimeAgentRunApi {
                             return;
                         }
                     }
+                    () = tokio::time::sleep(std::time::Duration::from_secs(5)), if shared => {}
                 }
             }
         });

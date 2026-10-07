@@ -84,7 +84,7 @@ function desktop(overrides: Partial<DesktopStatus> = {}): DesktopStatus {
 }
 
 function renderSurface(
-  surface: "fleet" | "settings",
+  surface: "fleet" | "settings" | "connections",
   status = desktop(),
 ): string {
   return renderToStaticMarkup(
@@ -101,6 +101,8 @@ function renderSurface(
       workNavigationOpen: false,
       onOpenWorkNavigation: vi.fn(),
       onConnect: vi.fn(),
+      onManageControlPlaneWorkspace: vi.fn(),
+      onManageControlPlaneProfiles: vi.fn(),
       onOpenRun: vi.fn(),
       onSelectTarget: vi.fn(),
       onAddExternalTarget: vi.fn(),
@@ -130,6 +132,14 @@ function openingButtonTag(markup: string, label: string): string {
 }
 
 describe("OperationsSurface runtime targets", () => {
+  it("retains local and external routing while loading a separate Control Plane inventory", () => {
+    const markup = renderSurface("connections");
+    expect(markup).toContain("Folder-backed runtimes");
+    expect(markup).toContain("External daemons");
+    expect(markup).toContain("Lab fleet");
+    expect(markup).toContain('aria-label="Control Plane connections"');
+    expect(markup).toContain("Reading Control Plane enrollment status");
+  });
   it("keeps Workspace navigation reachable from every responsive operations view", () => {
     const markup = renderSurface("fleet");
 

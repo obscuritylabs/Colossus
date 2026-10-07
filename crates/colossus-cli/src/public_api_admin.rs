@@ -1,19 +1,17 @@
 use colossus_api::{ApiScope, ApplicationKind, scopes};
 use colossus_grpc::ApplicationGrant;
-#[cfg(unix)]
 use colossus_grpc::{TlsIdentity, TlsKeySeed};
 use colossus_worker::{
     PublicApiAuthenticationKey, PublicApiCredentialManager, PublicApiHostOptions, WorkerServer,
 };
-#[cfg(unix)]
 use fs4::fs_std::FileExt as _;
 use serde::Serialize;
-#[cfg(unix)]
 use sha2::{Digest as _, Sha256};
 use std::{
     error::Error,
     fmt,
     fs::File,
+    net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
 };
 use uuid::Uuid;
@@ -22,7 +20,6 @@ use zeroize::Zeroizing;
 #[cfg(unix)]
 use std::{
     fs,
-    net::{Ipv4Addr, SocketAddr},
     os::unix::fs::{DirBuilderExt as _, MetadataExt as _},
 };
 
@@ -30,23 +27,15 @@ use std::{
 const DIRECTORY_MODE: u32 = 0o700;
 #[cfg(unix)]
 const LOCK_FILE_MODE: u32 = 0o600;
-#[cfg(unix)]
 const DESCRIPTOR_FILENAME: &str = "endpoint.json";
-#[cfg(unix)]
 const CERTIFICATE_FILENAME: &str = "certificate.pem";
-#[cfg(unix)]
 const LOCK_FILENAME: &str = ".public-api.lock";
-#[cfg(unix)]
 const KEYRING_SERVICE_PREFIX: &str = "dev.obscuritylabs.colossus.public-api";
 const DESKTOP_EXTERNAL_KEYRING_SERVICE: &str = "com.obscuritylabs.colossus.desktop.external";
 const DESKTOP_BOUND_ACCOUNT_REQUEST: &str = "auto";
-#[cfg(unix)]
-const AUTHENTICATION_ROOT_ACCOUNT: &str = "authentication-root-v1";
-#[cfg(unix)]
-const TLS_SEED_ACCOUNT: &str = "tls-seed-v1";
-#[cfg(unix)]
-const INSTANCE_SEED_ACCOUNT: &str = "instance-identity-seed-v1";
-#[cfg(unix)]
+pub(super) const AUTHENTICATION_ROOT_ACCOUNT: &str = "authentication-root-v1";
+pub(super) const TLS_SEED_ACCOUNT: &str = "tls-seed-v1";
+pub(super) const INSTANCE_SEED_ACCOUNT: &str = "instance-identity-seed-v1";
 const INSTANCE_ID_DOMAIN: &[u8] = b"colossus-public-api-instance-id-v1\0";
 
 const KNOWN_SCOPES: [&str; 5] = [
@@ -65,13 +54,11 @@ const UNSUPPORTED_PUBLIC_TOOLS: [&str; 1] = ["agent.delegate"];
 /// material.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum PublicApiAdminError {
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     UnsupportedPlatform,
     InvalidDirectory,
-    #[cfg(unix)]
     DirectoryBusy,
     SecretStoreUnavailable,
-    #[cfg(unix)]
     SecretStoreValueInvalid,
     InvalidKeyringIdentifier,
     ReservedKeyringNamespace,
@@ -106,17 +93,15 @@ pub(super) enum PublicApiAdminError {
 impl fmt::Display for PublicApiAdminError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
-            #[cfg(not(unix))]
+            #[cfg(not(any(unix, windows)))]
             Self::UnsupportedPlatform => {
                 "native owner-only public API administration is unsupported on this platform"
             }
             Self::InvalidDirectory => {
                 "public API directory must be an absolute current-user 0700 directory"
             }
-            #[cfg(unix)]
             Self::DirectoryBusy => "public API directory is already owned by another process",
             Self::SecretStoreUnavailable => "OS credential store operation failed",
-            #[cfg(unix)]
             Self::SecretStoreValueInvalid => {
                 "OS credential store contains invalid public API key material"
             }
@@ -241,28 +226,145 @@ impl SecretStore for OsCredentialStore {
     }
 }
 
+struct HeadlessSecretStore(colossus_credentials::EnvironmentKeyStore);
+impl SecretStore for HeadlessSecretStore {
+    fn read(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> Result<Option<Zeroizing<Vec<u8>>>, PublicApiAdminError> {
+        use colossus_credentials::PlatformKeyStore as _;
+        self.0
+            .read(&colossus_connector::headless_credential_account(
+                service, account,
+            ))
+            .map_err(|_| PublicApiAdminError::SecretStoreUnavailable)
+    }
+    fn write(
+        &self,
+        service: &str,
+        account: &str,
+        secret: &[u8],
+    ) -> Result<(), PublicApiAdminError> {
+        use colossus_credentials::PlatformKeyStore as _;
+        self.0
+            .write(
+                &colossus_connector::headless_credential_account(service, account),
+                secret,
+            )
+            .map_err(|_| PublicApiAdminError::SecretStoreUnavailable)
+    }
+    fn delete(&self, service: &str, account: &str) -> Result<(), PublicApiAdminError> {
+        use colossus_credentials::PlatformKeyStore as _;
+        self.0
+            .delete(&colossus_connector::headless_credential_account(
+                service, account,
+            ))
+            .map_err(|_| PublicApiAdminError::SecretStoreUnavailable)
+    }
+}
+
+pub(super) fn credential_store(
+    directory: &Path,
+    variable: Option<&str>,
+) -> Result<Box<dyn SecretStore>, PublicApiAdminError> {
+    if std::env::var_os(colossus_credentials::DEVELOPMENT_AUTHORITY_VARIABLE).is_some() {
+        if !cfg!(debug_assertions) || variable.is_some() {
+            return Err(PublicApiAdminError::InvalidDirectory);
+        }
+        let home = colossus_home::ColossusHome::resolve_and_ensure()
+            .map_err(|_| PublicApiAdminError::InvalidDirectory)?;
+        let authority =
+            colossus_credentials::DevelopmentAuthority::selected(home.confined_root(), &[])
+                .map_err(|_| PublicApiAdminError::SecretStoreUnavailable)?
+                .ok_or(PublicApiAdminError::SecretStoreUnavailable)?;
+        let store = authority
+            .store(colossus_credentials::DevelopmentStoreScope::PublicApi)
+            .map_err(|_| PublicApiAdminError::SecretStoreUnavailable)?;
+        return Ok(Box::new(HeadlessSecretStore(store)));
+    }
+    match variable {
+        None => Ok(Box::new(OsCredentialStore)),
+        Some(variable) => {
+            let root = colossus_home::ConfinedRoot::bind(directory)
+                .map_err(|_| PublicApiAdminError::InvalidDirectory)?;
+            let private = root
+                .prepare_directory(Path::new("headless-credentials"))
+                .map_err(|_| PublicApiAdminError::InvalidDirectory)?;
+            let root = colossus_home::ConfinedRoot::bind(private)
+                .map_err(|_| PublicApiAdminError::InvalidDirectory)?;
+            Ok(Box::new(HeadlessSecretStore(
+                colossus_credentials::EnvironmentKeyStore::new(root, variable.into())
+                    .map_err(|_| PublicApiAdminError::SecretStoreUnavailable)?,
+            )))
+        }
+    }
+}
+
 /// Locked, canonical owner-private public API directory and its stable secret material.
 pub(super) struct PublicApiEnvironment {
     directory: PathBuf,
     namespace_service: String,
     authentication_root: Zeroizing<[u8; 32]>,
-    #[cfg(unix)]
     tls_seed: Zeroizing<[u8; 32]>,
-    #[cfg(unix)]
     instance_seed: Zeroizing<[u8; 32]>,
     _lease: File,
     #[cfg(unix)]
     directory_device: u64,
     #[cfg(unix)]
     directory_inode: u64,
+    #[cfg(windows)]
+    confined_root: colossus_home::ConfinedRoot,
 }
 
 impl PublicApiEnvironment {
     pub(super) fn open(path: &Path, store: &dyn SecretStore) -> Result<Self, PublicApiAdminError> {
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = (path, store);
             Err(PublicApiAdminError::UnsupportedPlatform)
+        }
+
+        #[cfg(windows)]
+        {
+            let confined_root = colossus_home::ConfinedRoot::bind(path)
+                .map_err(|_| PublicApiAdminError::InvalidDirectory)?;
+            let directory = confined_root.path().to_owned();
+            let checked = confined_root
+                .open_file(Path::new(LOCK_FILENAME))
+                .map_err(|_| PublicApiAdminError::InvalidDirectory)?;
+            if !checked
+                .file()
+                .try_lock_exclusive()
+                .map_err(|_| PublicApiAdminError::DirectoryBusy)?
+            {
+                return Err(PublicApiAdminError::DirectoryBusy);
+            }
+            checked
+                .revalidate(&confined_root)
+                .map_err(|_| PublicApiAdminError::InvalidDirectory)?;
+            let lease = checked
+                .file()
+                .try_clone()
+                .map_err(|_| PublicApiAdminError::InvalidDirectory)?;
+            let namespace_service = namespace_service(&directory);
+            let authentication_root =
+                load_or_create_exact_key(store, &namespace_service, AUTHENTICATION_ROOT_ACCOUNT)?;
+            let tls_seed = load_or_create_exact_key(store, &namespace_service, TLS_SEED_ACCOUNT)?;
+            let instance_seed =
+                load_or_create_exact_key(store, &namespace_service, INSTANCE_SEED_ACCOUNT)?;
+            confined_root
+                .revalidate()
+                .map_err(|_| PublicApiAdminError::InvalidDirectory)?;
+            Ok(Self {
+                directory,
+                namespace_service,
+                authentication_root,
+                tls_seed,
+                instance_seed,
+                _lease: lease,
+                confined_root,
+            })
         }
 
         #[cfg(unix)]
@@ -302,10 +404,26 @@ impl PublicApiEnvironment {
         &self,
         credentials: &PublicApiCredentialManager,
     ) -> Result<PublicApiHostOptions, PublicApiAdminError> {
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = credentials;
             Err(PublicApiAdminError::UnsupportedPlatform)
+        }
+
+        #[cfg(windows)]
+        {
+            self.confined_root
+                .revalidate()
+                .map_err(|_| PublicApiAdminError::InvalidDirectory)?;
+            PublicApiHostOptions::new(
+                SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+                stable_instance_id(&self.instance_seed),
+                self.directory.join(DESCRIPTOR_FILENAME),
+                self.directory.join(CERTIFICATE_FILENAME),
+                self.tls_identity()?,
+                credentials,
+            )
+            .map_err(|_| PublicApiAdminError::WorkerUnavailable)
         }
 
         #[cfg(unix)]
@@ -329,12 +447,12 @@ impl PublicApiEnvironment {
     }
 
     fn public_identity(&self) -> Result<(Uuid, String), PublicApiAdminError> {
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             Err(PublicApiAdminError::UnsupportedPlatform)
         }
 
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             let tls = self.tls_identity()?;
             Ok((
@@ -344,7 +462,6 @@ impl PublicApiEnvironment {
         }
     }
 
-    #[cfg(unix)]
     fn tls_identity(&self) -> Result<TlsIdentity, PublicApiAdminError> {
         TlsIdentity::from_seed(TlsKeySeed::new(*self.tls_seed))
             .map_err(|_| PublicApiAdminError::WorkerUnavailable)
@@ -870,7 +987,6 @@ fn normalize_scopes(scopes: &[String]) -> Result<Vec<ApiScope>, PublicApiAdminEr
     Ok(scopes)
 }
 
-#[cfg(unix)]
 fn load_or_create_exact_key(
     store: &dyn SecretStore,
     service: &str,
@@ -893,7 +1009,6 @@ fn load_or_create_exact_key(
     Ok(stored)
 }
 
-#[cfg(unix)]
 fn exact_key(value: Zeroizing<Vec<u8>>) -> Result<Zeroizing<[u8; 32]>, PublicApiAdminError> {
     if value.len() != 32 {
         return Err(PublicApiAdminError::SecretStoreValueInvalid);
@@ -903,13 +1018,11 @@ fn exact_key(value: Zeroizing<Vec<u8>>) -> Result<Zeroizing<[u8; 32]>, PublicApi
     Ok(key)
 }
 
-#[cfg(unix)]
-fn namespace_service(directory: &Path) -> String {
+pub(super) fn namespace_service(directory: &Path) -> String {
     let digest = Sha256::digest(directory.as_os_str().as_encoded_bytes());
     format!("{KEYRING_SERVICE_PREFIX}.{}", lowercase_hex(&digest))
 }
 
-#[cfg(unix)]
 fn stable_instance_id(seed: &[u8; 32]) -> Uuid {
     let mut hasher = Sha256::new();
     hasher.update(INSTANCE_ID_DOMAIN);
@@ -923,7 +1036,6 @@ fn stable_instance_id(seed: &[u8; 32]) -> Uuid {
     Uuid::from_bytes(bytes)
 }
 
-#[cfg(unix)]
 fn lowercase_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut encoded = String::with_capacity(bytes.len() * 2);

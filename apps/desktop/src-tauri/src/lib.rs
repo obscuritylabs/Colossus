@@ -1,3 +1,10 @@
+mod cloud_connector;
+mod control_plane_profiles;
+use cloud_connector::{
+    cloud_connect, cloud_disconnect, cloud_enroll, cloud_forget, cloud_revoke,
+    cloud_set_workspace_sharing, cloud_status,
+};
+use control_plane_profiles::{control_plane_profiles, save_control_plane_profiles};
 mod app_context;
 mod approval_adapter;
 mod browser;
@@ -307,6 +314,15 @@ pub fn run() {
             set_terminal_enabled,
             connect_colossus,
             connection_status,
+            cloud_enroll,
+            cloud_connect,
+            cloud_status,
+            control_plane_profiles,
+            save_control_plane_profiles,
+            cloud_set_workspace_sharing,
+            cloud_disconnect,
+            cloud_forget,
+            cloud_revoke,
             create_run,
             choose_run_attachment,
             read_artifact_content,

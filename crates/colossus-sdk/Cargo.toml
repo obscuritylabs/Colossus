@@ -18,6 +18,7 @@ daemon = [
     "dep:prost",
     "dep:prost-types",
     "dep:rustls",
+    "dep:serde_json",
     "dep:sha2",
     "dep:tonic",
     "dep:tokio",
@@ -37,6 +38,7 @@ sidecar = [
     "dep:tempfile",
 ]
 embedded = []
+serialization = ["dep:serde"]
 
 [dependencies]
 async-trait.workspace = true
@@ -54,6 +56,7 @@ prost = { workspace = true, optional = true }
 prost-types = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 sysinfo = { workspace = true, optional = true }
 thiserror.workspace = true
@@ -71,6 +74,9 @@ tempfile = { workspace = true, optional = true }
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["fs", "process", "signal"], optional = true }
 rustix = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { workspace = true, features = ["net"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 colossus-windows-native = { workspace = true, optional = true }

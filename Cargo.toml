@@ -1,6 +1,11 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/colossus-cloud",
+    "crates/colossus-cloud-postgres",
+    "crates/colossus-cloud-server",
+    "crates/colossus-connector",
+    "crates/colossus-cloud-protocol",
     "xtask",
     "crates/colossus-domain",
     "crates/colossus-contracts",
@@ -69,8 +74,20 @@ repository = "https://github.com/obscuritylabs/Colossus"
 publish-sdks = false
 
 [workspace.dependencies]
+chrono = "0.4.44"
+openidconnect = { version = "4.0.1", default-features = false, features = ["reqwest", "rustls-tls"] }
+colossus-connector = { version = "=0.11.7", path = "crates/colossus-connector" }
+colossus-cloud-server = { version = "=0.11.7", path = "crates/colossus-cloud-server" }
+axum = { version = "0.8.9", features = ["json", "tokio", "http1", "http2"] }
+colossus-cloud-protocol = { version = "=0.11.7", path = "crates/colossus-cloud-protocol" }
+colossus-cloud = { version = "=0.11.7", path = "crates/colossus-cloud" }
+colossus-cloud-postgres = { version = "=0.11.7", path = "crates/colossus-cloud-postgres" }
+diesel = { version = "2.3.13", default-features = false, features = ["postgres_backend", "serde_json"] }
+diesel-async = { version = "0.9.2", features = ["postgres", "bb8"] }
+tokio-postgres = { version = "0.7.16", features = ["with-serde_json-1"] }
 agent-client-protocol = "=2.2.0"
 colossus-bundled-plugins = { version = "=0.11.7", path = "crates/colossus-bundled-plugins" }
+argon2 = { version = "0.5.3", features = ["std"] }
 async-trait = "0.1.89"
 async-recursion = "1.1.1"
 base64 = "0.22.1"

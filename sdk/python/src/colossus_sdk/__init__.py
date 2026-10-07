@@ -19,6 +19,19 @@ from .error import (
     ErrorOutcomeCertainty,
     decode_colossus_rpc_error,
 )
+from .posture import (
+    PolicyApprovalMode,
+    PolicyFinding,
+    PolicyFindingCode,
+    PolicyFindingSeverity,
+    PolicyModelLabel,
+    PolicyProvenance,
+    PolicySandboxBackend,
+    PolicyTelemetry,
+    PolicyTelemetryProvenance,
+    RuntimePolicyPosture,
+    decode_runtime_policy_posture,
+)
 from .watch import (
     RunFeedItem,
     RunFeedProtocolError,
@@ -27,6 +40,17 @@ from .watch import (
 )
 
 __all__ = [
+    "PolicyApprovalMode",
+    "PolicyFinding",
+    "PolicyFindingCode",
+    "PolicyFindingSeverity",
+    "PolicyModelLabel",
+    "PolicyProvenance",
+    "PolicySandboxBackend",
+    "PolicyTelemetry",
+    "PolicyTelemetryProvenance",
+    "RuntimePolicyPosture",
+    "decode_runtime_policy_posture",
     "AgentRuns",
     "ColossusClient",
     "ColossusFieldViolation",

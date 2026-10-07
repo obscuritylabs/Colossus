@@ -1,3 +1,4 @@
+import { ConversationComposerFrame } from "@colossus/ui/conversation";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import {
@@ -45,7 +46,72 @@ function saveDraft() {
 function renderComposer() {
   flushSync(() =>
     composerRoot.render(
-      <>
+      <ConversationComposerFrame
+        aria-label="Task for Colossus"
+        onSubmit={(event) => {
+          event.preventDefault();
+          send();
+        }}
+        footer={
+          <div className="composer-actions shared-vscode-footer">
+            <div className="composer-controls">
+              <button
+                id="attach"
+                type="button"
+                className="icon-button"
+                title="Add context"
+                aria-label="Add context"
+                aria-expanded={contextOpen}
+                aria-controls="context-actions"
+                disabled={!view?.connected || view.busy}
+                onClick={() => {
+                  contextOpen = !contextOpen;
+                  element("context-actions").hidden = !contextOpen;
+                  renderComposer();
+                }}
+              >
+                <span className="icon icon-paperclip" aria-hidden="true" />
+              </button>
+              <ComposerModeSwitch
+                value={mode.value}
+                disabled={!view?.connected || view.busy}
+                options={[
+                  { value: "plan", label: "Plan" },
+                  { value: "execute", label: "Execute" },
+                ]}
+                onChange={(value) => {
+                  mode.value = value;
+                  saveDraft();
+                  renderComposer();
+                }}
+              />
+            </div>
+            <ComposerSendButton
+              id="send"
+              aria-label="Send"
+              title={
+                preferences.sendShortcut === "enter"
+                  ? "Send (Enter)"
+                  : "Send (Ctrl/Cmd+Enter)"
+              }
+              hidden={!!view?.busy}
+              disabled={!view?.connected || !!view.busy || !draft.trim()}
+              onClick={send}
+            />
+            <ComposerSendButton
+              id="stop"
+              className="is-stop"
+              aria-label="Stop"
+              title="Stop"
+              hidden={!view?.busy}
+              disabled={!view?.connected}
+              onClick={() => post({ type: "stop" })}
+            >
+              <span className="icon icon-square" aria-hidden="true" />
+            </ComposerSendButton>
+          </div>
+        }
+      >
         <ComposerInput
           id="prompt"
           aria-label="Task for Colossus"
@@ -75,63 +141,7 @@ function renderComposer() {
             }
           }}
         />
-        <div className="composer-actions">
-          <div className="composer-controls">
-            <button
-              id="attach"
-              className="icon-button"
-              title="Add context"
-              aria-label="Add context"
-              aria-expanded={contextOpen}
-              aria-controls="context-actions"
-              disabled={!view?.connected || view.busy}
-              onClick={() => {
-                contextOpen = !contextOpen;
-                element("context-actions").hidden = !contextOpen;
-                renderComposer();
-              }}
-            >
-              <span className="icon icon-paperclip" aria-hidden="true" />
-            </button>
-            <ComposerModeSwitch
-              value={mode.value}
-              disabled={!view?.connected || view.busy}
-              options={[
-                { value: "plan", label: "Plan" },
-                { value: "execute", label: "Execute" },
-              ]}
-              onChange={(value) => {
-                mode.value = value;
-                saveDraft();
-                renderComposer();
-              }}
-            />
-          </div>
-          <ComposerSendButton
-            id="send"
-            aria-label="Send"
-            title={
-              preferences.sendShortcut === "enter"
-                ? "Send (Enter)"
-                : "Send (Ctrl/Cmd+Enter)"
-            }
-            hidden={!!view?.busy}
-            disabled={!view?.connected || !!view.busy || !draft.trim()}
-            onClick={send}
-          />
-          <ComposerSendButton
-            id="stop"
-            className="is-stop"
-            aria-label="Stop"
-            title="Stop"
-            hidden={!view?.busy}
-            disabled={!view?.connected}
-            onClick={() => post({ type: "stop" })}
-          >
-            <span className="icon icon-square" aria-hidden="true" />
-          </ComposerSendButton>
-        </div>
-      </>,
+      </ConversationComposerFrame>,
     ),
   );
 }

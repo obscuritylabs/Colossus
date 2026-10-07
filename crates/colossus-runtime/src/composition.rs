@@ -272,6 +272,12 @@ impl Runtime {
                 workspace.display()
             )));
         }
+        let development_protection =
+            crate::development_credentials::runtime_development_protection(
+                config,
+                colossus_home_root.as_ref(),
+                &workspace,
+            )?;
         let mut tls_roots = config
             .network
             .ca_bundle_path
@@ -327,7 +333,12 @@ impl Runtime {
         let repository_id = repository_identity(&workspace);
         let storage =
             observe_startup_phase("colossus.runtime.storage.open", "storage_open", || {
-                compose_storage(config, &storage_path, &tls_roots)
+                compose_storage(
+                    config,
+                    &storage_path,
+                    &tls_roots,
+                    colossus_home_root.as_ref(),
+                )
             })?;
         let StorageComposition {
             keys,
@@ -531,15 +542,16 @@ impl Runtime {
         };
         let raw_filesystem_executor = Arc::new(
             FilesystemExecutor::new()
-                .with_workspace_search_exclusions(colossus_home.iter().cloned().collect()),
+                .with_workspace_search_exclusions(colossus_home.iter().cloned().collect())
+                .with_protected_filesystem(development_protection.clone()),
         );
         let filesystem_executor: Arc<dyn EffectExecutor> = Arc::new(
             WorkspaceBoundEffectExecutor::new(workspace_identity.clone(), raw_filesystem_executor),
         );
-        let raw_process_executor = Arc::new(SandboxProcessExecutor::new(
-            sandbox_executor_config.clone(),
-            sandbox_job_key,
-        ));
+        let raw_process_executor = Arc::new(
+            SandboxProcessExecutor::new(sandbox_executor_config.clone(), sandbox_job_key)
+                .with_protected_filesystem(development_protection),
+        );
         let process_executor: Arc<dyn EffectExecutor> =
             Arc::new(WorkspaceBoundEffectExecutor::new(
                 workspace_identity.clone(),

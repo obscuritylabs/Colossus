@@ -6,6 +6,7 @@ pub struct SandboxProcessExecutor {
     config: SandboxExecutorConfig,
     job_key: [u8; 32],
     pub(super) control: ProcessControl,
+    pub(super) protected: ProtectedFilesystem,
 }
 
 pub(super) struct OciCancellationGuard {
@@ -103,6 +104,7 @@ impl SandboxProcessExecutor {
             config,
             job_key,
             control: ProcessControl::default(),
+            protected: ProtectedFilesystem::default(),
         }
     }
 
@@ -112,7 +114,14 @@ impl SandboxProcessExecutor {
             config: self.config.clone(),
             job_key: self.job_key,
             control,
+            protected: self.protected.clone(),
         }
+    }
+
+    /// Add native-owned mandatory deny roots without expanding policy grants.
+    pub fn with_protected_filesystem(mut self, protected: ProtectedFilesystem) -> Self {
+        self.protected = protected;
+        self
     }
 }
 
@@ -195,6 +204,8 @@ impl SandboxProcessExecutor {
         }
         let mut spec: ProcessSpec = serde_json::from_value(request.content.clone())
             .map_err(|error| adapter_failure(format!("invalid process request: {error}")))?;
+        let mut job_obligations = permit.obligations().clone();
+        self.protected.restrict_process(&mut job_obligations)?;
         validate_process_spec(&spec, &request.resource, permit.obligations())?;
         validate_stdin_completion(&spec, &request.action)?;
         normalize_path_arguments(&mut spec, permit.obligations())?;
@@ -285,7 +296,6 @@ impl SandboxProcessExecutor {
             ));
         }
         let streaming = observer.is_some();
-        let mut job_obligations = permit.obligations().clone();
         job_obligations.timeout_ms = effective_timeout_ms;
         job_obligations.max_output_bytes = effective_output_bytes;
         let temporary_root = sandbox_temporary_root(&job_obligations.sandbox_backend)?;
@@ -527,7 +537,8 @@ pub(super) fn validate_process_spec(
         return Err(adapter_failure("process environment exceeds entry bound"));
     }
     for (name, value) in &spec.environment {
-        if (!danger_full_access && !obligations.allowed_environment.contains(name))
+        if reserved_credential_environment(name)
+            || (!danger_full_access && !obligations.allowed_environment.contains(name))
             || !valid_environment_name(name)
             || value.len() > 64 * 1024
             || value.contains('\0')
@@ -610,8 +621,25 @@ pub(super) fn inherit_ambient_environment(
         valid_environment_name(name)
             && !control_name.starts_with("COLOSSUS_SANDBOX_")
             && control_name != OCI_PROXY_CONFIG_VARIABLE
+            && !reserved_credential_environment(name)
     }));
-    environment.extend(explicit);
+    environment.extend(
+        explicit
+            .into_iter()
+            .filter(|(name, _)| !reserved_credential_environment(name)),
+    );
+}
+
+pub(super) fn reserved_credential_environment(name: &str) -> bool {
+    let name = name.to_ascii_uppercase();
+    name.starts_with("COLOSSUS_DEVELOPMENT_")
+        || matches!(
+            name.as_str(),
+            "COLOSSUS_JOURNAL_KEY"
+                | "COLOSSUS_SIGNING_KEY"
+                | "COLOSSUS_DEV_JOURNAL_KEY"
+                | "COLOSSUS_DEV_SIGNING_KEY"
+        )
 }
 
 pub(super) fn normalize_path_arguments(

@@ -73,3 +73,14 @@ sequence gaps. For a generated run-update watcher, set `RunWatchOptions.IsTermin
 `colossus.IsTerminalRunUpdate[*v1alpha1.RunUpdate]`. Only exact `result`, `failure`,
 and `cancellation` variants stop the feed; a lifecycle `state` notification does not.
 No effectful RPC is automatically retried.
+
+### Runtime policy metadata
+
+`colossus.GetRuntimePolicyPosture(ctx, agentRunClient)` reads validated, typed
+`RuntimePolicyPosture` metadata once through the authenticated generated client.
+`DecodeRuntimePolicyPosture` validates a released response independently. Closed
+enums and bounded identifier lists omit private configuration, and the nullable
+`*uint64` configuration revision preserves the full Rust integer range. Malformed,
+unknown, duplicate, or oversized metadata fails with `ErrRuntimePolicyPosture`
+without including payload text. Nil counters mean unknown. This runtime-reported
+configuration neither changes native policy nor independently attests enforcement.

@@ -72,6 +72,16 @@ impl Colossus {
         self.backend.agent_runs()
     }
 
+    /// Return the independently verified runtime instance without descriptor access.
+    pub fn instance_id(&self) -> Option<crate::InstanceId> {
+        self.backend.instance_id()
+    }
+
+    /// Return the independently granted native cloud run client, without exposing credentials.
+    pub fn connector_runs(&self) -> Option<Arc<dyn AgentRunClient>> {
+        self.backend.connector_runs()
+    }
+
     /// Return authenticated optional behaviors cached during connection setup.
     pub fn capabilities(&self) -> ServerCapabilities {
         self.backend.capabilities()

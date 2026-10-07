@@ -22,7 +22,9 @@ import { AgentRunServiceClient } from "@obscuritylabs/colossus-sdk/gen/colossus/
 import { DeploymentMode } from "@obscuritylabs/colossus-sdk/gen/colossus/api/v1alpha1/system";
 
 const descriptor = parseEndpointDescriptor(descriptorJson);
-const credential = new StaticBearerCredential(tokenObtainedFromSecureEnrollment);
+const credential = new StaticBearerCredential(
+  tokenObtainedFromSecureEnrollment,
+);
 const runs = await createSecureGrpcClient(
   AgentRunServiceClient,
   descriptor,
@@ -66,3 +68,15 @@ to the watch cursor or the helper fails closed. Pass
 directory. The gate verifies both the schema/tool input digest and the exact generated
 TypeScript tree recorded in `generated-output.sha256`, so a stale ignored binding tree
 cannot be published accidentally.
+
+### Runtime policy metadata
+
+`getRuntimePolicyPosture(agentRunClient)` returns a validated `RuntimePolicyPosture`
+with closed approval/sandbox enums, safe model labels, tools, roles, capabilities,
+configuration fingerprint, and explicit unavailable counters. `configurationRevision`
+is `bigint | null`, preserving Rust's full unsigned 64-bit range. The helper makes one
+read through the authenticated generated client and rejects malformed UTF-8, unknown
+or duplicate fields, unsafe labels, oversized metadata, and unsupported schema versions.
+The standalone `decodeRuntimePolicyPosture` applies the same checks to a released
+response. This configuration report does not grant tools or independently attest
+policy enforcement; null counters are unknown, not zero.

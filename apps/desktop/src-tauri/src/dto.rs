@@ -1549,6 +1549,16 @@ pub(crate) struct CreateRunInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RunBranchInput {
     source_run_id: String,
+    #[serde(default)]
+    kind: RunBranchKindInput,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RunBranchKindInput {
+    #[default]
+    Aside,
+    Thread,
 }
 
 impl CreateRunInput {
@@ -1568,6 +1578,12 @@ impl CreateRunInput {
         self.branch
             .as_ref()
             .map(|branch| branch.source_run_id.clone())
+    }
+
+    pub(crate) fn is_thread_fork(&self) -> bool {
+        self.branch
+            .as_ref()
+            .is_some_and(|branch| branch.kind == RunBranchKindInput::Thread)
     }
 
     pub(crate) fn into_sdk(self) -> Result<CreateRunRequest, CommandErrorDto> {
@@ -1615,7 +1631,7 @@ impl CreateRunInput {
         if branch.is_some() && (self.session_id.is_some() || plan_action.is_some()) {
             return Err(CommandErrorDto::invalid(
                 "branch",
-                "An Aside must start a separate session and cannot continue a Plan.",
+                "A conversation branch must start a separate session and cannot continue a Plan.",
             ));
         }
         Ok(CreateRunRequest {
@@ -2061,6 +2077,27 @@ mod tests {
 
         let request = input.into_sdk().expect("valid SDK request");
         assert_eq!(request.max_turns, 0);
+    }
+
+    #[test]
+    fn thread_fork_keeps_the_canonical_branch_boundary_and_is_not_an_aside() {
+        let input: CreateRunInput = serde_json::from_value(json!({
+            "prompt": "Explore another approach", "role": "primary", "mode": "execute",
+            "branch": { "sourceRunId": "owned-source", "kind": "thread" },
+            "maxTurns": 0, "idempotencyKey": "thread-fork"
+        }))
+        .expect("thread fork input");
+        assert!(input.is_thread_fork());
+        assert_eq!(input.branch_link().as_deref(), Some("owned-source"));
+        let request = input.into_sdk().expect("canonical branch request");
+        assert!(request.session_id.is_none());
+        assert!(request.plan_action.is_none());
+        let branch = request.branch.expect("branch retained");
+        assert_eq!(branch.source_message_count, 0);
+        assert_eq!(
+            branch.context_mode,
+            RunBranchContextMode::SourceRunConversation
+        );
     }
 
     #[test]

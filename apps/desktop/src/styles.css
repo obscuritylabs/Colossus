@@ -5107,149 +5107,6 @@ p {
   color: var(--red);
 }
 
-.run-activity {
-  min-width: 0;
-}
-
-.run-activity > summary {
-  list-style: none;
-  cursor: pointer;
-}
-
-.run-activity > summary::-webkit-details-marker {
-  display: none;
-}
-
-.run-activity-summary {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
-  gap: 9px;
-  align-items: center;
-}
-
-.run-activity-chevron {
-  display: grid;
-  color: var(--muted);
-  transition: transform 160ms ease;
-}
-
-.run-activity:not([open]) .run-activity-chevron {
-  transform: rotate(-90deg);
-}
-
-.run-activity-mark {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface-raised);
-  color: var(--icon-text);
-}
-
-.run-activity-mark img {
-  width: 17px;
-  height: 17px;
-}
-
-.run-activity.run-state-completed .run-activity-mark {
-  border-color: var(--green-border);
-  background: var(--green-soft);
-  box-shadow:
-    0 0 0 1px rgb(72 199 142 / 5%),
-    0 0 8px rgb(72 199 142 / 10%);
-}
-
-.run-activity.run-state-queued .run-activity-mark,
-.run-activity.run-state-running .run-activity-mark {
-  border-color: color-mix(in srgb, var(--cyan) 48%, var(--border));
-  background: color-mix(in srgb, var(--cyan) 12%, var(--surface));
-  box-shadow:
-    0 0 0 1px rgb(69 200 237 / 5%),
-    0 0 8px rgb(69 200 237 / 10%);
-}
-
-.run-activity-title {
-  display: flex;
-  min-width: 0;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.run-activity-title strong {
-  overflow: hidden;
-  color: var(--text);
-  font-size: 0.76rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.run-activity-title small {
-  flex: 0 0 auto;
-  color: var(--muted);
-  font-size: var(--font-size-caption);
-}
-
-.run-activity-status,
-.run-activity-exceptions {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--muted);
-  font-size: var(--font-size-body-sm);
-  font-weight: 680;
-}
-
-.run-activity-status.tone-success {
-  color: var(--green);
-}
-
-.run-activity-status.tone-danger,
-.run-activity-exceptions {
-  color: var(--red);
-}
-
-.run-activity-status.tone-warning {
-  color: var(--amber);
-}
-
-.run-activity-status.tone-active {
-  color: var(--cyan);
-}
-
-.run-activity-body {
-  min-width: 0;
-}
-
-.run-activity-thread {
-  padding: 2px 0 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.run-activity-thread .run-activity-summary {
-  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
-  padding-bottom: 8px;
-}
-
-.run-activity-thread .run-activity-body {
-  position: relative;
-  display: grid;
-  gap: 6px;
-  padding: 6px 0 0 74px;
-}
-
-.run-activity-thread .run-activity-body::before {
-  position: absolute;
-  top: 8px;
-  bottom: 8px;
-  left: 38px;
-  width: 2px;
-  background: var(--border-strong);
-  content: "";
-}
-
 .run-activity-thread .compact-tool-activity,
 .run-activity-thread .activity-thought,
 .run-activity-thread .feed-entry {
@@ -5841,7 +5698,6 @@ p {
 
 .interaction-heading h3,
 .connection-panel h3,
-.work-welcome h3,
 .overview-section h3,
 .settings-card h3 {
   margin: 0;
@@ -8399,8 +8255,7 @@ textarea {
   text-align: center;
 }
 
-.connection-panel,
-.work-welcome {
+.connection-panel {
   max-width: 650px;
   margin: clamp(16px, 7vh, 70px) auto 0;
 }
@@ -8415,13 +8270,11 @@ textarea {
   background: var(--surface);
 }
 
-.connection-panel h3,
-.work-welcome h3 {
+.connection-panel h3 {
   font-size: 1.16rem;
 }
 
-.connection-panel p:not(.eyebrow),
-.work-welcome > p:not(.eyebrow) {
+.connection-panel p:not(.eyebrow) {
   margin: 8px 0 12px;
   color: var(--muted);
   font-size: 0.77rem;
@@ -8434,60 +8287,6 @@ textarea {
   background: var(--surface-inset);
   color: var(--muted);
   font-size: var(--font-size-body-sm);
-}
-
-.work-welcome {
-  text-align: center;
-}
-
-.work-welcome > img {
-  width: 56px;
-  height: 56px;
-  margin-bottom: 14px;
-}
-
-.starter-list {
-  display: grid;
-  gap: 7px;
-  margin-top: 18px;
-  text-align: left;
-}
-
-.starter-list button {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  font-size: 0.72rem;
-  transition:
-    border-color 140ms ease,
-    background-color 140ms ease,
-    color 140ms ease;
-}
-
-.starter-list button svg {
-  color: var(--icon-text);
-  filter: drop-shadow(0 0 0 transparent);
-  transition:
-    color 140ms ease,
-    filter 140ms ease;
-}
-
-.starter-list button:hover,
-.starter-list button:focus-visible {
-  border-color: var(--accent-border);
-  background: var(--surface-hover);
-  color: var(--text-strong);
-}
-
-.starter-list button:hover svg,
-.starter-list button:focus-visible svg {
-  color: var(--blue-strong);
-  filter: drop-shadow(0 0 5px var(--focus-ring));
 }
 
 .context-sidebar {
@@ -10524,30 +10323,6 @@ textarea {
   .session-resource-actions {
     grid-column: 2;
     flex-wrap: wrap;
-  }
-
-  .run-activity-summary,
-  .run-activity-thread .run-activity-summary {
-    grid-template-columns: auto auto minmax(0, 1fr) auto;
-  }
-
-  .run-activity-title {
-    display: grid;
-    gap: 1px;
-  }
-
-  .run-activity-title small {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .run-activity-exceptions {
-    display: none;
-  }
-
-  .run-activity-thread .run-activity-body {
-    padding-left: 62px;
   }
 
   .run-activity-thread .compact-tool-activity::before,
@@ -13507,4 +13282,13 @@ textarea {
   padding: 12px 16px;
   color: var(--muted);
   font-size: var(--font-size-body-sm);
+}
+
+/* The shared frame owns composer chrome; Desktop retains its rich native slots. */
+.work-composer .shared-composer-body {
+  padding: 0;
+}
+.work-composer .shared-composer-body > .prompt-limit-error,
+.work-composer .shared-composer-body > .composer-error {
+  margin-inline: var(--space-3, 12px);
 }

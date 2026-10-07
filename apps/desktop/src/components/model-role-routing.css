@@ -12,11 +12,11 @@
   margin: 0;
   color: var(--muted);
   font-size: var(--font-size-body-sm);
-  line-height: 1.5;
+  line-height: var(--line-height-body);
 }
 .model-role-list {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   overflow: hidden;
 }
 .model-role-row {
@@ -50,15 +50,15 @@
 .model-role-purpose code {
   display: block;
   margin-top: 4px;
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   color: var(--muted);
   overflow-wrap: anywhere;
 }
 .model-role-required {
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   padding: 1px 6px;
-  font-size: 10px;
+  font-size: var(--font-size-overline);
   font-weight: 600;
   color: var(--muted);
 }
@@ -69,8 +69,8 @@
   display: block;
   margin-top: 6px;
   color: var(--muted);
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
   overflow-wrap: anywhere;
 }
 .model-role-routing .model-role-empty {

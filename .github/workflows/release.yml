@@ -1186,6 +1186,114 @@ jobs:
           compression-level: 0
           retention-days: 14
 
+  control_plane:
+    name: Control Plane ${{ matrix.target }}
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest-m
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the portable server and web image from pinned inputs
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
+        run: |
+          docker build --file deploy/control-plane/Dockerfile \
+            --label org.opencontainers.image.source=https://github.com/obscuritylabs/Colossus \
+            --label "org.opencontainers.image.revision=$SOURCE_COMMIT" \
+            --label "org.opencontainers.image.version=$RELEASE_TAG" \
+            --tag colossus-control-plane:release .
+      - name: Smoke the actual unprivileged image
+        run: |
+          test "$(docker image inspect colossus-control-plane:release --format '{{.Config.User}}')" = 10001:10001
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges colossus-control-plane:release --version
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges colossus-control-plane:release --help
+      - name: Package matching server, web, deployment, and offline Docker assets
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          TARGET: ${{ matrix.target }}
+          SOURCE_DATE_EPOCH: ${{ needs.validate.outputs.source_date_epoch }}
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/control-plane-stage"
+          output="$RUNNER_TEMP/control-plane-release"
+          mkdir -p "$stage/bin" "$stage/web" "$stage/deploy" "$output"
+          container=$(docker create colossus-control-plane:release)
+          trap 'docker rm "$container" >/dev/null 2>&1 || true' EXIT
+          docker cp "$container:/usr/local/bin/colossus-control-plane" "$stage/bin/"
+          docker cp "$container:/opt/colossus/web/." "$stage/web/"
+          cp -R deploy/control-plane/. "$stage/deploy/"
+          cp LICENSE "$stage/"
+          cp docs/admin/cloud-control-plane.md "$stage/README.md"
+          archive="Colossus-Control-Plane-${RELEASE_TAG}-${TARGET}.tar.gz"
+          tar --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 --numeric-owner -czf "$output/$archive" -C "$stage" .
+          image="Colossus-Control-Plane-${RELEASE_TAG}-${TARGET}.docker.tar.gz"
+          docker save colossus-control-plane:release | gzip -n > "$output/$image"
+          (cd "$output" && sha256sum "$archive" > "$archive.sha256" && sha256sum "$image" > "$image.sha256")
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: colossus-control-plane-${{ matrix.target }}
+          path: ${{ runner.temp }}/control-plane-release/*
+          if-no-files-found: error
+          retention-days: 30
+
+  vscode:
+    name: VSIX ${{ matrix.target }}
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64, win32-arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: apps/vscode/package-lock.json
+      - name: Check and build the shared extension
+        run: |
+          cd sdk/typescript
+          npm ci --ignore-scripts
+          npm run build
+          cd ../../apps/vscode
+          npm ci --ignore-scripts --legacy-peer-deps --install-links
+          npm run check
+          npm run build
+      - name: Package the locked native binding for the exact VS Code target
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cd apps/vscode
+          node scripts/package.mjs "$TARGET"
+          version=$(node -p "require('./package.json').version")
+          output="$RUNNER_TEMP/vsix-release"
+          mkdir -p "$output"
+          asset="Colossus-VSCode-${RELEASE_TAG}-${TARGET}.vsix"
+          cp "artifacts/colossus-${TARGET}-${version}.vsix" "$output/$asset"
+          (cd "$output" && sha256sum "$asset" > "$asset.sha256")
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: colossus-vsix-${{ matrix.target }}
+          path: ${{ runner.temp }}/vsix-release/*
+          if-no-files-found: error
+
   gate:
     name: Colossus release gate
     if: always()
@@ -1200,6 +1308,8 @@ jobs:
         desktop_macos,
         desktop_windows_preview,
         desktop_windows_signed,
+        control_plane,
+        vscode,
       ]
     runs-on: ubuntu-slim
     timeout-minutes: 5
@@ -1222,7 +1332,9 @@ jobs:
           set -euo pipefail
           ./scripts/ci/require-success.sh \
             validate=${{ needs.validate.result }} \
-            artifacts=${{ needs.artifacts.result }}
+            artifacts=${{ needs.artifacts.result }} \
+            control_plane=${{ needs.control_plane.result }} \
+            vscode=${{ needs.vscode.result }}
           if [ "$TEST_RELEASE" = true ]; then
             test "$TARGET_CHANNEL" = developer_preview
             test "$BOOTSTRAP_RESULT" = skipped
@@ -1293,7 +1405,7 @@ jobs:
           set -euo pipefail
           case "$RELEASE_CHANNEL" in
             stable)
-              test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 25
+              test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 45
               windows="Colossus-Desktop-STABLE-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe"
               test -f "dist/$windows"
               test -f "dist/$windows.sha256"
@@ -1314,9 +1426,9 @@ jobs:
                 "$sdk_dir" "$RELEASE_VERSION" "$SOURCE_COMMIT"
               ;;
             developer_preview)
-              expected_assets=22
+              expected_assets=42
               if [ "$TEST_RELEASE" = true ]; then
-                expected_assets=18
+                expected_assets=38
               fi
               test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq "$expected_assets"
               desktop="Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip"
@@ -1343,6 +1455,16 @@ jobs:
               test -f "dist/$bootstrap_asset"
             done
           fi
+          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            test -f "dist/Colossus-Control-Plane-${RELEASE_TAG}-${target}.tar.gz"
+            test -f "dist/Colossus-Control-Plane-${RELEASE_TAG}-${target}.tar.gz.sha256"
+            test -f "dist/Colossus-Control-Plane-${RELEASE_TAG}-${target}.docker.tar.gz"
+            test -f "dist/Colossus-Control-Plane-${RELEASE_TAG}-${target}.docker.tar.gz.sha256"
+          done
+          for target in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64 win32-arm64; do
+            test -f "dist/Colossus-VSCode-${RELEASE_TAG}-${target}.vsix"
+            test -f "dist/Colossus-VSCode-${RELEASE_TAG}-${target}.vsix.sha256"
+          done
           for checksum in dist/*.sha256; do
             (cd dist && sha256sum --check --strict "$(basename "$checksum")")
           done

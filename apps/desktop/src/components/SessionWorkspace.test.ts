@@ -15,6 +15,12 @@ import {
   SessionWorkspaceTabs,
 } from "./SessionWorkspace";
 
+function classTokens(markup: string): string[][] {
+  return [...markup.matchAll(/class="([^"]*)"/g)].map((match) =>
+    match[1]!.split(/\s+/),
+  );
+}
+
 function runView(runId: string, title: string, minute: number): RunView {
   const run: Run = {
     runId,
@@ -156,7 +162,9 @@ describe("SessionWorkspace", () => {
     expect(markup).toContain(
       '<button class="session-plan-title" type="button">make me a simple plan</button>',
     );
-    expect(markup).toContain('class="markdown-content session-plan-preview"');
+    expect(classTokens(markup)).toContainEqual(
+      expect.arrayContaining(["markdown-content", "session-plan-preview"]),
+    );
     expect(markup).toContain("<h4>Simple repository orientation plan</h4>");
     expect(markup).toContain("<strong>Review project foundations</strong>");
     expect(markup).not.toContain("### Simple repository orientation plan");
@@ -178,8 +186,8 @@ describe("SessionWorkspace", () => {
     expect(markup).toContain(
       `Messages ${snapshot.sourceStartSequence}–${snapshot.sourceEndSequence}`,
     );
-    expect(markup).toContain(
-      'class="markdown-content session-snapshot-preview"',
+    expect(classTokens(markup)).toContainEqual(
+      expect.arrayContaining(["markdown-content", "session-snapshot-preview"]),
     );
     expect(markup).toContain("<h4>Session context</h4>");
     expect(markup).toContain(
@@ -199,8 +207,8 @@ describe("SessionWorkspace", () => {
     expect(detail).toContain(
       `<h3 id="session-map-detail-title">Messages ${snapshot.sourceStartSequence}–${snapshot.sourceEndSequence}</h3>`,
     );
-    expect(detail).toContain(
-      'class="markdown-content session-snapshot-summary"',
+    expect(classTokens(detail)).toContainEqual(
+      expect.arrayContaining(["markdown-content", "session-snapshot-summary"]),
     );
     expect(detail).toContain("<h4>Session context</h4>");
     expect(detail).not.toContain("## Session context");

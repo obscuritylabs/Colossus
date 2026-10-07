@@ -97,6 +97,7 @@ impl<'a> CodexRefreshRequest<'a> {
 pub struct CodexAuthStore {
     path: PathBuf,
     update_lock: Arc<Mutex<()>>,
+    confined: Option<crate::confined_store::ConfinedAuthStore>,
 }
 
 impl CodexAuthStore {
@@ -123,7 +124,24 @@ impl CodexAuthStore {
         Self {
             path: path.into(),
             update_lock: Arc::new(Mutex::new(())),
+            confined: None,
         }
+    }
+
+    /// Bind one existing private file to a retained owner-private parent directory.
+    /// Construction inspects metadata only. Every load/refresh revalidates the
+    /// directory and current single-link leaf, permitting legitimate atomic refresh
+    /// replacement but refusing changed parent aliases without another store fallback.
+    pub fn confined(
+        root: colossus_home::ConfinedRoot,
+        name: impl AsRef<Path>,
+    ) -> Result<Self, CodexAuthError> {
+        let binding = crate::confined_store::ConfinedAuthStore::new(root, name.as_ref())?;
+        Ok(Self {
+            path: binding.path(),
+            update_lock: Arc::new(Mutex::new(())),
+            confined: Some(binding),
+        })
     }
 
     /// Credential file path without reading it.
@@ -133,7 +151,17 @@ impl CodexAuthStore {
 
     /// Load and validate the current ChatGPT authorization without logging secrets.
     pub fn load(&self) -> Result<CodexAuthorization, CodexAuthError> {
-        authorization_from_file(&read_stored_auth(&self.path)?)
+        authorization_from_file(&self.read_selected_auth()?)
+    }
+
+    fn read_selected_auth(&self) -> Result<StoredAuth, CodexAuthError> {
+        if let Some(binding) = &self.confined {
+            let bytes = binding.read()?;
+            serde_json::from_slice(&bytes)
+                .map_err(|_| CodexAuthError::Unavailable("Codex auth file is invalid JSON".into()))
+        } else {
+            read_stored_auth(&self.path)
+        }
     }
 
     /// Atomically merge a successful bounded refresh response into Codex storage.
@@ -152,8 +180,17 @@ impl CodexAuthStore {
             .update_lock
             .lock()
             .map_err(|_| CodexAuthError::Storage("credential update lock was poisoned".into()))?;
-        let _file_guard = AuthUpdateLock::acquire(&self.path)?;
-        let mut stored = read_stored_auth(&self.path)?;
+        let confined_lock = self
+            .confined
+            .as_ref()
+            .map(|binding| binding.lock())
+            .transpose()?;
+        let _file_guard = if self.confined.is_none() {
+            Some(AuthUpdateLock::acquire(&self.path)?)
+        } else {
+            None
+        };
+        let mut stored = self.read_selected_auth()?;
         let witness = AuthWitness::capture(&stored)?;
         let tokens = stored.tokens.as_mut().ok_or_else(missing_tokens)?;
         if tokens.refresh_token != expected.refresh_token() {
@@ -197,10 +234,21 @@ impl CodexAuthStore {
                 .format(&Rfc3339)
                 .map_err(|error| CodexAuthError::Storage(error.to_string()))?,
         );
-        if !witness.matches(&read_stored_auth(&self.path)?) {
+        if !witness.matches(&self.read_selected_auth()?) {
             return Err(credentials_changed());
         }
-        write_stored_auth(&self.path, &stored)?;
+        if let Some(binding) = &self.confined {
+            if let Some(guard) = &confined_lock {
+                guard.revalidate()?;
+            }
+            let bytes = auth_bytes(&stored)?;
+            binding.write(&bytes)?;
+            if let Some(guard) = &confined_lock {
+                guard.revalidate()?;
+            }
+        } else {
+            write_stored_auth(&self.path, &stored)?;
+        }
         authorization_from_file(&stored)
     }
 }
@@ -692,6 +740,10 @@ fn zeroize_json_value(value: &mut Value) {
 }
 
 fn write_stored_auth(path: &Path, stored: &StoredAuth) -> Result<(), CodexAuthError> {
+    write_auth_bytes(path, &auth_bytes(stored)?)
+}
+
+fn auth_bytes(stored: &StoredAuth) -> Result<Zeroizing<Vec<u8>>, CodexAuthError> {
     let bytes = Zeroizing::new(
         serde_json::to_vec_pretty(stored)
             .map_err(|error| CodexAuthError::Storage(error.to_string()))?,
@@ -701,7 +753,7 @@ fn write_stored_auth(path: &Path, stored: &StoredAuth) -> Result<(), CodexAuthEr
             "updated Codex auth file exceeds the safety bound".into(),
         ));
     }
-    write_auth_bytes(path, &bytes)
+    Ok(bytes)
 }
 
 #[cfg(unix)]
@@ -1162,7 +1214,6 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
     fn valid_auth(refresh_token: &str) -> Value {
         json!({
             "auth_mode": "chatgpt",
@@ -1174,6 +1225,97 @@ mod tests {
                 "refresh_token": refresh_token
             }
         })
+    }
+
+    fn confined_fixture() -> (tempfile::TempDir, colossus_home::ConfinedRoot) {
+        let temporary = test_tempdir();
+        let parent = fs::canonicalize(temporary.path()).expect("canonical private parent");
+        let path = parent.join("account");
+        #[cfg(windows)]
+        colossus_windows_native::create_private_directory(&path)
+            .expect("private account directory");
+        #[cfg(not(windows))]
+        {
+            fs::create_dir(&path).expect("private account directory");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+        }
+        (
+            temporary,
+            colossus_home::ConfinedRoot::bind(path).expect("private account binding"),
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn confined_store_refuses_parent_alias_after_selection_for_load_and_refresh() {
+        use std::os::unix::fs::symlink;
+        let (_temporary, root) = confined_fixture();
+        let path = root.path().join("auth.json");
+        write_auth(&path, &valid_auth("refresh-1"));
+        let store = CodexAuthStore::confined(root.clone(), Path::new("auth.json")).unwrap();
+        let snapshot = store.load().unwrap();
+        let displaced = root.path().with_file_name("displaced");
+        fs::rename(root.path(), &displaced).unwrap();
+        symlink(&displaced, root.path()).unwrap();
+        assert!(matches!(store.load(), Err(CodexAuthError::Storage(_))));
+        assert!(matches!(
+            store.apply_refresh(&snapshot, b"{}"),
+            Err(CodexAuthError::Storage(_))
+        ));
+        assert!(!displaced.join("auth.json.lock").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn confined_store_refuses_new_hardlink_after_selection_without_update() {
+        let (_temporary, root) = confined_fixture();
+        let path = root.path().join("auth.json");
+        write_auth(&path, &valid_auth("refresh-1"));
+        let store = CodexAuthStore::confined(root.clone(), Path::new("auth.json")).unwrap();
+        let snapshot = store.load().unwrap();
+        let original = fs::read(&path).unwrap();
+        fs::hard_link(&path, root.path().join("alias.json")).unwrap();
+        assert!(matches!(store.load(), Err(CodexAuthError::Storage(_))));
+        assert!(matches!(
+            store.apply_refresh(&snapshot, b"{}"),
+            Err(CodexAuthError::Storage(_))
+        ));
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert!(!root.path().join("auth.json.lock").exists());
+    }
+
+    #[test]
+    fn confined_store_accepts_atomic_refresh_and_preserves_unknown_metadata_and_cas() {
+        let (_temporary, root) = confined_fixture();
+        let path = root.path().join("auth.json");
+        let mut initial = valid_auth("refresh-1");
+        initial["fixture_metadata"] = json!({"retained": true});
+        write_auth(&path, &initial);
+        let store = CodexAuthStore::confined(root.clone(), Path::new("auth.json")).unwrap();
+        let snapshot = store.load().unwrap();
+        let old = root.open_existing_file(Path::new("auth.json")).unwrap();
+        let response = serde_json::to_vec(&json!({
+            "access_token": jwt(json!({"exp": OffsetDateTime::now_utc().unix_timestamp() + 7200})),
+            "refresh_token": "refresh-2"
+        }))
+        .unwrap();
+        let refreshed = store.apply_refresh(&snapshot, &response).unwrap();
+        assert_eq!(refreshed.refresh_token(), "refresh-2");
+        let current = root.open_existing_file(Path::new("auth.json")).unwrap();
+        assert!(!old.shares_identity(current.file()).unwrap());
+        assert_eq!(store.load().unwrap().refresh_token(), "refresh-2");
+        let document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(document["fixture_metadata"], json!({"retained": true}));
+        let committed = fs::read(&path).unwrap();
+        assert!(matches!(
+            store.apply_refresh(&snapshot, &response),
+            Err(CodexAuthError::Storage(_))
+        ));
+        assert_eq!(fs::read(&path).unwrap(), committed);
     }
 
     #[cfg(windows)]

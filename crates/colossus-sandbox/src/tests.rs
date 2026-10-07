@@ -1294,6 +1294,9 @@ fn ambient_workspace_search_respects_repository_ignores_and_releases_context() {
         1024 * 1024,
         true,
         &[application_home],
+        &super::ProtectedFilesystem::default()
+            .snapshot()
+            .expect("unprotected snapshot"),
     )
     .expect("workspace-scoped ambient search");
     let value: serde_json::Value = serde_json::from_slice(&result.bytes).expect("JSON");
@@ -1560,67 +1563,104 @@ async fn public_wildcard_proxy_rejects_loopback_without_an_exact_origin() {
 
 #[tokio::test]
 async fn authenticated_allowlist_proxy_rejects_missing_credentials_and_strips_valid_ones() {
-    let upstream = TcpListener::bind(("127.0.0.1", 0)).await.expect("listen");
-    let address = upstream.local_addr().expect("address");
-    let origin = format!("http://{address}");
-    let credential = "a".repeat(64);
-    let proxy = AllowlistProxy::start_authenticated(vec![origin.clone()], &credential)
-        .await
-        .expect("authenticated proxy");
-
-    let mut unauthorized = TcpStream::connect(("127.0.0.1", proxy.port()))
-        .await
-        .expect("unauthorized connect");
-    unauthorized
-        .write_all(format!("GET {origin}/denied HTTP/1.1\r\nHost: {address}\r\n\r\n").as_bytes())
-        .await
-        .expect("unauthorized request");
-    let mut response = Vec::new();
-    unauthorized
-        .read_to_end(&mut response)
-        .await
-        .expect("unauthorized response");
-    assert!(response.starts_with(b"HTTP/1.1 407"));
-
-    let server = tokio::spawn(async move {
-        let (mut stream, _) = upstream.accept().await.expect("authorized accept");
-        let mut request = Vec::new();
-        let mut buffer = [0_u8; 1024];
-        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-            let count = stream.read(&mut buffer).await.expect("authorized read");
-            assert!(count > 0);
-            request.extend_from_slice(&buffer[..count]);
-        }
-        assert!(
-            !String::from_utf8_lossy(&request)
-                .to_ascii_lowercase()
-                .contains("proxy-authorization:")
-        );
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-            .await
-            .expect("authorized response");
-    });
-    let authorization = format!("Basic {}", BASE64.encode(format!("colossus:{credential}")));
-    let mut authorized = TcpStream::connect(("127.0.0.1", proxy.port()))
-        .await
-        .expect("authorized connect");
-    authorized
-            .write_all(
-                format!(
-                    "GET {origin}/allowed HTTP/1.1\r\nHost: {address}\r\nProxy-Authorization: {authorization}\r\nConnection: close\r\n\r\n"
-                )
-                .as_bytes(),
+    for dual_stack in [false, true] {
+        let upstream = TcpListener::bind(("127.0.0.1", 0)).await.expect("listen");
+        let address = upstream.local_addr().expect("address");
+        let origin = format!("http://{address}");
+        let credential = "a".repeat(64);
+        let authorization = format!("Basic {}", BASE64.encode(format!("colossus:{credential}")));
+        let proxy = if dual_stack {
+            AllowlistProxy::start_with_authorization(
+                vec![origin.clone()],
+                Some(authorization.clone()),
+                true,
             )
             .await
-            .expect("authorized request");
-    let mut response = Vec::new();
-    authorized
-        .read_to_end(&mut response)
-        .await
-        .expect("authorized response");
-    assert!(response.starts_with(b"HTTP/1.1 200"));
-    server.await.expect("server");
+        } else {
+            AllowlistProxy::start_authenticated(vec![origin.clone()], &credential).await
+        }
+        .expect("authenticated proxy");
+        let mut endpoints = vec![proxy.address];
+        if dual_stack {
+            endpoints.push(SocketAddr::new(
+                IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+                proxy.port(),
+            ));
+        }
+        let requests = endpoints.len();
+        let server = tokio::spawn(async move {
+            for _ in 0..requests {
+                let (mut stream, _) = upstream.accept().await.expect("authorized accept");
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let count = stream.read(&mut buffer).await.expect("authorized read");
+                    assert!(count > 0);
+                    request.extend_from_slice(&buffer[..count]);
+                    assert!(request.len() <= 16 * 1024);
+                }
+                assert!(
+                    !String::from_utf8_lossy(&request)
+                        .to_ascii_lowercase()
+                        .contains("proxy-authorization:")
+                );
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await
+                    .expect("authorized response");
+            }
+        });
+        for endpoint in &endpoints {
+            let response = proxy_test_response(
+                *endpoint,
+                format!("GET {origin}/denied HTTP/1.1\r\nHost: {address}\r\n\r\n"),
+            )
+            .await;
+            assert!(response.starts_with(b"HTTP/1.1 407"));
+            let response = proxy_test_response(*endpoint,
+                format!("GET http://127.0.0.1:1/denied HTTP/1.1\r\nHost: 127.0.0.1:1\r\nProxy-Authorization: {authorization}\r\n\r\n"),
+            ).await;
+            assert!(response.starts_with(b"HTTP/1.1 403"));
+            let response = proxy_test_response(*endpoint,
+                format!("GET {origin}/allowed HTTP/1.1\r\nHost: {address}\r\nProxy-Authorization: {authorization}\r\nConnection: close\r\n\r\n"),
+            ).await;
+            assert!(response.starts_with(b"HTTP/1.1 200"));
+            assert!(response.ends_with(b"ok"));
+        }
+        server.await.expect("server");
+        assert_eq!(proxy.observed_origins(), vec![origin]);
+        drop(proxy);
+        for endpoint in endpoints {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while let Ok(stream) = TcpStream::connect(endpoint).await {
+                    drop(stream);
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("private proxy listener closes on drop");
+        }
+    }
+}
+
+async fn proxy_test_response(endpoint: SocketAddr, request: String) -> Vec<u8> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut stream = TcpStream::connect(endpoint).await.expect("proxy connect");
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .expect("proxy request");
+        let mut response = Vec::new();
+        stream
+            .read_to_end(&mut response)
+            .await
+            .expect("proxy response");
+        response
+    })
+    .await
+    .expect("proxy response deadline")
 }
 
 #[tokio::test]

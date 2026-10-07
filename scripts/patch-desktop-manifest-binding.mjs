@@ -44,13 +44,28 @@ const MACH_O_MAGICS = new Set([
 ]);
 
 function isPortableExecutable(executable) {
-  if (executable.length < 64 || executable[0] !== 0x4d || executable[1] !== 0x5a) {
+  if (
+    executable.length < 64 ||
+    executable[0] !== 0x4d ||
+    executable[1] !== 0x5a
+  ) {
     return false;
   }
   const headerOffset = executable.readUInt32LE(0x3c);
   return (
     headerOffset <= executable.length - 4 &&
-    executable.subarray(headerOffset, headerOffset + 4).equals(Buffer.from("PE\0\0"))
+    executable
+      .subarray(headerOffset, headerOffset + 4)
+      .equals(Buffer.from("PE\0\0"))
+  );
+}
+function isElfExecutable(executable) {
+  return (
+    executable.length >= 64 &&
+    executable.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) &&
+    executable[4] === 2 &&
+    executable[5] === 1 &&
+    [2, 3].includes(executable.readUInt16LE(16))
   );
 }
 
@@ -175,9 +190,7 @@ function validateManifest(bytes) {
     ) ||
     !validExecutableEntry(
       manifest.cli,
-      manifest.targetTriple.includes("-windows-")
-        ? "colossus.exe"
-        : "colossus",
+      manifest.targetTriple.includes("-windows-") ? "colossus.exe" : "colossus",
     ) ||
     !validExecutableEntry(
       manifest.ripgrep,
@@ -209,9 +222,10 @@ try {
   if (
     executable.length < 4 ||
     (!MACH_O_MAGICS.has(executable.readUInt32BE(0)) &&
-      !isPortableExecutable(executable))
+      !isPortableExecutable(executable) &&
+      !isElfExecutable(executable))
   ) {
-    fail("executable is not a supported Mach-O or PE image");
+    fail("executable is not a supported Mach-O, PE, or ELF image");
   }
 
   const bindingOffset = executable.indexOf(PLACEHOLDER_BINDING);

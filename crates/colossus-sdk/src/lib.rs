@@ -11,6 +11,8 @@ mod client;
 mod config;
 #[cfg(feature = "daemon")]
 mod daemon;
+#[cfg(all(feature = "sidecar", any(unix, windows)))]
+mod development_selector;
 #[cfg(feature = "embedded")]
 mod embedded;
 #[cfg(feature = "embedded")]
@@ -20,6 +22,8 @@ mod error;
 mod grpc;
 #[cfg(feature = "keyring")]
 mod keyring_provider;
+#[cfg(all(feature = "sidecar", target_os = "linux"))]
+mod linux_credential_session;
 #[cfg(all(feature = "sidecar", target_os = "macos"))]
 mod macos_code_identity;
 #[cfg(all(feature = "sidecar", target_os = "macos"))]
@@ -36,12 +40,14 @@ mod native_sidecar;
 mod native_sidecar;
 mod plugins;
 mod secret;
+mod sharing;
 #[cfg(feature = "sidecar")]
 mod sidecar;
 #[cfg(all(feature = "sidecar", any(unix, windows)))]
 mod sidecar_agent_runs;
 mod stream;
 mod types;
+pub use sharing::{ListVisibleRunsResponse, VisibleRun};
 mod workflows;
 pub use plugins::*;
 pub use workflows::*;
@@ -52,7 +58,10 @@ pub use backend::{AgentRunClient, ArtifactClient, Backend, BackendKind};
 pub use client::Colossus;
 pub use colossus_api::{
     ApiError, ApiErrorCode, ApiErrorReason, ApiResult, ApiScope, FieldViolation, IdempotencyKey,
-    PLAN_CONTINUATION_CAPABILITY, SESSION_ACTIVITY_CAPABILITY, scopes,
+    PLAN_CONTINUATION_CAPABILITY, PolicyApprovalMode, PolicyFinding, PolicyFindingSeverity,
+    PolicyModelLabel, PolicyProvenance, PolicySandboxBackend, PolicyTelemetry,
+    PolicyTelemetryProvenance, RuntimePolicyPosture, SESSION_ACTIVITY_CAPABILITY,
+    SetWorkspaceSharingRequest, WorkspaceSharingState, scopes,
 };
 #[cfg(all(feature = "sidecar", target_os = "macos"))]
 pub use colossus_darwin_process::{

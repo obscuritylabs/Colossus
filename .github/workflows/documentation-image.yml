@@ -1,0 +1,112 @@
+name: Publish Documentation image
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published stable or preview release tag
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - .github/workflows/documentation-image.yml
+      - scripts/ci/documentation-*.mjs
+      - scripts/ci/publish-documentation-image.sh
+
+permissions: {}
+
+concurrency:
+  group: documentation-image-${{ github.event.release.tag_name || inputs.tag || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  publisher-revision:
+    name: Resolve the protected main publisher
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      revision: ${{ steps.publisher.outputs.revision }}
+    steps:
+      - name: Use proposed code for tests or protected main for publication
+        id: publisher
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            revision="$GITHUB_SHA"
+          else
+            revision=$(gh api repos/obscuritylabs/Colossus/git/ref/heads/main --jq .object.sha)
+          fi
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+
+  contracts:
+    name: Verify immutable documentation publication contracts
+    needs: publisher-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.publisher-revision.outputs.revision }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+      - run: node --test scripts/ci/documentation-candidate.test.mjs
+      - run: bash -n scripts/ci/publish-documentation-image.sh
+
+  publish:
+    name: Publish the tested documentation platform index
+    needs: [publisher-revision, contracts]
+    if: >-
+      github.repository == 'obscuritylabs/Colossus' &&
+      ((github.event_name == 'release' && github.event.release.draft == false) ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    steps:
+      - name: Use the same protected publisher revision that passed contracts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.publisher-revision.outputs.revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+      - name: Authenticate with a job-scoped package token
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
+      - name: Verify release provenance, retained tested candidates, and immutable publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: bash scripts/ci/publish-documentation-image.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: colossus-documentation-publication-${{ github.event.release.tag_name || inputs.tag }}
+          path: |
+            ${{ runner.temp }}/documentation-image/publication.json
+            ${{ runner.temp }}/documentation-image/provenance.json
+            ${{ runner.temp }}/documentation-image/trusted/*.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Remove the job-scoped registry session
+        if: always()
+        run: docker logout ghcr.io

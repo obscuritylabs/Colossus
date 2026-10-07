@@ -30,9 +30,11 @@
     "tauri:build": "npm run prepare:sidecars:release && tauri build --no-bundle -- --locked",
     "tauri:bundle:macos": "../../scripts/package-desktop-macos",
     "tauri:bundle:windows": "pwsh -File ../../scripts/package-desktop-windows.ps1",
+    "tauri:bundle:linux": "sh ../../scripts/package-desktop-linux",
     "prepare:dictation": "node ../../scripts/stage-dictation-model.mjs"
   },
   "dependencies": {
+    "@colossus/ui": "file:../ui",
     "@shikijs/core": "4.3.1",
     "@shikijs/engine-javascript": "4.3.1",
     "@shikijs/langs": "4.3.1",
@@ -45,18 +47,19 @@
     "react-dom": "19.2.7",
     "react-markdown": "10.1.0",
     "rehype-sanitize": "6.0.0",
-    "remark-gfm": "4.0.1",
-    "@colossus/ui": "file:../ui"
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.12.1",
     "@playwright/test": "1.62.0",
+    "@tailwindcss/vite": "4.3.3",
     "@tauri-apps/cli": "2.11.4",
     "@types/node": "26.1.1",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.3",
     "prettier": "3.9.5",
+    "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
     "vite": "8.1.5",
     "vitest": "4.1.10"

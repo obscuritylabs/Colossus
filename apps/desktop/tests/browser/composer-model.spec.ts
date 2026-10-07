@@ -20,13 +20,13 @@ test("model settings opens the workspace route and preserves an unsent draft", a
   ).toBeVisible();
   await model.click();
   await expect(
-    page.getByRole("heading", { name: "Providers and models", exact: true }),
+    page.getByRole("heading", { name: "Models", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Workspace", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");
   await expect(
-    page.getByRole("button", { name: "Providers", exact: true }),
+    page.getByRole("button", { name: "Models", exact: true }),
   ).toHaveAttribute("aria-current", "page");
   await page.getByRole("button", { name: "Back to work", exact: true }).click();
   await expect(
@@ -34,7 +34,7 @@ test("model settings opens the workspace route and preserves an unsent draft", a
   ).toHaveValue(draft);
   await model.press("Enter");
   await expect(
-    page.getByRole("heading", { name: "Providers and models", exact: true }),
+    page.getByRole("heading", { name: "Models", exact: true }),
   ).toBeVisible();
 });
 

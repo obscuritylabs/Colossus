@@ -69,6 +69,10 @@ mod filesystem;
 pub use filesystem::FilesystemExecutor;
 use filesystem::*;
 
+mod protected_filesystem;
+pub use protected_filesystem::ProtectedFilesystem;
+use protected_filesystem::ProtectedFilesystemSnapshot;
+
 mod process;
 pub use process::SandboxProcessExecutor;
 use process::*;

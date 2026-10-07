@@ -1,7 +1,4 @@
-export {
-  StaticBearerCredential,
-  type MetadataWriter,
-} from "./credential.js";
+export { StaticBearerCredential, type MetadataWriter } from "./credential.js";
 export {
   type EndpointDescriptor,
   assertPinnedLeafCertificate,
@@ -32,3 +29,15 @@ export {
   isTerminalRunUpdate,
   watchRun,
 } from "./watch.js";
+export {
+  type PolicyProvenance,
+  type PolicySandboxBackend,
+  type PolicyApprovalMode,
+  type PolicyFindingCode,
+  type PolicyModelLabel,
+  type PolicyFinding,
+  type PolicyTelemetry,
+  type RuntimePolicyPosture,
+  decodeRuntimePolicyPosture,
+  getRuntimePolicyPosture,
+} from "./posture.js";

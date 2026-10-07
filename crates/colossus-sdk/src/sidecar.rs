@@ -247,6 +247,7 @@ pub struct SidecarBootstrapConfig {
     client_key_pem: Option<HostSecret>,
     codex_auth_path: Option<PathBuf>,
     approval_broker_grant: Option<SidecarApprovalBrokerGrant>,
+    connector_grant: Option<SidecarApplicationGrant>,
     host_credentials: Vec<SidecarHostCredential>,
     worker_ipc_authentication: Option<SecretString>,
 }
@@ -278,6 +279,7 @@ impl SidecarBootstrapConfig {
             client_key_pem: None,
             codex_auth_path: None,
             approval_broker_grant: None,
+            connector_grant: None,
             host_credentials: Vec::new(),
             worker_ipc_authentication: None,
         })
@@ -419,6 +421,35 @@ impl SidecarBootstrapConfig {
         Ok(self)
     }
 
+    pub(crate) fn has_connector_grant(&self) -> bool {
+        self.connector_grant.is_some()
+    }
+
+    /// Provision an independent cloud application beneath the local grant's ceilings.
+    /// Native hosts opt in before launch; enrollment is a separate explicit action.
+    pub fn with_connector_grant(mut self, grant: SidecarApplicationGrant) -> SdkResult<Self> {
+        if grant.application_id == self.grant.application_id
+            || grant
+                .allowed_roles
+                .iter()
+                .any(|role| !self.grant.allowed_roles.contains(role))
+            || grant
+                .allowed_tools
+                .iter()
+                .any(|tool| !self.grant.allowed_tools.contains(tool))
+            || grant.scopes.iter().any(|scope| {
+                !(self.grant.scopes.contains(scope)
+                    || scope == "approvals:respond" && self.approval_broker_grant.is_some())
+            })
+        {
+            return Err(SdkError::InvalidConfiguration(
+                "connector grant exceeds local authority",
+            ));
+        }
+        self.connector_grant = Some(grant);
+        Ok(self)
+    }
+
     /// Attach a bounded exact map of host-resolved provider credentials.
     pub fn with_host_credentials(
         mut self,
@@ -541,6 +572,10 @@ impl SidecarBootstrapConfig {
                 .approval_broker_grant
                 .as_ref()
                 .map(SidecarApprovalBrokerGrant::wire),
+            connector_grant: self
+                .connector_grant
+                .as_ref()
+                .map(SidecarApplicationGrant::wire),
             host_credentials: self
                 .host_credentials
                 .iter()

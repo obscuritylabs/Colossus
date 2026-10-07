@@ -10,7 +10,8 @@ type: how-to
 ## Goal
 
 Publish one stable Colossus version as six GitHub CLI archives, a signed Windows x64
-Desktop installer, two reviewed bootstrap installers,
+Desktop installer, Linux Control Plane bundles and images, six VS Code packages,
+two reviewed bootstrap installers,
 `@obscuritylabs/colossus-sdk` on npm, `obscuritylabs-colossus-sdk` on PyPI, and
 `sdk/go/vX.Y.Z` from the same immutable source commit. Stable releases require Azure
 Artifact Signing for the Windows executables and installer. They do not include a
@@ -42,6 +43,7 @@ Complete these account-owned steps before publishing the first stable draft:
    After a trusted publication succeeds, disallow token-based publication and revoke
    any bootstrap automation token. The public repository allows npm to attach a
    provenance statement to each trusted OIDC publication; keep `--provenance` enabled.
+
 5. The normalized PyPI name `colossus-sdk` belongs to an unrelated project. Create a
    **pending trusted publisher** for the unclaimed project
    `obscuritylabs-colossus-sdk` with owner `obscuritylabs`, repository `Colossus`,
@@ -75,8 +77,9 @@ setuptools does not apply `SOURCE_DATE_EPOCH` to all sdist metadata itself.
 All internal Rust packages must retain `publish = false`.
 
 Set `workspace.metadata.release.publish-sdks` in `Cargo.toml` for each release:
-`true` allows coordinated SDK registry publication; `false` selects Core/Desktop-only
-publication. Both modes build and verify SDK candidate archives with aligned versions.
+`true` allows coordinated SDK registry publication; `false` publishes the application
+artifacts without SDK registry publication. Both modes build and verify SDK candidate
+archives with aligned versions.
 The publisher reads this required boolean from the immutable release tag and blocks
 its privileged publication job when false, including manual recovery requests. Missing
 or malformed policy fails validation. Check the release tag's `Cargo.toml` for the
@@ -131,6 +134,17 @@ candidate pass. Before publishing the draft, verify that it contains exactly:
 - `colossus-sdk-vX.Y.Z-SHA256SUMS`;
 - a signed `Colossus-Desktop-STABLE-vX.Y.Z-x86_64-pc-windows-msvc-setup.exe`,
   its `.sha256`, sealed bundle manifest, and provenance JSON.
+- two `Colossus-Control-Plane-TAG-TARGET.tar.gz` server/web/deployment bundles and
+  their checksums, for Linux x64 and arm64;
+- two matching `.docker.tar.gz` offline image archives and their checksums; and
+- six `Colossus-VSCode-TAG-PLATFORM.vsix` packages with checksums, for Linux,
+  macOS, and Windows x64/arm64.
+
+The complete stable release has 45 assets. Ordinary previews have 42; previews built
+from an unchanged stable source version have 38 because they omit bootstrap installers.
+Control Plane and VSIX jobs are required by the release gate for every channel. The
+extension retains its independently versioned package metadata; release filenames
+identify the shared source tag.
 
 Publishing the stable draft triggers `publish-sdk.yml`. For a release whose policy
 allows SDK publication, approve its one
@@ -147,11 +161,13 @@ the core tag's commit.
 
 The stable GitHub Release contains the six CLI archives and checksums, the two
 repository-owned bootstrap installers and checksums, the five immutable SDK candidate
-files, and four signed Windows Desktop assets. The Windows CLI archives contain signed
-executables. When `publish-sdks` is true, the protected publisher releases the same
+files, four signed Windows Desktop assets, Linux Control Plane bundles and offline
+images, and six platform-specific VSIX packages with checksums. The Windows CLI
+archives contain signed executables. Publishing also starts the separate Control
+Plane image publisher. When `publish-sdks` is true, the protected publisher releases the same
 version to npm and PyPI and creates the Go module tag at the identical source commit.
-For Core/Desktop-only releases, candidate validation passes and the publication job
-is skipped; no registry packages or Go module tag are created.
+When `publish-sdks` is false, SDK candidate validation passes and the SDK publication
+job is skipped; no SDK registry packages or Go module tag are created.
 
 ## Verification
 
@@ -261,6 +277,97 @@ attached installer or app archive and extract CLI archives manually. These test 
 omit the four bootstrap installer assets because bootstrap installation requires the
 tag and binary versions to match. Stable tags and already-versioned preview sources
 still require an exact version match.
+
+### Control Plane containers and VS Code packages
+
+The native Linux release jobs build the pinned `deploy/control-plane/Dockerfile`,
+smoke its actual non-root image with a read-only filesystem and no network, and package
+matching server/web bytes plus an offline `docker load` archive. Both architectures
+are retained in the successful tag run's Actions artifacts and attached to the release.
+
+Publishing the reviewed release starts `Publish Control Plane image`. It uses the
+protected-main publisher, verifies the annotated tag's ancestry and successful tag
+build, and compares every server/image release asset against the independently retained
+Actions candidate. Recomputed mutable release checksums alone cannot authorize
+substituted bytes. It publishes only those tested images at
+`ghcr.io/obscuritylabs/colossus-control-plane:TAG`, then verifies the Linux amd64/arm64
+manifest index by digest. Conflicting existing version tags are refused; matching
+reruns reuse existing bytes. No moving `latest` alias is published.
+
+The publisher requires Docker API 1.46 or later and explicitly pushes each executable
+platform manifest before assembling the index from immutable manifest digests. It
+verifies the remote manifest's config digest against the trusted offline archive,
+then pulls the immutable executable digest so Docker validates the actual layers and
+root filesystem before advertising the index. This supports both classic and
+containerd image stores. Containerd's parent index and
+default build attestations remain in the offline archive; they are omitted from the
+published executable image index.
+
+Verify both the publication evidence and an anonymous digest pull before advertising
+the image. The first GHCR package must be public for anonymous on-prem installation.
+For an interrupted publication, rerun the publisher from `main` with the exact tag:
+
+```sh
+gh workflow run control-plane-image.yml --ref main -f tag=TAG
+```
+
+Trusted server candidates are retained for 30 days; if they have expired, the publisher
+fails rather than trusting release sidecars. Restore a successful exact-tag build
+before retrying. Offline installs can instead verify and load the attached
+`Colossus-Control-Plane-TAG-TARGET.docker.tar.gz` archive.
+
+The release builds platform-specific VSIX packages using the locked native keyring
+archive and verifies its registry integrity before packaging. Install the matching
+asset with `code --install-extension PATH_TO_VSIX`. This does not publish to the VS Code
+Marketplace. Source/browser and native worker acceptance remain distinct checks; a
+cross-packaged native binding is not a claim of native acceptance on that platform.
+
+### Documentation container
+
+The separate `documentation-candidate.yml` tag workflow builds and HTTP smoke-tests
+the canonical documentation image on native Linux amd64 and arm64. It retains the
+actual tested offline images and candidate manifests binding the annotated tag, source
+commit, archive hashes, and non-root image config digests. Candidate artifacts expire
+after 30 days; mutable Release sidecars cannot substitute for this source evidence.
+
+Publishing the reviewed stable or preview Release starts `documentation-image.yml`.
+The publisher runs from one resolved protected-main revision and requires successful
+exact-tag `release.yml` and documentation candidate runs before publishing
+`ghcr.io/obscuritylabs/colossus-documentation:TAG`. It publishes only the tested
+executables and verifies their immutable config/layers and final amd64/arm64 index.
+It refuses conflicting existing version tags; matching reruns reuse existing images.
+No moving `latest` alias or extra CLI Release assets are produced.
+
+To recover an interrupted publication:
+
+```sh
+gh workflow run documentation-image.yml --ref main -f tag=TAG
+```
+
+If the candidate artifacts expired, first rerun the original successful exact-tag
+Documentation image candidate workflow run, then retry publication:
+
+```sh
+gh run rerun DOCUMENTATION_CANDIDATE_RUN_ID
+gh run watch DOCUMENTATION_CANDIDATE_RUN_ID --exit-status
+gh workflow run documentation-image.yml --ref main -f tag=TAG
+```
+
+Inspect the retained publication evidence, confirm the first GHCR package is public,
+and verify an anonymous pull by its recorded index digest before advertising the
+image. Package visibility and a successful authenticated push do not prove anonymous
+availability. For example, use a temporary empty Docker configuration for the pull:
+
+```sh
+documentation_auth=$(mktemp -d)
+docker --config "$documentation_auth" pull \
+  ghcr.io/obscuritylabs/colossus-documentation@sha256:RECORDED_INDEX_DIGEST
+rm -r "$documentation_auth"
+```
+
+See [documentation hosting](../admin/documentation-hosting.md) for the portable `/docs/`
+mount, Kubernetes deployment, and browser/agent search. The canonical GitHub Pages
+publication continues independently.
 
 ### Windows Artifact Signing authority
 

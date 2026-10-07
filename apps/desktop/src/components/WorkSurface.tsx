@@ -15,7 +15,6 @@ import {
   IconPlugConnected,
   IconRefresh,
   IconShieldLock,
-  IconSparkles,
   IconX,
 } from "@tabler/icons-react";
 import {
@@ -32,7 +31,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { ActiveShells } from "./tools/ActiveShells";
 import { useShellSessions, shellIsActive } from "../shellSessions";
 
-import colossusMark from "@colossus/ui/assets/colossus-mark.svg";
+import { WorkWelcome } from "@colossus/ui";
 import {
   MAX_ASIDE_PANE_WIDTH,
   MIN_ASIDE_PANE_WIDTH,
@@ -118,6 +117,8 @@ interface WorkSurfaceProps {
   onOpenGenericTerminal?: () => void;
   title: string;
   view: RunView | undefined;
+  forkDraft?: boolean;
+  inheritedViews?: readonly RunView[];
   conversationViews: readonly RunView[];
   connection: ConnectionStatus;
   connecting: boolean;
@@ -192,18 +193,14 @@ interface WorkSurfaceProps {
   onCloseAside: (view: RunView | undefined) => Promise<boolean>;
 }
 
-const STARTERS = [
-  "Orient yourself in this repo",
-  "Plan a secure migration without making external changes",
-  "Coordinate an implementation and security review",
-];
-
 const IGNORE_SESSION_WORKSPACE_VIEW = () => undefined;
 
 export function WorkSurface({
   onInspectSchedule,
   gitWorkspaceId = null,
   gitAvailable = false,
+  forkDraft = false,
+  inheritedViews = [],
   title,
   view,
   conversationViews,
@@ -1075,7 +1072,9 @@ export function WorkSurface({
           <p className="surface-breadcrumb">
             <span>Work</span>
             <span aria-hidden="true">/</span>
-            <span>{status?.label ?? "New work"}</span>
+            <span>
+              {forkDraft ? "Fork draft" : (status?.label ?? "New work")}
+            </span>
             {!composerVisible ? gitControl : null}
           </p>
           <h2>{title}</h2>
@@ -1286,32 +1285,17 @@ export function WorkSurface({
                     </button>
                   </div>
                 </section>
+              ) : forkDraft ? (
+                <div className="conversation-timeline" id="work-activity">
+                  {conversationViews.map((contextView) => (
+                    <RunTimeline
+                      key={contextView.run.runId}
+                      view={contextView}
+                    />
+                  ))}
+                </div>
               ) : view === undefined ? (
-                <section className="work-welcome">
-                  <img src={colossusMark} alt="" />
-                  <p className="eyebrow">Local-first agent workspace</p>
-                  <h3>Give Colossus a goal. Keep control of every effect.</h3>
-                  <p>
-                    Start a task, switch to plan mode, or coordinate specialist
-                    work through one policy-bound local connection.
-                  </p>
-                  <div className="starter-list" aria-label="Example prompts">
-                    {STARTERS.map((suggestion) => (
-                      <button
-                        type="button"
-                        key={suggestion}
-                        onClick={() => onSuggestion(suggestion)}
-                      >
-                        <IconSparkles
-                          size={17}
-                          stroke={1.6}
-                          aria-hidden="true"
-                        />
-                        <span>{suggestion}</span>
-                      </button>
-                    ))}
-                  </div>
-                </section>
+                <WorkWelcome onSuggestion={onSuggestion} />
               ) : sessionWorkspaceView === "topology" ? (
                 <SessionTopology
                   views={conversationViews}
@@ -1364,6 +1348,12 @@ export function WorkSurface({
               ) : (
                 <>
                   <div className="conversation-timeline" id="work-activity">
+                    {inheritedViews.map((contextView) => (
+                      <RunTimeline
+                        key={`inherited-${contextView.run.runId}`}
+                        view={contextView}
+                      />
+                    ))}
                     {conversationViews.map((conversationView) => (
                       <div
                         data-aside-context="true"

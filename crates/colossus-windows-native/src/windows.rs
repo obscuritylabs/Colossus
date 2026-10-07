@@ -1,7 +1,7 @@
 use crate::{FileIdentity, WindowsNativeError};
 use std::{
     fs::{self, File, OpenOptions},
-    mem::{size_of, zeroed},
+    mem::{offset_of, size_of, zeroed},
     os::windows::{
         ffi::{OsStrExt as _, OsStringExt as _},
         fs::OpenOptionsExt as _,
@@ -11,8 +11,12 @@ use std::{
     path::{Path, PathBuf},
     ptr::{null, null_mut},
 };
+use windows_sys::Wdk::Storage::FileSystem::{
+    FILE_RENAME_INFORMATION, FILE_RENAME_POSIX_SEMANTICS, FILE_RENAME_REPLACE_IF_EXISTS,
+    FileRenameInformationEx, NtSetInformationFile,
+};
 use windows_sys::Win32::{
-    Foundation::{GENERIC_READ, INVALID_HANDLE_VALUE, LocalFree, NO_ERROR},
+    Foundation::{GENERIC_READ, INVALID_HANDLE_VALUE, LocalFree, NO_ERROR, RtlNtStatusToDosError},
     Security::{
         ACCESS_ALLOWED_ACE, ACE_FLAGS, ACE_HEADER,
         Authorization::{
@@ -27,18 +31,19 @@ use windows_sys::Win32::{
         WinBuiltinAdministratorsSid, WinLocalSystemSid,
     },
     Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS,
-        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_WRITE, FILE_ID_INFO,
-        FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileIdInfo,
-        GetFileInformationByHandle, GetFileInformationByHandleEx, MOVEFILE_REPLACE_EXISTING,
-        MOVEFILE_WRITE_THROUGH, MoveFileExW, READ_CONTROL,
+        BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE,
+        FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_GENERIC_WRITE, FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
+        READ_CONTROL,
     },
     System::{
         Console::{STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle},
         Diagnostics::ToolHelp::{
             CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
         },
+        IO::IO_STATUS_BLOCK,
         JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
@@ -248,7 +253,11 @@ pub(super) fn replace_private_file(
     parent.validate_ancestor_namespace_authority()?;
     parent.validate_private_owner_dacl()?;
     parent.revalidate()?;
-    let source = open_bound(source_path, BoundKind::File)?;
+    let source = open_bound_with_access(
+        source_path,
+        BoundKind::File,
+        GENERIC_READ | FILE_GENERIC_WRITE | DELETE,
+    )?;
     source.validate_ancestor_namespace_authority()?;
     source.validate_private_owner_dacl()?;
     source.revalidate()?;
@@ -259,19 +268,75 @@ pub(super) fn replace_private_file(
         destination.revalidate()?;
     }
 
-    let source_encoded = nul_terminated_path(source_path)?;
-    let destination_encoded = nul_terminated_path(destination_path)?;
-    // SAFETY: both paths are NUL-terminated and remain live for the call. The retained
-    // private parent and source handles make the post-operation identity check meaningful.
-    if unsafe {
-        MoveFileExW(
-            source_encoded.as_ptr(),
-            destination_encoded.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+    let destination_leaf = destination_path
+        .file_name()
+        .ok_or(WindowsNativeError::InvalidInput)?;
+    let mut encoded = destination_leaf.encode_wide().collect::<Vec<_>>();
+    if encoded.is_empty() || encoded.contains(&0) {
+        return Err(WindowsNativeError::InvalidInput);
+    }
+    let name_bytes = encoded
+        .len()
+        .checked_mul(size_of::<u16>())
+        .and_then(|size| u32::try_from(size).ok())
+        .ok_or(WindowsNativeError::InvalidInput)?;
+    encoded.push(0);
+    let buffer_bytes = offset_of!(FILE_RENAME_INFORMATION, FileName)
+        .checked_add(encoded.len() * size_of::<u16>())
+        .and_then(|size| u32::try_from(size).ok())
+        .ok_or(WindowsNativeError::InvalidInput)?;
+    // Struct storage preserves alignment while reserving the variable-length name tail.
+    let mut buffer = vec![
+        FILE_RENAME_INFORMATION::default();
+        (buffer_bytes as usize).div_ceil(size_of::<FILE_RENAME_INFORMATION>())
+    ];
+    buffer[0].Anonymous.Flags = FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS;
+    buffer[0].RootDirectory = parent.file.as_raw_handle().cast();
+    buffer[0].FileNameLength = name_bytes;
+    // SAFETY: the aligned allocation covers the header and entire UTF-16 name tail;
+    // its destination range does not overlap the separate encoded-name allocation.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            encoded.as_ptr(),
+            buffer
+                .as_mut_ptr()
+                .cast::<u8>()
+                .add(offset_of!(FILE_RENAME_INFORMATION, FileName))
+                .cast::<u16>(),
+            encoded.len(),
+        );
+    }
+    source
+        .file
+        .sync_all()
+        .map_err(|source| WindowsNativeError::Io {
+            operation: "flush private replacement file",
+            source,
+        })?;
+    source.revalidate()?;
+    parent.revalidate()?;
+    let mut io_status = IO_STATUS_BLOCK::default();
+    // Use the native operation for a leaf relative to the retained directory handle;
+    // the Win32 wrapper performs DOS path conversion before calling this operation.
+    // SAFETY: both handles remain live, the output status is writable, and the aligned
+    // buffer contains exactly the initialized rename header and name bytes. POSIX
+    // replacement keeps existing readers attached to the displaced file object.
+    let status = unsafe {
+        NtSetInformationFile(
+            source.file.as_raw_handle().cast(),
+            &mut io_status,
+            buffer.as_ptr().cast(),
+            buffer_bytes,
+            FileRenameInformationEx,
         )
-    } == 0
-    {
-        return Err(last_error("replace private file"));
+    };
+    if status < 0 {
+        // SAFETY: translating an NTSTATUS does not dereference caller-owned memory.
+        let error = unsafe { RtlNtStatusToDosError(status) };
+        return Err(WindowsNativeError::Io {
+            operation: "replace private file",
+            source: std::io::Error::from_raw_os_error(error as i32),
+        });
     }
 
     let committed = open_bound(destination_path, BoundKind::File)?;
@@ -566,19 +631,19 @@ pub(super) fn open_bound(
     path: &Path,
     kind: BoundKind,
 ) -> Result<BoundPathInner, WindowsNativeError> {
-    open_bound_with_access(path, kind, false)
+    open_bound_with_access(path, kind, GENERIC_READ)
 }
 
 pub(super) fn open_bound_file_read_write(
     path: &Path,
 ) -> Result<BoundPathInner, WindowsNativeError> {
-    open_bound_with_access(path, BoundKind::File, true)
+    open_bound_with_access(path, BoundKind::File, GENERIC_READ | FILE_GENERIC_WRITE)
 }
 
 fn open_bound_with_access(
     path: &Path,
     kind: BoundKind,
-    writable_file: bool,
+    file_access: u32,
 ) -> Result<BoundPathInner, WindowsNativeError> {
     if !path.is_absolute()
         || path.parent().is_none()
@@ -604,7 +669,11 @@ fn open_bound_with_access(
         }
         let leaf = index + 1 == components.len();
         let component_kind = if leaf { kind } else { BoundKind::Directory };
-        let opened = open_exact(&candidate, component_kind, leaf && writable_file)?;
+        let opened = open_exact(
+            &candidate,
+            component_kind,
+            if leaf { file_access } else { 0 },
+        )?;
         if leaf {
             let canonical_path =
                 fs::canonicalize(path).map_err(|source| WindowsNativeError::Io {
@@ -625,14 +694,10 @@ fn open_bound_with_access(
     Err(WindowsNativeError::InvalidInput)
 }
 
-fn open_exact(
-    path: &Path,
-    kind: BoundKind,
-    writable_file: bool,
-) -> Result<File, WindowsNativeError> {
+fn open_exact(path: &Path, kind: BoundKind, file_access: u32) -> Result<File, WindowsNativeError> {
     let mut options = OpenOptions::new();
     let data_access = if matches!(kind, BoundKind::File) {
-        GENERIC_READ | if writable_file { FILE_GENERIC_WRITE } else { 0 }
+        file_access
     } else {
         0
     };

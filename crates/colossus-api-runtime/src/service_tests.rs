@@ -44,6 +44,7 @@ use uuid::Uuid;
 mod plan_interaction;
 mod process_sessions;
 mod schedule_approval;
+mod sharing;
 
 struct RuntimeFixture {
     runtime: Arc<Runtime>,
@@ -681,6 +682,59 @@ fn service(runtime: Arc<Runtime>, admission: RunAdmissionConfig) -> Arc<RuntimeA
         "You are a deterministic conformance test.",
         admission,
     ))
+}
+
+async fn policy_metadata_is_scoped_path_free_and_updates_with_native_mode(runtime: Arc<Runtime>) {
+    let mode = Arc::new(TestPublicApprovalMode::new(PublicApprovalMode::Ask));
+    let router = Arc::new(
+        PublicInteractionRouter::new(Arc::new(DenyApproval), None)
+            .with_public_approval_mode(mode.clone()),
+    );
+    let api = RuntimeAgentRunApi::new(Arc::clone(&runtime), router, "primary", "Metadata fixture");
+    let reader = caller_with_exact_scopes("app:policy-reader", "policy-read", &[scopes::RUNS_READ]);
+    let first = api
+        .get_runtime_policy_posture(&reader)
+        .await
+        .expect("released metadata");
+    assert!(first.validate());
+    assert!(
+        first.allowed_tools.is_empty(),
+        "read permission cannot borrow wider tool authority"
+    );
+    assert_eq!(first.approval_mode, colossus_api::PolicyApprovalMode::Ask);
+    assert!(
+        first.telemetry.denied_requests.is_none(),
+        "unavailable counts are unknown"
+    );
+    let json = serde_json::to_string(&first).expect("metadata");
+    assert!(!json.contains(runtime.workspace().to_string_lossy().as_ref()));
+    for private_field in [
+        "canonical_workspace",
+        "protected_paths",
+        "network_destinations",
+        "resolved_shell",
+        "credentialReference",
+    ] {
+        assert!(!json.contains(private_field));
+    }
+    let denied = caller_with_exact_scopes("app:policy-denied", "policy-denied", &[]);
+    assert_eq!(
+        api.get_runtime_policy_posture(&denied)
+            .await
+            .unwrap_err()
+            .code,
+        colossus_api::ApiErrorCode::PermissionDenied
+    );
+    mode.set(PublicApprovalMode::RiskAuto);
+    let changed = api
+        .get_runtime_policy_posture(&reader)
+        .await
+        .expect("current native mode");
+    assert_eq!(
+        changed.approval_mode,
+        colossus_api::PolicyApprovalMode::RiskAuto
+    );
+    assert_ne!(first.fingerprint, changed.fingerprint);
 }
 
 async fn wait_inactive(service: &RuntimeAgentRunApi) {
@@ -1503,6 +1557,10 @@ fn runtime_service_conformance() {
         .build()
         .expect("test runtime")
         .block_on(async {
+            policy_metadata_is_scoped_path_free_and_updates_with_native_mode(Arc::clone(
+                &fixture.runtime,
+            ))
+            .await;
             process_sessions::inspection_and_control_require_current_scopes(Arc::clone(
                 &fixture.runtime,
             ))

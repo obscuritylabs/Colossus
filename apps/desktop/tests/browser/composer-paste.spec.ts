@@ -53,9 +53,9 @@ test("large pasted text stays compact and the full text is sent", async ({
   expect((await prompt.boundingBox())!.height).toBeLessThan(100);
 
   await prompt.press("Enter");
-  await expect(page.locator(".message-user .message-body")).toHaveText(
-    `Before ${normalized} after`,
-  );
+  await expect(
+    page.locator('article[data-role="user"] .shared-message-body'),
+  ).toHaveText(`Before ${normalized} after`);
   await expect(prompt).toHaveValue("");
   await expect(page.locator(".composer-paste-summary")).toHaveCount(0);
 });
@@ -76,9 +76,9 @@ test("the byte limit uses hidden text and removing a marker drops its payload", 
   await expect(page.locator(".composer-paste-summary")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Send prompt" })).toBeEnabled();
   await prompt.press("Enter");
-  await expect(page.locator(".message-user .message-body")).toHaveText(
-    "Short message",
-  );
+  await expect(
+    page.locator('article[data-role="user"] .shared-message-body'),
+  ).toHaveText("Short message");
 });
 
 test("backspacing the marker edge detaches the hidden paste", async ({

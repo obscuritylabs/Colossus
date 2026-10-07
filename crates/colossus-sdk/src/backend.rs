@@ -34,6 +34,43 @@ pub enum BackendKind {
 /// context before exposing this interface.
 #[async_trait]
 pub trait AgentRunClient: Send + Sync {
+    /// Read metadata-only current policy posture beneath this application's authority.
+    async fn get_runtime_policy_posture(&self) -> ApiResult<crate::RuntimePolicyPosture> {
+        Err(crate::ApiError::failed_precondition(
+            crate::ApiErrorReason::InvalidRunTransition,
+            "runtime policy metadata is unavailable",
+        ))
+    }
+    /// Explicitly share only this application's sessions in the connected workspace.
+    async fn set_workspace_sharing(
+        &self,
+        _request: crate::SetWorkspaceSharingRequest,
+    ) -> ApiResult<crate::WorkspaceSharingState> {
+        Err(crate::ApiError::failed_precondition(
+            crate::ApiErrorReason::InvalidRunTransition,
+            "workspace sharing is unavailable",
+        ))
+    }
+
+    /// Discover runtime-authorized shared sessions with explicit mutation flags.
+    async fn list_visible_runs(
+        &self,
+        request: ListRunsRequest,
+    ) -> ApiResult<crate::ListVisibleRunsResponse> {
+        let page = self.list_runs(request).await?;
+        Ok(crate::ListVisibleRunsResponse {
+            runs: page
+                .runs
+                .into_iter()
+                .map(|run| crate::VisibleRun {
+                    run,
+                    controllable: false,
+                    continuable: false,
+                })
+                .collect(),
+            page: page.page,
+        })
+    }
     /// List caller-owned managed shells.
     async fn list_process_sessions(
         &self,
@@ -175,6 +212,44 @@ impl fmt::Debug for ContextBoundAgentRunClient {
 #[async_trait]
 #[cfg(feature = "embedded")]
 impl AgentRunClient for ContextBoundAgentRunClient {
+    async fn get_runtime_policy_posture(&self) -> ApiResult<crate::RuntimePolicyPosture> {
+        self.api.get_runtime_policy_posture(&self.caller).await
+    }
+    async fn set_workspace_sharing(
+        &self,
+        request: crate::SetWorkspaceSharingRequest,
+    ) -> ApiResult<crate::WorkspaceSharingState> {
+        self.api.set_workspace_sharing(&self.caller, request).await
+    }
+    async fn list_visible_runs(
+        &self,
+        request: ListRunsRequest,
+    ) -> ApiResult<crate::ListVisibleRunsResponse> {
+        let page = self
+            .api
+            .list_visible_runs(
+                &self.caller,
+                crate::embedded_projection::list_request(request),
+            )
+            .await?;
+        let runs = page
+            .runs
+            .into_iter()
+            .map(|value| {
+                Ok(crate::VisibleRun {
+                    run: crate::embedded_projection::get_response(value.run, &self.caller)?.run,
+                    controllable: value.controllable,
+                    continuable: value.continuable,
+                })
+            })
+            .collect::<ApiResult<Vec<_>>>()?;
+        Ok(crate::ListVisibleRunsResponse {
+            runs,
+            page: page
+                .next_page_token
+                .map(|next_page_token| crate::PageResponse { next_page_token }),
+        })
+    }
     async fn list_process_sessions(
         &self,
         request: crate::ListProcessSessionsRequest,
@@ -360,6 +435,16 @@ pub trait Backend: Send + Sync {
 
     /// Caller-bound run service.
     fn agent_runs(&self) -> Arc<dyn AgentRunClient>;
+
+    /// Authenticated runtime instance, when this backend has a native identity.
+    fn instance_id(&self) -> Option<crate::InstanceId> {
+        None
+    }
+
+    /// Independent cloud run client, present only after native cloud grant provisioning.
+    fn connector_runs(&self) -> Option<Arc<dyn AgentRunClient>> {
+        None
+    }
 
     /// Cached authenticated server capabilities.
     ///

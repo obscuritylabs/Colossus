@@ -4,6 +4,7 @@ use super::*;
 #[derive(Default)]
 pub struct FilesystemExecutor {
     workspace_search_exclusions: Vec<PathBuf>,
+    protected: ProtectedFilesystem,
 }
 
 impl FilesystemExecutor {
@@ -18,6 +19,12 @@ impl FilesystemExecutor {
         self.workspace_search_exclusions = paths;
         self
     }
+
+    /// Restrict native-owned private state independently of the effect's grants.
+    pub fn with_protected_filesystem(mut self, protected: ProtectedFilesystem) -> Self {
+        self.protected = protected;
+        self
+    }
 }
 
 #[async_trait]
@@ -29,18 +36,28 @@ impl EffectExecutor for FilesystemExecutor {
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
         let mode = filesystem_mode(&request.action)?;
         let target = authorized_path(Path::new(&request.resource), mode, permit.obligations())?;
+        let protected = self.protected.snapshot()?;
+        protected.check_path(&target)?;
         let max_output =
             usize::try_from(permit.obligations().max_output_bytes).map_err(adapter_failure)?;
-        match request.action.as_str() {
+        let result = match request.action.as_str() {
             "filesystem.read" | "filesystem.read_run_input" => {
-                let metadata = fs::metadata(&target).map_err(adapter_failure)?;
+                let file = fs::File::open(&target).map_err(adapter_failure)?;
+                protected.check_file(&file)?;
+                let metadata = file.metadata().map_err(adapter_failure)?;
                 if !metadata.is_file() {
                     return Err(adapter_failure("filesystem.read requires a regular file"));
                 }
                 if metadata.len() > permit.obligations().max_output_bytes {
                     return Err(adapter_failure("file exceeds the permitted output bound"));
                 }
-                let bytes = fs::read(target).map_err(adapter_failure)?;
+                let mut bytes = Vec::new();
+                file.take(permit.obligations().max_output_bytes.saturating_add(1))
+                    .read_to_end(&mut bytes)
+                    .map_err(adapter_failure)?;
+                if bytes.len() > max_output {
+                    return Err(adapter_failure("file exceeds the permitted output bound"));
+                }
                 Ok(QuarantinedEffectResult {
                     media_type: "application/octet-stream".into(),
                     bytes,
@@ -62,6 +79,10 @@ impl EffectExecutor for FilesystemExecutor {
             "filesystem.list" => {
                 let mut entries = fs::read_dir(&target)
                     .map_err(adapter_failure)?
+                    .filter(|entry| match entry {
+                        Ok(entry) => protected.discoverable(&entry.path()),
+                        Err(_) => true,
+                    })
                     .map(|entry| {
                         let entry = entry.map_err(adapter_failure)?;
                         let metadata =
@@ -83,16 +104,19 @@ impl EffectExecutor for FilesystemExecutor {
                 max_output,
                 permit.obligations().resource_authority == ResourceAuthority::Ambient,
                 &self.workspace_search_exclusions,
+                &protected,
             ),
             "filesystem.write" | "audit.export.write" => {
-                write_file(&target, &request.content, max_output)
+                write_file(&target, &request.content, max_output, &protected)
             }
-            "patch.preview" => preview_patch(&target, &request.content, max_output),
+            "patch.preview" => preview_patch(&target, &request.content, max_output, &protected),
             "patch.apply" | "patch.reverse" | "trace.export" => {
-                write_file(&target, &request.content, max_output)
+                write_file(&target, &request.content, max_output, &protected)
             }
             _ => Err(adapter_failure("unsupported filesystem action")),
-        }
+        }?;
+        protected.revalidate()?;
+        Ok(result)
     }
 }
 
@@ -119,6 +143,7 @@ pub(super) fn search_files(
     max_output: usize,
     ambient: bool,
     workspace_search_exclusions: &[PathBuf],
+    protected: &ProtectedFilesystemSnapshot,
 ) -> Result<QuarantinedEffectResult, ExecutionError> {
     if !root.is_dir() {
         return Err(adapter_failure(
@@ -185,9 +210,16 @@ pub(super) fn search_files(
     } else {
         Vec::new()
     };
+    let protected_roots = protected.paths();
     walker
         .follow_links(false)
-        .filter_entry(move |entry| !exclusions.iter().any(|root| entry.path().starts_with(root)))
+        .filter_entry(move |entry| {
+            !exclusions.iter().any(|root| entry.path().starts_with(root))
+                && (protected_roots.is_empty()
+                    || fs::canonicalize(entry.path()).is_ok_and(|path| {
+                        !protected_roots.iter().any(|root| path.starts_with(root))
+                    }))
+        })
         .hidden(false)
         .ignore(respect_repository_ignores)
         .git_ignore(respect_repository_ignores)
@@ -196,6 +228,9 @@ pub(super) fn search_files(
         .max_filesize(Some(MAX_SEARCH_FILE_BYTES));
     for entry in walker.build().filter_map(Result::ok) {
         let path = entry.path();
+        if !protected.discoverable(path) {
+            continue;
+        }
         if !entry
             .file_type()
             .is_some_and(|file_type| file_type.is_file())
@@ -208,9 +243,18 @@ pub(super) fn search_files(
         {
             continue;
         }
-        let Ok(bytes) = fs::read(path) else {
+        let Ok(file) = fs::File::open(path) else {
             continue;
         };
+        protected.check_file(&file)?;
+        let mut bytes = Vec::new();
+        if file
+            .take(MAX_SEARCH_FILE_BYTES.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .is_err()
+        {
+            continue;
+        }
         if bytes.len() > usize::try_from(MAX_SEARCH_FILE_BYTES).unwrap_or(usize::MAX)
             || bytes.contains(&0)
         {
@@ -402,6 +446,7 @@ pub(super) fn write_file(
     target: &Path,
     content: &Value,
     max_output: usize,
+    protected: &ProtectedFilesystemSnapshot,
 ) -> Result<QuarantinedEffectResult, ExecutionError> {
     if content.get("content_base64").is_some() {
         let bytes = proposed_write_bytes(content, max_output)?;
@@ -422,7 +467,7 @@ pub(super) fn write_file(
         .get("operation")
         .and_then(Value::as_str)
         .unwrap_or("write");
-    let existing = existing_text(target, max_output)?;
+    let existing = existing_text(target, max_output, protected)?;
     let (updated, replacements, create_only) = match operation {
         "write" => {
             let supplied = content
@@ -523,8 +568,9 @@ pub(super) fn preview_patch(
     target: &Path,
     content: &Value,
     max_output: usize,
+    protected: &ProtectedFilesystemSnapshot,
 ) -> Result<QuarantinedEffectResult, ExecutionError> {
-    let original = existing_text(target, max_output)?
+    let original = existing_text(target, max_output, protected)?
         .ok_or_else(|| adapter_failure("patch.preview requires an existing file"))?;
     let old = content
         .get("old")
@@ -569,6 +615,7 @@ pub(super) fn preview_patch(
 pub(super) fn existing_text(
     target: &Path,
     max_bytes: usize,
+    protected: &ProtectedFilesystemSnapshot,
 ) -> Result<Option<String>, ExecutionError> {
     match fs::metadata(target) {
         Ok(metadata) if !metadata.is_file() => Err(adapter_failure(
@@ -577,9 +624,24 @@ pub(super) fn existing_text(
         Ok(metadata) if metadata.len() > u64::try_from(max_bytes).unwrap_or(u64::MAX) => Err(
             adapter_failure("existing file exceeds the permitted mutation bound"),
         ),
-        Ok(_) => fs::read_to_string(target)
-            .map(Some)
-            .map_err(adapter_failure),
+        Ok(_) => {
+            let file = fs::File::open(target).map_err(adapter_failure)?;
+            protected.check_file(&file)?;
+            let mut bytes = Vec::new();
+            file.take(
+                u64::try_from(max_bytes)
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1),
+            )
+            .read_to_end(&mut bytes)
+            .map_err(adapter_failure)?;
+            if bytes.len() > max_bytes {
+                return Err(adapter_failure(
+                    "existing file exceeds the permitted mutation bound",
+                ));
+            }
+            String::from_utf8(bytes).map(Some).map_err(adapter_failure)
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(adapter_failure(error)),
     }

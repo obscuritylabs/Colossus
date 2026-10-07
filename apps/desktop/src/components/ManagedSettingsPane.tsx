@@ -1,3 +1,5 @@
+import { CloudConnectionPane } from "./CloudConnectionPane";
+import { ControlPlaneSettingsPane } from "./ControlPlaneSettingsPane";
 import { ModelFeatureControl } from "./ModelFeatureControl";
 import type { ModelFeatureMode, ManagedModelCapabilities } from "../types";
 import { RememberedCommands } from "./RememberedCommands";
@@ -6,6 +8,7 @@ import { useSetupPackages } from "./setup/useSetupPackages";
 import { ImportedProviderActions } from "./setup/ImportedProviderActions";
 import { SettingsFrame } from "./SettingsFrame";
 import { ModelRoleRouting } from "./ModelRoleRouting";
+import { ModelRoutingOverview } from "./ModelRoutingOverview";
 import { RuntimeProfileRow } from "./RuntimeProfileRow";
 import {
   subscribeSettingsUpdates,
@@ -220,6 +223,7 @@ type DesktopTab = (typeof DESKTOP_PAGES)[number]["id"];
 
 type SettingsScope = "global" | "space";
 type GlobalTab =
+  | "control-plane"
   | "providers"
   | "models"
   | "credentials"
@@ -230,8 +234,11 @@ type GlobalTab =
   | "defaults"
   | DesktopTab;
 type SpaceTab =
+  | "cloud"
   | "runtime"
   | "providers"
+  | "models"
+  | "routing"
   | "mcp"
   | "plugins"
   | "access"
@@ -244,7 +251,17 @@ type SpaceTab =
 
 interface ManagedSettingsPaneProps {
   initialSpaceTab?:
-    "runtime" | "providers" | "plugins" | "terminal" | "dictation" | undefined;
+    | "runtime"
+    | "providers"
+    | "models"
+    | "routing"
+    | "plugins"
+    | "terminal"
+    | "dictation"
+    | "cloud"
+    | "control-plane"
+    | undefined;
+  initialSpaceId?: string | undefined;
   desktop: DesktopStatus;
   connecting: boolean;
   updateChecking: boolean;
@@ -370,6 +387,7 @@ const GLOBAL_TABS: ReadonlyArray<{
   group?: string;
 }> = [
   { id: "providers", label: "Providers", group: "Global settings" },
+  { id: "control-plane", label: "Control Plane", group: "Global settings" },
   { id: "models", label: "Models", group: "Global settings" },
   { id: "credentials", label: "Credentials", group: "Global settings" },
   { id: "mcp", label: "MCP", group: "Global settings" },
@@ -382,7 +400,10 @@ const GLOBAL_TABS: ReadonlyArray<{
 
 const SPACE_TABS: ReadonlyArray<{ id: SpaceTab; label: string }> = [
   { id: "runtime", label: "Runtime" },
+  { id: "cloud", label: "Control Plane" },
   { id: "providers", label: "Providers" },
+  { id: "models", label: "Models" },
+  { id: "routing", label: "Routing" },
   { id: "mcp", label: "MCP" },
   { id: "plugins", label: "Plugins" },
   { id: "access", label: "Access" },
@@ -1683,6 +1704,7 @@ function mcpEntry(
 
 export function ManagedSettingsPane({
   initialSpaceTab = "runtime",
+  initialSpaceId,
   onReturnToWork,
   desktop,
   connecting,
@@ -1708,17 +1730,23 @@ export function ManagedSettingsPane({
   );
   const [snapshot, setSnapshot] = useState(initial);
   const [scope, setScope] = useState<SettingsScope>(
-    initialSpaceTab === "terminal" || initialSpaceTab === "dictation"
+    initialSpaceTab === "terminal" ||
+      initialSpaceTab === "dictation" ||
+      initialSpaceTab === "control-plane"
       ? "global"
       : "space",
   );
   const [globalTab, setGlobalTab] = useState<GlobalTab>(
-    initialSpaceTab === "terminal" || initialSpaceTab === "dictation"
+    initialSpaceTab === "terminal" ||
+      initialSpaceTab === "dictation" ||
+      initialSpaceTab === "control-plane"
       ? initialSpaceTab
       : "mcp",
   );
   const [spaceTab, setSpaceTab] = useState<SpaceTab>(
-    initialSpaceTab === "terminal" || initialSpaceTab === "dictation"
+    initialSpaceTab === "terminal" ||
+      initialSpaceTab === "dictation" ||
+      initialSpaceTab === "control-plane"
       ? "runtime"
       : initialSpaceTab,
   );
@@ -1727,7 +1755,7 @@ export function ManagedSettingsPane({
     ReadonlySet<string>
   >(() => new Set());
   const [selectedSpaceId, setSelectedSpaceId] = useState(
-    desktop.selectedSpaceId ?? initial.spaces[0]?.id ?? "",
+    initialSpaceId ?? desktop.selectedSpaceId ?? initial.spaces[0]?.id ?? "",
   );
   const [query, setQuery] = useState("");
   const [actionBusy, setBusy] = useState(false);
@@ -1823,7 +1851,7 @@ export function ManagedSettingsPane({
 
   const selectedSpace =
     snapshot.spaces.find((candidate) => candidate.id === selectedSpaceId) ??
-    snapshot.spaces[0];
+    (initialSpaceId === undefined ? snapshot.spaces[0] : undefined);
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -3068,79 +3096,90 @@ export function ManagedSettingsPane({
       ) : (
         <>
           {selectedSpace ? (
-            <SpaceSettingsBody
-              tab={spaceTab}
-              snapshot={snapshot}
-              selectedSpace={selectedSpace}
-              draft={space}
-              setDraft={setSpace}
-              descriptors={descriptors}
-              effective={effective}
-              focusedFieldId={focusedFieldId}
-              expandedAdvancedSections={expandedAdvancedSections}
-              onAdvancedSectionToggle={(section, open) => {
-                setExpandedAdvancedSections((current) => {
-                  if (current.has(section) === open) return current;
-                  const next = new Set(current);
-                  if (open) next.add(section);
-                  else next.delete(section);
-                  return next;
-                });
-                if (
-                  !open &&
-                  descriptors.find(({ id }) => id === focusedFieldId)
-                    ?.section === section
-                ) {
-                  setFocusedFieldId(null);
+            spaceTab === "cloud" ? (
+              <CloudConnectionPane
+                key={selectedSpace.id}
+                targetId={selectedSpace.id}
+              />
+            ) : (
+              <SpaceSettingsBody
+                tab={spaceTab}
+                snapshot={snapshot}
+                selectedSpace={selectedSpace}
+                draft={space}
+                setDraft={setSpace}
+                descriptors={descriptors}
+                effective={effective}
+                focusedFieldId={focusedFieldId}
+                expandedAdvancedSections={expandedAdvancedSections}
+                onAdvancedSectionToggle={(section, open) => {
+                  setExpandedAdvancedSections((current) => {
+                    if (current.has(section) === open) return current;
+                    const next = new Set(current);
+                    if (open) next.add(section);
+                    else next.delete(section);
+                    return next;
+                  });
+                  if (
+                    !open &&
+                    descriptors.find(({ id }) => id === focusedFieldId)
+                      ?.section === section
+                  ) {
+                    setFocusedFieldId(null);
+                  }
+                }}
+                busy={busy}
+                mcpDiagnostics={mcpDiagnostics}
+                mcpOauthStatuses={mcpOauthStatuses}
+                mcpOauthLogins={mcpOauthLogins}
+                mcpOauthCallbacks={mcpOauthCallbacks}
+                onMcpOauthCallback={(server, value) =>
+                  setMcpOauthCallbacks((current) => ({
+                    ...current,
+                    [server]: value,
+                  }))
                 }
-              }}
-              busy={busy}
-              mcpDiagnostics={mcpDiagnostics}
-              mcpOauthStatuses={mcpOauthStatuses}
-              mcpOauthLogins={mcpOauthLogins}
-              mcpOauthCallbacks={mcpOauthCallbacks}
-              onMcpOauthCallback={(server, value) =>
-                setMcpOauthCallbacks((current) => ({
-                  ...current,
-                  [server]: value,
-                }))
-              }
-              onTestMcp={testMcpServer}
-              onLoadMcpOAuthStatus={loadMcpOAuthStatus}
-              onLoginMcpOAuth={loginMcpOAuth}
-              onCompleteMcpOAuth={completeMcpOAuth}
-              onLogoutMcpOAuth={logoutMcpOAuth}
-              runtimeDiagnostics={runtimeDiagnostics}
-              testingRuntimeProfile={testingRuntimeProfile}
-              runtimeDiagnosticErrors={runtimeDiagnosticErrors}
-              onTestRuntimeProfile={testRuntimeProfile}
-              onTestSearchRole={testSearchRole}
-              onTestTelemetry={testTelemetry}
-              extensionInventory={extensionInventory}
-              extensionInventoryBusy={extensionInventoryBusy}
-              onRefreshExtensionInventory={() => void loadExtensionInventory()}
-            />
+                onTestMcp={testMcpServer}
+                onLoadMcpOAuthStatus={loadMcpOAuthStatus}
+                onLoginMcpOAuth={loginMcpOAuth}
+                onCompleteMcpOAuth={completeMcpOAuth}
+                onLogoutMcpOAuth={logoutMcpOAuth}
+                runtimeDiagnostics={runtimeDiagnostics}
+                testingRuntimeProfile={testingRuntimeProfile}
+                runtimeDiagnosticErrors={runtimeDiagnosticErrors}
+                onTestRuntimeProfile={testRuntimeProfile}
+                onTestSearchRole={testSearchRole}
+                onTestTelemetry={testTelemetry}
+                extensionInventory={extensionInventory}
+                extensionInventoryBusy={extensionInventoryBusy}
+                onRefreshExtensionInventory={() =>
+                  void loadExtensionInventory()
+                }
+              />
+            )
           ) : (
             <EmptySettings
               icon={<IconFolder size={24} />}
               title="No Workspace selected"
             />
           )}
-          <SettingsActionBar
-            dirty={spaceDirty}
-            busy={busy}
-            failure={failure}
-            label="Apply Workspace changes"
-            pending={
-              selectedSpace?.pendingGlobalRevision ? selectedSpace : undefined
-            }
-            onDiscard={() =>
-              selectedSpace && setSpace(spaceDraft(selectedSpace))
-            }
-            onApply={() =>
-              void (spaceDirty ? saveSpace() : applyPendingRevision())
-            }
-          />
+          {spaceTab !== "cloud" && (
+            <SettingsActionBar
+              dirty={spaceDirty}
+              busy={busy}
+              failure={failure}
+              label="Apply Workspace changes"
+              pending={
+                selectedSpace?.pendingGlobalRevision ? selectedSpace : undefined
+              }
+              onDiscard={() =>
+                selectedSpace && setSpace(spaceDraft(selectedSpace))
+              }
+              onApply={() =>
+                void (spaceDirty ? saveSpace() : applyPendingRevision())
+              }
+            />
+          )}
           {importProposal ? (
             <RepositoryImportDialog
               proposal={importProposal}
@@ -3316,6 +3355,8 @@ function GlobalSettingsBody({
     );
   };
   const global = snapshot.globalConfiguration;
+  if (tab === "control-plane") return <ControlPlaneSettingsPane />;
+
   if (tab === "plugins") {
     return (
       <PluginSettingsBody
@@ -4932,7 +4973,7 @@ export function SpaceSettingsBody({
       </section>
     );
   }
-  if (tab === "providers") {
+  if (tab === "providers" || tab === "models" || tab === "routing") {
     const selectedModels = snapshot.globalConfiguration.models.filter((entry) =>
       draft.selectedModels.includes(entry.id),
     );
@@ -4965,129 +5006,176 @@ export function SpaceSettingsBody({
         <div className="managed-settings-body">
           <div className="managed-section-heading">
             <div>
-              <p className="eyebrow">Pinned global revisions</p>
-              <h3>Providers and models</h3>
+              <p className="eyebrow">
+                {tab === "routing"
+                  ? "Workspace routes"
+                  : "Pinned global revisions"}
+              </p>
+              <h3>
+                {tab === "providers"
+                  ? "Providers"
+                  : tab === "models"
+                    ? "Models"
+                    : "Routing"}
+              </h3>
+              <p className="managed-heading-copy">
+                {tab === "providers"
+                  ? "Choose which provider connections this workspace can use."
+                  : tab === "models"
+                    ? "Enable models from the providers selected for this workspace."
+                    : "Assign models to roles and inspect their effective provider routes."}
+              </p>
             </div>
             <span>
-              {draft.selectedProviders.length} providers ·{" "}
-              {draft.selectedModels.length} models
+              {tab === "providers"
+                ? `${draft.selectedProviders.length} selected ${draft.selectedProviders.length === 1 ? "provider" : "providers"}`
+                : `${draft.selectedModels.length} enabled ${draft.selectedModels.length === 1 ? "model" : "models"}`}
             </span>
           </div>
-          <div className="managed-list mcp-selection-list">
-            {snapshot.globalConfiguration.providers.map((entry) => {
-              const provider = currentValue(entry);
-              const enabled = draft.selectedProviders.includes(entry.id);
-              return (
-                <RuntimeProfileRow
-                  key={entry.id}
-                  kind="provider"
-                  label={entry.label}
-                  subtitle={provider.baseUrl}
-                  selected={enabled}
-                  busy={busy}
-                  {...testState("provider", entry, provider.profile, enabled)}
-                >
-                  <SwitchInput
-                    disabled={busy}
-                    checked={enabled}
-                    aria-label={`Select ${entry.label}`}
-                    onChange={(event) => {
-                      const selectedProviders = event.target.checked
-                        ? [...draft.selectedProviders, entry.id]
-                        : draft.selectedProviders.filter(
-                            (id) => id !== entry.id,
-                          );
-                      const removedModels = new Set(
-                        snapshot.globalConfiguration.models
-                          .filter(
-                            (model) =>
-                              currentValue(model).providerProfile ===
-                              provider.profile,
-                          )
-                          .map((model) => model.id),
+          {tab !== "routing" ? (
+            <div className="managed-list mcp-selection-list">
+              {tab === "providers"
+                ? snapshot.globalConfiguration.providers.map((entry) => {
+                    const provider = currentValue(entry);
+                    const enabled = draft.selectedProviders.includes(entry.id);
+                    return (
+                      <RuntimeProfileRow
+                        key={entry.id}
+                        kind="provider"
+                        label={entry.label}
+                        subtitle={provider.baseUrl}
+                        selected={enabled}
+                        busy={busy}
+                        {...testState(
+                          "provider",
+                          entry,
+                          provider.profile,
+                          enabled,
+                        )}
+                      >
+                        <SwitchInput
+                          disabled={busy}
+                          checked={enabled}
+                          aria-label={`Select ${entry.label}`}
+                          onChange={(event) => {
+                            const selectedProviders = event.target.checked
+                              ? [...draft.selectedProviders, entry.id]
+                              : draft.selectedProviders.filter(
+                                  (id) => id !== entry.id,
+                                );
+                            const removedModels = new Set(
+                              snapshot.globalConfiguration.models
+                                .filter(
+                                  (model) =>
+                                    currentValue(model).providerProfile ===
+                                    provider.profile,
+                                )
+                                .map((model) => model.id),
+                            );
+                            const selectedModelProfiles = new Set(
+                              snapshot.globalConfiguration.models
+                                .filter(
+                                  (model) =>
+                                    event.target.checked ||
+                                    !removedModels.has(model.id),
+                                )
+                                .map((model) => currentValue(model).profile),
+                            );
+                            setDraft({
+                              ...draft,
+                              selectedProviders,
+                              selectedModels: event.target.checked
+                                ? draft.selectedModels
+                                : draft.selectedModels.filter(
+                                    (id) => !removedModels.has(id),
+                                  ),
+                              modelRoles: Object.fromEntries(
+                                Object.entries(draft.modelRoles).filter(
+                                  ([, profile]) =>
+                                    selectedModelProfiles.has(profile),
+                                ),
+                              ),
+                            });
+                          }}
+                        />
+                      </RuntimeProfileRow>
+                    );
+                  })
+                : null}
+              {tab === "models"
+                ? snapshot.globalConfiguration.models.map((entry) => {
+                    const model = currentValue(entry);
+                    const providerSelected =
+                      snapshot.globalConfiguration.providers.some(
+                        (provider) =>
+                          draft.selectedProviders.includes(provider.id) &&
+                          currentValue(provider).profile ===
+                            model.providerProfile,
                       );
-                      const selectedModelProfiles = new Set(
-                        snapshot.globalConfiguration.models
-                          .filter(
-                            (model) =>
-                              event.target.checked ||
-                              !removedModels.has(model.id),
-                          )
-                          .map((model) => currentValue(model).profile),
-                      );
-                      setDraft({
-                        ...draft,
-                        selectedProviders,
-                        selectedModels: event.target.checked
-                          ? draft.selectedModels
-                          : draft.selectedModels.filter(
-                              (id) => !removedModels.has(id),
-                            ),
-                        modelRoles: Object.fromEntries(
-                          Object.entries(draft.modelRoles).filter(
-                            ([, profile]) => selectedModelProfiles.has(profile),
-                          ),
-                        ),
-                      });
-                    }}
-                  />
-                </RuntimeProfileRow>
-              );
-            })}
-            {snapshot.globalConfiguration.models.map((entry) => {
-              const model = currentValue(entry);
-              const providerSelected =
-                snapshot.globalConfiguration.providers.some(
-                  (provider) =>
-                    draft.selectedProviders.includes(provider.id) &&
-                    currentValue(provider).profile === model.providerProfile,
-                );
-              const enabled = draft.selectedModels.includes(entry.id);
-              return (
-                <RuntimeProfileRow
-                  key={entry.id}
-                  kind="model"
-                  label={entry.label}
-                  subtitle={`${model.model} · ${model.providerProfile}`}
-                  selected={enabled}
-                  busy={busy}
-                  {...testState(
-                    "model",
-                    entry,
-                    model.profile,
-                    enabled && providerSelected,
-                  )}
-                >
-                  <SwitchInput
-                    disabled={busy || !providerSelected}
-                    checked={enabled}
-                    aria-label={`Select ${entry.label}`}
-                    onChange={(event) => {
-                      const selectedModels = event.target.checked
-                        ? [...draft.selectedModels, entry.id]
-                        : draft.selectedModels.filter((id) => id !== entry.id);
-                      const modelRoles = Object.fromEntries(
-                        Object.entries(draft.modelRoles).filter(
-                          ([, profile]) =>
-                            event.target.checked || profile !== model.profile,
-                        ),
-                      );
-                      setDraft({ ...draft, selectedModels, modelRoles });
-                    }}
-                  />
-                </RuntimeProfileRow>
-              );
-            })}
-          </div>
-          <ModelRoleRouting
-            roles={draft.modelRoles}
-            models={selectedModels.map((entry) => ({
-              ...currentValue(entry),
-              label: entry.label,
-            }))}
-            disabled={busy}
-            onChange={(modelRoles) => setDraft({ ...draft, modelRoles })}
-          />
+                    const enabled = draft.selectedModels.includes(entry.id);
+                    return (
+                      <RuntimeProfileRow
+                        key={entry.id}
+                        kind="model"
+                        label={entry.label}
+                        subtitle={`${model.model} · ${model.providerProfile}`}
+                        selected={enabled}
+                        busy={busy}
+                        {...testState(
+                          "model",
+                          entry,
+                          model.profile,
+                          enabled && providerSelected,
+                        )}
+                      >
+                        <SwitchInput
+                          disabled={busy || !providerSelected}
+                          checked={enabled}
+                          aria-label={`Select ${entry.label}`}
+                          onChange={(event) => {
+                            const selectedModels = event.target.checked
+                              ? [...draft.selectedModels, entry.id]
+                              : draft.selectedModels.filter(
+                                  (id) => id !== entry.id,
+                                );
+                            const modelRoles = Object.fromEntries(
+                              Object.entries(draft.modelRoles).filter(
+                                ([, profile]) =>
+                                  event.target.checked ||
+                                  profile !== model.profile,
+                              ),
+                            );
+                            setDraft({ ...draft, selectedModels, modelRoles });
+                          }}
+                        />
+                      </RuntimeProfileRow>
+                    );
+                  })
+                : null}
+            </div>
+          ) : null}
+          {tab === "routing" ? (
+            <>
+              <ModelRoutingOverview
+                roles={draft.modelRoles}
+                models={selectedModels.map((entry) => ({
+                  ...currentValue(entry),
+                  label: entry.label,
+                }))}
+                disabled={busy}
+                onChange={(modelRoles) => setDraft({ ...draft, modelRoles })}
+              />
+              <ModelRoleRouting
+                roles={draft.modelRoles}
+                models={selectedModels.map((entry) => ({
+                  ...currentValue(entry),
+                  label: entry.label,
+                }))}
+                disabled={busy}
+                onChange={(modelRoles) => setDraft({ ...draft, modelRoles })}
+              />
+            </>
+          ) : null}
         </div>
       </section>
     );

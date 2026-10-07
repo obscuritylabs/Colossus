@@ -10,7 +10,12 @@ targets = [
 all-features = true
 
 [advisories]
-ignore = []
+ignore = [
+    # OIDC verifies signatures with public keys only; certificate issuance is
+    # Ed25519. No application path performs RSA private-key operations.
+    # See ADR 0006. Remove when OpenID Connect drops the affected dependency.
+    { id = "RUSTSEC-2023-0071", reason = "OIDC public-key verification is outside the private-key timing attack; no application RSA private-key operations" },
+]
 
 [licenses]
 allow = [

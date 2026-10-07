@@ -1508,6 +1508,8 @@ test("release manifest writer emits exact final binary digests", () => {
     mkdirSync(notices, { mode: 0o755 });
     for (const name of ["COPYING", "LICENSE-MIT", "UNLICENSE"]) {
       writeFileSync(join(notices, name), "test license\n", { mode: 0o644 });
+      // Match staging's public notice permissions even with a private umask.
+      chmodSync(join(notices, name), 0o644);
     }
     const sidecar = join(macos, "colossus-sidecar");
     const cli = join(macos, "colossus");

@@ -677,3 +677,24 @@ button.workspace-button {
   --blue-strong: var(--vscode-focusBorder, #fff);
   --text-on-accent: var(--vscode-button-foreground, #000);
 }
+/* Shared conversation islands retain host projections, tools, and scroll policy. */
+.message.shared-message-island {
+  padding: 18px 0 4px;
+  margin-left: 0;
+  font-size: var(--font-size-body);
+  color: var(--text);
+}
+.composer:has(.shared-conversation-composer) {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+}
+.composer .shared-conversation-composer {
+  box-shadow: none;
+}
+.shared-vscode-footer {
+  padding: 0;
+  border: 0;
+  flex: 1;
+}

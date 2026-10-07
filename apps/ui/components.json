@@ -1,0 +1,21 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "radix-nova",
+  "rsc": false,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "styles/shadcn.css",
+    "baseColor": "neutral",
+    "cssVariables": true,
+    "prefix": "ui"
+  },
+  "iconLibrary": "tabler",
+  "aliases": {
+    "components": "@colossus/ui/components",
+    "ui": "@colossus/ui/components/ui",
+    "utils": "@colossus/ui/lib/utils",
+    "lib": "@colossus/ui/lib",
+    "hooks": "@colossus/ui/hooks"
+  }
+}

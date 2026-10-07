@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sign-in interrupted · Colossus Cloud</title>
+    <style>
+      :root {
+        color-scheme: dark light;
+        font-family: system-ui, sans-serif;
+        background: #111318;
+        color: #eef0f5;
+      }
+      body {
+        margin: 0;
+        min-height: 100svh;
+        display: grid;
+        place-items: center;
+      }
+      main {
+        width: min(440px, calc(100% - 48px));
+        padding: 48px 0;
+      }
+      .brand {
+        color: #99a6bc;
+        font-size: 14px;
+        letter-spacing: 0.04em;
+      }
+      h1 {
+        font-size: clamp(28px, 6vw, 36px);
+        line-height: 1.2;
+        margin: 28px 0 16px;
+      }
+      p {
+        color: #abb4c4;
+        line-height: 1.6;
+        margin: 0 0 28px;
+      }
+      a {
+        display: inline-block;
+        background: #2365c6;
+        color: #fff;
+        font-weight: 600;
+        text-decoration: none;
+        padding: 12px 18px;
+        border-radius: 8px;
+      }
+      a:hover {
+        background: #1c55a5;
+      }
+      a:focus-visible {
+        outline: 3px solid #a8cdff;
+        outline-offset: 4px;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          background: #f5f7fa;
+          color: #18202f;
+        }
+        .brand,
+        p {
+          color: #536177;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand">COLOSSUS CLOUD</div>
+      <h1>Let’s try signing in again.</h1>
+      <p>
+        Your sign-in could not be completed. The request may have expired.
+        Return to Colossus and start a fresh sign-in.
+      </p>
+      <a href="/">Return to Colossus</a>
+    </main>
+  </body>
+</html>

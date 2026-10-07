@@ -5,14 +5,50 @@ use colossus_credentials::PlatformCredentialVault;
 use colossus_home::ConfinedRoot;
 use colossus_ports::CredentialVault;
 use sha2::{Digest as _, Sha256};
-use std::{path::Path, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+/// Existing native OAuth vault location and its exact nonsecret owner binding.
+#[derive(Clone, Debug)]
+pub struct RuntimeOAuthVaultBinding {
+    /// Canonical existing state directory; no vault or key is created.
+    pub directory: PathBuf,
+    /// Original purpose bound into every encrypted vault record.
+    pub owner_scope: String,
+}
+/// Inspect only the canonical existing directory identity used by OAuth custody.
+/// Callers inspect vault metadata separately; this reads no vault or credential.
+pub fn runtime_oauth_vault_binding(
+    storage_path: &Path,
+) -> Result<RuntimeOAuthVaultBinding, RuntimeError> {
+    let (root, scope) = platform_oauth_vault_binding(None, storage_path)?;
+    Ok(RuntimeOAuthVaultBinding {
+        directory: root.path().to_owned(),
+        owner_scope: scope,
+    })
+}
 
 pub(crate) fn platform_oauth_vault(
     home: Option<&ConfinedRoot>,
     storage_path: &Path,
 ) -> Result<Arc<dyn CredentialVault>, RuntimeError> {
     let (root, scope) = platform_oauth_vault_binding(home, storage_path)?;
-    let vault = PlatformCredentialVault::new(root, scope).map_err(|_| unavailable())?;
+    let development = home
+        .map(|home| colossus_credentials::DevelopmentAuthority::selected(home, &[]))
+        .transpose()
+        .map_err(|_| unavailable())?
+        .flatten();
+    let vault = if let Some(authority) = development {
+        let store = authority
+            .store(colossus_credentials::DevelopmentStoreScope::RuntimeOAuthVault)
+            .map_err(|_| unavailable())?;
+        PlatformCredentialVault::with_key_store(root, scope, Arc::new(store))
+            .map_err(|_| unavailable())?
+    } else {
+        PlatformCredentialVault::new(root, scope).map_err(|_| unavailable())?
+    };
     Ok(Arc::new(vault))
 }
 
@@ -25,10 +61,8 @@ fn platform_oauth_vault_binding(
     let directory = storage_path.parent().ok_or_else(unavailable)?;
     // ConfinedRoot::bind can create a missing directory for other callers. OAuth
     // composition only binds the state directory that runtime already prepared.
-    if !std::fs::symlink_metadata(directory)
-        .map_err(|_| unavailable())?
-        .is_dir()
-    {
+    let metadata = std::fs::symlink_metadata(directory).map_err(|_| unavailable())?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(unavailable());
     }
     if let Some(home) = home {

@@ -2930,7 +2930,7 @@ test("terminal threads can be archived from the Workspace sidebar", async ({
       name: "Thread actions for Audit ipc boundary",
     })
     .click();
-  const archive = page.getByRole("button", {
+  const archive = page.getByRole("menuitem", {
     name: "Archive Audit ipc boundary",
   });
   await expect(archive).toBeEnabled();
@@ -2964,7 +2964,9 @@ test("threads can be pinned, persisted, and returned to their normal group", asy
       name: "Thread actions for Audit ipc boundary",
     })
     .click();
-  await page.getByRole("button", { name: "Pin Audit ipc boundary" }).click();
+  await page
+    .getByRole("menuitemcheckbox", { name: "Pin Audit ipc boundary" })
+    .click();
 
   const pinned = page.locator(".work-group").filter({
     has: page.getByRole("heading", { name: "Pinned", exact: true }),
@@ -2976,8 +2978,8 @@ test("threads can be pinned, persisted, and returned to their normal group", asy
     })
     .click();
   await expect(
-    page.getByRole("button", { name: "Unpin Audit ipc boundary" }),
-  ).toHaveAttribute("aria-pressed", "true");
+    page.getByRole("menuitemcheckbox", { name: "Unpin Audit ipc boundary" }),
+  ).toHaveAttribute("aria-checked", "true");
 
   await page.reload();
   await page
@@ -2986,10 +2988,12 @@ test("threads can be pinned, persisted, and returned to their normal group", asy
     })
     .click();
   await expect(
-    page.getByRole("button", { name: "Unpin Audit ipc boundary" }),
+    page.getByRole("menuitemcheckbox", { name: "Unpin Audit ipc boundary" }),
   ).toBeAttached();
 
-  await page.getByRole("button", { name: "Unpin Audit ipc boundary" }).click();
+  await page
+    .getByRole("menuitemcheckbox", { name: "Unpin Audit ipc boundary" })
+    .click();
   await expect(pinned).toContainText("Harden desktop agent bootstrap");
   await expect(pinned).not.toContainText("Audit ipc boundary");
 
@@ -2999,7 +3003,9 @@ test("threads can be pinned, persisted, and returned to their normal group", asy
     })
     .click();
   await page
-    .getByRole("button", { name: "Unpin Harden desktop agent bootstrap" })
+    .getByRole("menuitemcheckbox", {
+      name: "Unpin Harden desktop agent bootstrap",
+    })
     .click();
   await expect(pinned).toHaveCount(0);
 
@@ -3020,7 +3026,9 @@ test("pinning remains available while the startup connection settles", async ({
       name: "Thread actions for Audit ipc boundary",
     })
     .click();
-  const pin = page.getByRole("button", { name: "Pin Audit ipc boundary" });
+  const pin = page.getByRole("menuitemcheckbox", {
+    name: "Pin Audit ipc boundary",
+  });
   await expect(pin).toBeEnabled();
   await pin.click();
 
@@ -3030,7 +3038,7 @@ test("pinning remains available while the startup connection settles", async ({
   await expect(pinned).toContainText("Audit ipc boundary");
 });
 
-test("thread actions survive a WebKit blur without a related target", async ({
+test("thread actions support keyboard navigation and restore focus", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
@@ -3038,30 +3046,254 @@ test("thread actions survive a WebKit blur without a related target", async ({
   const actions = page.getByRole("button", {
     name: "Thread actions for Audit ipc boundary",
   });
-  await actions.click();
-  const pin = page.getByRole("button", { name: "Pin Audit ipc boundary" });
-  await pin.evaluate((button) => {
-    const menu = button.closest("details");
-    const summary = menu?.querySelector("summary") ?? null;
-    if (menu === null || summary === null) {
-      throw new Error("thread actions menu is unavailable");
-    }
-    summary.dispatchEvent(
-      new FocusEvent("blur", { bubbles: true, relatedTarget: null }),
-    );
-    button.focus();
+  await expect(actions).toBeEnabled();
+  await actions.press("ArrowDown");
+  const rename = page.getByRole("menuitem", {
+    name: "Rename Audit ipc boundary",
   });
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
-  );
+  const fork = page.getByRole("menuitem", {
+    name: "Fork Audit ipc boundary",
+  });
+  await expect(rename).toBeFocused();
+  await rename.press("ArrowDown");
+  await expect(fork).toBeFocused();
+  await page
+    .getByRole("menu", { name: "Actions for Audit ipc boundary" })
+    .screenshot({ path: "output/playwright/thread-actions-menu.png" });
+  await fork.press("Escape");
+  await expect(actions).toBeFocused();
+  await expect(fork).toBeHidden();
+});
 
-  await expect(pin).toBeVisible();
-  await pin.click();
-  const pinned = page.locator(".work-group").filter({
-    has: page.getByRole("heading", { name: "Pinned", exact: true }),
+test("forking opens a saved draft without sending until the full composer is used", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  const original = page.getByRole("button", {
+    name: /^Audit ipc boundary Execute/u,
   });
-  await expect(pinned).toContainText("Audit ipc boundary");
+  const actions = page.getByRole("button", {
+    name: "Thread actions for Audit ipc boundary",
+  });
+  await actions.click();
+  await page
+    .getByRole("menuitem", { name: "Fork Audit ipc boundary" })
+    .press("Enter");
+  await expect(page.getByRole("dialog", { name: "Fork thread" })).toHaveCount(
+    0,
+  );
+  await expect(
+    page.getByRole("heading", {
+      name: "Audit ipc boundary (fork)",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(original).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /^Audit ipc boundary \(fork\) Draft/u }),
+  ).toHaveAttribute("aria-current", "page");
+  const prompt = page.getByRole("textbox", { name: "Prompt", exact: true });
+  await expect(prompt).toBeFocused();
+  await expect(prompt).toHaveValue("");
+  await page
+    .getByRole("button", {
+      name: "Thread actions for Audit ipc boundary (fork)",
+    })
+    .click();
+  await page
+    .getByRole("menuitem", { name: "Rename Audit ipc boundary (fork)" })
+    .click();
+  await page
+    .getByRole("textbox", { name: "Thread name" })
+    .fill("Alternative approach");
+  await page.getByRole("button", { name: "Save thread name" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Alternative approach", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Run controls", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Send prompt" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText("Fork draft", { exact: true }).first(),
+  ).toBeVisible();
+  await page.reload();
+  await page
+    .getByRole("button", { name: /^Alternative approach Draft/u })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Alternative approach", exact: true }),
+  ).toBeVisible();
+  await prompt.fill("Explore another approach.");
+  await page.getByRole("button", { name: "Send prompt" }).click();
+  await expect(page.getByText("Fork draft", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Alternative approach", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Explore another approach.", { exact: true }),
+  ).toBeVisible();
+  await expect(original).toBeVisible();
+});
+
+test("unfinished threads cannot be forked or archived", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page
+    .getByRole("button", {
+      name: "Thread actions for Harden desktop agent bootstrap",
+    })
+    .click();
+  await expect(
+    page.getByRole("menuitem", { name: "Fork Harden desktop agent bootstrap" }),
+  ).toHaveAttribute("aria-disabled", "true");
+  await expect(
+    page.getByRole("menuitem", {
+      name: "Archive Harden desktop agent bootstrap",
+    }),
+  ).toHaveAttribute("aria-disabled", "true");
+  await expect(
+    page.getByRole("menuitemcheckbox", {
+      name: "Unpin Harden desktop agent bootstrap",
+    }),
+  ).toBeEnabled();
+});
+
+test("fork retains visible source context after the first message is sent", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.goto("/?fixture=activity-comparison");
+  await expect(
+    page.getByRole("heading", {
+      name: "Review workspace readiness",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", {
+      name: "Thread actions for Review workspace readiness",
+      exact: true,
+    })
+    .click();
+  await page
+    .getByRole("menuitem", {
+      name: "Fork Review workspace readiness",
+      exact: true,
+    })
+    .click();
+  await expect(page.getByRole("dialog", { name: "Fork thread" })).toHaveCount(
+    0,
+  );
+  const context = page.getByText(
+    "Review this workspace and identify the safest high-impact next task",
+    { exact: true },
+  );
+  await expect(context).toBeVisible();
+  await page
+    .getByRole("textbox", { name: "Prompt", exact: true })
+    .fill("Consider another approach.");
+  await page.getByRole("button", { name: "Send prompt", exact: true }).click();
+  await expect(context).toBeVisible();
+  await expect(
+    page.getByText("Consider another approach.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: "Review workspace readiness (fork)",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: /^Review workspace readiness Execute/u })
+    .click();
+  await expect(
+    page.getByText("Consider another approach.", { exact: true }),
+  ).toHaveCount(0);
+  await expect(context).toBeVisible();
+});
+
+test("fork draft opens the full composer at minimum size with Large text", async ({
+  page,
+}) => {
+  for (const [colorTheme, darkPalette] of [
+    ["light", "colossus"],
+    ["dark", "colossus"],
+    ["dark", "neutral"],
+    ["dark", "hacker"],
+  ]) {
+    await page.addInitScript(
+      ({ colorTheme, darkPalette }) => {
+        localStorage.removeItem("colossus.thread-forks:v1");
+        localStorage.setItem(
+          "colossus.desktop.appearance.v1",
+          JSON.stringify({ colorTheme, darkPalette, textSize: "large" }),
+        );
+      },
+      { colorTheme, darkPalette },
+    );
+    await page.goto(FIXTURE);
+    await expect(
+      page.getByRole("heading", { name: "Harden desktop agent bootstrap" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Open work navigation" }).click();
+    await page
+      .getByRole("button", {
+        name: "Thread actions for Audit ipc boundary",
+        exact: true,
+      })
+      .click();
+    const actions = page.getByRole("menu", {
+      name: "Actions for Audit ipc boundary",
+    });
+    await expect(actions).toBeVisible();
+    await expect(actions).toBeInViewport();
+    // Capture the visible popup without an element screenshot's automatic scrolling.
+    await page.screenshot({
+      path: `output/playwright/thread-actions-${colorTheme}-${darkPalette}.png`,
+    });
+    await page
+      .getByRole("menuitem", { name: "Fork Audit ipc boundary", exact: true })
+      .click();
+    await expect(page.getByRole("dialog", { name: "Fork thread" })).toHaveCount(
+      0,
+    );
+    await expect(
+      page.getByRole("dialog", { name: "Workspace navigation" }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("heading", {
+        name: "Audit ipc boundary (fork)",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("textbox", { name: "Prompt", exact: true }),
+    ).toBeFocused();
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-theme",
+      colorTheme!,
+    );
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-text-size",
+      "large",
+    );
+    const box = await page.locator(".work-composer").boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(880);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(640);
+    const accessibility = await new AxeBuilder({ page })
+      .include(".work-composer")
+      .analyze();
+    expect(
+      accessibility.violations.filter((violation) =>
+        ["critical", "serious"].includes(violation.impact ?? ""),
+      ),
+    ).toEqual([]);
+    await page.screenshot({
+      path: `output/playwright/thread-fork-${colorTheme}-${darkPalette}.png`,
+    });
+  }
 });
 
 test("search scope is part of the search control", async ({ page }) => {
@@ -3160,20 +3392,22 @@ test("follow-up prompts remain in the same work conversation", async ({
   const followUp = "Now check the Windows preview path";
   await prompt.fill(opening);
   await prompt.press("Enter");
-  await expect(page.locator(".message-user .message-body")).toContainText(
-    opening,
-  );
+  await expect(
+    page.locator('article[data-role="user"] .shared-message-body'),
+  ).toContainText(opening);
 
   await prompt.fill(followUp);
   await prompt.press("Enter");
-  await expect(page.locator(".message-user .message-body")).toHaveCount(2);
   await expect(
-    page.locator(".message-user .message-body").nth(0),
+    page.locator('article[data-role="user"] .shared-message-body'),
+  ).toHaveCount(2);
+  await expect(
+    page.locator('article[data-role="user"] .shared-message-body').nth(0),
   ).toContainText(opening);
   await expect(
-    page.locator(".message-user .message-body").nth(1),
+    page.locator('article[data-role="user"] .shared-message-body').nth(1),
   ).toContainText(followUp);
-  await expect(page.locator(".message-assistant")).toHaveCount(2);
+  await expect(page.locator('article[data-role="assistant"]')).toHaveCount(2);
   await expect(page.getByRole("heading", { name: opening })).toBeVisible();
 
   await page.getByRole("button", { name: "Open work navigation" }).click();

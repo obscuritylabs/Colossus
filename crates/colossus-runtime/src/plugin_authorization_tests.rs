@@ -2,6 +2,7 @@ use super::*;
 use colossus_contracts::PluginManagementRequest as Op;
 
 pub(super) fn open(root: &Path, plugins: PluginsConfig) -> Runtime {
+    let root = root.canonicalize().expect("canonical fixture root");
     let workspace = root.join("workspace");
     fs::create_dir_all(&workspace).expect("workspace");
     let home = colossus_home::ColossusHome::ensure_at(root.join("home")).expect("home");

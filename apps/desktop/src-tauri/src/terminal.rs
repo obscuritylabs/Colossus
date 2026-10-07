@@ -303,6 +303,7 @@ pub(crate) enum TerminalError {
     InvalidWorkspace,
     InvalidConfiguration,
     ProgramUnavailable,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     ShellUnavailable,
     InvalidSize,
     InputTooLarge,
@@ -324,6 +325,7 @@ impl TerminalError {
             Self::InvalidWorkspace => "invalid_workspace",
             Self::InvalidConfiguration => "invalid_configuration",
             Self::ProgramUnavailable => "program_unavailable",
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             Self::ShellUnavailable => "shell_unavailable",
             Self::InvalidSize | Self::InputTooLarge => "invalid_argument",
             Self::InputBackpressure => "terminal_backpressure",
@@ -345,6 +347,7 @@ impl TerminalError {
             Self::InvalidWorkspace => "The selected local workspace is unavailable.",
             Self::InvalidConfiguration => "The managed Colossus configuration is unavailable.",
             Self::ProgramUnavailable => PROGRAM_UNAVAILABLE_MESSAGE,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             Self::ShellUnavailable => {
                 "The operating system shell is unavailable. Check that it is installed and accessible."
             }

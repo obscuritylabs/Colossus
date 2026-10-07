@@ -66,13 +66,61 @@ impl Metadata {
 pub(crate) struct OpenedVault {
     pub database: Database,
     pub master: Option<crate::crypto::MasterKey>,
-    pub file: ConfinedFile,
+    // The database uses a clone of this open-file description. Explicit unlock
+    // after Database drop also releases any transient fork-inherited duplicate.
+    pub file: VaultLease,
     // The lease outlives the database. Never unlink the lock file: another owner may
     // already hold its inode/handle while this process releases its own lease.
-    pub lease: ConfinedFile,
+    pub lease: VaultLease,
+}
+
+/// Explicit unlock also releases a transient fork-inherited duplicate of the same
+/// open file description. This field drops after the database and its file handles.
+pub(crate) struct VaultLease(pub ConfinedFile);
+impl std::ops::Deref for VaultLease {
+    type Target = ConfinedFile;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl Drop for VaultLease {
+    fn drop(&mut self) {
+        let _ = fs4::fs_std::FileExt::unlock(self.0.file());
+    }
 }
 
 impl OpenedVault {
+    pub(crate) fn open(file: ConfinedFile, lease: VaultLease) -> Result<Self, CredentialError> {
+        // Unix can inherit redb's cloned open-file description during a fork.
+        // Own the lock before redb initialization, including its error paths.
+        // Windows cannot re-lock an overlapping exclusive range, so redb keeps
+        // its original acquisition there and the guard follows successful open.
+        #[cfg(unix)]
+        let file = {
+            if !fs4::fs_std::FileExt::try_lock_exclusive(file.file())
+                .map_err(|_| CredentialError::Io)?
+            {
+                return Err(CredentialError::Busy);
+            }
+            VaultLease(file)
+        };
+        let database = Database::builder()
+            .create_file(file.file().try_clone().map_err(|_| CredentialError::Io)?)
+            .map_err(|error| match error {
+                redb::DatabaseError::DatabaseAlreadyOpen => CredentialError::Busy,
+                redb::DatabaseError::Storage(redb::StorageError::Io(_)) => CredentialError::Io,
+                _ => CredentialError::Corrupt,
+            })?;
+        #[cfg(not(unix))]
+        let file = VaultLease(file);
+        Ok(Self {
+            database,
+            master: None,
+            file,
+            lease,
+        })
+    }
+
     pub fn revalidate(&self, root: &ConfinedRoot) -> Result<(), CredentialError> {
         self.file
             .revalidate(root)

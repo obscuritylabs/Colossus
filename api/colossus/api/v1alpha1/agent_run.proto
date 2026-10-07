@@ -47,6 +47,13 @@ service AgentRunService {
 
   // RespondInteraction answers one caller-bound prompt or approval exactly once.
   rpc RespondInteraction(RespondInteractionRequest) returns (RespondInteractionResponse);
+
+  // The local application explicitly releases its own workspace sessions.
+  rpc SetWorkspaceSharing(SetWorkspaceSharingRequest) returns (SetWorkspaceSharingResponse);
+  // Discovery includes only owned or explicitly shared released runs.
+  rpc ListVisibleRuns(ListVisibleRunsRequest) returns (ListVisibleRunsResponse);
+  // Caller-scoped configuration metadata; never an enforcement attestation or raw config.
+  rpc GetRuntimePolicyPosture(GetRuntimePolicyPostureRequest) returns (GetRuntimePolicyPostureResponse);
 }
 
 // RunMode selects the runtime's public execution mode.
@@ -1123,4 +1130,59 @@ message StopProcessSessionRequest {
 message StopProcessSessionResponse {
   // Bounded process snapshot.
   ProcessSessionSnapshot snapshot = 1;
+}
+
+// Change the authenticated application's local workspace disclosure relationship.
+message SetWorkspaceSharingRequest {
+  // Exact independently enrolled recipient application identity.
+  string recipient_application_id = 1;
+  // Release source-owned sessions, or revoke future reads.
+  bool enabled = 2;
+  // Permit recipient-owned runs to continue source sessions under its own grant.
+  bool allow_continuation = 3;
+}
+// Durable local sharing posture. Enrollment alone does not enable sharing.
+message SetWorkspaceSharingResponse {
+  // Exact recipient application identity.
+  string recipient_application_id = 1;
+  // Whether released source sessions are visible to the recipient.
+  bool enabled = 2;
+  // Whether recipient-owned runs may continue shared sessions.
+  bool allow_continuation = 3;
+}
+// Bounded discovery filters for caller-owned and explicitly shared runs.
+message ListVisibleRunsRequest {
+  // Optional exact session identity within the released source scope.
+  optional string session_id = 1;
+  // Distinct optional lifecycle states; empty includes all states.
+  repeated RunStatus statuses = 2;
+  // Bounded page size and opaque source-stable continuation cursor.
+  PageRequest page = 3;
+  // Include shared and owned archived threads.
+  bool include_archived = 4;
+}
+// Released run and authority derived by the authenticated runtime.
+message VisibleRun {
+  // Public run projection; never private worker data.
+  Run run = 1;
+  // Whether this caller owns cancellation and interaction response authority.
+  bool controllable = 2;
+  // Whether the caller may continue this session using its own grant.
+  bool continuable = 3;
+}
+// Bounded source-stable page of owned and explicitly shared runs.
+message ListVisibleRunsResponse {
+  // Runtime-authorized released run projections.
+  repeated VisibleRun runs = 1;
+  // Opaque continuation cursor bound to current sharing relationships.
+  PageResponse page = 2;
+}
+
+// Requests current metadata beneath the authenticated application ceiling.
+message GetRuntimePolicyPostureRequest {}
+
+// Contains one closed, validated metadata-only RuntimePolicyPosture contract.
+message GetRuntimePolicyPostureResponse {
+  // Strict RuntimePolicyPosture JSON, at most64KiB; unknown fields are rejected by SDKs.
+  bytes policy_json = 1;
 }

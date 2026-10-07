@@ -77,10 +77,12 @@ run cargo deny --locked check -D warnings advisories
 # registry release in quickwit-oss/tantivy#3034. Remove this exact exception
 # with that upgrade. cargo-deny does not report this informational advisory, so
 # its advisory policy remains unmodified.
-run cargo audit -D warnings --ignore RUSTSEC-2026-0253 --file Cargo.lock
+# OpenID Connect verifies public signatures only; no RSA private-key operations.
+# Keep this exact exception aligned with deny.toml and ADR 0006.
+run cargo audit -D warnings --ignore RUSTSEC-2026-0253 --ignore RUSTSEC-2023-0071 --file Cargo.lock
 
 run cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -A license-not-encountered licenses sources bans
-run cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -D warnings advisories
+run cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -D warnings -A advisory-not-detected advisories
 run cargo audit -D warnings --file fuzz/Cargo.lock
 
 printf 'local release-readiness verification passed\n'

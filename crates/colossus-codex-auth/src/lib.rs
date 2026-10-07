@@ -3,6 +3,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 mod cli;
+mod confined_store;
 mod store;
 
 pub use cli::*;

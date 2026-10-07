@@ -578,23 +578,33 @@ sandbox:
             &format!("  networkDestinations:\n    - {origin}"),
         );
         fs::write(&config, updated).expect("network config");
+        let families: &[&str] = if cfg!(target_os = "macos") {
+            &["", "--ipv4", "--ipv6"]
+        } else {
+            &[""]
+        };
+        let requests = families.len();
         let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("network accept");
-            let mut request = Vec::new();
-            let mut chunk = [0_u8; 1024];
-            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                let count = stream.read(&mut chunk).expect("network read");
-                assert_ne!(count, 0, "network request ended before its header");
-                request.extend_from_slice(&chunk[..count]);
-                assert!(request.len() <= 16 * 1024, "network request is oversized");
+            for _ in 0..requests {
+                let (mut stream, _) = listener.accept().expect("network accept");
+                let mut request = Vec::new();
+                let mut chunk = [0_u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let count = stream.read(&mut chunk).expect("network read");
+                    assert_ne!(count, 0, "network request ended before its header");
+                    request.extend_from_slice(&chunk[..count]);
+                    assert!(request.len() <= 16 * 1024, "network request is oversized");
+                }
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .expect("network write");
+                stream.flush().expect("network flush");
+                stream
+                    .shutdown(Shutdown::Write)
+                    .expect("network response shutdown");
             }
-            stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-                .expect("network write");
-            stream.flush().expect("network flush");
-            stream
-                .shutdown(Shutdown::Write)
-                .expect("network response shutdown");
         });
         let denied_url = format!("http://{denied_address}/");
         let denied_network = run(
@@ -633,10 +643,8 @@ sandbox:
         );
         let allowed_url = format!("{origin}/");
         let allowed_response = allowed.join("allowed-network-response.txt");
-        let allowed_network = run(
-            &binary,
-            &config,
-            &[
+        for family in families {
+            let mut arguments = vec![
                 "process",
                 "run",
                 "/usr/bin/curl",
@@ -658,31 +666,36 @@ sandbox:
                 "--output",
                 allowed_response.to_str().expect("allowed response path"),
                 &allowed_url,
-            ],
-        );
-        assert!(
-            allowed_network.status.success(),
-            "{}",
-            String::from_utf8_lossy(&allowed_network.stderr)
-        );
-        let result: Value =
-            serde_json::from_slice(&allowed_network.stdout).expect("network result");
-        assert_eq!(
-            result["success"],
-            true,
-            "allowed network command failed: {result}; stderr: {}",
-            String::from_utf8_lossy(
-                &BASE64
-                    .decode(result["stderr_base64"].as_str().expect("stderr"))
-                    .expect("decoded stderr")
-            )
-        );
-        assert_eq!(result["exit_code"], 0);
-        assert_eq!(result["output_truncated"], false);
+            ];
+            if !family.is_empty() {
+                arguments.push(*family);
+            }
+            let allowed_network = run(&binary, &config, &arguments);
+            assert!(
+                allowed_network.status.success(),
+                "{}",
+                String::from_utf8_lossy(&allowed_network.stderr)
+            );
+            let result: Value =
+                serde_json::from_slice(&allowed_network.stdout).expect("network result");
+            assert_eq!(
+                result["success"],
+                true,
+                "allowed network command ({family:?}) failed: {result}; stderr: {}",
+                String::from_utf8_lossy(
+                    &BASE64
+                        .decode(result["stderr_base64"].as_str().expect("stderr"))
+                        .expect("decoded stderr")
+                )
+            );
+            assert_eq!(result["exit_code"], 0);
+            assert_eq!(result["output_truncated"], false);
+            assert_eq!(result["observed_origins"], serde_json::json!([origin]));
+            assert_eq!(
+                fs::read(&allowed_response).expect("allowed network response"),
+                b"ok"
+            );
+        }
         server.join().expect("server thread");
-        assert_eq!(
-            fs::read(&allowed_response).expect("allowed network response"),
-            b"ok"
-        );
     }
 }

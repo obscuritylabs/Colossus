@@ -6,6 +6,32 @@ import { validateViewContributions } from "../scripts/validate-manifest.mjs";
 const manifest = JSON.parse(
   await readFile(new URL("../package.json", import.meta.url), "utf8"),
 );
+test("referenced webview assets and shared attribution remain in the VSIX allowlist", async () => {
+  const [extension, build, ignore] = await Promise.all([
+    readFile(new URL("../src/extension.ts", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/build.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../.vscodeignore", import.meta.url), "utf8"),
+  ]);
+  const included = new Set(ignore.split(/\r?\n/u));
+  const referenced = [...extension.matchAll(/\basset\("([^"\n]+)"\)/gu)].map(
+    (match) => match[1],
+  );
+  assert.ok(referenced.includes("shadcn.css"));
+  for (const asset of [
+    ...referenced,
+    "shadcn-LICENSE.txt",
+    "THIRD_PARTY_NOTICES.txt",
+  ]) {
+    assert.ok(
+      included.has(`!dist/${asset}`),
+      `Referenced or attributed asset would be omitted: ${asset}`,
+    );
+    assert.ok(
+      build.includes(`dist/${asset}`),
+      `Asset is not emitted by the build: ${asset}`,
+    );
+  }
+});
 
 test("all contributed views have valid VS Code containers and bundled icons", async () => {
   assert.doesNotThrow(() => validateViewContributions(manifest));

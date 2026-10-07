@@ -80,7 +80,6 @@ import {
   ExecutionBoundaryBanner,
   executionBoundaryBannerVisible,
 } from "./components/ExecutionBoundaryBanner";
-import { OperationsSurface } from "./components/OperationsSurface";
 import { pluginSelectionKey } from "./plugins";
 import { usePluginSkills } from "./use-plugin-skills";
 import type { AsideDraft } from "./components/AsidePanel";
@@ -96,6 +95,16 @@ import {
   pasteIntoComposerDraft,
 } from "./composer-paste";
 import { WorkSidebar } from "./components/WorkSidebar";
+import {
+  canForkThread,
+  createThreadForkDraft,
+  defaultForkTitle,
+  readThreadForkDrafts,
+  storeThreadForkDrafts,
+  threadForkBranch,
+  threadForkDraftRun,
+} from "./thread-fork";
+import type { ThreadForkDraft } from "./thread-fork";
 import { ToastRegion, useToastQueue } from "./components/ToastRegion";
 import type {
   SpaceActionFeedback,
@@ -221,6 +230,12 @@ import {
 const OnboardingSurface = lazy(() =>
   import("./components/OnboardingSurface").then((module) => ({
     default: module.OnboardingSurface,
+  })),
+);
+
+const OperationsSurface = lazy(() =>
+  import("./components/OperationsSurface").then((module) => ({
+    default: module.OperationsSurface,
   })),
 );
 
@@ -878,6 +893,7 @@ interface RunSubmission {
   idempotencyKey: string;
   sessionId?: string;
   planRevision?: PlanRevisionTarget;
+  branch?: CreateRunRequest["branch"];
 }
 
 type RunSubmissionResult =
@@ -934,12 +950,24 @@ export default function App() {
     );
   const [asideHistory, setAsideHistory] = useState<readonly Aside[]>([]);
   const [asideBusy, setAsideBusy] = useState(false);
+  const forkDraftFocus = useRef<string | null>(null);
+  const [threadForkDrafts, setThreadForkDrafts] =
+    useState(readThreadForkDrafts);
+  const [forkPreviewViews, setForkPreviewViews] = useState<
+    ReadonlyMap<string, readonly RunView[]>
+  >(new Map());
   const [asideError, setAsideError] = useState<CommandError | null>(null);
   const [asideReadOnly, setAsideReadOnly] = useState(false);
   const appShellRef = useRef<HTMLDivElement>(null);
   const [initialWorkSidebarWidth] = useState(readStoredWorkSidebarWidth);
   const workSidebarWidthRef = useRef(initialWorkSidebarWidth);
   const [desktop, setDesktop] = useState<DesktopStatus>(INITIAL_DESKTOP);
+  const activeForkDraft = threadForkDrafts.find(
+    (draft) =>
+      draft.id === chat.activeRunId &&
+      draft.materializedSessionId === undefined &&
+      draft.spaceId === desktop.selectedSpaceId,
+  );
   const [conversationSkills, setConversationSkills] = useState<
     Record<string, readonly string[]>
   >({});
@@ -1006,8 +1034,18 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [surface, setSurface] = useState<WorkspaceSurface>("work");
   const [settingsStartTab, setSettingsStartTab] = useState<
-    "runtime" | "providers" | "plugins" | "terminal" | "dictation"
+    | "runtime"
+    | "providers"
+    | "models"
+    | "plugins"
+    | "terminal"
+    | "dictation"
+    | "cloud"
+    | "control-plane"
   >("runtime");
+  const [settingsSpaceId, setSettingsSpaceId] = useState<string | undefined>(
+    undefined,
+  );
   const [workNavigationOpen, setWorkNavigationOpen] = useState(false);
   const [workspaceFileOpenRequest, setWorkspaceFileOpenRequest] =
     useState<WorkspaceFileOpenRequest | null>(null);
@@ -1149,6 +1187,10 @@ export default function App() {
         "managed_local",
       );
       targetRoutes.current.bindRuns(chat.views.keys(), route);
+      targetRoutes.current.bindRuns(
+        chat.recentRuns.map((run) => run.runId),
+        route,
+      );
     }
   }
   const connectingRef = useRef(false);
@@ -1287,9 +1329,146 @@ export default function App() {
     });
   }
 
+  function updateForkDrafts(
+    update: (drafts: readonly ThreadForkDraft[]) => readonly ThreadForkDraft[],
+  ) {
+    setThreadForkDrafts((current) => {
+      const next = update(current);
+      storeThreadForkDrafts(next);
+      return next;
+    });
+  }
+
+  async function beginThreadFork(run: Run) {
+    const spaceId = desktopRef.current.selectedSpaceId;
+    if (
+      !canForkThread(run) ||
+      spaceId === null ||
+      submitInFlight.current ||
+      connectingRef.current
+    )
+      return;
+    try {
+      const title = defaultForkTitle(
+        resolveThreadTitle(spaceId, run.sessionId, run.title),
+      );
+      const draft = createThreadForkDraft(run, spaceId, title);
+      updateForkDrafts((current) => [draft, ...current].slice(0, 64));
+      dictation?.controller.reset();
+      setPrompt("");
+      setAttachments([]);
+      setComposerError(null);
+      await openForkDraft(draft);
+    } catch (error: unknown) {
+      setActionError(commandError(error));
+    }
+  }
+
+  async function loadForkPreview(draft: ThreadForkDraft, route: TargetRoute) {
+    try {
+      let preview = chatRef.current;
+      let sourceSessionId = draft.sourceSessionId;
+      let sourceCreatedAt = draft.sourceCreatedAt;
+      if (FIXTURE_MODE) {
+        const source = preview.recentRuns.find(
+          (run) => run.runId === draft.sourceRunId,
+        );
+        if (source !== undefined)
+          preview = chatReducer(preview, { type: "upsert_run", run: source });
+      } else {
+        const details = await getRun(route.targetId, {
+          runId: draft.sourceRunId,
+        });
+        if (targetRoutes.current?.isCurrent(route) !== true) return;
+        sourceSessionId = details.run.sessionId;
+        sourceCreatedAt = details.run.createdAt;
+        preview = chatReducer(preview, { type: "hydrate_run", details });
+        const history = await listRuns(route.targetId, {
+          sessionId: sourceSessionId,
+          pageToken: "",
+        });
+        for (const run of history.runs
+          .filter(
+            (run) =>
+              run.runId !== draft.sourceRunId &&
+              run.createdAt <= sourceCreatedAt,
+          )
+          .slice(0, MAX_CONVERSATION_RUNS - 1)) {
+          if (targetRoutes.current?.isCurrent(route) !== true) return;
+          const historical = await getRun(route.targetId, { runId: run.runId });
+          preview = chatReducer(preview, {
+            type: "hydrate_run",
+            details: historical,
+          });
+        }
+      }
+      if (targetRoutes.current?.isCurrent(route) !== true) return;
+      const views = selectConversationViews(preview, sourceSessionId).filter(
+        (view) => view.run.createdAt <= sourceCreatedAt,
+      );
+      setForkPreviewViews((current) => {
+        const next = new Map(current);
+        next.delete(draft.id);
+        next.set(draft.id, views);
+        while (next.size > 8) {
+          const oldest = next.keys().next().value;
+          if (oldest === undefined) break;
+          next.delete(oldest);
+        }
+        return next;
+      });
+    } catch (error: unknown) {
+      if (
+        targetRoutes.current?.isCurrent(route) === true &&
+        (chatRef.current.activeRunId === draft.id ||
+          chatRef.current.views.get(chatRef.current.activeRunId ?? "")?.run
+            .sessionId === draft.materializedSessionId)
+      )
+        setRunLoadError(commandError(error).message);
+    }
+  }
+
+  async function openForkDraft(draft: ThreadForkDraft) {
+    const route = targetRoutes.current?.capture() ?? null;
+    if (
+      route === null ||
+      draft.spaceId !== desktopRef.current.selectedSpaceId ||
+      submitInFlight.current ||
+      connectingRef.current
+    )
+      return;
+    setPlanRevision(null);
+    setWorkNavigationOpen(false);
+    setSurface("work");
+    setRole(draft.role);
+    setRunLoadError("");
+    setActionError(null);
+    forkDraftFocus.current = draft.id;
+    dispatch({ type: "select_run", runId: draft.id });
+    await loadForkPreview(draft, route);
+  }
+
   useEffect(() => {
     chatRef.current = chat;
   }, [chat]);
+
+  useEffect(() => {
+    const draftId = forkDraftFocus.current;
+    if (draftId === null) return;
+    if (chat.activeRunId !== draftId || surface !== "work") {
+      forkDraftFocus.current = null;
+      return;
+    }
+    if (workNavigationOpen) return;
+    // The compact drawer must release the workspace's inert state first.
+    const frame = requestAnimationFrame(() => {
+      if (chatRef.current.activeRunId === draftId) {
+        composerRef.current?.focus();
+        forkDraftFocus.current = null;
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [chat.activeRunId, surface, workNavigationOpen]);
 
   useEffect(() => {
     desktopRef.current = desktop;
@@ -1999,6 +2178,15 @@ export default function App() {
     if (submitInFlight.current || connectingRef.current) {
       return;
     }
+    const forkDraft = threadForkDrafts.find(
+      (draft) =>
+        draft.id === run.runId &&
+        draft.spaceId === desktopRef.current.selectedSpaceId,
+    );
+    if (forkDraft !== undefined) {
+      await openForkDraft(forkDraft);
+      return;
+    }
     if (FIXTURE_MODE) {
       setPlanRevision(null);
       setWorkNavigationOpen(false);
@@ -2007,6 +2195,14 @@ export default function App() {
       dispatch({ type: "select_run", runId: run.runId });
       setRunLoadError("");
       setActionError(null);
+      const origin = threadForkDrafts.find(
+        (draft) =>
+          draft.materializedSessionId === run.sessionId &&
+          draft.spaceId === desktopRef.current.selectedSpaceId,
+      );
+      const route = targetRoutes.current?.capture() ?? null;
+      if (origin !== undefined && route !== null)
+        void loadForkPreview(origin, route);
       return;
     }
     const route = targetRoutes.current?.routeForRun(run.runId) ?? null;
@@ -2015,6 +2211,12 @@ export default function App() {
       return;
     }
     targetRoutes.current.bindRun(run.runId, route);
+    const origin = threadForkDrafts.find(
+      (draft) =>
+        draft.materializedSessionId === run.sessionId &&
+        draft.spaceId === desktopRef.current.selectedSpaceId,
+    );
+    if (origin !== undefined) void loadForkPreview(origin, route);
     setPlanRevision(null);
     setWorkNavigationOpen(false);
     setSurface("work");
@@ -2175,6 +2377,9 @@ export default function App() {
         ...(submission.sessionId === undefined
           ? {}
           : { sessionId: submission.sessionId }),
+        ...(submission.branch === undefined
+          ? {}
+          : { branch: submission.branch }),
         ...(submission.planRevision === undefined
           ? {}
           : {
@@ -2590,7 +2795,10 @@ export default function App() {
       return;
     }
 
-    const sessionId = continuationView?.run.sessionId;
+    const sessionId =
+      activeForkDraft === undefined
+        ? continuationView?.run.sessionId
+        : undefined;
     if (sessionId) setThreadQueuePaused(route.targetId, sessionId, false);
     const effectiveMode: RunMode = planRevision === null ? mode : "plan";
     if (effectiveMode === "research" && researchSources.length === 0) {
@@ -2612,6 +2820,8 @@ export default function App() {
         ? [researchDepth, ...researchSources]
         : []),
       maxTurns,
+      activeForkDraft?.sourceRunId ?? "",
+      activeForkDraft?.id ?? "",
       planRevision?.sourceRunId ?? "",
       planRevision?.planId ?? "",
       planRevision?.revision ?? 0,
@@ -2638,11 +2848,42 @@ export default function App() {
         maxTurns,
         idempotencyKey: attempt.key,
         ...(sessionId === undefined ? {} : { sessionId }),
+        ...(activeForkDraft === undefined
+          ? {}
+          : { branch: threadForkBranch(activeForkDraft) }),
         ...(planRevision === null ? {} : { planRevision }),
       },
       route,
     );
     if (result.type === "accepted") {
+      if (activeForkDraft !== undefined) {
+        const forkTitle = resolveThreadTitle(
+          activeForkDraft.spaceId,
+          activeForkDraft.id,
+          activeForkDraft.title,
+        );
+        setStoredThreadNames((current) => {
+          const next = setThreadName(
+            current,
+            activeForkDraft.spaceId,
+            result.run.sessionId,
+            forkTitle,
+          );
+          storeThreadNames(next);
+          return next;
+        });
+        if (pinnedThreadSessionIds.has(activeForkDraft.id)) {
+          updateThreadPin(activeForkDraft.spaceId, activeForkDraft.id, false);
+          updateThreadPin(activeForkDraft.spaceId, result.run.sessionId, true);
+        }
+        updateForkDrafts((current) =>
+          current.map((draft) =>
+            draft.id === activeForkDraft.id
+              ? { ...draft, materializedSessionId: result.run.sessionId }
+              : draft,
+          ),
+        );
+      }
       createAttempt.current = null;
       setPrompt("");
       setPlanRevision(null);
@@ -4229,6 +4470,25 @@ export default function App() {
   }
 
   async function handleArchiveThread(run: Run) {
+    const forkDraft = threadForkDrafts.find(
+      (draft) =>
+        draft.id === run.runId &&
+        draft.spaceId === desktopRef.current.selectedSpaceId,
+    );
+    if (forkDraft !== undefined) {
+      if (connectingRef.current || submitInFlight.current) return;
+      updateForkDrafts((current) =>
+        current.filter((draft) => draft.id !== forkDraft.id),
+      );
+      setForkPreviewViews((current) => {
+        const next = new Map(current);
+        next.delete(forkDraft.id);
+        return next;
+      });
+      if (chatRef.current.activeRunId === forkDraft.id) newWork();
+      updateThreadPin(forkDraft.spaceId, forkDraft.id, false);
+      return;
+    }
     if (
       connectingRef.current ||
       submitInFlight.current ||
@@ -4704,6 +4964,12 @@ export default function App() {
   const activeView =
     chat.activeRunId === null ? undefined : chat.views.get(chat.activeRunId);
   const activeRun = activeView?.run;
+  const activeForkOrigin = threadForkDrafts.find(
+    (draft) =>
+      draft.spaceId === desktop.selectedSpaceId &&
+      draft.materializedSessionId !== undefined &&
+      draft.materializedSessionId === activeRun?.sessionId,
+  );
   useEffect(() => {
     delegateRequest.current = null;
     dispatchDelegate({ type: "reset" });
@@ -4857,8 +5123,11 @@ export default function App() {
     submitting,
   ]);
   const conversationViews = useMemo(
-    () => selectConversationViews(chat, activeRun?.sessionId ?? null),
-    [activeRun?.sessionId, chat],
+    () =>
+      activeForkDraft === undefined
+        ? selectConversationViews(chat, activeRun?.sessionId ?? null)
+        : (forkPreviewViews.get(activeForkDraft.id) ?? []),
+    [activeRun?.sessionId, activeForkDraft, forkPreviewViews, chat],
   );
   const asideView =
     asideChat.activeRunId === null
@@ -5030,17 +5299,23 @@ export default function App() {
   const generatedTitle =
     openingRun?.title ?? conversationViews[0]?.run.title ?? activeRun?.title;
   const title =
-    activeRun === undefined || generatedTitle === undefined
-      ? "New work"
-      : safeDisplayLabel(
-          resolveThreadTitle(
-            desktop.selectedSpaceId,
-            activeRun.sessionId,
-            generatedTitle,
-          ),
-          agentRoleLabel(activeRun.role),
-          160,
-        );
+    activeForkDraft !== undefined
+      ? resolveThreadTitle(
+          activeForkDraft.spaceId,
+          activeForkDraft.id,
+          activeForkDraft.title,
+        )
+      : activeRun === undefined || generatedTitle === undefined
+        ? "New work"
+        : safeDisplayLabel(
+            resolveThreadTitle(
+              desktop.selectedSpaceId,
+              activeRun.sessionId,
+              generatedTitle,
+            ),
+            agentRoleLabel(activeRun.role),
+            160,
+          );
   const closeWorkNavigation = useCallback(
     () => setWorkNavigationOpen(false),
     [],
@@ -5054,7 +5329,10 @@ export default function App() {
 
   const selectSurface = useCallback((nextSurface: WorkspaceSurface) => {
     setWorkNavigationOpen(false);
-    if (nextSurface === "settings") setSettingsStartTab("runtime");
+    if (nextSurface === "settings") {
+      setSettingsStartTab("runtime");
+      setSettingsSpaceId(undefined);
+    }
     setSurface(nextSurface);
   }, []);
 
@@ -5102,7 +5380,7 @@ export default function App() {
         configuration: desktop.managedModelConfiguration,
       }}
       onOpenModelSettings={() => {
-        setSettingsStartTab("providers");
+        setSettingsStartTab("models");
         setWorkNavigationOpen(false);
         setSurface("settings");
       }}
@@ -5264,7 +5542,16 @@ export default function App() {
 
       {onboardingActive || surface === "settings" ? null : (
         <WorkSidebar
-          runs={chat.recentRuns}
+          runs={[
+            ...threadForkDrafts
+              .filter(
+                (draft) =>
+                  draft.spaceId === desktop.selectedSpaceId &&
+                  draft.materializedSessionId === undefined,
+              )
+              .map(threadForkDraftRun),
+            ...chat.recentRuns,
+          ]}
           spaces={desktop.spaces}
           selectedSpaceId={desktop.selectedSpaceId}
           surface={surface}
@@ -5273,7 +5560,7 @@ export default function App() {
           terminalEnabled={desktop.terminalEnabled}
           terminalConsentPending={desktop.terminalConsentPending === true}
           terminalAvailable={terminalAvailable}
-          activeSessionId={activeRun?.sessionId ?? null}
+          activeSessionId={activeForkDraft?.id ?? activeRun?.sessionId ?? null}
           pinnedSessionIds={pinnedThreadSessionIds}
           resolveThreadTitle={resolveThreadTitle}
           query={workQuery}
@@ -5317,6 +5604,9 @@ export default function App() {
           onRestoreSpace={(spaceId) => void handleRestoreSpace(spaceId)}
           onArchiveThread={(run) => void handleArchiveThread(run)}
           onRenameThread={handleRenameThread}
+          onForkThread={
+            desktop.selectedSpaceId === null ? undefined : beginThreadFork
+          }
           onToggleThreadPinned={handleToggleThreadPinned}
           onRestoreThread={(result) => void handleRestoreThread(result)}
           onSelectSurface={selectSurface}
@@ -5413,6 +5703,12 @@ export default function App() {
           }}
           title={title}
           view={activeView}
+          forkDraft={activeForkDraft !== undefined}
+          inheritedViews={
+            activeForkOrigin === undefined
+              ? []
+              : (forkPreviewViews.get(activeForkOrigin.id) ?? [])
+          }
           conversationViews={conversationViews}
           connection={connection}
           connecting={connecting}
@@ -5558,70 +5854,97 @@ export default function App() {
           onCloseAside={closeAside}
         />
       ) : (
-        <OperationsSurface
-          scheduleInspection={
-            scheduleInspection?.targetId === desktop.selectedTargetId
-              ? scheduleInspection
-              : null
+        <Suspense
+          fallback={
+            <main className="overview-surface">
+              <p role="status">Loading page…</p>
+            </main>
           }
-          initialSettingsTab={settingsStartTab}
-          onConfigurePluginConnection={() => {
-            setSettingsStartTab("plugins");
-            setSurface("settings");
-          }}
-          onReturnToWork={() => selectSurface("work")}
-          pluginSelections={pluginSelections}
-          onUsePluginSkill={(id) => {
-            setConversationSkills((current) => ({
-              ...current,
-              [selectionKey]: [
-                ...new Set([...(current[selectionKey] ?? []), id]),
-              ],
-            }));
-            setSurface("work");
-            requestAnimationFrame(() => composerRef.current?.focus());
-          }}
-          surface={surface}
-          connection={connection}
-          desktop={desktop}
-          connecting={connecting}
-          updateChecking={updateChecking}
-          updateMessage={updateMessage}
-          runs={chat.recentRuns}
-          artifacts={allArtifacts}
-          demoParticipants={FIXTURE_MODE ? DEMO_PARTICIPANTS : null}
-          workNavigationOpen={workNavigationOpen}
-          onOpenWorkNavigation={openWorkNavigation}
-          onConnect={() => void connect(desktop.selectedTargetId ?? undefined)}
-          onOpenRun={(run) => void openRun(run)}
-          onSelectTarget={(targetId) => void handleSelectTarget(targetId)}
-          onAddExternalTarget={() => void handleAddExternalTarget()}
-          onRemoveExternalTarget={(targetId) =>
-            void handleRemoveExternalTarget(targetId)
-          }
-          onChooseWorkspace={() => void handleChooseWorkspace()}
-          onConfigureManaged={() => setShowOnboarding(true)}
-          onRestartManaged={() => void handleRestartManaged()}
-          onSetTerminalEnabled={(enabled) =>
-            void handleSetTerminalEnabled(enabled)
-          }
-          onOpenTerminal={(kind) => void handleOpenTerminal(kind)}
-          onExportDiagnostics={() => {
-            void exportDiagnostics().catch((error: unknown) => {
-              setActionError(
-                error instanceof CommandFailure
-                  ? error.detail
-                  : FALLBACK_ACTION_ERROR,
-              );
-            });
-          }}
-          onCheckForUpdates={() => void handleCheckDesktopUpdate()}
-          onInstallUpdate={() => void handleInstallDesktopUpdate()}
-          onImportCaBundle={() => void handleImportCaBundle()}
-          onRemoveCaBundle={() => void handleRemoveCaBundle()}
-          onImportClientIdentity={() => void handleImportClientIdentity()}
-          onRemoveClientIdentity={() => void handleRemoveClientIdentity()}
-        />
+        >
+          <OperationsSurface
+            scheduleInspection={
+              scheduleInspection?.targetId === desktop.selectedTargetId
+                ? scheduleInspection
+                : null
+            }
+            initialSettingsTab={settingsStartTab}
+            initialSettingsSpaceId={settingsSpaceId}
+            onManageControlPlaneWorkspace={(spaceId) => {
+              if (
+                !desktopRef.current.spaces.some(
+                  (space) => space.spaceId === spaceId,
+                )
+              )
+                return;
+              setSettingsSpaceId(spaceId);
+              setSettingsStartTab("cloud");
+              setSurface("settings");
+            }}
+            onManageControlPlaneProfiles={() => {
+              setSettingsSpaceId(undefined);
+              setSettingsStartTab("control-plane");
+              setSurface("settings");
+            }}
+            onConfigurePluginConnection={() => {
+              setSettingsStartTab("plugins");
+              setSurface("settings");
+            }}
+            onReturnToWork={() => selectSurface("work")}
+            pluginSelections={pluginSelections}
+            onUsePluginSkill={(id) => {
+              setConversationSkills((current) => ({
+                ...current,
+                [selectionKey]: [
+                  ...new Set([...(current[selectionKey] ?? []), id]),
+                ],
+              }));
+              setSurface("work");
+              requestAnimationFrame(() => composerRef.current?.focus());
+            }}
+            surface={surface}
+            connection={connection}
+            desktop={desktop}
+            connecting={connecting}
+            updateChecking={updateChecking}
+            updateMessage={updateMessage}
+            runs={chat.recentRuns}
+            artifacts={allArtifacts}
+            demoParticipants={FIXTURE_MODE ? DEMO_PARTICIPANTS : null}
+            workNavigationOpen={workNavigationOpen}
+            onOpenWorkNavigation={openWorkNavigation}
+            onConnect={() =>
+              void connect(desktop.selectedTargetId ?? undefined)
+            }
+            onOpenRun={(run) => void openRun(run)}
+            onSelectTarget={(targetId) => void handleSelectTarget(targetId)}
+            onAddExternalTarget={() => void handleAddExternalTarget()}
+            onRemoveExternalTarget={(targetId) =>
+              void handleRemoveExternalTarget(targetId)
+            }
+            onChooseWorkspace={() => void handleChooseWorkspace()}
+            onConfigureManaged={() => setShowOnboarding(true)}
+            onRestartManaged={() => void handleRestartManaged()}
+            onSetTerminalEnabled={(enabled) =>
+              void handleSetTerminalEnabled(enabled)
+            }
+            onOpenTerminal={(kind) => void handleOpenTerminal(kind)}
+            onExportDiagnostics={() => {
+              void exportDiagnostics().catch((error: unknown) => {
+                setActionError(
+                  error instanceof CommandFailure
+                    ? error.detail
+                    : FALLBACK_ACTION_ERROR,
+                );
+              });
+            }}
+            onCheckForUpdates={() => void handleCheckDesktopUpdate()}
+            onInstallUpdate={() => void handleInstallDesktopUpdate()}
+            onImportCaBundle={() => void handleImportCaBundle()}
+            onRemoveCaBundle={() => void handleRemoveCaBundle()}
+            onImportClientIdentity={() => void handleImportClientIdentity()}
+            onRemoveClientIdentity={() => void handleRemoveClientIdentity()}
+          />
+        </Suspense>
       )}
     </div>
   );

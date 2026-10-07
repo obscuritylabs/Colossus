@@ -1,0 +1,83 @@
+#!/bin/sh
+set -eu
+umask 077
+fail() { printf 'package-desktop-linux: %s\n' "$*" >&2; exit 1; }
+[ "$(uname -s)" = Linux ] || fail "Linux packaging requires a native Linux builder"
+[ "$#" -eq 0 ] || fail "usage: scripts/package-desktop-linux"
+case "${COLOSSUS_DESKTOP_RELEASE_CHANNEL:-}" in
+    developer_preview|validation_only) ;;
+    *) fail "select developer_preview or validation_only explicitly" ;;
+esac
+[ "${COLOSSUS_DESKTOP_TEAM_ID:-}" = UNSIGNED ] || fail "set COLOSSUS_DESKTOP_TEAM_ID=UNSIGNED"
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+repository=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
+target=$(rustc --print host-tuple)
+case "$target" in
+    x86_64-unknown-linux-gnu) architecture=amd64 ;;
+    aarch64-unknown-linux-gnu) architecture=arm64 ;;
+    *) fail "unsupported native Linux target: $target" ;;
+esac
+desktop="$repository/apps/desktop"
+[ -x "$desktop/node_modules/.bin/tauri" ] || fail "install the Desktop npm dependencies first"
+version=$(node -p "JSON.parse(require('fs').readFileSync('$desktop/src-tauri/tauri.conf.json','utf8')).version")
+cd "$repository"
+cargo xtask desktop prepare --profile release --target "$target"
+search_target=$(printf '%s' "$target" | sed 's/-gnu$/-musl/')
+node scripts/stage-ripgrep.mjs --target "$search_target" --output "$desktop/src-tauri/binaries" --binary-name "rg-$target"
+cd "$desktop"
+"$desktop/node_modules/.bin/tauri" build --no-bundle -- --locked
+cd "$repository"
+native_target=${CARGO_TARGET_DIR:-$desktop/src-tauri/target}
+case "$native_target" in /*) ;; *) native_target="$repository/$native_target" ;; esac
+mkdir -p "$repository/dist/desktop-linux"
+output=$(CDPATH= cd -- "$repository/dist/desktop-linux" && pwd -P)
+stage=$(mktemp -d "$output/.package.XXXXXXXX")
+trap 'rm -rf -- "$stage"' EXIT HUP INT TERM
+bundle="$stage/usr/lib/colossus-desktop"
+mkdir -p "$bundle" "$stage/DEBIAN" "$stage/usr/bin" "$stage/usr/share/applications" "$stage/usr/share/icons/hicolor/scalable/apps"
+install -m 0755 "$native_target/release/colossus-desktop" "$bundle/colossus-desktop"
+for name in colossus-sidecar colossus rg; do
+    install -m 0755 "$desktop/src-tauri/binaries/$name-$target" "$bundle/$name"
+    strip "$bundle/$name"
+done
+strip "$bundle/colossus-desktop"
+mkdir -p "$bundle/dictation" "$bundle/ripgrep"
+install -m 0644 "$desktop/src-tauri/dictation-assets/ggml-tiny.en.bin" "$desktop/src-tauri/dictation-assets/models.json" "$desktop/src-tauri/dictation-assets/LICENSE-MIT" "$bundle/dictation/"
+install -m 0644 "$desktop/src-tauri/binaries/COPYING" "$desktop/src-tauri/binaries/LICENSE-MIT" "$desktop/src-tauri/binaries/UNLICENSE" "$bundle/ripgrep/"
+install -m 0644 "$repository/LICENSE" "$bundle/LICENSE"
+node scripts/write-desktop-bundle-manifest.mjs --target "$target" --release-channel "$COLOSSUS_DESKTOP_RELEASE_CHANNEL" --sidecar "$bundle/colossus-sidecar" --cli "$bundle/colossus" --ripgrep "$bundle/rg" --output "$bundle/colossus-bundle-manifest.json"
+node scripts/patch-desktop-manifest-binding.mjs --executable "$bundle/colossus-desktop" --manifest "$bundle/colossus-bundle-manifest.json"
+cat > "$stage/usr/bin/colossus-desktop" <<'LAUNCHER'
+#!/bin/sh
+exec /usr/lib/colossus-desktop/colossus-desktop "$@"
+LAUNCHER
+chmod 0755 "$stage/usr/bin/colossus-desktop"
+cat > "$stage/usr/share/applications/colossus-desktop.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Colossus Desktop
+Comment=Colossus agent workspaces
+Exec=colossus-desktop
+Icon=colossus-desktop
+Terminal=false
+Categories=Development;
+DESKTOP
+install -m 0644 "$repository/apps/ui/assets/colossus-mark.svg" "$stage/usr/share/icons/hicolor/scalable/apps/colossus-desktop.svg"
+cat > "$stage/DEBIAN/control" <<CONTROL
+Package: colossus-desktop
+Version: $version
+Architecture: $architecture
+Maintainer: Obscurity Labs <engineering@obscuritylabs.com>
+Section: devel
+Priority: optional
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0, libayatana-appindicator3-1, libsecret-1-0, libxdo3, libssl3, libasound2
+Recommends: gnome-keyring
+Description: Colossus Desktop Developer Preview
+ Native workspaces and explicitly enrolled cloud runtime connections.
+CONTROL
+find "$stage" -type d -exec chmod 0755 {} +
+find "$stage" -type f ! -perm /111 -exec chmod 0644 {} +
+package="$output/colossus-desktop-$version-$target.deb"
+dpkg-deb --build --root-owner-group "$stage" "$package"
+(cd "$output" && sha256sum "${package##*/}" > "${package##*/}.sha256")
+printf 'Built Linux Desktop package: %s\n' "$package"

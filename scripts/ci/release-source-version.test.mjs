@@ -53,7 +53,11 @@ test("test releases keep signing and omit incompatible bootstrap installers", ()
   assert.ok(gate.includes('windows_cli_sign="$WINDOWS_CLI_SIGN_RESULT"'));
   assert.ok(gate.includes('desktop_windows_signed="$WINDOWS_SIGNED_DESKTOP_RESULT"'));
   const draft = workflow.slice(workflow.indexOf("  draft-release:"));
-  assert.ok(draft.includes('expected_assets=18'));
+  assert.ok(draft.includes('expected_assets=38'));
+  assert.ok(gate.includes('control_plane=${{ needs.control_plane.result }}'));
+  assert.ok(gate.includes('vscode=${{ needs.vscode.result }}'));
+  assert.ok(draft.includes('Colossus-Control-Plane-${RELEASE_TAG}-${target}.docker.tar.gz'));
+  assert.ok(draft.includes('Colossus-VSCode-${RELEASE_TAG}-${target}.vsix'));
   assert.ok(draft.includes('if [ "$TEST_RELEASE" != true ]; then'));
   assert.ok(draft.includes("CLI archives retain the source version"));
 });

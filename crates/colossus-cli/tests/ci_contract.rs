@@ -578,7 +578,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     );
     assert_eq!(
         field(job(jobs, "windows-desktop"), "timeout-minutes").as_u64(),
-        Some(65),
+        Some(75),
         "Windows Desktop acceptance must allow a cold native build"
     );
     assert_eq!(
@@ -593,6 +593,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     let gate_needs = strings(field(job(jobs, "gate"), "needs"), "pre-merge gate needs");
     for name in [
         "linux-rust-integration",
+        "linux-desktop",
         "macos-desktop-acceptance",
         "macos-desktop-bundle",
         "windows-runtime",
@@ -605,6 +606,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     }
     for name in [
         "linux-rust-integration",
+        "linux-desktop",
         "macos-native",
         "macos-desktop-acceptance",
         "macos-desktop-bundle",
@@ -802,12 +804,14 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
         [
             "artifacts",
             "bootstrap_installers",
+            "control_plane",
             "desktop_macos",
             "desktop_macos_build",
             "desktop_windows_preview",
             "desktop_windows_signed",
             "sdk_release",
             "validate",
+            "vscode",
             "windows_cli_sign",
         ]
         .into_iter()
@@ -837,6 +841,8 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
         "test \"$WINDOWS_DESKTOP_RESULT\" = skipped",
         "windows_cli_sign=\"$WINDOWS_CLI_SIGN_RESULT\"",
         "desktop_windows_signed=\"$WINDOWS_SIGNED_DESKTOP_RESULT\"",
+        "control_plane=${{ needs.control_plane.result }}",
+        "vscode=${{ needs.vscode.result }}",
         "test \"$SDK_RELEASE_RESULT\" = skipped",
         "obscuritylabs-colossus-sdk-${RELEASE_VERSION}.tgz",
         "obscuritylabs_colossus_sdk-${RELEASE_VERSION}-py3-none-any.whl",
@@ -869,9 +875,9 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
         "codeSigning = 'azure_artifact_signing'",
         "Colossus-Desktop-STABLE-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe",
         "Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe",
-        "-eq 25",
-        "expected_assets=22",
-        "expected_assets=18",
+        "-eq 45",
+        "expected_assets=42",
+        "expected_assets=38",
     ] {
         assert!(
             source.contains(required),
@@ -896,14 +902,14 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
         .find("  desktop_windows_signed:")
         .map(|offset| windows_start + offset)
         .expect("Windows signed job");
-    let gate_start = source[signed_windows_start..]
-        .find("  gate:")
+    let control_plane_start = source[signed_windows_start..]
+        .find("  control_plane:")
         .map(|offset| signed_windows_start + offset)
-        .expect("gate job");
+        .expect("Control Plane job");
     let build_job = &source[build_start..sign_start];
     let sign_job = &source[sign_start..windows_start];
     let windows_job = &source[windows_start..signed_windows_start];
-    let signed_windows_job = &source[signed_windows_start..gate_start];
+    let signed_windows_job = &source[signed_windows_start..control_plane_start];
     for forbidden in [
         "${{ secrets.",
         "MACOS_DEVELOPER_ID_P12",

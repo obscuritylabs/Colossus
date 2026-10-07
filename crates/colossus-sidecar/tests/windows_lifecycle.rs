@@ -10,8 +10,8 @@ use colossus_sdk::{
     ApiMajor, AppPrivateInstanceDir, BackendKind, Colossus, CreateRunRequest, GetRunRequest,
     InputContentPart, InstanceId, ManagedAccessProfile, ManagedExecutionBoundary,
     ManagedRuntimeConfig, NativeSidecarLifecycle, NativeSidecarStatus, RunMode, RunStatus,
-    Sha256Digest, SidecarApplicationGrant, SidecarBootstrapConfig, SidecarOptions,
-    VerifiedExecutable, WorkspaceIdentity,
+    Sha256Digest, SidecarApplicationGrant, SidecarApprovalBrokerGrant, SidecarBootstrapConfig,
+    SidecarOptions, VerifiedExecutable, WorkspaceIdentity,
 };
 use colossus_windows_native::{BoundPath, create_private_directory};
 use colossus_worker_protocol::{WorkerApprovalMode, WorkerControlClient, worker_ipc_endpoint};
@@ -144,6 +144,27 @@ async fn verified_sidecar_bootstraps_pinned_grpc_runs_echo_and_closes() {
     .expect("bootstrap")
     .with_expected_workspace_identity(workspace_identity(&workspace))
     .expect("expected workspace identity")
+    .with_approval_broker_grant(
+        SidecarApprovalBrokerGrant::new(
+            "app:native-sidecar-windows-acceptance",
+            ["primary".into()],
+        )
+        .unwrap(),
+    )
+    .expect("approval broker")
+    .with_connector_grant(
+        SidecarApplicationGrant::new(
+            "app:cloud-windows-acceptance",
+            [
+                ApiScope::new(scopes::RUNS_EXECUTE).unwrap(),
+                ApiScope::new(scopes::RUNS_READ).unwrap(),
+            ],
+            ["primary".into()],
+            Vec::<String>::new(),
+        )
+        .unwrap(),
+    )
+    .expect("independent cloud grant")
     .with_risk_auto_approvals()
     .with_worker_ipc_authentication(colossus_sdk::Secret::new(vec![0x5a; 32]).expect("worker key"))
     .expect("worker authentication");
@@ -224,6 +245,53 @@ async fn verified_sidecar_bootstraps_pinned_grpc_runs_echo_and_closes() {
         .expect("create run");
     let run_id = created.run.run_id;
     assert!(!run_id.is_empty());
+    let connector = client
+        .connector_runs()
+        .expect("dedicated Windows cloud client");
+    assert!(client.instance_id().is_some());
+    assert!(
+        connector
+            .get_run(GetRunRequest {
+                run_id: run_id.clone()
+            })
+            .await
+            .is_err(),
+        "cloud cannot inherit Desktop runs"
+    );
+    let cloud_run = connector
+        .create_run(CreateRunRequest {
+            plugin_skill_ids: vec![],
+            input: vec![InputContentPart::Text(
+                "Windows cloud grant self-test".into(),
+            )],
+            session_id: None,
+            end_user_id: None,
+            role: "primary".into(),
+            mode: RunMode::Execute,
+            research_depth: None,
+            research_sources: vec![],
+            plan_action: None,
+            branch: None,
+            max_turns: 1,
+            idempotency_key: IdempotencyKey::new("windows-cloud-once").unwrap(),
+        })
+        .await
+        .expect("cloud grant executes");
+    assert!(
+        client
+            .get_run(GetRunRequest {
+                run_id: cloud_run.run.run_id.clone()
+            })
+            .await
+            .is_err(),
+        "Desktop cannot inherit cloud runs"
+    );
+    connector
+        .get_run(GetRunRequest {
+            run_id: cloud_run.run.run_id,
+        })
+        .await
+        .expect("cloud reads its own run");
     assert_eq!(
         wait_for_terminal_run(&client, &run_id).await,
         RunStatus::Completed

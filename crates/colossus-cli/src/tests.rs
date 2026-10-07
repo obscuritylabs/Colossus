@@ -4,6 +4,12 @@ use std::collections::BTreeSet;
 #[path = "terminal_command_tests.rs"]
 mod terminal_commands;
 
+#[path = "dev_credentials_tests.rs"]
+mod development_credentials;
+
+#[path = "worker_codex_auth_tests.rs"]
+mod worker_codex_auth;
+
 struct PrivateTempDir {
     #[cfg(windows)]
     path: PathBuf,

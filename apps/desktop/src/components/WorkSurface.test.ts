@@ -163,7 +163,8 @@ describe("WorkSurface side panels", () => {
     const markup = renderSurface([]);
 
     expect(markup).toContain('<main class="work-surface is-new-work"');
-    expect(markup).toContain('<section class="work-welcome">');
+    expect(markup).toContain('class="shared-work-welcome"');
+    expect(markup).toContain('aria-label="Start new work"');
     expect(markup).toContain("Orient yourself in this repo");
     expect(markup).not.toContain(
       "Review this workspace and identify the safest high-impact next task",

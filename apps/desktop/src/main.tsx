@@ -10,6 +10,10 @@ import {
   initializeAppearance,
 } from "./theme/AppearanceProvider";
 import "@colossus/ui/styles/theme.css";
+import "@colossus/ui/styles/shadcn.css";
+import "@colossus/ui/styles/conversation.css";
+import "@colossus/ui/styles/workspace-sidebar.css";
+import "@colossus/ui/styles/work-welcome.css";
 import "./styles.css";
 import "@colossus/ui/styles/composer.css";
 import "@colossus/ui/styles/select.css";
@@ -42,6 +46,19 @@ if (
             hasCredential={false}
             showControls={false}
           />
+        </AppearanceProvider>,
+      );
+    },
+  );
+} else if (
+  import.meta.env.DEV &&
+  new URLSearchParams(window.location.search).get("fixture") === "cloud"
+) {
+  void import("./dev/cloud-connection-preview").then(
+    ({ default: CloudPreview }) => {
+      createRoot(root).render(
+        <AppearanceProvider initialPreference={initialAppearance}>
+          <CloudPreview />
         </AppearanceProvider>,
       );
     },

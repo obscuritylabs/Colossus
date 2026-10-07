@@ -1,12 +1,49 @@
 import { build } from "esbuild";
+import { compile, optimize } from "@tailwindcss/node";
+import { Scanner } from "@tailwindcss/oxide";
 import { validateViewContributions } from "./validate-manifest.mjs";
 import { cp, mkdir, readdir, rm, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 
 validateViewContributions(JSON.parse(await readFile("package.json", "utf8")));
 
 await rm("dist", { recursive: true, force: true });
 await mkdir("dist", { recursive: true });
+const sharedStylesheet = resolve("node_modules/@colossus/ui/styles/shadcn.css");
+const compiler = await compile(await readFile(sharedStylesheet, "utf8"), {
+  from: sharedStylesheet,
+  base: dirname(sharedStylesheet),
+  onDependency() {},
+});
+const sourceRoots =
+  compiler.root === "none"
+    ? []
+    : compiler.root === null
+      ? [{ base: process.cwd(), pattern: "**/*", negated: false }]
+      : [{ ...compiler.root, negated: false }];
+const scanner = new Scanner({
+  sources: [
+    ...sourceRoots,
+    ...compiler.sources,
+    {
+      base: dirname(process.execPath),
+      pattern: basename(process.execPath),
+      negated: true,
+    },
+    {
+      base: dirname(sharedStylesheet),
+      pattern: basename(sharedStylesheet),
+      negated: false,
+    },
+  ],
+});
+await writeFile(
+  "dist/shadcn.css",
+  optimize(compiler.build(scanner.scan()), {
+    file: sharedStylesheet,
+    minify: true,
+  }).code,
+);
 const hostBuild = await build({
   entryPoints: ["src/extension.ts"],
   bundle: true,
@@ -79,6 +116,14 @@ const tabler = JSON.parse(
 licenses.set(
   "tabler",
   `@tabler/icons@${tabler.version} (MIT)\n${await readFile("node_modules/@tabler/icons/LICENSE", "utf8")}`,
+);
+licenses.set(
+  "shadcn",
+  await readFile("node_modules/@colossus/ui/assets/shadcn-LICENSE.txt", "utf8"),
+);
+await cp(
+  "node_modules/@colossus/ui/assets/shadcn-LICENSE.txt",
+  "dist/shadcn-LICENSE.txt",
 );
 await writeFile(
   "dist/THIRD_PARTY_NOTICES.txt",

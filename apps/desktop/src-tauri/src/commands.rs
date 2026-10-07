@@ -206,6 +206,7 @@ pub(crate) async fn create_run(
     mut request: CreateRunInput,
 ) -> Result<RunDto, CommandErrorDto> {
     let branch = request.branch_link();
+    let thread_fork = request.is_thread_fork();
     let settings = SettingsStore::open_application()?.load()?;
     if branch.is_some() {
         require_selected_space(&settings, &target_id)?;
@@ -283,7 +284,12 @@ pub(crate) async fn create_run(
         .bind_runs(&target, vec![response.run.run_id.clone()])
         .await;
     let run: RunDto = response.run.into();
-    register_or_advance_aside(&target_id, branch, source.as_ref(), &run)?;
+    register_or_advance_aside(
+        &target_id,
+        if thread_fork { None } else { branch },
+        source.as_ref(),
+        &run,
+    )?;
     index_released_runs(&target_id, std::slice::from_ref(&run));
     Ok(run)
 }

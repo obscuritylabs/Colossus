@@ -2,7 +2,7 @@
   "name": "colossus",
   "displayName": "Colossus",
   "description": "Work with the Colossus agent runtime from VS Code.",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "publisher": "obscuritylabs",
   "icon": "media/colossus.png",
   "type": "module",
@@ -210,12 +210,15 @@
     "@napi-rs/keyring": "2.1.0",
     "@obscuritylabs/colossus-sdk": "file:../../sdk/typescript",
     "react": "19.2.7",
-    "react-dom": "19.2.7"
+    "react-dom": "19.2.7",
+    "react-is": "19.2.7"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.12.1",
     "@playwright/test": "1.62.0",
     "@tabler/icons": "3.45.0",
+    "@tailwindcss/node": "4.3.3",
+    "@tailwindcss/oxide": "4.3.3",
     "@types/mdast": "4.0.4",
     "@types/node": "22.18.0",
     "@types/react": "19.2.17",
@@ -227,6 +230,7 @@
     "mdast-util-gfm-table": "2.0.0",
     "micromark-extension-gfm-table": "2.1.1",
     "prettier": "3.9.5",
+    "tailwindcss": "4.3.3",
     "typescript": "5.9.3"
   },
   "overrides": {

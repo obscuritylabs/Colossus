@@ -44,6 +44,10 @@ impl CredentialAvailability {
 }
 
 impl DesktopCredentials {
+    pub(crate) fn native_vault(&self) -> Arc<dyn CredentialVault> {
+        self.vault.clone()
+    }
+
     /// Store a validated PEM identity in the native vault under an opaque ID.
     pub(crate) async fn write_client_identity(
         self: &Arc<Self>,
@@ -157,8 +161,27 @@ impl DesktopCredentials {
             return Ok(Arc::clone(store));
         }
         let confined = ConfinedRoot::bind(root).map_err(|_| unavailable())?;
-        let vault =
-            PlatformCredentialVault::new(confined, "desktop-manual").map_err(credential_error)?;
+        let vault = if std::env::var_os(colossus_credentials::DEVELOPMENT_AUTHORITY_VARIABLE)
+            .is_some()
+        {
+            // Release selection fails before any key file is opened. The native
+            // host alone reads the opted-in home-bound authority; no renderer or
+            // process environment contains its wrapping key.
+            if !cfg!(debug_assertions) {
+                return Err(unavailable());
+            }
+            let home = ConfinedRoot::bind(settings.home_root()?).map_err(|_| unavailable())?;
+            let authority = colossus_credentials::DevelopmentAuthority::selected(&home, &[])
+                .map_err(credential_error)?
+                .ok_or_else(unavailable)?;
+            let keys = authority
+                .store(colossus_credentials::DevelopmentStoreScope::DesktopVault)
+                .map_err(credential_error)?;
+            PlatformCredentialVault::with_key_store(confined, "desktop-manual", Arc::new(keys))
+                .map_err(credential_error)?
+        } else {
+            PlatformCredentialVault::new(confined, "desktop-manual").map_err(credential_error)?
+        };
         let store = Arc::new(Self {
             root: root.to_owned(),
             vault: Arc::new(vault),
