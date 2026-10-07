@@ -171,6 +171,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn timed_out_listing_releases_the_slot_for_waiting_reads() {
+        let list = RunList::default();
+        let started = tokio::sync::Notify::new();
+        let probe = tokio::time::timeout(
+            Duration::from_millis(30),
+            list.execute(
+                || async {
+                    started.notify_one();
+                    std::future::pending::<Result<(), ApiError>>().await
+                },
+                &ADMISSION_RETRY_DELAYS,
+            ),
+        );
+        let foreground = async {
+            started.notified().await;
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                list.execute(|| async { Ok(()) }, &ADMISSION_RETRY_DELAYS),
+            )
+            .await
+            .expect("foreground read acquires the slot after the health deadline")
+            .expect("foreground listing");
+        };
+        let (probe, ()) = tokio::join!(probe, foreground);
+        assert!(probe.is_err(), "stalled health read reaches its deadline");
+    }
+
+    #[tokio::test]
     async fn retries_transient_admission_capacity_until_the_read_succeeds() {
         let attempts = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&attempts);
