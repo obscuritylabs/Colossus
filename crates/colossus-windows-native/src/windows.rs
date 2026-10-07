@@ -11,8 +11,12 @@ use std::{
     path::{Path, PathBuf},
     ptr::{null, null_mut},
 };
+use windows_sys::Wdk::Storage::FileSystem::{
+    FILE_RENAME_INFORMATION, FILE_RENAME_POSIX_SEMANTICS, FILE_RENAME_REPLACE_IF_EXISTS,
+    FileRenameInformationEx, NtSetInformationFile,
+};
 use windows_sys::Win32::{
-    Foundation::{GENERIC_READ, INVALID_HANDLE_VALUE, LocalFree, NO_ERROR},
+    Foundation::{GENERIC_READ, INVALID_HANDLE_VALUE, LocalFree, NO_ERROR, RtlNtStatusToDosError},
     Security::{
         ACCESS_ALLOWED_ACE, ACE_FLAGS, ACE_HEADER,
         Authorization::{
@@ -30,16 +34,16 @@ use windows_sys::Win32::{
         BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE,
         FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
         FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_GENERIC_WRITE, FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_RENAME_INFO,
-        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileIdInfo, FileRenameInfoEx,
-        GetFileInformationByHandle, GetFileInformationByHandleEx, READ_CONTROL,
-        SetFileInformationByHandle,
+        FILE_GENERIC_WRITE, FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
+        READ_CONTROL,
     },
     System::{
         Console::{STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle},
         Diagnostics::ToolHelp::{
             CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
         },
+        IO::IO_STATUS_BLOCK,
         JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
@@ -52,9 +56,6 @@ use windows_sys::Win32::{
         Threading::{
             CREATE_NO_WINDOW, CREATE_SUSPENDED, GetCurrentProcess, OpenProcessToken, OpenThread,
             QueryFullProcessImageNameW, ResumeThread, THREAD_SUSPEND_RESUME,
-        },
-        WindowsProgramming::{
-            FILE_RENAME_FLAG_POSIX_SEMANTICS, FILE_RENAME_FLAG_REPLACE_IF_EXISTS,
         },
     },
 };
@@ -280,17 +281,16 @@ pub(super) fn replace_private_file(
         .and_then(|size| u32::try_from(size).ok())
         .ok_or(WindowsNativeError::InvalidInput)?;
     encoded.push(0);
-    let buffer_bytes = offset_of!(FILE_RENAME_INFO, FileName)
+    let buffer_bytes = offset_of!(FILE_RENAME_INFORMATION, FileName)
         .checked_add(encoded.len() * size_of::<u16>())
         .and_then(|size| u32::try_from(size).ok())
         .ok_or(WindowsNativeError::InvalidInput)?;
     // Struct storage preserves alignment while reserving the variable-length name tail.
     let mut buffer = vec![
-        FILE_RENAME_INFO::default();
-        (buffer_bytes as usize).div_ceil(size_of::<FILE_RENAME_INFO>())
+        FILE_RENAME_INFORMATION::default();
+        (buffer_bytes as usize).div_ceil(size_of::<FILE_RENAME_INFORMATION>())
     ];
-    buffer[0].Anonymous.Flags =
-        FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS;
+    buffer[0].Anonymous.Flags = FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS;
     buffer[0].RootDirectory = parent.file.as_raw_handle().cast();
     buffer[0].FileNameLength = name_bytes;
     // SAFETY: the aligned allocation covers the header and entire UTF-16 name tail;
@@ -301,7 +301,7 @@ pub(super) fn replace_private_file(
             buffer
                 .as_mut_ptr()
                 .cast::<u8>()
-                .add(offset_of!(FILE_RENAME_INFO, FileName))
+                .add(offset_of!(FILE_RENAME_INFORMATION, FileName))
                 .cast::<u16>(),
             encoded.len(),
         );
@@ -315,19 +315,28 @@ pub(super) fn replace_private_file(
         })?;
     source.revalidate()?;
     parent.revalidate()?;
-    // SAFETY: the source and private parent handles remain live, and the aligned
+    let mut io_status = IO_STATUS_BLOCK::default();
+    // Use the native operation for a leaf relative to the retained directory handle;
+    // the Win32 wrapper performs DOS path conversion before calling this operation.
+    // SAFETY: both handles remain live, the output status is writable, and the aligned
     // buffer contains exactly the initialized rename header and name bytes. POSIX
     // replacement keeps existing readers attached to the displaced file object.
-    if unsafe {
-        SetFileInformationByHandle(
+    let status = unsafe {
+        NtSetInformationFile(
             source.file.as_raw_handle().cast(),
-            FileRenameInfoEx,
+            &mut io_status,
             buffer.as_ptr().cast(),
             buffer_bytes,
+            FileRenameInformationEx,
         )
-    } == 0
-    {
-        return Err(last_error("replace private file"));
+    };
+    if status < 0 {
+        // SAFETY: translating an NTSTATUS does not dereference caller-owned memory.
+        let error = unsafe { RtlNtStatusToDosError(status) };
+        return Err(WindowsNativeError::Io {
+            operation: "replace private file",
+            source: std::io::Error::from_raw_os_error(error as i32),
+        });
     }
 
     let committed = open_bound(destination_path, BoundKind::File)?;

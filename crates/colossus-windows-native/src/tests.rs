@@ -332,7 +332,13 @@ fn private_file_replacement_is_atomic_and_preserves_private_access() {
     create_private_directory(&directory).expect("create private directory");
     let destination = directory.join("settings.json");
     let source = directory.join(".settings.next");
-    std::fs::write(&destination, b"old").expect("write original");
+    create_private_file(&source, b"old").expect("stage initial private file");
+    replace_private_file(&source, &destination).expect("commit initially absent private file");
+    assert!(!source.exists());
+    assert_eq!(
+        std::fs::read(&destination).expect("read initial file"),
+        b"old"
+    );
     std::fs::write(&source, b"new").expect("write replacement");
     let old = BoundPath::open_file_read_write(&destination).expect("retain original writer");
     let staged = BoundPath::open_file_read_write(&source).expect("retain replacement writer");

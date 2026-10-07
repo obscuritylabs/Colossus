@@ -12,6 +12,7 @@ thiserror.workspace = true
 [target.'cfg(windows)'.dependencies]
 tokio.workspace = true
 windows-sys = { workspace = true, features = [
+    "Wdk_Storage_FileSystem",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Security",
@@ -19,12 +20,12 @@ windows-sys = { workspace = true, features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
     "Win32_System_JobObjects",
     "Win32_System_Pipes",
     "Win32_System_SystemServices",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
-    "Win32_System_WindowsProgramming",
     "Win32_UI_WindowsAndMessaging",
 ] }
 
