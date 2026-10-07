@@ -1294,6 +1294,9 @@ fn ambient_workspace_search_respects_repository_ignores_and_releases_context() {
         1024 * 1024,
         true,
         &[application_home],
+        &super::ProtectedFilesystem::default()
+            .snapshot()
+            .expect("unprotected snapshot"),
     )
     .expect("workspace-scoped ambient search");
     let value: serde_json::Value = serde_json::from_slice(&result.bytes).expect("JSON");

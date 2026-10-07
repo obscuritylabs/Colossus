@@ -11,6 +11,8 @@ mod client;
 mod config;
 #[cfg(feature = "daemon")]
 mod daemon;
+#[cfg(all(feature = "sidecar", any(unix, windows)))]
+mod development_selector;
 #[cfg(feature = "embedded")]
 mod embedded;
 #[cfg(feature = "embedded")]

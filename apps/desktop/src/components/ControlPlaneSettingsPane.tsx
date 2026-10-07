@@ -2,24 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { IconCloud } from "@tabler/icons-react";
 import { Button, CatalogInventory, TextInput } from "@colossus/ui";
-
-interface Profile {
-  id: string;
-  label: string;
-  endpoint: string;
-}
-export interface ControlPlaneProfiles {
-  revision: number;
-  profiles: Profile[];
-  defaultProfile: string | null;
-  connections: {
-    targetId: string;
-    status: string;
-    projectId: string | null;
-    endpoint: string | null;
-    sharedSessions: boolean;
-  }[];
-}
+import "./cloud-connection.css";
+import type { ControlPlaneProfile, ControlPlaneProfiles } from "../types";
+export type { ControlPlaneProfiles } from "../types";
 
 export function ControlPlaneSettingsPane() {
   const [catalog, setCatalog] = useState<ControlPlaneProfiles | null>(null);
@@ -52,7 +37,10 @@ export function ControlPlaneSettingsPane() {
       clearInterval(timer);
     };
   }, []);
-  async function save(profiles: Profile[], defaultProfile: string | null) {
+  async function save(
+    profiles: ControlPlaneProfile[],
+    defaultProfile: string | null,
+  ) {
     if (!catalog || busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
@@ -83,9 +71,22 @@ export function ControlPlaneSettingsPane() {
   const profiles = catalog?.profiles ?? [];
   if (!catalog)
     return (
-      <p role={error ? "alert" : "status"}>
-        {error || "Loading Control Plane connections…"}
-      </p>
+      <section className="managed-settings-body control-plane-settings">
+        <div className="managed-section-heading">
+          <div>
+            <p className="eyebrow">Shared resources</p>
+            <h3>Control Plane</h3>
+          </div>
+        </div>
+        <p
+          className={
+            error ? "managed-settings-notice error" : "managed-heading-copy"
+          }
+          role={error ? "alert" : "status"}
+        >
+          {error || "Loading Control Plane connections…"}
+        </p>
+      </section>
     );
   return (
     <CatalogInventory
@@ -150,18 +151,30 @@ export function ControlPlaneSettingsPane() {
           ),
       }))}
       footer={
-        catalog.connections.length ? (
-          <section>
-            <h4>Connected workspace runtimes</h4>
-            {catalog.connections.map((connection) => (
-              <p key={connection.targetId}>
-                <strong>{connection.projectId ?? "Workspace"}</strong> ·{" "}
-                {connection.status} ·{" "}
-                {connection.sharedSessions
-                  ? "Workspace history shared"
-                  : "Local history private"}
+        catalog.connections.length || catalog.connectionStatusUnavailable ? (
+          <section className="control-plane-workspaces">
+            <h4>Enrolled workspace runtimes</h4>
+            {catalog.connectionStatusUnavailable ? (
+              <p className="managed-settings-notice error" role="alert">
+                Enrollment status is unavailable. Saved endpoints remain usable.
               </p>
-            ))}
+            ) : null}
+            <ul className="control-plane-workspace-list">
+              {catalog.connections.map((connection) => (
+                <li key={connection.targetId}>
+                  <strong>{connection.projectId ?? "Workspace"}</strong>
+                  <span>
+                    {catalog.connectionStatusUnavailable
+                      ? "Unknown"
+                      : connection.status}{" "}
+                    ·{" "}
+                    {connection.sharedSessions
+                      ? "Workspace history shared"
+                      : "Local history private"}
+                  </span>
+                </li>
+              ))}
+            </ul>
           </section>
         ) : null
       }

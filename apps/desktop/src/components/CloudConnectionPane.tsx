@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button, RadioGroup, TextInput } from "@colossus/ui";
 import {
-  IconCloud,
   IconPlugConnected,
   IconPlugConnectedX,
   IconRefresh,
@@ -24,6 +23,8 @@ interface CloudStatus {
   sharingSupported?: boolean;
 }
 export function CloudConnectionPane({ targetId }: { targetId: string }) {
+  const headingId = useId(),
+    sharingHeadingId = useId();
   const [status, setStatus] = useState<CloudStatus | null>(null),
     [url, setUrl] = useState(""),
     [token, setToken] = useState(""),
@@ -120,16 +121,19 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
     );
   }, [status?.sharedSessions, status?.sharedContinuation, targetId]);
   return (
-    <section className="cloud-settings">
-      <header>
-        <div className="cloud-settings-icon">
-          <IconCloud size={26} />
-        </div>
+    <section
+      className="managed-settings-body cloud-settings"
+      aria-labelledby={headingId}
+    >
+      <div className="managed-section-heading">
         <div>
-          <h2>Colossus Control Plane</h2>
-          <p>Make this runtime available to your project's Control Plane.</p>
+          <p className="eyebrow">Workspace connection</p>
+          <h3 id={headingId}>Control Plane</h3>
+          <p className="managed-heading-copy">
+            Make this runtime available to your project's Control Plane.
+          </p>
         </div>
-      </header>
+      </div>
       {error && (
         <p className="cloud-settings-error" role="alert">
           {error}
@@ -213,6 +217,8 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
           </p>
           {status.sharingSupported && (
             <form
+              className="cloud-settings-sharing"
+              aria-labelledby={sharingHeadingId}
               onSubmit={(event) => {
                 event.preventDefault();
                 void action("cloud_set_workspace_sharing", {
@@ -222,9 +228,10 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
                 });
               }}
             >
-              <div>
-                <p>Desktop conversation sharing</p>
+              <div className="cloud-settings-control-column">
+                <h4 id={sharingHeadingId}>Desktop conversation sharing</h4>
                 <RadioGroup
+                  variant="compact"
                   value={sharing}
                   onValueChange={setSharing}
                   disabled={busy || status.status === "revoked"}
@@ -263,6 +270,7 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
         </>
       ) : (
         <form
+          className="cloud-settings-enrollment cloud-settings-control-column"
           onSubmit={(event) => {
             event.preventDefault();
             void action("cloud_enroll", {
@@ -316,8 +324,8 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
           )}
         </form>
       )}
-      <aside>
-        <IconShieldLock size={19} />
+      <aside className="cloud-settings-policy">
+        <IconShieldLock size={18} aria-hidden="true" />
         <p>
           Only authorized project members can submit tasks. This runtime's
           roles, tools, policy, and approval rules still apply. Managed Local

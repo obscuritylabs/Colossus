@@ -246,6 +246,29 @@ export interface DesktopStatus {
   capabilities: DesktopCapabilities;
 }
 
+export interface ControlPlaneProfile {
+  id: string;
+  label: string;
+  endpoint: string;
+}
+
+/** Public native enrollment metadata; contains no runtime credentials. */
+export interface ControlPlaneEnrollmentStatus {
+  targetId: string;
+  status: string;
+  projectId: string | null;
+  endpoint: string | null;
+  sharedSessions: boolean;
+}
+
+export interface ControlPlaneProfiles {
+  revision: number;
+  profiles: ControlPlaneProfile[];
+  defaultProfile: string | null;
+  connections: ControlPlaneEnrollmentStatus[];
+  connectionStatusUnavailable?: boolean;
+}
+
 export type ApprovalMode = "deny" | "ask" | "risk_auto" | "full_access";
 export type AccessProfile = "minimal" | "pinned" | "development" | "allow_all";
 export type ExecutionBoundary =
@@ -1227,6 +1250,8 @@ export interface CreateRunRequest {
   planAction?: PlanRunAction;
   branch?: {
     sourceRunId: string;
+    /** Desktop presentation only; canonical history is resolved natively. */
+    kind?: "aside" | "thread";
   };
   /** Positive override, or USE_CONFIGURED_MAX_TURNS for the server default. */
   maxTurns: number;

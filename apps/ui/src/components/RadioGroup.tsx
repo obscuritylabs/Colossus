@@ -8,18 +8,20 @@ export interface RadioGroupOption {
   description?: ReactNode;
 }
 
-/** Accessible choice cards composed from the shared shadcn button foundation. */
+/** Accessible choices composed from the shared shadcn button foundation. */
 export function RadioGroup({
   value,
   onValueChange,
   options,
   disabled = false,
+  variant = "cards",
   "aria-label": label,
 }: {
   value: string;
   onValueChange: (value: string) => void;
   options: RadioGroupOption[];
   disabled?: boolean;
+  variant?: "cards" | "compact";
   "aria-label": string;
 }) {
   const id = useId();
@@ -29,7 +31,11 @@ export function RadioGroup({
     <div
       role="radiogroup"
       aria-label={label}
-      className="ui:flex ui:flex-col ui:gap-2"
+      className={
+        variant === "compact"
+          ? "ui-radio-group ui-radio-group--compact"
+          : "ui-radio-group ui:flex ui:flex-col ui:gap-2"
+      }
     >
       {options.map((option, index) => {
         const checked = value === option.value;
@@ -45,7 +51,11 @@ export function RadioGroup({
             disabled={disabled}
             tabIndex={index === Math.max(0, selected) ? 0 : -1}
             variant="secondary"
-            className={`ui:h-auto ui:justify-start ui:items-start ui:gap-3 ui:px-3 ui:py-3 ui:text-left ui:whitespace-normal ${checked ? "ui:border-primary ui:bg-accent" : ""}`}
+            className={
+              variant === "compact"
+                ? "ui-radio-option--compact"
+                : `ui:h-auto ui:justify-start ui:items-start ui:gap-3 ui:px-3 ui:py-3 ui:text-left ui:whitespace-normal ${checked ? "ui:border-primary ui:bg-accent" : ""}`
+            }
             onClick={() => onValueChange(option.value)}
             onKeyDown={(event) => {
               const step =

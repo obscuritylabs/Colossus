@@ -28,6 +28,19 @@ export default defineConfig({
   },
   server: {
     strictPort: true,
+    fs: {
+      strict: true,
+      deny: [
+        ".env",
+        ".env.*",
+        "*.{crt,pem,key,p12,pfx,cer,der}",
+        ".npmrc",
+        ".yarnrc.yml",
+        "**/.git/**",
+        "**/development-credentials/**",
+        "**/.authority-key.env",
+      ],
+    },
     proxy: {
       "/api": "http://127.0.0.1:8090",
       "/auth": "http://127.0.0.1:8090",

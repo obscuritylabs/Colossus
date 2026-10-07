@@ -325,6 +325,9 @@ async fn launch(
     command.stderr(Stdio::inherit());
     #[cfg(not(debug_assertions))]
     command.stderr(Stdio::null());
+    if let Some(path) = crate::development_selector::selector()? {
+        command.env(crate::development_selector::VARIABLE, path);
+    }
     colossus_windows_native::configure_suspended_process(command.as_std_mut());
     let mut child = command.spawn().map_err(|_| SdkError::SidecarFailed)?;
     let (job, process_id) =

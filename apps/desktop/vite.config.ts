@@ -69,6 +69,8 @@ export default defineConfig({
         ".npmrc",
         ".yarnrc.yml",
         "**/.git/**",
+        "**/development-credentials/**",
+        "**/.authority-key.env",
         "**/src-tauri/**",
       ],
     },

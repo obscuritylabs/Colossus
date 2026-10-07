@@ -209,6 +209,37 @@ impl ConfinedFile {
         &self.file
     }
 
+    /// Compare another open descriptor with this retained private file without
+    /// reading either file's contents. Both descriptors remain alive during the
+    /// comparison, including on Windows where file identity can otherwise be reused.
+    pub fn shares_identity(&self, other: &File) -> Result<bool, HomeError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            let retained = self
+                .file
+                .metadata()
+                .map_err(|error| HomeError::io(&self.path, error))?;
+            let candidate = other
+                .metadata()
+                .map_err(|error| HomeError::io(&self.path, error))?;
+            Ok(retained.dev() == candidate.dev() && retained.ino() == candidate.ino())
+        }
+        #[cfg(windows)]
+        {
+            let retained = colossus_windows_native::FileIdentity::of(&self.file)
+                .map_err(|_| HomeError::UnsafeConfinedPath(self.path.clone()))?;
+            let candidate = colossus_windows_native::FileIdentity::of(other)
+                .map_err(|_| HomeError::UnsafeConfinedPath(self.path.clone()))?;
+            Ok(retained == candidate)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = other;
+            Err(HomeError::UnsafeConfinedPath(self.path.clone()))
+        }
+    }
+
     /// Prove this private file is still named by its original confined leaf.
     ///
     /// Unlike path preparation, a missing leaf is an error. Both the retained file

@@ -4,9 +4,10 @@ import { join, relative, resolve } from "node:path";
 const desktop = resolve(process.argv[2] ?? "apps/desktop");
 const dist = join(desktop, "dist");
 const maximumJavaScriptChunkBytes = 700_000;
-// Regular dictation adds its native controls, meter, and lazy Settings page (~27 KB).
-// Keep a bounded 50 KB allowance; model weights remain outside the renderer.
-const maximumRendererBytes = 4_050_000;
+// Regular dictation includes a bounded 50 KB allowance; weights stay native.
+// Desktop's shared shadcn thread menu adds ~81 KB of Radix menu/focus/positioning
+// code in a lazy chunk. Allow 100 KB total growth while retaining the chunk limit.
+const maximumRendererBytes = 4_150_000;
 const forbiddenFixtureStrings = [
   "Offline dictation preview",
   "fixture-run-desktop-release",

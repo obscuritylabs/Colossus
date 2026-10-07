@@ -14,7 +14,11 @@ use zeroize::Zeroizing;
 /// Kubernetes/systemd should inject the key from their secret authority.
 pub struct EnvironmentKeyStore {
     root: ConfinedRoot,
-    variable: String,
+    authority: WrappingAuthority,
+}
+enum WrappingAuthority {
+    Environment(String),
+    Native(crypto::MasterKey),
 }
 impl EnvironmentKeyStore {
     /// Bind an explicit key reference and protected root; creation happens on write.
@@ -27,12 +31,29 @@ impl EnvironmentKeyStore {
         {
             return Err(CredentialError::InvalidInput);
         }
-        Ok(Self { root, variable })
+        Ok(Self {
+            root,
+            authority: WrappingAuthority::Environment(variable),
+        })
+    }
+    /// Bind an explicit trusted-native zeroizing key without reading process
+    /// environment or selecting another authority on failure. Development custody
+    /// uses this same sealed format after confined native-only key-file validation.
+    pub fn with_wrapping_key(root: ConfinedRoot, key: Zeroizing<[u8; 32]>) -> Self {
+        Self {
+            root,
+            authority: WrappingAuthority::Native(key),
+        }
     }
     fn key(&self) -> Result<crypto::MasterKey, CredentialError> {
-        let value = Zeroizing::new(
-            std::env::var(&self.variable).map_err(|_| CredentialError::Unavailable)?,
-        );
+        let WrappingAuthority::Environment(variable) = &self.authority else {
+            let WrappingAuthority::Native(key) = &self.authority else {
+                unreachable!()
+            };
+            return Ok(Zeroizing::new(**key));
+        };
+        let value =
+            Zeroizing::new(std::env::var(variable).map_err(|_| CredentialError::Unavailable)?);
         let mut key = Zeroizing::new([0u8; 32]);
         hex::decode_to_slice(value.trim(), key.as_mut()).map_err(|_| CredentialError::Corrupt)?;
         Ok(key)

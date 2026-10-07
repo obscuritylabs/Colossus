@@ -325,3 +325,16 @@ fn decode_anchor(value: &Value) -> Result<SecureAnchor, StoreError> {
         status,
     })
 }
+
+/// Decode the canonical current or legacy protected anchor without changing its
+/// sequence, hash, verification profile or status during explicit custody rewrap.
+pub fn decode_secure_anchor(bytes: &[u8]) -> Result<SecureAnchor, StoreError> {
+    if bytes.len() > 8192 {
+        return Err(StoreError::Verification(
+            "secure anchor exceeds bound".into(),
+        ));
+    }
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|_| StoreError::Verification("secure anchor is invalid".into()))?;
+    decode_anchor(&value)
+}

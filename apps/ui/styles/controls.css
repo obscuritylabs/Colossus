@@ -104,3 +104,41 @@
 .ui-button--large {
   min-height: var(--control-height);
 }
+
+.ui-radio-group--compact {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.ui-radio-group--compact > .ui-radio-option--compact {
+  max-width: 100%;
+  min-height: var(--control-height-compact);
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 4px 6px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--font-size-body-sm);
+  font-weight: 400;
+  line-height: var(--line-height-body);
+  text-align: left;
+  white-space: normal;
+}
+.ui-radio-group--compact > .ui-radio-option--compact:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--surface-hover);
+}
+.ui-radio-option--compact > svg {
+  flex: none;
+  margin-top: 1px;
+}
+.ui-radio-option--compact[aria-checked="true"] > svg {
+  color: var(--blue);
+}
+.ui-radio-option--compact > span {
+  min-width: 0;
+}

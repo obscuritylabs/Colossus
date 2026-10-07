@@ -32,6 +32,19 @@ pub(crate) struct ProfileSnapshot {
     #[serde(flatten)]
     catalog: Profiles,
     connections: Vec<cloud_connector::CloudStatus>,
+    connection_status_unavailable: bool,
+}
+
+fn snapshot(
+    catalog: Profiles,
+    connections: Result<Vec<cloud_connector::CloudStatus>, CommandErrorDto>,
+) -> ProfileSnapshot {
+    let connection_status_unavailable = connections.is_err();
+    ProfileSnapshot {
+        catalog,
+        connections: connections.unwrap_or_default(),
+        connection_status_unavailable,
+    }
 }
 
 fn failure() -> CommandErrorDto {
@@ -154,10 +167,10 @@ pub(crate) async fn control_plane_profiles(
     let catalog = tauri::async_runtime::spawn_blocking(|| access(None))
         .await
         .map_err(|_| failure())??;
-    Ok(ProfileSnapshot {
+    Ok(snapshot(
         catalog,
-        connections: cloud_connector::global_connections(&state).await,
-    })
+        cloud_connector::global_connections(&state).await,
+    ))
 }
 
 #[tauri::command]
@@ -168,10 +181,10 @@ pub(crate) async fn save_control_plane_profiles(
     let catalog = tauri::async_runtime::spawn_blocking(move || access(Some(catalog)))
         .await
         .map_err(|_| failure())??;
-    Ok(ProfileSnapshot {
+    Ok(snapshot(
         catalog,
-        connections: cloud_connector::global_connections(&state).await,
-    })
+        cloud_connector::global_connections(&state).await,
+    ))
 }
 
 #[cfg(test)]

@@ -6,26 +6,33 @@ use crate::{
 use colossus_connector::{ConnectionConfig, ConnectorStatus, EnrollmentStore, RuntimeConnector};
 use colossus_sdk::AgentRunClient;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tokio::sync::watch;
 use zeroize::Zeroizing;
+
+mod status_cache;
 
 pub(crate) struct CloudSession {
     config: ConnectionConfig,
     status: watch::Receiver<ConnectorStatus>,
     shutdown: watch::Sender<bool>,
     task: tauri::async_runtime::JoinHandle<()>,
+    alive: Arc<AtomicBool>,
 }
 impl Drop for CloudSession {
     fn drop(&mut self) {
+        self.alive.store(false, Ordering::Release);
         let _ = self.shutdown.send(true);
         self.task.abort();
     }
 }
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct CloudStatus {
     target_id: String,
     status: ConnectorStatus,
@@ -81,20 +88,66 @@ fn dto(target: String, config: Option<&ConnectionConfig>, status: ConnectorStatu
             }),
     }
 }
-pub(crate) async fn global_connections(state: &AppState) -> Vec<CloudStatus> {
+async fn cache_status(status: CloudStatus) -> Result<CloudStatus, CommandErrorDto> {
+    let summary = status.clone();
+    let retained = tauri::async_runtime::spawn_blocking(move || {
+        if summary.node_id.is_some() {
+            status_cache::remember(summary)
+        } else {
+            status_cache::forget(summary.target_id)
+        }
+    })
+    .await;
+    if !matches!(retained, Ok(Ok(()))) {
+        // Presentation metadata cannot prevent or reinterpret an authorized lifecycle action.
+        eprintln!("Control Plane connection summary could not be retained.");
+    }
+    Ok(status)
+}
+
+async fn disconnected_status(
+    target: &str,
+    config: Option<&ConnectionConfig>,
+    removed: Option<ConnectorStatus>,
+) -> ConnectorStatus {
+    let Some(config) = config else {
+        return ConnectorStatus::Disconnected;
+    };
+    if config.revoked || removed == Some(ConnectorStatus::Revoked) {
+        return ConnectorStatus::Revoked;
+    }
+    let target = target.to_owned();
+    let node = config.node_id.clone();
+    // A read/disconnect does not undo a terminal remote observation. This cache
+    // affects presentation only; reconnect still checks the native enrollment.
+    tauri::async_runtime::spawn_blocking(move || {
+        status_cache::retained_disconnected_status(&target, &node)
+    })
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .unwrap_or(ConnectorStatus::Disconnected)
+}
+pub(crate) async fn global_connections(
+    state: &AppState,
+) -> Result<Vec<CloudStatus>, CommandErrorDto> {
+    let mut summaries = tauri::async_runtime::spawn_blocking(status_cache::load)
+        .await
+        .map_err(|_| failure("Connection summaries are unavailable."))??;
     let sessions = state.cloud_connections.lock().await;
-    let mut connections = sessions
-        .iter()
-        .map(|(target, session)| {
+    for (target, session) in sessions.iter() {
+        summaries.insert(
+            target.clone(),
             dto(
                 target.clone(),
                 Some(&session.config),
                 *session.status.borrow(),
-            )
-        })
-        .collect::<Vec<_>>();
+            ),
+        );
+    }
+    let mut connections = summaries.into_values().collect::<Vec<_>>();
     connections.sort_by(|left, right| left.target_id.cmp(&right.target_id));
-    connections
+    Ok(connections)
 }
 async fn confirm(app: &AppHandle, message: String) -> Result<(), CommandErrorDto> {
     confirm_action(
@@ -173,21 +226,48 @@ async fn start(
     if connections.len() >= 16 {
         return Err(failure("Desktop Control Plane connection limit reached."));
     }
+    drop(connections);
+    // Invalidate the previous session before saving a replacement summary. Its
+    // terminal callback must never overwrite this enrollment or resurrect forget.
+    cache_status(dto(
+        target.clone(),
+        Some(&config),
+        ConnectorStatus::Disconnected,
+    ))
+    .await?;
+    let alive = Arc::new(AtomicBool::new(true));
+    let terminal_alive = Arc::clone(&alive);
+    let terminal_target = target.clone();
+    let terminal_node = config.node_id.clone();
     let task = tauri::async_runtime::spawn(async move {
-        if connector.run(receiver, status.clone()).await.is_err()
-            && *status.borrow() != ConnectorStatus::Revoked
-        {
+        let failed = connector.run(receiver, status.clone()).await.is_err();
+        let revoked = *status.borrow() == ConnectorStatus::Revoked;
+        if failed && !revoked {
             status.send_replace(ConnectorStatus::Disconnected);
+        }
+        if revoked {
+            let saved = tauri::async_runtime::spawn_blocking(move || {
+                status_cache::remember_remote_revocation(
+                    terminal_target,
+                    terminal_node,
+                    terminal_alive,
+                )
+            })
+            .await;
+            if !matches!(saved, Ok(Ok(()))) {
+                eprintln!("Control Plane revocation summary could not be retained.");
+            }
         }
     });
     let result = dto(target.clone(), Some(&config), ConnectorStatus::Connecting);
-    connections.insert(
+    state.cloud_connections.lock().await.insert(
         target,
         CloudSession {
             config,
             status: updates,
             shutdown,
             task,
+            alive,
         },
     );
     Ok(result)
@@ -315,15 +395,8 @@ pub(crate) async fn cloud_status(
         .map_err(|_| failure("Enrollment vault unavailable."))?
         .map_err(failure)?
         .map(|(config, _)| config);
-    Ok(dto(
-        target_id,
-        config.as_ref(),
-        if config.as_ref().is_some_and(|config| config.revoked) {
-            ConnectorStatus::Revoked
-        } else {
-            ConnectorStatus::Disconnected
-        },
-    ))
+    let status = disconnected_status(&target_id, config.as_ref(), None).await;
+    cache_status(dto(target_id, config.as_ref(), status)).await
 }
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn cloud_set_workspace_sharing(
@@ -395,7 +468,7 @@ pub(crate) async fn cloud_set_workspace_sharing(
             .ok_or_else(|| failure("Dedicated cloud grant unavailable."))?;
         start(&state, target_id, config, key, runs).await
     } else {
-        Ok(dto(target_id, Some(&config), ConnectorStatus::Disconnected))
+        cache_status(dto(target_id, Some(&config), ConnectorStatus::Disconnected)).await
     }
 }
 #[tauri::command(rename_all = "camelCase")]
@@ -438,7 +511,7 @@ pub(crate) async fn cloud_revoke(
         .map_err(|_| failure("Enrollment vault unavailable."))?
         .map_err(failure)?
         .map(|(config, _)| config);
-    Ok(dto(target_id, config.as_ref(), ConnectorStatus::Revoked))
+    cache_status(dto(target_id, config.as_ref(), ConnectorStatus::Revoked)).await
 }
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn cloud_disconnect(
@@ -447,6 +520,7 @@ pub(crate) async fn cloud_disconnect(
 ) -> Result<CloudStatus, CommandErrorDto> {
     let _operation = state.cloud_operation.lock().await;
     let session = state.cloud_connections.lock().await.remove(&target_id);
+    let removed_status = session.as_ref().map(|session| *session.status.borrow());
     drop(session);
     let enrollment = store(&state, &target_id)?;
     let config = tokio::task::spawn_blocking(move || enrollment.load())
@@ -454,12 +528,8 @@ pub(crate) async fn cloud_disconnect(
         .map_err(|_| failure("Enrollment vault unavailable."))?
         .map_err(failure)?
         .map(|(config, _)| config);
-    let status = if config.as_ref().is_some_and(|config| config.revoked) {
-        ConnectorStatus::Revoked
-    } else {
-        ConnectorStatus::Disconnected
-    };
-    Ok(dto(target_id, config.as_ref(), status))
+    let status = disconnected_status(&target_id, config.as_ref(), removed_status).await;
+    cache_status(dto(target_id, config.as_ref(), status)).await
 }
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn cloud_forget(
@@ -473,5 +543,5 @@ pub(crate) async fn cloud_forget(
         .await
         .map_err(|_| failure("Enrollment vault unavailable."))?
         .map_err(failure)?;
-    Ok(dto(target_id, None, ConnectorStatus::Disconnected))
+    cache_status(dto(target_id, None, ConnectorStatus::Disconnected)).await
 }

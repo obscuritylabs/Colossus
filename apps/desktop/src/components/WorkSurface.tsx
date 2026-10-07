@@ -117,6 +117,8 @@ interface WorkSurfaceProps {
   onOpenGenericTerminal?: () => void;
   title: string;
   view: RunView | undefined;
+  forkDraft?: boolean;
+  inheritedViews?: readonly RunView[];
   conversationViews: readonly RunView[];
   connection: ConnectionStatus;
   connecting: boolean;
@@ -197,6 +199,8 @@ export function WorkSurface({
   onInspectSchedule,
   gitWorkspaceId = null,
   gitAvailable = false,
+  forkDraft = false,
+  inheritedViews = [],
   title,
   view,
   conversationViews,
@@ -1068,7 +1072,9 @@ export function WorkSurface({
           <p className="surface-breadcrumb">
             <span>Work</span>
             <span aria-hidden="true">/</span>
-            <span>{status?.label ?? "New work"}</span>
+            <span>
+              {forkDraft ? "Fork draft" : (status?.label ?? "New work")}
+            </span>
             {!composerVisible ? gitControl : null}
           </p>
           <h2>{title}</h2>
@@ -1279,6 +1285,15 @@ export function WorkSurface({
                     </button>
                   </div>
                 </section>
+              ) : forkDraft ? (
+                <div className="conversation-timeline" id="work-activity">
+                  {conversationViews.map((contextView) => (
+                    <RunTimeline
+                      key={contextView.run.runId}
+                      view={contextView}
+                    />
+                  ))}
+                </div>
               ) : view === undefined ? (
                 <WorkWelcome onSuggestion={onSuggestion} />
               ) : sessionWorkspaceView === "topology" ? (
@@ -1333,6 +1348,12 @@ export function WorkSurface({
               ) : (
                 <>
                   <div className="conversation-timeline" id="work-activity">
+                    {inheritedViews.map((contextView) => (
+                      <RunTimeline
+                        key={`inherited-${contextView.run.runId}`}
+                        view={contextView}
+                      />
+                    ))}
                     {conversationViews.map((conversationView) => (
                       <div
                         data-aside-context="true"

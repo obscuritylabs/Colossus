@@ -1814,7 +1814,12 @@ async fn spawn_verified_sidecar(
 )> {
     use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
-    let credential_session = crate::linux_credential_session::verified_address().await?;
+    let development_selector = crate::development_selector::selector()?;
+    let credential_session = if development_selector.is_none() {
+        Some(crate::linux_credential_session::verified_address().await?)
+    } else {
+        None
+    };
     // The manifest-matching bytes live in a sealed anonymous file. Clearing only
     // FD_CLOEXEC lets the child resolve this exact kernel object through procfs;
     // replacement of the bundle path is therefore irrelevant to execution.
@@ -1825,12 +1830,17 @@ async fn spawn_verified_sidecar(
     command
         .arg("__managed-sidecar-v1")
         .env_clear()
-        .env("DBUS_SESSION_BUS_ADDRESS", credential_session)
         .current_dir(canonical_instance)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
+    if let Some(address) = credential_session {
+        command.env("DBUS_SESSION_BUS_ADDRESS", address);
+    }
+    if let Some(path) = development_selector {
+        command.env(crate::development_selector::VARIABLE, path);
+    }
     let (mut child, process_tree) = spawn_managed_child(&mut command)?;
     let guardian = child.stdin.take().ok_or_else(|| {
         let _ = child.start_kill();

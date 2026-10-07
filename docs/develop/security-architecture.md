@@ -450,6 +450,51 @@ existing IDs or sign in to MCP OAuth again. Old OS entries are left untouched.
 Automatic master-key rotation, portable export, and backup recovery are outside
 this version. Copying a database alone does not produce a portable credential vault.
 
+### Development credential authority
+
+The optional debug-only development authority is bound to the exact canonical
+`COLOSSUS_HOME/development-credentials` directory, outside the workspace. Its
+owner-private, single-link wrapping-key file protects the existing encrypted envelopes
+and vault records with the same authenticated encryption as the headless key store.
+Unix key mode must remain `0600`. This is explicit filesystem custody, with less
+same-user application isolation than an OS-protected store. Production composition
+continues to use the platform store and release builds reject the selector.
+
+Preparation creates an inactive marker. Metadata-only planning never opens a wrapping
+key or OS credential. Explicit offline apply binds the reviewed source fingerprints
+and selectors, holds source leases that exclude writers, copies and verifies only selected
+material, then atomically commits activation. Whole-vault rewrap preserves its original
+vault/key/owner identities; named enrollment copy decrypts only the selected record and
+creates an independent destination vault. Both retain the original platform entries
+and source ciphertext. Neither rotates an application bearer, expands a grant or
+re-enrolls a runtime. Incomplete, missing or mismatched sources fail without activation;
+runtime use has no platform fallback or regeneration.
+
+Vault planning and apply open the original database read-only and revalidate its
+confined identity and ciphertext hash. If redb requires allocator recovery, they recover
+only an encrypted in-memory snapshot, bounded to 64 MiB with bounded storage growth.
+No source lock file is created, no original database repair is performed, and no sibling
+record is decrypted during named copy. Corrupt, oversized, busy or owner-mismatched
+sources fail closed. Destination writes use the ordinary encrypted vault transaction.
+
+Native composition alone reads the wrapping key. Build processes receive no raw key;
+the renderer receives no selector or credential. The verified managed sidecar may
+inherit only the nonsecret authority path so its runtime can validate custody before
+storage acquisition. Ordinary tools strip or reject reserved authority/key variables.
+Supported isolated runtimes deny filesystem and search access to the authority root,
+including linked aliases. Startup rejects `danger_full_access`, external/broker and
+unsupported sandbox backends, and broker fallback, before storage-key or runtime
+acquisition. Approval modes do not rewrite that sandbox boundary or its grants.
+The protected process adapter separately rejects ambient resource authority and sandbox
+downgrade permits before launching a helper. These controls do not protect against
+compromised native code, arbitrary same-user applications or the OS.
+
+The SDK's platform-keyring provider permits one outstanding native read per provider.
+The guard stays with the blocking OS call after async timeout or cancellation, preventing
+repeated calls from opening concurrent consent dialogs. Subsequent completed reads are
+fresh; the SDK does not cache application bearers or relax authentication. See
+[isolated development setup](setup-testing.md#use-isolated-development-credential-custody).
+
 Codex/ChatGPT authentication is also operator-only. `colossus codex login` delegates the
 OAuth ceremony to the official Codex CLI and forces its supported file credential store;
 Colossus never handles the authorization code. The `open_ai_codex` adapter accepts only

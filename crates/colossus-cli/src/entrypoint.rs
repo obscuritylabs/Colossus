@@ -69,6 +69,17 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         Err(error) => error.exit(),
     };
     set_output_mode(cli.output);
+    if let Command::DevelopmentCredentials(command) = &cli.command {
+        if cli.worker_required
+            || cli.desktop_worker_auth
+            || cli.approval_mode.is_some()
+            || cli.config.is_some()
+        {
+            return Err("development credential operations are offline and do not accept runtime/authentication flags".into());
+        }
+        return dev_credentials::run(command, &cli.workspace)
+            .map_err(|error| Box::new(error) as Box<dyn Error>);
+    }
     if let Command::Cloud(command) = cli.command {
         return colossus_connector::run_cli(command).await;
     }
@@ -426,6 +437,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             acp_approvals.as_ref().ok_or("ACP approval bridge is unavailable")?.clone(),
         ).await?,
         Command::Cloud(_) => unreachable!("handled before runtime construction"),
+        Command::DevelopmentCredentials(_) => unreachable!("handled before runtime construction"),
         Command::Update(_) => unreachable!("handled before runtime construction"),
         Command::Config(ConfigCommand {
             command: ConfigAction::Effective,

@@ -305,6 +305,7 @@ async fn local_password_sessions_are_revoked_across_replicas_and_disabled_users_
 #[tokio::test]
 async fn local_password_inputs_and_shared_attempt_budgets_are_bounded() {
     let (auth, server) = fixture_local().await;
+    let now = crate::http::now();
     assert!(
         auth.password_hash(Zeroizing::new("界".repeat(5)))
             .await
@@ -317,10 +318,11 @@ async fn local_password_inputs_and_shared_attempt_budgets_are_bounded() {
     );
     for _ in 0..8 {
         assert_eq!(
-            auth.local_login(
+            auth.local_login_at(
                 &csrf(),
                 "rate-limited".into(),
-                Zeroizing::new("incorrect password".into())
+                Zeroizing::new("incorrect password".into()),
+                now,
             )
             .await
             .unwrap_err(),
@@ -332,14 +334,27 @@ async fn local_password_inputs_and_shared_attempt_budgets_are_bounded() {
         .unwrap();
     assert_eq!(
         replica
-            .local_login(
+            .local_login_at(
                 &csrf(),
                 "rate-limited".into(),
-                Zeroizing::new("incorrect password".into())
+                Zeroizing::new("incorrect password".into()),
+                now,
             )
             .await
             .unwrap_err(),
         CloudError::ResourceExhausted
+    );
+    assert_eq!(
+        replica
+            .local_login_at(
+                &csrf(),
+                "rate-limited".into(),
+                Zeroizing::new("incorrect password".into()),
+                now + 60,
+            )
+            .await
+            .unwrap_err(),
+        CloudError::PermissionDenied
     );
     server.abort();
 }

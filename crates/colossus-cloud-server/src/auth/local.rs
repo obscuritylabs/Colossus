@@ -35,6 +35,16 @@ impl Authentication {
         username: String,
         password: Zeroizing<String>,
     ) -> CloudResult<HeaderValue> {
+        self.local_login_at(headers, username, password, crate::http::now())
+            .await
+    }
+    pub(super) async fn local_login_at(
+        &self,
+        headers: &HeaderMap,
+        username: String,
+        password: Zeroizing<String>,
+        budget_at: u64,
+    ) -> CloudResult<HeaderValue> {
         self.csrf(headers)?;
         let config = self
             .config
@@ -45,7 +55,7 @@ impl Authentication {
             return Err(CloudError::PermissionDenied);
         }
         let username = normalize_username(&username).map_err(|_| CloudError::PermissionDenied)?;
-        self.login_budget(&username).await?;
+        self.login_budget(&username, budget_at).await?;
         let record = self
             .store
             .read(&identity_key(
@@ -117,20 +127,22 @@ impl Authentication {
             .await?;
         self.set_cookie("colossus_session", &session, seconds)
     }
-    async fn login_budget(&self, username: &str) -> CloudResult<()> {
-        let now = crate::http::now();
+    async fn login_budget(&self, username: &str, now: u64) -> CloudResult<()> {
         let bucket = (now / 60).to_string();
         // Shared database counters survive replicas; neither remote IP nor proxy headers are trusted.
         for (name, limit) in [
             (hash_identity(&["local-login-global", &bucket]), 120u64),
             (hash_identity(&["local-login", username, &bucket]), 8u64),
         ] {
-            self.consume_auth_budget(&name, limit).await?;
+            self.consume_auth_budget_at(&name, limit, now).await?;
         }
         Ok(())
     }
     pub(super) async fn consume_auth_budget(&self, name: &str, limit: u64) -> CloudResult<()> {
-        let now = crate::http::now();
+        self.consume_auth_budget_at(name, limit, crate::http::now())
+            .await
+    }
+    async fn consume_auth_budget_at(&self, name: &str, limit: u64, now: u64) -> CloudResult<()> {
         let key = flow_key(name);
         for attempt in 0..8 {
             let (revision, count) = match self.store.read(&key).await {

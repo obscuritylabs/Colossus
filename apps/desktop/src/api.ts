@@ -345,6 +345,7 @@ import type {
   ConfigureManagedRuntimeRequest,
   CodexAuthStatus,
   ConnectionStatus,
+  ControlPlaneProfiles,
   CreateRunRequest,
   DesktopStatus,
   DesktopReleaseChannel,
@@ -495,6 +496,11 @@ export function installDesktopUpdate(): Promise<boolean> {
 
 export function desktopStatus(): Promise<DesktopStatus> {
   return call("desktop_status");
+}
+
+/** Cached public status and saved bookmarks; does not read the enrollment vault. */
+export function controlPlaneProfiles(): Promise<ControlPlaneProfiles> {
+  return call("control_plane_profiles");
 }
 
 export function codexAuthStatus(): Promise<CodexAuthStatus> {

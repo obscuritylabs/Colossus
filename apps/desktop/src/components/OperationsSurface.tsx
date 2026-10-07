@@ -28,6 +28,7 @@ import type {
 import type { AgentParticipant } from "./AgentFlow";
 import { AgentFlow } from "./AgentFlow";
 import { ManagedSettingsPane } from "./ManagedSettingsPane";
+import { ControlPlaneConnections } from "./ControlPlaneConnections";
 import { PluginsSurface } from "./PluginsSurface";
 import { WorkflowsSurface } from "./WorkflowsSurface";
 import { SchedulesSurface } from "./SchedulesSurface";
@@ -37,7 +38,17 @@ interface OperationsSurfaceProps {
   scheduleInspection?:
     { scheduleId: string; showRun: boolean } | null | undefined;
   initialSettingsTab?:
-    "runtime" | "providers" | "plugins" | "terminal" | "dictation" | undefined;
+    | "runtime"
+    | "providers"
+    | "plugins"
+    | "terminal"
+    | "dictation"
+    | "cloud"
+    | "control-plane"
+    | undefined;
+  initialSettingsSpaceId?: string | undefined;
+  onManageControlPlaneWorkspace: (spaceId: string) => void;
+  onManageControlPlaneProfiles: () => void;
   onConfigurePluginConnection?: () => void;
   pluginSelections?: readonly string[];
   onUsePluginSkill?: (id: string) => void;
@@ -372,6 +383,8 @@ function ConnectionsView({
   onSelectTarget,
   onAddExternalTarget,
   onRemoveExternalTarget,
+  onManageControlPlaneWorkspace,
+  onManageControlPlaneProfiles,
 }: Pick<
   OperationsSurfaceProps,
   | "desktop"
@@ -379,6 +392,8 @@ function ConnectionsView({
   | "onSelectTarget"
   | "onAddExternalTarget"
   | "onRemoveExternalTarget"
+  | "onManageControlPlaneWorkspace"
+  | "onManageControlPlaneProfiles"
 >) {
   const externalTargets = desktop.targets.filter(
     (target) => target.kind === "external_daemon",
@@ -428,6 +443,12 @@ function ConnectionsView({
               ))}
           </div>
         </section>
+        <ControlPlaneConnections
+          spaces={desktop.spaces}
+          disabled={connecting}
+          onManageWorkspace={onManageControlPlaneWorkspace}
+          onManageProfiles={onManageControlPlaneProfiles}
+        />
         <section className="overview-section">
           <div className="section-heading">
             <div>
@@ -525,6 +546,7 @@ function effectiveManagedConfiguration(desktop: DesktopStatus): string {
 
 function SettingsView({
   initialSettingsTab,
+  initialSettingsSpaceId,
   onReturnToWork,
   connection,
   desktop,
@@ -550,6 +572,7 @@ function SettingsView({
 }: Pick<
   OperationsSurfaceProps,
   | "initialSettingsTab"
+  | "initialSettingsSpaceId"
   | "onReturnToWork"
   | "connection"
   | "desktop"
@@ -600,6 +623,7 @@ function SettingsView({
       <div className="overview-scroll settings-scroll" tabIndex={0}>
         <ManagedSettingsPane
           initialSpaceTab={initialSettingsTab}
+          initialSpaceId={initialSettingsSpaceId}
           onReturnToWork={onReturnToWork}
           desktop={desktop}
           connecting={connecting}
@@ -1067,6 +1091,7 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
       {props.surface === "settings" ? (
         <SettingsView
           initialSettingsTab={props.initialSettingsTab}
+          initialSettingsSpaceId={props.initialSettingsSpaceId}
           onReturnToWork={props.onReturnToWork}
           connection={props.connection}
           desktop={props.desktop}

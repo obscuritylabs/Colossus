@@ -49,12 +49,16 @@ struct EnrolledNode {
     instance_id: String,
 }
 impl EnrollmentStore {
+    /// Exact native encrypted record selector for an explicitly reviewed named
+    /// enrollment copy. This does not load a vault or create/rotate any grant.
+    pub fn credential_key(id: &str) -> Result<CredentialKey, &'static str> {
+        CredentialKey::new("cloud-connector", id).map_err(|_| "invalid enrollment identity")
+    }
     /// Bind an opaque enrollment record under the caller's protected native vault.
     pub fn new(vault: Arc<dyn CredentialVault>, id: &str) -> Result<Self, &'static str> {
         Ok(Self {
             vault,
-            key: CredentialKey::new("cloud-connector", id)
-                .map_err(|_| "invalid enrollment identity")?,
+            key: Self::credential_key(id)?,
         })
     }
     /// Generate the key locally and persist the pending exchange before contacting

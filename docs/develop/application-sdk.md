@@ -267,7 +267,12 @@ clearing the child's environment. The SDK accepts one filesystem or abstract Uni
 socket and verifies the bus peer's OS user before launch; it rejects remote transports,
 autolaunch, aliases, and ambiguous addresses. Without an explicit session locator it
 uses `/run/user/<uid>/bus`. This locator carries no secret. The native Secret Service
-remains required; missing session authority fails startup without a credential fallback.
+remains required by default; missing session authority fails startup without a credential
+fallback. The explicit debug-only
+[development credential authority](security-architecture.md#development-credential-authority)
+instead forwards one validated nonsecret path to the verified child and uses its
+encrypted file custody. It does not require a Secret Service session, discover an
+alternative backend or change application grants. Release builds reject this opt-in.
 
 The selected macOS workspace is also persistent object authority rather than a saved
 path. Desktop hashes the device, inode, and birth timestamp obtained from a securely

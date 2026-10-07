@@ -1,7 +1,11 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
-async function openRouting(page: Page, unconfiguredModel = false) {
+async function openRouting(
+  page: Page,
+  unconfiguredModel = false,
+  section: "Providers" | "Models" | "Routing" = "Routing",
+) {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/?fixture=operations-studio");
   await page.evaluate(async (unconfiguredModel) => {
@@ -136,7 +140,7 @@ async function openRouting(page: Page, unconfiguredModel = false) {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page
     .getByRole("navigation", { name: "Settings sections" })
-    .getByRole("button", { name: "Providers", exact: true })
+    .getByRole("button", { name: section, exact: true })
     .click();
   return page.getByRole("region", { name: "Role routing" });
 }
@@ -144,7 +148,7 @@ async function openRouting(page: Page, unconfiguredModel = false) {
 test("provider and model tests stay in their rows through progress, failure, and retry", async ({
   page,
 }, testInfo) => {
-  await openRouting(page);
+  await openRouting(page, false, "Providers");
   const provider = page.getByRole("group", {
     name: "Provider company",
     exact: true,
@@ -157,12 +161,10 @@ test("provider and model tests stay in their rows through progress, failure, and
   await expect(
     provider.getByRole("button", { name: "Test provider company" }),
   ).toBeEnabled();
-  await expect(
-    general.getByRole("button", { name: "Test model general" }),
-  ).toBeEnabled();
-  await expect(
-    fast.getByRole("button", { name: "Test model fast" }),
-  ).toBeEnabled();
+  await expect(general).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Role routing" })).toHaveCount(
+    0,
+  );
   await expect(page.locator(".managed-diagnostic-actions")).toHaveCount(0);
   await provider.getByRole("button", { name: "Test provider company" }).click();
   await expect(provider.getByRole("status")).toHaveText("Testing company…");
@@ -172,21 +174,37 @@ test("provider and model tests stay in their rows through progress, failure, and
   await expect(
     provider.getByText("Test passed", { exact: true }),
   ).toBeVisible();
-  await expect(general.getByText("Test passed", { exact: true })).toHaveCount(
-    0,
-  );
   await provider.getByText("Test details", { exact: true }).click();
   await expect(
     provider.getByText("Endpoint responded successfully."),
   ).toBeVisible();
+  await page
+    .getByRole("navigation", { name: "Settings sections" })
+    .getByRole("button", { name: "Models", exact: true })
+    .click();
+  await expect(provider).toHaveCount(0);
+  await expect(
+    general.getByRole("button", { name: "Test model general" }),
+  ).toBeEnabled();
+  await expect(
+    fast.getByRole("button", { name: "Test model fast" }),
+  ).toBeEnabled();
   await general.getByRole("button", { name: "Test model general" }).click();
   await page.evaluate(() => (window as any).rejectProfileTest());
   await expect(general.getByRole("alert")).toContainText(
     "Connection timed out",
   );
+  await page
+    .getByRole("navigation", { name: "Settings sections" })
+    .getByRole("button", { name: "Providers", exact: true })
+    .click();
   await expect(
     provider.getByText("Test passed", { exact: true }),
   ).toBeVisible();
+  await page
+    .getByRole("navigation", { name: "Settings sections" })
+    .getByRole("button", { name: "Models", exact: true })
+    .click();
   await general.getByRole("button", { name: "Test model general" }).click();
   await expect(general.getByRole("alert")).toHaveCount(0);
   await page.evaluate(() => (window as any).finishProfileTest(false));
@@ -209,7 +227,6 @@ test("provider and model tests stay in their rows through progress, failure, and
       request: { spaceId: "fixture-managed-local", profile: "general" },
     })),
   ]);
-  await provider.getByText("Test details", { exact: true }).click();
   await page
     .locator(".settings-main")
     .evaluate((element) => element.scrollTo(0, 0));
@@ -238,7 +255,7 @@ test("provider and model tests stay in their rows through progress, failure, and
 test("newly selected models must be applied before testing", async ({
   page,
 }) => {
-  await openRouting(page, true);
+  await openRouting(page, true, "Models");
   const fast = page.getByRole("group", { name: "Model fast", exact: true });
   await expect(
     fast.getByRole("button", { name: "Test model fast" }),
@@ -277,10 +294,29 @@ test("all seven routes show their purpose and persist optional research assignme
   await expect(
     routing.getByText("Uses general-model · company", { exact: true }),
   ).toHaveCount(7);
-  await planner.click();
+  const map = page.locator(".model-routing-overview");
+  await map.getByText("Routing map", { exact: true }).click();
+  await map
+    .getByRole("button", {
+      name: "role: Research planner. Inherits Primary",
+      exact: true,
+    })
+    .click();
+  await expect(
+    map.getByRole("heading", { name: "Research planner" }),
+  ).toBeVisible();
+  await map
+    .getByRole("combobox", { name: "Research planner assignment", exact: true })
+    .click();
   await page
     .getByRole("option", { name: "fast · fast-model", exact: true })
     .click();
+  await expect(planner).toHaveText("fast · fast-model");
+  await expect(
+    map.locator(".react-flow__node-route").filter({ hasText: "Model" }),
+  ).toHaveCount(2);
+  await expect(map).toContainText("general-model");
+  await expect(map).toContainText("fast-model");
   await page
     .getByRole("button", { name: "Apply Workspace changes", exact: true })
     .click();
@@ -302,6 +338,9 @@ test("all seven routes show their purpose and persist optional research assignme
   await expect(
     routing.getByText("Uses fast-model · company", { exact: true }),
   ).toHaveCount(7);
+  await expect(
+    map.locator(".react-flow__node-route").filter({ hasText: "Model" }),
+  ).toHaveCount(1);
   await planner.click();
   await page.getByRole("option", { name: "Use primary", exact: true }).click();
   await page
@@ -313,7 +352,15 @@ test("all seven routes show their purpose and persist optional research assignme
     )
     .toEqual({ primary: "fast" });
   // Removing primary must expose an explicit choice, not an apparent self-fallback.
+  await page
+    .getByRole("navigation", { name: "Settings sections" })
+    .getByRole("button", { name: "Models", exact: true })
+    .click();
   await page.getByRole("switch", { name: "Select fast", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Settings sections" })
+    .getByRole("button", { name: "Routing", exact: true })
+    .click();
   await expect(
     routing.getByRole("combobox", { name: "Primary model", exact: true }),
   ).toHaveText("Choose a model");
@@ -335,6 +382,15 @@ for (const colorScheme of ["light", "dark"] as const) {
     expect(
       (await new AxeBuilder({ page }).include(".model-role-routing").analyze())
         .violations,
+    ).toEqual([]);
+    const map = page.locator(".model-routing-overview");
+    await map.getByText("Routing map", { exact: true }).click();
+    expect(
+      (
+        await new AxeBuilder({ page })
+          .include(".model-routing-overview")
+          .analyze()
+      ).violations,
     ).toEqual([]);
     await page.setViewportSize({ width: 700, height: 900 });
     await routing

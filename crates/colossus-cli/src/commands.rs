@@ -2,6 +2,9 @@ use super::*;
 
 #[derive(Subcommand)]
 pub(super) enum Command {
+    /// Explicit offline development-only credential preparation and reviewed rewrap.
+    #[command(name = "dev-credentials", hide = !cfg!(debug_assertions))]
+    DevelopmentCredentials(DevelopmentCredentialsCommand),
     /// Enroll and manage an outbound Control Plane connector with its dedicated local grant.
     #[command(name = "control-plane", alias = "cloud")]
     #[command(subcommand)]

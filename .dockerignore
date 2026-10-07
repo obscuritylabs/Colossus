@@ -11,6 +11,8 @@
 .colossus/
 **/.env
 **/.env.*
+**/development-credentials/
+**/.authority-key.env
 **/.aws/
 **/.ssh/
 **/.git-credentials

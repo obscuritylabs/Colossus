@@ -1,7 +1,12 @@
+param([Alias("DevCredentials")][switch] $DevelopmentCredentials)
 $ErrorActionPreference = "Stop"
 $Repository = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Desktop = Join-Path $Repository "apps/desktop"
 $Connection = Join-Path $Desktop "src-tauri/connection.local.json"
+$DevelopmentLauncher = Join-Path $PSScriptRoot "development-launch.mjs"
+if ($DevelopmentCredentials -and [string]::IsNullOrWhiteSpace($env:COLOSSUS_HOME)) {
+    throw "-DevCredentials requires an explicit private COLOSSUS_HOME outside the workspace"
+}
 
 function Test-AbsoluteDevPath {
     param(
@@ -145,7 +150,7 @@ if (Test-Path $Connection) {
 
 Push-Location $Repository
 try {
-    cargo xtask desktop prepare --profile debug
+    node $DevelopmentLauncher -- cargo xtask desktop prepare --profile debug
     if ($LASTEXITCODE -ne 0) {
         throw "desktop managed runtime preparation failed"
     }
@@ -156,11 +161,18 @@ finally {
 
 Push-Location $Desktop
 try {
-    npm ci --ignore-scripts
+    node $DevelopmentLauncher -- npm ci --ignore-scripts
     if ($LASTEXITCODE -ne 0) {
         throw "desktop dependency installation failed"
     }
-    npm run tauri:dev
+    if ($DevelopmentCredentials) {
+        $HostTarget = (& rustc -vV | Select-String '^host: ').ToString().Substring(6)
+        $PreparedCli = Join-Path $Desktop "src-tauri/binaries/colossus-$HostTarget.exe"
+        node $DevelopmentLauncher --authority-home $env:COLOSSUS_HOME --workspace $Repository --cli $PreparedCli -- npm run tauri -- dev -- --locked
+    }
+    else {
+        node $DevelopmentLauncher -- npm run tauri:dev
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "desktop development application failed"
     }

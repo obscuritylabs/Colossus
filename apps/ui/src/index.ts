@@ -1,5 +1,6 @@
 /// <reference path="./assets.d.ts" />
 export { SettingsFrame } from "./components/SettingsFrame.js";
+export { GraphWorkspace } from "./components/GraphWorkspace.js";
 export {
   ComposerInput,
   ComposerModeSwitch,

@@ -7,6 +7,7 @@ import {
   IconCheck,
   IconChevronDown,
   IconFolder,
+  IconGitFork,
   IconLibrary,
   IconLoader2,
   IconDots,
@@ -22,7 +23,7 @@ import {
   IconTopologyStar3,
   IconX,
 } from "@tabler/icons-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   WorkspaceSidebarGroupHeading,
   WorkspaceSidebarHeading,
@@ -55,7 +56,12 @@ import type {
   SpaceSearchResult,
   SpaceSummary,
 } from "../types";
-import { isTerminalStatus } from "../types";
+import { isThreadForkDraft } from "../thread-fork";
+const ThreadActionsMenu = lazy(() =>
+  import("./ThreadActionsMenu").then((module) => ({
+    default: module.ThreadActionsMenu,
+  })),
+);
 import { ObscurityLabsMark } from "./ObscurityLabsMark";
 import type { WorkspaceSurface } from "./ProductRail";
 
@@ -122,6 +128,7 @@ interface WorkSidebarProps {
   onArchiveSpace: (spaceId: string) => void;
   onRestoreSpace: (spaceId: string) => void;
   onArchiveThread: (run: Run) => void;
+  onForkThread?: ((run: Run) => void) | undefined;
   onRenameThread: (run: Run, name: string) => void;
   onToggleThreadPinned: (run: Run) => void;
   onRestoreThread: (result: SpaceSearchResult) => void;
@@ -229,6 +236,7 @@ export function WorkSidebar({
   onArchiveSpace,
   onRestoreSpace,
   onArchiveThread,
+  onForkThread,
   onRenameThread,
   onToggleThreadPinned,
   onRestoreThread,
@@ -984,6 +992,7 @@ export function WorkSidebar({
                           return null;
                         }
                         const pinned = pinnedSessionIds.has(run.sessionId);
+                        const forkDraft = isThreadForkDraft(run);
                         const archiving =
                           threadLifecycleBusySessionId === run.sessionId;
                         const renaming =
@@ -1071,137 +1080,70 @@ export function WorkSidebar({
                                     title={item.title}
                                     metadata={
                                       <>
-                                        {item.modeLabel} · {item.updatedLabel}
+                                        {forkDraft ? "Draft" : item.modeLabel} ·{" "}
+                                        {item.updatedLabel}
                                       </>
                                     }
                                     status={
                                       <span
                                         className={`work-item-state tone-${item.statusTone}`}
-                                        title={item.statusCopy}
+                                        title={
+                                          forkDraft
+                                            ? "Ready for your first message"
+                                            : item.statusCopy
+                                        }
                                       >
-                                        {statusIcon(item.statusTone)}
+                                        {forkDraft ? (
+                                          <IconGitFork
+                                            size={14}
+                                            aria-hidden="true"
+                                          />
+                                        ) : (
+                                          statusIcon(item.statusTone)
+                                        )}
                                         <span className="sr-only">
-                                          {item.statusLabel}
+                                          {forkDraft
+                                            ? "Fork draft"
+                                            : item.statusLabel}
                                         </span>
                                       </span>
                                     }
                                   />
                                 </button>
-                                <details
-                                  className="thread-actions-menu"
-                                  onBlur={(event) => {
-                                    const menu = event.currentTarget;
-                                    const nextFocus = event.relatedTarget;
-                                    if (
-                                      !(nextFocus instanceof Node) ||
-                                      !menu.contains(nextFocus)
-                                    ) {
-                                      menu.removeAttribute("open");
-                                    }
-                                  }}
-                                  onKeyDown={(event) => {
-                                    if (event.key === "Escape") {
-                                      event.preventDefault();
-                                      event.currentTarget.removeAttribute(
-                                        "open",
-                                      );
-                                      event.currentTarget
-                                        .querySelector("summary")
-                                        ?.focus();
-                                    }
-                                  }}
+                                <Suspense
+                                  fallback={
+                                    <button
+                                      type="button"
+                                      className="work-item-action thread-actions-trigger"
+                                      aria-label={`Thread actions for ${item.title}`}
+                                      aria-haspopup="menu"
+                                      aria-expanded="false"
+                                      aria-busy="true"
+                                      disabled
+                                    >
+                                      <IconDots size={17} aria-hidden="true" />
+                                    </button>
+                                  }
                                 >
-                                  <summary
-                                    className="work-item-action"
-                                    role="button"
-                                    aria-haspopup="menu"
-                                    aria-label={`Thread actions for ${item.title}`}
-                                    title="Thread actions"
-                                  >
-                                    <IconDots
-                                      size={17}
-                                      stroke={1.9}
-                                      aria-hidden="true"
-                                    />
-                                  </summary>
-                                  <div
-                                    className="thread-actions-popover"
-                                    aria-label={`Actions for ${item.title}`}
-                                  >
-                                    <button
-                                      type="button"
-                                      aria-label={`Rename ${item.title}`}
-                                      disabled={spaceStartup !== null}
-                                      onClick={(event) => {
-                                        event.currentTarget
-                                          .closest("details")
-                                          ?.removeAttribute("open");
-                                        beginThreadRename(run, item.title);
-                                      }}
-                                    >
-                                      <IconPencil
-                                        size={15}
-                                        stroke={1.8}
-                                        aria-hidden="true"
-                                      />
-                                      Rename
-                                    </button>
-                                    <button
-                                      type="button"
-                                      aria-label={`${pinned ? "Unpin" : "Pin"} ${item.title}`}
-                                      aria-pressed={pinned}
-                                      disabled={spaceStartup !== null}
-                                      onClick={(event) => {
-                                        event.currentTarget
-                                          .closest("details")
-                                          ?.removeAttribute("open");
-                                        onToggleThreadPinned(run);
-                                      }}
-                                    >
-                                      <IconPin
-                                        size={15}
-                                        stroke={1.8}
-                                        fill={pinned ? "currentColor" : "none"}
-                                        aria-hidden="true"
-                                      />
-                                      {pinned ? "Unpin" : "Pin"}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      aria-label={`Archive ${item.title}`}
-                                      title={
-                                        isTerminalStatus(run.status)
-                                          ? "Archive thread"
-                                          : "Finish or cancel this thread before archiving"
-                                      }
-                                      disabled={
-                                        actionsDisabled ||
-                                        archiving ||
-                                        !isTerminalStatus(run.status)
-                                      }
-                                      onClick={(event) => {
-                                        event.currentTarget
-                                          .closest("details")
-                                          ?.removeAttribute("open");
-                                        onArchiveThread(run);
-                                      }}
-                                    >
-                                      {archiving ? (
-                                        <IconLoader2
-                                          className="spin-icon"
-                                          size={15}
-                                        />
-                                      ) : (
-                                        <IconArchive
-                                          size={15}
-                                          stroke={1.8}
-                                          aria-hidden="true"
-                                        />
-                                      )}
-                                      {archiving ? "Archiving…" : "Archive"}
-                                    </button>
-                                  </div>
-                                </details>
+                                  <ThreadActionsMenu
+                                    run={run}
+                                    title={item.title}
+                                    pinned={pinned}
+                                    disabled={actionsDisabled}
+                                    localDisabled={spaceStartup !== null}
+                                    archiving={archiving}
+                                    onRename={() =>
+                                      beginThreadRename(run, item.title)
+                                    }
+                                    onPin={() => onToggleThreadPinned(run)}
+                                    onArchive={() => onArchiveThread(run)}
+                                    onFork={
+                                      onForkThread === undefined
+                                        ? undefined
+                                        : () => onForkThread(run)
+                                    }
+                                  />
+                                </Suspense>
                               </>
                             )}
                           </div>

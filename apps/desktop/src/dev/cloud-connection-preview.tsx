@@ -3,11 +3,16 @@ import {
   ControlPlaneSettingsPane,
   type ControlPlaneProfiles,
 } from "../components/ControlPlaneSettingsPane";
+import { SettingsFrame } from "@colossus/ui";
+import { useState } from "react";
 
 /** Visual fixture only: never replaces a native bridge or proves enrollment. */
 export default function CloudPreview() {
   const host = window as unknown as { __TAURI_INTERNALS__?: unknown };
   const parameters = new URLSearchParams(location.search);
+  const [scope, setScope] = useState<"global" | "space">(
+    parameters.get("pane") === "global" ? "global" : "space",
+  );
   if (
     import.meta.env.DEV &&
     parameters.get("fixture") === "cloud" &&
@@ -21,7 +26,17 @@ export default function CloudPreview() {
       revision: 0,
       profiles: [],
       defaultProfile: null,
-      connections: [],
+      connections: enrolled
+        ? [
+            {
+              targetId: "preview-workspace",
+              status,
+              projectId: "Example project",
+              endpoint: "https://control-plane.example.com",
+              sharedSessions: false,
+            },
+          ]
+        : [],
     };
     const snapshot = () => ({
       targetId: "preview-workspace",
@@ -52,7 +67,7 @@ export default function CloudPreview() {
             catalog = {
               ...arguments_.catalog,
               revision: catalog.revision + 1,
-              connections: [],
+              connections: catalog.connections,
             };
             return catalog;
           case "cloud_status":
@@ -87,20 +102,35 @@ export default function CloudPreview() {
     if (!enrolled) status = "disconnected";
   }
   return (
-    <main style={{ maxWidth: 850, margin: "32px auto", padding: "0 24px" }}>
-      <p
-        style={{
-          color: "var(--muted)",
-          fontSize: "var(--font-size-caption)",
-        }}
-      >
-        Desktop visual preview · Native enrollment is tested separately.
-      </p>
-      {parameters.get("pane") === "global" ? (
-        <ControlPlaneSettingsPane />
-      ) : (
-        <CloudConnectionPane targetId="preview-workspace" />
-      )}
-    </main>
+    <div className="app-shell app-shell--settings">
+      <div className="settings-scroll">
+        <SettingsFrame
+          scope={scope}
+          onScopeChange={setScope}
+          query=""
+          onQueryChange={() => undefined}
+          tabs={[{ id: "control-plane", label: "Control Plane" }]}
+          activeTab="control-plane"
+          onTabChange={() => undefined}
+          workspaceContext={
+            <div className="space-settings-context">
+              <strong>Preview workspace</strong>
+              <small>Sample connection</small>
+            </div>
+          }
+        >
+          <div className="settings-page-context">
+            <p className="muted">
+              Desktop visual preview · Native enrollment is tested separately.
+            </p>
+          </div>
+          {scope === "global" ? (
+            <ControlPlaneSettingsPane />
+          ) : (
+            <CloudConnectionPane targetId="preview-workspace" />
+          )}
+        </SettingsFrame>
+      </div>
+    </div>
   );
 }

@@ -14,6 +14,8 @@ apps/desktop/design-qa-*.jpg
 apps/desktop/research-settings-qa/
 apps/desktop/artifact-audit/
 .env
+**/development-credentials/
+**/.authority-key.env
 .colossus/config.yaml
 .colossus/config.dev.yaml
 .colossus/dev-keys.env

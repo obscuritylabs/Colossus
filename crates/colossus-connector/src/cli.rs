@@ -107,17 +107,32 @@ struct HeadlessAuthority {
 }
 fn store(arguments: &StorageArguments) -> Result<EnrollmentStore, Box<dyn std::error::Error>> {
     let home = ColossusHome::resolve_and_ensure()?;
+    let development =
+        colossus_credentials::DevelopmentAuthority::selected(home.confined_root(), &[])?;
+    if development.is_some() && arguments.vault_key_variable.is_some() {
+        return Err("development authority conflicts with an explicit vault-key variable".into());
+    }
     let root = ConfinedRoot::bind(
         home.confined_root()
             .prepare_directory(std::path::Path::new("cloud-connector"))?,
     )?;
-    let vault: Arc<dyn CredentialVault> = match &arguments.vault_key_variable {
-        Some(variable) => Arc::new(PlatformCredentialVault::with_key_store(
-            root.clone(),
+    let vault: Arc<dyn CredentialVault> = if let Some(authority) = development {
+        Arc::new(PlatformCredentialVault::with_key_store(
+            root,
             "cloud-connector",
-            Arc::new(EnvironmentKeyStore::new(root, variable.clone())?),
-        )?),
-        None => Arc::new(PlatformCredentialVault::new(root, "cloud-connector")?),
+            Arc::new(
+                authority.store(colossus_credentials::DevelopmentStoreScope::ControlPlaneVault)?,
+            ),
+        )?)
+    } else {
+        match &arguments.vault_key_variable {
+            Some(variable) => Arc::new(PlatformCredentialVault::with_key_store(
+                root.clone(),
+                "cloud-connector",
+                Arc::new(EnvironmentKeyStore::new(root, variable.clone())?),
+            )?),
+            None => Arc::new(PlatformCredentialVault::new(root, "cloud-connector")?),
+        }
     };
     Ok(EnrollmentStore::new(vault, &arguments.name)?)
 }
@@ -140,6 +155,13 @@ async fn local(arguments: &LocalArguments) -> Result<Colossus, Box<dyn std::erro
         return Err("local config exceeds bound".into());
     }
     let config: LocalConfig = serde_json::from_slice(&bytes)?;
+    if config.headless_authority.is_some()
+        && std::env::var_os(colossus_credentials::DEVELOPMENT_AUTHORITY_VARIABLE).is_some()
+    {
+        return Err(
+            "development authority conflicts with an explicit headless credential authority".into(),
+        );
+    }
     file.revalidate(&root)?;
     let credential: Arc<dyn colossus_sdk::CredentialProvider> = match config.headless_authority {
         Some(authority) => Arc::new(crate::HeadlessCredentialProvider::new(
@@ -148,10 +170,25 @@ async fn local(arguments: &LocalArguments) -> Result<Colossus, Box<dyn std::erro
             &config.keyring_service,
             &config.keyring_account,
         )?),
-        None => Arc::new(KeyringCredentialProvider::new(
-            config.keyring_service,
-            config.keyring_account,
-        )?),
+        None => {
+            let home = ColossusHome::resolve_and_ensure()?;
+            if let Some(authority) =
+                colossus_credentials::DevelopmentAuthority::selected(home.confined_root(), &[])?
+            {
+                Arc::new(crate::HeadlessCredentialProvider::from_store(
+                    Arc::new(
+                        authority.store(colossus_credentials::DevelopmentStoreScope::PublicApi)?,
+                    ),
+                    &config.keyring_service,
+                    &config.keyring_account,
+                )?)
+            } else {
+                Arc::new(KeyringCredentialProvider::new(
+                    config.keyring_service,
+                    config.keyring_account,
+                )?)
+            }
+        }
     };
     let options = DaemonConnectOptions::new(
         InstanceId::from_str(&config.instance_id)?,

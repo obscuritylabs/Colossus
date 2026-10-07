@@ -119,6 +119,20 @@ fn profiles_revision_cas_is_durable_across_reopen() {
 }
 
 #[test]
+fn unavailable_enrollment_metadata_does_not_reinterpret_a_committed_bookmark_save() {
+    let (_guard, home) = home();
+    let saved = access_with_home(Some(catalog(0, "https://saved.example")), || Ok(home))
+        .expect("bookmark committed");
+    let response =
+        serde_json::to_value(snapshot(saved, Err(failure()))).expect("public command response");
+    assert_eq!(response["revision"], 1);
+    assert_eq!(response["profiles"][0]["endpoint"], "https://saved.example");
+    assert_eq!(response["connectionStatusUnavailable"], true);
+    assert_eq!(response["connections"], serde_json::json!([]));
+    assert!(response.get("connection_status_unavailable").is_none());
+}
+
+#[test]
 fn profiles_concurrent_writers_share_one_revision() {
     let (_guard, home) = home();
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));

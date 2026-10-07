@@ -33,9 +33,9 @@ const LOCK_FILENAME: &str = ".public-api.lock";
 const KEYRING_SERVICE_PREFIX: &str = "dev.obscuritylabs.colossus.public-api";
 const DESKTOP_EXTERNAL_KEYRING_SERVICE: &str = "com.obscuritylabs.colossus.desktop.external";
 const DESKTOP_BOUND_ACCOUNT_REQUEST: &str = "auto";
-const AUTHENTICATION_ROOT_ACCOUNT: &str = "authentication-root-v1";
-const TLS_SEED_ACCOUNT: &str = "tls-seed-v1";
-const INSTANCE_SEED_ACCOUNT: &str = "instance-identity-seed-v1";
+pub(super) const AUTHENTICATION_ROOT_ACCOUNT: &str = "authentication-root-v1";
+pub(super) const TLS_SEED_ACCOUNT: &str = "tls-seed-v1";
+pub(super) const INSTANCE_SEED_ACCOUNT: &str = "instance-identity-seed-v1";
 const INSTANCE_ID_DOMAIN: &[u8] = b"colossus-public-api-instance-id-v1\0";
 
 const KNOWN_SCOPES: [&str; 5] = [
@@ -268,6 +268,21 @@ pub(super) fn credential_store(
     directory: &Path,
     variable: Option<&str>,
 ) -> Result<Box<dyn SecretStore>, PublicApiAdminError> {
+    if std::env::var_os(colossus_credentials::DEVELOPMENT_AUTHORITY_VARIABLE).is_some() {
+        if !cfg!(debug_assertions) || variable.is_some() {
+            return Err(PublicApiAdminError::InvalidDirectory);
+        }
+        let home = colossus_home::ColossusHome::resolve_and_ensure()
+            .map_err(|_| PublicApiAdminError::InvalidDirectory)?;
+        let authority =
+            colossus_credentials::DevelopmentAuthority::selected(home.confined_root(), &[])
+                .map_err(|_| PublicApiAdminError::SecretStoreUnavailable)?
+                .ok_or(PublicApiAdminError::SecretStoreUnavailable)?;
+        let store = authority
+            .store(colossus_credentials::DevelopmentStoreScope::PublicApi)
+            .map_err(|_| PublicApiAdminError::SecretStoreUnavailable)?;
+        return Ok(Box::new(HeadlessSecretStore(store)));
+    }
     match variable {
         None => Ok(Box::new(OsCredentialStore)),
         Some(variable) => {
@@ -1003,7 +1018,7 @@ fn exact_key(value: Zeroizing<Vec<u8>>) -> Result<Zeroizing<[u8; 32]>, PublicApi
     Ok(key)
 }
 
-fn namespace_service(directory: &Path) -> String {
+pub(super) fn namespace_service(directory: &Path) -> String {
     let digest = Sha256::digest(directory.as_os_str().as_encoded_bytes());
     format!("{KEYRING_SERVICE_PREFIX}.{}", lowercase_hex(&digest))
 }

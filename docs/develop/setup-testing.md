@@ -190,6 +190,66 @@ chain but has no payload confidentiality, signed checkpoints, or external rollba
 anchor. Release builds continue to use platform-protected journals and never reuse the
 debug partition.
 
+### Use isolated development credential custody
+
+Unsigned development rebuilds can change their macOS code identity and require renewed
+Keychain consent. The ordinary launchers keep the platform credential store. An explicit
+debug-only alternative stores encrypted credentials under a private, isolated
+`COLOSSUS_HOME`, with its wrapping key in that same private home. This provides less
+protection from other applications running as your OS user than the platform store;
+use it only for a deliberately selected development home outside every workspace.
+Release binaries reject the development selector.
+
+Build the debug CLI with the pinned toolchain first. Stop the selected app, worker and
+connector before preparing custody; the offline commands refuse busy vaults and
+journals. `dev-credentials init --home /absolute/private/home --workspace
+/absolute/workspace` creates an **inactive** authority. `dev-credentials status` with
+the same arguments inspects its public marker without reading a key. Neither command
+migrates platform entries or activates an existing home.
+
+Use `colossus dev-credentials plan --help` to select exact existing sources, then review
+the generated owner-private plan and its SHA-256 before applying it with
+`dev-credentials rewrap --plan-file FILE --expected-plan-sha256 SHA256 --apply`.
+Planning reads only nonsecret metadata. Applying may require one final platform-store
+consent to read the selected original entries, seals and verifies them, and activates
+the authority only after all selected sources pass. Old platform entries remain intact;
+credentials and grants are not reissued. A named connector enrollment can be copied
+from a shared source home into a new isolated home without exporting that source
+vault's master or sibling enrollments. Platform-backed redb journals preserve their
+historical key IDs, checkpoint seed and anchor; environment/headless and PostgreSQL
+journal source migration is not supported by this command and fails explicitly.
+
+Vault inspection and apply retain the original database bytes. An unclean redb vault
+can be inspected through a bounded encrypted snapshot recovered only in memory; the
+original file is not repaired. Vault sources larger than 64 MiB or held by a writer
+are refused. This does not recover a missing platform key or authorize a different
+source selection.
+
+For an empty home, an explicit `plan --fresh-empty` followed by the same reviewed
+rewrap boundary activates fresh development custody. It refuses existing runtime or
+credential state. Never use a fresh-home plan to recover missing keys.
+
+After activation, run the canonical launcher with its explicit opt-in:
+
+```sh
+COLOSSUS_HOME=/absolute/private/home ./scripts/desktop-dev --dev-credentials
+COLOSSUS_HOME=/absolute/private/home COLOSSUS_DEV_CONFIG=/absolute/config.yaml \
+  ./scripts/colossus-dev --dev-credentials tui
+```
+
+On Windows, set the same explicit private `COLOSSUS_HOME` and run
+`./scripts/desktop-dev.ps1 -DevCredentials`. These launchers require Node.js, inspect
+only the authority marker, and pass one nonsecret path selector to trusted native
+composition. They remove raw development/journal key variables from build processes;
+tools cannot inherit the selector or raw wrapping material. The CLI opt-in uses the
+reviewed existing configuration and does not regenerate development journal IDs.
+
+An inactive, malformed, missing, linked, moved or overly permissive wrapping-key file
+fails closed. There is no automatic platform fallback or key regeneration. Restore the
+original private custody from a protected backup or stop and review a new offline plan;
+do not delete a key to make startup succeed. See the
+[credential boundary](security-architecture.md#development-credential-authority).
+
 The pruned release compilation path requires an explicit non-runnable validation
 channel and sentinel:
 
