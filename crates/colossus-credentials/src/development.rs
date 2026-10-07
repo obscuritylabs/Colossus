@@ -463,9 +463,24 @@ fn home_fingerprint(home: &ConfinedRoot) -> Result<String, CredentialError> {
     Ok(hex::encode(Sha256::digest(text.as_bytes())))
 }
 fn validate_workspaces(authority: &Path, workspaces: &[PathBuf]) -> Result<(), CredentialError> {
+    if workspaces.is_empty() {
+        return Ok(());
+    }
+    // Compare the same physical path spelling on both sides. Windows homes may
+    // use ordinary drive paths while canonical workspaces use verbatim prefixes.
+    // Initialization also checks overlap before the authority directory exists.
+    let authority = match std::fs::canonicalize(authority) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = authority.parent().ok_or(CredentialError::InvalidInput)?;
+            let leaf = authority.file_name().ok_or(CredentialError::InvalidInput)?;
+            std::fs::canonicalize(parent).map_err(invalid)?.join(leaf)
+        }
+        Err(error) => return Err(invalid(error)),
+    };
     for workspace in workspaces {
         let canonical = std::fs::canonicalize(workspace).map_err(invalid)?;
-        if authority.starts_with(&canonical) || canonical.starts_with(authority) {
+        if authority.starts_with(&canonical) || canonical.starts_with(&authority) {
             return Err(CredentialError::InvalidInput);
         }
     }

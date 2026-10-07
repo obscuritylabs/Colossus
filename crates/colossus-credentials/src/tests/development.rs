@@ -10,8 +10,10 @@ use std::sync::Arc;
 fn development_authority_is_home_bound_private_and_never_regenerates_partial_keys() {
     let home = Fixture::new();
     let other = Fixture::new();
-    let authority = DevelopmentAuthority::initialize(&home.root, &[]).unwrap();
     let path = DevelopmentAuthority::path_for_home(&home.root);
+    assert!(DevelopmentAuthority::initialize(&home.root, &[home.root.path().to_owned()]).is_err());
+    assert!(!path.exists());
+    let authority = DevelopmentAuthority::initialize(&home.root, &[]).unwrap();
     let key_path = path.join(".authority-key.env");
     let original = std::fs::read(&key_path).unwrap();
     assert_eq!(original.len(), 65);
@@ -209,9 +211,13 @@ fn unclean_metadata_recovers_only_in_memory_without_source_writes_or_key_reads()
     vault.write(&key(), &record(100)).unwrap();
     let sibling = colossus_ports::CredentialKey::new("manual-token", "unrelated").unwrap();
     vault.write(&sibling, &record(20)).unwrap();
-    // Capture a committed database while its writer remains open. Only this
-    // synthetic encrypted snapshot lacks the writer's clean-shutdown allocator.
+    // Exit a committed writer without Drop so allocator recovery is genuinely
+    // required. Read only after its mandatory Windows file locks are released.
+    drop(vault);
+    super::run_child(&source, "unclean-exit");
     let bytes = std::fs::read(source.root.path().join("credentials-v1.redb")).unwrap();
+    let source_writer = source.vault(keys.clone());
+    source_writer.read(&key()).unwrap();
     snapshot
         .root
         .open_file(Path::new("credentials-v1.redb"))
@@ -324,6 +330,7 @@ fn metadata_recovery_refuses_missing_lease_corruption_and_oversized_snapshots() 
     let keys = Arc::new(MemoryKeys::default());
     let vault = source.vault(keys);
     vault.write(&key(), &record(100)).unwrap();
+    drop(vault);
     let bytes = std::fs::read(source.root.path().join("credentials-v1.redb")).unwrap();
     let snapshot = Fixture::new();
     let file = snapshot
@@ -381,18 +388,28 @@ fn source_observation_excludes_writers_until_drop_and_detects_modified_source() 
         std::fs::read(source.root.path().join("credentials-v1.redb")).unwrap(),
         original
     );
-    // Deliberately bypass advisory locks in this synthetic fixture. A same-inode
-    // modification must fail final activation revalidation, not just path checks.
     let file = source
         .root
         .open_existing_file_read_write(Path::new("credentials-v1.redb"))
         .unwrap();
     let mut bytes = file.file().try_clone().unwrap();
     bytes.seek(SeekFrom::Start(0)).unwrap();
-    bytes.write_all(&[original[0] ^ 1]).unwrap();
-    assert!(matches!(guard.revalidate(), Err(CredentialError::Corrupt)));
-    bytes.seek(SeekFrom::Start(0)).unwrap();
-    bytes.write_all(&original[..1]).unwrap();
+    #[cfg(unix)]
+    {
+        // Bypass advisory locks: same-inode mutation must fail the final digest
+        // revalidation even though the pathname and retained identity still match.
+        bytes.write_all(&[original[0] ^ 1]).unwrap();
+        assert!(matches!(guard.revalidate(), Err(CredentialError::Corrupt)));
+        bytes.seek(SeekFrom::Start(0)).unwrap();
+        bytes.write_all(&original[..1]).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        // Windows enforces the observer's shared byte-range lock on other write
+        // handles, so the hostile write must be rejected before changing bytes.
+        let error = bytes.write_all(&[original[0] ^ 1]).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(33)); // ERROR_LOCK_VIOLATION
+    }
     guard.revalidate().unwrap();
     drop(guard);
     assert_eq!(
