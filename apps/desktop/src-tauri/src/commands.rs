@@ -15,7 +15,7 @@ use crate::{
         ListRunsInput, ListSessionActivityDto, ListSessionActivityInput, RespondInteractionInput,
         RunDto, ThreadLifecycleDto, ThreadLifecycleInput, WatchEventDto, WatchRunInput,
     },
-    run_list, space_search,
+    space_search,
     state::{AppState, SelectedTargetLease, TargetConsentContext, TargetHandle},
 };
 
@@ -348,7 +348,9 @@ pub(crate) async fn list_runs(
     let request = request.into_sdk()?;
     let target = target(&state, &target_id).await?;
     let _unary_slot = unary_slot(&target.target)?;
-    let response = run_list::list_runs(&target.target.client, request)
+    let response = target
+        .target
+        .list_runs(request)
         .await
         .map_err(CommandErrorDto::from_api)?;
     state

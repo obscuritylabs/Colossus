@@ -42,10 +42,9 @@ use crate::{
         JournalPayloadSetting, McpTransportSetting, OtlpProtocolSetting,
         ResolvedSpaceConfiguration, SearchProviderKindSetting, resolve_space_configuration,
     },
-    run_list,
     state::{
         AppState, MAX_LIVE_MANAGED_SPACES, ManagedConfigurationDrainGuard, ManagedHealth,
-        TargetConsentContext,
+        TargetConsentContext, TargetHandle,
     },
     terminal::{TerminalWorkerAuthentication, TerminalWorkspace},
 };
@@ -285,14 +284,14 @@ async fn ensure_managed_capacity(
             state.remove_managed_space_runtime(&target_id).await;
             continue;
         };
-        let active = managed_target_has_active_work(&target.client).await?;
+        let active = managed_target_has_active_work(&target).await?;
         candidates.push((last_used, target_id, active));
     }
     let Some(target_id) = activity::revalidated_idle_lru(candidates, |target_id| async move {
         let Some(target) = state.target(&target_id).await else {
             return Ok(false);
         };
-        managed_target_has_active_work(&target.client).await
+        managed_target_has_active_work(&target).await
     })
     .await?
     else {
@@ -310,11 +309,11 @@ async fn ensure_managed_capacity(
 }
 
 pub(crate) async fn managed_target_has_active_work(
-    client: &Colossus,
+    target: &TargetHandle,
 ) -> Result<bool, CommandErrorDto> {
     activity::has_active_work(
-        || managed_workflows_have_active_work(client),
-        managed_target_has_active_chat_work(client),
+        || managed_workflows_have_active_work(&target.client),
+        managed_target_has_active_chat_work(target),
     )
     .await
 }
@@ -332,7 +331,10 @@ async fn managed_workflows_have_active_work(client: &Colossus) -> Result<bool, C
     Ok(false)
 }
 
-async fn managed_target_has_active_chat_work(client: &Colossus) -> Result<bool, CommandErrorDto> {
+async fn managed_target_has_active_chat_work(
+    target: &TargetHandle,
+) -> Result<bool, CommandErrorDto> {
+    let client = &target.client;
     if client.capabilities().contains("process_sessions.v1") {
         let mut after = None;
         for _ in 0..3 {
@@ -361,9 +363,8 @@ async fn managed_target_has_active_chat_work(client: &Colossus) -> Result<bool, 
     let mut page_token = String::new();
     let mut seen_tokens = BTreeSet::new();
     for _ in 0..MAX_ACTIVE_RUN_PAGES {
-        let response = run_list::list_runs(
-            client,
-            ListRunsRequest {
+        let response = target
+            .list_runs(ListRunsRequest {
                 session_id: None,
                 statuses: vec![
                     RunStatus::Queued,
@@ -376,10 +377,9 @@ async fn managed_target_has_active_chat_work(client: &Colossus) -> Result<bool, 
                     page_token,
                 }),
                 include_archived: false,
-            },
-        )
-        .await
-        .map_err(CommandErrorDto::from_api)?;
+            })
+            .await
+            .map_err(CommandErrorDto::from_api)?;
         if !response.runs.is_empty() {
             return Ok(true);
         }
@@ -424,7 +424,7 @@ pub(crate) async fn drain_active_runs_for_configuration(
 
     let drained = tokio::time::timeout(CONFIGURATION_DRAIN_TIMEOUT, async {
         loop {
-            if !managed_target_has_active_work(&target.client).await? {
+            if !managed_target_has_active_work(&target).await? {
                 return Ok::<(), CommandErrorDto>(());
             }
             tokio::time::sleep(CONFIGURATION_DRAIN_POLL_INTERVAL).await;

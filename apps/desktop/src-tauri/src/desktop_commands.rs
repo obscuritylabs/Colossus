@@ -32,7 +32,7 @@ use crate::{
         read_client_key_source, revalidate_workspace, validate_workspace,
     },
     dto::{CommandErrorDto, ConnectionStateDto, ConnectionStatusDto, RunDto},
-    managed_runtime, provider_enrollment, run_list, space_search,
+    managed_runtime, provider_enrollment, space_search,
     state::{AppState, ExternalHealth, ManagedHealth, TargetConsentContext, TargetHandle},
 };
 
@@ -931,18 +931,15 @@ async fn refresh_live_space_search_index(state: &AppState, settings: &DesktopSet
                 let remaining = SPACE_SUMMARY_REFRESH_TIMEOUT.checked_sub(started.elapsed())?;
                 let response = tokio::time::timeout(
                     remaining,
-                    run_list::list_runs(
-                        &target.client,
-                        ListRunsRequest {
-                            session_id: None,
-                            statuses: Vec::new(),
-                            page: Some(PageRequest {
-                                page_size: SPACE_SEARCH_INDEX_PAGE_SIZE,
-                                page_token,
-                            }),
-                            include_archived: false,
-                        },
-                    ),
+                    target.list_runs(ListRunsRequest {
+                        session_id: None,
+                        statuses: Vec::new(),
+                        page: Some(PageRequest {
+                            page_size: SPACE_SEARCH_INDEX_PAGE_SIZE,
+                            page_token,
+                        }),
+                        include_archived: false,
+                    }),
                 )
                 .await
                 .ok()?
@@ -1740,9 +1737,8 @@ pub(crate) async fn reject_active_managed_runs_for(
     if !matches!(target.consent, TargetConsentContext::ManagedLocal) {
         return Ok(());
     }
-    let runs = run_list::list_runs(
-        &target.client,
-        ListRunsRequest {
+    let runs = target
+        .list_runs(ListRunsRequest {
             session_id: None,
             statuses: vec![
                 RunStatus::Queued,
@@ -1755,10 +1751,9 @@ pub(crate) async fn reject_active_managed_runs_for(
                 page_token: String::new(),
             }),
             include_archived: false,
-        },
-    )
-    .await
-    .map_err(CommandErrorDto::from_api)?;
+        })
+        .await
+        .map_err(CommandErrorDto::from_api)?;
     if runs.runs.is_empty() {
         Ok(())
     } else {
@@ -2600,7 +2595,7 @@ async fn connect_external(
     target: &ExternalTargetSetting,
 ) -> Result<(), CommandErrorDto> {
     let generation = state.begin_external_probe(&target.target_id).await;
-    let client = match connection::connect(target).await {
+    let client = match connection::connect(target, state.external_credential_read_slots()).await {
         Ok(client) => client,
         Err(error) => {
             state
@@ -2709,27 +2704,23 @@ async fn probe_connected_external(
         }),
         include_archived: false,
     };
-    let mut probe = tauri::async_runtime::spawn(async move {
-        // The permit lives with the actual request task. If the health deadline
-        // expires, a non-cancellable platform-keychain read remains globally bounded.
-        let _permit = permit;
-        run_list::list_runs(&existing.client, request).await
-    });
-    let result = tokio::time::timeout(EXTERNAL_PROBE_TIMEOUT, &mut probe).await;
+    let _permit = permit;
+    // The timeout owns the read future so expiry releases the shared listing slot.
+    // The SDK keeps a separate native-read permit inside any uncancellable keychain job.
+    let result = tokio::time::timeout(EXTERNAL_PROBE_TIMEOUT, existing.list_runs(request)).await;
     let health = match result {
-        Ok(Ok(Ok(_))) => Some(ExternalHealth::connected()),
-        Ok(Ok(Err(error))) if error.code == ApiErrorCode::Unavailable => {
+        Ok(Ok(_)) => Some(ExternalHealth::connected()),
+        Ok(Err(error)) if error.code == ApiErrorCode::Unavailable => {
             Some(ExternalHealth::unreachable())
         }
-        Ok(Ok(Err(error))) if error.code == ApiErrorCode::Unauthenticated => {
+        Ok(Err(error)) if error.code == ApiErrorCode::Unauthenticated => {
             Some(ExternalHealth::authentication_failed())
         }
-        Ok(Ok(Err(_))) => {
+        Ok(Err(_)) => {
             // An authenticated server response proves transport liveness; workload-
             // specific denial or pressure is not a connection loss.
             Some(ExternalHealth::connected())
         }
-        Ok(Err(_)) => Some(ExternalHealth::connection_failed("internal")),
         Err(_) => Some(ExternalHealth::stalled()),
     };
     state
@@ -2744,9 +2735,10 @@ async fn probe_disconnected_external(
     permit: tokio::sync::OwnedSemaphorePermit,
 ) {
     let target_for_probe = target.clone();
+    let read_slots = state.external_credential_read_slots();
     let mut probe = tauri::async_runtime::spawn(async move {
         let _permit = permit;
-        match connection::connect(&target_for_probe).await {
+        match connection::connect(&target_for_probe, read_slots).await {
             Ok(client) => {
                 let _ = client.close().await;
                 ExternalHealth::available()

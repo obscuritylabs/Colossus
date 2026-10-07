@@ -1,4 +1,7 @@
-use colossus_sdk::{Colossus, NativeSidecarFailure, NativeSidecarStatus};
+use colossus_sdk::{
+    ApiError, Colossus, ListRunsRequest, ListRunsResponse, NativeSidecarFailure,
+    NativeSidecarStatus,
+};
 use colossus_worker_protocol::WorkerControlClient;
 use std::{
     collections::HashMap,
@@ -17,6 +20,7 @@ use tokio::sync::{
 
 use crate::{
     desktop_dto::{DesktopApprovalModeDto, ManagedRuntimeStateDto, RuntimeFailureCodeDto},
+    run_list::RunList,
     terminal::{TerminalKind, TerminalManager, TerminalPlanContext, TerminalWorkspace},
 };
 
@@ -26,6 +30,7 @@ pub(crate) const MAX_LIVE_MANAGED_SPACES: usize = 4;
 const MAX_NATIVE_WATCHES_PER_TARGET: usize = 8;
 const MAX_NATIVE_UNARY_CALLS_PER_TARGET: usize = 16;
 const MAX_CONCURRENT_EXTERNAL_PROBES: usize = 4;
+const MAX_CONCURRENT_EXTERNAL_CREDENTIAL_READS: usize = 4;
 const MAX_RUN_TARGET_BINDINGS: usize = 4_096;
 const EXTERNAL_PROBE_COOLDOWN: Duration = Duration::from_secs(15);
 
@@ -78,6 +83,7 @@ impl SelectedTargetLease<'_> {
 struct TargetLimits {
     watch_slots: Arc<Semaphore>,
     unary_slots: Arc<Semaphore>,
+    run_list: RunList,
 }
 
 impl TargetHandle {
@@ -97,6 +103,13 @@ impl TargetHandle {
         self.limits.try_unary_slot()
     }
 
+    pub(crate) async fn list_runs(
+        &self,
+        request: ListRunsRequest,
+    ) -> Result<ListRunsResponse, ApiError> {
+        self.limits.run_list.list_runs(&self.client, request).await
+    }
+
     fn is_closed(&self) -> bool {
         self.client.agent_runs().is_closed()
     }
@@ -107,6 +120,7 @@ impl TargetLimits {
         Self {
             watch_slots: Arc::new(Semaphore::new(MAX_NATIVE_WATCHES_PER_TARGET)),
             unary_slots: Arc::new(Semaphore::new(MAX_NATIVE_UNARY_CALLS_PER_TARGET)),
+            run_list: RunList::default(),
         }
     }
 
@@ -281,6 +295,7 @@ pub(crate) struct AppState {
     external_health: RwLock<HashMap<String, ExternalHealth>>,
     external_health_generation: AtomicU64,
     external_probe_slots: Arc<Semaphore>,
+    external_credential_read_slots: Arc<Semaphore>,
     connect_guard: Mutex<()>,
     approval_mode_run_guard: Arc<RwLock<()>>,
     managed_spaces: RwLock<HashMap<String, Arc<ManagedSpaceRuntime>>>,
@@ -448,6 +463,9 @@ impl Default for AppState {
             external_health: RwLock::new(HashMap::new()),
             external_health_generation: AtomicU64::new(0),
             external_probe_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_EXTERNAL_PROBES)),
+            external_credential_read_slots: Arc::new(Semaphore::new(
+                MAX_CONCURRENT_EXTERNAL_CREDENTIAL_READS,
+            )),
             connect_guard: Mutex::new(()),
             approval_mode_run_guard: Arc::new(RwLock::new(())),
             managed_spaces: RwLock::new(HashMap::new()),
@@ -1216,6 +1234,10 @@ impl AppState {
             },
         );
         Some(generation)
+    }
+
+    pub(crate) fn external_credential_read_slots(&self) -> Arc<Semaphore> {
+        Arc::clone(&self.external_credential_read_slots)
     }
 
     pub(crate) async fn acquire_external_probe_slot(&self) -> Option<OwnedSemaphorePermit> {

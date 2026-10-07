@@ -161,11 +161,15 @@ pub(crate) fn same_connection(left: &ExternalTargetSetting, right: &ExternalTarg
         && left.credential_account == right.credential_account
 }
 
-pub(crate) async fn connect(target: &ExternalTargetSetting) -> Result<Colossus, CommandErrorDto> {
+pub(crate) async fn connect(
+    target: &ExternalTargetSetting,
+    read_slots: Arc<tokio::sync::Semaphore>,
+) -> Result<Colossus, CommandErrorDto> {
     let prepared = prepare_saved_connection(target)?;
     let credential_provider =
         KeyringCredentialProvider::new(prepared.credential_service, prepared.credential_account)
-            .map_err(CommandErrorDto::from_sdk)?;
+            .map_err(CommandErrorDto::from_sdk)?
+            .with_read_limit(read_slots);
     let options = DaemonConnectOptions::new(
         prepared.instance_id,
         prepared.public_api_dir.join(ENDPOINT_FILE),
