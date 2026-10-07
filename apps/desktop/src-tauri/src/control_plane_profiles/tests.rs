@@ -14,8 +14,8 @@ fn home() -> (tempfile::TempDir, ColossusHome) {
     (directory, home)
 }
 
-fn catalog(revision: u64, endpoint: &str) -> Profiles {
-    Profiles {
+fn catalog(revision: u64, endpoint: &str) -> Catalog {
+    Catalog {
         revision,
         profiles: vec![ControlPlaneProfile {
             id: "acceptance-profile".into(),
@@ -26,7 +26,7 @@ fn catalog(revision: u64, endpoint: &str) -> Profiles {
     }
 }
 
-fn rejected_before_home(catalog: Profiles) {
+fn rejected_before_home(catalog: Catalog) {
     assert!(
         access_with_home(Some(catalog), || panic!("invalid metadata resolved a home")).is_err()
     );

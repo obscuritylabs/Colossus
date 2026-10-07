@@ -47,6 +47,18 @@ fn explicit_workspace_sharing_preserves_source_and_recipient_authority() {
     let cloud = caller("app:cloud-sharing", "sharing-cloud");
     let other = caller("app:other-sharing", "sharing-other");
     let repository = EventSourcedRunRepository::new(fixture.runtime.journal());
+    let sharing_stream = format!(
+        "api.workspace.sharing:{}",
+        hex::encode(Sha256::digest(b"app:cloud-sharing"))
+    );
+    let sharing_events = || {
+        fixture
+            .runtime
+            .journal()
+            .read_stream(&sharing_stream)
+            .expect("canonical sharing events")
+            .len()
+    };
     for number in 0..2 {
         let create = request(&format!("sharing-create-{number}"), "Local conversation");
         let run = NewRun::from_request(
@@ -125,6 +137,41 @@ fn explicit_workspace_sharing_preserves_source_and_recipient_authority() {
                     &read_only,
                     SetWorkspaceSharingRequest {
                         recipient_application_id: "app:cloud-sharing".into(),
+                        enabled: false,
+                        allow_continuation: false
+                    }
+                )
+                .await
+                .expect_err("an idempotent private request still requires source control")
+                .reason,
+                ApiErrorReason::ScopeDenied
+            );
+            for _ in 0..4097 {
+                let private = api
+                    .set_workspace_sharing(
+                        &owner,
+                        SetWorkspaceSharingRequest {
+                            recipient_application_id: "app:cloud-sharing".into(),
+                            enabled: false,
+                            allow_continuation: false,
+                        },
+                    )
+                    .await
+                    .expect(
+                        "private reconnect reconciliation cannot exhaust the 4096-event budget",
+                    );
+                assert!(!private.enabled && !private.allow_continuation);
+            }
+            assert_eq!(
+                sharing_events(),
+                0,
+                "default private requests do not append permission changes"
+            );
+            assert_eq!(
+                api.set_workspace_sharing(
+                    &read_only,
+                    SetWorkspaceSharingRequest {
+                        recipient_application_id: "app:cloud-sharing".into(),
                         enabled: true,
                         allow_continuation: false,
                     }
@@ -144,6 +191,18 @@ fn explicit_workspace_sharing_preserves_source_and_recipient_authority() {
             )
             .await
             .expect("explicit share");
+            assert_eq!(sharing_events(), 1, "an actual enable remains durable");
+            api.set_workspace_sharing(
+                &owner,
+                SetWorkspaceSharingRequest {
+                    recipient_application_id: "app:cloud-sharing".into(),
+                    enabled: true,
+                    allow_continuation: false,
+                },
+            )
+            .await
+            .expect("same enabled tuple");
+            assert_eq!(sharing_events(), 1);
             let canonical = api
                 .list_session_activity(&cloud, history("sharing-run-0"))
                 .await
@@ -269,6 +328,28 @@ fn explicit_workspace_sharing_preserves_source_and_recipient_authority() {
             )
             .await
             .expect("revoke sharing");
+            assert_eq!(
+                sharing_events(),
+                3,
+                "enable, continuation change and disable each append once"
+            );
+            for _ in 0..4097 {
+                api.set_workspace_sharing(
+                    &owner,
+                    SetWorkspaceSharingRequest {
+                        recipient_application_id: "app:cloud-sharing".into(),
+                        enabled: false,
+                        allow_continuation: false,
+                    },
+                )
+                .await
+                .expect("already-disabled reconnect reconciliation cannot consume journal budget");
+            }
+            assert_eq!(
+                sharing_events(),
+                3,
+                "same disabled tuple preserves audit history and its remaining budget"
+            );
             assert!(
                 api.list_session_activity(&cloud, history("sharing-run-0"))
                     .await

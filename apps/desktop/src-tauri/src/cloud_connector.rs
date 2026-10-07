@@ -15,20 +15,26 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tokio::sync::watch;
 use zeroize::Zeroizing;
 
+mod sharing;
 mod status_cache;
 
 pub(crate) struct CloudSession {
     config: ConnectionConfig,
     status: watch::Receiver<ConnectorStatus>,
     shutdown: watch::Sender<bool>,
-    task: tauri::async_runtime::JoinHandle<()>,
+    task: Option<tauri::async_runtime::JoinHandle<()>>,
     alive: Arc<AtomicBool>,
+    sharing_recovery_required: bool,
+    shutdown_confirmed: bool,
+    sharing_restart_required: bool,
 }
 impl Drop for CloudSession {
     fn drop(&mut self) {
         self.alive.store(false, Ordering::Release);
         let _ = self.shutdown.send(true);
-        self.task.abort();
+        if let Some(task) = &self.task {
+            task.abort();
+        }
     }
 }
 #[derive(Clone, Deserialize, Serialize)]
@@ -44,6 +50,10 @@ pub(crate) struct CloudStatus {
     shared_sessions: bool,
     shared_continuation: bool,
     sharing_supported: bool,
+    #[serde(default)]
+    sharing_recovery_required: sharing::Requirement,
+    #[serde(default)]
+    sharing_restart_required: sharing::Requirement,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -86,7 +96,37 @@ fn dto(target: String, config: Option<&ConnectionConfig>, status: ConnectorStatu
             .is_some_and(|inventory| {
                 inventory.deployment_kind == colossus_connector::DeploymentKind::Desktop
             }),
+        sharing_recovery_required: sharing::Requirement::Clear,
+        sharing_restart_required: sharing::Requirement::Clear,
     }
+}
+
+impl CloudSession {
+    fn snapshot(&self, target: String) -> CloudStatus {
+        let status = if self.alive.load(Ordering::Acquire) {
+            *self.status.borrow()
+        } else if *self.status.borrow() == ConnectorStatus::Revoked {
+            ConnectorStatus::Revoked
+        } else {
+            ConnectorStatus::Disconnected
+        };
+        let mut summary = dto(target, Some(&self.config), status);
+        summary.sharing_recovery_required = self.sharing_recovery_required.into();
+        summary.sharing_restart_required = self.sharing_restart_required.into();
+        summary
+    }
+}
+
+fn disconnected_summary(
+    target: String,
+    config: Option<&ConnectionConfig>,
+    status: ConnectorStatus,
+) -> CloudStatus {
+    let mut summary = dto(target, config, status);
+    // A saved choice is not a runtime observation. Explicit reconnect reconciles
+    // it; disconnected metadata must not claim that permission is currently applied.
+    summary.sharing_recovery_required = summary.sharing_supported.into();
+    summary
 }
 async fn cache_status(status: CloudStatus) -> Result<CloudStatus, CommandErrorDto> {
     let summary = status.clone();
@@ -135,15 +175,16 @@ pub(crate) async fn global_connections(
         .await
         .map_err(|_| failure("Connection summaries are unavailable."))??;
     let sessions = state.cloud_connections.lock().await;
+    for summary in summaries.values_mut() {
+        if summary.sharing_supported {
+            summary.sharing_recovery_required = sharing::Requirement::Required;
+        }
+        // Restart fencing is process-local. After restart, an explicit connection
+        // may reconcile the saved choice; the cache supplies no authorization.
+        summary.sharing_restart_required = sharing::Requirement::Clear;
+    }
     for (target, session) in sessions.iter() {
-        summaries.insert(
-            target.clone(),
-            dto(
-                target.clone(),
-                Some(&session.config),
-                *session.status.borrow(),
-            ),
-        );
+        summaries.insert(target.clone(), session.snapshot(target.clone()));
     }
     let mut connections = summaries.into_values().collect::<Vec<_>>();
     connections.sort_by(|left, right| left.target_id.cmp(&right.target_id));
@@ -185,6 +226,60 @@ async fn confirm_action(
         Err(failure("The native confirmation was cancelled."))
     }
 }
+async fn reconcile_managed_sharing(
+    state: &AppState,
+    target: &str,
+    config: &ConnectionConfig,
+    primary: &dyn AgentRunClient,
+) -> Result<(), CommandErrorDto> {
+    // Every explicit Managed Local start reconciles the protected saved choice,
+    // including after restart or cache loss. Metadata never supplies authority.
+    let result = sharing::update(
+        &state.cloud_connections,
+        target,
+        config,
+        sharing::saved_request(config),
+        |request| primary.set_workspace_sharing(request),
+        || std::future::ready(Ok(config.clone())),
+    )
+    .await;
+    if let Err(error) = result {
+        if let Some(summary) = sharing::summary(&state.cloud_connections, target).await {
+            cache_status(summary).await?;
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+fn spawn_connector(
+    connector: RuntimeConnector,
+    receiver: watch::Receiver<bool>,
+    status: watch::Sender<ConnectorStatus>,
+    terminal_target: String,
+    terminal_node: String,
+    terminal_alive: Arc<AtomicBool>,
+) -> tauri::async_runtime::JoinHandle<()> {
+    tauri::async_runtime::spawn(async move {
+        let failed = connector.run(receiver, status.clone()).await.is_err();
+        let revoked = *status.borrow() == ConnectorStatus::Revoked;
+        if failed && !revoked {
+            status.send_replace(ConnectorStatus::Disconnected);
+        }
+        if revoked {
+            let saved = tauri::async_runtime::spawn_blocking(move || {
+                status_cache::remember_remote_revocation(
+                    terminal_target,
+                    terminal_node,
+                    terminal_alive,
+                )
+            })
+            .await;
+            if !matches!(saved, Ok(Ok(()))) {
+                eprintln!("Control Plane revocation summary could not be retained.");
+            }
+        }
+    })
+}
 async fn start(
     state: &AppState,
     target: String,
@@ -192,6 +287,21 @@ async fn start(
     key: Zeroizing<String>,
     runs: Arc<dyn AgentRunClient>,
 ) -> Result<CloudStatus, CommandErrorDto> {
+    sharing::check_start(&state.cloud_connections, &target).await?;
+    let lease = state
+        .selected_target(&target)
+        .await
+        .ok_or_else(|| failure("Select the workspace before connecting Control Plane."))?;
+    if lease
+        .target
+        .client
+        .instance_id()
+        .map(|id| id.to_string())
+        .as_deref()
+        != Some(&config.instance_id)
+    {
+        return Err(failure("The enrolled local runtime identity has changed."));
+    }
     if config.inventory.is_none() {
         let inventory = colossus_connector::native_inventory(
             format!("workspace:{}", config.instance_id),
@@ -207,12 +317,21 @@ async fn start(
     let connector = RuntimeConnector::new(config.clone(), key, runs)
         .map_err(failure)?
         .with_enrollment_store((*store(state, &target)?).clone());
+    if lease.target.consent == crate::state::TargetConsentContext::ManagedLocal {
+        reconcile_managed_sharing(
+            state,
+            &target,
+            &config,
+            lease.target.client.agent_runs().as_ref(),
+        )
+        .await?;
+    }
     let (shutdown, receiver) = watch::channel(false);
     let (status, updates) = watch::channel(ConnectorStatus::Connecting);
     let mut connections = state.cloud_connections.lock().await;
     if let Some(existing) = connections.get(&target) {
         if matches!(
-            *existing.status.borrow(),
+            existing.snapshot(target.clone()).status,
             ConnectorStatus::Connecting
                 | ConnectorStatus::Connected
                 | ConnectorStatus::Reconnecting
@@ -236,29 +355,14 @@ async fn start(
     ))
     .await?;
     let alive = Arc::new(AtomicBool::new(true));
-    let terminal_alive = Arc::clone(&alive);
-    let terminal_target = target.clone();
-    let terminal_node = config.node_id.clone();
-    let task = tauri::async_runtime::spawn(async move {
-        let failed = connector.run(receiver, status.clone()).await.is_err();
-        let revoked = *status.borrow() == ConnectorStatus::Revoked;
-        if failed && !revoked {
-            status.send_replace(ConnectorStatus::Disconnected);
-        }
-        if revoked {
-            let saved = tauri::async_runtime::spawn_blocking(move || {
-                status_cache::remember_remote_revocation(
-                    terminal_target,
-                    terminal_node,
-                    terminal_alive,
-                )
-            })
-            .await;
-            if !matches!(saved, Ok(Ok(()))) {
-                eprintln!("Control Plane revocation summary could not be retained.");
-            }
-        }
-    });
+    let task = spawn_connector(
+        connector,
+        receiver,
+        status,
+        target.clone(),
+        config.node_id.clone(),
+        Arc::clone(&alive),
+    );
     let result = dto(target.clone(), Some(&config), ConnectorStatus::Connecting);
     state.cloud_connections.lock().await.insert(
         target,
@@ -266,8 +370,11 @@ async fn start(
             config,
             status: updates,
             shutdown,
-            task,
+            task: Some(task),
             alive,
+            sharing_recovery_required: false,
+            shutdown_confirmed: false,
+            sharing_restart_required: false,
         },
     );
     Ok(result)
@@ -279,6 +386,7 @@ pub(crate) async fn cloud_enroll(
     request: EnrollInput,
 ) -> Result<CloudStatus, CommandErrorDto> {
     let _operation = state.cloud_operation.lock().await;
+    sharing::ensure_recoverable(&state.cloud_connections, &request.target_id).await?;
     let lease = state
         .selected_target(&request.target_id)
         .await
@@ -317,9 +425,10 @@ pub(crate) async fn cloud_enroll(
         } else {
             format!("workspace:{}", config.instance_id)
         },
-        workspace
-            .map(|workspace| workspace.display_name)
-            .unwrap_or_else(|| "Desktop workspace".into()),
+        workspace.map_or_else(
+            || "Desktop workspace".into(),
+            |workspace| workspace.display_name,
+        ),
         if managed {
             colossus_connector::DeploymentKind::Desktop
         } else {
@@ -342,6 +451,7 @@ pub(crate) async fn cloud_connect(
     target_id: String,
 ) -> Result<CloudStatus, CommandErrorDto> {
     let _operation = state.cloud_operation.lock().await;
+    sharing::ensure_recoverable(&state.cloud_connections, &target_id).await?;
     let lease = state
         .selected_target(&target_id)
         .await
@@ -369,9 +479,9 @@ pub(crate) async fn cloud_connect(
     }
     confirm(
         &app,
-        format!(
-            "Reconnect runtime {} to {}?",
-            config.instance_id, config.endpoint
+        sharing::reconnect_message(
+            &config,
+            lease.target.consent == crate::state::TargetConsentContext::ManagedLocal,
         ),
     )
     .await?;
@@ -383,11 +493,7 @@ pub(crate) async fn cloud_status(
     target_id: String,
 ) -> Result<CloudStatus, CommandErrorDto> {
     if let Some(session) = state.cloud_connections.lock().await.get(&target_id) {
-        return Ok(dto(
-            target_id.clone(),
-            Some(&session.config),
-            *session.status.borrow(),
-        ));
+        return Ok(session.snapshot(target_id));
     }
     let store = store(&state, &target_id)?;
     let config = tokio::task::spawn_blocking(move || store.load())
@@ -396,7 +502,7 @@ pub(crate) async fn cloud_status(
         .map_err(failure)?
         .map(|(config, _)| config);
     let status = disconnected_status(&target_id, config.as_ref(), None).await;
-    cache_status(dto(target_id, config.as_ref(), status)).await
+    cache_status(disconnected_summary(target_id, config.as_ref(), status)).await
 }
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn cloud_set_workspace_sharing(
@@ -407,6 +513,7 @@ pub(crate) async fn cloud_set_workspace_sharing(
     allow_continuation: bool,
 ) -> Result<CloudStatus, CommandErrorDto> {
     let _operation = state.cloud_operation.lock().await;
+    sharing::ensure_recoverable(&state.cloud_connections, &target_id).await?;
     let lease = state
         .selected_target(&target_id)
         .await
@@ -418,49 +525,57 @@ pub(crate) async fn cloud_set_workspace_sharing(
     }
     let enrollment = store(&state, &target_id)?;
     let reader = enrollment.clone();
-    let (config, _) = tokio::task::spawn_blocking(move || reader.load())
+    let (previous_config, key) = tokio::task::spawn_blocking(move || reader.load())
         .await
         .map_err(|_| failure("Enrollment vault unavailable."))?
         .map_err(failure)?
         .ok_or_else(|| failure("Enroll this workspace before sharing sessions."))?;
     if enabled {
         confirm_action(&app, format!("Share this workspace's existing and future Desktop conversations with project {} at {}? Released history will be retained in the Control Plane for authorized project members. {} Local roles, tools, policy, and approvals remain enforced. Disabling sharing stops future synchronization but does not erase previously synchronized history.",
-            config.project_id,config.endpoint,
+            previous_config.project_id,previous_config.endpoint,
             if allow_continuation {"Members with execution permission may continue these conversations using the dedicated Control Plane grant."} else {"Existing Desktop runs remain read-only in the Control Plane."}),"Workspace sharing","Update sharing").await?;
     }
-    lease
-        .target
-        .client
-        .agent_runs()
-        .set_workspace_sharing(colossus_sdk::SetWorkspaceSharingRequest {
-            recipient_application_id: "app:colossus-desktop-cloud".into(),
-            enabled,
-            allow_continuation: enabled && allow_continuation,
-        })
-        .await
-        .map_err(|_| failure("The runtime could not commit workspace sharing."))?;
-    let config = enrollment
-        .set_sharing(enabled, allow_continuation)
-        .await
-        .map_err(failure)?;
-    let mut sessions = state.cloud_connections.lock().await;
-    let status = sessions
-        .get(&target_id)
-        .map(|session| *session.status.borrow())
-        .unwrap_or(ConnectorStatus::Disconnected);
-    // Reconnect refreshes native inventory without cancelling any accepted work.
-    sessions.remove(&target_id);
-    drop(sessions);
+    let primary = lease.target.client.agent_runs();
+    let update = sharing::update(
+        &state.cloud_connections,
+        &target_id,
+        &previous_config,
+        sharing::request(enabled, allow_continuation),
+        |request| primary.set_workspace_sharing(request),
+        || enrollment.set_sharing(enabled, allow_continuation),
+    )
+    .await;
+    let (config, status) = match update {
+        Ok(result) => result,
+        Err(error) => {
+            if let Some(summary) = sharing::summary(&state.cloud_connections, &target_id).await {
+                cache_status(summary).await?;
+            }
+            return Err(error);
+        }
+    };
+    // Refresh native inventory only after both writes succeeded. Accepted runtime
+    // work is independent of the stopped connector and remains running locally.
     if matches!(
         status,
         ConnectorStatus::Connected | ConnectorStatus::Connecting | ConnectorStatus::Reconnecting
     ) {
-        let reader = enrollment.clone();
-        let (_, key) = tokio::task::spawn_blocking(move || reader.load())
-            .await
-            .map_err(|_| failure("Enrollment vault unavailable."))?
-            .map_err(failure)?
-            .ok_or_else(|| failure("Enrollment unavailable."))?;
+        let key = if config.certificate_pem == previous_config.certificate_pem {
+            key
+        } else {
+            let reader = enrollment.clone();
+            let (current, key) = tokio::task::spawn_blocking(move || reader.load())
+                .await
+                .map_err(|_| failure("Enrollment vault unavailable."))?
+                .map_err(failure)?
+                .ok_or_else(|| failure("Enrollment unavailable."))?;
+            if current.certificate_pem != config.certificate_pem {
+                return Err(failure(
+                    "Enrollment changed while updating sharing; reconnect.",
+                ));
+            }
+            key
+        };
         let runs = lease
             .target
             .client
@@ -468,7 +583,10 @@ pub(crate) async fn cloud_set_workspace_sharing(
             .ok_or_else(|| failure("Dedicated cloud grant unavailable."))?;
         start(&state, target_id, config, key, runs).await
     } else {
-        cache_status(dto(target_id, Some(&config), ConnectorStatus::Disconnected)).await
+        let summary = sharing::summary(&state.cloud_connections, &target_id)
+            .await
+            .ok_or_else(|| failure("Sharing confirmation is unavailable."))?;
+        cache_status(summary).await
     }
 }
 #[tauri::command(rename_all = "camelCase")]
@@ -478,6 +596,7 @@ pub(crate) async fn cloud_revoke(
     target_id: String,
 ) -> Result<CloudStatus, CommandErrorDto> {
     let _operation = state.cloud_operation.lock().await;
+    sharing::ensure_recoverable(&state.cloud_connections, &target_id).await?;
     let enrollment = store(&state, &target_id)?;
     let reader = enrollment.clone();
     let (config, _) = tokio::task::spawn_blocking(move || reader.load())
@@ -519,6 +638,7 @@ pub(crate) async fn cloud_disconnect(
     target_id: String,
 ) -> Result<CloudStatus, CommandErrorDto> {
     let _operation = state.cloud_operation.lock().await;
+    sharing::ensure_recoverable(&state.cloud_connections, &target_id).await?;
     let session = state.cloud_connections.lock().await.remove(&target_id);
     let removed_status = session.as_ref().map(|session| *session.status.borrow());
     drop(session);
@@ -529,7 +649,7 @@ pub(crate) async fn cloud_disconnect(
         .map_err(failure)?
         .map(|(config, _)| config);
     let status = disconnected_status(&target_id, config.as_ref(), removed_status).await;
-    cache_status(dto(target_id, config.as_ref(), status)).await
+    cache_status(disconnected_summary(target_id, config.as_ref(), status)).await
 }
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn cloud_forget(
@@ -537,6 +657,7 @@ pub(crate) async fn cloud_forget(
     target_id: String,
 ) -> Result<CloudStatus, CommandErrorDto> {
     let _operation = state.cloud_operation.lock().await;
+    sharing::ensure_recoverable(&state.cloud_connections, &target_id).await?;
     state.cloud_connections.lock().await.remove(&target_id);
     let store = store(&state, &target_id)?;
     tokio::task::spawn_blocking(move || store.forget())

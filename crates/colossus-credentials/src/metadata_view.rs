@@ -7,9 +7,7 @@ use crate::{
 use colossus_contracts::CredentialError;
 use colossus_home::{ConfinedFile, ConfinedRoot, HomeError};
 use fs4::fs_std::FileExt;
-use redb::{
-    Database, ReadOnlyDatabase, ReadableDatabase as _, ReadableTableMetadata as _, StorageBackend,
-};
+use redb::{Database, ReadableDatabase as _, ReadableTableMetadata as _, StorageBackend};
 use sha2::{Digest as _, Sha256};
 use std::{
     fmt,
@@ -20,13 +18,8 @@ use zeroize::Zeroizing;
 
 const MAX_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
 
-enum MetadataDatabase {
-    ReadOnly(ReadOnlyDatabase),
-    Volatile(Database),
-}
-
 pub(crate) struct MetadataView {
-    database: MetadataDatabase,
+    database: Database,
     source: VaultLease,
     lease: VaultLease,
     source_hash: [u8; 32],
@@ -63,14 +56,8 @@ impl MetadataView {
         let lease = root
             .open_existing_file(Path::new(LEASE_FILE))
             .map_err(home_error)?;
-        for file in [&lease, &source] {
-            if !FileExt::try_lock_shared(file.file()).map_err(|_| CredentialError::Io)? {
-                return Err(CredentialError::Busy);
-            }
-            file.revalidate(root).map_err(home_error)?;
-        }
-        let lease = VaultLease(lease);
-        let source = VaultLease(source);
+        let lease = owned_shared_lease(root, lease)?;
+        let source = owned_shared_lease(root, source)?;
         let length = source
             .file()
             .metadata()
@@ -82,35 +69,25 @@ impl MetadataView {
         if length > MAX_SNAPSHOT_BYTES {
             return Err(CredentialError::Oversized);
         }
-        let (database, source_hash) = match Database::builder()
+        // Pinned redb's read-only API opens another path-based descriptor whose
+        // shared flock can be inherited by a concurrent fork. Observe encrypted
+        // bytes only through our owned descriptor, and keep all redb IO in memory.
+        // Metadata/apply paths remain bounded; ordinary runtime vault IO stays disk.
+        let bytes = snapshot_bytes(&source)?;
+        let source_hash = Sha256::digest(bytes.as_slice()).into();
+        source.revalidate(root).map_err(home_error)?;
+        lease.revalidate(root).map_err(home_error)?;
+        let backend = BoundedMemoryBackend(redb::backends::InMemoryBackend::new());
+        backend
+            .set_len(bytes.len() as u64)
+            .map_err(|_| CredentialError::Oversized)?;
+        backend
+            .write(0, &bytes)
+            .map_err(|_| CredentialError::Corrupt)?;
+        let database = Database::builder()
             .set_cache_size(1024 * 1024)
-            .open_read_only(source.path())
-        {
-            Ok(database) => (
-                MetadataDatabase::ReadOnly(database),
-                source_digest(&source)?,
-            ),
-            Err(redb::DatabaseError::DatabaseAlreadyOpen) => return Err(CredentialError::Busy),
-            Err(redb::DatabaseError::RepairAborted) => {
-                let bytes = snapshot_bytes(&source)?;
-                let digest = Sha256::digest(bytes.as_slice()).into();
-                source.revalidate(root).map_err(home_error)?;
-                lease.revalidate(root).map_err(home_error)?;
-                let backend = BoundedMemoryBackend(redb::backends::InMemoryBackend::new());
-                backend
-                    .set_len(bytes.len() as u64)
-                    .map_err(|_| CredentialError::Oversized)?;
-                backend
-                    .write(0, &bytes)
-                    .map_err(|_| CredentialError::Corrupt)?;
-                let database = Database::builder()
-                    .set_cache_size(1024 * 1024)
-                    .create_with_backend(backend)
-                    .map_err(|_| CredentialError::Corrupt)?;
-                (MetadataDatabase::Volatile(database), digest)
-            }
-            Err(_) => return Err(CredentialError::Corrupt),
-        };
+            .create_with_backend(backend)
+            .map_err(|_| CredentialError::Corrupt)?;
         let view = Self {
             database,
             source,
@@ -122,11 +99,7 @@ impl MetadataView {
     }
 
     pub(crate) fn begin_read(&self) -> Result<redb::ReadTransaction, CredentialError> {
-        match &self.database {
-            MetadataDatabase::ReadOnly(database) => database.begin_read(),
-            MetadataDatabase::Volatile(database) => database.begin_read(),
-        }
-        .map_err(|_| CredentialError::Io)
+        self.database.begin_read().map_err(|_| CredentialError::Io)
     }
 
     pub(crate) fn metadata(&self, owner_scope_hash: &str) -> Result<Metadata, CredentialError> {
@@ -171,6 +144,19 @@ impl MetadataView {
             source_hash,
         }
     }
+}
+
+fn owned_shared_lease(
+    root: &ConfinedRoot,
+    file: ConfinedFile,
+) -> Result<VaultLease, CredentialError> {
+    if !FileExt::try_lock_shared(file.file()).map_err(|_| CredentialError::Io)? {
+        return Err(CredentialError::Busy);
+    }
+    // Wrap immediately after success, before validation or the next acquisition.
+    let lease = VaultLease(file);
+    lease.revalidate(root).map_err(home_error)?;
+    Ok(lease)
 }
 
 fn revalidate_source(
@@ -288,3 +274,6 @@ fn bounded_range(offset: u64, length: usize) -> io::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(all(test, unix))]
+mod lease_tests;

@@ -250,6 +250,33 @@ original private custody from a protected backup or stop and review a new offlin
 do not delete a key to make startup succeed. See the
 [credential boundary](security-architecture.md#development-credential-authority).
 
+### Select a private Codex account for a worker
+
+A serving CLI worker can select one existing owner-private Codex auth file without
+changing the default account store or setting `CODEX_HOME`:
+
+```sh
+target/debug/colossus --workspace /absolute/workspace --config /absolute/config.yaml \
+  --approval-mode ask worker --public-api-dir /absolute/private/api \
+  --codex-auth-path /absolute/private/account/auth.json --no-model-network-tools
+```
+
+The file and its directory must already exist, be private and have no linked aliases;
+keep the selected account file outside the tool workspace.
+The path must be absolute and canonical; credential contents remain late-bound behind
+the provider permit. The selected private directory stays bound for every load and
+refresh; parent aliases and added hard links are refused, while legitimate atomic
+credential replacement remains supported. Invalid selection fails before worker
+acquisition without falling
+back to another account. This option is unavailable with `worker --once`, status,
+shutdown or enrollment administration; ordinary `codex login/status/logout` behavior
+is unchanged. Configure the `open_ai_codex` primary route and exact service/refresh
+origins using the [provider guide](../use/providers/codex-chatgpt.md).
+The optional serve-only `--no-model-network-tools` host control hides generic model
+fetch tools while retaining the configured provider's HTTP and refresh transport. It
+does not change access policy, runtime grants, approval handling or provider credentials;
+omitting it preserves the ordinary CLI tool surface.
+
 The pruned release compilation path requires an explicit non-runnable validation
 channel and sentinel:
 

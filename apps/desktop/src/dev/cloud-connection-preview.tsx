@@ -22,6 +22,8 @@ export default function CloudPreview() {
     let status = parameters.get("state") ?? "connected";
     let sharedSessions = false;
     let sharedContinuation = false;
+    let sharingRecoveryRequired = parameters.get("recovery") === "1";
+    const sharingRestartRequired = parameters.get("restart") === "1";
     let catalog: ControlPlaneProfiles = {
       revision: 0,
       profiles: [],
@@ -34,6 +36,8 @@ export default function CloudPreview() {
               projectId: "Example project",
               endpoint: "https://control-plane.example.com",
               sharedSessions: false,
+              sharingRecoveryRequired,
+              sharingRestartRequired,
             },
           ]
         : [],
@@ -49,6 +53,8 @@ export default function CloudPreview() {
       sharingSupported: true,
       sharedSessions,
       sharedContinuation,
+      sharingRecoveryRequired,
+      sharingRestartRequired,
     });
     host.__TAURI_INTERNALS__ = {
       invoke: async (
@@ -75,6 +81,7 @@ export default function CloudPreview() {
           case "cloud_set_workspace_sharing":
             sharedSessions = arguments_.enabled ?? false;
             sharedContinuation = arguments_.allowContinuation ?? false;
+            sharingRecoveryRequired = false;
             break;
           case "cloud_enroll":
             enrolled = true;
@@ -82,6 +89,7 @@ export default function CloudPreview() {
             break;
           case "cloud_connect":
             status = "connected";
+            sharingRecoveryRequired = false;
             break;
           case "cloud_disconnect":
             status = "disconnected";

@@ -25,6 +25,8 @@ use zeroize::Zeroizing;
 
 #[cfg(test)]
 mod readiness_tests;
+#[cfg(test)]
+mod watcher_tests;
 
 /// Non-secret persisted enrollment and local runtime identity binding.
 #[derive(Clone, Serialize, Deserialize)]
@@ -178,7 +180,19 @@ impl RuntimeConnector {
             } else {
                 ConnectorStatus::Reconnecting
             });
-            let result = tokio::select! {result=self.connect_once(&status)=>result,_=shutdown.changed()=>{status.send_replace(ConnectorStatus::Disconnected);return Ok(());}};
+            // Keep child watches outside the cancellable connection future. A
+            // cooperative shutdown must join their cancellation, not merely drop
+            // a JoinSet whose child uploads may still be executing.
+            let mut watchers = JoinSet::new();
+            let result = tokio::select! {
+                result = self.connect_once(&status, &mut watchers) => Some(result),
+                _ = shutdown.changed() => None,
+            };
+            quiesce_watchers(&mut watchers).await;
+            let Some(result) = result else {
+                status.send_replace(ConnectorStatus::Disconnected);
+                return Ok(());
+            };
             if let Err(error) = &result {
                 // Transport categories are diagnostic metadata. Never log server
                 // messages, provider bodies, identifiers, or credential material.
@@ -213,7 +227,11 @@ impl RuntimeConnector {
             delay = (delay * 2).min(30);
         }
     }
-    async fn connect_once(&self, status: &watch::Sender<ConnectorStatus>) -> Result<(), Status> {
+    async fn connect_once(
+        &self,
+        status: &watch::Sender<ConnectorStatus>,
+        watchers: &mut JoinSet<Result<(), Status>>,
+    ) -> Result<(), Status> {
         check_local_readiness(self.runs.as_ref()).await?;
         let tls = ClientTlsConfig::new()
             .ca_certificate(Certificate::from_pem(self.config.ca_pem.clone()))
@@ -274,7 +292,6 @@ impl RuntimeConnector {
         let mut heartbeat = tokio::time::interval(Duration::from_secs(5));
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let permits = Arc::new(Semaphore::new(MAX_ACTIVE_TASKS));
-        let mut watchers: JoinSet<Result<(), Status>> = JoinSet::new();
         let mut watched = HashSet::new();
         let mut discovery: Option<wire::ReleasedDiscoveryPage> = None;
         let mut acknowledged_discovery: Option<(String, String)> = None;
@@ -577,4 +594,9 @@ async fn send(
     .await
     .map_err(|_| Status::resource_exhausted("outbound backpressure deadline"))?
     .map_err(|_| Status::cancelled("cloud stream closed"))
+}
+
+async fn quiesce_watchers(watchers: &mut JoinSet<Result<(), Status>>) {
+    // These tasks own released-output watches, never the accepted local run.
+    watchers.shutdown().await;
 }

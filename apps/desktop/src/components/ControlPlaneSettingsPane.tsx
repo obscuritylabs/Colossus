@@ -168,9 +168,15 @@ export function ControlPlaneSettingsPane() {
                       ? "Unknown"
                       : connection.status}{" "}
                     ·{" "}
-                    {connection.sharedSessions
-                      ? "Workspace history shared"
-                      : "Local history private"}
+                    {catalog.connectionStatusUnavailable
+                      ? "Sharing status unknown"
+                      : connection.sharingRestartRequired
+                        ? "Restart Desktop to reconcile sharing"
+                        : connection.sharingRecoveryRequired
+                          ? "Sharing needs reconciliation"
+                          : connection.sharedSessions
+                            ? "Workspace history shared"
+                            : "Local history private"}
                   </span>
                 </li>
               ))}

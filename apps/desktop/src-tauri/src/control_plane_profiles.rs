@@ -20,7 +20,7 @@ pub(crate) struct ControlPlaneProfile {
 
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct Profiles {
+pub(crate) struct Catalog {
     revision: u64,
     profiles: Vec<ControlPlaneProfile>,
     default_profile: Option<String>,
@@ -30,13 +30,13 @@ pub(crate) struct Profiles {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProfileSnapshot {
     #[serde(flatten)]
-    catalog: Profiles,
+    catalog: Catalog,
     connections: Vec<cloud_connector::CloudStatus>,
     connection_status_unavailable: bool,
 }
 
 fn snapshot(
-    catalog: Profiles,
+    catalog: Catalog,
     connections: Result<Vec<cloud_connector::CloudStatus>, CommandErrorDto>,
 ) -> ProfileSnapshot {
     let connection_status_unavailable = connections.is_err();
@@ -54,14 +54,14 @@ fn failure() -> CommandErrorDto {
     )
 }
 
-fn access(next: Option<Profiles>) -> Result<Profiles, CommandErrorDto> {
+fn access(next: Option<Catalog>) -> Result<Catalog, CommandErrorDto> {
     access_with_home(next, ColossusHome::resolve_and_ensure)
 }
 
 fn access_with_home(
-    next: Option<Profiles>,
+    next: Option<Catalog>,
     resolve_home: impl FnOnce() -> Result<ColossusHome, colossus_home::HomeError>,
-) -> Result<Profiles, CommandErrorDto> {
+) -> Result<Catalog, CommandErrorDto> {
     if let Some(next) = &next {
         let mut ids = BTreeSet::new();
         let mut names = BTreeSet::new();
@@ -130,8 +130,8 @@ fn access_with_home(
         if bytes.len() > 32768 {
             return Err(failure());
         }
-        let old: Profiles = if bytes.is_empty() {
-            Profiles::default()
+        let old: Catalog = if bytes.is_empty() {
+            Catalog::default()
         } else {
             serde_json::from_slice(&bytes).map_err(|_| failure())?
         };
@@ -176,7 +176,7 @@ pub(crate) async fn control_plane_profiles(
 #[tauri::command]
 pub(crate) async fn save_control_plane_profiles(
     state: State<'_, AppState>,
-    catalog: Profiles,
+    catalog: Catalog,
 ) -> Result<ProfileSnapshot, CommandErrorDto> {
     let catalog = tauri::async_runtime::spawn_blocking(move || access(Some(catalog)))
         .await

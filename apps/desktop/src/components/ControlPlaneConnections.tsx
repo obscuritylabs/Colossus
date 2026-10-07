@@ -76,6 +76,16 @@ export function ControlPlaneConnectionInventory({
                 <dd>{connection.projectId ?? "Not reported"}</dd>
                 <dt>Endpoint</dt>
                 <dd>{connection.endpoint ?? "Not reported"}</dd>
+                {connection.sharingRecoveryRequired ? (
+                  <>
+                    <dt>Sharing</dt>
+                    <dd>
+                      {connection.sharingRestartRequired
+                        ? "Restart Desktop to reconcile sharing"
+                        : "Sharing needs reconciliation"}
+                    </dd>
+                  </>
+                ) : null}
               </dl>
               {!space ? (
                 <p className="control-plane-connection-note">

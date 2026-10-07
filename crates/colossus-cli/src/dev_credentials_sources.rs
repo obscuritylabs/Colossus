@@ -1,12 +1,12 @@
 use super::{
     dev_credentials_args::DevelopmentCredentialSources,
+    dev_credentials_lease::OfflineFileLease,
     dev_credentials_plan::{self as plan, Failure, Plan, Result, Source},
     public_api_admin,
 };
 use colossus_credentials::{DevelopmentAuthority, PlatformCredentialVault};
 use colossus_home::{ColossusHome, detect_workspace_identity};
 use colossus_runtime::{KeyConfig, RuntimeConfig, StorageAdapter, StorageLocation};
-use fs4::fs_std::FileExt as _;
 use serde::Deserialize;
 use std::{
     collections::BTreeSet,
@@ -270,15 +270,11 @@ pub(super) fn public_api_source(directory: &Path) -> Result<Source> {
     let lock = root
         .open_existing_file_read_write(Path::new(".public-api.lock"))
         .map_err(|_| Failure("existing public API source lease is unavailable"))?;
-    if !lock
-        .file()
-        .try_lock_exclusive()
-        .map_err(|_| Failure("public API source lease failed"))?
-    {
-        return Err(Failure(
-            "stop the source public API before planning or rewrapping its custody",
-        ));
-    }
+    let lock = OfflineFileLease::acquire(
+        lock,
+        "public API source lease failed",
+        "stop the source public API before planning or rewrapping its custody",
+    )?;
     let certificate_file_sha256 =
         match std::fs::symlink_metadata(root.path().join("certificate.pem")) {
             Ok(_) => Some(plan::sha256(
@@ -296,7 +292,8 @@ pub(super) fn public_api_source(directory: &Path) -> Result<Source> {
         certificate_file_sha256,
         service: public_api_admin::namespace_service(root.path()),
     };
-    lock.revalidate(&root)
+    lock.file()
+        .revalidate(&root)
         .map_err(|_| Failure("public API source identity changed"))?;
     Ok(source)
 }

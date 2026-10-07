@@ -13,49 +13,52 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+mod styling;
+
 pub(crate) fn open(
     parent: &tauri::Window,
     cancelled: Arc<AtomicBool>,
     completion: Completion,
-    _appearance: DialogAppearance,
+    appearance: DialogAppearance,
 ) {
     let Ok(parent) = parent.gtk_window() else {
         completion.finish(Err(PromptError::Unavailable));
         return;
     };
-    create(parent.upcast_ref(), cancelled, completion);
+    let _ = create(parent.upcast_ref(), cancelled, completion, appearance);
 }
 
 fn create(
     parent: &gtk::Window,
     cancelled: Arc<AtomicBool>,
     completion: Completion,
-) -> (gtk::Dialog, gtk::Entry) {
+    appearance: DialogAppearance,
+) -> Result<(gtk::Dialog, gtk::Entry), PromptError> {
     let dialog = gtk::Dialog::builder()
         .title("Save a credential")
         .transient_for(parent)
         .modal(true)
         .destroy_with_parent(true)
-        .default_width(520)
+        .default_width(styling::pixels(appearance, 520))
         .resizable(false)
         .build();
     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
     dialog.add_button("Save credential", gtk::ResponseType::Accept);
     dialog.set_default_response(gtk::ResponseType::Accept);
     let content = dialog.content_area();
-    content.set_spacing(12);
-    content.set_margin_start(24);
-    content.set_margin_end(24);
-    content.set_margin_top(20);
-    content.set_margin_bottom(20);
+    styling::content(&content, appearance);
     let description = gtk::Label::new(Some(
         "This token stays in native credential storage and is never sent to the app's web view.",
     ));
     description.set_line_wrap(true);
     description.set_xalign(0.0);
+    description
+        .style_context()
+        .add_class("credential-description");
     let label = gtk::Label::new(Some("_Token"));
     label.set_use_underline(true);
     label.set_xalign(0.0);
+    label.style_context().add_class("credential-label");
     let entry = gtk::Entry::new();
     entry.set_visibility(false);
     entry.set_input_purpose(gtk::InputPurpose::Password);
@@ -68,10 +71,16 @@ fn create(
     let error = gtk::Label::new(None);
     error.set_line_wrap(true);
     error.set_xalign(0.0);
+    error.style_context().add_class("credential-error");
     content.add(&description);
     content.add(&label);
     content.add(&entry);
     content.add(&error);
+    if styling::apply(&dialog, appearance).is_err() {
+        dialog.close();
+        completion.finish(Err(PromptError::Unavailable));
+        return Err(PromptError::Unavailable);
+    }
     let completion = Rc::new(RefCell::new(Some(completion)));
     let result = Rc::new(RefCell::new(None));
     dialog.connect_response({
@@ -127,7 +136,7 @@ fn create(
     });
     dialog.show_all();
     entry.grab_focus();
-    (dialog, entry)
+    Ok((dialog, entry))
 }
 
 #[cfg(test)]
@@ -161,8 +170,15 @@ mod tests {
         gtk::init().unwrap();
         let parent = gtk::Window::new(gtk::WindowType::Toplevel);
         parent.show_all();
+        assert_appearance(&parent);
         let (completion, mut received) = Completion::acquire().unwrap();
-        let (dialog, entry) = create(&parent, Arc::new(AtomicBool::new(false)), completion);
+        let (dialog, entry) = create(
+            &parent,
+            Arc::new(AtomicBool::new(false)),
+            completion,
+            DialogAppearance::default(),
+        )
+        .unwrap();
         assert!(!gtk::prelude::EntryExt::is_visible(&entry));
         let clipboard = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
         clipboard.set_text("unrelated-synthetic-clipboard");
@@ -180,12 +196,61 @@ mod tests {
         dialog.response(gtk::ResponseType::Accept);
         wait_for_completion(&mut received).expect("valid native credential entry");
         let (completion, mut received) = Completion::acquire().unwrap();
-        let (dialog, _) = create(&parent, Arc::new(AtomicBool::new(false)), completion);
+        let (dialog, _) = create(
+            &parent,
+            Arc::new(AtomicBool::new(false)),
+            completion,
+            DialogAppearance::default(),
+        )
+        .unwrap();
         dialog.response(gtk::ResponseType::Cancel);
         assert_eq!(
             wait_for_completion(&mut received).unwrap_err(),
             PromptError::Cancelled
         );
         parent.close();
+    }
+
+    fn assert_appearance(parent: &gtk::Window) {
+        use crate::{ColorScheme, TextSize};
+        let parent_color = parent.style_context().color(gtk::StateFlags::NORMAL);
+        for scheme in [ColorScheme::Light, ColorScheme::Dark] {
+            let mut sizes = Vec::new();
+            let mut widths = Vec::new();
+            for text_size in [TextSize::Compact, TextSize::Comfortable, TextSize::Large] {
+                let appearance = DialogAppearance {
+                    color_scheme: scheme,
+                    text_size,
+                };
+                let (completion, mut received) = Completion::acquire().unwrap();
+                let (dialog, entry) = create(
+                    parent,
+                    Arc::new(AtomicBool::new(false)),
+                    completion,
+                    appearance,
+                )
+                .unwrap();
+                let context = entry.style_context();
+                sizes.push(context.font(gtk::StateFlags::NORMAL).size());
+                widths.push(dialog.default_size().0);
+                let color = context.color(gtk::StateFlags::NORMAL);
+                let expected = appearance.palette().text;
+                for (actual, shift) in [(color.red(), 16), (color.green(), 8), (color.blue(), 0)] {
+                    assert!((actual - f64::from((expected >> shift) & 0xff) / 255.0).abs() < 0.005);
+                }
+                assert_eq!(
+                    parent.style_context().color(gtk::StateFlags::NORMAL),
+                    parent_color
+                );
+                assert!(!gtk::prelude::EntryExt::is_visible(&entry));
+                dialog.response(gtk::ResponseType::Cancel);
+                assert_eq!(
+                    wait_for_completion(&mut received).unwrap_err(),
+                    PromptError::Cancelled
+                );
+            }
+            assert!(sizes[0] < sizes[1] && sizes[1] < sizes[2]);
+            assert!(widths[0] < widths[1] && widths[1] < widths[2]);
+        }
     }
 }

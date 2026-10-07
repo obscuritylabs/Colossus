@@ -115,6 +115,7 @@ impl DevelopmentAuthority {
         {
             return Err(CredentialError::Busy);
         }
+        let _lock = crate::database::VaultLease(lock);
         let has_key = root
             .path()
             .join(KEY_FILE)
@@ -263,6 +264,7 @@ impl DevelopmentAuthority {
         {
             return Err(CredentialError::Busy);
         }
+        let lock = crate::database::VaultLease(lock);
         lock.revalidate(&self.root).map_err(invalid)?;
         let (_, mut manifest) = validated_manifest(home, self.root.path(), &[])?;
         manifest.active = true;

@@ -22,7 +22,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  publisher-revision:
+    name: Resolve the protected main publisher
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      revision: ${{ steps.publisher.outputs.revision }}
+    steps:
+      - name: Use proposed code for tests or protected main for publication
+        id: publisher
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            revision="$GITHUB_SHA"
+          else
+            revision=$(gh api repos/obscuritylabs/Colossus/git/ref/heads/main --jq .object.sha)
+          fi
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+
   contracts:
+    needs: publisher-revision
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -30,6 +56,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.publisher-revision.outputs.revision }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -39,7 +66,7 @@ jobs:
 
   publish:
     name: Publish the exact tested multi-platform server
-    needs: contracts
+    needs: [publisher-revision, contracts]
     if: >-
       github.repository == 'obscuritylabs/Colossus' &&
       ((github.event_name == 'release' && github.event.release.draft == false) ||
@@ -51,10 +78,10 @@ jobs:
       contents: read
       packages: write
     steps:
-      - name: Use the protected main publisher, not downloaded executable code
+      - name: Use the same protected publisher revision that passed contracts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ needs.publisher-revision.outputs.revision }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0

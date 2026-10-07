@@ -36,8 +36,24 @@ fn share_stream(recipient: &str) -> String {
     )
 }
 
+fn same_share(actual: Option<&ShareRecord>, desired: &ShareRecord) -> bool {
+    actual.map_or(!desired.enabled, |record| {
+        record.owner == desired.owner
+            && record.owner_kind == desired.owner_kind
+            && record.recipient == desired.recipient
+            && record.enabled == desired.enabled
+            && record.allow_continuation == desired.allow_continuation
+    })
+}
+
 impl RuntimeAgentRunApi {
     fn shares(&self, recipient: &CallerContext) -> ApiResult<(Vec<ShareRecord>, u64)> {
+        let (mut records, cursor) = self.latest_shares(recipient)?;
+        records.retain(|record| record.enabled);
+        Ok((records, cursor))
+    }
+
+    fn latest_shares(&self, recipient: &CallerContext) -> ApiResult<(Vec<ShareRecord>, u64)> {
         recipient.require_scope(scopes::RUNS_READ)?;
         let journal = self.runtime.journal();
         let mut records = BTreeMap::new();
@@ -81,11 +97,8 @@ impl RuntimeAgentRunApi {
                 break;
             }
         }
-        let records = records
-            .into_values()
-            .filter(|record| record.enabled)
-            .collect::<Vec<_>>();
-        if records.len() > MAX_SHARED_SOURCES {
+        let records = records.into_values().collect::<Vec<_>>();
+        if records.iter().filter(|record| record.enabled).count() > MAX_SHARED_SOURCES {
             return Err(capacity_error(recipient));
         }
         Ok((records, cursor))
@@ -160,12 +173,11 @@ impl RuntimeAgentRunApi {
             allow_continuation: request.allow_continuation,
         };
         for _ in 0..32 {
-            let (records, version) = self.shares(&recipient)?;
-            if records.iter().any(|record| {
-                record.owner == desired.owner
-                    && record.enabled == desired.enabled
-                    && record.allow_continuation == desired.allow_continuation
-            }) {
+            let (records, version) = self.latest_shares(&recipient)?;
+            if same_share(
+                records.iter().find(|record| record.owner == desired.owner),
+                &desired,
+            ) {
                 break;
             }
             if version >= MAX_SHARE_EVENTS as u64 {
@@ -196,12 +208,9 @@ impl RuntimeAgentRunApi {
                 Err(error) => return Err(ApiError::from_store(&error, caller.request_id())),
             }
         }
-        let (records, _) = self.shares(&recipient)?;
+        let (records, _) = self.latest_shares(&recipient)?;
         let actual = records.iter().find(|record| record.owner == desired.owner);
-        if (desired.enabled
-            && actual.is_none_or(|record| record.allow_continuation != desired.allow_continuation))
-            || (!desired.enabled && actual.is_some())
-        {
+        if !same_share(actual, &desired) {
             return Err(capacity_error(caller));
         }
         Ok(WorkspaceSharingState {

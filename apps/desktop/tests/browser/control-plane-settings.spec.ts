@@ -1,6 +1,118 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
+test("uncertain sharing requires restart instead of another mutation", async ({
+  page,
+}) => {
+  await page.goto("/?fixture=cloud&state=disconnected&recovery=1&restart=1");
+  const notice = page
+    .getByRole("alert")
+    .filter({ hasText: "Sharing needs reconciliation" });
+  await expect(notice).toContainText(
+    "Restart Desktop before changing sharing or reconnecting.",
+  );
+  await expect(notice).not.toContainText("Save your choice again");
+  for (const name of [
+    "Reconnect runtime",
+    "Revoke enrollment",
+    "Forget enrollment",
+    "Save conversation sharing",
+  ]) {
+    await expect(
+      page.getByRole("button", { name, exact: true }),
+    ).toBeDisabled();
+  }
+  await expect(
+    page.getByRole("radio", {
+      name: "Control Plane conversations only",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await expect(page.locator(".control-plane-workspace-list")).toContainText(
+    "Restart Desktop to reconcile sharing",
+  );
+});
+
+test("sharing recovery stays visible until an explicit saved choice succeeds", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 700, height: 850 });
+  await page.goto("/?fixture=cloud&state=disconnected&recovery=1");
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = "dark";
+    document.documentElement.dataset.palette = "neutral";
+    document.documentElement.dataset.textSize = "large";
+    const host = window as unknown as {
+      __TAURI_INTERNALS__: {
+        invoke: (command: string, parameters: unknown) => Promise<unknown>;
+      };
+      sharingCalls: unknown[];
+    };
+    host.sharingCalls = [];
+    const invoke = host.__TAURI_INTERNALS__.invoke;
+    host.__TAURI_INTERNALS__.invoke = (command, parameters) => {
+      if (
+        command === "cloud_set_workspace_sharing" ||
+        command === "cloud_connect"
+      )
+        host.sharingCalls.push({ command, parameters });
+      return invoke(command, parameters);
+    };
+  });
+  const notice = page.getByRole("alert").filter({
+    hasText: "Sharing needs reconciliation",
+  });
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText("Synchronization is paused");
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await expect(page.locator(".control-plane-workspace-list")).toContainText(
+    "Sharing needs reconciliation",
+  );
+  await expect(page.locator(".control-plane-workspace-list")).not.toContainText(
+    "Local history private",
+  );
+  await page.getByRole("button", { name: "Workspace", exact: true }).click();
+  await expect(notice).toBeVisible();
+  await page
+    .getByRole("radio", { name: "Share Desktop history for viewing" })
+    .click();
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { sharingCalls: unknown[] }).sharingCalls,
+    ),
+  ).toEqual([]);
+  await expect(notice).toBeVisible();
+  const result = await new AxeBuilder({ page })
+    .include(".managed-settings-shell")
+    .analyze();
+  expect(result.violations).toEqual([]);
+  expect(
+    await page
+      .locator(".cloud-settings")
+      .evaluate((body) => body.scrollWidth <= body.clientWidth),
+  ).toBe(true);
+  await page.screenshot({
+    path: "output/playwright/control-plane-sharing-recovery.png",
+  });
+  await page.getByRole("button", { name: "Save conversation sharing" }).click();
+  await expect(notice).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { sharingCalls: unknown[] }).sharingCalls,
+    ),
+  ).toEqual([
+    {
+      command: "cloud_set_workspace_sharing",
+      parameters: {
+        targetId: "preview-workspace",
+        enabled: true,
+        allowContinuation: false,
+      },
+    },
+  ]);
+});
+
 test("workspace Control Plane uses compact settings geometry and defers sharing to Save", async ({
   page,
 }) => {

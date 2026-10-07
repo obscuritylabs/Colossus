@@ -160,6 +160,20 @@ pub(super) enum UpdateAction {
 
 #[derive(Args)]
 pub(super) struct WorkerCommand {
+    /// Use one existing private Codex auth file for this serving worker only.
+    /// Credential contents stay late-bound inside the permitted provider adapter.
+    #[arg(
+        long,
+        value_name = "ABS_FILE",
+        conflicts_with_all = ["once", "shutdown", "status", "enroll_application", "revoke_credential"]
+    )]
+    pub(super) codex_auth_path: Option<PathBuf>,
+    /// Hide generic model fetch tools while retaining configured provider transport.
+    #[arg(
+        long,
+        conflicts_with_all = ["once", "shutdown", "status", "enroll_application", "revoke_credential"]
+    )]
+    pub(super) no_model_network_tools: bool,
     /// Recover and drain once instead of serving local IPC.
     #[arg(
         long,

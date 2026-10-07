@@ -83,6 +83,14 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
     if let Command::Cloud(command) = cli.command {
         return colossus_connector::run_cli(command).await;
     }
+    // Metadata validation precedes home/runtime/worker acquisition. The selected
+    // account remains native-only and no credential is loaded until a provider permit.
+    let worker_codex_auth = match &cli.command {
+        Command::Worker(worker) => {
+            worker_codex_auth::select(worker.codex_auth_path.as_deref(), &cli.workspace)?
+        }
+        _ => None,
+    };
     let home = ColossusHome::resolve_and_ensure()?;
     if let Command::Update(update) = &cli.command {
         match update.command.as_ref() {
@@ -234,21 +242,28 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 ApprovalMode::FullAccess => WorkerApprovalMode::FullAccess,
             };
             let server =
-                WorkerServer::open_with_mode_at_workspace(&config, mode, runtime_options.clone())
-                    .map_err(worker_open_error)?
-                    .with_observability_diagnostics(move || {
-                        serde_json::to_value(observability_diagnostics.force_flush())
-                            .unwrap_or_else(|_| {
-                                serde_json::json!({
-                                    "ready": false,
-                                    "checks": [{
-                                        "name": "host",
-                                        "status": "fail",
-                                        "detail": "The exporter diagnostic failed safely."
-                                    }]
-                                })
+                WorkerServer::open_with_mode_at_workspace_and_provider_credentials_and_codex_auth(
+                    &config,
+                    mode,
+                    worker_codex_auth::runtime_options(worker, runtime_options.clone()),
+                    Arc::new(colossus_runtime::EnvironmentCredentialResolver),
+                    worker_codex_auth,
+                )
+                .map_err(worker_open_error)?
+                .with_observability_diagnostics(move || {
+                    serde_json::to_value(observability_diagnostics.force_flush()).unwrap_or_else(
+                        |_| {
+                            serde_json::json!({
+                                "ready": false,
+                                "checks": [{
+                                    "name": "host",
+                                    "status": "fail",
+                                    "detail": "The exporter diagnostic failed safely."
+                                }]
                             })
-                    });
+                        },
+                    )
+                });
             let (server, public_environment) = if let Some(directory) =
                 worker.public_api_dir.as_deref()
             {

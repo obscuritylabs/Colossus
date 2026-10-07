@@ -5,7 +5,7 @@ use colossus_contracts::{CredentialError, VaultRecord};
 use colossus_home::{ConfinedRoot, HomeError};
 use colossus_ports::{CredentialKey, CredentialVault};
 use fs4::fs_std::FileExt as _;
-use redb::{Database, Durability, ReadableDatabase as _};
+use redb::{Durability, ReadableDatabase as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::{
@@ -344,19 +344,7 @@ impl PlatformCredentialVault {
                 .open_existing_file_read_write(Path::new(DATABASE_FILE))
         }
         .map_err(home_error)?;
-        let database = Database::builder()
-            .create_file(file.file().try_clone().map_err(|_| CredentialError::Io)?)
-            .map_err(|error| match error {
-                redb::DatabaseError::DatabaseAlreadyOpen => CredentialError::Busy,
-                redb::DatabaseError::Storage(redb::StorageError::Io(_)) => CredentialError::Io,
-                _ => CredentialError::Corrupt,
-            })?;
-        let vault = OpenedVault {
-            database,
-            master: None,
-            file,
-            lease,
-        };
+        let vault = OpenedVault::open(file, lease)?;
         vault.revalidate(&self.root)?;
         *guard = Some(vault);
         #[cfg(test)]

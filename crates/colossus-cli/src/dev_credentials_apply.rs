@@ -1,4 +1,5 @@
 use super::{
+    dev_credentials_lease::OfflineFileLease,
     dev_credentials_plan::{self as plan, Failure, Plan, Result, Source},
     dev_credentials_sources,
     public_api_admin::{self, SecretStore},
@@ -8,8 +9,7 @@ use colossus_credentials::{
     DevelopmentAuthority, DevelopmentStoreScope, PlatformCredentialVault, development_journal_key,
     headless_credential_account, seal_existing, seal_existing_record,
 };
-use colossus_home::{ConfinedFile, ConfinedRoot};
-use fs4::fs_std::FileExt as _;
+use colossus_home::ConfinedRoot;
 use std::path::Path;
 use zeroize::Zeroizing;
 
@@ -45,13 +45,11 @@ pub(super) fn apply_with_vault_keys(
     let operation = authority_root
         .open_file(Path::new("offline-rewrap.lock"))
         .map_err(|_| Failure("development rewrap lease is unavailable"))?;
-    if !operation
-        .file()
-        .try_lock_exclusive()
-        .map_err(|_| Failure("development rewrap lease failed"))?
-    {
-        return Err(Failure("another offline development rewrap is active"));
-    }
+    let operation_lease = OfflineFileLease::acquire(
+        operation,
+        "development rewrap lease failed",
+        "another offline development rewrap is active",
+    )?;
     if dev_credentials_sources::rebuild(plan)? != *plan {
         return Err(Failure("existing sources changed since the reviewed plan"));
     }
@@ -262,7 +260,8 @@ pub(super) fn apply_with_vault_keys(
         }
     }
     for (root, file) in &_source_leases {
-        file.revalidate(root)
+        file.file()
+            .revalidate(root)
             .map_err(|_| Failure("source identity changed during offline rewrap"))?;
     }
     if plan.fresh_empty {
@@ -276,14 +275,15 @@ pub(super) fn apply_with_vault_keys(
     authority
         .activate(&home)
         .map_err(|_| Failure("verified development custody could not be activated"))?;
-    operation
+    operation_lease
+        .file()
         .revalidate(&authority_root)
         .map_err(|_| Failure("development rewrap identity changed"))?;
     drop(held_vaults);
     Ok((copied, reused))
 }
 
-fn source_leases(plan: &Plan) -> Result<Vec<(ConfinedRoot, ConfinedFile)>> {
+fn source_leases(plan: &Plan) -> Result<Vec<(ConfinedRoot, OfflineFileLease)>> {
     let mut guards = Vec::new();
     let mut directories = std::collections::BTreeSet::new();
     for source in &plan.sources {
@@ -318,19 +318,16 @@ fn source_leases(plan: &Plan) -> Result<Vec<(ConfinedRoot, ConfinedFile)>> {
                 ..
             } => {
                 let (root, file) = plan::existing_file(journal)?;
-                if !file
-                    .file()
-                    .try_lock_exclusive()
-                    .map_err(|_| Failure("journal source lease failed"))?
-                {
-                    return Err(Failure(
-                        "stop the source journal writer before rewrapping custody",
-                    ));
-                }
+                let file = OfflineFileLease::acquire(
+                    file,
+                    "journal source lease failed",
+                    "stop the source journal writer before rewrapping custody",
+                )?;
                 if plan::file_digest(journal)? != *journal_sha256 {
                     return Err(Failure("journal source changed before its offline lease"));
                 }
-                file.revalidate(&root)
+                file.file()
+                    .revalidate(&root)
                     .map_err(|_| Failure("journal source identity changed"))?;
                 guards.push((root, file));
             }
@@ -342,16 +339,13 @@ fn source_leases(plan: &Plan) -> Result<Vec<(ConfinedRoot, ConfinedFile)>> {
         let file = root
             .open_existing_file_read_write(Path::new(".public-api.lock"))
             .map_err(|_| Failure("existing public API source lease is unavailable"))?;
-        if !file
-            .file()
-            .try_lock_exclusive()
-            .map_err(|_| Failure("public API source lease failed"))?
-        {
-            return Err(Failure(
-                "stop the source public API before rewrapping custody",
-            ));
-        }
-        file.revalidate(&root)
+        let file = OfflineFileLease::acquire(
+            file,
+            "public API source lease failed",
+            "stop the source public API before rewrapping custody",
+        )?;
+        file.file()
+            .revalidate(&root)
             .map_err(|_| Failure("public API source identity changed"))?;
         guards.push((root, file));
     }

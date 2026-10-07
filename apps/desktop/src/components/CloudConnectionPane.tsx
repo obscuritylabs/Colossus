@@ -21,6 +21,8 @@ interface CloudStatus {
   sharedSessions?: boolean;
   sharedContinuation?: boolean;
   sharingSupported?: boolean;
+  sharingRecoveryRequired?: boolean;
+  sharingRestartRequired?: boolean;
 }
 export function CloudConnectionPane({ targetId }: { targetId: string }) {
   const headingId = useId(),
@@ -111,6 +113,7 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
   const active =
     status &&
     ["connected", "connecting", "reconnecting"].includes(status.status);
+  const sharingBlocked = Boolean(status?.sharingRestartRequired);
   useEffect(() => {
     setSharing(
       status?.sharedSessions
@@ -188,7 +191,7 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
             ) : (
               <Button
                 variant="primary"
-                disabled={busy || status.status === "revoked"}
+                disabled={busy || status.status === "revoked" || sharingBlocked}
                 onClick={() => void action("cloud_connect")}
               >
                 <IconRefresh size={17} />
@@ -197,14 +200,14 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
             )}
             <Button
               variant="danger"
-              disabled={busy || status.status === "revoked"}
+              disabled={busy || status.status === "revoked" || sharingBlocked}
               onClick={() => void action("cloud_revoke")}
             >
               Revoke enrollment
             </Button>
             <Button
               variant="secondary"
-              disabled={busy || !!active}
+              disabled={busy || !!active || sharingBlocked}
               onClick={() => void action("cloud_forget")}
             >
               Forget enrollment
@@ -230,11 +233,27 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
             >
               <div className="cloud-settings-control-column">
                 <h4 id={sharingHeadingId}>Desktop conversation sharing</h4>
+                {status.sharingRecoveryRequired ? (
+                  <div className="managed-settings-notice error" role="alert">
+                    <strong>Sharing needs reconciliation</strong>
+                    <p>
+                      Synchronization is paused and the sharing state is
+                      unconfirmed.{" "}
+                      {sharingBlocked
+                        ? "Restart Desktop before changing sharing or reconnecting."
+                        : "Save your choice again, or reconnect to apply the last saved choice."}{" "}
+                      Previously shared history remains available in the Control
+                      Plane.
+                    </p>
+                  </div>
+                ) : null}
                 <RadioGroup
                   variant="compact"
                   value={sharing}
                   onValueChange={setSharing}
-                  disabled={busy || status.status === "revoked"}
+                  disabled={
+                    busy || status.status === "revoked" || sharingBlocked
+                  }
                   aria-label="Desktop conversation sharing"
                   options={[
                     {
@@ -261,7 +280,7 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
               <Button
                 type="submit"
                 variant="secondary"
-                disabled={busy || status.status === "revoked"}
+                disabled={busy || status.status === "revoked" || sharingBlocked}
               >
                 Save conversation sharing
               </Button>

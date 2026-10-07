@@ -25,6 +25,8 @@ fn status(state: ConnectorStatus) -> CloudStatus {
         shared_sessions: false,
         shared_continuation: false,
         sharing_supported: true,
+        sharing_recovery_required: super::super::sharing::Requirement::Clear,
+        sharing_restart_required: super::super::sharing::Requirement::Clear,
     }
 }
 
@@ -52,6 +54,26 @@ fn saved_connections_survive_reopen_without_claiming_live_connectivity() {
     let bytes =
         fs::read(home.root().join("desktop-control-plane/connections.json")).expect("public cache");
     let encoded = String::from_utf8(bytes).expect("UTF8 metadata");
+    let mut wire: serde_json::Value = serde_json::from_str(&encoded).expect("wire metadata");
+    let row = wire["owned-workspace"]
+        .as_object_mut()
+        .expect("status object");
+    assert_eq!(row["sharingRecoveryRequired"], false);
+    assert_eq!(row["sharingRestartRequired"], false);
+    row.remove("sharingRecoveryRequired");
+    row.remove("sharingRestartRequired");
+    let legacy: CloudStatus = serde_json::from_value(serde_json::Value::Object(row.clone()))
+        .expect("legacy status defaults");
+    assert!(!legacy.sharing_recovery_required.is_required());
+    assert!(!legacy.sharing_restart_required.is_required());
+    row.insert(
+        "sharingRecoveryRequired".into(),
+        serde_json::json!("required"),
+    );
+    assert!(
+        serde_json::from_value::<CloudStatus>(serde_json::Value::Object(row.clone())).is_err(),
+        "wire flags remain strict booleans"
+    );
     for forbidden in ["credential", "bearer", "privateKey", "certificate"] {
         assert!(!encoded.contains(forbidden));
     }
@@ -270,7 +292,11 @@ fn forged_connected_states_and_secret_bearing_fields_are_rejected() {
     fs::write(&path, serde_json::to_vec(&forged).expect("forged JSON"))
         .expect("write forbidden field");
     assert!(access(None, || Ok(home.clone())).is_err());
-    fs::write(&path, vec![b' '; MAX_BYTES as usize + 1]).expect("oversized cache");
+    fs::write(
+        &path,
+        vec![b' '; usize::try_from(MAX_BYTES).expect("bounded cache size fits usize") + 1],
+    )
+    .expect("oversized cache");
     assert!(access(None, || Ok(home)).is_err());
 }
 

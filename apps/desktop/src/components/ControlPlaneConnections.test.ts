@@ -90,6 +90,34 @@ it("never turns an unrecognized or unavailable status into Connected", () => {
   expect(controlPlaneState("connected", true).label).toBe("Unknown");
 });
 
+it("surfaces incomplete sharing changes without changing workspace navigation", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ControlPlaneConnectionInventory, {
+      catalog: {
+        ...catalog,
+        connections: [
+          { ...catalog.connections[1]!, sharingRecoveryRequired: true },
+        ],
+      },
+      spaces: [
+        {
+          spaceId: "space-b",
+          targetId: "target-b",
+          displayName: "Workspace B",
+        },
+      ],
+      onManageWorkspace: () => undefined,
+      onManageProfiles: () => undefined,
+    }),
+  );
+  expect(markup).toContain("Sharing needs reconciliation");
+  expect(markup).toContain("Disconnected");
+  expect(markup).toContain('aria-label="Manage Control Plane for Workspace B"');
+  expect(markup).not.toMatch(
+    /disabled=""[^>]*aria-label="Manage Control Plane for Workspace B"/,
+  );
+});
+
 it("marks retained enrollment metadata Unknown while keeping endpoint bookmarks usable", () => {
   const markup = renderToStaticMarkup(
     createElement(ControlPlaneConnectionInventory, {

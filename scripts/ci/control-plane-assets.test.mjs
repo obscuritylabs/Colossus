@@ -1,13 +1,28 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { serverTargets, validateRequest, verifyControlPlaneAssets, savedImageConfigPath,
   verifySavedImageConfig, verifyExecutableManifest, executableDescriptorDigest } from "./verify-control-plane-assets.mjs";
 import { readSavedImageConfig } from "./verify-control-plane-assets.mjs";
+
+test("privileged publication uses the protected publisher revision that passed contracts", async () => {
+  const workflow = await readFile(new URL("../../.github/workflows/control-plane-image.yml", import.meta.url), "utf8");
+  const resolver = workflow.split("  publisher-revision:\n")[1]?.split("  contracts:\n")[0];
+  assert.ok(resolver, "Publication must resolve its trusted publisher before either consumer runs");
+  assert.match(resolver, /if \[\[ "\$EVENT_NAME" == pull_request \]\]; then\s+revision="\$GITHUB_SHA"\s+else\s+revision=\$\(gh api repos\/obscuritylabs\/Colossus\/git\/ref\/heads\/main --jq \.object\.sha\)/u);
+  assert.match(resolver, /\[\[ "\$revision" =~ \^\[0-9a-f\]\{40\}\$ \]\]/u);
+  assert.equal(workflow.split("ref: ${{ needs.publisher-revision.outputs.revision }}").length - 1, 2,
+    "Contracts and credentialed publication must check out the same resolved immutable SHA");
+  assert.doesNotMatch(workflow, /ref: main\b/u, "A moving main ref can bypass the checked publisher revision");
+  const contracts = workflow.split("  contracts:\n")[1]?.split("  publish:\n")[0];
+  assert.match(contracts, /needs: publisher-revision/u);
+  const publish = workflow.split("  publish:\n")[1];
+  assert.match(publish, /needs: \[publisher-revision, contracts\]/u);
+});
 
 test("publication rejects path/tag injection and mutable release substitutions", async () => {
   assert.throws(() => validateRequest("../../secret"));

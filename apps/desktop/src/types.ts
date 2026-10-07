@@ -259,6 +259,8 @@ export interface ControlPlaneEnrollmentStatus {
   projectId: string | null;
   endpoint: string | null;
   sharedSessions: boolean;
+  sharingRecoveryRequired?: boolean;
+  sharingRestartRequired?: boolean;
 }
 
 export interface ControlPlaneProfiles {

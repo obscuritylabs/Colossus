@@ -18,7 +18,7 @@ pub enum TextSize {
     Large,
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 impl TextSize {
     pub(crate) const fn root_pixels(self) -> i32 {
         match self {
@@ -42,28 +42,28 @@ pub struct DialogAppearance {
 }
 
 #[derive(Clone, Copy)]
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 pub(crate) struct Palette {
     pub surface: u32,
     pub control: u32,
     pub text: u32,
     pub strong: u32,
     pub muted: u32,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub border: u32,
     pub accent: u32,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub accent_hover: u32,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub on_accent: u32,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub hover: u32,
     pub danger: u32,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub focus: u32,
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 impl DialogAppearance {
     pub(crate) const fn palette(self) -> Palette {
         match self.color_scheme {
@@ -74,20 +74,20 @@ impl DialogAppearance {
                 strong: 0xf7_fa_ff,
                 muted: 0x91_a2_b8,
 
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 border: 0x2b_42_60,
                 accent: 0x43_89_ff,
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 accent_hover: 0x55_94_ff,
 
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 on_accent: 0x07_10_1d,
 
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 hover: 0x18_2b_41,
 
                 danger: 0xff_ad_b3,
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 focus: 0x45_c8_ed,
             },
             ColorScheme::System | ColorScheme::Light => Palette {
@@ -97,20 +97,20 @@ impl DialogAppearance {
                 strong: 0x10_20_33,
                 muted: 0x52_65_7a,
 
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 border: 0xb8_c7_d8,
                 accent: 0x25_63_d9,
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 accent_hover: 0x1d_4f_b8,
 
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 on_accent: 0xff_ff_ff,
 
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 hover: 0xe6_ed_f6,
 
                 danger: 0x96_2d_3a,
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 focus: 0x08_7d_a1,
             },
         }

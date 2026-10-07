@@ -1362,6 +1362,7 @@ name = "colossus-codex-auth"
 version = "0.11.7"
 dependencies = [
  "base64 0.22.1",
+ "colossus-home",
  "colossus-windows-native",
  "directories",
  "fs4",
