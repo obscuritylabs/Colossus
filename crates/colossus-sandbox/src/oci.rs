@@ -706,9 +706,14 @@ pub(super) fn configure_proxy_environment(command: &mut Command, proxy: &str) {
 }
 
 pub(super) fn authenticated_proxy_url(port: u16, credential: Option<&str>) -> String {
+    let host = if cfg!(target_os = "macos") {
+        "localhost"
+    } else {
+        "127.0.0.1"
+    };
     credential.map_or_else(
-        || format!("http://127.0.0.1:{port}"),
-        |credential| format!("http://colossus:{credential}@127.0.0.1:{port}"),
+        || format!("http://{host}:{port}"),
+        |credential| format!("http://colossus:{credential}@{host}:{port}"),
     )
 }
 
