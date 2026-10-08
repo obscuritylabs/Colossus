@@ -21,6 +21,9 @@ export async function installWorkflowFixture(
       workflowBadInput?: boolean;
       workflowRunStatus?: string;
       workflowRunUncertain?: boolean;
+      workflowRunDelay?: boolean;
+      resumeWorkflowRun?: () => void;
+      workflowHistoryFailure?: boolean;
       workflowDeleteUncertain?: boolean;
     };
     host.workflowCalls = [];
@@ -315,8 +318,17 @@ export async function installWorkflowFixture(
           schedule.etag = "e".repeat(64);
           return structuredClone(schedule);
         }
-        if (command === "list_workflow_runs")
+        if (command === "list_workflow_runs") {
+          if (host.workflowHistoryFailure)
+            throw {
+              message: "Run history is temporarily unavailable.",
+              code: "unavailable",
+              retryable: true,
+              outcomeUnknown: false,
+              violations: [],
+            };
           return { items: manualRun ? [manualRun] : [], next_cursor: null };
+        }
         if (command === "start_workflow_run") {
           const request = args.request as {
             idempotency_key: string;
@@ -370,6 +382,12 @@ export async function installWorkflowFixture(
               waiting_reason: null,
             };
             manualKey = request.idempotency_key;
+          }
+          if (host.workflowRunDelay) {
+            host.workflowRunDelay = false;
+            await new Promise<void>((resolve) => {
+              host.resumeWorkflowRun = resolve;
+            });
           }
           if (host.workflowRunUncertain) {
             host.workflowRunUncertain = false;

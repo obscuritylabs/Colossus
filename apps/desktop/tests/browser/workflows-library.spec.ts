@@ -165,3 +165,35 @@ test("empty workflow library has a single starting view and launches a new autho
   await expect(message).toContainText("Help me create a reusable workflow");
   await expect(message).toContainText("strict input schema");
 });
+
+test("a run-history failure keeps the confirmed workflow library and selected definition visible", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installWorkflowFixture(page, { modern: true });
+  await page.goto("/?fixture=operations-studio");
+  await page.getByRole("button", { name: "Workflows", exact: true }).click();
+  await page.evaluate(() => {
+    (
+      window as unknown as { workflowHistoryFailure: boolean }
+    ).workflowHistoryFailure = true;
+  });
+  const workflow = page.getByRole("button", {
+    name: /workspace-health Version/u,
+  });
+  await workflow.click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Run history is temporarily unavailable",
+  );
+  await expect(workflow).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: "workspace-health",
+      exact: true,
+      level: 3,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Run workflow", exact: true }),
+  ).toBeEnabled();
+});

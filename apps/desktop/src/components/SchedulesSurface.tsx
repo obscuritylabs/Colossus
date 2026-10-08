@@ -11,7 +11,11 @@ import { Button } from "@colossus/ui";
 import { AutomationSurface } from "@colossus/ui/automations";
 import "@colossus/ui/styles/automations.css";
 import { IconPlus, IconSparkles, IconLayoutGrid } from "@tabler/icons-react";
-import type { WorkflowContext, WorkflowSchedule } from "../workflows";
+import type {
+  ScheduleRunAttempt,
+  WorkflowContext,
+  WorkflowSchedule,
+} from "../workflows";
 import { ScheduleCreate } from "./ScheduleCreate";
 import { ScheduleDetail } from "./ScheduleDetail";
 import { WorkflowDialog } from "./WorkflowDialog";
@@ -32,12 +36,16 @@ export function SchedulesSurface({
   initialInspection,
   onCreateWithAgent,
   agentStarting,
+  runAttempts,
+  attemptScope,
 }: {
   targetId: string | null;
   workspaceName: string;
   runtimeReady: boolean;
   onCreateWithAgent: (prompt: string) => void;
   agentStarting: boolean;
+  runAttempts: Map<string, ScheduleRunAttempt>;
+  attemptScope: string;
   initialInspection?:
     { scheduleId: string; showRun: boolean } | null | undefined;
 }) {
@@ -430,6 +438,8 @@ export function SchedulesSurface({
         )}
       {detail && targetId && context && (
         <ScheduleDetail
+          runAttempts={runAttempts}
+          attemptScope={attemptScope}
           key={`${context.selection_epoch}:${detail.record.schedule_id}`}
           targetId={targetId}
           context={context}

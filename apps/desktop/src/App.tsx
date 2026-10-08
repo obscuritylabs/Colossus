@@ -71,6 +71,7 @@ import {
   watchRun,
 } from "./api";
 import type { StatusBarAction } from "./api";
+import type { ScheduleRunAttempt } from "./workflows";
 import type { AgentParticipant } from "./components/AgentFlow";
 import type {
   ArtifactPreviewLine,
@@ -1198,6 +1199,7 @@ export default function App() {
   const queuedMessagesRef = useRef<readonly QueuedMessage[]>([]);
   const queueDeliveryRef = useRef<string | null>(null);
   const createAttempt = useRef<RoutedAttempt | null>(null);
+  const scheduleRunAttempts = useRef(new Map<string, ScheduleRunAttempt>());
   const asideCreateAttempt = useRef<RoutedAttempt | null>(null);
   const cancelAttempts = useRef(new Map<string, IdempotentAttempt>());
   const responseAttempts = useRef(new Map<string, IdempotentAttempt>());
@@ -5916,6 +5918,7 @@ export default function App() {
           }
         >
           <OperationsSurface
+            scheduleRunAttempts={scheduleRunAttempts.current}
             onCreateWithAgent={(prompt) =>
               void createAutomationWithAgent(prompt)
             }

@@ -92,6 +92,7 @@ function renderSurface(
       surface,
       onCreateWithAgent: vi.fn(),
       agentStarting: false,
+      scheduleRunAttempts: new Map(),
       connection: status.connection,
       desktop: status,
       connecting: false,

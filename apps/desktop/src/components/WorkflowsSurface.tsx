@@ -225,7 +225,7 @@ Review the steps, explicit tool capabilities, execution limits, and strict input
           This runtime does not advertise workflow discovery. Ask its
           administrator to enable the workflow read scope.
         </div>
-      ) : error ? null : !items.length ? (
+      ) : error && !items.length ? null : !items.length ? (
         <AutomationWelcome
           title="Turn a repeatable task into a workflow"
           description="Describe what to automate. An agent will help you define the steps and inputs, then prepare a workflow you can run again."

@@ -320,6 +320,12 @@ test("Run now executes a paused task with pinned inputs and keeps its schedule u
   await expect(
     page.getByRole("status").filter({ hasText: "run is unconfirmed" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Back to schedules" }).click();
+  await page.getByRole("button", { name: "Workflows", exact: true }).click();
+  await page.getByRole("button", { name: "Schedules", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Manual health test Agent task", exact: true })
+    .click();
   await page
     .getByRole("button", { name: "Confirm same run request", exact: true })
     .click();
@@ -348,4 +354,48 @@ test("Run now executes a paused task with pinned inputs and keeps its schedule u
     calls.filter((call) => call.command === "set_workflow_schedule_enabled"),
   ).toHaveLength(0);
   await capture(page, "05-task-run-now.png");
+});
+
+test("a pending manual run retains its request identity after leaving the detail and surface", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await open(page);
+  await page.evaluate(() => {
+    (window as unknown as { workflowRunDelay: boolean }).workflowRunDelay =
+      true;
+  });
+  await page.getByRole("button", { name: "Run now", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Starting…", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Back to schedules" }).click();
+  await page.getByRole("button", { name: "Workflows", exact: true }).click();
+  await page.getByRole("button", { name: "Schedules", exact: true }).click();
+  await page
+    .getByRole("button", { name: /hourly-health workspace-health/u })
+    .click();
+  await page
+    .getByRole("button", { name: "Confirm same run request", exact: true })
+    .click();
+  await expect(
+    page.getByRole("region", { name: "Independent workflow run" }),
+  ).toContainText("18446744073709551615");
+  const calls = await page.evaluate(() =>
+    (
+      window as unknown as {
+        workflowCalls: { command: string; args: unknown }[];
+      }
+    ).workflowCalls.filter((call) => call.command === "start_workflow_run"),
+  );
+  expect(calls).toHaveLength(2);
+  expect(calls[0]!.args).toEqual(calls[1]!.args);
+  await page.evaluate(() => {
+    (
+      window as unknown as { resumeWorkflowRun?: () => void }
+    ).resumeWorkflowRun?.();
+  });
+  await expect(
+    page.getByRole("button", { name: "Run now", exact: true }),
+  ).toBeVisible();
 });

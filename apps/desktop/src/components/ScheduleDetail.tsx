@@ -3,10 +3,16 @@ import { CommandFailure, listWorkflowRuns, startWorkflowRun } from "../api";
 import { Button } from "@colossus/ui";
 import { AutomationOverview } from "@colossus/ui/automations";
 import { IconPlayerPlay, IconCalendarTime } from "@tabler/icons-react";
-import { occurrence, recurrence, workflowFailure } from "../workflows";
+import {
+  canonicalJson,
+  occurrence,
+  recurrence,
+  workflowFailure,
+} from "../workflows";
 import type {
   WorkflowContext,
   StartWorkflowRunRequest,
+  ScheduleRunAttempt,
   WorkflowRun,
   WorkflowSchedule,
 } from "../workflows";
@@ -17,6 +23,8 @@ export function ScheduleDetail({
   context,
   schedule,
   busy,
+  runAttempts,
+  attemptScope,
   onControl,
   onDelete,
   onLogic,
@@ -25,11 +33,15 @@ export function ScheduleDetail({
   context: WorkflowContext;
   schedule: WorkflowSchedule;
   busy: boolean;
+  runAttempts: Map<string, ScheduleRunAttempt>;
+  attemptScope: string;
   onControl: () => void;
   onDelete: () => void;
   onLogic: () => void;
 }) {
   const { record } = schedule;
+  const attemptKey = JSON.stringify([attemptScope, record.schedule_id]);
+  const retainedAttempt = runAttempts.get(attemptKey);
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [runId, setRunId] = useState<string | null>(record.last_run_id);
   const lastRun = useRef(record.last_run_id);
@@ -38,9 +50,13 @@ export function ScheduleDetail({
   const [loading, setLoading] = useState(false);
   const [historyRevision, setHistoryRevision] = useState(0);
   const [starting, setStarting] = useState(false);
-  const [uncertain, setUncertain] = useState(false);
+  const [uncertain, setUncertain] = useState(
+    retainedAttempt?.uncertain ?? false,
+  );
   const [startError, setStartError] = useState("");
-  const runRequest = useRef<StartWorkflowRunRequest | null>(null);
+  const runRequest = useRef<StartWorkflowRunRequest | null>(
+    retainedAttempt?.request ?? null,
+  );
   const startInFlight = useRef(false);
   const alive = useRef(true);
   const generation = useRef(0);
@@ -126,22 +142,43 @@ export function ScheduleDetail({
     !record.blocked_reason;
   async function runNow() {
     if (!canRun || busy || startInFlight.current) return;
+    const previous = runAttempts.get(attemptKey);
+    const request = previous?.request ??
+      runRequest.current ?? {
+        workflow_id: workflowId,
+        expected_hash: record.workflow_hash,
+        inputs: structuredClone(record.inputs!),
+        idempotency_key: `desktop-task-run-${crypto.randomUUID()}`,
+      };
+    if (
+      request.workflow_id !== workflowId ||
+      request.expected_hash !== record.workflow_hash ||
+      canonicalJson(request.inputs) !== canonicalJson(record.inputs)
+    ) {
+      setStartError(
+        "Reconcile the pending run before executing a changed schedule.",
+      );
+      return;
+    }
+    if (!previous && runAttempts.size >= 128) {
+      setStartError("Reconcile pending task runs before starting more.");
+      return;
+    }
+    const wasUncertain = uncertain || !!previous?.uncertain;
+    const attempt: ScheduleRunAttempt = { request, uncertain: true };
+    runAttempts.set(attemptKey, attempt);
+    runRequest.current = request;
     startInFlight.current = true;
     setStarting(true);
     setStartError("");
-    const request = runRequest.current ?? {
-      workflow_id: workflowId,
-      expected_hash: record.workflow_hash,
-      inputs: structuredClone(record.inputs!),
-      idempotency_key: `desktop-task-run-${crypto.randomUUID()}`,
-    };
-    runRequest.current = request;
     try {
       const run = await startWorkflowRun(
         targetId,
         context.selection_epoch,
         request,
       );
+      if (runAttempts.get(attemptKey) === attempt)
+        runAttempts.delete(attemptKey);
       if (alive.current) {
         runRequest.current = null;
         setUncertain(false);
@@ -152,11 +189,12 @@ export function ScheduleDetail({
         setRunId(run.run_id);
       }
     } catch (error) {
+      const unknown =
+        wasUncertain ||
+        (error instanceof CommandFailure && error.detail.outcomeUnknown);
+      attempt.uncertain = unknown;
       if (alive.current) {
-        const unknown =
-          error instanceof CommandFailure && error.detail.outcomeUnknown;
         setUncertain(unknown);
-        if (!unknown) runRequest.current = null;
         setStartError(workflowFailure(error));
       }
     } finally {
