@@ -2410,47 +2410,64 @@ fn canonical_system_messages_are_excluded() {
 
 #[test]
 fn historical_tool_results_are_correlated_with_assistant_calls() {
-    let mut source = snapshot();
-    source.transcript.messages = vec![
-        SessionMessage {
-            session_id: "019f-test".into(),
-            run_id: "run".into(),
-            sequence: 1,
-            message: ModelMessage {
-                role: ModelMessageRole::Assistant,
-                content: String::new().into(),
-                tool_call_id: None,
-                tool_calls: vec![ModelToolCall {
-                    call_id: "call-1".into(),
-                    name: "filesystem.search".into(),
-                    arguments: serde_json::json!({"query": "needle"}),
-                }],
+    for (name, arguments, label) in [
+        (
+            "filesystem.search",
+            serde_json::json!({"query": "needle"}),
+            "filesystem.search",
+        ),
+        (
+            "mcp.call",
+            serde_json::json!({"server": "Splunk", "tool": "search"}),
+            "mcp.call · Splunk · search",
+        ),
+    ] {
+        let mut source = snapshot();
+        source.transcript.messages = vec![
+            SessionMessage {
+                session_id: "019f-test".into(),
+                run_id: "run".into(),
+                sequence: 1,
+                message: ModelMessage {
+                    role: ModelMessageRole::Assistant,
+                    content: String::new().into(),
+                    tool_call_id: None,
+                    tool_calls: vec![ModelToolCall {
+                        call_id: "call-1".into(),
+                        name: name.into(),
+                        arguments,
+                    }],
+                },
+                created_at: "2026-07-15T00:00:00Z".into(),
             },
-            created_at: "2026-07-15T00:00:00Z".into(),
-        },
-        SessionMessage {
-            session_id: "019f-test".into(),
-            run_id: "run".into(),
-            sequence: 2,
-            message: ModelMessage {
-                role: ModelMessageRole::Tool,
-                content: "found".into(),
-                tool_call_id: Some("call-1".into()),
-                tool_calls: Vec::new(),
+            SessionMessage {
+                session_id: "019f-test".into(),
+                run_id: "run".into(),
+                sequence: 2,
+                message: ModelMessage {
+                    role: ModelMessageRole::Tool,
+                    content: "found".into(),
+                    tool_call_id: Some("call-1".into()),
+                    tool_calls: Vec::new(),
+                },
+                created_at: "2026-07-15T00:00:00Z".into(),
             },
-            created_at: "2026-07-15T00:00:00Z".into(),
-        },
-    ];
-    let state = TuiState::from_snapshot(source);
-    let rendered = transcript_lines(&state, 80)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        rendered.contains("Completed filesystem.search"),
-        "{rendered}"
-    );
+        ];
+        let state = TuiState::from_snapshot(source);
+        let rendered = transcript_lines(&state, 80)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains(&format!("Completed {label}")),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(&format!("Requested {label}")),
+            "{rendered}"
+        );
+    }
 }
 
 #[test]
