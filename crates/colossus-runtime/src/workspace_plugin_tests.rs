@@ -13,6 +13,92 @@ fn write_source(root: &Path, body: &str) {
 }
 
 #[tokio::test]
+async fn native_absolute_sources_add_disable_and_reaccept_without_escaping_the_workspace() {
+    let temporary = crate::test_support::private_tempdir();
+    let root = temporary.path().canonicalize().unwrap();
+    let workspace = root.join("workspace");
+    let source = workspace.join(".agents/plugins/review");
+    write_source(&source, "Native selected instructions.");
+    let home = colossus_home::ColossusHome::ensure_at(root.join("home")).unwrap();
+    let runtime = open(&workspace, Some(home.root()), true);
+    let selected = source.to_string_lossy().into_owned();
+    // Native Windows dialogs and Node use the ordinary drive spelling, while
+    // the runtime binds its workspace with Rust's canonical verbatim prefix.
+    #[cfg(windows)]
+    let selected = selected
+        .strip_prefix(r"\\?\")
+        .expect("canonical Windows source")
+        .to_owned();
+    let add = || Op::Add {
+        source: PluginInstallSource::Directory {
+            path: selected.clone(),
+        },
+        trust_profile: "default".into(),
+    };
+    for _ in 0..2 {
+        runtime
+            .manage_plugin(add())
+            .await
+            .expect("add native source");
+        assert!(
+            runtime
+                .plugin_inventory()
+                .unwrap()
+                .iter()
+                .any(|entry| { entry.manifest.name == "review-tools" && entry.available })
+        );
+        runtime
+            .manage_plugin(Op::DisableWorkspace {
+                path: selected.clone(),
+            })
+            .await
+            .expect("disable native spelling");
+        assert!(
+            !runtime
+                .plugin_inventory()
+                .unwrap()
+                .iter()
+                .any(|entry| { entry.manifest.name == "review-tools" && entry.available })
+        );
+    }
+    let sibling = root.join("workspace-sibling/plugin");
+    write_source(&sibling, "Outside instructions.");
+    assert!(
+        runtime
+            .manage_plugin(Op::Add {
+                source: PluginInstallSource::Directory {
+                    path: sibling.to_string_lossy().into_owned(),
+                },
+                trust_profile: "default".into(),
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        runtime
+            .plugin_catalog
+            .workspace_plugins
+            .candidate(
+                &workspace
+                    .join("../workspace-sibling/plugin")
+                    .to_string_lossy()
+            )
+            .is_err()
+    );
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&sibling, workspace.join("linked")).unwrap();
+        assert!(
+            runtime
+                .plugin_catalog
+                .workspace_plugins
+                .candidate(&workspace.join("linked").to_string_lossy())
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
 async fn concurrent_source_selection_uses_one_grant_snapshot_for_filtering_and_capture() {
     let temporary = crate::test_support::private_tempdir();
     let root = temporary.path().canonicalize().expect("root");

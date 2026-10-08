@@ -110,22 +110,21 @@ impl WorkspacePlugins {
     }
 
     pub(super) fn candidate(&self, path: &str) -> Result<WorkspacePluginCandidate, RuntimeError> {
-        let path = workspace_absolute_path(&self.workspace, Path::new(path));
-        let relative = path.strip_prefix(&self.workspace).map_err(|_| {
-            RuntimeError::Config(
-                "local plugin sources must be beneath the selected workspace".into(),
-            )
-        })?;
-        Ok(capture_workspace_plugin(&self.workspace, relative)?)
+        let relative = self.relative_path(path)?;
+        Ok(capture_workspace_plugin(
+            &self.workspace,
+            Path::new(&relative),
+        )?)
     }
 
     pub(super) fn relative_path(&self, path: &str) -> Result<String, RuntimeError> {
         let path = workspace_absolute_path(&self.workspace, Path::new(path));
-        let relative = path.strip_prefix(&self.workspace).map_err(|_| {
-            RuntimeError::Config(
-                "local plugin sources must be beneath the selected workspace".into(),
-            )
-        })?;
+        let relative = super::tool_arguments::strip_workspace_prefix(&self.workspace, &path)
+            .map_err(|_| {
+                RuntimeError::Config(
+                    "local plugin sources must be beneath the selected workspace".into(),
+                )
+            })?;
         if relative
             .components()
             .any(|part| !matches!(part, std::path::Component::Normal(_)))
