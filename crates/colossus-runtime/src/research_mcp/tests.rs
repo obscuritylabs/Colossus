@@ -154,6 +154,7 @@ fn tool(name: &str) -> McpToolSummary {
             serde_json::to_vec(&input_schema).expect("schema"),
         )),
         input_schema,
+        output_schema: None,
     }
 }
 
