@@ -1713,6 +1713,14 @@ mod tests {
             .expect("overridden config");
         assert_eq!(config.research.max_sources, 7);
 
+        managed.field_overrides[0] = ManagedFieldOverride {
+            field_id: "plugins.workspaceDiscovery".into(),
+            value: serde_json::json!(false),
+        };
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+            .expect("workspace discovery override");
+        assert!(!config.plugins.workspace_discovery);
+
         managed.providers[0].kind = ManagedProviderKind::OpenAiCompatible;
         managed.providers[0].base_url = Some("https://example.test/v1".into());
         managed.providers[0].credential_id = Some("provider-key".into());

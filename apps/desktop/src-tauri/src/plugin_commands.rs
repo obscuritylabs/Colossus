@@ -300,14 +300,15 @@ pub(crate) async fn manage_plugin(
         return Ok(json!({"cancelled": true}));
     };
     #[cfg(windows)]
-    let revokes_outlook = matches!(
-        &request,
-        PluginManagementRequest::Enable { name, .. }
-            | PluginManagementRequest::Disable { name }
-            | PluginManagementRequest::Update { name, .. }
-            | PluginManagementRequest::Uninstall { name, .. }
-            if name == "outlook-classic"
-    );
+    let revokes_outlook = matches!(&request, PluginManagementRequest::Add { .. })
+        || matches!(
+            &request,
+            PluginManagementRequest::Enable { name, .. }
+                | PluginManagementRequest::Disable { name }
+                | PluginManagementRequest::Update { name, .. }
+                | PluginManagementRequest::Uninstall { name, .. }
+                if name == "outlook-classic"
+        );
     #[cfg(windows)]
     let force_revoke_on_success = match &request {
         PluginManagementRequest::Disable { name } if name == "outlook-classic" => true,

@@ -343,13 +343,15 @@ const fn default_search_timeout_ms() -> u64 {
     30_000
 }
 
-/// Agent Plugins configuration for one workspace using the owner-scoped global store.
+/// Plugin discovery and exposure within one workspace and explicit Colossus home.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginsConfig {
-    /// Whether this workspace exposes globally active plugins at all.
+    /// Whether this workspace exposes accepted local or globally active plugins.
     pub enabled: bool,
-    /// Optional exact allowlist of globally active plugin names.
+    /// Discover fixed workspace plugin directories; presence never grants execution.
+    pub workspace_discovery: bool,
+    /// Optional exact allowlist of accepted local and globally active plugin names.
     pub include: Vec<String>,
     /// Exact denylist applied after `include`.
     pub exclude: Vec<String>,
@@ -366,6 +368,7 @@ impl Default for PluginsConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            workspace_discovery: true,
             include: Vec::new(),
             exclude: Vec::new(),
             trust_profiles: default_plugin_trust_profiles(),
@@ -447,6 +450,9 @@ pub(super) fn validate_builtin_plugin_trust_identity(
 pub struct PluginMcpServerConfig {
     /// Explicitly expose this portable server to the runtime.
     pub enabled: bool,
+    /// Bind a workspace-local connection to this exact unsigned snapshot.
+    /// Installed connections must leave this absent.
+    pub workspace_plugin_digest: Option<String>,
     /// Secret child-environment values expressed as credential references.
     pub environment: BTreeMap<String, String>,
     /// Secret HTTP header overlays expressed as credential references.
@@ -1756,6 +1762,22 @@ fn validate_plugins_config(config: &PluginsConfig) -> Result<(), RuntimeError> {
         }
     }
     for (id, server) in &config.mcp_servers {
+        if server
+            .workspace_plugin_digest
+            .as_ref()
+            .is_some_and(|digest| {
+                digest.strip_prefix("sha256:").is_none_or(|value| {
+                    value.len() != 64
+                        || !value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                })
+            })
+        {
+            return Err(RuntimeError::Config(format!(
+                "plugins.mcpServers.{id}.workspacePluginDigest must be a canonical sha256 manifest digest"
+            )));
+        }
         let Some((plugin, name)) = id.split_once('/') else {
             return Err(RuntimeError::Config(format!(
                 "plugins.mcpServers key {id} must be a qualified <plugin>/<server> identity"

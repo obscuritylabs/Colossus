@@ -9,6 +9,8 @@ mod bundled;
 #[cfg(test)]
 mod bundled_tests;
 mod inventory;
+mod workspace;
+pub use workspace::WorkspacePluginGrant;
 
 fn acquire_plugin_writer(path: PathBuf) -> Result<RedbWriterLease, StoreError> {
     let started = std::time::Instant::now();
@@ -674,7 +676,12 @@ impl PluginStore {
         exclude: &[String],
     ) -> Result<Vec<AgentPluginRecord>, StoreError> {
         let _writer = acquire_plugin_writer(self.state_path())?;
-        self.snapshot_locked(include, exclude, false)
+        self.snapshot_locked(
+            include,
+            exclude,
+            false,
+            &mut crate::PluginIconBudget::default(),
+        )
     }
 
     fn snapshot_locked(
@@ -682,11 +689,11 @@ impl PluginStore {
         include: &[String],
         exclude: &[String],
         omit_unavailable: bool,
+        icons: &mut crate::PluginIconBudget,
     ) -> Result<Vec<AgentPluginRecord>, StoreError> {
         let include = include.iter().map(String::as_str).collect::<BTreeSet<_>>();
         let exclude = exclude.iter().map(String::as_str).collect::<BTreeSet<_>>();
         let mut records = Vec::new();
-        let mut icons = crate::icons::CatalogIconBudget::default();
         for installation in self
             .open_repository()?
             .list_plugins(MAX_PLUGIN_INSTALLATIONS)?
@@ -715,7 +722,12 @@ impl PluginStore {
         exclude: &[String],
     ) -> Result<(Vec<AgentPluginRecord>, PluginSnapshotLease), StoreError> {
         let _writer = acquire_plugin_writer(self.state_path())?;
-        let records = self.snapshot_locked(include, exclude, false)?;
+        let records = self.snapshot_locked(
+            include,
+            exclude,
+            false,
+            &mut crate::PluginIconBudget::default(),
+        )?;
         let lease = self.lease_records(&records)?;
         Ok((records, lease))
     }
@@ -727,8 +739,22 @@ impl PluginStore {
         include: &[String],
         exclude: &[String],
     ) -> Result<(Vec<AgentPluginRecord>, PluginSnapshotLease), StoreError> {
+        self.available_snapshot_with_icon_budget(
+            include,
+            exclude,
+            &mut crate::PluginIconBudget::default(),
+        )
+    }
+
+    /// Lease the valid subset while sharing one display budget across sources.
+    pub fn available_snapshot_with_icon_budget(
+        &self,
+        include: &[String],
+        exclude: &[String],
+        icons: &mut crate::PluginIconBudget,
+    ) -> Result<(Vec<AgentPluginRecord>, PluginSnapshotLease), StoreError> {
         let _writer = acquire_plugin_writer(self.state_path())?;
-        let records = self.snapshot_locked(include, exclude, true)?;
+        let records = self.snapshot_locked(include, exclude, true, icons)?;
         let lease = self.lease_records(&records)?;
         Ok((records, lease))
     }
@@ -739,12 +765,20 @@ impl PluginStore {
         &self,
         digests: &BTreeMap<String, String>,
     ) -> Result<(Vec<AgentPluginRecord>, PluginSnapshotLease), StoreError> {
+        self.snapshot_digests_with_icon_budget(digests, &mut crate::PluginIconBudget::default())
+    }
+
+    /// Restore exact leased content within a catalog's cumulative display budget.
+    pub fn snapshot_digests_with_icon_budget(
+        &self,
+        digests: &BTreeMap<String, String>,
+        icons: &mut crate::PluginIconBudget,
+    ) -> Result<(Vec<AgentPluginRecord>, PluginSnapshotLease), StoreError> {
         let _writer = acquire_plugin_writer(self.state_path())?;
         let installed = self
             .open_repository()?
             .list_plugins(MAX_PLUGIN_INSTALLATIONS)?;
         let mut records = Vec::with_capacity(digests.len());
-        let mut icons = crate::icons::CatalogIconBudget::default();
         for (name, digest) in digests {
             validate_lease_digest(digest)?;
             let installation = installed

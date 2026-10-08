@@ -51,6 +51,10 @@ fn installed_plugin_stdio_status_matches_runtime_component_validation() {
         ..PluginsConfig::default()
     });
     let catalog = PluginCatalogSource {
+        workspace_plugins: Arc::new(
+            crate::workspace_plugins::WorkspacePlugins::new(&root, None)
+                .expect("workspace sources"),
+        ),
         store: Some(store),
         configuration,
         standalone_mcp: McpConfig::default(),

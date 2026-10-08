@@ -55,10 +55,11 @@ several skills; selecting its name in plugin inventory does not select them all.
 
 ## Inspect plugins
 
-Enter `/plugins` to see installed plugin candidates and their status. Use
+Enter `/plugins` to see installed packages and workspace sources with their status. Use
 `/plugins show colossus` for one plugin. A plugin must be enabled and available in
-the workspace before its skills can be selected. Installing a plugin and enabling it
-are separate operations.
+the workspace before its skills can be selected. Use `colossus plugins add` to accept
+a local directory or verify, install, and activate a signed package in one flow.
+See [Agent Plugins](../extend/plugins.md) for a working `.agents/plugins` example.
 
 Skills guide the agent's behavior; they do not add tool permissions or bypass
 approvals. An MCP server packaged with a plugin also needs its own explicit server

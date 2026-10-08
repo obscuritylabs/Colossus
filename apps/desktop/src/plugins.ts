@@ -19,7 +19,7 @@ export interface PluginEntry {
   };
   digest: string;
   source: string;
-  origin: "bundled" | "installed";
+  origin: "bundled" | "installed" | "workspace";
   status: "enabled" | "disabled" | "uninstalled";
   available: boolean;
   unavailable_reason: string | null;
@@ -75,6 +75,9 @@ export type PluginRequest =
     }
   | { operation: "verify_installed"; name: string; digest: string }
   | { operation: "install"; source: PluginSource; trust_profile: string }
+  | { operation: "add"; source: PluginSource; trust_profile: string }
+  | { operation: "accept_workspace"; path: string; digest: string | null }
+  | { operation: "disable_workspace"; path: string }
   | {
       operation: "enable";
       name: string;

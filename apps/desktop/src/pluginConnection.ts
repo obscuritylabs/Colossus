@@ -14,6 +14,7 @@ export function pluginConnectionRequest(
   spaceId: string,
   serverId: string,
   enabled: boolean,
+  workspacePluginDigest?: string,
 ): SaveSpaceConfigurationRequest {
   const space = snapshot.spaces.find((candidate) => candidate.id === spaceId);
   if (!space || space.archived)
@@ -25,10 +26,20 @@ export function pluginConnectionRequest(
     ...record(current?.value ?? { $colossusPatchV1: true }),
   };
   const existing = record(servers[serverId] ?? {});
+  // A connection may release credentials only to the explicitly selected source.
+  // Changing between installed/local sources or local snapshots starts fresh.
+  const sameSource =
+    (existing.workspacePluginDigest ?? null) ===
+    (workspacePluginDigest ?? null);
   servers[serverId] = {
-    ...existing,
+    ...(sameSource ? existing : {}),
     enabled,
-    allowedTools: enabled ? ["*"] : (existing.allowedTools ?? []),
+    workspacePluginDigest: workspacePluginDigest ?? null,
+    allowedTools: enabled
+      ? ["*"]
+      : sameSource
+        ? (existing.allowedTools ?? [])
+        : [],
   };
   const fields = space.configuration.fieldOverrides.filter(
     (entry) => entry.fieldId !== "plugins.mcpServers",

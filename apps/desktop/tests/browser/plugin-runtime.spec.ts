@@ -81,7 +81,7 @@ test("browser → production native adapter → authenticated worker: offline co
     smoke
       .replace(
         "allow: [plugin.list]",
-        "allow: [plugin.list, plugin.inspect, plugin.skill.read, plugin.resource.list, plugin.resource.read, plugin.validate, plugin.verify, plugin.install, plugin.enable, plugin.disable, plugin.gc, plugin.package, plugin.export, plugin.uninstall]",
+        "allow: [plugin.list, plugin.inspect, plugin.skill.read, plugin.resource.list, plugin.resource.read, plugin.validate, plugin.verify, plugin.install, plugin.enable, plugin.disable, plugin.workspace.accept, plugin.workspace.disable, plugin.gc, plugin.package, plugin.export, plugin.uninstall]",
       )
       .replace(
         "filesystem: []",
@@ -116,6 +116,21 @@ test("browser → production native adapter → authenticated worker: offline co
     join(source, "skills", "hello", "SKILL.md"),
     "---\nname: hello\ndescription: Say hello using ordinary authorized tools.\n---\nSay hello from the scratch workspace.\n",
   );
+  const localSource = join(workspace, ".agents", "plugins", "local-review");
+  const localSkill = join(localSource, "skills", "review", "SKILL.md");
+  await mkdir(join(localSource, "skills", "review"), { recursive: true });
+  await writeFile(
+    join(localSource, "plugin.json"),
+    JSON.stringify({
+      $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+      name: "local-review",
+      version: "1.0.0",
+      description: "Discovered workspace review instructions",
+    }),
+  );
+  const localInstructions =
+    "---\nname: review\ndescription: Review local changes.\n---\nReview the workspace changes carefully.\n";
+  await writeFile(localSkill, localInstructions);
   let worker: ChildProcess | undefined;
   const processes = new AcceptanceProcesses();
   const operations = new AcceptanceOperations();
@@ -210,6 +225,11 @@ test("browser → production native adapter → authenticated worker: offline co
         (plugin) => plugin.manifest.name === "colossus",
       ),
     ).toBe(true);
+    expect(
+      readyInventory.plugins.some(
+        (plugin) => plugin.manifest.name === "local-review",
+      ),
+    ).toBe(true);
     await page.exposeBinding(
       "nativePluginAcceptance",
       async (_, command: string, args: Record<string, unknown>) =>
@@ -285,6 +305,105 @@ test("browser → production native adapter → authenticated worker: offline co
       "naturalWidth",
       128,
     );
+    await page.getByRole("button", { name: /local-review 1\.0/u }).click();
+    const local = page.getByRole("article", { name: "local-review details" });
+    await expect(
+      local.getByText("Workspace source", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      local.getByRole("button", { name: "Preview instructions" }),
+    ).toBeDisabled();
+    await local
+      .getByRole("button", { name: "Use workspace source", exact: true })
+      .click();
+    await operations.submit("accept_workspace", () =>
+      page
+        .getByRole("form")
+        .getByRole("button", { name: "Continue", exact: true })
+        .click(),
+    );
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(
+      local.getByRole("button", { name: "Preview instructions" }),
+    ).toBeDisabled();
+    consent = true;
+    await operations.submit("accept_workspace", () =>
+      page
+        .getByRole("form")
+        .getByRole("button", { name: "Continue", exact: true })
+        .click(),
+    );
+    await expect(
+      local.getByRole("button", { name: "Disable workspace source" }),
+    ).toBeVisible();
+    await local.getByRole("button", { name: "Preview instructions" }).click();
+    await expect(local.locator("pre")).toContainText(
+      "Review the workspace changes carefully.",
+    );
+    await local
+      .getByRole("button", { name: "Use in this conversation" })
+      .click();
+    await expect(
+      page.getByRole("button", { name: "Remove local-review/review" }),
+    ).toBeVisible();
+    await writeFile(
+      localSkill,
+      localInstructions.replace("carefully", "with the updated checklist"),
+    );
+    await page.getByRole("button", { name: "Refresh plugins" }).click();
+    await expect(
+      page.getByRole("button", { name: "Refresh plugins" }),
+    ).toBeEnabled();
+    await page.getByRole("button", { name: /local-review 1\.0/u }).click();
+    await expect(
+      local.getByRole("button", { name: "Disable workspace source" }),
+    ).toBeVisible();
+    await local.getByRole("button", { name: "Preview instructions" }).click();
+    await expect(local.locator("pre")).toContainText(
+      "with the updated checklist",
+    );
+    const localInventory = (await invoke("get_plugin_inventory", {
+      targetId: "local",
+    })) as {
+      plugins: {
+        manifest: { name: string };
+        origin: string;
+        trust: { trusted: boolean };
+        available: boolean;
+      }[];
+    };
+    expect(
+      localInventory.plugins.find(
+        (plugin) => plugin.manifest.name === "local-review",
+      ),
+    ).toMatchObject({
+      origin: "workspace",
+      available: true,
+      trust: { trusted: false },
+    });
+    await local
+      .getByRole("button", { name: "Disable workspace source" })
+      .click();
+    await operations.submit("disable_workspace", () =>
+      page
+        .getByRole("form")
+        .getByRole("button", { name: "Continue", exact: true })
+        .click(),
+    );
+    await expect(
+      local.getByRole("button", { name: "Preview instructions" }),
+    ).toBeDisabled();
+    nativePaths = [localSource];
+    await page.getByRole("button", { name: "Add plugin", exact: true }).click();
+    await page.getByRole("combobox", { name: "Plugin source" }).click();
+    await page
+      .getByRole("option", { name: "Plugin directory", exact: true })
+      .click();
+    await continueOperation("add");
+    await expect(
+      local.getByRole("button", { name: "Disable workspace source" }),
+    ).toBeVisible();
+    consent = false;
     await page.getByText("Developer tools", { exact: true }).click();
     nativePaths = [source];
     await page.getByRole("button", { name: "Validate", exact: true }).click();
@@ -300,7 +419,7 @@ test("browser → production native adapter → authenticated worker: offline co
     ).toBeVisible();
     nativePaths = [join(workspace, "layout")];
     await page.getByRole("button", { name: "Install", exact: true }).click();
-    await page.getByRole("combobox", { name: "Installation source" }).click();
+    await page.getByRole("combobox", { name: "Plugin source" }).click();
     await page
       .getByRole("option", { name: "OCI layout directory", exact: true })
       .click();

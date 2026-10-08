@@ -853,6 +853,10 @@ message AgentPlugin {
   repeated PluginDiagnostic diagnostics = 13;
   // icon_data_url is a bounded PNG data URL; empty when no valid icon is available.
   string icon_data_url = 14;
+  // workspace_local identifies an unsigned source owned by this workspace.
+  bool workspace_local = 15;
+  // workspace_active reports remembered acceptance of that local source.
+  bool workspace_active = 16;
 }
 
 // PluginTrust keeps executable provenance distinct from signature verification.

@@ -6,6 +6,36 @@ use colossus_contracts::{PluginInstallSource as Source, PluginManagementRequest 
 impl PluginsAction {
     pub(super) fn request(&self) -> Result<Request, String> {
         Ok(match self {
+            Self::Add {
+                source,
+                registry,
+                trust_profile,
+            } => {
+                let source = if let Some(reference) = source.strip_prefix("oci://") {
+                    Source::Reference {
+                        registry: registry.clone().unwrap_or_default(),
+                        reference: reference.into(),
+                    }
+                } else {
+                    if registry.is_some() {
+                        return Err("--registry requires an OCI reference".into());
+                    }
+                    Source::Directory {
+                        path: source.clone(),
+                    }
+                };
+                Request::Add {
+                    source,
+                    trust_profile: trust_profile.clone(),
+                }
+            }
+            Self::WorkspaceAccept { path, digest } => Request::AcceptWorkspace {
+                path: path.display().to_string(),
+                digest: digest.clone(),
+            },
+            Self::WorkspaceDisable { path } => Request::DisableWorkspace {
+                path: path.display().to_string(),
+            },
             Self::List { .. } => Request::Inventory,
             Self::Show { name } => Request::Show { name: name.clone() },
             Self::Validate { directory } => Request::Validate {

@@ -53,7 +53,9 @@ export function PluginDetail({
           <span className="plugin-eyebrow">
             {plugin.origin === "bundled"
               ? "Bundled with Colossus"
-              : "Installed plugin"}
+              : plugin.origin === "workspace"
+                ? "Workspace source"
+                : "Installed plugin"}
           </span>
           <h3>{plugin.manifest.name}</h3>
           <span className="plugin-version">
@@ -97,7 +99,11 @@ export function PluginDetail({
               >
                 {action === "enable"
                   ? "Activate this digest"
-                  : action[0]!.toUpperCase() + action.slice(1)}
+                  : action === "workspace_accept"
+                    ? "Use workspace source"
+                    : action === "workspace_disable"
+                      ? "Disable workspace source"
+                      : action[0]!.toUpperCase() + action.slice(1)}
               </button>
             ))}
         </div>
@@ -140,6 +146,9 @@ export function PluginDetail({
                 server={server.id}
                 enabled={server.enabled}
                 pluginActive={plugin.available}
+                workspacePluginDigest={
+                  plugin.origin === "workspace" ? plugin.digest : undefined
+                }
                 sessionRequired={
                   plugin.manifest.name === "outlook-classic" &&
                   server.id === "outlook-classic/mail"
@@ -281,14 +290,20 @@ function SkillPreview({
       <div className="plugin-actions">
         <button
           className="button secondary"
-          disabled={loading}
+          disabled={
+            loading ||
+            (plugin.origin === "workspace" && plugin.status !== "enabled")
+          }
           onClick={() => void load("skill")}
         >
           Preview instructions
         </button>
         <button
           className="button secondary"
-          disabled={loading}
+          disabled={
+            loading ||
+            (plugin.origin === "workspace" && plugin.status !== "enabled")
+          }
           onClick={() => void load("resources")}
         >
           Browse resources

@@ -274,7 +274,11 @@ fn plugin_to_proto(plugin: PluginInventoryEntry) -> proto::AgentPlugin {
         digest: plugin.digest,
         source: plugin.source,
         bundled: plugin.origin == PluginOrigin::Bundled,
-        globally_active: plugin.status == PluginStatus::Enabled,
+        globally_active: plugin.origin != PluginOrigin::Workspace
+            && plugin.status == PluginStatus::Enabled,
+        workspace_local: plugin.origin == PluginOrigin::Workspace,
+        workspace_active: plugin.origin == PluginOrigin::Workspace
+            && plugin.status == PluginStatus::Enabled,
         available: plugin.available,
         unavailable_reason: plugin.unavailable_reason.unwrap_or_default(),
         trust: Some(proto::PluginTrust {

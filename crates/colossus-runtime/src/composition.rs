@@ -416,14 +416,20 @@ impl Runtime {
                 return Err(error.into());
             }
         }
-        let (active_plugins, _startup_plugin_lease) = if config.plugins.enabled {
+        let workspace_plugins = Arc::new(crate::workspace_plugins::WorkspacePlugins::new(
+            &workspace,
+            colossus_home.as_deref(),
+        )?);
+        let mut plugin_icons = colossus_plugins::PluginIconBudget::default();
+        let (mut active_plugins, _startup_plugin_lease) = if config.plugins.enabled {
             plugin_store.as_ref().map_or_else(
                 || Ok((Vec::new(), None)),
                 |store| {
                     store
-                        .available_snapshot_with_lease(
+                        .available_snapshot_with_icon_budget(
                             &plugin_configuration.include,
                             &plugin_configuration.exclude,
+                            &mut plugin_icons,
                         )
                         .map(|(plugins, lease)| (plugins, Some(lease)))
                 },
@@ -431,9 +437,22 @@ impl Runtime {
         } else {
             (Vec::new(), None)
         };
+        let (local_plugins, _startup_workspace_plugin_lease) =
+            workspace_plugins.capture(&plugin_configuration, &mut plugin_icons)?;
+        if plugin_configuration.workspace_discovery {
+            let selected = workspace_plugins
+                .grants()?
+                .into_values()
+                .filter(|grant| grant.enabled)
+                .map(|grant| grant.source.name)
+                .collect::<BTreeSet<_>>();
+            active_plugins.retain(|record| !selected.contains(&record.installation.manifest.name));
+        }
+        active_plugins.extend(local_plugins);
         let plugins = Arc::new(active_plugins);
         let plugin_catalog = Arc::new(PluginCatalogSource {
             store: plugin_store.clone(),
+            workspace_plugins: Arc::clone(&workspace_plugins),
             configuration: Arc::new(plugin_configuration.clone()),
             standalone_mcp: config.mcp.clone(),
             sandbox: config.sandbox.clone(),
@@ -446,6 +465,7 @@ impl Runtime {
             &config.mcp,
             &config.sandbox,
             plugin_store.as_deref(),
+            workspace_plugins.store.as_deref(),
         )?;
         let security_posture =
             security_posture::build_security_posture(config, &active_plugin_extensions.mcp);

@@ -254,6 +254,8 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "audit.export.worm.write",
             "plugin.install",
             "plugin.enable",
+            "plugin.workspace.accept",
+            "plugin.workspace.disable",
             "plugin.disable",
             "plugin.update",
             "plugin.uninstall",

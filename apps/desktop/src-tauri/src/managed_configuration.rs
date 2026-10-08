@@ -481,12 +481,15 @@ fn merge_plugin_server_overrides(
             Some(value) => value.as_object().cloned().ok_or_else(configuration_error)?,
             None => serde_json::Map::new(),
         };
-        server.extend(
-            override_value
-                .as_object()
-                .ok_or_else(configuration_error)?
-                .clone(),
-        );
+        let patch = override_value.as_object().ok_or_else(configuration_error)?;
+        if let Some(binding) = patch.get("workspacePluginDigest")
+            && binding != server.get("workspacePluginDigest").unwrap_or(&Value::Null)
+        {
+            // Source changes start with a new connection. Global or previous local
+            // credentials and authority cannot flow into an explicitly rebound source.
+            server.clear();
+        }
+        server.extend(patch.clone());
         servers.insert(name.clone(), Value::Object(server));
     }
     Ok(Value::Object(servers))
@@ -1045,6 +1048,7 @@ mod tests {
     use crate::desktop_settings::{
         ModelCapabilitiesSetting, ProviderKindSetting, WorkspaceSetting,
     };
+    use serde_json::json;
     use std::path::PathBuf;
 
     fn provider(base_url: &str) -> ProviderSetting {
@@ -1377,6 +1381,21 @@ mod tests {
             .value;
         assert!(servers.get("global/mail").is_none());
         assert_eq!(servers["local/docs"]["enabled"], true);
+    }
+
+    #[test]
+    fn source_binding_change_drops_inherited_credentials_and_authority() {
+        let inherited = json!({ "example/mail": { "enabled": true, "allowedTools": ["old"], "credentialHeaders": { "Authorization": "vault:old" }, "environment": { "TOKEN": "env:OLD" }, "oauth": { "clientId": "old" } }, "other/docs": { "enabled": true } });
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let local = json!({ PLUGIN_SERVER_PATCH_MARKER: true, "example/mail": { "workspacePluginDigest": digest, "enabled": true, "allowedTools": ["search"] } });
+        let merged =
+            merge_plugin_server_overrides(Some(&inherited), &local).expect("local binding");
+        assert_eq!(merged["example/mail"], local["example/mail"]);
+        assert_eq!(merged["other/docs"], inherited["other/docs"]);
+        let global = json!({ PLUGIN_SERVER_PATCH_MARKER: true, "example/mail": { "workspacePluginDigest": null, "enabled": false } });
+        let reverted =
+            merge_plugin_server_overrides(Some(&merged), &global).expect("installed binding");
+        assert_eq!(reverted["example/mail"], global["example/mail"]);
     }
 
     #[test]

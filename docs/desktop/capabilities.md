@@ -31,7 +31,7 @@ Plugin-provided MCP servers are listed in the plugin details. Enable each one ex
 Classic Outlook is a special case on Windows: its live COM connection needs the
 **Connect Outlook session** control in the signed plugin's details. The older published
 alpha.3 package has only a sandboxed stdio server and cannot attach to the running
-Outlook session. [Plugin installation and Outlook requirements](../extend/plugins.md#validate-package-and-install)
+Outlook session. [Plugin installation and Outlook requirements](../use/outlook-classic.md)
 
 ## Other navigation destinations
 

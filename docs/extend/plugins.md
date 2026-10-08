@@ -1,282 +1,160 @@
 ---
 title: Agent Plugins
-description: Validate, distribute, trust, install, and run Agent Plugins over OCI.
-audience: operator
-type: guide
+description: Load a workspace plugin, add a signed package, and choose its skills or connections.
+audience: user
+type: how-to
 icon: lucide/puzzle
 ---
 
 # Agent Plugins
 
-Colossus implements [Agent Plugins v1](https://agent-plugins.org/specification) as its
-only portable extension package. A plugin is one directory with required `plugin.json`,
-optional Agent Skills at `skills/NAME/SKILL.md`, optional root `mcp.json`, and arbitrary
-resources. Skills use the [Agent Skills specification](https://agentskills.io/specification).
+Plugins give Colossus skills and optional MCP connections. Use a local directory for
+project instructions, or add a signed OCI package for reuse across workspaces.
 
-Plugins are installed once beneath `$COLOSSUS_HOME/plugins` and shared by every workspace
-using that home. Ordinary installation leaves a plugin disabled. Enabling selects one immutable OCI
-manifest digest globally; each workspace can narrow that active set with `plugins.enabled`,
-`plugins.include`, and `plugins.exclude`.
+## Load a workspace plugin
 
-## Built-in skills
+Put a plugin under `.agents/plugins/` in your project:
 
-The CLI and Managed Local sidecar embed the `colossus` plugin, including `coding`,
-`offline-dev`, `security-review`, `plugin-authoring`, and `schedule-task`. First startup with an explicit
-Colossus home installs and enables it without a checkout, registry or interpreter.
-Standalone SDK runtimes without a home remain isolated and do not open your personal home.
+```text
+.agents/
+└── plugins/
+    └── review/
+        ├── plugin.json
+        └── skills/
+            └── review/
+                └── SKILL.md
+```
 
-Core uses the same immutable, digest-addressed store as imported plugins. Its inventory
-label is **Bundled with Colossus**, not a claim of Cosign signature verification. Only
-compiled content can receive that ownership; importing a directory named `colossus`
-does not. Core can be inspected, verified, exported, enabled or disabled, but its version
-is managed by the executable, not independent update or uninstall commands.
-
-On startup, each binary selects its bundled version for subsequent runs sharing that
-home, including binary rollbacks. A user's global disabled preference survives that
-change. Workspace exclusions never change global activation. Existing runs retain their
-original leased catalog, skill instructions and MCP configuration.
-
-## Desktop and terminal selection
-
-Desktop's **Plugins** surface lists installed candidates, availability, source, digest,
-trust, component diagnostics, skills and MCP servers. Managed Local owns lifecycle
-operations and native import/export dialogs. External targets provide authorized
-discovery and bounded previews when they advertise support; they are not managed locally.
-Choose **Install → OCI registry**, paste an `oci://` reference, and continue. When one
-configured registry profile matches the host, Desktop selects it automatically. The
-registry options let you choose a named profile when several match. Local directories
-and OCI layout imports remain available in the source selector.
-After installation, open the candidate and select **Activate this digest**. For an
-installed MCP server, **Enable all plugin tools** applies a Workspace overlay and restarts
-Managed Local after preflight. This wildcard also covers tools added by later versions;
-use **Configure plugin connections** to narrow the tool list or add credentials.
-**Test connection** checks the applied server after the restart.
-Public API clients can request unavailable metadata with `include_disabled`; instruction
-and resource reads still require the plugin to be available in the workspace. An empty
-kind filter or `EXTENSION_KIND_UNSPECIFIED` includes Agent Plugins.
-
-Open **Settings → Global → Plugins** for shared plugin defaults, inclusion and
-exclusion lists, trust profiles, OCI registries, and plugin MCP server overlays.
-**Settings → Workspace → Plugins** shows the same controls for the selected workspace,
-with each value's source and an **Inherit** action to remove an override. Save global
-changes; ordinary updates apply when each workspace is idle. Changes to plugin permissions,
-trust, registries, and selection rules require confirmation through **Apply global updates**
-in the workspace footer. Workspace edits use **Apply Workspace changes** in that same footer
-and include pending global updates. These settings configure the runtime; installing,
-updating, and activating packages remains in **Plugins** in the main navigation.
-
-Use **Use in this conversation** for a sticky selection, or start one message with
-`@colossus/plugin-authoring` for a message-only selection. Sticky and message selections
-are combined without duplicates. Unknown mentions remain ordinary text. New conversations
-and target changes do not inherit selections; unavailable selected skills fail explicitly.
-Desktop captures recognized mentions before queuing a message. Later delivery validates
-those IDs again; disabling a plugin cannot silently turn a queued skill selection into
-ordinary prompt text.
-
-In the TUI, `/plugins` opens inventory and `/plugins OPERATION` accepts the same management
-arguments as the CLI. `/plugin skills`, `/plugin active`, `/plugin use PLUGIN/SKILL`,
-`/plugin remove PLUGIN/SKILL`, and `/plugin clear` manage conversation selections.
-`/plugin show`, `/plugin resources`, and `/plugin read` provide progressive disclosure.
-Selecting a plugin name lists its skills; it does not select every skill.
-
-Installation and activation are separate. An update installs a candidate; activate the
-exact digest explicitly. An untrusted-content checkbox only requests approval and is
-never approval evidence. Native policy prompts identify the operation's scope. Browsing
-instructions or configuring credentials never enables MCP servers.
-
-## Portable layout
-
-### Plugin icons
-
-Agent Plugins v1 has no portable icon field. Colossus uses the specification's
-[client extension mechanism](https://agent-plugins.org/specification#8-client-extensions)
-so the manifest remains compatible with other clients:
+Create `.agents/plugins/review/plugin.json`:
 
 ```json
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-  "name": "example-plugin",
-  "extensions": {
-    "com.obscuritylabs.colossus": {
-      "icon": "com.obscuritylabs.colossus/icon.png"
-    }
-  }
+  "name": "review-tools",
+  "description": "Code review instructions for this project"
 }
 ```
 
-Add the `extensions` object to `plugin.json` and put the PNG at the indicated path inside the
-plugin directory. Use a square image, ideally 128 × 128 pixels. The path is relative
-to the plugin root and must stay beneath `com.obscuritylabs.colossus/`. Absolute paths,
-URLs, traversal, links, and SVG are not supported. Both the source and normalized PNG
-must fit within 64 KiB, with dimensions no larger than 512 × 512 pixels.
+Create `.agents/plugins/review/skills/review/SKILL.md`:
 
-Icons travel with the immutable OCI package and work offline. Colossus decodes and
-re-encodes the image to remove ancillary content, then includes a bounded PNG data URL
-in authorized discovery (`icon_data_url`). An absent or invalid icon uses a monogram;
-icons that fail validation produce `invalid_plugin_icon` diagnostics without disabling valid skills
-or MCP components. The existing package-wide rejection of links still applies.
-Catalogs retain at most 2 MiB of icon data and limit normalization to 64 images and
-8 Mi decoded pixels per discovery. Local inventory and snapshots reserve capacity for
-the bundled icon. Additional icons use the monogram fallback while their plugins and
-skills remain discoverable. Once a budget is exhausted, remaining display images are
-not decoded; validating one plugin directly still checks its icon independently.
+```markdown
+---
+name: review
+description: Review changes for correctness and missing tests.
+---
+Read the changed code and its callers. Explain concrete problems with file references.
+Check whether tests cover the behavior that changed.
+```
 
-Desktop shows the icon in the plugin library, plugin details, `@` suggestions and
-conversation selections. Type `@` to choose a plugin, then select one of its skills.
-You can still type a qualified `@plugin/skill` directly. The library supports search
-and availability filters; **Developer tools** contains validation, packaging and registry
-operations, and **Installation details** contains provenance, trust and the exact digest.
+Colossus discovers the directory automatically. Accept the source once:
 
-### Components
+```bash
+colossus plugins add .agents/plugins/review
+```
+
+Review the source approval prompt. Acceptance applies to this workspace and later
+instruction edits in this directory. Local sources are shown as **Workspace source**
+and remain unsigned. Acceptance grants access to their instructions; tools and
+connections still need their own permissions.
+
+In Desktop, open **Plugins**, select the discovered source, and choose
+**Use workspace source**. To register another directory inside the project, choose
+**Add plugin → Plugin directory**.
+
+Now select the skill in the composer:
 
 ```text
-example-plugin/
-├── plugin.json
-├── skills/
-│   └── review/
-│       ├── SKILL.md
-│       ├── scripts/
-│       └── references/
-└── mcp.json
+@review-tools/review Review the changes on this branch.
 ```
 
-Colossus discovers only those fixed locations. Skill IDs are always qualified as
-`PLUGIN_NAME/SKILL_NAME`; unqualified selections are rejected. All skill metadata is
-available for discovery, while the `SKILL.md` body is loaded only when selected or read
-through `plugin.skill.read`. Text resources are bounded previews; binary resources remain
-listed by contained path.
+For a conversation selection, use `/plugin use review-tools/review` in the terminal
+or **Use in this conversation** in Desktop.
 
-`allowed-tools` is advisory metadata. It cannot expose a hidden tool, bypass policy, or
-grant filesystem, process, network, credential, or approval authority. Scripts run only
-through the ordinary shell/process tools with the selected immutable plugin root added as
-a read/execute grant.
+## Discover local sources
 
-## Validate, package, and install
+| Location | Behavior |
+| --- | --- |
+| `.agents/plugins/NAME/plugin.json` | Discovers each immediate plugin directory |
+| `.agents/plugin.json` | Discovers one plugin rooted at `.agents` |
+| Another directory inside the workspace | Register it with `colossus plugins add PATH` |
 
-On a fresh configuration, the built-in GHCR profile and its required Sigstore signing
-identity are ready for a published Obscurity Labs plugin:
+Choose either the single-plugin layout or the collection layout. Discovery does not
+search arbitrary subdirectories. Each plugin needs its own `plugin.json`.
+
+Browse sources with `colossus plugins list` or `/plugins`. A discovered source stays
+unavailable until accepted. Missing or malformed sources show diagnostics; valid
+siblings remain discoverable. SDK hosts need an explicit Colossus home to persist
+acceptance, and do not implicitly open your personal home.
+
+## Add a signed package
+
+Use a published OCI reference:
 
 ```bash
-colossus plugin install oci://ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:0.1.0-alpha.4.ci.7.1-windows-amd64
-colossus plugins list
-colossus plugins enable outlook-classic --digest sha256:e95973e1eb55062d92d8c8810788d142cf62ac94bc7f0b3d5bf49f70e9b5342a
+colossus plugins add oci://ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:VERSION
 ```
 
-The install resolves the tag once and records the verified manifest digest. Check the
-reported digest before activation. A different registry needs a configured exact-origin
-profile; pass `--registry NAME` when more than one profile matches its origin.
-The Outlook Classic alpha.4 release includes the user-session companion. Select its
-active digest in Desktop **Plugins**, then choose **Connect Outlook session** in its
-details. This per-Workspace switch starts the verified executable as the logged-in
-Windows user and passes a fresh bearer token to Managed Local through its protected
-bootstrap. The runtime connects to one loopback MCP endpoint; the ordinary
-`windows_job` boundary remains in place for agent and plugin subprocesses. The
-connection exposes the package's 14 current tool names and keeps ordinary MCP policy,
-approval, and audit. **Disconnect Outlook session** stops the helper and rotates the
-token on the next connection. Disabling or removing the active plugin through Desktop
-revokes running Outlook helpers; downloading an update leaves the current session in
-place until a different digest is activated. Restart a Workspace to use a newly
-activated digest. A CLI activation change revokes a running helper within 15 seconds.
-The earlier alpha.3 package does not contain this companion.
+Replace `VERSION` with the published tag for your platform. In Desktop, choose
+**Add plugin → OCI registry**, paste the reference, and continue.
+See [Connect classic Outlook](../use/outlook-classic.md) for Windows session setup.
 
-**Discover tools** checks the authenticated MCP transport and allowlist. Outlook COM
-attachment is checked when an authorized Outlook tool runs; discovery alone does not
-prove that classic Outlook is open.
+Colossus verifies the signature, installs the package, and activates that exact version
+in one flow. The built-in GHCR profile accepts the Obscurity Labs plugin signing
+workflow. For another registry, [configure a registry profile](plugin-distribution.md#registries-and-trust);
+use `--registry NAME` when several profiles match.
+
+Installed packages are shared by workspaces using the same Colossus home. Accepting
+a local source with the same plugin name selects it only in this workspace. The global
+version remains active elsewhere. The bundled `colossus` name is reserved.
+
+## Control availability
 
 ```bash
-colossus plugins validate ./example-plugin
-colossus plugins package ./example-plugin --output ./example-plugin.oci
-colossus plugins verify ./example-plugin.oci --trust-profile default
-colossus plugins install --layout ./example-plugin.oci --trust-profile default
-colossus plugins enable example-plugin --digest sha256:MANIFEST_DIGEST
-```
-
-Directory, OCI layout, deterministic layout tar, and registry-reference installs are
-supported. Layouts with multiple candidates require `--digest`. Tags are resolved once;
-the recorded identity is always the verified OCI manifest digest.
-
-The Colossus OCI profile uses a standard OCI image manifest with:
-
-- `artifactType: application/vnd.colossus.agent-plugin.v1`
-- config `application/vnd.colossus.agent-plugin.config.v1+json`
-- one `application/vnd.colossus.agent-plugin.content.v1.tar+gzip` layer
-- exactly one archive root named for the plugin
-
-Packaging is deterministic. Import rejects image indexes as plugin payloads, multiple
-content layers, traversal, absolute and duplicate paths, links, devices, special files,
-digest/size mismatches, oversized manifests or files, more than 10,000 files, and more
-than 2 GiB extracted content.
-
-## Registries and trust
-
-Registry profiles declare an exact origin, allowed token-service and blob-redirect
-origins, per-origin CA roots, authentication, and a trust profile. No registry is contacted
-at startup and no ambient Docker credentials are used unless `auth.kind: docker` is
-selected explicitly. Bearer/basic values remain credential references. Docker helpers
-require an exact configured executable and run through the normal process permit and audit
-boundary.
-The built-in `obscuritylabs` profile allows anonymous pulls from `https://ghcr.io` and
-requires a keyless Sigstore certificate issued by GitHub Actions for the exact
-`obscuritylabs/colossus-plugins` main-branch plugin workflow. It does not trust every
-artifact on GHCR. Explicit workspace configuration can replace or remove this profile.
-Docker configuration is opened only inside an authorized registry transfer, and its file
-must be covered by that transfer's permit. Denied transfers do not inspect credentials.
-
-Trust profiles are `required` by default. `optional` admits unmatched content as untrusted;
-enabling it requires explicit approval. `disabled` deliberately applies digest integrity
-only and has the same explicit untrusted-enable requirement. Signature verification is
-in-process Sigstore/Cosign using configured public keys or keyless issuer/subject identity,
-with optional local trust roots and bundled transparency evidence for disconnected use.
-Verification and installation require read grants for the selected profile's public-key
-and trust-root files. The built-in policy requests approval for paths outside existing
-workspace grants; an external policy must supply those grants explicitly. Re-verifying
-an installed plugin uses the same checks.
-
-```bash
-colossus plugins pull registry.example/acme/review:v1 \
-  --registry production --output ./review.oci
-colossus plugins push ./review.oci registry.example/acme/review:v1 \
-  --registry production
-colossus plugins install --reference registry.example/acme/review@sha256:DIGEST \
-  --registry production
-```
-
-Cosign signatures and attestations remain standard OCI referrers. Pulls also read the
-OCI referrers tag fallback when a registry does not serve the referrers API, verifying
-each attached manifest's digest and exact subject before checking its signature.
-Colossus does not invent a signing envelope.
-
-## MCP enablement and data
-
-Portable MCP server IDs are `PLUGIN_NAME/SERVER_NAME`. Every server needs a matching
-`plugins.mcpServers` entry with `enabled: true` and an explicit `allowedTools` list before
-any tools are exposed. Colossus supports stdio and Streamable HTTP. A valid legacy SSE
-entry is reported independently as unsupported and does not disable the plugin.
-
-Managed Local's plugin details offer explicit connection testing and OAuth status/sign-in
-for enabled servers. Save and apply the server overlay first. These actions reuse the
-normal native credential and OAuth boundaries and never enable a plugin or MCP server.
-Runtime effect names use length-prefixed plugin and server components so dotted names
-cannot accidentally share permission rules; portable server IDs remain `PLUGIN/SERVER`.
-
-`${PLUGIN_ROOT}` and `${PLUGIN_DATA}` expansion is exact, single-pass, and limited to MCP
-arguments, environment values, and `cwd`. Reserved variables are set after manifest and
-client overlays. Plugin roots stay immutable; stable writable state lives at
-`$COLOSSUS_HOME/plugins/data/PLUGIN_NAME` and survives update or uninstall unless
-`--purge-data` is explicit.
-
-## Lifecycle and air gaps
-
-```bash
-colossus plugins list
-colossus plugins show example-plugin
+colossus plugins workspace-disable .agents/plugins/review
 colossus plugins disable example-plugin
-colossus plugins uninstall example-plugin --digest sha256:DIGEST
-colossus plugins gc
-colossus plugins export example-plugin --output ./example-plugin-layout.tar
 ```
 
-The dedicated `plugins/state.redb` journal serializes lifecycle writers. Running snapshots
-lease their immutable content, so disable, uninstall, or garbage collection affects only
-later runs. Export carries the plugin manifest, blobs, signatures, and attestations and
-does not open a network connection during import.
+The first command disables a local source in this workspace. The second disables an
+installed plugin across the shared home. Reaccept a local source with `plugins add PATH`;
+reactivate an installed version from its Desktop details or with
+`plugins enable NAME --digest sha256:MANIFEST_DIGEST`, using the digest reported by
+`plugins show NAME`.
+
+Workspace [plugin settings](../reference/configuration/extensions.md) can disable
+discovery, exclude names, or allow only selected names. In Desktop, open
+**Settings → Workspace → Plugins** and apply the workspace changes.
+
+## Edit and reload
+
+Instruction and resource edits in an accepted directory apply to the next run.
+Each running task keeps an immutable snapshot, including the exact instructions
+and resources it started with. Disabling or removing a source affects subsequent runs.
+
+Replacing the source directory or changing its manifest name requires fresh acceptance.
+If a selected local source becomes invalid, Colossus reports it as unavailable.
+Disable that local selection explicitly to use the globally active version again.
+
+## Connect tools
+
+A plugin can declare MCP servers, but adding it does not start them or expose their tools.
+In Desktop, open its details and choose **Enable all plugin tools**, or
+**Configure plugin connections** to choose an exact tool list and credentials.
+Apply the settings, restart the workspace, then use **Test connection**.
+
+For local plugins, connection permission is tied to the exact snapshot. After an edit,
+review and enable the connection again. Credentials and tool permissions from an installed
+version are not reused for a local source.
+
+See [MCP configuration](../reference/configuration/extensions.md) for
+`plugins.mcpServers` and the `workspacePluginDigest` binding.
+
+## Next steps
+
+- [Choose and inspect skills](../use/skills-plugins.md).
+- [Create a plugin](plugin-authoring.md), including resources and icons.
+- [Distribute and trust plugins](plugin-distribution.md), including private registries,
+  offline import, signature profiles, updates, and export.
+- [Agent Plugin formats](../reference/extension-formats.md) for exact contracts.
+
+Desktop's **Developer tools → Install** and `plugins install` retain the advanced
+install-only workflow: candidates stay disabled until explicitly activated.

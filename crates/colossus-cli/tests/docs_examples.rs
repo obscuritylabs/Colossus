@@ -22,6 +22,32 @@ fn read(relative: &str) -> String {
         .unwrap_or_else(|error| panic!("read {relative}: {error}"))
 }
 
+#[test]
+fn published_workspace_plugin_example_loads_without_packaging_or_registry_configuration() {
+    let document = read("docs/extend/plugins.md");
+    let fence = |language: &str| {
+        document
+            .split_once(&format!("```{language}\n"))
+            .expect("example fence")
+            .1
+            .split_once("\n```")
+            .expect("closing fence")
+            .0
+            .to_owned()
+    };
+    let temporary = tempfile::tempdir().expect("workspace");
+    let source = temporary.path().join(".agents/plugins/review");
+    fs::create_dir_all(source.join("skills/review")).expect("example directory");
+    fs::write(source.join("plugin.json"), fence("json")).expect("manifest example");
+    fs::write(source.join("skills/review/SKILL.md"), fence("markdown")).expect("skill example");
+    let discovered = colossus_plugins::discover_workspace_plugins(temporary.path(), &[]);
+    assert!(discovered.issues.is_empty());
+    assert_eq!(discovered.candidates.len(), 1);
+    let plugin = &discovered.candidates[0].record;
+    assert_eq!(plugin.skills[0].id, "review-tools/review");
+    assert!(!plugin.installation.trust.trusted);
+}
+
 fn marked_yaml<'a>(document: &'a str, marker: &str) -> &'a str {
     let start = format!("<!-- {marker}:start -->");
     let end = format!("<!-- {marker}:end -->");

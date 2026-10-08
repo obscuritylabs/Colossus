@@ -50,7 +50,9 @@ impl PluginManagementExecutor {
                     .map(|(name, _)| name)
                     .ok_or_else(|| failed("select a qualified plugin/skill identifier"))?;
                 let (plugins, _lease) = self
-                    .store()?
+                    .catalog
+                    .preview_store(name, &digest)
+                    .map_err(failed)?
                     .snapshot_digests_with_lease(&BTreeMap::from([(name.into(), digest)]))
                     .map_err(failed)?;
                 let skill = plugins
@@ -71,13 +73,17 @@ impl PluginManagementExecutor {
             }
             Op::VerifyInstalled { name, digest } => {
                 let (plugins, _lease) = self
-                    .store()?
+                    .catalog
+                    .preview_store(&name, &digest)
+                    .map_err(failed)?
                     .snapshot_digests_with_lease(&BTreeMap::from([(name, digest.clone())]))
                     .map_err(failed)?;
                 let plugin = plugins
                     .first()
                     .ok_or_else(|| failed("plugin is not installed"))?;
-                let trust = if plugin.installation.origin == PluginOrigin::Bundled {
+                let trust = if plugin.installation.origin == PluginOrigin::Workspace {
+                    plugin.installation.trust.clone()
+                } else if plugin.installation.origin == PluginOrigin::Bundled {
                     let embedded = colossus_bundled_plugins::core_artifact().map_err(failed)?;
                     if embedded.manifest_digest != digest {
                         return Err(failed(
@@ -189,6 +195,59 @@ impl PluginManagementExecutor {
                 .map_err(failed)?;
                 serde_json::to_value(installation)
             }
+            Op::AcceptWorkspace { path, digest } => {
+                if !self.configuration.workspace_discovery || !self.configuration.enabled {
+                    return Err(failed("workspace plugin loading is disabled"));
+                }
+                if request.approval.is_none() {
+                    return Err(failed(
+                        "workspace source acceptance requires request-bound approval",
+                    ));
+                }
+                let candidate = self
+                    .catalog
+                    .workspace_plugins
+                    .candidate(&path)
+                    .map_err(failed)?;
+                if digest
+                    .as_ref()
+                    .is_some_and(|digest| *digest != candidate.artifact.manifest_digest)
+                {
+                    return Err(failed(
+                        "workspace plugin changed; refresh and review its current snapshot",
+                    ));
+                }
+                let store = self
+                    .catalog
+                    .workspace_plugins
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| failed("workspace plugins require an explicit Colossus home"))?;
+                store
+                    .accept_workspace_plugin(&candidate, actor.clone())
+                    .map_err(failed)?;
+                let mut installation = store
+                    .snapshot_workspace_plugin(&candidate, actor)
+                    .map_err(failed)?;
+                installation.status = colossus_contracts::PluginStatus::Enabled;
+                serde_json::to_value(installation)
+            }
+            Op::DisableWorkspace { path } => {
+                let relative = self
+                    .catalog
+                    .workspace_plugins
+                    .relative_path(&path)
+                    .map_err(failed)?;
+                self.catalog
+                    .workspace_plugins
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| failed("workspace plugins require an explicit Colossus home"))?
+                    .disable_workspace_plugin(&relative, actor)
+                    .map_err(failed)?;
+                Ok(json!({"source": relative, "active": false, "origin": "workspace"}))
+            }
+            Op::Add { .. } => return Err(failed("plugin add requires shared orchestration")),
             Op::Enable {
                 name,
                 digest,
@@ -274,9 +333,14 @@ impl EffectExecutor for PluginManagementExecutor {
                 "operator plugin request does not match its authorized effect",
             ));
         }
+        let selected_store = match &operation {
+            PluginManagementRequest::VerifyInstalled { name, digest } => {
+                Some(self.catalog.preview_store(name, digest).map_err(failed)?)
+            }
+            _ => self.store.as_deref(),
+        };
         for (path, write) in
-            management_paths(&operation, &self.configuration, self.store.as_deref())
-                .map_err(failed)?
+            management_paths(&operation, &self.configuration, selected_store).map_err(failed)?
         {
             enforce_management_path(&path, write, &permit)?;
         }
@@ -296,7 +360,9 @@ pub(super) fn management_paths(
 ) -> Result<Vec<(PathBuf, bool)>, StoreError> {
     use PluginManagementRequest as Op;
     let paths = match operation {
-        Op::Validate { path } | Op::Verify { path, .. } => vec![(path, false)],
+        Op::Validate { path } | Op::Verify { path, .. } | Op::AcceptWorkspace { path, .. } => {
+            vec![(path, false)]
+        }
         Op::Install {
             source:
                 PluginInstallSource::Directory { path }
@@ -324,16 +390,15 @@ pub(super) fn management_paths(
                 })?
                 .list(10_000)?
                 .into_iter()
-                .find(|entry| entry.manifest.name == *name && entry.digest == *digest)
-                .ok_or_else(|| {
-                    StoreError::Adapter("selected plugin digest is not installed".into())
-                })?;
-            (installation.origin != PluginOrigin::Bundled).then(|| {
-                installation
-                    .trust
-                    .profile
-                    .unwrap_or_else(|| "default".into())
-            })
+                .find(|entry| entry.manifest.name == *name && entry.digest == *digest);
+            installation
+                .filter(|entry| entry.origin == PluginOrigin::Installed)
+                .map(|installation| {
+                    installation
+                        .trust
+                        .profile
+                        .unwrap_or_else(|| "default".into())
+                })
         }
         _ => None,
     };
@@ -402,8 +467,35 @@ impl Runtime {
         mut operation: PluginManagementRequest,
     ) -> Result<Value, RuntimeError> {
         use PluginManagementRequest as Op;
+        if let Op::Add {
+            source,
+            trust_profile,
+        } = operation
+        {
+            if let PluginInstallSource::Directory { path } = source {
+                return Box::pin(self.manage_plugin(Op::AcceptWorkspace { path, digest: None }))
+                    .await;
+            }
+            let receipt = Box::pin(self.manage_plugin(Op::Install {
+                source,
+                trust_profile,
+            }))
+            .await?;
+            let installation: colossus_contracts::PluginInstallation =
+                serde_json::from_value(receipt)
+                    .map_err(|error| RuntimeError::Config(error.to_string()))?;
+            return Box::pin(self.manage_plugin(Op::Enable {
+                name: installation.manifest.name,
+                digest: installation.digest,
+                allow_untrusted: false,
+            }))
+            .await;
+        }
         match &mut operation {
-            Op::Validate { path } | Op::Verify { path, .. } => {
+            Op::Validate { path }
+            | Op::Verify { path, .. }
+            | Op::AcceptWorkspace { path, .. }
+            | Op::DisableWorkspace { path } => {
                 *path = workspace_absolute_path(&self.workspace, Path::new(path))
                     .display()
                     .to_string()

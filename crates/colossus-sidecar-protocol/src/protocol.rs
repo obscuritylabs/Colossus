@@ -1161,6 +1161,7 @@ pub const MANAGED_EDITABLE_FIELD_IDS: &[&str] = &[
     "research.maxSources",
     "research.maxWorkers",
     "plugins.enabled",
+    "plugins.workspaceDiscovery",
     "plugins.include",
     "plugins.exclude",
     "plugins.trustProfiles",
