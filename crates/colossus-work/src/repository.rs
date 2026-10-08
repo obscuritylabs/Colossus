@@ -774,4 +774,12 @@ impl WorkRepository for EventSourcedWorkRepository {
         records.truncate(limit.clamp(1, MAX_LIST));
         Ok(records)
     }
+
+    fn subagent_recovery_page(
+        &self,
+        after_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SubagentRecoveryEntry>, StoreError> {
+        super::subagent_recovery::page(self.journal.as_ref(), after_id, limit)
+    }
 }

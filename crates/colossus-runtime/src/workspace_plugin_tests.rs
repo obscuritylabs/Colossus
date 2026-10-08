@@ -371,6 +371,73 @@ async fn pruning_preserves_restart_and_retry_provenance_until_the_child_job_comp
 }
 
 #[tokio::test]
+async fn more_than_one_thousand_terminal_jobs_keep_plugin_capture_and_recovery_available() {
+    let temporary = crate::test_support::private_tempdir();
+    let root = temporary.path().canonicalize().unwrap();
+    let workspace = root.join("workspace");
+    let source = workspace.join(".agents/plugins/review");
+    write_source(&source, "Pinned original instructions.");
+    let home = colossus_home::ColossusHome::ensure_at(root.join("home")).unwrap();
+    let runtime = open(&workspace, Some(home.root()), true);
+    runtime
+        .manage_plugin(Op::AcceptWorkspace {
+            path: ".agents/plugins/review".into(),
+            digest: None,
+        })
+        .await
+        .unwrap();
+    let session = runtime.create_session(Some("terminal history")).unwrap();
+    let template = runtime
+        .queue_subagent(&session.id, "Review changes", "subagent_default")
+        .await
+        .unwrap();
+    let snapshot_id = runtime
+        .work
+        .subagent_instruction_snapshot_id(&template.id)
+        .unwrap()
+        .unwrap();
+    let digests = runtime
+        .instruction_snapshots
+        .load(&snapshot_id)
+        .unwrap()
+        .plugin_digests()
+        .clone();
+    for index in 0..1_001 {
+        let mut job = template.clone();
+        job.id = format!("terminal-job-{index:04}");
+        job.parent_call_id = format!("terminal-call-{index}");
+        job.child_session_id = format!("terminal-child-{index}");
+        let reference = (index % 2 == 0).then(|| snapshot_id.clone());
+        let mut job = runtime
+            .work
+            .create_subagent_with_instruction_snapshot(job, reference, terminal_actor())
+            .unwrap();
+        job.status = SubagentStatus::Cancelled;
+        job.error = "Cancelled fixture job".into();
+        job.completed_at = Some(job.updated_at.clone());
+        runtime.work.update_subagent(job, terminal_actor()).unwrap();
+    }
+    for index in 0..12 {
+        write_source(&source, &format!("Later instructions {index}."));
+        runtime.plugin_catalog.capture().unwrap();
+    }
+    let restored = runtime.plugin_catalog.restore(&digests).unwrap();
+    assert!(restored.records.iter().any(|record| {
+        record.installation.origin == PluginOrigin::Workspace
+            && record.skills[0]
+                .instructions
+                .contains("Pinned original instructions")
+    }));
+    runtime
+        .manage_plugin(Op::AcceptWorkspace {
+            path: ".agents/plugins/review".into(),
+            digest: None,
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn add_cannot_autoapprove_unsigned_oci_or_replace_the_previous_active_version() {
     let temporary = crate::test_support::private_tempdir();
     let root = temporary.path().canonicalize().expect("root");

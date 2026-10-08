@@ -25,8 +25,9 @@ Presence alone does not grant instruction or execution authority.
 
 Automatic discovery is bounded to 128 sources, 128 collection entries, and 256 MiB of
 cumulative validated source bytes, in deterministic path order. Failed captures do not
-spend that shared budget; each attempt remains bounded and malformed manifests are
-rejected before payload reads. Linked ancestry, linked files,
+spend that shared budget. Metadata rejects oversized trees before payload reads;
+manifest validation precedes other payloads. A separate 384 MiB inspection budget
+counts reads from successful and failed sources. Linked ancestry, linked files,
 special files, and out-of-workspace paths are rejected. Accepted source grants bind the
 workspace partition, relative directory path, platform directory identity, and manifest
 name. Each run uses a deterministic OCI snapshot of captured bytes. Recovery uses the

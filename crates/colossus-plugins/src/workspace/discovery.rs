@@ -33,7 +33,23 @@ pub(super) fn discover_with_budget(
     workspace: &Path,
     registered: &[String],
     icons: &mut crate::PluginIconBudget,
+    remaining: u64,
+) -> WorkspacePluginDiscovery {
+    discover_with_budgets(
+        workspace,
+        registered,
+        icons,
+        remaining,
+        remaining.saturating_add(MAX_WORKSPACE_PLUGINS as u64 * MAX_MANIFEST_BYTES),
+    )
+}
+
+pub(super) fn discover_with_budgets(
+    workspace: &Path,
+    registered: &[String],
+    icons: &mut crate::PluginIconBudget,
     mut remaining: u64,
+    mut inspection_remaining: u64,
 ) -> WorkspacePluginDiscovery {
     let mut result = WorkspacePluginDiscovery::default();
     if registered.len() > MAX_WORKSPACE_PLUGINS {
@@ -113,6 +129,7 @@ pub(super) fn discover_with_budget(
             workspace,
             Path::new(path),
             &mut remaining,
+            &mut inspection_remaining,
             icons.for_origin(PluginOrigin::Workspace),
         ) {
             Ok(candidate) => result.candidates.push(candidate),

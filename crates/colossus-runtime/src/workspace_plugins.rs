@@ -61,28 +61,40 @@ impl WorkspacePlugins {
     /// jobs recovered after a process restart when no in-memory lease remains.
     pub(super) fn recoverable_digests(&self) -> Result<BTreeSet<String>, RuntimeError> {
         let mut digests = BTreeSet::new();
-        for status in [
-            SubagentStatus::Queued,
-            SubagentStatus::Running,
-            SubagentStatus::Failed,
-            SubagentStatus::Cancelled,
-            SubagentStatus::Interrupted,
-        ] {
-            let jobs = self.work.list_subagents(None, Some(status), 1_000)?;
-            if jobs.len() == 1_000 {
-                return Err(RuntimeError::Config("cannot safely prune workspace plugins while the recoverable job listing is at its limit".into()));
+        let mut after = None::<String>;
+        loop {
+            let jobs = self.work.subagent_recovery_page(after.as_deref(), 1_000)?;
+            if jobs.len() > 1_000 {
+                return Err(RuntimeError::Config(
+                    "subagent recovery page exceeds its bound".into(),
+                ));
             }
-            for job in jobs {
-                if let Some(id) = self.work.subagent_instruction_snapshot_id(&job.id)? {
-                    let snapshot = self.instruction_snapshots.load(&id)?;
-                    digests.extend(
-                        snapshot
-                            .plugin_digests()
-                            .iter()
-                            .filter(|(name, _)| name.starts_with("workspace:"))
-                            .map(|(_, digest)| digest.clone()),
-                    );
+            if jobs.is_empty() {
+                break;
+            }
+            let mut snapshots = BTreeSet::new();
+            for (job, reference) in jobs {
+                if after.as_ref().is_some_and(|after| job.id <= *after) {
+                    return Err(RuntimeError::Config(
+                        "subagent recovery page is not ordered".into(),
+                    ));
                 }
+                after = Some(job.id);
+                if job.status != SubagentStatus::Completed
+                    && let Some(id) = reference
+                {
+                    snapshots.insert(id);
+                }
+            }
+            for id in snapshots {
+                let snapshot = self.instruction_snapshots.load(&id)?;
+                digests.extend(
+                    snapshot
+                        .plugin_digests()
+                        .iter()
+                        .filter(|(name, _)| name.starts_with("workspace:"))
+                        .map(|(_, digest)| digest.clone()),
+                );
             }
         }
         Ok(digests)

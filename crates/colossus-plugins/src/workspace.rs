@@ -14,6 +14,8 @@ mod tests;
 pub const MAX_WORKSPACE_PLUGINS: usize = 128;
 /// Aggregate source bytes admitted by automatic workspace discovery.
 pub const MAX_WORKSPACE_PLUGIN_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_WORKSPACE_INSPECTION_BYTES: u64 =
+    MAX_WORKSPACE_PLUGIN_BYTES + MAX_WORKSPACE_PLUGINS as u64 * MAX_MANIFEST_BYTES;
 
 /// Object and path identity of an explicitly accepted mutable source.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -93,10 +95,12 @@ pub fn capture_workspace_plugin(
     relative: &Path,
 ) -> Result<WorkspacePluginCandidate, StoreError> {
     let mut remaining = MAX_WORKSPACE_PLUGIN_BYTES;
+    let mut inspection_remaining = MAX_WORKSPACE_INSPECTION_BYTES;
     capture_with_budget(
         workspace,
         relative,
         &mut remaining,
+        &mut inspection_remaining,
         &mut crate::icons::IconBudget::default(),
     )
 }
@@ -105,26 +109,48 @@ fn capture_with_budget(
     workspace: &Path,
     relative: &Path,
     remaining: &mut u64,
+    inspection_remaining: &mut u64,
     icons: &mut crate::icons::IconBudget,
 ) -> Result<WorkspacePluginCandidate, StoreError> {
     let root = workspace_plugin_root(workspace, relative)?;
     let identity = detect_workspace_identity(&root).map_err(adapter)?;
-    // Reject malformed manifests before inspecting potentially large payloads.
-    let (manifest, _) = load_manifest(&root)?;
-    if manifest.name == "colossus" {
-        return Err(adapter(
-            "colossus is reserved for the executable-bundled plugin",
-        ));
-    }
     let mut files = Vec::new();
     collect_regular_files(&root, &root, 0, &mut files)?;
     let reader = ReadRoot::bind(&root)?;
+    if !files.iter().any(|path| path == Path::new("plugin.json")) {
+        return Err(adapter("plugin.json is required"));
+    }
+    // Reject oversized trees using metadata before reading their payloads.
+    let mut total = 0_u64;
+    for path in &files {
+        let size = reader
+            .open_file(path, MAX_FILE_BYTES)?
+            .metadata()
+            .map_err(adapter)?
+            .len();
+        total = total
+            .checked_add(size)
+            .filter(|total| *total <= *remaining)
+            .ok_or_else(|| adapter("workspace plugin discovery exceeds 256 MiB"))?;
+    }
+    // Validate the captured manifest before reading other payloads, without
+    // rereading it or refunding inspection work when validation fails.
+    files.sort_by_key(|path| path != Path::new("plugin.json"));
     // Only validated captures spend the shared availability budget. Each attempt
     // retains its byte bound; discovery also limits the number of attempts.
     let mut candidate_remaining = *remaining;
     let mut owned = Vec::new();
     for relative in files {
-        let file = reader.open_file(&relative, candidate_remaining.min(MAX_FILE_BYTES))?;
+        let manifest = relative == Path::new("plugin.json");
+        let file_limit = if manifest {
+            MAX_MANIFEST_BYTES
+        } else {
+            MAX_FILE_BYTES
+        };
+        let limit = candidate_remaining
+            .min(*inspection_remaining)
+            .min(file_limit);
+        let file = reader.open_file(&relative, limit)?;
         #[cfg(unix)]
         let executable = {
             use std::os::unix::fs::PermissionsExt as _;
@@ -133,9 +159,20 @@ fn capture_with_budget(
         #[cfg(not(unix))]
         let executable = false;
         let mut bytes = Vec::new();
-        file.take(candidate_remaining.saturating_add(1))
-            .read_to_end(&mut bytes)
-            .map_err(adapter)?;
+        let read = (&file).take(limit).read_to_end(&mut bytes);
+        *inspection_remaining -= bytes.len() as u64;
+        read.map_err(adapter)?;
+        if file.metadata().map_err(adapter)?.len() != bytes.len() as u64 {
+            return Err(adapter("workspace plugin changed during capture"));
+        }
+        if manifest {
+            let (manifest, _) = parse_plugin_manifest(&bytes)?;
+            if manifest.name == "colossus" {
+                return Err(adapter(
+                    "colossus is reserved for the executable-bundled plugin",
+                ));
+            }
+        }
         candidate_remaining = candidate_remaining
             .checked_sub(bytes.len() as u64)
             .ok_or_else(|| adapter("workspace plugin discovery exceeds 256 MiB"))?;
