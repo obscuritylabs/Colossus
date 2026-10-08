@@ -363,8 +363,7 @@ test("Workflows and Schedules use real manual runs, calendar tasks, model prefer
       .click();
     await page
       .getByRole("region", { name: "Task run history" })
-      .getByRole("button")
-      .filter({ hasText: queued.run_id })
+      .getByTitle(queued.run_id, { exact: true })
       .click();
     await expect(
       page.getByRole("complementary", { name: "Selected run output" }),
