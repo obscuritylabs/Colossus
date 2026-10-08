@@ -370,6 +370,8 @@ impl Runtime {
             config.observability.logs.journal_payloads,
         ));
         let instruction_snapshots = Arc::new(InstructionSnapshotStore::new(Arc::clone(&journal)));
+        let work: Arc<dyn WorkRepository> =
+            Arc::new(EventSourcedWorkRepository::new(Arc::clone(&journal)));
         let projections = Arc::new(ProjectionWorker::new(
             Arc::clone(&journal),
             Arc::clone(&projection_store),
@@ -419,6 +421,8 @@ impl Runtime {
         let workspace_plugins = Arc::new(crate::workspace_plugins::WorkspacePlugins::new(
             &workspace,
             colossus_home.as_deref(),
+            Arc::clone(&work),
+            Arc::clone(&instruction_snapshots),
         )?);
         let mut plugin_icons = colossus_plugins::PluginIconBudget::default();
         let (mut active_plugins, _startup_plugin_lease) = if config.plugins.enabled {
@@ -471,8 +475,6 @@ impl Runtime {
             security_posture::build_security_posture(config, &active_plugin_extensions.mcp);
         let sessions: Arc<dyn SessionRepository> =
             Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
-        let work: Arc<dyn WorkRepository> =
-            Arc::new(EventSourcedWorkRepository::new(Arc::clone(&journal)));
         let presentation: Arc<dyn PresentationRepository> = Arc::new(
             EventSourcedPresentationRepository::new(Arc::clone(&journal)),
         );

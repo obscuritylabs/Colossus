@@ -13,10 +13,17 @@ use colossus_plugins::{
 pub(super) struct WorkspacePlugins {
     workspace: PathBuf,
     pub(super) store: Option<Arc<PluginStore>>,
+    work: Arc<dyn WorkRepository>,
+    instruction_snapshots: Arc<InstructionSnapshotStore>,
 }
 
 impl WorkspacePlugins {
-    pub(super) fn new(workspace: &Path, home: Option<&Path>) -> Result<Self, RuntimeError> {
+    pub(super) fn new(
+        workspace: &Path,
+        home: Option<&Path>,
+        work: Arc<dyn WorkRepository>,
+        instruction_snapshots: Arc<InstructionSnapshotStore>,
+    ) -> Result<Self, RuntimeError> {
         let store = home
             .map(|path| {
                 let home = colossus_home::ColossusHome::ensure_at(path.to_owned())
@@ -45,7 +52,40 @@ impl WorkspacePlugins {
         Ok(Self {
             workspace: workspace.to_owned(),
             store,
+            work,
+            instruction_snapshots,
         })
+    }
+
+    /// Reconstruct durable run pins from canonical child-job provenance, including
+    /// jobs recovered after a process restart when no in-memory lease remains.
+    pub(super) fn recoverable_digests(&self) -> Result<BTreeSet<String>, RuntimeError> {
+        let mut digests = BTreeSet::new();
+        for status in [
+            SubagentStatus::Queued,
+            SubagentStatus::Running,
+            SubagentStatus::Failed,
+            SubagentStatus::Cancelled,
+            SubagentStatus::Interrupted,
+        ] {
+            let jobs = self.work.list_subagents(None, Some(status), 1_000)?;
+            if jobs.len() == 1_000 {
+                return Err(RuntimeError::Config("cannot safely prune workspace plugins while the recoverable job listing is at its limit".into()));
+            }
+            for job in jobs {
+                if let Some(id) = self.work.subagent_instruction_snapshot_id(&job.id)? {
+                    let snapshot = self.instruction_snapshots.load(&id)?;
+                    digests.extend(
+                        snapshot
+                            .plugin_digests()
+                            .iter()
+                            .filter(|(name, _)| name.starts_with("workspace:"))
+                            .map(|(_, digest)| digest.clone()),
+                    );
+                }
+            }
+        }
+        Ok(digests)
     }
 
     pub(super) fn grants(&self) -> Result<BTreeMap<String, WorkspacePluginGrant>, RuntimeError> {
@@ -162,12 +202,21 @@ impl WorkspacePlugins {
             return Ok((Vec::new(), None));
         };
         let grants = self.grants()?;
+        if !grants.values().any(|grant| {
+            grant.enabled
+                && !config.exclude.contains(&grant.source.name)
+                && (config.include.is_empty() || config.include.contains(&grant.source.name))
+        }) {
+            return Ok((Vec::new(), None));
+        }
         let discovered = discover_workspace_plugins_with_icon_budget(
             &self.workspace,
             &grants.keys().cloned().collect::<Vec<_>>(),
             &mut colossus_plugins::PluginIconBudget::exhausted(),
         );
         let mut digests = BTreeMap::new();
+        let recoverable = self.recoverable_digests()?;
+        let mut publication_leases = Vec::new();
         for candidate in discovered.candidates {
             let name = &candidate.source.name;
             if config.exclude.contains(name)
@@ -180,8 +229,9 @@ impl WorkspacePlugins {
             }
             // Publication is internal snapshot custody under the remembered source
             // grant, never an implicit global installation or signature claim.
-            match store.snapshot_workspace_plugin(&candidate, terminal_actor()) {
-                Ok(installation) => {
+            match store.snapshot_workspace_plugin(&candidate, &recoverable, terminal_actor()) {
+                Ok((installation, lease)) => {
+                    publication_leases.push(lease);
                     digests.insert(installation.manifest.name, installation.digest);
                 }
                 Err(error) => tracing::warn!(%error, "workspace plugin snapshot unavailable"),
@@ -191,6 +241,7 @@ impl WorkspacePlugins {
             return Ok((Vec::new(), None));
         }
         let (records, lease) = store.snapshot_digests_with_icon_budget(&digests, icons)?;
+        drop(publication_leases);
         Ok((records, Some(lease)))
     }
 }

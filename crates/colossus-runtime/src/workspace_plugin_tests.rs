@@ -107,6 +107,142 @@ fn open(workspace: &Path, home: Option<&Path>, approve: bool) -> Runtime {
 }
 
 #[tokio::test]
+async fn pruning_preserves_restart_and_retry_provenance_until_the_child_job_completes() {
+    let temporary = crate::test_support::private_tempdir();
+    let root = temporary.path().canonicalize().expect("root");
+    let workspace = root.join("workspace");
+    let source = workspace.join(".agents/plugins/review");
+    write_source(&source, "Original recoverable instructions.");
+    let home = colossus_home::ColossusHome::ensure_at(root.join("home")).expect("home");
+    let config = RuntimeConfig::offline_template(workspace.join("state.redb"));
+    let reopen = || {
+        Runtime::open_with_options(
+            &config,
+            Arc::new(AllowApproval {
+                approved_by: "fixture".into(),
+            }),
+            None,
+            RuntimeOpenOptions::for_workspace(&workspace)
+                .expect("workspace")
+                .with_colossus_home(home.root())
+                .expect("home"),
+        )
+        .expect("durable runtime")
+    };
+    let runtime = reopen();
+    runtime
+        .manage_plugin(Op::Add {
+            source: PluginInstallSource::Directory {
+                path: ".agents/plugins/review".into(),
+            },
+            trust_profile: "default".into(),
+        })
+        .await
+        .expect("accept");
+    let session = runtime
+        .create_session(Some("recoverable child"))
+        .expect("session");
+    let job = runtime
+        .queue_subagent(&session.id, "Review changes", "subagent_default")
+        .await
+        .expect("queue");
+    let id = runtime
+        .work
+        .subagent_instruction_snapshot_id(&job.id)
+        .expect("reference")
+        .expect("snapshot");
+    let digests = runtime
+        .instruction_snapshots
+        .load(&id)
+        .expect("snapshot")
+        .plugin_digests()
+        .clone();
+    drop(runtime);
+    let runtime = reopen();
+    let service = WorkService::new(Arc::clone(&runtime.work), Arc::clone(&runtime.sessions));
+    let mut version = 0;
+    for status in [
+        SubagentStatus::Queued,
+        SubagentStatus::Running,
+        SubagentStatus::Failed,
+        SubagentStatus::Cancelled,
+        SubagentStatus::Interrupted,
+    ] {
+        if status != SubagentStatus::Queued {
+            let current = runtime
+                .get_subagent(&job.id)
+                .expect("job")
+                .expect("job")
+                .status;
+            if current != SubagentStatus::Running {
+                if current != SubagentStatus::Queued {
+                    service
+                        .requeue_subagent(&job.id, terminal_actor())
+                        .expect("retry");
+                }
+                service
+                    .start_subagent(&job.id, terminal_actor())
+                    .expect("start");
+            }
+            if status != SubagentStatus::Running {
+                service
+                    .stop_subagent(&job.id, status, "retry fixture", terminal_actor())
+                    .expect("stop");
+            }
+        }
+        for _ in 0..12 {
+            version += 1;
+            write_source(&source, &format!("New instructions version {version}."));
+            runtime
+                .plugin_catalog
+                .capture()
+                .expect("capture new instructions");
+        }
+        let restored = runtime
+            .plugin_catalog
+            .restore(&digests)
+            .expect("recover exact catalog");
+        let local = restored
+            .records
+            .iter()
+            .find(|record| record.installation.origin == PluginOrigin::Workspace)
+            .expect("workspace plugin");
+        assert!(
+            local.skills[0]
+                .instructions
+                .contains("Original recoverable instructions")
+        );
+    }
+    service
+        .requeue_subagent(&job.id, terminal_actor())
+        .expect("retry");
+    service
+        .start_subagent(&job.id, terminal_actor())
+        .expect("start");
+    service
+        .complete_subagent(&job.id, "fixture-child-run", "Done", terminal_actor())
+        .expect("complete");
+    write_source(&source, "Final instructions.");
+    runtime
+        .plugin_catalog
+        .capture()
+        .expect("prune completed job snapshot");
+    assert!(runtime.plugin_catalog.restore(&digests).is_err());
+    assert_eq!(
+        runtime
+            .plugin_catalog
+            .workspace_plugins
+            .store
+            .as_ref()
+            .expect("store")
+            .list(10_000)
+            .expect("bounded cache")
+            .len(),
+        8
+    );
+}
+
+#[tokio::test]
 async fn add_cannot_autoapprove_unsigned_oci_or_replace_the_previous_active_version() {
     let temporary = crate::test_support::private_tempdir();
     let root = temporary.path().canonicalize().expect("root");

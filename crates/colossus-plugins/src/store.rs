@@ -1,4 +1,5 @@
 use super::*;
+use colossus_contracts::PluginOrigin;
 use colossus_journal_redb::RedbWriterLease;
 use colossus_ports::{PluginRepository, collect_stream_ids};
 use fs4::fs_std::FileExt as _;
@@ -208,6 +209,7 @@ impl PluginRepository for EventSourcedPluginRepository {
                 "plugin list limit must be in 1..=10000".into(),
             ));
         }
+        let cached = self.workspace_cache()?.entries;
         let mut installations = Vec::new();
         for stream in collect_stream_ids(self.journal.as_ref(), "plugin:")? {
             let suffix = stream
@@ -218,6 +220,9 @@ impl PluginRepository for EventSourcedPluginRepository {
                 .ok_or_else(|| StoreError::Verification("invalid plugin stream identity".into()))?;
             let digest = format!("sha256:{hex}");
             if let Some(mut installation) = self.reduce_installation(name, &digest)? {
+                if installation.origin == PluginOrigin::Workspace && !cached.contains_key(&digest) {
+                    continue;
+                }
                 if installation.status != PluginStatus::Uninstalled {
                     installation.status = if self.active_digest(name)?.as_deref() == Some(&digest) {
                         PluginStatus::Enabled
@@ -416,6 +421,15 @@ impl PluginStore {
     /// Return every installation lifecycle record.
     pub fn list(&self, limit: usize) -> Result<Vec<PluginInstallation>, StoreError> {
         self.with_write(|repository| repository.list_plugins(limit))
+    }
+
+    /// Read one exact lifecycle receipt without applying the inventory listing ceiling.
+    pub fn installation(
+        &self,
+        name: &str,
+        digest: &str,
+    ) -> Result<Option<PluginInstallation>, StoreError> {
+        self.with_write(|repository| repository.get_plugin(name, digest))
     }
 
     /// Return one active plugin by name.
@@ -775,22 +789,17 @@ impl PluginStore {
         icons: &mut crate::PluginIconBudget,
     ) -> Result<(Vec<AgentPluginRecord>, PluginSnapshotLease), StoreError> {
         let _writer = acquire_plugin_writer(self.state_path())?;
-        let installed = self
-            .open_repository()?
-            .list_plugins(MAX_PLUGIN_INSTALLATIONS)?;
+        let repository = self.open_repository()?;
         let mut records = Vec::with_capacity(digests.len());
         for (name, digest) in digests {
             validate_lease_digest(digest)?;
-            let installation = installed
-                .iter()
-                .find(|entry| entry.manifest.name == *name && entry.digest == *digest)
-                .ok_or_else(|| {
-                    StoreError::NotFound(format!(
-                        "captured plugin {name}@{digest} is unavailable; start a new run"
-                    ))
-                })?;
+            let installation = repository.get_plugin(name, digest)?.ok_or_else(|| {
+                StoreError::NotFound(format!(
+                    "captured plugin {name}@{digest} is unavailable; start a new run"
+                ))
+            })?;
             let mut record = self
-                .load_verified_installation(installation, icons.for_origin(installation.origin))?;
+                .load_verified_installation(&installation, icons.for_origin(installation.origin))?;
             // Activation was captured by the caller before this immutable snapshot was
             // persisted. Later lifecycle changes do not rewrite that run's catalog.
             record.installation.status = PluginStatus::Enabled;
@@ -808,6 +817,10 @@ impl PluginStore {
             .iter()
             .map(|record| record.installation.digest.clone())
             .collect::<BTreeSet<_>>();
+        self.lease_digests(&digests)
+    }
+
+    fn lease_digests(&self, digests: &BTreeSet<String>) -> Result<PluginSnapshotLease, StoreError> {
         let path = self
             .root
             .join("leases")
@@ -824,7 +837,7 @@ impl PluginStore {
             file.set_permissions(fs::Permissions::from_mode(0o600))
                 .map_err(adapter)?;
         }
-        file.write_all(&serde_json::to_vec(&digests).map_err(adapter)?)
+        file.write_all(&serde_json::to_vec(digests).map_err(adapter)?)
             .map_err(adapter)?;
         file.sync_all().map_err(adapter)?;
         file.lock_shared().map_err(adapter)?;
@@ -834,9 +847,15 @@ impl PluginStore {
     /// Remove immutable content that has no installed lifecycle reference.
     pub fn gc(&self) -> Result<Vec<String>, StoreError> {
         let _writer = acquire_plugin_writer(self.state_path())?;
-        let bundled_digest = self.open_repository()?.bundled_digest()?;
-        let mut referenced = self
-            .open_repository()?
+        self.gc_locked(&self.open_repository()?)
+    }
+
+    fn gc_locked(
+        &self,
+        repository: &EventSourcedPluginRepository,
+    ) -> Result<Vec<String>, StoreError> {
+        let bundled_digest = repository.bundled_digest()?;
+        let mut referenced = repository
             .list_plugins(MAX_PLUGIN_INSTALLATIONS)?
             .into_iter()
             .filter(|installation| {

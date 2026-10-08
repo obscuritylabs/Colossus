@@ -130,6 +130,11 @@ Instruction and resource edits in an accepted directory apply to the next run.
 Each running task keeps an immutable snapshot, including the exact instructions
 and resources it started with. Disabling or removing a source affects subsequent runs.
 
+Colossus keeps a bounded local snapshot cache and prunes older unused copies.
+Running and queued jobs, including jobs that can be retried, keep their exact snapshots.
+If retained snapshots fill the cache, complete those jobs or disable unused workspace
+sources before capturing further edits.
+
 Replacing the source directory or changing its manifest name requires fresh acceptance.
 If a selected local source becomes invalid, Colossus reports it as unavailable.
 Disable that local selection explicitly to use the globally active version again.

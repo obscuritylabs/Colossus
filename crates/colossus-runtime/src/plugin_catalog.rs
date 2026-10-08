@@ -309,18 +309,12 @@ impl PluginCatalogSource {
         digest: &str,
     ) -> Result<&PluginStore, RuntimeError> {
         if let Some(store) = &self.store
-            && store
-                .list(10_000)?
-                .iter()
-                .any(|entry| entry.manifest.name == name && entry.digest == digest)
+            && store.installation(name, digest)?.is_some()
         {
             return Ok(store);
         }
         if let Some(store) = &self.workspace_plugins.store
-            && store
-                .list(10_000)?
-                .iter()
-                .any(|entry| entry.manifest.name == name && entry.digest == digest)
+            && store.installation(name, digest)?.is_some()
         {
             return Ok(store);
         }

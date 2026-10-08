@@ -4,6 +4,7 @@ use super::*;
 use colossus_contracts::{EventClassification, ExecutionContext, NewEvent, PluginOrigin};
 
 const SOURCES_STREAM: &str = "plugin-workspace-sources";
+mod retention;
 
 #[cfg(test)]
 mod tests;
@@ -76,6 +77,7 @@ impl PluginStore {
     pub fn accept_workspace_plugin(
         &self,
         candidate: &WorkspacePluginCandidate,
+        recoverable: &BTreeSet<String>,
         actor: Actor,
     ) -> Result<PluginInstallation, StoreError> {
         candidate.revalidate()?;
@@ -88,7 +90,8 @@ impl PluginStore {
             }
             // Publication and its disabled receipt must succeed before source permission
             // changes. A failed capture preserves the previous selected source.
-            let installation = self.cache_workspace_plugin(repository, candidate, actor.clone())?;
+            let installation =
+                self.cache_workspace_plugin(repository, candidate, recoverable, actor.clone())?;
             // One chosen local source per portable name. Acceptance is an explicit
             // workspace selection; it does not alter the global active digest.
             for grant in grants
@@ -124,11 +127,13 @@ impl PluginStore {
 
     /// Cache an accepted source without global installation or activation.
     /// The caller retains source/workspace identity through discovery and capture.
+    /// The returned lease protects publication through assembly of the run catalog.
     pub fn snapshot_workspace_plugin(
         &self,
         candidate: &WorkspacePluginCandidate,
+        recoverable: &BTreeSet<String>,
         actor: Actor,
-    ) -> Result<PluginInstallation, StoreError> {
+    ) -> Result<(PluginInstallation, PluginSnapshotLease), StoreError> {
         candidate.revalidate()?;
         self.with_write(|repository| {
             if !repository
@@ -140,7 +145,10 @@ impl PluginStore {
                     "workspace plugin source requires explicit acceptance",
                 ));
             }
-            self.cache_workspace_plugin(repository, candidate, actor)
+            let installation =
+                self.cache_workspace_plugin(repository, candidate, recoverable, actor)?;
+            let lease = self.lease_digests(&BTreeSet::from([installation.digest.clone()]))?;
+            Ok((installation, lease))
         })
     }
 
@@ -148,8 +156,11 @@ impl PluginStore {
         &self,
         repository: &EventSourcedPluginRepository,
         candidate: &WorkspacePluginCandidate,
+        recoverable: &BTreeSet<String>,
         actor: Actor,
     ) -> Result<PluginInstallation, StoreError> {
+        let cache =
+            self.prepare_workspace_cache(repository, candidate, recoverable, actor.clone())?;
         let destination = self.publish_artifact(&candidate.artifact)?;
         let record = load_plugin(&destination)?;
         if record.installation.manifest.name != candidate.source.name {
@@ -187,8 +198,9 @@ impl PluginStore {
             .as_ref()
             .is_none_or(|value| value.source != installation.source)
         {
-            repository.append_installation(&installation, actor, "plugin.installed.v1")?;
+            repository.append_installation(&installation, actor.clone(), "plugin.installed.v1")?;
         }
+        repository.append_workspace_cache(&cache, actor)?;
         Ok(installation)
     }
 }

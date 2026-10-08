@@ -37,6 +37,8 @@ pub struct WorkspacePluginCandidate {
     pub record: AgentPluginRecord,
     /// Immutable bytes to publish after source authorization.
     pub artifact: BuiltPluginArtifact,
+    /// Conservative extracted-content, blob and filesystem-overhead cache cost.
+    pub cache_bytes: u64,
     identity: WorkspaceIdentity,
 }
 
@@ -139,6 +141,17 @@ fn capture_with_budget(
         })
         .collect::<Vec<_>>();
     let artifact = build_plugin_artifact_from_files(&files)?;
+    let cache_bytes = owned
+        .iter()
+        .fold(64 * 1024_u64, |total, (path, bytes, _)| {
+            total
+                .saturating_add(bytes.len() as u64)
+                .saturating_add(4096_u64.saturating_mul(path.split('/').count() as u64))
+        })
+        // A filesystem without hard links copies blobs into the retained layout.
+        .saturating_add(2_u64.saturating_mul(artifact.layer.len() as u64))
+        .saturating_add(2_u64.saturating_mul(artifact.manifest.len() as u64))
+        .saturating_add(2_u64.saturating_mul(artifact.config.len() as u64));
     let temporary = tempfile::tempdir().map_err(adapter)?;
     let captured = temporary.path().join("plugin");
     extract_plugin_artifact(&artifact, &captured)?;
@@ -170,6 +183,7 @@ fn capture_with_budget(
         source,
         record,
         artifact,
+        cache_bytes,
         identity,
     })
 }
