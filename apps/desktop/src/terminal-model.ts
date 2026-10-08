@@ -90,15 +90,19 @@ export function decodeTerminalOutput(value: string): Uint8Array {
   return bytes;
 }
 
-export function terminalDimensions(width: number, height: number) {
+export function terminalDimensions(
+  width: number,
+  height: number,
+  cell = { width: 8.4, height: 17.2 },
+) {
   return {
     cols: Math.max(
       MIN_TERMINAL_DIMENSION,
-      Math.min(MAX_TERMINAL_DIMENSION, Math.floor(width / 8.4)),
+      Math.min(MAX_TERMINAL_DIMENSION, Math.floor(width / cell.width)),
     ),
     rows: Math.max(
       MIN_TERMINAL_DIMENSION,
-      Math.min(MAX_TERMINAL_DIMENSION, Math.floor(height / 17.2)),
+      Math.min(MAX_TERMINAL_DIMENSION, Math.floor(height / cell.height)),
     ),
   };
 }
@@ -107,10 +111,11 @@ export function terminalContentDimensions(
   width: number,
   height: number,
   insets: TerminalContentInsets,
+  cell?: { width: number; height: number },
 ) {
   const contentWidth = Math.max(0, width - insets.left - insets.right);
   const contentHeight = Math.max(0, height - insets.top - insets.bottom);
-  return terminalDimensions(contentWidth, contentHeight);
+  return terminalDimensions(contentWidth, contentHeight, cell);
 }
 
 export function terminalOpenDimensions(width: number, height: number) {

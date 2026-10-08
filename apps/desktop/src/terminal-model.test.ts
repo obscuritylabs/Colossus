@@ -160,6 +160,17 @@ describe("terminal renderer bounds", () => {
     ).toEqual({ cols: 97, rows: 19 });
   });
 
+  it("fits measured glyphs at non-default native scale without clipping the final row", () => {
+    expect(
+      terminalContentDimensions(
+        840,
+        344,
+        { top: 8, right: 9, bottom: 4, left: 9 },
+        { width: 9.2, height: 18.8 },
+      ),
+    ).toEqual({ cols: 89, rows: 17 });
+  });
+
   it("opens a hidden terminal at a usable fallback size", () => {
     expect(terminalOpenDimensions(0, 0)).toEqual({ cols: 80, rows: 24 });
     expect(terminalOpenDimensions(840, 344)).toEqual({
