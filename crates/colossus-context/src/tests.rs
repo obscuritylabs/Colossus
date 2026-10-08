@@ -470,6 +470,7 @@ async fn ordinary_pdf_fits_a_vision_model_context_without_treating_binary_bytes_
     });
     let (_, _, _, service) = fixture(ContextConfig::default(), provider);
     let mut request = preparation_request(vec![pdf_message(0, 1_048_576)], false);
+    request.route.capabilities.image_inputs = true;
     request.route.limits = ModelLimits {
         context_window_tokens: 128_000,
         max_output_tokens: 8192,

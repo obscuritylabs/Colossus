@@ -63,6 +63,7 @@ pub(super) async fn prepare_model_content(
     let mut text_attachments = Vec::new();
     let mut images = Vec::<ModelImageReference>::new();
     let mut files = Vec::new();
+    let mut media_parts = Vec::new();
     let mut combined_image_bytes = 0_u64;
     for path in attachments {
         let bytes = runtime.read_run_input_file_bytes(path).await?;
@@ -86,8 +87,10 @@ pub(super) async fn prepare_model_content(
                 &format!("cli-pdf-{digest}"),
             )
             .await?;
-            files
-                .push(runtime.run_input_file_reference("app:colossus-cli", &artifact.artifact_id)?);
+            let file =
+                runtime.run_input_file_reference("app:colossus-cli", &artifact.artifact_id)?;
+            files.push(file.clone());
+            media_parts.push(ModelContentPart::File { file });
             continue;
         }
         match runtime.validate_run_input_image(file_name, None, &bytes) {
@@ -100,7 +103,9 @@ pub(super) async fn prepare_model_content(
                         cli_error("image inputs exceed the 16-image or 32 MiB bound").into(),
                     );
                 }
-                images.push(import_validated_image(runtime, file_name, &bytes, &validated).await?);
+                let image = import_validated_image(runtime, file_name, &bytes, &validated).await?;
+                images.push(image.clone());
+                media_parts.push(ModelContentPart::Image { image });
             }
             Err(error) if image_candidate(path, &bytes) => return Err(error.into()),
             Err(_) => text_attachments.push((path.clone(), bytes)),
@@ -114,16 +119,7 @@ pub(super) async fn prepare_model_content(
         return Ok(ModelContent::Text(text));
     }
     let mut parts = vec![ModelContentPart::Text { text }];
-    parts.extend(
-        images
-            .into_iter()
-            .map(|image| ModelContentPart::Image { image }),
-    );
-    parts.extend(
-        files
-            .into_iter()
-            .map(|file| ModelContentPart::File { file }),
-    );
+    parts.extend(media_parts);
     Ok(ModelContent::Parts(parts))
 }
 
