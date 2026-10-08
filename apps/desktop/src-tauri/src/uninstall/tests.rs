@@ -254,7 +254,10 @@ fn cleanup_preserves_nested_plugin_snapshots_created_after_inspection() {
     plugin_blob_at(&store, true);
     let plan = plan::CleanupPlan::inspect(&home).unwrap();
     plan.check_idle().unwrap();
-    let concurrent = store.join("layouts/sha256").join("d".repeat(64));
+    // The deep workspace cache needs a verbatim path for native Win32 creation.
+    let concurrent = fs::canonicalize(store.join("layouts/sha256"))
+        .unwrap()
+        .join("d".repeat(64));
     create_private_directory(&concurrent).unwrap();
     create_private_file(&concurrent.join("index.json"), b"new CLI snapshot").unwrap();
     assert_eq!(plan.remove_data(), Err(CleanupError::UnsafeData));
