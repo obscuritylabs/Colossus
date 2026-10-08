@@ -55,8 +55,21 @@ export async function processRuntimeHost(
     for await (const chunk of request) body += chunk.toString();
     const parsed = JSON.parse(body);
     observations.push(parsed);
-    const call = pending;
-    pending = null;
+    // Scheduled tasks share this provider; only the explicit bridge turn may
+    // consume the armed response. A due task must not steal its tool call.
+    const input = "Execute the next isolated process acceptance case.";
+    let explicitTurn = false;
+    for (const message of parsed.messages ?? []) {
+      if (message.role !== "user") continue;
+      explicitTurn = false;
+      const parts = Array.isArray(message.content)
+        ? message.content
+        : [{ type: "text", text: message.content }];
+      for (const part of parts)
+        if (part.type === "text" && part.text === input) explicitTurn = true;
+    }
+    const call = explicitTurn ? pending : null;
+    if (call) pending = null;
     const delta = call
       ? {
           tool_calls: [

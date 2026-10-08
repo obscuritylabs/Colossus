@@ -22,6 +22,17 @@ async function choose(page: Page, name: string, option: string) {
   await page.getByRole("combobox", { name, exact: true }).click();
   await page.getByRole("option", { name: option, exact: true }).click();
 }
+async function setTheme(page: Page, theme: "light" | "dark") {
+  await page.evaluate(async (theme) => {
+    document.documentElement.dataset.theme = theme;
+    await Promise.allSettled(
+      document
+        .getAnimations()
+        .filter((animation) => animation instanceof CSSTransition)
+        .map((animation) => animation.finished),
+    );
+  }, theme);
+}
 
 test("Workflows and Schedules use real manual runs, calendar tasks, model preferences, and exact uncertain-create reconciliation", async ({
   page,
@@ -389,18 +400,14 @@ test("Workflows and Schedules use real manual runs, calendar tasks, model prefer
       .fill(
         "Summarize consequential cybersecurity market developments with source links and actionable implications.",
       );
-    await page.evaluate(() => {
-      document.documentElement.dataset.theme = "dark";
-    });
+    await setTheme(page, "dark");
     await capture(page, "10-schedule-a-task-dark.png");
     const taskAudit = await new AxeBuilder({ page })
       .include(".workflow-dialog")
       .analyze();
     expect(taskAudit.violations).toEqual([]);
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
-    await page.evaluate(() => {
-      document.documentElement.dataset.theme = "light";
-    });
+    await setTheme(page, "light");
     const audit = await new AxeBuilder({ page })
       .include(".workflow-surface")
       .analyze();
