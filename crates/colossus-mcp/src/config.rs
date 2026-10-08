@@ -127,7 +127,8 @@ pub struct McpServerConfig {
     /// Exact tool names or star patterns that may be discovered or invoked; `*` must stand alone.
     #[serde(default)]
     pub allowed_tools: Vec<String>,
-    /// Configured research calls made for each research query.
+    /// Optional calls overriding inherited allowed tools for each research query.
+    /// An empty list lets the research worker select calls from the live allowed catalog.
     #[serde(default)]
     pub research_tools: Vec<McpResearchToolConfig>,
     /// Optional server-specific timeout bounded by sandbox policy.

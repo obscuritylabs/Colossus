@@ -7656,7 +7656,8 @@ export function McpEditor({
             </small>
             <small>
               Save, then test this server in an active workspace to see the
-              discovered tools allowed by these selectors.
+              discovered tools allowed by these selectors. Research uses this
+              selection by default; optional research projections override it.
             </small>
           </label>
           {draft.transport === "stdio" ? (
@@ -7838,6 +7839,12 @@ export function McpEditor({
                 })
               }
             />
+            <small>
+              Leave empty to use the tools selected in Allowed tools. Research
+              chooses tools and arguments from their live schemas. Add
+              projections to override this server's research tools and
+              arguments, using {"{query}"} where the research query belongs.
+            </small>
           </label>
         </div>
       </details>

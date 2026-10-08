@@ -4,20 +4,37 @@ use super::*;
 /// execute sequentially. Its deadline must contain those inner deadlines; otherwise
 /// the generic sandbox timeout can interrupt a valid research run while an inner
 /// external effect is still active and force an `outcome_unknown` terminal state.
-pub(super) fn research_run_timeout_ms(
-    provider_timeout_ms: u64,
-    sandbox_timeout_ms: u64,
-    max_sources: usize,
-    max_workers: usize,
-) -> u64 {
-    let model_calls = u64::try_from(max_sources)
-        .unwrap_or(u64::MAX)
+pub(super) fn research_run_timeout_ms(provider_timeout_ms: u64, config: &RuntimeConfig) -> u64 {
+    let max_sources = u64::try_from(config.research.max_sources).unwrap_or(u64::MAX);
+    let max_workers = u64::try_from(config.research.max_workers).unwrap_or(u64::MAX);
+    // Include configured plugin overlays even before their components are installed:
+    // later run snapshots may expose them without rebuilding the outer effect policy.
+    let max_mcp_servers = u64::try_from(
+        config
+            .mcp
+            .servers
+            .len()
+            .saturating_add(config.plugins.mcp_servers.len()),
+    )
+    .unwrap_or(u64::MAX);
+    let mcp_pages = u64::try_from(MAX_MCP_PAGES).unwrap_or(u64::MAX);
+    let mcp_collection_calls = if max_mcp_servers == 0 {
+        0
+    } else {
+        // Initial inherited discovery visits every server. Every selected or
+        // projected call then rediscovers its complete schema before invocation.
+        max_mcp_servers
+            .saturating_mul(mcp_pages)
+            .saturating_add(max_sources.saturating_mul(mcp_pages.saturating_add(1)))
+    };
+    let model_calls = max_sources
+        .saturating_add(max_workers) // MCP tool selection per lane
         .saturating_add(2); // planning plus synthesis
-    let collection_calls = u64::try_from(max_workers).unwrap_or(u64::MAX);
+    let collection_calls = max_workers.saturating_mul(mcp_collection_calls.max(1));
     provider_timeout_ms
         .saturating_mul(model_calls)
-        .saturating_add(sandbox_timeout_ms.saturating_mul(collection_calls))
-        .saturating_add(sandbox_timeout_ms) // bounded orchestration overhead
+        .saturating_add(config.sandbox.timeout_ms.saturating_mul(collection_calls))
+        .saturating_add(config.sandbox.timeout_ms) // bounded orchestration overhead
 }
 
 struct StartupObservation {
@@ -810,6 +827,9 @@ impl Runtime {
         });
         let weak_risk_evaluator: Weak<dyn RiskEvaluator> = Arc::downgrade(&risk_evaluator);
         gateway.bind_risk_evaluator(weak_risk_evaluator)?;
+        let research_model = Arc::new(GatewayResearchModel {
+            provider: Arc::clone(&model_provider),
+        });
         let research_collector: Arc<dyn ResearchCollector> = Arc::new(GatewayResearchCollector {
             gateway: Arc::clone(&gateway),
             filesystem: Arc::clone(&filesystem_executor),
@@ -817,15 +837,13 @@ impl Runtime {
             search: Arc::clone(&search_provider),
             plugins: Arc::clone(&plugin_catalog),
             identity: workspace_identity.clone(),
-        });
-        let research_model: Arc<dyn ResearchModel> = Arc::new(GatewayResearchModel {
-            provider: Arc::clone(&model_provider),
+            model: Arc::clone(&research_model),
         });
         let research_service = Arc::new(ResearchService::new_with_model(
             Arc::clone(&research),
             Arc::clone(&sessions),
             research_collector,
-            Some(research_model),
+            Some(research_model as Arc<dyn ResearchModel>),
             ResearchLimits {
                 max_sources: config.research.max_sources,
                 max_workers: config.research.max_workers,

@@ -107,7 +107,7 @@ export interface WorkView {
   watching: boolean;
   status: string;
   error: string;
-  mode: "plan" | "execute";
+  mode: WorkMode;
 }
 export type ViewAction =
   | {
@@ -131,6 +131,7 @@ export type ViewAction =
       type: "openSettings";
     }
   | { type: "send"; text: string; mode: "plan" | "execute" }
+  | ({ type: "send"; text: string; mode: "research" } & ResearchOptions)
   | { type: "selectSession" | "inspectRun" | "inspectPlan"; id: string }
   | { type: "respond"; id: string };
 
@@ -166,10 +167,26 @@ export function parseAction(value: unknown): ViewAction | undefined {
     typeof input.text === "string" &&
     input.text.trim().length > 0 &&
     new TextEncoder().encode(input.text).length <= 64 * 1024 &&
-    (input.mode === "plan" || input.mode === "execute") &&
-    Object.keys(input).length === 3
-  )
-    return { type: "send", text: input.text, mode: input.mode };
+    isWorkMode(input.mode)
+  ) {
+    if (
+      (input.mode === "plan" || input.mode === "execute") &&
+      Object.keys(input).length === 3
+    )
+      return { type: "send", text: input.text, mode: input.mode };
+    if (
+      input.mode === "research" &&
+      Object.keys(input).length === 5 &&
+      isResearchOptions(input)
+    )
+      return {
+        type: "send",
+        text: input.text,
+        mode: "research",
+        researchDepth: input.researchDepth,
+        researchSources: [...input.researchSources],
+      };
+  }
   if (
     ["selectSession", "respond", "inspectRun", "inspectPlan"].includes(
       String(input.type),
@@ -206,4 +223,48 @@ export function initialView(workspace: string): WorkView {
     error: "",
     mode: "plan",
   };
+}
+export type WorkMode = "plan" | "execute" | "research";
+export type ResearchDepth = "quick" | "standard" | "deep";
+export type ResearchSource = "repo" | "web" | "mcp";
+export interface ResearchOptions {
+  researchDepth: ResearchDepth;
+  researchSources: ResearchSource[];
+}
+
+export function isWorkMode(value: unknown): value is WorkMode {
+  return value === "plan" || value === "execute" || value === "research";
+}
+
+export function isResearchDepth(value: unknown): value is ResearchDepth {
+  return value === "quick" || value === "standard" || value === "deep";
+}
+
+export function isResearchSources(value: unknown): value is ResearchSource[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 3 &&
+    [...value].every(
+      (source) => source === "repo" || source === "web" || source === "mcp",
+    ) &&
+    new Set(value).size === value.length
+  );
+}
+
+export function isResearchOptions(value: unknown): value is ResearchOptions {
+  if (!value || typeof value !== "object") return false;
+  const input = value as Record<string, unknown>;
+  return (
+    isResearchDepth(input.researchDepth) &&
+    isResearchSources(input.researchSources) &&
+    input.researchSources.length > 0
+  );
+}
+
+export function supportsResearch(
+  capabilities: readonly CapabilityView[],
+): boolean {
+  return capabilities.some(
+    (capability) => capability.name === "research.create" && capability.enabled,
+  );
 }

@@ -173,7 +173,7 @@ async fn search_mcp_catalog(
     Ok(output)
 }
 
-fn search_terms(query: &str) -> Vec<String> {
+pub(super) fn search_terms(query: &str) -> Vec<String> {
     query
         .split(|ch: char| !ch.is_alphanumeric())
         .filter(|word| word.len() > 1)
@@ -181,7 +181,7 @@ fn search_terms(query: &str) -> Vec<String> {
         .collect()
 }
 
-fn mcp_search_score(tool: &McpToolSummary, terms: &[String]) -> u32 {
+pub(super) fn mcp_search_score(tool: &McpToolSummary, terms: &[String]) -> u32 {
     let name = tool.name.to_ascii_lowercase();
     let title = tool.title.as_deref().unwrap_or("").to_ascii_lowercase();
     let description = tool

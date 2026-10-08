@@ -455,7 +455,7 @@ pub struct PluginMcpServerConfig {
     pub oauth: Option<McpOAuthConfig>,
     /// Exact tool names or star patterns that may be exposed; `*` must stand alone.
     pub allowed_tools: Vec<String>,
-    /// Optional research-tool mappings for this server.
+    /// Optional research calls overriding this server's inherited allowed tool selection.
     pub research_tools: Vec<McpResearchToolConfig>,
     /// Permit a remote server to omit MCP session identifiers.
     pub allow_stateless: bool,

@@ -13,6 +13,7 @@ test("settings changes are limited to editor preferences and fixed native action
   for (const action of [
     { type: "setPreference", name: "sendShortcut", value: "enter" },
     { type: "setPreference", name: "defaultMode", value: "plan" },
+    { type: "setPreference", name: "defaultMode", value: "research" },
     { type: "setPreference", name: "showToolActivity", value: false },
     { type: "setPreference", name: "palette", value: "colossus" },
     { type: "setPreference", name: "palette", value: "hacker" },
@@ -23,7 +24,7 @@ test("settings changes are limited to editor preferences and fixed native action
     assert.deepEqual(parseSettingsAction(action), action);
   for (const value of [
     { type: "setPreference", name: "access.danger_full_access", value: true },
-    { type: "setPreference", name: "defaultMode", value: "research" },
+    { type: "setPreference", name: "defaultMode", value: "arbitrary" },
     { type: "setPreference", name: "showToolActivity", value: "true" },
     { type: "setPreference", name: "palette", value: "arbitrary-css" },
     {
@@ -67,6 +68,17 @@ test("every editable preference is registered in the extension manifest with mat
     "colossus",
     "hacker",
   ]);
+  assert.deepEqual(properties["colossus.composer.defaultMode"].enum, [
+    "plan",
+    "execute",
+    "research",
+  ]);
+  assert.equal(
+    readPreferences((key) =>
+      key === "composer.defaultMode" ? "research" : undefined,
+    ).defaultMode,
+    "research",
+  );
 });
 
 test("preference save failures explain native settings problems without exposing private error text", () => {

@@ -27,6 +27,32 @@ test("the renderer can request native review but cannot supply approval authorit
     assert.equal(parseAction(input), undefined);
 });
 
+test("Research accepts only an explicit bounded depth and unique evidence lanes", () => {
+  const research = {
+    type: "send",
+    text: "Investigate MCP evidence",
+    mode: "research",
+    researchDepth: "deep",
+    researchSources: ["repo", "web", "mcp"],
+  };
+  assert.deepEqual(parseAction(research), research);
+  for (const input of [
+    { ...research, researchDepth: undefined },
+    { ...research, researchDepth: "unbounded" },
+    { ...research, researchSources: [] },
+    { ...research, researchSources: ["mcp", "mcp"] },
+    { ...research, researchSources: ["filesystem"] },
+    { ...research, researchSources: new Array(1) },
+    { ...research, researchSources: "mcp" },
+    { ...research, mode: "execute" },
+    { ...research, mode: "plan" },
+    { ...research, tools: ["*"] },
+    { ...research, server: "forged-server" },
+    { ...research, researchSources: ["mcp"], arguments: { query: "forged" } },
+  ])
+    assert.equal(parseAction(input), undefined);
+});
+
 test("only deliberate public errors cross the webview boundary", () => {
   const raw = new Error("private-path and sensitive-token-fixture");
   assert.doesNotMatch(safeError(raw), /private-path|sensitive-token/u);

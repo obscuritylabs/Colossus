@@ -473,6 +473,8 @@ streams, stdio output, parsed tool schemas, and released results remain bounded.
 | Discovered tools per server | 1,024 |
 | Discovery pages per server | 32 |
 | Research templates per server | 64 |
+| Model-visible inherited research tools | 32 ranked tools |
+| Inherited research tool definitions | 512 KiB, further bounded by the model input budget |
 | One input or output schema | 256 KiB |
 | Wildcard-discovered title | 8 KiB |
 | Wildcard-discovered description | 32 KiB |
@@ -483,7 +485,19 @@ dynamic trust is enabled.
 
 ## Research templates
 
-`researchTools` explicitly maps selected MCP tools into the deep-research MCP lane:
+Research uses each server's ordinary `allowedTools` selection by default, including
+star patterns and wildcard mode. When `researchTools` is omitted or empty, the
+collector discovers the live allowed catalog and gives a bounded ranked selection
+of live argument schemas to the `research_worker` model. The model chooses relevant retrieval
+calls and their arguments. Each call still passes fresh discovery, argument validation,
+policy, approval, and post-effect release.
+
+Provider declarations add `type: object` when the server omits the root type;
+invocation validation and schema hashes retain the original discovered schema.
+
+A nonempty `researchTools` list overrides inheritance for that server: only its
+configured projections run, with `{query}` substituted into their arguments. Other
+servers with empty projections continue to inherit their allowed tools. For example:
 
 ```yaml
 researchTools:
@@ -496,13 +510,21 @@ researchTools:
 
 | Field | Rule |
 | --- | --- |
-| `tool` | Exact explicitly allowed tool, or any valid tool under wildcard mode |
+| `tool` | Exact tool matching `allowedTools`, including star patterns or wildcard mode |
 | `title` | Optional bounded source title |
 | `arguments` | JSON object; `{query}` is replaced recursively in string values |
 
-Research templates always remain explicit, even when `allowedTools: ["*"]`. Merely
-allowing an MCP tool does not make it a research source. See
+Automatic selection requires a configured `research_worker` model with tool-call
+support; this role normally falls back to `primary`. If that model is unavailable or
+returns an invalid selection, the lane records a limitation rather than guessing
+arguments. Explicit projections work without a selection model. See
 [Deep research](../../use/deep-research.md) for lane selection and evidence behavior.
+
+Select this lane with `colossus research run "QUESTION" --source mcp`, or choose
+**MCP connections** under the Research evidence sources in Desktop or VS Code.
+Desktop edits these templates under **Global settings → MCP → Edit → Advanced
+settings → Research tool projections**. VS Code uses its connected worker's
+configuration and needs `mcp.call` in the application's enrolled tool ceiling.
 
 ## Configuration and invocation flow
 

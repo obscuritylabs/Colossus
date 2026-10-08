@@ -74,8 +74,8 @@ const RESEARCH_SOURCE_OPTIONS = [
   },
   {
     value: "mcp",
-    label: "Connections",
-    description: "Search your connected apps",
+    label: "MCP connections",
+    description: "Search enabled MCP tools or research projections",
     Icon: IconPlugConnected,
   },
 ] as const;
@@ -242,12 +242,10 @@ export function WorkComposer({
   const slashOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const editIntent = useRef<ComposerEditIntent | null>(null);
   const researchSourceSummary = researchSources
-    .map((source) =>
-      source === "repo"
-        ? "This Workspace"
-        : source === "web"
-          ? "Web"
-          : "Connections",
+    .map(
+      (source) =>
+        RESEARCH_SOURCE_OPTIONS.find((option) => option.value === source)
+          ?.label ?? source,
     )
     .join(", ");
 
