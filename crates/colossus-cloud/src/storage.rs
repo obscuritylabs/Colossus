@@ -10,6 +10,9 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use tokio::sync::Mutex;
 
+mod records;
+pub use records::{Admission, BootstrapMarker, CertificateRenewal, EntityData, EntityValue};
+
 /// Independently versioned cloud domain tables.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -111,8 +114,8 @@ pub struct EntityRecord {
     pub key: EntityKey,
     /// Monotonically increasing aggregate version.
     pub revision: u64,
-    /// Validated service-owned representation; adapters project indexed columns.
-    pub value: Value,
+    /// Typed domain value reconstructed by the persistence adapter.
+    pub value: EntityValue,
     /// Stable returned pagination position; absent for point reads.
     pub page_cursor: Option<String>,
 }
@@ -124,8 +127,8 @@ pub struct EntityMutation {
     pub key: EntityKey,
     /// Zero creates, otherwise the exact currently observed version.
     pub expected_revision: u64,
-    /// New validated service representation.
-    pub value: Value,
+    /// New typed domain value mapped to storage by the adapter.
+    pub value: EntityValue,
     /// Authenticated actor identifier, without credential data.
     pub actor: String,
     /// Bounded domain operation name used for audit and delivery.
@@ -397,7 +400,7 @@ pub struct CloudMaintenanceReport {
     pub removed_outbox: usize,
     /// Expired browser sessions removed.
     pub expired_sessions: usize,
-    /// Expired OIDC flows consumed and removed; import markers remain untouched.
+    /// Expired OIDC flows consumed and removed; unexpired maintenance metadata remains.
     pub expired_auth_flows: usize,
 }
 
@@ -521,13 +524,9 @@ fn enrolled_live(state: &MemoryState, project: &str, node: &str) -> bool {
         id: node.into(),
     };
     !state.deleted.contains(&key)
-        && state.entities.get(&key).is_some_and(|record| {
-            !record
-                .value
-                .get("revoked")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        })
+        && state.entities.get(&key).is_some_and(
+            |record| matches!(&record.value, EntityValue::Node(value) if !value.revoked),
+        )
 }
 
 #[async_trait::async_trait]
@@ -559,7 +558,7 @@ impl CloudStore for MemoryCloudStore {
                     r.key.kind,
                     EntityKind::LocalCredential | EntityKind::OidcIdentity
                 ) && !state.deleted.contains(&r.key)
-                    && r.value.get("user_id").and_then(Value::as_str) == Some(user_id)
+                    && r.value.user_id() == Some(user_id)
             })
             .take(16)
             .cloned()
@@ -632,84 +631,48 @@ impl CloudStore for MemoryCloudStore {
                     && r.key.project_id == query.project_id
                     && query.parent_id.as_ref().is_none_or(|p| {
                         if query.kind == EntityKind::Task {
-                            r.value.get("thread_id").and_then(Value::as_str) == Some(p)
+                            r.value.thread_id() == Some(p)
                         } else {
                             r.key.parent_id.as_ref() == Some(p)
                         }
                     })
-                    && query
-                        .node_id
-                        .as_ref()
-                        .is_none_or(|n| r.value.get("node_id").and_then(Value::as_str) == Some(n))
+                    && query.node_id.as_ref().is_none_or(|n| {
+                        r.value.node_id().or(match r.key.kind {
+                            EntityKind::Run | EntityKind::NodeTask | EntityKind::SessionMapping => {
+                                r.key.parent_id.as_deref()
+                            }
+                            EntityKind::Admission | EntityKind::Renewal => Some(r.key.id.as_str()),
+                            _ => None,
+                        }) == Some(n)
+                    })
                     && query.query.as_ref().is_none_or(|q| {
-                        search_text(&r.value)
+                        r.value
+                            .search_text()
                             .to_lowercase()
                             .contains(&q.to_lowercase())
                     })
-                    && query.status.as_ref().is_none_or(|s| {
-                        if r.key.kind == EntityKind::User {
-                            if s == "administrator" {
-                                r.value.pointer("/user/active").and_then(Value::as_bool)
-                                    == Some(true)
-                                    && r.value.pointer("/user/is_admin").and_then(Value::as_bool)
-                                        == Some(true)
-                            } else {
-                                s == if r.value.pointer("/user/active").and_then(Value::as_bool)
-                                    == Some(true)
-                                {
-                                    "active"
-                                } else {
-                                    "disabled"
-                                }
-                            }
-                        } else if r.key.kind == EntityKind::Membership {
-                            s == if r.value.get("user_id").is_some()
-                                && r.value
-                                    .get("permissions")
-                                    .and_then(Value::as_array)
-                                    .is_some_and(|p| !p.is_empty())
-                            {
-                                "active"
-                            } else {
-                                "removed"
-                            }
-                        } else if r.key.kind == EntityKind::Command {
-                            if r.value.get("reply").is_none_or(Value::is_null) {
-                                s == "pending"
-                            } else {
-                                s == "reconciled"
-                            }
+                    && query.status.as_ref().is_none_or(|status| {
+                        if query.kind == EntityKind::User && status == "administrator" {
+                            r.value.active_administrator()
                         } else {
-                            status(&r.value) == *s
+                            r.value.status() == status
                         }
                     })
-                    && query.archived.is_none_or(|a| {
-                        r.value
-                            .get("archived")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false)
-                            == a
-                    })
+                    && query
+                        .archived
+                        .is_none_or(|archived| r.value.archived() == archived)
             })
             .cloned()
             .collect();
-        let timestamp = |record: &EntityRecord| match query.order {
-            EntityOrder::UpdatedDesc => record
-                .value
-                .get("updated_at")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .unwrap_or("1970-01-01T00:00:00Z")
-                .to_owned(),
-            EntityOrder::CreatedAsc | EntityOrder::CreatedDesc => record
-                .value
-                .get("created_at")
-                .or_else(|| record.value.pointer("/snapshot/run/created_at"))
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .unwrap_or("1970-01-01T00:00:00Z")
-                .to_owned(),
-            _ => "1970-01-01T00:00:00Z".into(),
+        let timestamp = |record: &EntityRecord| {
+            match query.order {
+                EntityOrder::UpdatedDesc => record.value.updated_at(),
+                EntityOrder::CreatedAsc | EntityOrder::CreatedDesc => record.value.created_at(),
+                _ => None,
+            }
+            .filter(|value| !value.is_empty())
+            .unwrap_or("1970-01-01T00:00:00Z")
+            .to_owned()
         };
         let epoch = |value: &str| {
             time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
@@ -783,8 +746,7 @@ impl CloudStore for MemoryCloudStore {
         let had_admin = state.entities.values().any(|r| {
             r.key.kind == EntityKind::User
                 && !state.deleted.contains(&r.key)
-                && r.value.pointer("/user/active").and_then(Value::as_bool) == Some(true)
-                && r.value.pointer("/user/is_admin").and_then(Value::as_bool) == Some(true)
+                && r.value.active_administrator()
         });
         let projects: std::collections::BTreeSet<_> = transaction
             .entities
@@ -822,7 +784,7 @@ impl CloudStore for MemoryCloudStore {
             && transaction.entities.iter().any(|m| {
                 m.key.kind == EntityKind::User
                     && m.actor == "operator-bootstrap"
-                    && m.value.pointer("/user/is_admin").and_then(Value::as_bool) == Some(true)
+                    && matches!(&m.value, EntityValue::User(value) if value.user.is_admin)
             })
         {
             return Err(StoreError::Conflict {
@@ -831,7 +793,16 @@ impl CloudStore for MemoryCloudStore {
                 actual: 1,
             });
         }
-        for mutation in transaction.entities {
+        for mut mutation in transaction.entities {
+            if mutation.value.validate_key(&mutation.key).is_err() {
+                return Err(StoreError::Adapter("cloud entity kind mismatch".into()));
+            }
+            mutation.value.set_revision(
+                mutation
+                    .expected_revision
+                    .checked_add(1)
+                    .ok_or_else(|| StoreError::Adapter("cloud revision bound exceeded".into()))?,
+            );
             if mutation.key.kind == EntityKind::Invitation
                 && state.entities.keys().any(|key| {
                     key.kind == EntityKind::Invitation
@@ -903,8 +874,7 @@ impl CloudStore for MemoryCloudStore {
             let has_admin = state.entities.values().any(|r| {
                 r.key.kind == EntityKind::User
                     && !state.deleted.contains(&r.key)
-                    && r.value.pointer("/user/active").and_then(Value::as_bool) == Some(true)
-                    && r.value.pointer("/user/is_admin").and_then(Value::as_bool) == Some(true)
+                    && r.value.active_administrator()
             });
             if had_admin && !has_admin {
                 return Err(StoreError::Conflict {
@@ -931,8 +901,10 @@ impl CloudStore for MemoryCloudStore {
                     next = state
                         .entities
                         .get(&crate::project_key(&id))
-                        .and_then(|r| r.value.get("parent_project_id"))
-                        .and_then(Value::as_str)
+                        .and_then(|r| match &r.value {
+                            EntityValue::Project(project) => project.parent_project_id.as_deref(),
+                            _ => None,
+                        })
                         .map(str::to_owned);
                 }
             }
@@ -951,7 +923,7 @@ impl CloudStore for MemoryCloudStore {
             .filter(|r| {
                 !state.deleted.contains(&r.key)
                     && r.key.kind == EntityKind::Membership
-                    && r.value.get("subject").and_then(Value::as_str) == Some(subject)
+                    && matches!(&r.value, EntityValue::Membership(value) if value.subject == subject)
             })
             .take(1024)
             .cloned()
@@ -961,35 +933,9 @@ impl CloudStore for MemoryCloudStore {
         let state = self.state.lock().await;
         Ok(state.entities.values().any(|record| {
             !state.deleted.contains(&record.key)
-                && record.key.kind == EntityKind::Task
                 && record.key.project_id == project
-                && record.value.get("thread_id").and_then(Value::as_str) == Some(thread)
-                && (record
-                    .value
-                    .get("output_limited")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                    || record
-                        .value
-                        .get("history_bounded")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                    || (record.value.get("subject").and_then(Value::as_str) == Some("runtime")
-                        && !record
-                            .value
-                            .get("history_complete")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false))
-                    || record
-                        .value
-                        .pointer("/snapshot/run/last_sequence")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0)
-                        > record
-                            .value
-                            .get("last_sequence")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(0))
+                && record.value.thread_id() == Some(thread)
+                && record.value.incomplete()
         }))
     }
     async fn events(
@@ -1143,41 +1089,12 @@ impl CloudStore for MemoryCloudStore {
 }
 
 /// Literal user-facing title/label projection used consistently by storage adapters.
-pub fn search_text(value: &Value) -> String {
-    value
-        .pointer("/user/display_name")
-        .or_else(|| value.get("title"))
-        .or_else(|| value.get("name"))
-        .or_else(|| value.get("label"))
-        .or_else(|| value.pointer("/request/prompt"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .into()
+pub fn search_text(value: &EntityValue) -> String {
+    value.search_text().into()
 }
 /// Released domain status projection, including tasks with an SDK run snapshot.
-pub fn status(value: &Value) -> String {
-    if value
-        .pointer("/dispatch_error/code")
-        .and_then(Value::as_str)
-        == Some("outcome_unknown")
-    {
-        return "outcome_unknown".into();
-    }
-    if value.get("dispatch_error").is_some_and(|v| !v.is_null()) {
-        return "failed".into();
-    }
-    value
-        .get("status")
-        .or_else(|| value.pointer("/snapshot/run/status"))
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| {
-            if value.get("request").is_some() {
-                "queued"
-            } else {
-                ""
-            }
-        })
-        .into()
+pub fn status(value: &EntityValue) -> String {
+    value.status().into()
 }
 /// Categorical conflict retaining the entity's exact observed revision.
 pub fn conflict(key: &EntityKey, expected: u64, actual: u64) -> StoreError {

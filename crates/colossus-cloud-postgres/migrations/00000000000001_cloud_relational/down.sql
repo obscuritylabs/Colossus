@@ -1,24 +1,2 @@
-DROP TABLE thread_sources CASCADE;
--- Destructive rollback requires an explicit operator decision.
-DROP TABLE connection_leases CASCADE;
-DROP TABLE browser_sessions CASCADE;
-DROP TABLE delivery_outbox CASCADE;
-DROP TABLE cloud_audit CASCADE;
-DROP TABLE sync_cursors CASCADE;
-DROP TABLE released_event_heads CASCADE;
-DROP TABLE released_events CASCADE;
-DROP TABLE certificate_renewals CASCADE;
-DROP TABLE enrollment_invitations CASCADE;
-DROP TABLE admission_counters CASCADE;
-DROP TABLE node_task_placements CASCADE;
-DROP TABLE run_allocations CASCADE;
-DROP TABLE commands CASCADE;
-DROP TABLE tasks CASCADE;
-DROP TABLE conversation_messages CASCADE;
-DROP TABLE conversation_threads CASCADE;
-DROP TABLE workspaces CASCADE;
-DROP TABLE runtime_agents CASCADE;
-DROP TABLE hosts CASCADE;
-DROP TABLE oidc_flows CASCADE;
-DROP TABLE project_memberships CASCADE;
-DROP TABLE projects CASCADE;
+-- Explicit destructive reset of the cloud schema.
+DROP TABLE IF EXISTS user_login_metadata,connection_leases,browser_sessions,delivery_outbox,cloud_audit,sync_cursors,released_event_heads,released_events,oidc_flows,control_plane_settings,certificate_renewals,enrollment_invitations,admission_counters,thread_sources,node_task_placements,run_allocations,commands,tasks,conversation_messages,conversation_threads,workspaces,runtime_agents,hosts,project_memberships,local_credentials,user_identities,cloud_users,projects CASCADE;

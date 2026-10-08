@@ -193,50 +193,23 @@ Desktop's global **Control Plane** settings manage named endpoint profiles and s
 workspace connections. Selecting a profile only pre-fills its endpoint. Enrollment,
 local sharing, and grant confirmation remain explicit per workspace.
 
-## Migrate an existing cloud journal
+## Initialize cloud storage
 
-Use the explicit offline importer when upgrading a control plane that used the old
-cloud journal adapter. Ordinary server startup accepts the new database configuration;
-it does not reinterpret an old `storage` or `signing_key_variable` block. Runtime
-journals are outside this migration and remain untouched.
+Prepare a dedicated PostgreSQL database or schema and configure the `database` block
+with its protected connection-variable reference. Start `colossus-cloud-server` with
+that configuration; startup creates the relational tables and applies checksummed
+migrations under a schema-specific advisory lock. The cloud database is separate
+from every runtime journal.
 
-1. Stop every old and new cloud-server replica. Connectors can disconnect while
-   accepted work continues locally. Freeze the legacy cloud source for the entire
-   import; do not run the old server against it during migration.
-2. Take an independently restorable source backup. For protected journal storage,
-   preserve its encryption/signing references and secure anchor with its database or
-   files. Keep the old configuration and image available for reconciliation.
-3. Prepare `CONFIG.json` with the new `database` block and independent
-   `auth_key_variable`. Preserve projects, memberships, browser origin, runtime endpoint
-   and certificate authority. The destination must be an empty cloud store. When the
-   legacy source uses PostgreSQL, use a different destination schema, such as
-   `colossus_cloud_v2`; never import into the legacy journal schema.
-4. Supply both configurations' credential references through the protected environment
-   and run the installed server's migration command:
+The initial cloud schema is a fresh relational baseline. Earlier disposable development
+schemas must be recreated before startup; there is no legacy cloud-journal import
+command or data conversion. A migration checksum mismatch identifies a schema created
+with an earlier baseline. Recreate only that disposable cloud schema, then restart
+and verify readiness, sign-in and enrollment. Local runtime storage is unaffected.
 
-   ```sh
-   colossus-cloud-server migrate-journal /secure/cloud/LEGACY_CONFIG.json \
-     /secure/cloud/CONFIG.json
-   ```
-
-5. Wait for successful completion before starting any cloud replica. If interrupted,
-   rerun the same command against the same frozen source and destination. Import progress
-   is bound to the verified source head/hash and resumes with the same entity revisions,
-   task/run IDs, command identities, receipts and event cursors. A changed source is not
-   a valid retry. Normal startup fails closed while an import marker is incomplete;
-   do not remove the marker manually to bypass recovery.
-6. Update the deployment's configuration and Secrets, then apply the new manifests and
-   verify readiness. Sign in again, reconnect the original agents and compare original
-   task/run IDs, receipts, retained event sequences and thread history. New metadata and
-   thread projections can advance record revisions; they preserve accepted native run
-   identities and the imported canonical events.
-
-Keep the legacy backup and anchor after verification. The new deployment removes the
-anchor volume from its pod specification; applying it does not delete an existing PVC.
-Retire the old PVC and journal/signing Secrets only under your backup-retention policy.
-Rollback is straightforward before new cloud mutations are accepted. After cutover,
-reconcile newly accepted work on its original runtime before returning to an older cloud
-snapshot; the legacy source cannot contain those later commands.
+For deployed schemas, preserve applied migration files and evolve the database through
+new migrations. Keep backups and independently archived audit checkpoints as described
+in [cloud backup and restore](#back-up-and-restore-the-cloud-database).
 
 ## Enroll a CLI daemon
 

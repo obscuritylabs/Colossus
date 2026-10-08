@@ -5,7 +5,9 @@ use colossus_ports::StoreError;
 use diesel_async::SimpleAsyncConnection;
 use serde_json::json;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+mod fixtures;
 mod identity;
+mod normalized;
 
 fn key(kind: EntityKind, id: &str) -> EntityKey {
     EntityKey {
@@ -19,7 +21,7 @@ fn write(kind: EntityKind, id: &str, expected: u64, value: serde_json::Value) ->
     EntityMutation {
         key: key(kind, id),
         expected_revision: expected,
-        value,
+        value: fixtures::value(kind, id, value),
         actor: "acceptance".into(),
         operation: "cloud.acceptance.v1".into(),
     }
@@ -176,6 +178,18 @@ async fn postgres_atomic_recovery_and_replica_conformance() {
         vec![event.clone()]
     );
     store.commit(CloudTransaction{entities:vec![write(EntityKind::Workspace,"workspace",0,json!({"node_id":"runtime","label":"Workspace"})),write(EntityKind::Thread,"thread",0,json!({"node_id":"runtime","workspace_id":"workspace","title":"Conversation","created_at":"2026-10-05T12:00:00Z","updated_at":"2026-10-05T12:00:00Z"}))],..Default::default()}).await.unwrap();
+    store
+        .commit(CloudTransaction {
+            entities: vec![write(
+                EntityKind::Task,
+                "message-task",
+                0,
+                json!({"thread_id":"thread"}),
+            )],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     let mut older = write(
         EntityKind::ThreadMessage,
         "z-older",
@@ -307,15 +321,15 @@ async fn postgres_atomic_recovery_and_replica_conformance() {
         .await
         .unwrap();
     let current = store.read(&key(EntityKind::Node, "runtime")).await.unwrap();
-    let mut revoked = current.value;
-    revoked["revoked"] = json!(true);
+    let mut revoked = colossus_cloud::CloudNode::try_from(current.value).unwrap();
+    revoked.revoked = true;
     store
         .commit(CloudTransaction {
             entities: vec![write(
                 EntityKind::Node,
                 "runtime",
                 current.revision,
-                revoked,
+                serde_json::to_value(revoked).unwrap(),
             )],
             ..Default::default()
         })
@@ -415,7 +429,7 @@ async fn postgres_atomic_recovery_and_replica_conformance() {
             .is_err()
     );
     let mut conn = store.pool.get().await.unwrap();
-    conn.batch_execute("UPDATE hosts SET record='{}'::JSONB WHERE id='host'")
+    conn.batch_execute("UPDATE hosts SET host_name='changed without an audit' WHERE id='host'")
         .await
         .unwrap();
     assert_eq!(
@@ -591,7 +605,7 @@ async fn postgres_checkpoint_and_maintenance_conformance() {
             entities: vec![EntityMutation {
                 key: body_key.clone(),
                 expected_revision: 0,
-                value: body.clone(),
+                value: EntityValue::AuthFlow(body.clone()),
                 actor: "acceptance".into(),
                 operation: "cloud.auth.flow-created.v2".into(),
             }],
@@ -599,7 +613,16 @@ async fn postgres_checkpoint_and_maintenance_conformance() {
         })
         .await
         .unwrap();
-    assert_eq!(store.read(&body_key).await.unwrap().value, body);
+    assert_eq!(
+        store
+            .read(&body_key)
+            .await
+            .unwrap()
+            .value
+            .auth_flow()
+            .unwrap(),
+        &body
+    );
     store
         .commit(CloudTransaction {
             entities: vec![
@@ -671,7 +694,9 @@ async fn postgres_checkpoint_and_maintenance_conformance() {
             id: "expired-flow".into(),
         },
         expected_revision: 0,
-        value: json!({"nonce":"synthetic","ciphertext":"opaque-synthetic-ciphertext","expires_at":now-1}),
+        value: EntityValue::AuthFlow(
+            json!({"nonce":"synthetic","ciphertext":"opaque-synthetic-ciphertext","expires_at":now-1}),
+        ),
         actor: "acceptance".into(),
         operation: "cloud.auth-flow.created.v1".into(),
     };
@@ -683,7 +708,7 @@ async fn postgres_checkpoint_and_maintenance_conformance() {
             id: "retained-marker".into(),
         },
         expected_revision: 0,
-        value: json!({"status":"running"}),
+        value: EntityValue::AuthFlow(json!({"status":"running"})),
         actor: "acceptance".into(),
         operation: "cloud.import.started.v1".into(),
     };

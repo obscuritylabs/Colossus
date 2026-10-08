@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 /// Single-use enrollment invitation, bound to administrator-reviewed placement.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Enrollment {
     /// Hash of the high-entropy invitation, never its redeemable plaintext.

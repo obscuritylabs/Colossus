@@ -51,7 +51,7 @@ async fn fixture() -> (CloudRepository, CloudCaller, CloudNode) {
         .unwrap();
     (repo, caller, node)
 }
-fn request() -> CreateRunRequest {
+pub(crate) fn request() -> CreateRunRequest {
     CreateRunRequest {
         plugin_skill_ids: vec![],
         input: vec![InputContentPart::Text("hello".into())],
@@ -255,7 +255,7 @@ async fn certificate_rotation_reconciles_lost_ack_and_rejects_old_leaf_or_revoca
         CloudError::PermissionDenied
     );
 }
-fn snapshot() -> GetRunResponse {
+pub(crate) fn snapshot() -> GetRunResponse {
     GetRunResponse {
         run: Run {
             plugin_skill_ids: vec![],

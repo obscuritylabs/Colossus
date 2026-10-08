@@ -41,11 +41,11 @@ impl CloudPostgresStore {
 
 const SQL: &str = r#"
 WITH agent_set AS (
-    SELECT id,host_id,record FROM runtime_agents WHERE project_id=$1 AND NOT deleted AND NOT revoked AND ($2::TEXT IS NULL OR id=$2)
+    SELECT id,host_id,runtime_ready FROM runtime_agents WHERE project_id=$1 AND NOT deleted AND NOT revoked AND ($2::TEXT IS NULL OR id=$2)
 ), thread_set AS (
     SELECT id FROM conversation_threads WHERE project_id=$1 AND NOT deleted AND ($2::TEXT IS NULL OR node_id=$2)
 ), task_set AS (
-    SELECT id,status,domain_created_at,record FROM tasks WHERE project_id=$1 AND NOT deleted AND ($2::TEXT IS NULL OR node_id=$2)
+    SELECT id,status,domain_created_at FROM tasks WHERE project_id=$1 AND NOT deleted AND ($2::TEXT IS NULL OR node_id=$2)
 ), recent AS (
     SELECT * FROM task_set WHERE domain_created_at>=to_timestamp($3) AND domain_created_at<=to_timestamp($4)
 ), usage_events AS (
@@ -66,7 +66,7 @@ SELECT jsonb_build_object(
         'projects',0,
         'hosts',CASE WHEN $2::TEXT IS NULL THEN (SELECT COUNT(*) FROM hosts WHERE project_id=$1 AND NOT deleted) ELSE (SELECT COUNT(DISTINCT host_id) FROM agent_set WHERE host_id IS NOT NULL) END,
         'agents',(SELECT COUNT(*) FROM agent_set),
-        'online_agents',(SELECT COUNT(*) FROM agent_set a JOIN connection_leases l ON l.project_id=$1 AND l.node_id=a.id AND l.expires_at>$4 WHERE COALESCE((a.record->>'runtime_ready')::BOOLEAN,FALSE)),
+        'online_agents',(SELECT COUNT(*) FROM agent_set a JOIN connection_leases l ON l.project_id=$1 AND l.node_id=a.id AND l.expires_at>$4 WHERE a.runtime_ready),
         'threads',(SELECT COUNT(*) FROM thread_set),
         'runs',(SELECT COUNT(*) FROM recent),
         'completed',(SELECT COUNT(*) FROM recent WHERE status='completed'),

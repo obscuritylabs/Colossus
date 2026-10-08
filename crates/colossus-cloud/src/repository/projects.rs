@@ -3,44 +3,12 @@ use super::accounts::{administrator, mutation, timestamp};
 use super::*;
 use crate::{CloudProject, CloudUser, project_key, validate_project};
 fn decode_project(record: crate::storage::EntityRecord) -> CloudResult<CloudProject> {
-    if let Ok(mut project) = serde_json::from_value::<CloudProject>(record.value.clone()) {
-        if project.id != record.key.id {
-            return Err(CloudError::Storage);
-        }
-        project.revision = record.revision;
-        return Ok(project);
-    }
-    let legacy = record.value.as_object().ok_or(CloudError::Storage)?;
-    let label = legacy
-        .get("label")
-        .and_then(serde_json::Value::as_str)
-        .ok_or(CloudError::Storage)?;
-    if legacy
-        .keys()
-        .any(|key| !matches!(key.as_str(), "project_id" | "label" | "revision"))
-        || legacy.get("project_id").and_then(serde_json::Value::as_str)
-            != Some(record.key.id.as_str())
-        || record.key.project_id != record.key.id
-        || record.key.parent_id.is_some()
-        || label.trim().is_empty()
-        || label.len() > 256
-        || label.chars().any(char::is_control)
-        || legacy
-            .get("revision")
-            .is_some_and(|value| value.as_u64().is_none_or(|revision| revision == 0))
-    {
+    let mut project = CloudProject::try_from(record.value)?;
+    if project.id != record.key.id {
         return Err(CloudError::Storage);
     }
-    Ok(CloudProject {
-        id: record.key.id.clone(),
-        name: label.into(),
-        description: String::new(),
-        parent_project_id: None,
-        archived: false,
-        revision: record.revision,
-        created_at: String::new(),
-        updated_at: String::new(),
-    })
+    project.revision = record.revision;
+    Ok(project)
 }
 
 impl CloudRepository {
@@ -133,40 +101,5 @@ impl CloudRepository {
             })
             .await?;
         Ok(project)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn record(value: serde_json::Value) -> crate::storage::EntityRecord {
-        crate::storage::EntityRecord {
-            key: project_key("project-a"),
-            revision: 4,
-            value,
-            page_cursor: None,
-        }
-    }
-    #[test]
-    fn legacy_metadata_is_stable_and_bad_modern_state_never_becomes_legacy() {
-        let first = decode_project(record(
-            serde_json::json!({"project_id":"project-a","label":"Legacy","revision":4}),
-        ))
-        .unwrap();
-        let second = decode_project(record(
-            serde_json::json!({"project_id":"project-a","label":"Legacy","revision":4}),
-        ))
-        .unwrap();
-        assert_eq!(first.created_at, second.created_at);
-        assert!(first.created_at.is_empty());
-        assert!(first.updated_at.is_empty());
-        assert_eq!(decode_project(record(serde_json::json!({"id":"project-a","name":"Modern","archived":"invalid","label":"Legacy","project_id":"project-a"}))).unwrap_err(),CloudError::Storage);
-        assert_eq!(
-            decode_project(record(
-                serde_json::json!({"project_id":"other-project","label":"Legacy"})
-            ))
-            .unwrap_err(),
-            CloudError::Storage
-        );
     }
 }

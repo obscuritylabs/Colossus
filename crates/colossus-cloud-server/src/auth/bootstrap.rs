@@ -13,7 +13,7 @@ fn timestamp() -> CloudResult<String> {
 fn operation(
     key: EntityKey,
     revision: u64,
-    value: serde_json::Value,
+    value: colossus_cloud::storage::EntityValue,
     name: &str,
 ) -> EntityMutation {
     EntityMutation {
@@ -111,7 +111,7 @@ pub(super) async fn seed_accounts(store: &Arc<dyn CloudStore>, config: &Config) 
                     entities: vec![operation(
                         project_key(&project.id),
                         0,
-                        serde_json::to_value(project).map_err(|_| CloudError::Storage)?,
+                        project.into(),
                         "cloud.project.bootstrap.v3",
                     )],
                     ..Default::default()
@@ -146,7 +146,7 @@ pub(super) async fn seed_accounts(store: &Arc<dyn CloudStore>, config: &Config) 
                     entities: vec![operation(
                         key,
                         0,
-                        serde_json::to_value(value).map_err(|_| CloudError::Storage)?,
+                        value.into(),
                         "cloud.membership.bootstrap.v3",
                     )],
                     ..Default::default()
@@ -172,7 +172,11 @@ pub(super) async fn seed_accounts(store: &Arc<dyn CloudStore>, config: &Config) 
             entities: vec![operation(
                 marker,
                 0,
-                serde_json::json!({"completed":true,"version":3}),
+                colossus_cloud::storage::BootstrapMarker {
+                    completed: true,
+                    version: 3,
+                }
+                .into(),
                 "cloud.identity.bootstrap-completed.v3",
             )],
             ..Default::default()
@@ -236,8 +240,7 @@ async fn bootstrap_administrator(repo: &CloudRepository, config: &Config) -> Clo
             let key = identity_key(EntityKind::LocalCredential, &hash_identity(&[username]));
             match repo.storage().read(&key).await {
                 Ok(record) => {
-                    let credential: LocalCredential =
-                        serde_json::from_value(record.value).map_err(|_| CloudError::Storage)?;
+                    let credential: LocalCredential = record.value.try_into()?;
                     if credential.user_id != id {
                         return Err(CloudError::Conflict);
                     }
@@ -248,7 +251,7 @@ async fn bootstrap_administrator(repo: &CloudRepository, config: &Config) -> Clo
                     bindings.push(operation(
                         key,
                         0,
-                        serde_json::to_value(credential).map_err(|_| CloudError::Storage)?,
+                        credential.into(),
                         "cloud.user.bootstrap-local-bound.v3",
                     ));
                     account
@@ -262,7 +265,7 @@ async fn bootstrap_administrator(repo: &CloudRepository, config: &Config) -> Clo
         bindings.push(operation(
             identity_key(EntityKind::User, &id),
             revision,
-            serde_json::to_value(account).map_err(|_| CloudError::Storage)?,
+            account.into(),
             "cloud.user.bootstrap-administrator.v3",
         ));
         match repo
@@ -323,7 +326,11 @@ async fn bootstrap_administrator(repo: &CloudRepository, config: &Config) -> Clo
             entities: vec![operation(
                 marker,
                 0,
-                serde_json::json!({"completed":true,"user_id":id}),
+                colossus_cloud::storage::BootstrapMarker {
+                    completed: true,
+                    version: 3,
+                }
+                .into(),
                 "cloud.administrator.bootstrap-completed.v3",
             )],
             ..Default::default()

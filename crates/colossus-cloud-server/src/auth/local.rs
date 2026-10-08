@@ -65,7 +65,7 @@ impl Authentication {
             .await
             .ok();
         let credential = record.and_then(|r| {
-            serde_json::from_value::<LocalCredential>(r.value)
+            LocalCredential::try_from(r.value)
                 .ok()
                 .map(|credential| (r.revision, credential))
         });
@@ -149,6 +149,7 @@ impl Authentication {
                 Ok(r) => (
                     r.revision,
                     r.value
+                        .auth_flow()?
                         .get("attempts")
                         .and_then(serde_json::Value::as_u64)
                         .ok_or(CloudError::Storage)?,
@@ -165,7 +166,9 @@ impl Authentication {
                     entities: vec![EntityMutation {
                         key: key.clone(),
                         expected_revision: revision,
-                        value: serde_json::json!({"attempts":count+1,"expires_at":now+600}),
+                        value: colossus_cloud::storage::EntityValue::AuthFlow(
+                            serde_json::json!({"attempts":count+1,"expires_at":now+600}),
+                        ),
                         actor: "browser-authentication".into(),
                         operation: "cloud.auth.attempt.v3".into(),
                     }],

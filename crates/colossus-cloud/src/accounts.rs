@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 pub const IDENTITY_NAMESPACE: &str = "__identity";
 
 /// Human account metadata. Credentials are retained separately and never released here.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CloudUser {
     /// Immutable domain identity within its namespace.
     pub id: String,
@@ -32,7 +32,7 @@ pub struct CloudUser {
 }
 
 /// Safe login binding metadata for account administration.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LoginIdentityMetadata {
     /// Login kind, local or oidc.
     pub kind: String,
@@ -47,7 +47,7 @@ pub struct LoginIdentityMetadata {
 }
 
 /// Retained account plus a revocation generation; changing credentials retires old sessions.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UserAccount {
     /// Credential-free account metadata.
     pub user: CloudUser,
@@ -82,7 +82,7 @@ impl ProjectRole {
 }
 
 /// Named project namespace with independently authorized children.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CloudProject {
     /// Immutable domain identity within its namespace.
     pub id: String,
@@ -104,7 +104,7 @@ pub struct CloudProject {
 }
 
 /// Persisted project membership with its explicit permission ceiling.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectMembership {
     /// Exact project authority namespace.
     pub project_id: String,
@@ -121,7 +121,7 @@ pub struct ProjectMembership {
 }
 
 /// Verified provider binding. Emails are never used to link accounts.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OidcIdentity {
     /// Stable persisted account identity.
     pub user_id: String,
@@ -132,7 +132,7 @@ pub struct OidcIdentity {
 }
 
 /// Native-host-only salted PHC credential. Never expose it in browser responses.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct LocalCredential {
     /// Stable persisted account identity.
     pub user_id: String,

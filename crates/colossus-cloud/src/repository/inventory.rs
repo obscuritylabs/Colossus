@@ -469,8 +469,7 @@ impl CloudRepository {
             }
             after = records.last().map(|record| record.key.id.clone());
             for record in records {
-                let mut thread: CloudThread =
-                    serde_json::from_value(record.value).map_err(|_| CloudError::Storage)?;
+                let mut thread: CloudThread = record.value.try_into()?;
                 // New cloud sessions without a receipt are not discovery omissions.
                 let Some(session) = &thread.session_id else {
                     continue;
