@@ -399,7 +399,7 @@ async fn members(
         .await?
         .into_iter()
         .map(|record| {
-            serde_json::from_value::<UserAccount>(record.value)
+            UserAccount::try_from(record.value)
                 .map(|a| (a.user.id.clone(), a.user))
                 .map_err(|_| CloudError::Storage)
         })

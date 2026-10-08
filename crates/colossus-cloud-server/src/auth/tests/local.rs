@@ -373,7 +373,9 @@ async fn exhausted_global_login_budget_does_not_create_new_username_buckets() {
             entities: vec![EntityMutation {
                 key: global,
                 expected_revision: 0,
-                value: json!({"attempts":120,"expires_at":now+600}),
+                value: colossus_cloud::storage::EntityValue::AuthFlow(
+                    json!({"attempts":120,"expires_at":now+600}),
+                ),
                 actor: "fixture".into(),
                 operation: "fixture.auth-budget".into(),
             }],
@@ -411,7 +413,7 @@ async fn password_rotation_between_credential_read_and_verification_cannot_mint_
         &colossus_cloud::hash_identity(&["operator"]),
     );
     let original = auth.store.read(&key).await.unwrap();
-    let mut credential: LocalCredential = serde_json::from_value(original.value).unwrap();
+    let mut credential: LocalCredential = LocalCredential::try_from(original.value).unwrap();
     credential.password_hash = auth
         .password_hash(Zeroizing::new("concurrently rotated password".into()))
         .await
@@ -430,14 +432,14 @@ async fn password_rotation_between_credential_read_and_verification_cannot_mint_
             EntityMutation {
                 key: key.clone(),
                 expected_revision: original.revision,
-                value: serde_json::to_value(credential).unwrap(),
+                value: credential.into(),
                 actor: "local-admin".into(),
                 operation: "fixture.password-rotation".into(),
             },
             EntityMutation {
                 key: colossus_cloud::identity_key(EntityKind::User, "local-user"),
                 expected_revision: version,
-                value: serde_json::to_value(account).unwrap(),
+                value: account.into(),
                 actor: "local-admin".into(),
                 operation: "fixture.password-rotation".into(),
             },

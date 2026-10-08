@@ -57,6 +57,9 @@ mod terminal_process;
 mod terminal_protocol;
 #[cfg(windows)]
 mod uninstall;
+#[cfg(all(test, not(windows)))]
+#[path = "uninstall/ownership.rs"]
+mod uninstall_ownership;
 mod updates;
 mod workspace_files;
 mod workspace_git;

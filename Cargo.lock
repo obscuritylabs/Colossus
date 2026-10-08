@@ -1329,8 +1329,6 @@ dependencies = [
  "colossus-contracts",
  "colossus-credentials",
  "colossus-home",
- "colossus-journal-postgres",
- "colossus-journal-redb",
  "colossus-network",
  "colossus-policy",
  "colossus-ports",

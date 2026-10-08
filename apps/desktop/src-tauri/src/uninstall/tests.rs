@@ -72,11 +72,15 @@ fn cleanup_rejects_busy_data_before_removing_any_files() {
 }
 
 fn plugin_blob(home: &Path, linked: bool) -> std::path::PathBuf {
+    plugin_blob_at(&home.join("plugins"), linked)
+}
+
+fn plugin_blob_at(store: &Path, linked: bool) -> std::path::PathBuf {
     let blob = "a".repeat(64);
     let layout = "b".repeat(64);
-    let global = home.join("plugins/blobs/sha256").join(&blob);
-    let retained = home
-        .join("plugins/layouts/sha256")
+    let global = store.join("blobs/sha256").join(&blob);
+    let retained = store
+        .join("layouts/sha256")
         .join(layout)
         .join("blobs/sha256")
         .join(blob);
@@ -105,6 +109,66 @@ fn plugin_blob(home: &Path, linked: bool) -> std::path::PathBuf {
         fs::set_permissions(path, permissions).unwrap();
     }
     global
+}
+
+fn workspace_plugin_store(home: &Path) -> std::path::PathBuf {
+    let partition = home.join("workspaces").join("c".repeat(64));
+    for directory in [home.join("workspaces"), partition.clone()] {
+        create_private_directory(&directory).unwrap();
+    }
+    let store = partition.join("workspace-plugins");
+    create_private_directory(&store).unwrap();
+    store
+}
+
+#[test]
+fn cleanup_removes_empty_workspace_plugin_store_created_by_runtime_startup() {
+    let (_guard, home) = fixture();
+    workspace_plugin_store(&home);
+    cleanup(&home).unwrap();
+    assert!(!home.exists());
+}
+
+#[test]
+fn cleanup_removes_workspace_plugin_snapshots_and_pending_layouts() {
+    for linked in [false, true] {
+        let (_guard, home) = fixture();
+        let store = workspace_plugin_store(&home);
+        let blob = plugin_blob_at(&store, linked);
+        for prefix in ["generated-layout-", "retained-layout-"] {
+            let staging = store
+                .join("staging")
+                .join(format!("{prefix}{}", uuid::Uuid::new_v4()))
+                .join("blobs/sha256");
+            fs::create_dir_all(&staging).unwrap();
+            fs::hard_link(&blob, staging.join(blob.file_name().unwrap())).unwrap();
+        }
+        cleanup(&home).unwrap();
+        assert!(!home.exists());
+    }
+}
+
+#[test]
+fn cleanup_preserves_external_workspace_plugin_blob_links_and_attributes() {
+    let (guard, home) = fixture();
+    let store = workspace_plugin_store(&home);
+    let blob = plugin_blob_at(&store, true);
+    let external = guard.path().join("external-workspace-blob");
+    fs::hard_link(&blob, &external).unwrap();
+    assert_eq!(cleanup(&home), Err(CleanupError::UnsafeData));
+    assert_eq!(fs::read(&external).unwrap(), b"installed plugin blob");
+    assert!(fs::metadata(&external).unwrap().permissions().readonly());
+    assert!(store.is_dir());
+}
+
+#[test]
+fn cleanup_rechecks_workspace_plugin_blob_links_added_after_inspection() {
+    let (guard, home) = fixture();
+    let store = workspace_plugin_store(&home);
+    let blob = plugin_blob_at(&store, true);
+    let plan = plan::CleanupPlan::inspect(&home).unwrap();
+    fs::hard_link(blob, guard.path().join("late-workspace-blob-link")).unwrap();
+    assert_eq!(plan.check_idle(), Err(CleanupError::UnsafeData));
 }
 
 #[test]

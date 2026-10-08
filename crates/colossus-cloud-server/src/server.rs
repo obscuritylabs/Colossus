@@ -58,25 +58,6 @@ impl ControlPlaneServer {
             .readiness()
             .await
             .map_err(|_| "cloud database unavailable")?;
-        let marker = colossus_cloud::storage::EntityKey {
-            kind: colossus_cloud::storage::EntityKind::AuthFlow,
-            project_id: "__migration".into(),
-            parent_id: None,
-            id: "journal-import".into(),
-        };
-        match store.read(&marker).await {
-            Ok(record)
-                if record
-                    .value
-                    .get("status")
-                    .and_then(serde_json::Value::as_str)
-                    != Some("complete") =>
-            {
-                return Err("cloud journal migration is incomplete");
-            }
-            Ok(_) | Err(colossus_cloud::CloudError::NotFound) => {}
-            Err(_) => return Err("cloud database unavailable"),
-        }
         let repo =
             CloudRepository::new(store.clone()).map_err(|_| "cloud repository unavailable")?;
         if let Some(classification) = &config.classification {

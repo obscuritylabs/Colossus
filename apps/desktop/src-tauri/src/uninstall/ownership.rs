@@ -14,12 +14,12 @@ pub(super) fn owned_path(relative: &Path, directory: bool) -> bool {
         ["desktop" | "workspaces" | "plugins"] | ["desktop", "self-test" | "managed-local"] => {
             directory
         }
-        ["workspaces", partition] | ["workspaces", partition, "cli"] => {
+        ["workspaces", partition] | ["workspaces", partition, "cli" | "workspace-plugins"] => {
             directory && is_partition(partition)
         }
-        ["workspaces", partition, "desktop", ..] | ["desktop", "managed-local", partition, ..] => {
-            is_partition(partition)
-        }
+        ["workspaces", partition, "workspace-plugins", _, ..]
+        | ["workspaces", partition, "desktop", ..]
+        | ["desktop", "managed-local", partition, ..] => is_partition(partition),
         [
             "desktop",
             "self-test",
@@ -87,18 +87,19 @@ pub(super) fn plugin_blob(relative: &Path) -> bool {
     else {
         return false;
     };
-    match parts.as_slice() {
-        ["plugins", "blobs", "sha256", digest] => is_partition(digest),
-        [
-            "plugins",
-            "layouts",
-            "sha256",
-            layout,
-            "blobs",
-            "sha256",
-            digest,
-        ] => is_partition(layout) && is_partition(digest),
-        ["plugins", "staging", staging, "blobs", "sha256", digest] => {
+    let cache = match parts.as_slice() {
+        ["plugins", cache @ ..] => cache,
+        ["workspaces", partition, "workspace-plugins", cache @ ..] if is_partition(partition) => {
+            cache
+        }
+        _ => return false,
+    };
+    match cache {
+        ["blobs", "sha256", digest] => is_partition(digest),
+        ["layouts", "sha256", layout, "blobs", "sha256", digest] => {
+            is_partition(layout) && is_partition(digest)
+        }
+        ["staging", staging, "blobs", "sha256", digest] => {
             staging
                 .strip_prefix("generated-layout-")
                 .or_else(|| staging.strip_prefix("retained-layout-"))
@@ -108,3 +109,7 @@ pub(super) fn plugin_blob(relative: &Path) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+#[path = "ownership_tests.rs"]
+mod tests;

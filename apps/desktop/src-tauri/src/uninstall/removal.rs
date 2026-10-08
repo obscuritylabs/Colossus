@@ -45,7 +45,9 @@ impl CleanupRemoval {
             [] | ["workspaces"] | ["workspaces", _] | ["workspaces", _, "cli"] => {
                 Kind::EmptyDirectory
             }
-            ["desktop" | "plugins"] | ["workspaces", _, "desktop"] => Kind::DesktopTree,
+            ["desktop" | "plugins"] | ["workspaces", _, "desktop" | "workspace-plugins"] => {
+                Kind::DesktopTree
+            }
             [_] if !directory => Kind::File,
             _ => return Ok(()), // Removed through its exclusively Desktop-owned tree.
         };

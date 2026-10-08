@@ -41,6 +41,8 @@ include breaking changes while the public API is still settling.
 
 - Agent schedule creation and pause/enable approvals publish the valid public schedule
   review category, retaining exact response binding and owner isolation.
+- Offline development credential rewrap on Windows fingerprints journals through
+  their retained exclusive lease, preserving source bytes and writer exclusion.
 
 ## [0.11.7] - 2026-10-03
 

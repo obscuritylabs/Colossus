@@ -39,50 +39,11 @@ impl CloudPostgresStore {
             if published+removed+sessions+flows.len()>0 {
                 let key=EntityKey{kind:EntityKind::AuthFlow,project_id:"__maintenance".into(),parent_id:None,id:"operational".into()};
                 let revision=match entities::read(conn,&key).await{Ok(record)=>record.revision,Err(CloudError::NotFound)=>0,Err(_)=>return Err(TransactionError::Store(StoreError::Adapter("maintenance audit unavailable".into())))};
-                entities::mutate(conn,EntityMutation{key,expected_revision:revision,value:serde_json::json!({"observed_at":now,"published_outbox":published,"removed_outbox":removed,"expired_sessions":sessions,"expired_auth_flows":flows.len()}),actor:"cloud-maintenance".into(),operation:"cloud.operational-maintenance.v1".into()}).await?;
+                entities::mutate(conn,EntityMutation{key,expected_revision:revision,value:EntityValue::AuthFlow(serde_json::json!({"observed_at":now,"published_outbox":published,"removed_outbox":removed,"expired_sessions":sessions,"expired_auth_flows":flows.len()})),actor:"cloud-maintenance".into(),operation:"cloud.operational-maintenance.v1".into()}).await?;
             }
             Ok::<_,TransactionError>(report)
         }).await.map_err(|error|CloudError::from(error.into_store()))
     }
-    /// Begin or reconcile an explicit offline legacy import into a provably empty schema.
-    /// The source anchor binds retries; ordinary host startup must reject a running marker.
-    pub async fn begin_journal_import(
-        &self,
-        source_head_hash: &str,
-        source_sequence: u64,
-    ) -> CloudResult<EntityRecord> {
-        if source_head_hash.len() != 64 || !source_head_hash.bytes().all(|b| b.is_ascii_hexdigit())
-        {
-            return Err(CloudError::InvalidArgument);
-        }
-        let key = EntityKey {
-            kind: EntityKind::AuthFlow,
-            project_id: "__migration".into(),
-            parent_id: None,
-            id: "journal-import".into(),
-        };
-        let mut conn = self.pool.get().await.map_err(|_| CloudError::Storage)?;
-        let result=conn.transaction(async|conn|{
-            sql_query("SELECT pg_advisory_xact_lock(hashtext($1))").bind::<Text,_>(format!("colossus-cloud-import:{}",self.schema)).execute(conn).await?;
-            match entities::read(conn,&key).await{
-                Ok(record)=>{
-                    if record.value.get("source_head_hash").and_then(serde_json::Value::as_str)!=Some(source_head_hash)||record.value.get("source_sequence").and_then(serde_json::Value::as_u64)!=Some(source_sequence)||!record.value.get("status").and_then(serde_json::Value::as_str).is_some_and(|status|matches!(status,"running"|"complete")){return Err(TransactionError::Store(StoreError::Conflict{stream_id:key.conflict_id(),expected:0,actual:record.revision}));}
-                    return Ok(record);
-                },
-                Err(CloudError::NotFound)=>{},
-                Err(_)=>return Err(TransactionError::Store(StoreError::Adapter("import marker unavailable".into()))),
-            }
-            #[derive(diesel::QueryableByName)]struct Occupied{#[diesel(sql_type=Bool)]occupied:bool}
-            for table in ["cloud_users","user_identities","local_credentials","control_plane_settings","projects","project_memberships","oidc_flows","hosts","runtime_agents","workspaces","conversation_threads","conversation_messages","thread_sources","tasks","commands","run_allocations","node_task_placements","admission_counters","enrollment_invitations","certificate_renewals","released_events","released_event_heads","sync_cursors","cloud_audit","delivery_outbox","browser_sessions","connection_leases"]{
-                let occupied=sql_query(format!("SELECT EXISTS(SELECT 1 FROM {table} LIMIT 1) AS occupied")).get_result::<Occupied>(conn).await?;
-                if occupied.occupied{return Err(TransactionError::Store(StoreError::Conflict{stream_id:"cloud.import.destination".into(),expected:0,actual:1}));}
-            }
-            entities::mutate(conn,EntityMutation{key:key.clone(),expected_revision:0,value:serde_json::json!({"source_head_hash":source_head_hash,"source_sequence":source_sequence,"status":"running"}),actor:"offline-import".into(),operation:"cloud.import.started.v1".into()}).await?;
-            entities::read(conn,&key).await.map_err(|_|TransactionError::Store(StoreError::Adapter("import marker unavailable".into())))
-        }).await;
-        result.map_err(|error| CloudError::from(error.into_store()))
-    }
-
     /// Remove only this adapter's explicitly generated local measurement namespace.
     /// Ordinary cloud schema names are rejected, and a caller cannot nominate another schema.
     pub async fn remove_fixture_schema(&self, schema: &str) -> CloudResult<()> {

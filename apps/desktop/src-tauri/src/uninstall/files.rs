@@ -49,7 +49,7 @@ impl CleanupFiles {
             }
             *observed += 1;
         }
-        // Plugin installation intentionally links global blobs into retained OCI
+        // Plugin installation intentionally links cache blobs into retained OCI
         // layouts. Permit them only when every link is in the inspected owned
         // cache. A link outside it must preserve both the file and its attributes.
         if names

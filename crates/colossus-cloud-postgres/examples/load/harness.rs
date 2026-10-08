@@ -374,7 +374,17 @@ pub async fn run() -> Result<(), &'static str> {
                     id: PROJECT.into(),
                 },
                 expected_revision: 0,
-                value: json!({"project_id":PROJECT,"label":"Load project"}),
+                value: colossus_cloud::CloudProject {
+                    id: PROJECT.into(),
+                    name: "Load project".into(),
+                    description: String::new(),
+                    parent_project_id: None,
+                    archived: false,
+                    revision: 1,
+                    created_at: String::new(),
+                    updated_at: String::new(),
+                }
+                .into(),
                 actor: "load-fixture".into(),
                 operation: "cloud.load.fixture-created.v1".into(),
             }],

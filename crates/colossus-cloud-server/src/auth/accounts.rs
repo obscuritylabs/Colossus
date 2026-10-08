@@ -100,8 +100,7 @@ impl Authentication {
             .await
         {
             Ok(record) => {
-                let member: ProjectMembership =
-                    serde_json::from_value(record.value).map_err(|_| CloudError::Storage)?;
+                let member: ProjectMembership = record.value.try_into()?;
                 if member.project_id != project
                     || member.user_id != account.user.id
                     || member.subject != account.user.id
