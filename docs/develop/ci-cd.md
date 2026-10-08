@@ -84,15 +84,18 @@ lockfiles, toolchain files, or the cache workflows change. Writers can also run 
 manually to fill a missing archive. It uses standard public Linux and macOS runners
 and is not a merge gate. The `recipe-v1` key is shared by each warmer and its
 consumers. When changing warm-up commands without changing the Rust environment,
-bump this key in all seven cache steps to create fresh archives; GitHub cannot
+bump this key in all eight cache steps to create fresh archives; GitHub cannot
 replace an existing exact cache entry.
 
 The Linux PR lint and unit jobs restore one shared dependency build cache from
 `main`. The two macOS Desktop pre-merge jobs restore separate debug acceptance and
-release bundle caches. Each `rust-cache` workspace maps its target relative to its
-workspace (`apps/desktop/src-tauri -> target`), and those jobs do not save duplicate
-PR-scoped archives. `rust-cache` caches dependency build artifacts in `target`, not
-the application binaries or workspace crates, so a warm run still compiles changed
+release bundle caches. The unsigned macOS Desktop release job also restores the
+main release bundle cache. Its runner, target directory, recipe key and compiler
+environment match the warmer, including the absence of `RUSTC_WRAPPER`.
+Each `rust-cache` workspace maps its target relative to its workspace
+(`apps/desktop/src-tauri -> target`), and those jobs do not save duplicate PR- or
+tag-scoped archives. `rust-cache` caches dependency build artifacts in `target`,
+not the application binaries or workspace crates, so a warm run still compiles changed
 Colossus code. Cache misses build normally. Other PR and pre-merge lanes use the
 optional `sccache` compiler cache in GitHub read-only mode by default. When R2
 credentials are configured, those jobs read the R2 compiler cache instead. This
@@ -107,10 +110,11 @@ pre-merge jobs that already use `sccache`. A separate `Warm R2 compiler cache`
 workflow writes from `main` on Linux, macOS, and Windows. It leaves the existing
 `rust-cache` dependency archives intact. PR and pre-merge jobs read R2 only; on
 forks or before credentials are configured, they keep their read-only GitHub
-compiler-cache fallback. R2 is not used by the macOS Desktop acceptance and bundle
-jobs, which restore the main branch's target archives. The signed Windows Desktop
-release keeps its signing environment and GitHub compiler cache; the unsigned macOS
-Desktop release keeps its credential-free build path.
+compiler-cache fallback. R2 is not used by the macOS Desktop acceptance, bundle,
+or unsigned release jobs, which restore the main branch's target archives.
+The signed Windows Desktop release keeps its signing environment and GitHub compiler cache; the unsigned macOS
+Desktop release keeps its credential-free build path. The main warmer also runs
+when the release workflow changes.
 
 To enable R2 for this repository:
 
