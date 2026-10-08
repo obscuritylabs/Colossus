@@ -248,11 +248,14 @@ function Settings() {
           <div className="settings-card">
             <div
               className="setting-row"
-              data-search="default run mode plan execute composer"
+              data-search="default run mode plan execute research composer"
             >
               <div>
                 <label htmlFor="defaultMode">Default run mode</label>
-                <p>Start new conversations in Plan or Execute mode.</p>
+                <p>
+                  Start new conversations in Plan, Execute, or Research mode.
+                  Research requires a supporting worker.
+                </p>
               </div>
               <DropdownSelect
                 id="defaultMode"
@@ -261,12 +264,13 @@ function Settings() {
                   preference({
                     type: "setPreference",
                     name: "defaultMode",
-                    value: event.target.value as "plan" | "execute",
+                    value: event.target.value as Preferences["defaultMode"],
                   })
                 }
               >
                 <option value="plan">Plan</option>
                 <option value="execute">Execute</option>
+                <option value="research">Research</option>
               </DropdownSelect>
             </div>
             <div

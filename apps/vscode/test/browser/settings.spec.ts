@@ -118,6 +118,18 @@ test("desktop-style settings navigate, search and request validated host changes
       name: "defaultMode",
       value: "execute",
     });
+  await choose(page, "Default run mode", "Research");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as unknown as { actions: unknown[] }).actions,
+      ),
+    )
+    .toContainEqual({
+      type: "setPreference",
+      name: "defaultMode",
+      value: "research",
+    });
   await page.getByRole("button", { name: "Workspace", exact: true }).click();
   await page
     .getByRole("button", { name: "Credential location", exact: true })

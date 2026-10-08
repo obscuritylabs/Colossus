@@ -7,15 +7,28 @@ import {
   ComposerSendButton,
   isComposerSendKey,
 } from "@colossus/ui";
-import type { ViewAction, WorkView } from "../src/model.js";
+import {
+  isWorkMode,
+  isResearchDepth,
+  isResearchSources,
+  supportsResearch,
+  type ResearchDepth,
+  type ResearchOptions,
+  type ResearchSource,
+  type ViewAction,
+  type WorkMode,
+  type WorkView,
+} from "../src/model.js";
 import { DEFAULT_PREFERENCES, type Preferences } from "../src/settings.js";
 import { brandMarks, element, icon, node } from "./ui.js";
 import { Conversation } from "./conversation.js";
 
 declare function acquireVsCodeApi(): {
   postMessage(message: ViewAction): void;
-  getState(): { draft?: string; mode?: "plan" | "execute" } | undefined;
-  setState(state: { draft: string; mode: "plan" | "execute" }): void;
+  getState():
+    | ({ draft?: string; mode?: WorkMode } & Partial<ResearchOptions>)
+    | undefined;
+  setState(state: { draft: string; mode: WorkMode } & ResearchOptions): void;
 };
 const api = acquireVsCodeApi();
 const app = element<HTMLDivElement>("app");
@@ -33,7 +46,22 @@ brandMarks(app);
 const composerRoot = createRoot(element("composer-fields"));
 const persisted = api.getState();
 let draft = persisted?.draft ?? "";
-const mode = { value: persisted?.mode ?? "plan" };
+const mode: { value: WorkMode } = {
+  value: isWorkMode(persisted?.mode) ? persisted.mode : "plan",
+};
+let researchDepth: ResearchDepth = isResearchDepth(persisted?.researchDepth)
+  ? persisted.researchDepth
+  : "standard";
+let researchSources: ResearchSource[] = isResearchSources(
+  persisted?.researchSources,
+)
+  ? [...persisted.researchSources]
+  : ["repo"];
+const sourceOptions = [
+  { value: "repo", label: "This Workspace" },
+  { value: "web", label: "Web" },
+  { value: "mcp", label: "MCP connections" },
+] as const;
 let preferences = DEFAULT_PREFERENCES;
 let initializedPreferences = false;
 let view: WorkView | undefined;
@@ -41,7 +69,16 @@ let submittedText: string | undefined;
 let submittedAfter = new Set<string>();
 let contextOpen = false;
 function saveDraft() {
-  api.setState({ draft, mode: mode.value });
+  api.setState({ draft, mode: mode.value, researchDepth, researchSources });
+}
+function canSend() {
+  return (
+    !!view?.connected &&
+    !view.busy &&
+    !!draft.trim() &&
+    (mode.value !== "research" ||
+      (supportsResearch(view.capabilities) && researchSources.length > 0))
+  );
 }
 function renderComposer() {
   flushSync(() =>
@@ -72,12 +109,21 @@ function renderComposer() {
               >
                 <span className="icon icon-paperclip" aria-hidden="true" />
               </button>
-              <ComposerModeSwitch
+              <ComposerModeSwitch<WorkMode>
                 value={mode.value}
                 disabled={!view?.connected || view.busy}
                 options={[
                   { value: "plan", label: "Plan" },
                   { value: "execute", label: "Execute" },
+                  {
+                    value: "research",
+                    label: "Research",
+                    disabled: !view || !supportsResearch(view.capabilities),
+                    title:
+                      view && supportsResearch(view.capabilities)
+                        ? "Investigate a question with cited evidence"
+                        : "Research is unavailable for this worker connection",
+                  },
                 ]}
                 onChange={(value) => {
                   mode.value = value;
@@ -95,7 +141,7 @@ function renderComposer() {
                   : "Send (Ctrl/Cmd+Enter)"
               }
               hidden={!!view?.busy}
-              disabled={!view?.connected || !!view.busy || !draft.trim()}
+              disabled={!canSend()}
               onClick={send}
             />
             <ComposerSendButton
@@ -122,7 +168,9 @@ function renderComposer() {
               ? "Draft your next task…"
               : mode.value === "plan"
                 ? "Describe the work you want Colossus to plan…"
-                : "Ask Colossus to work on something…"
+                : mode.value === "research"
+                  ? "Ask a question to investigate with cited evidence…"
+                  : "Ask Colossus to work on something…"
           }
           onChange={(event) => {
             draft = event.target.value;
@@ -141,6 +189,61 @@ function renderComposer() {
             }
           }}
         />
+        {mode.value === "research" ? (
+          <section className="research-controls" aria-label="Research settings">
+            <fieldset disabled={!view?.connected || view.busy}>
+              <legend>Research depth</legend>
+              <div className="research-depth-options">
+                {(["quick", "standard", "deep"] as const).map((depth) => (
+                  <label key={depth}>
+                    <input
+                      type="radio"
+                      name="research-depth"
+                      value={depth}
+                      checked={researchDepth === depth}
+                      onChange={() => {
+                        researchDepth = depth;
+                        saveDraft();
+                        renderComposer();
+                      }}
+                    />
+                    <span>{depth[0]!.toUpperCase() + depth.slice(1)}</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            <fieldset disabled={!view?.connected || view.busy}>
+              <legend>Evidence sources</legend>
+              <div className="research-source-options">
+                {sourceOptions.map((source) => (
+                  <label key={source.value}>
+                    <input
+                      type="checkbox"
+                      checked={researchSources.includes(source.value)}
+                      onChange={(event) => {
+                        researchSources = event.target.checked
+                          ? [...researchSources, source.value]
+                          : researchSources.filter(
+                              (value) => value !== source.value,
+                            );
+                        saveDraft();
+                        renderComposer();
+                      }}
+                    />
+                    <span>{source.label}</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            <p className="research-help" role="status">
+              {view?.connected && !supportsResearch(view.capabilities)
+                ? "Research is unavailable for this worker connection."
+                : researchSources.length === 0
+                  ? "Select at least one evidence source before starting Research."
+                  : "Web uses your research search route; MCP uses enabled tools or research projections on your worker."}
+            </p>
+          </section>
+        ) : null}
       </ConversationComposerFrame>,
     ),
   );
@@ -162,16 +265,22 @@ button("workspace", "openSettings");
 button("connect", "connect");
 button("history", "openWorkspace");
 function send() {
-  if (!view?.connected || view.busy || !draft.trim()) return;
+  if (!canSend() || !view) return;
   submittedText = draft;
   submittedAfter = new Set(
     view.messages.filter((m) => m.role === "user").map((m) => m.id),
   );
-  post({
-    type: "send",
-    text: submittedText,
-    mode: mode.value as "plan" | "execute",
-  });
+  post(
+    mode.value === "research"
+      ? {
+          type: "send",
+          text: submittedText,
+          mode: "research",
+          researchDepth,
+          researchSources: [...researchSources],
+        }
+      : { type: "send", text: submittedText, mode: mode.value },
+  );
 }
 const conversation = new Conversation(
   element("messages"),
@@ -268,7 +377,7 @@ window.addEventListener(
       type?: string;
       view?: WorkView;
       preferences?: Preferences;
-      mode?: "plan" | "execute";
+      mode?: WorkMode;
     }>,
   ) => {
     if (event.data.type === "newConversation" && event.data.mode) {

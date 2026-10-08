@@ -49,7 +49,7 @@ Select only the evidence lanes the question needs:
 | --- | --- | --- |
 | `repo` | Bounded, read-only evidence from the selected workspace. | Access to that repository. |
 | `web` | Normalized results and snippets from planned searches; it does not fetch full pages. | A configured `research` search route. |
-| `mcp` | Results from explicitly configured MCP research tools. | Allowed research templates and tools. |
+| `mcp` | Results from enabled MCP tools, with optional research projections. | A tool-capable research model or explicit projections, plus MCP access. |
 
 For example, compare repository behavior with published information using two lanes:
 
@@ -67,6 +67,35 @@ budget. See [research limits and evidence lanes](../reference/configuration/cont
 for the exact bounds and setup, [Search](web-search.md) for the web route, and
 [MCP research templates](../reference/configuration/mcp.md#research-templates) for
 MCP setup.
+
+## Use Desktop or VS Code
+
+In Desktop, select a Managed Local workspace, choose **Research** in the composer,
+and open **Sources** to choose depth and evidence. The **MCP connections** checkbox
+selects the MCP evidence lane. Research starts with **This Workspace** evidence only.
+Research inherits each server's **Allowed tools** selection and chooses relevant
+calls using the live schemas. Optional **Global settings → MCP → Edit → Advanced
+settings → Research tool projections** override that server's inherited selection.
+Each projection names an allowed tool and its arguments, with `{query}` where the
+research query belongs.
+See [MCP research templates](../reference/configuration/mcp.md#research-templates)
+for the exact shape. Desktop's External targets do not expose Research controls.
+
+In VS Code, choose **Research** in the composer, then select **Research depth** and
+**Evidence sources → MCP connections**. Configure the separately enrolled worker's
+MCP servers and allowed tools, with optional research projections; the extension does
+not edit runtime configuration.
+The application enrollment must allow `filesystem.search`, `web.search`, or `mcp.call`
+for the workspace, Web, or MCP lane respectively. See the
+[application enrollment](../admin/storage-worker.md#first-application-enrollment)
+for worker access grants.
+The Research option is disabled when the connected worker does not advertise support.
+
+Selecting **MCP connections** requests evidence from the normally enabled MCP tools,
+unless a server has explicit research projections. Excluded tools remain unavailable.
+Automatic selection needs a `research_worker` model with tool-call support; explicit
+projections work without that model. Both clients require at least one selected source
+and keep the report in the conversation.
 
 ## Follow the report back to its sources
 

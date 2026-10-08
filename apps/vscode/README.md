@@ -1,7 +1,7 @@
 # Colossus for VS Code
 
 The first VS Code MVP connects to an enrolled local Colossus worker through the
-public TypeScript SDK. It provides Plan/Execute chat, streamed responses, tool activity,
+public TypeScript SDK. It provides Plan/Execute/Research chat, streamed responses, tool activity,
 native approval and question dialogs, cancellation, recent conversations, and recovery
 after disconnect or an extension reload. Explicit selection/file context captures the
 current editor buffer, including unsaved text. **Review changes** opens VS Code's Source
@@ -13,7 +13,7 @@ it in chat; inspecting a run or plan opens saved state in an editor tab. Setting
 Desktop's Global/Workspace layout. Desktop and the webviews now consume the private `apps/ui` source package for design
 tokens, branding, the settings frame, accessible dropdowns, and composer controls.
 VS Code defaults to neutral Dark+ surfaces with Colossus accents. Light/dark theme
-selection follows VS Code, with a native high contrast bridge. The composer grows automatically, uses Desktop's segmented Plan/Execute
+selection follows VS Code, with a native high contrast bridge. The composer grows automatically, uses Desktop's segmented Plan/Execute/Research
 controls, and retains a draft while a run is active. Replies support bounded Markdown
 including scrollable tables; model HTML, links, and images remain inert. Drafts are sent only by the user.
 
@@ -80,6 +80,14 @@ your workflow when enrolling; for implementation, that can include `patch.previe
 `patch.apply`, and `shell.run`. Runtime policy and sandbox restrictions still apply.
 Inspect the configured catalog with `colossus tools list` before choosing the ceiling.
 
+Research with workspace evidence uses the example's `filesystem.search` grant. For
+Web or MCP evidence, also enroll the application with `--tool web.search` or
+`--tool mcp.call`, respectively. Configure the worker's research search route and
+normal MCP allowed tools before selecting those sources. Research inherits `allowedTools`
+and uses a tool-capable `research_worker` model to choose calls. Optional
+[research projections](../../docs/reference/configuration/mcp.md#research-templates)
+override that selection per server; selecting a source does not grant tool access.
+
 Enrollment stores the bearer directly in the OS keyring and prints non-secret
 `instance_id` and `certificate_sha256`. Keep those values independently of the discovery
 directory. Start the worker with the same workspace, configuration, and public API
@@ -118,6 +126,14 @@ These preferences are stored in VS Code's user settings and update the chat imme
 **Workspace → Connections** connects, disconnects, forgets trust settings, and opens
 diagnostics. Runtime and Access explain the connected worker's ownership; they do not
 edit providers, credentials, MCP servers, policy, or sandbox settings.
+
+Choose **Research** in the composer to expose **Research depth** (Quick, Standard, or
+Deep) and **Evidence sources** (This Workspace, Web, or **MCP connections**). Research
+starts with Standard depth and workspace evidence. Select MCP connections to collect
+from the worker's enabled MCP tools or explicit research projections. At least one source is required;
+depth and source choices survive webview reloads. The Research option is disabled
+when the worker does not advertise support. Existing run history, interactions,
+streaming, and cancellation also apply to research runs.
 
 For existing installs, VS Code may retain a view's old location. Right-click its title,
 choose **Move View**, and select **Secondary Side Bar**, or drag the Colossus view there.

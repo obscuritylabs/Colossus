@@ -698,3 +698,74 @@ button.workspace-button {
   border: 0;
   flex: 1;
 }
+
+.shared-vscode-footer .composer-controls {
+  flex-wrap: wrap;
+}
+@media (max-width: 360px) {
+  .shared-vscode-footer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .shared-vscode-footer .composer-controls {
+    display: contents;
+  }
+  .shared-vscode-footer #attach {
+    grid-column: 1;
+    grid-row: 1;
+    justify-self: start;
+  }
+  .shared-vscode-footer #send,
+  .shared-vscode-footer #stop {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .shared-vscode-footer .mode-switch {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-content: space-between;
+    min-width: 0;
+  }
+}
+.research-controls {
+  display: grid;
+  gap: 8px;
+  padding: 0 12px 12px;
+  font-size: var(--font-size-body-sm);
+}
+.research-controls fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.research-controls legend {
+  padding: 0;
+  margin-bottom: 6px;
+  color: var(--text-strong);
+  font-weight: 600;
+}
+.research-depth-options,
+.research-source-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+.research-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  cursor: pointer;
+}
+.research-controls input {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--blue-strong);
+}
+.research-help {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}

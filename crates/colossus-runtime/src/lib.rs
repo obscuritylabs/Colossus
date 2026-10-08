@@ -60,6 +60,7 @@ mod provider_gateway;
 mod provider_setup;
 mod repository_tools;
 mod research_gateway;
+mod research_mcp;
 mod research_skill_effects;
 mod runtime_helpers;
 mod sandbox_boundary;

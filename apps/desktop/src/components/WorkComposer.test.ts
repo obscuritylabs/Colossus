@@ -140,16 +140,18 @@ describe("WorkComposer capabilities", () => {
     expect(markup).toContain("Ask a source-backed question");
     expect(markup).toContain("Research depth");
     expect(markup).toContain("This Workspace");
-    expect(markup).toContain("Connections");
+    expect(markup).toContain("MCP connections");
     expect(markup).toContain("Research settings");
     expect(markup).toContain('aria-label="Close research settings"');
     expect(markup).toContain('name="research-depth"');
     expect(markup).toContain("Search across your workspace");
     expect(markup).toContain("Search the public web");
-    expect(markup).toContain("Search your connected apps");
-    expect(markup).toContain("Sources: This Workspace, Web, Connections");
     expect(markup).toContain(
-      'aria-label="Research controls, sources This Workspace, Web, Connections"',
+      "Search enabled MCP tools or research projections",
+    );
+    expect(markup).toContain("Sources: This Workspace, Web, MCP connections");
+    expect(markup).toContain(
+      'aria-label="Research controls, sources This Workspace, Web, MCP connections"',
     );
   });
 

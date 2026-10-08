@@ -12,9 +12,13 @@ import {
 import { Status } from "@obscuritylabs/colossus-sdk/gen/google/rpc/status";
 import {
   AgentRunServiceService,
+  CreateRunRequest,
   Interaction,
   InteractionStatus,
   Run,
+  RunMode,
+  ResearchDepth,
+  ResearchSourceKind,
   RunStatus,
   RunUpdate,
   RunResult,
@@ -45,7 +49,7 @@ async function until(condition: () => boolean) {
   }
 }
 
-async function fixture() {
+async function fixture(researchCapability?: boolean) {
   const home = await mkdtemp(join(tmpdir(), "colossus-vscode-runtime-"));
   const workspace = join(home, "workspace");
   const discovery = join(home, "api");
@@ -60,6 +64,7 @@ async function fixture() {
   const instanceId = "00000000-0000-4000-8000-000000000001";
   const server = new grpc.Server();
   let creates = 0;
+  const createRequests: CreateRunRequest[] = [];
   let answers = 0;
   let cancelRequests = 0;
   let watchStarts = 0;
@@ -159,6 +164,16 @@ async function fixture() {
           apiPackages: ["colossus.api.v1alpha1"],
           serverVersion: "0.11.6",
           deploymentMode: DeploymentMode.DEPLOYMENT_MODE_SHARED_DAEMON,
+          capabilities:
+            researchCapability === undefined
+              ? []
+              : [
+                  {
+                    name: "research.create",
+                    enabled: researchCapability,
+                    detail: "",
+                  },
+                ],
         }),
       });
     },
@@ -167,6 +182,8 @@ async function fixture() {
     createRun(call, callback) {
       auth(call);
       creates++;
+      createRequests.push(call.request);
+      run.mode = call.request.mode;
       assert.equal(call.request.role, "primary");
       assert.ok(call.request.idempotencyKey);
       assert.ok(call.request.input.length > 0);
@@ -382,6 +399,7 @@ async function fixture() {
       rejectHistory = true;
     },
     run,
+    createRequests,
     watchers,
     setUncertainCreate() {
       uncertainCreate = true;
@@ -411,6 +429,106 @@ async function fixture() {
     },
   };
 }
+
+test("Research carries its depth and MCP lanes over pinned gRPC and restores its active mode", async () => {
+  for (const [depth, expectedDepth, sources, expectedSources] of [
+    [
+      "quick",
+      ResearchDepth.RESEARCH_DEPTH_QUICK,
+      ["repo"],
+      [ResearchSourceKind.RESEARCH_SOURCE_KIND_REPO],
+    ],
+    [
+      "standard",
+      ResearchDepth.RESEARCH_DEPTH_STANDARD,
+      ["mcp"],
+      [ResearchSourceKind.RESEARCH_SOURCE_KIND_MCP],
+    ],
+    [
+      "deep",
+      ResearchDepth.RESEARCH_DEPTH_DEEP,
+      ["repo", "web", "mcp"],
+      [
+        ResearchSourceKind.RESEARCH_SOURCE_KIND_REPO,
+        ResearchSourceKind.RESEARCH_SOURCE_KIND_WEB,
+        ResearchSourceKind.RESEARCH_SOURCE_KIND_MCP,
+      ],
+    ],
+  ] as const) {
+    const f = await fixture(true);
+    try {
+      const first = await f.controller();
+      await first.send("Investigate this question", "research", {
+        researchDepth: depth,
+        researchSources: [...sources],
+      });
+      assert.equal(f.createRequests.length, 1);
+      const request = f.createRequests[0]!;
+      assert.equal(request.mode, RunMode.RUN_MODE_RESEARCH);
+      assert.equal(request.researchDepth, expectedDepth);
+      assert.deepEqual(request.researchSources, [...expectedSources]);
+      await until(() => first.view.interactions.length === 1);
+      first.detach();
+      const restored = await f.controller(f.remembered);
+      assert.equal(restored.view.mode, "research");
+      await until(() => restored.view.interactions.length === 1);
+      await restored.respond("interaction-1");
+      await until(() => !restored.view.busy);
+      assert.equal(f.creates, 1);
+      assert.ok(
+        restored.view.messages.some(
+          (message) => message.text === "Working done.",
+        ),
+      );
+    } finally {
+      await f.close();
+    }
+  }
+});
+
+test("unsupported Research and invalid selections never create or lock a run", async () => {
+  for (const capability of [undefined, false, true]) {
+    const f = await fixture(capability);
+    try {
+      const controller = await f.controller();
+      const options = {
+        researchDepth: "standard" as const,
+        researchSources: ["mcp" as const],
+      };
+      if (capability !== true) {
+        await assert.rejects(
+          controller.send("Question", "research", options),
+          /Research is unavailable/u,
+        );
+      } else {
+        for (const research of [
+          undefined,
+          { ...options, researchSources: [] },
+          { ...options, researchSources: ["mcp" as const, "mcp" as const] },
+        ])
+          await assert.rejects(
+            controller.send("Question", "research", research),
+            /depth and at least one unique evidence source/u,
+          );
+        await assert.rejects(
+          controller.send("Question", "execute", options),
+          /only in Research mode/u,
+        );
+      }
+      assert.equal(f.creates, 0);
+      assert.equal(controller.view.busy, false);
+      await controller.send("Plan instead", "plan");
+      assert.equal(f.creates, 1);
+      assert.equal(
+        f.createRequests[0]!.researchDepth,
+        ResearchDepth.RESEARCH_DEPTH_UNSPECIFIED,
+      );
+      assert.deepEqual(f.createRequests[0]!.researchSources, []);
+    } finally {
+      await f.close();
+    }
+  }
+});
 
 test("a real authenticated worker rejection identifies the handshake without leaking transport details", async () => {
   const f = await fixture();

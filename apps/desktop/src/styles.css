@@ -6520,6 +6520,24 @@ p {
   margin-left: auto;
 }
 
+.work-composer.is-research-mode .composer-run-actions {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.work-composer.is-research-mode .run-controls {
+  min-width: 0;
+}
+
+.work-composer.is-research-mode .run-controls summary {
+  overflow-wrap: anywhere;
+}
+
+.work-composer.is-research-mode .run-controls summary > svg {
+  flex: none;
+}
+
 .composer-model-loading {
   min-height: 28px;
   padding: 5px 3px;
@@ -6799,8 +6817,8 @@ p {
   color: var(--muted);
   font-size: var(--font-size-caption);
   line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .research-source-checkbox {
