@@ -134,7 +134,15 @@ impl WorkspacePlugins {
                 "local plugin source path must be normalized".into(),
             ));
         }
-        Ok(relative.to_string_lossy().replace('\\', "/"))
+        relative
+            .iter()
+            .map(|name| {
+                name.to_str().ok_or_else(|| {
+                    RuntimeError::Config("local plugin source paths must be UTF-8".into())
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(|parts| parts.join("/"))
     }
 
     pub(super) fn inventory(

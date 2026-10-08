@@ -98,6 +98,56 @@ async fn native_absolute_sources_add_disable_and_reaccept_without_escaping_the_w
     }
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn native_selection_preserves_literal_backslashes_in_unix_directory_names() {
+    let temporary = crate::test_support::private_tempdir();
+    let root = temporary.path().canonicalize().unwrap();
+    let workspace = root.join("workspace");
+    let selected = workspace.join(r"literal\name");
+    write_source(&selected, "Selected literal directory.");
+    write_source(
+        &workspace.join("literal/name"),
+        "Different nested directory.",
+    );
+    let home = colossus_home::ColossusHome::ensure_at(root.join("home")).unwrap();
+    let runtime = open(&workspace, Some(home.root()), true);
+    runtime
+        .manage_plugin(Op::Add {
+            source: PluginInstallSource::Directory {
+                path: selected.to_string_lossy().into_owned(),
+            },
+            trust_profile: "default".into(),
+        })
+        .await
+        .unwrap();
+    let captured = runtime.plugin_catalog.capture().unwrap();
+    let plugin = captured
+        .records
+        .iter()
+        .find(|record| record.installation.origin == PluginOrigin::Workspace)
+        .unwrap();
+    assert_eq!(plugin.installation.source, r"literal\name");
+    assert!(
+        plugin.skills[0]
+            .instructions
+            .contains("Selected literal directory")
+    );
+    runtime
+        .manage_plugin(Op::DisableWorkspace {
+            path: selected.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        !runtime
+            .plugin_inventory()
+            .unwrap()
+            .iter()
+            .any(|entry| { entry.manifest.name == "review-tools" && entry.available })
+    );
+}
+
 #[tokio::test]
 async fn concurrent_source_selection_uses_one_grant_snapshot_for_filtering_and_capture() {
     let temporary = crate::test_support::private_tempdir();
