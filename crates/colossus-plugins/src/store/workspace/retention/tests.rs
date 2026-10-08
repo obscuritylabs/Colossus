@@ -20,6 +20,13 @@ fn reaccepting_case_renames_replaces_the_source_after_successful_publication() {
         fs::rename(&previous_path, parent.join("rename-in-progress")).unwrap();
         let selected = parent.join(name);
         fs::rename(parent.join("rename-in-progress"), &selected).unwrap();
+        if index == 2 {
+            let manifest = selected.join("plugin.json");
+            let mut content: serde_json::Value =
+                serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+            content["name"] = "dev.example.renamed".into();
+            fs::write(manifest, serde_json::to_vec(&content).unwrap()).unwrap();
+        }
         fs::write(
             selected.join("skills/review/SKILL.md"),
             format!("---\nname: review\ndescription: Renamed review\n---\nInstructions {index}\n"),
@@ -56,6 +63,7 @@ fn reaccepting_case_renames_replaces_the_source_after_successful_publication() {
         let grants = store.workspace_plugin_grants().unwrap();
         assert_eq!(grants.len(), 1);
         assert!(grants[&path].enabled);
+        assert_eq!(grants[&path].source.name, candidate.source.name);
         let registered = grants.keys().cloned().collect::<Vec<_>>();
         let discovered = crate::discover_workspace_plugins(&root, &registered);
         assert!(discovered.issues.is_empty());

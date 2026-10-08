@@ -97,7 +97,6 @@ impl PluginStore {
             // this retirement in the proposed map until publication succeeds.
             grants.retain(|path, grant| {
                 path == &candidate.source.path
-                    || grant.source.name != candidate.source.name
                     || grant.source.identity_version != candidate.source.identity_version
                     || grant.source.identity_sha256 != candidate.source.identity_sha256
             });

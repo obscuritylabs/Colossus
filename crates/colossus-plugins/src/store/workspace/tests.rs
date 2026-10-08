@@ -15,6 +15,8 @@ fn capacity_fixture(enabled: bool) -> (tempfile::TempDir, PluginStore, Workspace
             let mut source = candidate.source.clone();
             source.path.clone_from(&path);
             source.name.clone_from(&path);
+            // Unavailable sources represent distinct directory objects.
+            source.identity_sha256 = hex::encode(sha2::Sha256::digest(path.as_bytes()));
             (path, WorkspacePluginGrant { source, enabled })
         })
         .collect();
