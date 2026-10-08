@@ -595,7 +595,6 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target
       COLOSSUS_DESKTOP_TARGET: aarch64-apple-darwin
-      SCCACHE_GHA_ENABLED: "true"
       COLOSSUS_DESKTOP_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
       COLOSSUS_DESKTOP_RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
       COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ""
@@ -616,21 +615,14 @@ jobs:
         with:
           toolchain: 1.96.0
 
-      - name: Enable shared compiler cache
-        id: sccache
-        continue-on-error: true
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
-
-      - name: Activate shared compiler cache
-        if: steps.sccache.outcome == 'success'
-        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
-
-      - name: Cache the single desktop release target
+      - name: Restore main Desktop bundle build cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          workspaces: apps/desktop/src-tauri -> apps/desktop/src-tauri/target
-          key: release-desktop-aarch64-apple-darwin
-          cache-targets: false
+          workspaces: apps/desktop/src-tauri -> target
+          shared-key: macos-desktop-bundle
+          key: recipe-v1
+          cache-targets: true
+          save-if: false
 
       - name: Install locked desktop dependencies
         working-directory: apps/desktop

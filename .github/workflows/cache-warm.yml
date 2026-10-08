@@ -14,6 +14,7 @@ on:
       - .github/workflows/cache-warm.yml
       - .github/workflows/pr.yml
       - .github/workflows/premerge.yml
+      - .github/workflows/release.yml
   workflow_dispatch:
 
 permissions:

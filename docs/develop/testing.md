@@ -354,6 +354,13 @@ production renderer checks reject development bridge markers.
 
 ### Embedded plugin and selection acceptance
 
+The bundled security-review scratch initializer has stdlib-only Python checks:
+`python3 -B -m unittest discover -s scripts/tests -p test_security_review_workspace.py`.
+They verify ignored local storage, temporary fallback, private POSIX modes, safe path
+handling, and preservation of existing notes without changing source or Git configuration.
+`cargo test -p colossus-bundled-plugins --lib` verifies the embedded plugin matches the
+portable directory artifact, including the skill's references and helper.
+
 `cargo test -p colossus-cli --test plugins_tui_smoke` exercises a real PTY against
 both embedded and authenticated-worker hosts with private offline homes. It covers
 completion, rendered core names (including the former `Item 1` regression), skill and

@@ -10,7 +10,7 @@ icon: lucide/puzzle
 
 A **skill** gives Colossus instructions for a particular kind of work. A **plugin**
 packages skills and may also include resources or MCP server declarations. The CLI
-includes the `colossus` plugin with `coding`, `offline-dev`, `plugin-authoring`, and
+includes the `colossus` plugin with `coding`, `offline-dev`, `plugin-authoring`,
 `schedule-task`, and `security-review` skills.
 
 ## Choose a skill for one message
@@ -52,6 +52,35 @@ Use `@colossus/schedule-task` to create or control recurring tasks through the s
 
 Use `/plugin show colossus/coding` to read the skill instructions. A plugin can offer
 several skills; selecting its name in plugin inventory does not select them all.
+
+## Review a repository's security
+
+Select the security-review skill and specify the target or change and deployment
+context that affects the threat model:
+
+```text
+@colossus/security-review Review this repository's authorization and plugin boundaries.
+It runs as a local agent with untrusted tool servers. Use static analysis and report
+verified findings, unresolved questions, and coverage.
+```
+
+The skill maps trust boundaries, traces attacker-controlled input to sensitive
+operations, and verifies suspected findings against source. Large reviews use bounded
+child jobs when delegation is available; the coordinator checks their evidence and
+accounts for unfinished work. See [Goals and subagents](goals-subagents.md) for job
+status, worker readiness, and recovery.
+
+For reviews spanning several files or stages, the agent keeps sanitized working notes
+and evidence under an already ignored `.local/security-reviews/` directory, or uses an
+authorized temporary directory when checkout-local storage is unsuitable. These files
+help resume work after compaction; they are not a sandbox or a substitute for rechecking
+source. See [Context and snapshots](sessions-context.md) for budgets and snapshot behavior.
+
+The report separates verified vulnerabilities from unresolved leads and states which
+surfaces and tools were checked. Static analysis can establish a finding without an
+exploit reproduction. Local validation uses isolated fixtures when authorized and
+available. Request fixes explicitly when you want product changes as well as a review;
+skill selection does not grant additional tool or filesystem permissions.
 
 ## Inspect plugins
 

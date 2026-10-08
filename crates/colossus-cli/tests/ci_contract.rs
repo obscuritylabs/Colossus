@@ -93,9 +93,13 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
         strings(field(push, "branches"), "cache warm branches"),
         ["main".to_owned()].into_iter().collect()
     );
+    assert!(
+        strings(field(push, "paths"), "cache warm paths").contains(".github/workflows/release.yml")
+    );
 
     let pr = workflow("pr.yml");
     let premerge = workflow("premerge.yml");
+    let release = workflow("release.yml");
     for (warm_job, consumer_job, consumer_workflow, cache_step, shared_key, workspace, runner) in [
         (
             "linux-pr",
@@ -133,6 +137,15 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
             "apps/desktop/src-tauri -> target",
             "macos-14",
         ),
+        (
+            "macos-desktop-bundle",
+            "desktop_macos_build",
+            &release,
+            "Restore main Desktop bundle build cache",
+            "macos-desktop-bundle",
+            "apps/desktop/src-tauri -> target",
+            "macos-14",
+        ),
     ] {
         let warm_job = job(jobs(&warm), warm_job);
         let consumer_job = job(jobs(consumer_workflow), consumer_job);
@@ -160,6 +173,31 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
             assert_eq!(field(inputs, "cache-targets").as_bool(), Some(true));
         }
         assert_eq!(field(consumer_inputs, "save-if").as_bool(), Some(false));
+        if runner == "macos-14" {
+            for cache_job in [warm_job, consumer_job] {
+                assert!(
+                    !mapping(field(cache_job, "env"), "macOS cache environment")
+                        .contains_key("RUSTC_WRAPPER")
+                );
+            }
+            for name in ["CARGO_INCREMENTAL", "CARGO_TARGET_DIR"] {
+                assert_eq!(
+                    field(mapping(field(warm_job, "env"), "warm environment"), name),
+                    field(
+                        mapping(field(consumer_job, "env"), "consumer environment"),
+                        name
+                    ),
+                    "macOS cache environment must match the main warmer"
+                );
+            }
+            let consumer_steps = serde_json::to_string(field(consumer_job, "steps"))
+                .expect("serialize macOS build steps");
+            assert!(
+                !consumer_steps.contains("RUSTC_WRAPPER")
+                    && !consumer_steps.contains("sccache-action"),
+                "a compiler wrapper changes the warmer's cache environment hash"
+            );
+        }
     }
 
     let acceptance = job(jobs(&warm), "macos-desktop-acceptance");
