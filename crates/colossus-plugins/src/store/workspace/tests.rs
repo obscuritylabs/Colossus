@@ -1,6 +1,113 @@
 use super::*;
 use crate::tests::{actor, write_plugin};
 
+fn capacity_fixture(enabled: bool) -> (tempfile::TempDir, PluginStore, WorkspacePluginCandidate) {
+    let temporary = tempfile::tempdir().expect("root");
+    let root = temporary.path().canonicalize().expect("root");
+    write_plugin(&root.join("new-source"));
+    let candidate = capture_workspace_plugin(&root, Path::new("new-source")).expect("candidate");
+    let store = PluginStore::new(root.join("store")).expect("store");
+    // These host-owned bindings represent sources whose directories have gone.
+    // Loading grants must not treat disappearance as permission to select globals.
+    let grants = (0..MAX_WORKSPACE_PLUGINS)
+        .map(|index| {
+            let path = format!("retired-{index:03}");
+            let mut source = candidate.source.clone();
+            source.path.clone_from(&path);
+            source.name.clone_from(&path);
+            (path, WorkspacePluginGrant { source, enabled })
+        })
+        .collect();
+    store
+        .with_write(|repository| repository.append_workspace_grants(&grants, actor()))
+        .expect("remembered sources");
+    (temporary, store, candidate)
+}
+
+#[test]
+fn disabled_sources_release_capacity_without_evicting_selected_missing_sources() {
+    let (_temporary, store, candidate) = capacity_fixture(true);
+    assert!(
+        store
+            .accept_workspace_plugin(&candidate, &BTreeSet::new(), actor())
+            .is_err()
+    );
+    assert_eq!(
+        store.workspace_plugin_grants().unwrap().len(),
+        MAX_WORKSPACE_PLUGINS
+    );
+    store
+        .disable_workspace_plugin("retired-000", actor())
+        .expect("disable missing source");
+    store
+        .accept_workspace_plugin(&candidate, &BTreeSet::new(), actor())
+        .expect("reuse disabled slot");
+    let grants = store.workspace_plugin_grants().unwrap();
+    assert_eq!(grants.len(), MAX_WORKSPACE_PLUGINS);
+    assert!(!grants.contains_key("retired-000"));
+    assert!(grants["new-source"].enabled);
+    for index in 1..MAX_WORKSPACE_PLUGINS {
+        assert!(grants[&format!("retired-{index:03}")].enabled);
+    }
+}
+
+#[test]
+fn selecting_replacement_for_the_same_name_can_reuse_its_slot_at_capacity() {
+    let (_temporary, store, candidate) = capacity_fixture(true);
+    store
+        .with_write(|repository| {
+            let mut grants = repository.workspace_grants()?;
+            grants
+                .get_mut("retired-000")
+                .unwrap()
+                .source
+                .name
+                .clone_from(&candidate.source.name);
+            repository.append_workspace_grants(&grants, actor())
+        })
+        .unwrap();
+    store
+        .accept_workspace_plugin(&candidate, &BTreeSet::new(), actor())
+        .expect("explicit replacement");
+    let grants = store.workspace_plugin_grants().unwrap();
+    assert_eq!(grants.len(), MAX_WORKSPACE_PLUGINS);
+    assert!(!grants.contains_key("retired-000"));
+    assert!(grants["new-source"].enabled);
+}
+
+#[test]
+fn publication_failure_does_not_evict_disabled_source_registration() {
+    let (_temporary, store, candidate) = capacity_fixture(false);
+    let previous = serde_json::to_value(store.workspace_plugin_grants().unwrap()).unwrap();
+    let blocked = store.root().join("content/sha256").join(
+        candidate
+            .artifact
+            .manifest_digest
+            .strip_prefix("sha256:")
+            .unwrap(),
+    );
+    fs::write(&blocked, "publication blocked").unwrap();
+    assert!(
+        store
+            .accept_workspace_plugin(&candidate, &BTreeSet::new(), actor())
+            .is_err()
+    );
+    assert_eq!(
+        serde_json::to_value(store.workspace_plugin_grants().unwrap()).unwrap(),
+        previous
+    );
+    fs::remove_file(blocked).unwrap();
+    assert!(
+        store
+            .snapshot_workspace_plugin(&candidate, &BTreeSet::new(), actor())
+            .is_err()
+    );
+    store
+        .accept_workspace_plugin(&candidate, &BTreeSet::new(), actor())
+        .expect("fresh acceptance");
+    assert!(store.workspace_plugin_grants().unwrap()["new-source"].enabled);
+}
+
 #[test]
 fn failed_publication_preserves_permissions_and_requires_acceptance_after_repair() {
     let temporary = tempfile::tempdir().expect("root");

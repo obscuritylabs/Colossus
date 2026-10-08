@@ -95,7 +95,21 @@ impl PluginStore {
             let mut grants = repository.workspace_grants()?;
             if !grants.contains_key(&candidate.source.path) && grants.len() >= MAX_WORKSPACE_PLUGINS
             {
-                return Err(adapter("workspace source catalog exceeds 128 sources"));
+                // Disabled registrations are discovery hints, not source permission.
+                // Replacing the selected source for this name also releases its slot.
+                // Keep selected sources for other names, including missing directories,
+                // so capacity pressure cannot silently restore a global fallback.
+                let retired = grants
+                    .iter()
+                    .find(|(_, grant)| !grant.enabled || grant.source.name == candidate.source.name)
+                    .map(|(path, _)| path.clone());
+                if let Some(path) = retired {
+                    grants.remove(&path);
+                } else {
+                    return Err(adapter(
+                        "workspace source catalog holds 128 selected sources; disable a source before accepting another",
+                    ));
+                }
             }
             // Publication and its disabled receipt must succeed before source permission
             // changes. A failed capture preserves the previous selected source.

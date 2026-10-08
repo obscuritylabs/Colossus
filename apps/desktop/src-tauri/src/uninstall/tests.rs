@@ -172,6 +172,59 @@ fn cleanup_rechecks_workspace_plugin_blob_links_added_after_inspection() {
 }
 
 #[test]
+fn cleanup_preserves_plugin_data_created_after_the_final_idle_check() {
+    for workspace in [false, true] {
+        let (_guard, home) = fixture();
+        let store = if workspace {
+            workspace_plugin_store(&home)
+        } else {
+            create_private_directory(&home.join("plugins")).unwrap();
+            home.join("plugins")
+        };
+        let original = plugin_blob_at(&store, true);
+        let plan = plan::CleanupPlan::inspect(&home).unwrap();
+        plan.check_idle().unwrap();
+        let concurrent = store.join("new-grants.redb");
+        create_private_file(&concurrent, b"concurrent CLI grants").unwrap();
+        assert_eq!(plan.remove_data(), Err(CleanupError::UnsafeData));
+        assert_eq!(fs::read(concurrent).unwrap(), b"concurrent CLI grants");
+        assert_eq!(fs::read(&original).unwrap(), b"installed plugin blob");
+        assert!(fs::metadata(original).unwrap().permissions().readonly());
+    }
+}
+
+#[test]
+fn cleanup_preserves_nested_plugin_snapshots_created_after_inspection() {
+    let (_guard, home) = fixture();
+    let store = workspace_plugin_store(&home);
+    plugin_blob_at(&store, true);
+    let plan = plan::CleanupPlan::inspect(&home).unwrap();
+    plan.check_idle().unwrap();
+    let concurrent = store.join("layouts/sha256").join("d".repeat(64));
+    create_private_directory(&concurrent).unwrap();
+    create_private_file(&concurrent.join("index.json"), b"new CLI snapshot").unwrap();
+    assert_eq!(plan.remove_data(), Err(CleanupError::UnsafeData));
+    assert_eq!(
+        fs::read(concurrent.join("index.json")).unwrap(),
+        b"new CLI snapshot"
+    );
+}
+
+#[test]
+fn cleanup_preserves_cache_blobs_linked_externally_after_the_final_idle_check() {
+    let (guard, home) = fixture();
+    let store = workspace_plugin_store(&home);
+    let blob = plugin_blob_at(&store, true);
+    let plan = plan::CleanupPlan::inspect(&home).unwrap();
+    plan.check_idle().unwrap();
+    let external = guard.path().join("late-external-cache-link");
+    fs::hard_link(&blob, &external).unwrap();
+    assert_eq!(plan.remove_data(), Err(CleanupError::UnsafeData));
+    assert_eq!(fs::read(&external).unwrap(), b"installed plugin blob");
+    assert!(fs::metadata(external).unwrap().permissions().readonly());
+}
+
+#[test]
 fn cleanup_removes_read_only_plugin_cache_with_retained_hard_links() {
     let (_guard, home) = fixture();
     plugin_blob(&home, true);

@@ -124,6 +124,10 @@ Workspace [plugin settings](../reference/configuration/extensions.md) can disabl
 discovery, exclude names, or allow only selected names. In Desktop, open
 **Settings → Workspace → Plugins** and apply the workspace changes.
 
+A workspace can retain 128 source registrations. Adding a new source can replace a
+disabled registration; readd its directory to use it again. If all registrations are
+selected, disable an unused source first. This also works when its directory is gone.
+
 ## Edit and reload
 
 Instruction and resource edits in an accepted directory apply to the next run.
