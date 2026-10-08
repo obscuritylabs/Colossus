@@ -39,7 +39,7 @@ pub(super) fn transcript_from_messages(
 ) -> (Vec<TranscriptEntry>, Vec<Option<TranscriptRenderSource>>) {
     let mut entries = Vec::new();
     let mut sources = Vec::new();
-    let mut tool_names = BTreeMap::<String, String>::new();
+    let mut tool_names = BTreeMap::<String, (String, String)>::new();
     for record in messages {
         let (kind, document, source) = match record.message.role {
             ModelMessageRole::System => continue,
@@ -56,7 +56,12 @@ pub(super) fn transcript_from_messages(
                     ));
                 }
                 for call in record.message.tool_calls {
-                    tool_names.insert(call.call_id.clone(), call.name.clone());
+                    let display_name =
+                        colossus_presentation::tool_display_name(&call.name, &call.arguments);
+                    tool_names.insert(
+                        call.call_id.clone(),
+                        (call.name.clone(), display_name.clone()),
+                    );
                     let input = if call.name == "shell.run" {
                         // Retained model calls have no prepared, sanitized context.
                         // Do not reconstruct command disclosure from their raw input.
@@ -71,7 +76,7 @@ pub(super) fn transcript_from_messages(
                         }
                     };
                     document.push(PresentationBlock::Card {
-                        title: format!("Requested {}", call.name),
+                        title: format!("Requested {display_name}"),
                         tone: PresentationTone::Tool,
                         body: vec![input],
                     });
@@ -84,7 +89,9 @@ pub(super) fn transcript_from_messages(
                     |id| {
                         tool_names.get(id).map_or_else(
                             || (format!("Tool result {id}"), None),
-                            |name| (format!("Completed {name}"), Some(name.clone())),
+                            |(name, display_name)| {
+                                (format!("Completed {display_name}"), Some(name.clone()))
+                            },
                         )
                     },
                 );

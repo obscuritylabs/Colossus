@@ -154,6 +154,7 @@ fn tool(name: &str) -> McpToolSummary {
             serde_json::to_vec(&input_schema).expect("schema"),
         )),
         input_schema,
+        output_schema: None,
     }
 }
 
@@ -169,6 +170,7 @@ fn server(allowed: &[&str], projections: Vec<McpResearchToolConfig>) -> McpServe
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
         allow_stateless: false,
+        protocol_version: colossus_contracts::McpProtocolVersion::Auto,
         oauth: None,
         allowed_tools: allowed.iter().map(|name| (*name).into()).collect(),
         research_tools: projections,

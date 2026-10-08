@@ -2,7 +2,13 @@ import {
   ConversationActivity,
   type ConversationActivityTone,
 } from "@colossus/ui/conversation";
-import { IconChevronDown, IconSparkles, IconTool } from "@tabler/icons-react";
+import { mcpCallTarget } from "@colossus/ui/lib/mcp-call";
+import {
+  IconChevronDown,
+  IconPlug,
+  IconSparkles,
+  IconTool,
+} from "@tabler/icons-react";
 import {
   statusLabel,
   taskStatus,
@@ -208,7 +214,11 @@ export function ThreadRunActivity({
           activity = latest.activity,
           input = [...item.history]
             .reverse()
-            .find((entry) => entry.activity.input)?.activity.input;
+            .find((entry) => entry.activity.input)?.activity.input,
+          isMcpCall = activity.tool_name === "mcp.call",
+          mcpTarget = isMcpCall
+            ? (mcpCallTarget(input) ?? mcpCallTarget(activity.preview))
+            : null;
         return (
           <details
             className="shared-activity-item shared-activity-tool"
@@ -216,8 +226,16 @@ export function ThreadRunActivity({
             key={item.key}
           >
             <summary>
-              <IconTool size={16} aria-hidden="true" />
-              <strong>{activity.tool_name}</strong>
+              {isMcpCall ? (
+                <IconPlug size={16} aria-hidden="true" />
+              ) : (
+                <IconTool size={16} aria-hidden="true" />
+              )}
+              <strong>
+                {mcpTarget
+                  ? `${activity.tool_name} · ${mcpTarget}`
+                  : activity.tool_name}
+              </strong>
               <span className="shared-activity-meta">
                 {statusLabel(activity.state)}
               </span>

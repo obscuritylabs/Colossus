@@ -1,22 +1,16 @@
 use super::*;
+pub(super) use crate::remote::execute_remote_operation;
 use colossus_contracts::{
     McpDiagnosticCode, McpDiagnosticConfiguration, McpDiagnosticStage, McpDiagnosticTransport,
 };
 use colossus_ports::{CredentialResolver, EnvironmentCredentialResolver};
 use http::{HeaderName, HeaderValue};
 use rmcp::{
-    ServiceError, ServiceExt as _,
+    ServiceError,
     model::{ContentBlock, ErrorData},
-    transport::{
-        auth::{
-            AuthClient, AuthError, AuthorizationManager, AuthorizationSession,
-            CredentialStore as _, OAuthClientConfig,
-        },
-        common::client_side_sse::NeverRetry,
-        streamable_http_client::{
-            StreamableHttpClient, StreamableHttpClientTransport,
-            StreamableHttpClientTransportConfig,
-        },
+    transport::auth::{
+        AuthClient, AuthError, AuthorizationManager, AuthorizationSession, CredentialStore as _,
+        OAuthClientConfig,
     },
 };
 use std::{
@@ -73,6 +67,7 @@ impl McpExecutor {
                                 available: false,
                                 transport: server.transport.as_str().into(),
                                 allow_stateless: server.allow_stateless,
+                                protocol_version: server.protocol_version,
                                 allowed_tools: ToolAllowlist::from_config(
                                     name,
                                     &server.allowed_tools,
@@ -114,6 +109,7 @@ impl McpExecutor {
                 headers: server.headers.clone(),
                 credential_headers: server.credential_headers.clone(),
                 allow_stateless: server.allow_stateless,
+                protocol_version: server.protocol_version,
                 oauth: server.oauth.clone(),
                 allowed_tools: ToolAllowlist::from_config(name, &server.allowed_tools)?,
                 research_tools: server.research_tools.clone(),
@@ -202,6 +198,7 @@ impl McpExecutor {
             credential_headers: server.credential_headers.len(),
             oauth: server.oauth.is_some(),
             allow_stateless: server.allow_stateless,
+            protocol_version: server.protocol_version,
             configured_timeout_ms: server.timeout_ms,
         })
     }
@@ -439,6 +436,7 @@ impl McpExecutor {
                 available: true,
                 transport: server.transport.as_str().into(),
                 allow_stateless: server.allow_stateless,
+                protocol_version: server.protocol_version,
                 allowed_tools: server.allowed_tools.summary(),
                 research_tools: server
                     .research_tools
@@ -518,6 +516,7 @@ impl McpExecutor {
             annotations,
             arguments,
             input_schema,
+            output_schema,
             schema_sha256,
             ..
         } = &operation
@@ -529,6 +528,7 @@ impl McpExecutor {
                 description.as_deref(),
                 annotations.as_ref(),
                 input_schema,
+                output_schema.as_deref(),
                 schema_sha256,
             )?;
             validate_arguments(input_schema, arguments)?;
@@ -551,6 +551,7 @@ impl McpExecutor {
             headers: server.headers.clone(),
             credential_headers: server.credential_headers.clone(),
             allow_stateless: server.allow_stateless,
+            protocol_version: server.protocol_version,
             oauth: server.oauth.clone(),
             timeout_ms: server.timeout_ms,
             max_output_bytes: server.max_output_bytes,
@@ -625,6 +626,7 @@ impl McpExecutor {
             || input.headers != server.headers
             || input.credential_headers != server.credential_headers
             || input.allow_stateless != server.allow_stateless
+            || input.protocol_version != server.protocol_version
             || input.oauth != server.oauth
             || input.timeout_ms != server.timeout_ms
             || input.max_output_bytes != server.max_output_bytes
@@ -640,6 +642,7 @@ impl McpExecutor {
             annotations,
             arguments,
             input_schema,
+            output_schema,
             schema_sha256,
             ..
         } = &input.operation
@@ -651,6 +654,7 @@ impl McpExecutor {
                 description.as_deref(),
                 annotations.as_ref(),
                 input_schema,
+                output_schema.as_deref(),
                 schema_sha256,
             )
             .map_err(failed)?;
@@ -715,11 +719,8 @@ impl McpExecutor {
             .await
             .map_err(safe_oauth_error)?;
         manager.set_credential_store(self.oauth_credential_store(server)?);
-        let metadata = manager
-            .discover_metadata()
-            .await
-            .map_err(safe_oauth_error)?;
-        manager.set_metadata(metadata);
+        let metadata = manager.resolve_metadata().await.map_err(safe_oauth_error)?;
+        manager.set_metadata(metadata.metadata);
         let redirect_uri = format!("http://127.0.0.1:{}/callback", oauth.callback_port);
         let mut client = OAuthClientConfig::new(&oauth.client_id, redirect_uri)
             .with_scopes(oauth.scopes.clone());
@@ -756,7 +757,7 @@ fn validate_arguments(schema: &Value, arguments: &Value) -> Result<(), McpError>
             "arguments and input schema must be JSON objects".into(),
         ));
     }
-    let validator = jsonschema::validator_for(schema)
+    let validator = crate::schema::validator(schema)
         .map_err(|error| McpError::InvalidArguments(format!("schema is invalid: {error}")))?;
     let messages = validator
         .iter_errors(arguments)
@@ -773,6 +774,7 @@ fn validate_call_review_metadata(
     description: Option<&str>,
     annotations: Option<&McpToolAnnotations>,
     input_schema: &Value,
+    output_schema: Option<&Value>,
     schema_sha256: &str,
 ) -> Result<(), McpError> {
     if description.is_some_and(|value| value.len() > 32 * 1024)
@@ -791,6 +793,7 @@ fn validate_call_review_metadata(
             "MCP review schema hash does not match the bounded input schema".into(),
         ));
     }
+    validate_output_schema(output_schema).map_err(McpError::InvalidArguments)?;
     Ok(())
 }
 
@@ -800,6 +803,7 @@ pub fn validate_tool_arguments(tool: &McpToolSummary, arguments: &Value) -> Resu
         tool.description.as_deref(),
         tool.annotations.as_ref(),
         &tool.input_schema,
+        tool.output_schema.as_ref(),
         &tool.schema_sha256,
     )?;
     validate_arguments(&tool.input_schema, arguments)
@@ -1005,60 +1009,36 @@ fn auth_execution_error(error: AuthError) -> ExecutionError {
 }
 
 pub(super) fn protocol_input(operation: &McpOperation) -> Result<Vec<u8>, ExecutionError> {
+    let _ = operation_message(operation)?;
     let initialize = InitializeRequestParams::new(
         ClientCapabilities::default(),
         Implementation::new("colossus", env!("CARGO_PKG_VERSION")),
     )
-    .with_protocol_version(ProtocolVersion::LATEST);
-    let operation_message = match operation {
+    .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE);
+    // The sandbox sends subsequent frames after validating this reply.
+    let message = json!({
+        "jsonrpc": "2.0", "id": INITIALIZE_REQUEST_ID,
+        "method": "initialize", "params": initialize,
+    });
+    let mut bytes = serde_json::to_vec(&message).map_err(failed)?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn operation_message(operation: &McpOperation) -> Result<Value, ExecutionError> {
+    Ok(match operation {
         McpOperation::ListTools { cursor, .. } => {
-            let params = PaginatedRequestParams::default().with_cursor(cursor.clone());
-            json!({
-                "jsonrpc": "2.0",
-                "id": MCP_REQUEST_ID,
-                "method": "tools/list",
-                "params": params,
-            })
+            if cursor.is_some() {
+                return Err(failed("MCP cursors cannot be resumed across processes"));
+            }
+            json!({"jsonrpc":"2.0", "id":MCP_REQUEST_ID, "method":"tools/list", "params":{}})
         }
         McpOperation::CallTool {
             tool, arguments, ..
         } => {
-            let arguments = arguments
-                .as_object()
-                .cloned()
-                .ok_or_else(|| failed("MCP tool arguments must be an object"))?;
-            let params = CallToolRequestParams::new(tool.clone()).with_arguments(arguments);
-            json!({
-                "jsonrpc": "2.0",
-                "id": MCP_REQUEST_ID,
-                "method": "tools/call",
-                "params": params,
-            })
+            json!({"jsonrpc":"2.0", "id":MCP_REQUEST_ID, "method":"tools/call", "params":{"name":tool, "arguments":arguments}})
         }
-    };
-    let messages = [
-        json!({
-            "jsonrpc": "2.0",
-            "id": INITIALIZE_REQUEST_ID,
-            "method": "initialize",
-            "params": initialize,
-        }),
-        json!({
-            "jsonrpc": "2.0",
-            "method": "notifications/initialized",
-        }),
-        operation_message,
-    ];
-    let mut bytes = Vec::new();
-    for message in messages {
-        let line = serde_json::to_vec(&message).map_err(failed)?;
-        if line.len() > MAX_PROTOCOL_LINE_BYTES {
-            return Err(failed("MCP protocol message exceeds the line bound"));
-        }
-        bytes.extend(line);
-        bytes.push(b'\n');
-    }
-    Ok(bytes)
+    })
 }
 
 #[derive(Deserialize)]
@@ -1171,7 +1151,7 @@ fn validate_initialize(stdout: &[u8]) -> Result<(), String> {
         serde_json::from_value(response_result(stdout, INITIALIZE_REQUEST_ID)?)
             .map_err(|error| format!("invalid MCP initialize result: {error}"))?;
     if !ProtocolVersion::KNOWN_VERSIONS.contains(&result.protocol_version)
-        || result.protocol_version > ProtocolVersion::LATEST
+        || result.protocol_version > ProtocolVersion::LATEST_WITH_INITIALIZE
         || result.capabilities.tools.is_none()
     {
         return Err(format!(
@@ -1182,11 +1162,51 @@ fn validate_initialize(stdout: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_tools(stdout: &[u8], server: &ConfiguredServer) -> Result<McpToolsPage, String> {
+pub(super) fn parse_tools(
+    stdout: &[u8],
+    server: &ConfiguredServer,
+) -> Result<McpToolsPage, String> {
     validate_initialize(stdout)?;
     McpDiagnosticCapture::current().stage(McpDiagnosticStage::ListTools);
-    let result: ListToolsResult = serde_json::from_value(response_result(stdout, MCP_REQUEST_ID)?)
-        .map_err(|error| format!("invalid MCP tools result: {error}"))?;
+    let mut result = ListToolsResult::default();
+    let mut cursors = BTreeSet::new();
+    let mut names = BTreeSet::new();
+    for page_number in 0..MAX_MCP_PAGES {
+        let raw = response_result(stdout, MCP_REQUEST_ID + page_number as i64)?;
+        let mut message = json!({"result": raw});
+        let raw_tools = message
+            .pointer("/result/tools")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "invalid MCP tools result".to_owned())?;
+        for tool in raw_tools {
+            let name = tool
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "invalid MCP tool name".to_owned())?;
+            if !names.insert(name.to_owned()) || names.len() > MAX_MCP_TOOLS {
+                return Err(
+                    "MCP discovery returned duplicate tools or exceeded its tool bound".into(),
+                );
+            }
+        }
+        crate::wire::filter_unsupported_task_tools(&mut message);
+        let page: ListToolsResult = serde_json::from_value(message["result"].take())
+            .map_err(|_| "invalid MCP tools result".to_owned())?;
+        let next = page.next_cursor;
+        result.tools.extend(page.tools);
+        let Some(next) = next else {
+            break;
+        };
+        if next.is_empty()
+            || next.len() > 8 * 1024
+            || !cursors.insert(next)
+            || page_number + 1 == MAX_MCP_PAGES
+        {
+            return Err(
+                "MCP discovery returned an invalid cursor or exceeded its page bound".into(),
+            );
+        }
+    }
     McpDiagnosticCapture::current().stage(McpDiagnosticStage::ValidateResponse);
     parse_tools_result(result, server)
 }
@@ -1195,6 +1215,13 @@ pub(super) fn parse_tools_result(
     result: ListToolsResult,
     server: &ConfiguredServer,
 ) -> Result<McpToolsPage, String> {
+    if result
+        .next_cursor
+        .as_ref()
+        .is_some_and(|value| value.is_empty() || value.len() > 8 * 1024)
+    {
+        return Err("MCP tools cursor exceeds its bound or is empty".into());
+    }
     if result.tools.len() > MAX_MCP_TOOLS {
         return Err(format!("MCP page exceeds {MAX_MCP_TOOLS} tools"));
     }
@@ -1210,12 +1237,16 @@ pub(super) fn parse_tools_result(
             return Err(format!("MCP server returned duplicate tool {name}"));
         }
         let input_schema = Value::Object((*tool.input_schema).clone());
-        jsonschema::validator_for(&input_schema)
-            .map_err(|error| format!("MCP tool {name} schema is invalid: {error}"))?;
         let schema_bytes = serde_json::to_vec(&input_schema).map_err(|error| error.to_string())?;
         if schema_bytes.len() > 256 * 1024 {
             return Err(format!("MCP tool {name} schema exceeds its bound"));
         }
+        crate::schema::validator(&input_schema)
+            .map_err(|error| format!("MCP tool {name} schema is invalid: {error}"))?;
+        let output_schema = tool
+            .output_schema
+            .map(|schema| Value::Object((*schema).clone()));
+        validate_output_schema(output_schema.as_ref())?;
         if matches!(
             &server.allowed_tools,
             ToolAllowlist::All | ToolAllowlist::Patterns(_)
@@ -1254,6 +1285,7 @@ pub(super) fn parse_tools_result(
                 open_world_hint: annotations.open_world_hint,
             }),
             input_schema,
+            output_schema,
             schema_sha256: hex_sha256(&schema_bytes),
         });
     }
@@ -1261,9 +1293,7 @@ pub(super) fn parse_tools_result(
     Ok(McpToolsPage {
         server: server.name.clone(),
         tools,
-        next_cursor: result
-            .next_cursor
-            .map(|value| bounded_string(&value, 8 * 1024)),
+        next_cursor: result.next_cursor.filter(|value| !value.is_empty()),
     })
 }
 
@@ -1292,6 +1322,45 @@ fn parse_call_result(
         tool: tool.into(),
         result,
     })
+}
+
+fn validate_output_schema(schema: Option<&Value>) -> Result<(), String> {
+    if let Some(schema) = schema {
+        if !schema.is_object()
+            || serde_json::to_vec(schema)
+                .map_err(|_| "invalid MCP output schema")?
+                .len()
+                > 256 * 1024
+        {
+            return Err("MCP output schema is not a bounded object".into());
+        }
+        crate::schema::validator(schema).map_err(|_| "MCP output schema is invalid")?;
+    }
+    Ok(())
+}
+
+pub(super) fn validate_call_output(
+    result: &CallToolResult,
+    operation: &McpOperation,
+) -> Result<(), String> {
+    if result.is_error == Some(true) {
+        return Ok(());
+    }
+    if let McpOperation::CallTool {
+        output_schema: Some(schema),
+        ..
+    } = operation
+    {
+        let structured = result.structured_content.as_ref().ok_or_else(|| {
+            "MCP tool omitted structuredContent required by outputSchema".to_owned()
+        })?;
+        let validator =
+            crate::schema::validator(schema).map_err(|_| "MCP output schema is invalid")?;
+        if !validator.is_valid(structured) {
+            return Err("MCP structuredContent does not match the authorized outputSchema".into());
+        }
+    }
+    Ok(())
 }
 
 pub(super) enum RemoteOperationResult {
@@ -1334,73 +1403,6 @@ pub(super) fn remote_call_failure(
             "MCP Streamable HTTP operation failed",
         )),
     }
-}
-
-pub(super) async fn execute_remote_operation<C>(
-    http: C,
-    server: &ConfiguredServer,
-    operation: &McpOperation,
-    headers: HashMap<HeaderName, HeaderValue>,
-    call_dispatched: &AtomicBool,
-) -> Result<RemoteOperationResult, ExecutionError>
-where
-    C: StreamableHttpClient + Send + Sync,
-{
-    let diagnostics = McpDiagnosticCapture::current();
-    diagnostics.stage(McpDiagnosticStage::Initialize);
-    let endpoint = server
-        .url
-        .clone()
-        .ok_or_else(|| failed("MCP Streamable HTTP server has no endpoint"))?;
-    let mut config = StreamableHttpClientTransportConfig::with_uri(endpoint);
-    config.retry_config = Arc::new(NeverRetry::default());
-    config.allow_stateless = server.allow_stateless;
-    config.reinit_on_expired_session = false;
-    config.custom_headers = headers;
-    let transport = StreamableHttpClientTransport::with_client(http, config);
-    let mut service = ()
-        .serve(transport)
-        .await
-        .map_err(|_| failed("MCP Streamable HTTP initialization failed"))?;
-    let info = service
-        .peer_info()
-        .ok_or_else(|| failed("MCP server omitted initialize metadata"))?;
-    if info.capabilities.tools.is_none()
-        || !ProtocolVersion::KNOWN_VERSIONS.contains(&info.protocol_version)
-        || info.protocol_version > ProtocolVersion::LATEST
-    {
-        let _ = service.close_with_timeout(Duration::from_millis(500)).await;
-        return Err(failed(format!(
-            "MCP server negotiated unsupported protocol {} or omitted tools capability",
-            info.protocol_version
-        )));
-    }
-    diagnostics.stage(McpDiagnosticStage::ListTools);
-    let result = match operation {
-        McpOperation::ListTools { cursor, .. } => service
-            .list_tools(Some(
-                PaginatedRequestParams::default().with_cursor(cursor.clone()),
-            ))
-            .await
-            .map(RemoteOperationResult::Tools)
-            .map_err(|_| failed("MCP Streamable HTTP operation failed")),
-        McpOperation::CallTool {
-            tool, arguments, ..
-        } => {
-            let arguments = arguments
-                .as_object()
-                .cloned()
-                .ok_or_else(|| failed("MCP tool arguments must be an object"))?;
-            call_dispatched.store(true, Ordering::Release);
-            service
-                .call_tool(CallToolRequestParams::new(tool.clone()).with_arguments(arguments))
-                .await
-                .map(RemoteOperationResult::Call)
-                .or_else(|error| remote_call_failure(error, operation))
-        }
-    };
-    let _ = service.close_with_timeout(Duration::from_millis(500)).await;
-    result
 }
 
 pub(super) fn redact_value(value: &mut Value, secrets: &[String]) {
@@ -1460,7 +1462,7 @@ fn hex_sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-fn failed(error: impl std::fmt::Display) -> ExecutionError {
+pub(super) fn failed(error: impl std::fmt::Display) -> ExecutionError {
     ExecutionError::Failed(error.to_string())
 }
 
@@ -1581,20 +1583,36 @@ impl EffectExecutor for McpExecutor {
         }
         let input: McpEffectInput = serde_json::from_value(request.content.clone())
             .map_err(|error| failed(format!("invalid MCP effect input: {error}")))?;
-        let server = self.configured(&input, request)?.clone();
-        let max_output_bytes = permit.obligations().max_output_bytes;
+        let mut server = self.configured(&input, request)?.clone();
+        let max_output_bytes = server
+            .max_output_bytes
+            .unwrap_or(permit.obligations().max_output_bytes)
+            .min(permit.obligations().max_output_bytes);
+        let timeout_ms = server
+            .timeout_ms
+            .unwrap_or(permit.obligations().timeout_ms)
+            .min(permit.obligations().timeout_ms);
+        server.max_output_bytes = Some(max_output_bytes);
+        server.timeout_ms = Some(timeout_ms);
         if server.transport == McpTransportKind::StreamableHttp {
             let endpoint = server
                 .url
                 .as_deref()
                 .ok_or_else(|| failed("MCP Streamable HTTP server has no endpoint"))?;
-            let http =
-                HardenedStreamableHttpClient::new(endpoint, &permit, &self.tls_roots).await?;
+            let http = HardenedStreamableHttpClient::new(
+                endpoint,
+                &permit,
+                &self.tls_roots,
+                &input.operation,
+                timeout_ms,
+                max_output_bytes,
+            )
+            .await?;
             let diagnostics = McpDiagnosticCapture::current();
             diagnostics.stage(McpDiagnosticStage::Credentials);
             let (headers, mut secrets) =
                 resolve_http_headers(&server, &permit, self.credentials.as_ref())?;
-            let timeout = Duration::from_millis(permit.obligations().timeout_ms);
+            let timeout = Duration::from_millis(timeout_ms);
             let call_dispatched = AtomicBool::new(false);
             let result = if server.oauth.is_some() {
                 let manager = self
@@ -1603,8 +1621,8 @@ impl EffectExecutor for McpExecutor {
                         permit.obligations().resource_authority,
                         &permit.obligations().network_destinations,
                         &permit.obligations().allowed_environment,
-                        permit.obligations().timeout_ms,
-                        permit.obligations().max_output_bytes,
+                        timeout_ms,
+                        max_output_bytes,
                     )
                     .await
                     .map_err(mcp_oauth_execution_error)?;
@@ -1655,6 +1673,8 @@ impl EffectExecutor for McpExecutor {
                     bounded_result(&page, max_output_bytes)
                 }
                 (McpOperation::CallTool { tool, .. }, RemoteOperationResult::Call(result)) => {
+                    validate_call_output(&result, &input.operation)
+                        .map_err(|error| operation_error(&input.operation, error))?;
                     let output = parse_call_result(result, &server, tool, &secrets)
                         .map_err(|error| operation_error(&input.operation, error))?;
                     bounded_call_result(&output, max_output_bytes)
@@ -1687,9 +1707,8 @@ impl EffectExecutor for McpExecutor {
             args: server.args.clone(),
             environment,
             stdin_base64: Some(BASE64.encode(protocol)),
-            stdin_completion: Some(ProcessStdinCompletion::JsonRpcResponse {
-                response_id: MCP_REQUEST_ID,
-                abort_error_ids: vec![INITIALIZE_REQUEST_ID],
+            stdin_completion: Some(ProcessStdinCompletion::McpExchange {
+                request: operation_message(&input.operation)?,
             }),
             timeout_ms: server.timeout_ms,
             max_output_bytes: server.max_output_bytes,
@@ -1726,6 +1745,11 @@ impl EffectExecutor for McpExecutor {
                 bounded_result(&page, max_output_bytes)
             }
             McpOperation::CallTool { tool, .. } => {
+                let result = call_response_result(&stdout, MCP_REQUEST_ID).map_err(|error| {
+                    operation_error(&input.operation, redact_text(error, &secrets))
+                })?;
+                validate_call_output(&result, &input.operation)
+                    .map_err(|error| operation_error(&input.operation, error))?;
                 let output = parse_call(&stdout, &server, tool, &secrets).map_err(|error| {
                     operation_error(&input.operation, redact_text(error, &secrets))
                 })?;

@@ -1665,6 +1665,7 @@ fn security_posture_reports_plaintext_storage_and_effective_oauth_state() {
             headers: BTreeMap::new(),
             credential_headers: BTreeMap::new(),
             allow_stateless: false,
+            protocol_version: Default::default(),
             oauth: Some(McpOAuthConfig {
                 client_id: "colossus".into(),
                 client_secret_reference: None,
@@ -2294,6 +2295,7 @@ fn configured_mcp_source_is_visible_at_run_start_without_connecting() {
             headers: BTreeMap::new(),
             credential_headers: BTreeMap::new(),
             allow_stateless: false,
+            protocol_version: Default::default(),
             oauth: None,
             allowed_tools: vec!["*".into()],
             research_tools: Vec::new(),
@@ -2357,6 +2359,7 @@ fn missing_isolated_mcp_command_does_not_block_runtime_startup() {
             headers: BTreeMap::new(),
             credential_headers: BTreeMap::new(),
             allow_stateless: false,
+            protocol_version: Default::default(),
             oauth: None,
             allowed_tools: vec!["*".into()],
             research_tools: Vec::new(),
@@ -2430,6 +2433,7 @@ fn exact_mcp_tool_lookup_is_independent_of_catalog_output_budget() {
         description: None,
         annotations: None,
         input_schema: json!({"type": "object"}),
+        output_schema: None,
         schema_sha256: "target-digest".into(),
     };
     let mut lookup = crate::McpToolLookup::new("fixture", "target");
@@ -2449,6 +2453,7 @@ fn exact_mcp_tool_lookup_is_independent_of_catalog_output_budget() {
                 "type": "object",
                 "description": "x".repeat(128 * 1024),
             }),
+            output_schema: None,
             schema_sha256: format!("digest-{index:02}"),
         };
         lookup.visit(tool.clone());
@@ -2491,6 +2496,7 @@ fn paginated_mcp_discovery_rejects_before_its_aggregate_output_limit() {
                 "type": "object",
                 "description": "x".repeat(255 * 1024),
             }),
+            output_schema: None,
             schema_sha256: format!("digest-{index:04}"),
         };
         if let Err(error) =
@@ -3222,6 +3228,7 @@ fn mcp_config_requires_exact_process_identity_refs_and_allowlists() {
             headers: BTreeMap::new(),
             credential_headers: BTreeMap::new(),
             allow_stateless: false,
+            protocol_version: Default::default(),
             oauth: None,
             allowed_tools: vec!["search".into()],
             research_tools: vec![McpResearchToolConfig {
@@ -3309,6 +3316,7 @@ fn remote_mcp_stateless_opt_in_round_trips_and_defaults_off() {
                 },
             )]),
             allow_stateless: true,
+            protocol_version: colossus_contracts::McpProtocolVersion::V2026,
             oauth: None,
             allowed_tools: vec!["*".into()],
             research_tools: Vec::new(),
@@ -3323,6 +3331,16 @@ fn remote_mcp_stateless_opt_in_round_trips_and_defaults_off() {
     assert!(yaml.contains("allowStateless: true"));
     let parsed = RuntimeConfig::from_yaml(&yaml).expect("stateless remote config");
     assert!(parsed.mcp.servers["splunk"].allow_stateless);
+    assert_eq!(
+        parsed.mcp.servers["splunk"].protocol_version,
+        colossus_contracts::McpProtocolVersion::V2026
+    );
+    let legacy_yaml = yaml.replacen("      protocolVersion: 2026-07-28\n", "", 1);
+    let legacy = RuntimeConfig::from_yaml(&legacy_yaml).expect("older configuration");
+    assert_eq!(
+        legacy.mcp.servers["splunk"].protocol_version,
+        colossus_contracts::McpProtocolVersion::Auto
+    );
 
     let default_yaml = yaml.replacen("      allowStateless: true\n", "", 1);
     let defaulted = RuntimeConfig::from_yaml(&default_yaml).expect("default stateful config");

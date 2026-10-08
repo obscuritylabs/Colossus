@@ -9,8 +9,8 @@ type: reference
 
 `mcp` connects Colossus to explicitly configured Model Context Protocol servers. A
 server may be a local process using stdio or an exact remote endpoint using Streamable
-HTTP. Remote servers are stateful by default, with an explicit stateless compatibility
-opt-in.
+HTTP. Remote servers automatically discover the current protocol and retain explicit
+compatibility controls for older endpoints.
 
 Colossus exposes only the MCP tool surface:
 
@@ -40,23 +40,40 @@ configured server itself is trusted to publish future callable tools.
 
 ## Supported MCP surface
 
-The native remote transport targets MCP `2025-11-25` and requires stateful Streamable
-HTTP by default. It supports bounded JSON and SSE responses, server session headers,
-POST requests, stateful GET event streams, and best-effort DELETE session cleanup.
-`allowStateless: true` permits one reviewed server to omit `Mcp-Session-Id`; it does not
-enable a different protocol version or legacy transport. For one-way JSON-RPC frames,
-the bounded HTTP adapter accepts an empty successful response as equivalent to `202
-Accepted`; requests still require a valid bounded JSON or SSE response.
+Colossus uses `rmcp 3.5.1`. Remote Streamable HTTP supports stable MCP `2026-07-28`
+through `server/discover`, per-request client metadata, standard MCP headers (including
+schema-declared `Mcp-Param-*` headers), and bounded JSON or request-scoped SSE responses.
+This protocol is sessionless and uses POST without GET streams or DELETE cleanup.
+Invocation uses the schema already bound to the authorized request, including its
+parameter-header declarations and output validation. It does not re-list tools during
+the call, which preserves servers' discovery-scoped routing defaults.
+
+`protocolVersion: auto` is the default. It tries 2026 discovery and falls back to
+initialization for a legacy discovery rejection or an unanswered discovery probe.
+Modern version errors do not silently fall back. Set `2026-07-28` to require discovery,
+or `2025-11-25` to initialize directly and accept supported older negotiation:
+`2024-11-05`, `2025-03-26`, `2025-06-18`, and `2025-11-25`.
+
+The 2025 compatibility path requires a session ID by default, supports stateful GET
+event streams, and closes sessions best-effort with DELETE. `allowStateless: true`
+permits a reviewed legacy server to omit `Mcp-Session-Id`. This setting has no effect
+on 2026 connections. Stdio continues to initialize with `2025-11-25` and accepts the
+four supported legacy versions; it validates initialization before sending an operation.
+Requests require a valid bounded response; empty successful acknowledgements apply
+only to one-way frames.
 
 The following modes are not enabled:
 
 - The legacy HTTP+SSE transport with separate message and event endpoints.
-- Streamable HTTP semantics specific to the `2026-07-28` release candidate.
 - Automatic request retry or transparent expired-session reinitialization.
+- Tasks, client-input continuations, subscriptions, and durable background execution.
 
-Each discovery page and tool call receives a fresh initialized transport. Colossus
-closes a negotiated session best-effort after the result. Explicitly stateless servers
-receive no GET event stream or DELETE cleanup because they publish no session identity.
+Each complete discovery uses one permit and one connection or subprocess, including
+all pagination. Cursors never cross connections. Each call owns a separate transport.
+Task-required tools are filtered from discovery. Declared output schemas are bound
+into the call permit and enforced against successful `structuredContent` before release.
+Input and output schemas must be self-contained. References to embedded definitions
+are supported; external file and network references are rejected.
 If a remote call may have reached the server but completion cannot be confirmed, the
 effect becomes `OutcomeUnknown` and is not automatically retried.
 
@@ -126,7 +143,7 @@ child variable, not the host variable. Using the same name for both is also vali
 | `args` | Literal arguments passed without a shell; at most 256 |
 | `workingDirectory` | Existing workspace-relative or absolute directory; under isolation it must be inside a sandbox read/write grant |
 | `environment` | At most 128 child variable names mapped to `env:HOST_VARIABLE` references |
-| HTTP and OAuth fields | `url`, `headers`, `credentialHeaders`, `allowStateless`, and `oauth` must be absent |
+| HTTP and OAuth fields | `url`, `headers`, `credentialHeaders`, `allowStateless`, and `oauth` must be absent; `protocolVersion` must be omitted or `auto` |
 
 When `workingDirectory` is omitted, Colossus uses the selected workspace; under
 isolation it still needs a containing filesystem grant. Arguments do not use shell
@@ -136,10 +153,11 @@ authority.
 
 Stdio MCP is a process effect. The MCP child receives only permit-authorized process,
 filesystem, environment, network, time, output, process-count, and memory obligations.
-Colossus writes one initialized request batch and keeps stdin open only until the final
-operation response, an initialization error, malformed or truncated protocol output,
-child exit, or the effect timeout. It then closes stdin and supervises cleanup. Each
-discovery page and tool call still uses a fresh process. The server owns its own TLS
+Colossus validates initialization before writing the authorized request and keeps stdin
+open while following discovery pages. It closes stdin after the final response, an
+initialization error, malformed or truncated output, child exit, or the effect timeout,
+then supervises cleanup. Each complete discovery and tool call uses a fresh process.
+The server owns its own TLS
 implementation and does not inherit `network.caBundlePath`.
 
 ## Remote Streamable HTTP servers
@@ -186,7 +204,8 @@ that ambient boundary.
 | `url` | Exact HTTP(S) endpoint with a host and path |
 | `headers` | Optional non-secret literal headers; at most 64 |
 | `credentialHeaders` | Optional secret headers backed by environment references; at most 16 |
-| `allowStateless` | Optional boolean; default `false`; remote-only compatibility opt-in for servers that omit `Mcp-Session-Id` |
+| `protocolVersion` | Optional `auto` (default), `2026-07-28`, or `2025-11-25`; remote-only lifecycle selection |
+| `allowStateless` | Optional boolean; default `false`; accepts missing session IDs in 2025 compatibility connections; ignored for 2026 |
 | `oauth` | Optional OAuth 2.1 authorization-code configuration |
 | Stdio fields | `command`, `args`, `workingDirectory`, and `environment` must be absent |
 
@@ -413,7 +432,7 @@ a portable plugin declaration alone cannot enable tools.
 
 Every call performs live discovery again, finds the selected tool, validates its JSON
 object schema, validates the supplied argument object, and binds the schema and its
-SHA-256 hash into the effect request. A schema cached from an earlier `mcp tools` command
+SHA-256 hash, plus any declared output schema, into the effect request. A schema cached from an earlier `mcp tools` command
 does not authorize a later call.
 
 This protects both explicit and wildcard selection from silent schema drift. It also
@@ -456,7 +475,7 @@ streams, stdio output, parsed tool schemas, and released results remain bounded.
 | Research templates per server | 64 |
 | Model-visible inherited research tools | 32 ranked tools |
 | Inherited research tool definitions | 512 KiB, further bounded by the model input budget |
-| One input schema | 256 KiB |
+| One input or output schema | 256 KiB |
 | Wildcard-discovered title | 8 KiB |
 | Wildcard-discovered description | 32 KiB |
 
@@ -555,7 +574,7 @@ server. Discovery and invocation are separately authorized effects.
 | Credentials | Cleared child environment populated from declared references | Permit-time static header or persisted OAuth token |
 | TLS | Owned by the child process | Colossus-owned pinned client and shared CA bundle |
 | Response | Bounded JSON-RPC on stdout | Bounded JSON or SSE |
-| Session | Fresh process initialization | Fresh initialized transport; stateful by default, explicit stateless opt-in |
+| Session | One initialized process per complete operation | 2026 sessionless discovery; 2025 initialized compatibility session |
 
 Configured credential values are hard-redacted from released schemas, results, errors,
 policy input, diagnostics, and audit evidence. If discovery itself contains one of the
@@ -588,7 +607,7 @@ or unexpectedly upgraded server; wildcard selection intentionally broadens that 
 | A call fails argument validation | Rediscover the live schema and send a JSON object matching it |
 | Discovery fails after a server update | Inspect invalid names, duplicate tools, schemas, descriptions, pagination, or limit overruns |
 | A server-specific bound is rejected | It may only narrow the sandbox timeout/output cap; output must remain at least 1,024 bytes |
-| A remote server omits `Mcp-Session-Id` | Review the server and set `allowStateless: true`; legacy HTTP+SSE still requires another adapter |
+| A 2025 remote server omits `Mcp-Session-Id` | Review the server and set `allowStateless: true`; 2026 never requires a session ID |
 | A call reports `OutcomeUnknown` | Inspect the remote system before retrying; Colossus will not guess whether the tool executed |
 
 Return to the [configuration overview](../configuration.md).

@@ -1933,7 +1933,10 @@ pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope)
         }
         RunEvent::ToolStarted { call, .. } => {
             finalize_intermediate_assistant_output(state);
-            state.activity = Some(format!("running {}", call.name));
+            state.activity = Some(format!(
+                "running {}",
+                colossus_presentation::tool_display_name(&call.name, &call.arguments)
+            ));
             state
                 .active_calls
                 .insert(call.call_id.clone(), call.clone());

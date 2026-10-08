@@ -74,9 +74,6 @@ export function ScheduledRunDetail({
   return (
     <section className="workflow-run" aria-label="Independent workflow run">
       <h4>Run output</h4>
-      <p>
-        <code>{runId}</code>
-      </p>
       {error && (
         <p role="alert">
           {error} {run && "Showing the last confirmed state."}
@@ -116,6 +113,10 @@ export function ScheduledRunDetail({
           <details className="workflow-run-metadata">
             <summary>Run details</summary>
             <dl className="workflow-facts">
+              <dt>Run ID</dt>
+              <dd>
+                <code>{runId}</code>
+              </dd>
               <dt>Definition</dt>
               <dd>{run.workflow_id}</dd>
               <dt>Hash</dt>
@@ -134,10 +135,6 @@ export function ScheduledRunDetail({
               state before starting a replacement.
             </p>
           )}
-          <p>
-            This is an independent workflow execution. It does not resume the
-            originating chat.
-          </p>
         </>
       )}
       <button className="button secondary" onClick={() => void load()}>

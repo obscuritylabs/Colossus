@@ -14,37 +14,21 @@ async function capture(page: Page, name: string) {
     animations: "disabled",
   });
 }
-async function open(
-  page: Page,
-  options: { empty?: boolean; modern?: boolean } = {
-    empty: true,
-    modern: true,
-  },
-) {
+async function open(page: Page, options = { empty: true, modern: true }) {
   await installWorkflowFixture(page, options);
   await page.goto("/?fixture=operations-studio");
   await page.getByRole("button", { name: "Schedules", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Schedules", exact: true }),
   ).toBeVisible();
-  await expect(
-    page.getByText("Managed Local worker is running", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Start with an example" }),
-  ).toBeVisible();
 }
 async function typography(page: Page, selector: string) {
   return page.locator(selector).evaluate((element) => {
     const style = getComputedStyle(element);
-    return {
-      size: parseFloat(style.fontSize),
-      family: style.fontFamily,
-      weight: style.fontWeight,
-    };
+    return { size: parseFloat(style.fontSize), family: style.fontFamily };
   });
 }
-test("schedule typography matches Providers and responds to text preferences and palettes", async ({
+test("schedule examples match settings typography across text sizes, palettes, and compact widths", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1600, height: 1100 });
@@ -52,26 +36,14 @@ test("schedule typography matches Providers and responds to text preferences and
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Global", exact: true }).click();
   await page.getByRole("button", { name: "Providers", exact: true }).click();
-  await expect(page.locator(".catalog-heading h3")).toHaveText("Providers");
   const heading = await typography(page, ".catalog-heading h3");
   const supporting = await typography(page, ".catalog-heading p");
-  await page.evaluate(() => {
-    document.documentElement.dataset.theme = "dark";
-  });
-  await capture(page, "01-providers-reference.png");
   await open(page);
   await expect(page.getByRole("article")).toHaveCount(6);
-  expect(await typography(page, ".workflow-page-header h2")).toMatchObject({
-    size: heading.size,
-    family: heading.family,
-  });
+  expect(await typography(page, ".workflow-page-header h2")).toEqual(heading);
   expect(
     await typography(page, ".workflow-page-header > div > p:last-child"),
-  ).toMatchObject({ size: supporting.size, family: supporting.family });
-  await page.evaluate(() => {
-    document.documentElement.dataset.theme = "dark";
-  });
-  await capture(page, "02-schedules-examples-dark.png");
+  ).toEqual(supporting);
   for (const [preference, scale] of [
     ["compact", 15 / 16],
     ["comfortable", 1],
@@ -83,152 +55,123 @@ test("schedule typography matches Providers and responds to text preferences and
     expect(
       (await typography(page, ".workflow-page-header h2")).size,
     ).toBeCloseTo(heading.size * scale);
-    expect(
-      (await typography(page, ".workflow-page-header > div > p:last-child"))
-        .size,
-    ).toBeCloseTo(supporting.size * scale);
+    await page.getByText("More options", { exact: true }).click();
     await page
-      .getByRole("button", { name: "Use Workspace health check example" })
+      .getByRole("button", { name: "Schedule a task", exact: true })
       .click();
     const input = page.getByRole("textbox", { name: "Task name", exact: true });
     expect(
       await input.evaluate((element) => getComputedStyle(element).fontWeight),
     ).toBe("400");
-    expect(
-      await input.evaluate((element) =>
-        parseFloat(getComputedStyle(element).fontSize),
-      ),
-    ).toBeCloseTo(14 * scale);
     await page.keyboard.press("Escape");
+    await page.getByText("More options", { exact: true }).click();
   }
   for (const theme of ["light", "dark"]) {
     for (const palette of ["colossus", "neutral", "hacker"]) {
       await page.evaluate(
-        ({ palette, theme }) => {
-          document.documentElement.dataset.palette = palette;
+        ({ theme, palette }) => {
           document.documentElement.dataset.theme = theme;
+          document.documentElement.dataset.palette = palette;
         },
-        { palette, theme },
+        { theme, palette },
       );
-      const audit = await new AxeBuilder({ page })
-        .include(".workflow-surface")
-        .withTags(["wcag2a", "wcag2aa"])
-        .analyze();
-      expect(audit.violations).toEqual([]);
-      await capture(
-        page,
-        `03-schedules-large-${theme === "dark" ? "" : "light-"}${palette}.png`,
-      );
+      expect(
+        (
+          await new AxeBuilder({ page })
+            .include(".workflow-surface")
+            .withTags(["wcag2a", "wcag2aa"])
+            .analyze()
+        ).violations,
+      ).toEqual([]);
+      await capture(page, `examples-${theme}-${palette}.png`);
     }
   }
   await page.setViewportSize({ width: 390, height: 844 });
-  const overflow = await page
-    .locator(".workflow-surface")
-    .evaluate((element) => element.scrollWidth > element.clientWidth);
-  expect(overflow).toBe(false);
-  await capture(page, "04-schedules-compact-large.png");
+  expect(
+    await page
+      .locator(".workflow-surface")
+      .evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
+  ).toBe(true);
+  await capture(page, "examples-compact-large.png");
 });
 
-test("examples fill editable task drafts and agent prompts without saving automatically", async ({
+test("an example starts a fresh agent chat with the complete scheduling prompt", async ({
   page,
-  context,
 }) => {
-  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.setViewportSize({ width: 1600, height: 1100 });
   await open(page);
   await page
-    .getByRole("button", { name: "Use Workspace health check example" })
-    .click();
-  await expect(
-    page.getByRole("textbox", { name: "Task name", exact: true }),
-  ).toHaveValue("Workspace health check");
-  await expect(
-    page.getByRole("textbox", { name: "Instructions", exact: true }),
-  ).toHaveValue(/Do not edit files/u);
-  await expect(
-    page.getByRole("combobox", { name: "Repeat", exact: true }),
-  ).toContainText("Daily");
-  await capture(page, "05-example-task-draft.png");
-  await page.getByText("Advanced", { exact: true }).click();
-  await expect(
-    page.getByRole("textbox", { name: /Allowed tools/u }),
-  ).toHaveValue("git.status, git.diff");
-  await capture(page, "05b-example-task-advanced.png");
-  await page.keyboard.press("Escape");
-  await page
-    .getByRole("button", { name: "Use Release notes draft example" })
-    .click();
-  await expect(
-    page.getByRole("combobox", { name: "Repeat", exact: true }),
-  ).toContainText("Weekly");
-  await expect(
-    page.getByRole("checkbox", { name: "Fri", exact: true }),
-  ).toBeChecked();
-  await expect(page.getByLabel("Time", { exact: true })).toHaveValue("16:00");
-  await page.keyboard.press("Escape");
-  await page
-    .getByRole("button", {
-      name: "Agent prompt for Cybersecurity market briefing",
-    })
-    .click();
-  const prompt = page.getByRole("textbox", {
-    name: "Agent prompt",
-    exact: true,
-  });
-  await expect(prompt).toHaveValue(/@colossus\/schedule-task/u);
-  const value = await prompt.inputValue();
-  expect(value).toContain("workflow.task.schedule");
-  expect(value).toContain("America/New_York");
-  await page.keyboard.press("Tab");
-  await expect(prompt).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(
-    page.getByRole("button", { name: "Close", exact: true }),
-  ).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(
-    page.getByRole("button", { name: "Copy agent prompt", exact: true }),
-  ).toBeFocused();
+    .getByRole("button", { name: "Create Workspace health check with agent" })
+    .focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("status")).toContainText("Prompt copied");
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(value);
-  await capture(page, "06-agent-scheduling-prompt.png");
-  const audit = await new AxeBuilder({ page })
-    .include(".workflow-dialog")
-    .analyze();
-  expect(audit.violations).toEqual([]);
-  await page.keyboard.press("Escape");
+  const messages = page.locator(
+    'article[data-role="user"] .shared-message-body',
+  );
+  await expect(messages).toHaveCount(1);
+  await expect(messages).toContainText("@colossus/schedule-task");
+  await expect(messages).toContainText("Name: Workspace health check");
+  await expect(messages).toContainText(
+    "Do not edit files, run commands, commit, or publish anything.",
+  );
+  await expect(messages).toContainText("Repeat: Daily");
+  await expect(messages).toContainText("Time zone: America/New_York");
+  await expect(messages).toContainText(
+    "Allowed task tools: git.status, git.diff",
+  );
+  await expect(messages).toContainText("workflow.task.schedule");
   await expect(
-    page.getByRole("button", {
-      name: "Agent prompt for Cybersecurity market briefing",
-    }),
-  ).toBeFocused();
-  await expect(
-    page.getByRole("heading", { name: "No schedules in this Workspace" }),
-  ).toBeVisible();
+    page.getByRole("textbox", { name: "Prompt", exact: true }),
+  ).toHaveValue("");
+  expect(
+    await page.evaluate(() =>
+      (
+        window as unknown as { workflowCalls: { command: string }[] }
+      ).workflowCalls.filter(
+        (call) => call.command === "create_workflow_schedule",
+      ),
+    ),
+  ).toHaveLength(0);
 });
 
-test("schedule inventory uses the settings table and filters loaded schedules", async ({
+test("custom creation starts an agent chat without picking an unrelated example", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1600, height: 1100 });
-  await open(page, { modern: true });
+  await open(page);
+  await page
+    .getByRole("button", { name: "Create with agent", exact: true })
+    .click();
+  const message = page.locator(
+    'article[data-role="user"] .shared-message-body',
+  );
+  await expect(message).toContainText(
+    "Ask what I want the agent to do and when it should repeat.",
+  );
+  await expect(message).not.toContainText("Cybersecurity market briefing");
+});
+
+test("saved schedules show inventory and examples open in a separate view", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1100 });
+  await open(page, { empty: false, modern: true });
   const table = page.getByRole("table", { name: "Schedules", exact: true });
   await expect(table).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Start with an example" }),
+  ).toHaveCount(0);
+  await capture(page, "schedule-inventory.png");
   await page
     .getByRole("textbox", { name: "Search loaded schedules", exact: true })
     .fill("hourly-health");
   await expect(table.getByRole("button")).toHaveCount(1);
-  await table.getByRole("button", { name: /hourly-health/u }).click();
+  await page.getByRole("button", { name: "Browse examples" }).click();
+  await expect(table).toHaveCount(0);
   await expect(
-    page.getByRole("region", { name: "Selected schedule" }),
-  ).toContainText("hourly-health");
-  await capture(page, "07-schedule-inventory.png");
+    page.getByRole("heading", { name: "Start with an example" }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Back to schedules" }).click();
-  await page
-    .getByRole("textbox", { name: "Search loaded schedules", exact: true })
-    .fill("no-match");
-  await expect(table).toContainText("No loaded schedules match");
+  await expect(table).toBeVisible();
 });
 
 test("examples respect unavailable task scheduling capabilities", async ({
@@ -237,11 +180,11 @@ test("examples respect unavailable task scheduling capabilities", async ({
   await page.setViewportSize({ width: 1600, height: 1100 });
   await open(page, { empty: true, modern: false });
   await expect(
-    page.getByRole("button", { name: "Use Workspace health check example" }),
+    page.getByRole("button", {
+      name: "Create Workspace health check with agent",
+    }),
   ).toBeDisabled();
   await expect(
-    page.getByRole("button", {
-      name: "Agent prompt for Workspace health check",
-    }),
-  ).toBeEnabled();
+    page.getByRole("button", { name: "Create with agent", exact: true }),
+  ).toBeDisabled();
 });

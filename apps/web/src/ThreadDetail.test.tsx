@@ -223,9 +223,17 @@ describe("human cloud conversation authority", () => {
       update: {
         tool_activity: {
           call_id: "same-call",
-          tool_name: "echo",
+          tool_name: "mcp.call",
           state,
           summary: `${task.task_id} ${state}`,
+          ...(state === "requested"
+            ? {
+                input: JSON.stringify({
+                  server: task.task_id === "first" ? "GitLab" : "Splunk",
+                  tool: "search",
+                }),
+              }
+            : {}),
           preview: `${task.task_id} released preview`,
         },
       },
@@ -254,6 +262,9 @@ describe("human cloud conversation authority", () => {
       const owner = index === 0 ? "first" : "second",
         other = index === 0 ? "second" : "first";
       expect(turn.dataset.runId).toBe(`run-${owner}`);
+      expect(
+        turn.querySelector(".shared-activity-tool > summary")?.textContent,
+      ).toContain(`mcp.call · ${index === 0 ? "GitLab" : "Splunk"} · search`);
       expect(
         [...turn.children].map(
           (child) => child.getAttribute("data-role") ?? child.className,

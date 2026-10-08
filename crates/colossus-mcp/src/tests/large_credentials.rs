@@ -178,6 +178,7 @@ async fn large_host_tokens_reach_real_http_adapter_and_echoes_are_redacted() {
                     annotations: tool.annotations,
                     arguments: json!({}),
                     input_schema: Box::new(tool.input_schema),
+                    output_schema: tool.output_schema.map(Box::new),
                     schema_sha256: tool.schema_sha256,
                 },
             )

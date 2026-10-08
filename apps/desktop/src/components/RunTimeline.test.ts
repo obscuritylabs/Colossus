@@ -385,6 +385,55 @@ describe("RunTimeline assistant output", () => {
     );
   });
 
+  it.each(["completed", "failed"] as const)(
+    "keeps the MCP server in the collapsed heading after a %s update without input",
+    (state) => {
+      const updates: RunUpdate[] = [
+        {
+          runId: "run-markdown-test",
+          sequence: 1,
+          createdAt: "2026-07-21T12:00:00Z",
+          update: {
+            type: "tool_activity",
+            activity: {
+              callId: "call-mcp",
+              toolName: "mcp.call",
+              state: "started",
+              summary: "tool execution started at turn 1",
+              input: JSON.stringify({
+                server: "GitLab",
+                tool: "list_issues",
+                arguments: { server: "payload-server" },
+              }),
+            },
+          },
+        },
+        {
+          runId: "run-markdown-test",
+          sequence: 2,
+          createdAt: "2026-07-21T12:00:01Z",
+          update: {
+            type: "tool_activity",
+            activity: {
+              callId: "call-mcp",
+              toolName: "mcp.call",
+              state,
+              summary: `tool execution ${state} at turn 1`,
+            },
+          },
+        },
+      ];
+      const markup = renderOutput("Done", "completed", "complete", updates);
+      const heading = markup.match(
+        /class="compact-tool-activity[^>]*><summary>(.*?)<\/summary>/su,
+      )?.[1];
+      expect(heading).toContain("GitLab · list_issues");
+      expect(heading).not.toContain("payload-server");
+      expect(markup).toContain("activity-kind-mcp");
+      expect(markup.match(/class="compact-tool-activity/gu)).toHaveLength(1);
+    },
+  );
+
   it("interleaves released reasoning summaries with tool actions in the working thread", () => {
     const updates: RunUpdate[] = [
       {

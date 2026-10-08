@@ -1,4 +1,5 @@
 use super::*;
+mod conformance;
 mod diagnostics;
 mod large_credentials;
 mod oauth_vault;
@@ -32,6 +33,7 @@ fn request_uses_official_protocol_models_and_no_secret_values() {
             "required": ["text"],
             "additionalProperties": false
         })),
+        output_schema: None,
         schema_sha256: "unused-by-protocol-projection".into(),
     };
     let bytes = protocol_input(&operation).expect("protocol");
@@ -42,9 +44,11 @@ fn request_uses_official_protocol_models_and_no_secret_values() {
         .collect::<Vec<_>>();
     assert_eq!(lines[0]["method"], "initialize");
     assert_eq!(lines[0]["params"]["protocolVersion"], "2025-11-25");
-    assert_eq!(lines[1]["method"], "notifications/initialized");
-    assert_eq!(lines[2]["method"], "tools/call");
-    assert_eq!(lines[2]["params"]["name"], "echo");
+    assert_eq!(
+        lines.len(),
+        1,
+        "tool requests wait for validated initialization"
+    );
 }
 
 #[test]
@@ -56,6 +60,7 @@ fn remote_call_timeout_certainty_follows_dispatch_stage() {
         annotations: None,
         arguments: json!({}),
         input_schema: Box::new(json!({"type": "object"})),
+        output_schema: None,
         schema_sha256: "unused-by-timeout-classification".into(),
     };
     assert!(matches!(
@@ -87,6 +92,7 @@ fn complete_json_rpc_tool_errors_are_confirmed_results() {
         annotations: None,
         arguments: json!({}),
         input_schema: Box::new(json!({"type": "object"})),
+        output_schema: None,
         schema_sha256: "unused-by-error-classification".into(),
     };
     let result = remote_call_failure(
@@ -123,6 +129,7 @@ fn confirmed_json_rpc_errors_fit_custom_output_caps() {
         annotations: None,
         arguments: json!({}),
         input_schema: Box::new(json!({"type": "object"})),
+        output_schema: None,
         schema_sha256: "unused-by-error-compaction".into(),
     };
     let result = remote_call_failure(
@@ -208,6 +215,7 @@ fn discovered_schema_is_enforced_before_call() {
         title: None,
         description: None,
         annotations: None,
+        output_schema: None,
         schema_sha256: test_schema_sha256(&input_schema),
         input_schema,
     };
@@ -234,6 +242,7 @@ fn discovery_pages_containing_configured_credentials_fail_before_release() {
             description: Some("accidentally echoed hard-secret".into()),
             annotations: None,
             input_schema: json!({"type": "object"}),
+            output_schema: None,
             schema_sha256: "hash".into(),
         }],
         next_cursor: None,
@@ -288,6 +297,7 @@ fn remote_server(endpoint: &str) -> McpServerConfig {
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
         allow_stateless: false,
+        protocol_version: McpProtocolVersion::V2025,
         oauth: None,
         allowed_tools: vec!["*".into()],
         research_tools: Vec::new(),
@@ -526,6 +536,7 @@ fn ambient_validation_keeps_exact_mcp_declarations_but_omits_duplicate_sandbox_g
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
         allow_stateless: false,
+        protocol_version: McpProtocolVersion::Auto,
         oauth: None,
         allowed_tools: vec!["*".into()],
         research_tools: Vec::new(),
@@ -575,6 +586,7 @@ fn plugin_stdio_accepts_only_runtime_bound_root_and_data_environment() {
     std::fs::create_dir_all(&data).expect("data");
     let mut server = remote_server("http://127.0.0.1:8787/mcp");
     server.transport = McpTransportKind::Stdio;
+    server.protocol_version = McpProtocolVersion::Auto;
     server.url = None;
     server.command = root.join("bin/server.exe");
     server.working_directory = Some(root.clone());
@@ -860,6 +872,7 @@ fn wildcard_releases_new_valid_tools_but_rejects_invalid_discovery_names() {
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
         allow_stateless: false,
+        protocol_version: McpProtocolVersion::V2025,
         oauth: None,
         allowed_tools: ToolAllowlist::All,
         research_tools: Vec::new(),
@@ -957,6 +970,7 @@ fn wildcard_and_explicit_discovery_preserve_bounded_risk_review_metadata() {
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
         allow_stateless: false,
+        protocol_version: McpProtocolVersion::V2025,
         oauth: None,
         allowed_tools: ToolAllowlist::All,
         research_tools: Vec::new(),
@@ -1266,6 +1280,7 @@ fn configured_http_server(endpoint: String) -> ConfiguredServer {
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
         allow_stateless: false,
+        protocol_version: McpProtocolVersion::V2025,
         oauth: None,
         allowed_tools: ToolAllowlist::All,
         research_tools: Vec::new(),
@@ -1479,6 +1494,7 @@ async fn streamable_http_call_initialization_failure_has_a_known_outcome() {
             annotations: None,
             arguments: json!({}),
             input_schema: Box::new(json!({"type": "object"})),
+            output_schema: None,
             schema_sha256: "unused-before-dispatch".into(),
         },
         HashMap::new(),
@@ -1535,6 +1551,18 @@ async fn streamable_http_call_failure_after_dispatch_has_an_unknown_outcome() {
                 Some("notifications/initialized") => {
                     write_http_response(&mut stream, "202 Accepted", "", "").await;
                 }
+                Some("tools/list") => {
+                    let body = json!({"jsonrpc":"2.0", "id":message.as_ref().unwrap()["id"],
+                        "result":{"tools":[{"name":"echo", "inputSchema":{"type":"object"}}]}})
+                    .to_string();
+                    write_http_response(
+                        &mut stream,
+                        "200 OK",
+                        "Content-Type: application/json\r\n",
+                        &body,
+                    )
+                    .await;
+                }
                 Some("tools/call") => break,
                 None if first.starts_with("GET ") => {
                     write_http_response(&mut stream, "405 Method Not Allowed", "", "").await;
@@ -1564,6 +1592,7 @@ async fn streamable_http_call_failure_after_dispatch_has_an_unknown_outcome() {
             annotations: None,
             arguments: json!({}),
             input_schema: Box::new(json!({"type": "object"})),
+            output_schema: None,
             schema_sha256: "unused-after-dispatch".into(),
         },
         HashMap::new(),
@@ -1710,6 +1739,7 @@ async fn streamable_http_json_session_discovery_uses_fresh_stateful_transport() 
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
         allow_stateless: false,
+        protocol_version: McpProtocolVersion::V2025,
         oauth: None,
         allowed_tools: ToolAllowlist::All,
         research_tools: Vec::new(),
@@ -1768,6 +1798,7 @@ async fn live_splunk_streamable_http_discovery() {
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
         allow_stateless: true,
+        protocol_version: Default::default(),
         oauth: None,
         allowed_tools: ToolAllowlist::All,
         research_tools: Vec::new(),
@@ -1830,6 +1861,7 @@ fn pattern_allowlist_checks_invocations_and_preserves_schema_binding() {
                 annotations: None,
                 arguments,
                 input_schema: Box::new(schema.clone()),
+                output_schema: None,
                 schema_sha256: hash,
             },
         )

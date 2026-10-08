@@ -44,14 +44,36 @@ function numericStyleValue(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function measuredTerminalDimensions(container: HTMLDivElement) {
+function measuredTerminalDimensions(
+  container: HTMLDivElement,
+  terminal: Terminal,
+) {
+  // Measure the rendered grid rather than assuming a fixed glyph size. Native
+  // font metrics and display scaling can otherwise place the last PTY row below
+  // the visible viewport.
+  const screen = terminal.element
+    ?.querySelector(".xterm-screen")
+    ?.getBoundingClientRect();
+  const cell =
+    screen && screen.width > 0 && screen.height > 0
+      ? {
+          width: screen.width / terminal.cols,
+          height: screen.height / terminal.rows,
+        }
+      : undefined;
+  const viewport =
+    terminal.element?.querySelector<HTMLElement>(".xterm-viewport");
+  const scrollbar = viewport
+    ? Math.max(0, viewport.offsetWidth - viewport.clientWidth)
+    : 0;
   const style =
     container.ownerDocument.defaultView?.getComputedStyle(container);
   if (style === undefined) {
     return terminalContentDimensions(
       container.clientWidth,
       container.clientHeight,
-      { top: 0, right: 0, bottom: 0, left: 0 },
+      { top: 0, right: scrollbar, bottom: 0, left: 0 },
+      cell,
     );
   }
   return terminalContentDimensions(
@@ -59,10 +81,11 @@ function measuredTerminalDimensions(container: HTMLDivElement) {
     container.clientHeight,
     {
       top: numericStyleValue(style.paddingTop),
-      right: numericStyleValue(style.paddingRight),
+      right: numericStyleValue(style.paddingRight) + scrollbar,
       bottom: numericStyleValue(style.paddingBottom),
       left: numericStyleValue(style.paddingLeft),
     },
+    cell,
   );
 }
 
@@ -160,7 +183,7 @@ function TerminalPane({
     const initial =
       container.clientWidth <= 0 || container.clientHeight <= 0
         ? terminalOpenDimensions(0, 0)
-        : measuredTerminalDimensions(container);
+        : measuredTerminalDimensions(container, terminal);
     terminal.resize(initial.cols, initial.rows);
     let disposed = false;
     let sessionReadyFrame: number | null = null;
@@ -177,7 +200,7 @@ function TerminalPane({
       ) {
         return;
       }
-      const next = measuredTerminalDimensions(container);
+      const next = measuredTerminalDimensions(container, terminal);
       terminal.resize(next.cols, next.rows);
       terminal.refresh(0, terminal.rows - 1);
       if (nativeSessionId !== null) {
@@ -287,14 +310,22 @@ function TerminalPane({
         terminal.writeln(`\r\n\x1b[38;2;241;118;127m${message}\x1b[0m`);
       });
 
+    let resizeFrame: number | null = null;
     const observer = new ResizeObserver(() => {
-      synchronizeVisibleSize(sessionIdRef.current);
+      if (resizeFrame !== null) return;
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = null;
+        synchronizeVisibleSize(sessionIdRef.current);
+      });
     });
     observer.observe(container);
+    const screen = terminal.element?.querySelector(".xterm-screen");
+    if (screen) observer.observe(screen);
 
     return () => {
       disposed = true;
       observer.disconnect();
+      if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
       if (sessionReadyFrame !== null) {
         cancelAnimationFrame(sessionReadyFrame);
       }
@@ -323,7 +354,7 @@ function TerminalPane({
       if (container.clientWidth <= 0 || container.clientHeight <= 0) {
         return;
       }
-      const next = measuredTerminalDimensions(container);
+      const next = measuredTerminalDimensions(container, terminal);
       terminal.resize(next.cols, next.rows);
       terminal.refresh(0, terminal.rows - 1);
       terminal.focus();

@@ -112,6 +112,11 @@ fn supported_mcp_review_metadata(request: &EffectRequest) -> bool {
         && supported_description
         && supported_annotations
         && operation.get("arguments").is_some_and(Value::is_object)
+        && operation.get("output_schema").is_none_or(|value| {
+            value.is_null()
+                || (value.is_object()
+                    && canonical_bytes(value).is_ok_and(|bytes| bytes.len() <= 256 * 1024))
+        })
         && schema_hash_matches
 }
 

@@ -1,8 +1,12 @@
 import { expect, test } from "@playwright/test";
 
+test.use({ deviceScaleFactor: 1.25 });
+
 test("TUI and shell tabs keep independent sessions and route typed commands", async ({
   page,
 }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
   await page.setViewportSize({ width: 1000, height: 700 });
   await page.goto("/?fixture=operations-studio");
   await expect(
@@ -89,6 +93,33 @@ test("TUI and shell tabs keep independent sessions and route typed commands", as
     tabs.getByRole("button", { name: "Shell 1", exact: true }),
   ).toHaveAttribute("aria-current", "page");
   await expect(fixture).toHaveAttribute("data-opens", /"kind":"shell"/);
+  for (const size of [
+    { width: 1000, height: 700 },
+    { width: 880, height: 640 },
+    { width: 640, height: 480 },
+    { width: 1500, height: 1100 },
+  ]) {
+    await page.setViewportSize(size);
+    await expect
+      .poll(async () =>
+        page.locator(".terminal-pane:not([hidden])").evaluate((pane) => {
+          const emulator = pane.querySelector(".terminal-emulator")!;
+          const grid = pane.querySelector(".xterm-screen")!;
+          const bounds = emulator.getBoundingClientRect();
+          const screen = grid.getBoundingClientRect();
+          const style = getComputedStyle(emulator);
+          return (
+            screen.bottom <=
+              bounds.bottom - parseFloat(style.paddingBottom) + 1 &&
+            screen.right <= bounds.right - parseFloat(style.paddingRight) + 1
+          );
+        }),
+      )
+      .toBe(true);
+    await expect(
+      page.getByRole("button", { name: "Terminate", exact: true }),
+    ).toBeInViewport();
+  }
   const input = page.locator(
     ".terminal-pane:not([hidden]) .xterm-helper-textarea",
   );
@@ -122,4 +153,5 @@ test("TUI and shell tabs keep independent sessions and route typed commands", as
   await expect(
     tabs.getByRole("button", { name: "Colossus TUI 1", exact: true }),
   ).toHaveAttribute("aria-current", "page");
+  expect(errors).toEqual([]);
 });

@@ -1,8 +1,17 @@
+import { mcpCallTarget } from "@colossus/ui/lib/mcp-call";
 import { safeDisplayLabel } from "./presenters";
 import type { ToolActivity, ToolActivityState } from "./types";
 
 export type ActivityLabelKind =
-  "delegate" | "generic" | "list" | "read" | "run" | "search" | "web" | "write";
+  | "delegate"
+  | "generic"
+  | "list"
+  | "mcp"
+  | "read"
+  | "run"
+  | "search"
+  | "web"
+  | "write";
 
 export interface ActivityLabel {
   title: string;
@@ -207,6 +216,21 @@ export function presentToolActivity(
     safeDisplayLabel(stringList(input, "argv").join(" "), "", 96);
 
   switch (activity.toolName) {
+    case "mcp.call": {
+      const target =
+        mcpCallTarget(releasedInput) ?? mcpCallTarget(activity.preview);
+      const name = target ?? "an MCP tool";
+      return {
+        kind: "mcp",
+        title: actionForState(activity.state, {
+          requested: `Preparing to call ${name}`,
+          active: `Calling ${name}`,
+          completed: `Called ${name}`,
+          cancelled: `Skipped calling ${name}`,
+          failed: `Couldn’t call ${name}`,
+        }),
+      };
+    }
     case "filesystem.read":
       return {
         kind: "read",

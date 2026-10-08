@@ -127,6 +127,12 @@ const mcpFields: readonly Field[] = [
   },
   { key: "allowStateless", label: "Allow stateless HTTP", type: "boolean" },
   {
+    key: "protocolVersion",
+    label: "HTTP protocol version",
+    type: "select",
+    options: ["auto", "2026-07-28", "2025-11-25"],
+  },
+  {
     key: "timeoutMs",
     label: "Timeout (milliseconds)",
     type: "number",

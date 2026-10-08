@@ -128,5 +128,5 @@ impl OAuthHttpClient for HardenedOAuthHttpClient {
 }
 
 fn oauth_error(message: &str) -> OAuthHttpClientError {
-    OAuthHttpClientError::new(message)
+    std::io::Error::other(message).into()
 }

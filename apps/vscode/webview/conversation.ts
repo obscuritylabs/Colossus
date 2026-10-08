@@ -4,6 +4,7 @@ import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { ConversationEntry } from "@colossus/ui/conversation";
+import { mcpCallTarget } from "@colossus/ui/lib/mcp-call";
 
 function runId(message: MessageView) {
   return (
@@ -41,6 +42,7 @@ function stateLabel(state: string) {
 }
 
 function toolIcon(name: string) {
+  if (name.startsWith("mcp.")) return "plug-connected";
   if (name.startsWith("filesystem.")) return "folder";
   if (name.startsWith("plan.")) return "list-check";
   if (name.startsWith("user.")) return "messages";
@@ -81,7 +83,13 @@ class ToolRow {
     if (signature === this.signature) return;
     this.signature = signature;
     this.element.dataset.state = tool.state;
-    this.name.textContent = tool.name;
+    const mcpTarget =
+      tool.name === "mcp.call"
+        ? (mcpCallTarget(tool.input) ?? mcpCallTarget(tool.preview))
+        : null;
+    this.name.textContent = mcpTarget
+      ? `${tool.name} · ${mcpTarget}`
+      : tool.name;
     this.symbol.className = `icon icon-${toolIcon(tool.name)}`;
     this.state.textContent = stateLabel(tool.state);
     this.description.textContent = tool.summary;

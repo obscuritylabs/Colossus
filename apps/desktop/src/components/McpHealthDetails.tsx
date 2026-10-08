@@ -65,6 +65,17 @@ export function McpHealthDetails({
                     : `${configuration.additionalCaCertificates} additional CA certificates loaded`}
                 </dd>
               </div>
+              <div>
+                <dt>Protocol</dt>
+                <dd>
+                  {configuration.transport === "stdio"
+                    ? "2025 initialization"
+                    : configuration.protocolVersion === "auto" ||
+                        !configuration.protocolVersion
+                      ? "Automatic"
+                      : configuration.protocolVersion}
+                </dd>
+              </div>
             </>
           )}
           {report.failure && (

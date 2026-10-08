@@ -55,7 +55,7 @@ pub use palette::{RgbColor, TerminalPalette};
 pub use repository::EventSourcedPresentationRepository;
 pub use semantic::{
     SemanticRenderer, automatic_approval_document, context_status_document,
-    risk_review_fallback_document, tool_result_document, work_state_document,
+    risk_review_fallback_document, tool_display_name, tool_result_document, work_state_document,
 };
 pub use terminal::{StyledDocumentRenderer, TerminalDocumentRenderer};
 pub use themes::{ThemeLibrary, ThemeLibraryStatus, ThemeScaffold, default_user_theme_directory};

@@ -147,6 +147,13 @@ fn serve_mcp(
         let operation = body.get("method").and_then(Value::as_str);
         let (status, response) = match (method.as_str(), operation) {
             ("GET", _) => ("405 Method Not Allowed", None),
+            ("POST", Some("server/discover")) => (
+                "200 OK",
+                Some(json!({
+                    "jsonrpc": "2.0", "id": body["id"],
+                    "error": {"code": -32601, "message": "Method not found"},
+                })),
+            ),
             ("POST", Some("initialize")) => (
                 "200 OK",
                 Some(json!({

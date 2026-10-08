@@ -1,12 +1,3 @@
-.workflow-surface {
-  padding: 20px var(--settings-gutter);
-  font-family: var(--font-sans);
-  font-size: var(--font-size-body-sm);
-  line-height: var(--line-height-body);
-  container-type: inline-size;
-  overflow: auto;
-  color: var(--text);
-}
 .workflow-page-header,
 .workflow-detail-header {
   display: flex;
@@ -34,7 +25,6 @@
   flex-wrap: wrap;
   align-items: center;
 }
-.workflow-availability,
 .workflow-empty {
   margin: 16px 0;
   border: 1px solid var(--border);
@@ -54,11 +44,7 @@
 }
 .schedule-detail-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   align-items: start;
-  gap: 20px;
-  max-width: 1280px;
-  margin-top: 20px;
 }
 .workflow-output-panel {
   min-width: 0;
@@ -99,7 +85,6 @@
   }
 }
 @container (max-width: 720px) {
-  .schedule-detail-layout,
   .workflow-layout-has-run {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -449,19 +434,6 @@
   font-family: var(--font-sans);
   font-size: var(--font-size-body-sm);
 }
-.workflow-schedule-layout {
-  grid-template-columns: minmax(0, 1fr);
-}
-.workflow-inventory .catalog-name-column {
-  width: 30%;
-}
-.workflow-inventory small {
-  display: block;
-  margin-top: 3px;
-  font-size: var(--font-size-caption);
-  color: var(--muted);
-  font-weight: 400;
-}
 .workflow-status[data-state="enabled"] {
   color: var(--green-text);
   border-color: var(--green-border);
@@ -470,9 +442,84 @@
   color: var(--amber-text);
   border-color: var(--amber-border);
 }
-@container (max-width: 640px) {
-  .workflow-inventory .catalog-inventory-row > td[data-label] {
-    padding-left: 0;
-    flex-wrap: wrap;
+
+.workflow-surface .workflow-availability {
+  margin: 28px 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: var(--font-size-caption);
+  color: var(--muted);
+}
+.workflow-availability summary {
+  padding: 8px 0;
+}
+.workflow-surface .schedule-create-options {
+  margin: 0;
+  font-size: var(--font-size-body-sm);
+}
+.schedule-create-options summary {
+  min-height: var(--control-height);
+  display: list-item;
+  align-content: center;
+  color: var(--muted);
+  padding-inline: 8px;
+}
+.schedule-create-options > .workflow-actions {
+  padding: 12px 0;
+}
+.schedule-detail-page {
+  max-width: 1440px;
+  margin: 28px auto 0;
+}
+.schedule-run-toolbar {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  margin: 24px 0;
+}
+.schedule-run-toolbar h3 {
+  margin: 0 0 6px;
+}
+.schedule-run-toolbar p {
+  color: var(--muted);
+  margin: 0;
+}
+.schedule-detail-layout {
+  grid-template-columns: minmax(280px, 0.65fr) minmax(0, 1.6fr);
+  gap: 24px;
+  max-width: none;
+  margin: 0;
+}
+.schedule-detail-layout .workflow-output-panel {
+  min-height: 360px;
+}
+.schedule-detail-layout .workflow-task-instructions {
+  padding: 0;
+  border: 0;
+  background: none;
+  max-height: 22rem;
+}
+.schedule-detail-layout .workflow-detail-header h3 {
+  margin-bottom: 12px;
+}
+.schedule-detail-layout .workflow-list button {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+.schedule-detail-layout .workflow-task-result {
+  max-height: none;
+}
+@container (max-width: 760px) {
+  .schedule-detail-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@container (max-width: 520px) {
+  .schedule-run-toolbar > .ui-button {
+    width: 100%;
   }
 }

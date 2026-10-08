@@ -1,4 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Button } from "@colossus/ui";
+import { AutomationSurface, AutomationWelcome } from "@colossus/ui/automations";
+import "@colossus/ui/styles/automations.css";
+import {
+  IconSparkles,
+  IconTopologyStar3,
+  IconPlayerPlay,
+  IconCalendarTime,
+} from "@tabler/icons-react";
 import {
   getRegisteredWorkflow,
   listRegisteredWorkflows,
@@ -23,10 +32,14 @@ export function WorkflowsSurface({
   targetId,
   workspaceName,
   runtimeReady,
+  onCreateWithAgent,
+  agentStarting,
 }: {
   targetId: string | null;
   workspaceName: string;
   runtimeReady: boolean;
+  onCreateWithAgent: (prompt: string) => void;
+  agentStarting: boolean;
 }) {
   const [context, setContext] = useState<WorkflowContext | null>(null);
   const [items, setItems] = useState<RegisteredWorkflow[]>([]);
@@ -153,15 +166,19 @@ export function WorkflowsSurface({
       if (alive.current && current === generation.current) setBusy(false);
     }
   }
+  const createWithAgent = () =>
+    onCreateWithAgent(`@colossus/coding
+Help me create a reusable workflow for this workspace.
+
+Ask what to automate, the inputs it needs, and the result I want. Follow workspace conventions, permissions, and approval rules.
+Review the steps, explicit tool capabilities, execution limits, and strict input schema with me. Prepare Colossus workflow YAML and help me import it into the library. Show how to test it with a manual run before scheduling.`);
   return (
-    <section className="workflow-surface" aria-label="Workspace workflows">
+    <AutomationSurface className="workflow-surface" label="Workspace workflows">
       <header className="workflow-page-header">
         <div>
           <p className="surface-breadcrumb">Workspace / {workspaceName}</p>
           <h2>Workflows</h2>
-          <p>
-            Reusable logic. Inspect the graph, run it now, or attach a schedule.
-          </p>
+          <p>Reusable steps for recurring work.</p>
         </div>
         <div className="workflow-actions">
           <button
@@ -171,8 +188,23 @@ export function WorkflowsSurface({
           >
             Refresh
           </button>
+          {items.length > 0 && (
+            <Button
+              variant="primary"
+              disabled={
+                loading ||
+                busy ||
+                agentStarting ||
+                !runtimeReady ||
+                !context?.workflows_register
+              }
+              onClick={createWithAgent}
+            >
+              <IconSparkles size={16} aria-hidden="true" /> Create with agent
+            </Button>
+          )}
           <button
-            className="button primary"
+            className="button secondary"
             disabled={loading || busy || !context?.workflows_register}
             onClick={() => setDialog("import")}
           >
@@ -193,20 +225,43 @@ export function WorkflowsSurface({
           This runtime does not advertise workflow discovery. Ask its
           administrator to enable the workflow read scope.
         </div>
+      ) : error && !items.length ? null : !items.length ? (
+        <AutomationWelcome
+          title="Turn a repeatable task into a workflow"
+          description="Describe what to automate. An agent will help you define the steps and inputs, then prepare a workflow you can run again."
+          icon={<IconTopologyStar3 size={24} stroke={1.6} aria-hidden="true" />}
+          action={
+            <Button
+              variant="primary"
+              disabled={agentStarting || !context.workflows_register}
+              onClick={createWithAgent}
+            >
+              <IconSparkles size={16} aria-hidden="true" /> Create with agent
+            </Button>
+          }
+          features={[
+            {
+              title: "Define the steps",
+              description: "Connect agent tasks, tools, and decisions.",
+              icon: <IconTopologyStar3 size={20} aria-hidden="true" />,
+            },
+            {
+              title: "Try a run",
+              description: "Inspect the logic and review the results.",
+              icon: <IconPlayerPlay size={20} aria-hidden="true" />,
+            },
+            {
+              title: "Put it on a schedule",
+              description: "Repeat the same workflow on your timing.",
+              icon: <IconCalendarTime size={20} aria-hidden="true" />,
+            },
+          ]}
+        />
       ) : (
         <div
           className={`workflow-layout ${runId ? "workflow-layout-has-run" : ""}`}
         >
           <div>
-            {!items.length && (
-              <div className="workflow-empty">
-                <h3>Your workflow library</h3>
-                <p>
-                  Import an existing workflow to explore its logic and run it.
-                  Schedules can reuse any registered workflow.
-                </p>
-              </div>
-            )}
             <ul className="workflow-list">
               {items.map((item) => (
                 <li key={item.workflow_id}>
@@ -425,6 +480,6 @@ export function WorkflowsSurface({
           }}
         />
       )}
-    </section>
+    </AutomationSurface>
   );
 }

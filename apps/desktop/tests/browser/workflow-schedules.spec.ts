@@ -103,6 +103,7 @@ test("imports an existing definition, freezes creation review, and reconciles an
     .click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.getByRole("button", { name: "Schedules", exact: true }).click();
+  await page.getByText("More options", { exact: true }).click();
   await page
     .getByRole("button", { name: "Schedule a workflow", exact: true })
     .click();
@@ -189,6 +190,7 @@ test("rejects stale control reviews without retrying the mutation", async ({
 });
 test("shows unavailable capability guidance", async ({ page }) => {
   await open(page, { supported: false });
+  await page.getByText("More options", { exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Schedule a workflow" }),
   ).toBeDisabled();
@@ -240,6 +242,7 @@ test("validates DST gaps and repeated wall times at a compact width", async ({
   const page = await context.newPage();
   try {
     await open(page);
+    await page.getByText("More options", { exact: true }).click();
     await page
       .getByRole("button", { name: "Schedule a workflow", exact: true })
       .click();
@@ -291,6 +294,7 @@ test("shows input schema failures inline without allocating a schedule", async (
   page,
 }) => {
   await open(page);
+  await page.getByText("More options", { exact: true }).click();
   await page
     .getByRole("button", { name: "Schedule a workflow", exact: true })
     .click();

@@ -22,6 +22,17 @@ async function choose(page: Page, name: string, option: string) {
   await page.getByRole("combobox", { name, exact: true }).click();
   await page.getByRole("option", { name: option, exact: true }).click();
 }
+async function setTheme(page: Page, theme: "light" | "dark") {
+  await page.evaluate(async (theme) => {
+    document.documentElement.dataset.theme = theme;
+    await Promise.allSettled(
+      document
+        .getAnimations()
+        .filter((animation) => animation instanceof CSSTransition)
+        .map((animation) => animation.finished),
+    );
+  }, theme);
+}
 
 test("Workflows and Schedules use real manual runs, calendar tasks, model preferences, and exact uncertain-create reconciliation", async ({
   page,
@@ -40,12 +51,16 @@ test("Workflows and Schedules use real manual runs, calendar tasks, model prefer
         __TAURI_INTERNALS__: unknown;
         loseTaskResponse: boolean;
         loseDeletionResponse: boolean;
+        lastManualRunId: string | null;
       };
       host.loseTaskResponse = false;
       host.loseDeletionResponse = false;
+      host.lastManualRunId = null;
       host.__TAURI_INTERNALS__ = {
         invoke: async (command: string, args: unknown) => {
           const result = await host.workflowBridge(command, args);
+          if (command === "start_workflow_run")
+            host.lastManualRunId = (result as { run_id: string }).run_id;
           if (
             command === "delete_workflow_schedule" &&
             host.loseDeletionResponse
@@ -172,6 +187,7 @@ test("Workflows and Schedules use real manual runs, calendar tasks, model prefer
       .getByRole("button", { name: "Close graph", exact: true })
       .click();
     await page.getByRole("button", { name: "Schedules", exact: true }).click();
+    await page.getByText("More options", { exact: true }).click();
     await page
       .getByRole("button", { name: "Schedule a task", exact: true })
       .click();
@@ -238,14 +254,40 @@ test("Workflows and Schedules use real manual runs, calendar tasks, model prefer
       };
     };
     expect(task.record.task.options.reasoning_effort).toBe("high");
-    const queued = (await host.invoke("start_workflow_run", {
-      request: {
-        workflow_id: `${task.record.workflow_name}:${task.record.workflow_version}`,
-        expected_hash: task.record.workflow_hash,
-        inputs: {},
-        idempotency_key: "task-agent-execution-proof",
-      },
-    })) as { run_id: string };
+    await page.evaluate(() => {
+      (
+        window as unknown as { lastManualRunId: string | null }
+      ).lastManualRunId = null;
+    });
+    await page.getByRole("button", { name: "Run now", exact: true }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { lastManualRunId: string | null })
+              .lastManualRunId,
+        ),
+      )
+      .not.toBeNull();
+    const queued = {
+      run_id: await page.evaluate(
+        () =>
+          (window as unknown as { lastManualRunId: string }).lastManualRunId,
+      ),
+    };
+    const output = page.getByRole("region", {
+      name: "Independent workflow run",
+    });
+    await expect(
+      output.locator(".workflow-run-metadata code").first(),
+    ).toHaveText(queued.run_id);
+    const manualHistory = (await host.invoke("list_workflow_runs", {
+      workflowId: `${task.record.workflow_name}:${task.record.workflow_version}`,
+      after: null,
+    })) as { items: { run_id: string }[] };
+    expect(
+      manualHistory.items.some((run) => run.run_id === queued.run_id),
+    ).toBe(true);
     await expect
       .poll(
         async () => {
@@ -332,8 +374,7 @@ test("Workflows and Schedules use real manual runs, calendar tasks, model prefer
       .click();
     await page
       .getByRole("region", { name: "Task run history" })
-      .getByRole("button")
-      .filter({ hasText: queued.run_id })
+      .getByTitle(queued.run_id, { exact: true })
       .click();
     await expect(
       page.getByRole("complementary", { name: "Selected run output" }),
@@ -378,6 +419,7 @@ test("Workflows and Schedules use real manual runs, calendar tasks, model prefer
       runId: queued.run_id,
     })) as { status: string };
     expect(retainedRun.status).toBe("completed");
+    await page.getByText("More options", { exact: true }).click();
     await page
       .getByRole("button", { name: "Schedule a task", exact: true })
       .click();
@@ -389,18 +431,14 @@ test("Workflows and Schedules use real manual runs, calendar tasks, model prefer
       .fill(
         "Summarize consequential cybersecurity market developments with source links and actionable implications.",
       );
-    await page.evaluate(() => {
-      document.documentElement.dataset.theme = "dark";
-    });
+    await setTheme(page, "dark");
     await capture(page, "10-schedule-a-task-dark.png");
     const taskAudit = await new AxeBuilder({ page })
       .include(".workflow-dialog")
       .analyze();
     expect(taskAudit.violations).toEqual([]);
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
-    await page.evaluate(() => {
-      document.documentElement.dataset.theme = "light";
-    });
+    await setTheme(page, "light");
     const audit = await new AxeBuilder({ page })
       .include(".workflow-surface")
       .analyze();

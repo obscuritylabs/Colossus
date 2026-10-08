@@ -740,6 +740,13 @@ fn imported_mcp(
                         .get("allowStateless")
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
+                    protocol_version: value
+                        .get("protocolVersion")
+                        .cloned()
+                        .map(serde_json::from_value)
+                        .transpose()
+                        .map_err(|_| invalid_repository_config())?
+                        .unwrap_or_default(),
                     oauth,
                     allowed_tools: value_array(value, "allowedTools")?,
                     research_tools: value
@@ -1415,11 +1422,24 @@ mod tests {
             Some("credential-provider")
         );
         let mcp = imported_mcp(&canonical(), &mappings).expect("MCP");
+        assert_eq!(
+            mcp[0].1.protocol_version,
+            colossus_contracts::McpProtocolVersion::Auto
+        );
         assert!(mcp[0].1.headers.is_empty());
         assert_eq!(
             mcp[0].1.credential_headers["Authorization"].credential_id,
             "credential-docs"
         );
+        let mut current = canonical();
+        current["mcp"]["servers"]["docs"]["protocolVersion"] = serde_json::json!("2026-07-28");
+        let mcp = imported_mcp(&current, &mappings).expect("2026 MCP");
+        assert_eq!(
+            mcp[0].1.protocol_version,
+            colossus_contracts::McpProtocolVersion::V2026
+        );
+        let persisted = serde_json::to_value(&mcp[0].1).expect("Desktop setting");
+        assert_eq!(persisted["protocolVersion"], "2026-07-28");
     }
 
     #[test]

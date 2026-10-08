@@ -868,25 +868,24 @@ pub(super) fn supervise_windows_job(
     }));
     let stdout_handle = capture(stdout, Arc::clone(&state), CaptureStream::Stdout);
     let stderr_handle = capture(stderr, Arc::clone(&state), CaptureStream::Stderr);
-    let mut stdin = child.stdin.take();
-    if let Some(encoded) = &job.process.stdin_base64 {
-        let input = BASE64
-            .decode(encoded)
-            .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
-        let stdin = stdin
-            .as_mut()
-            .ok_or_else(|| SandboxHelperError::Execution("child stdin is absent".into()))?;
-        stdin.write_all(&input)?;
-        stdin.flush()?;
-    }
+    let pipe = child
+        .stdin
+        .take()
+        .ok_or_else(|| SandboxHelperError::Execution("child stdin is absent".into()))?;
+    let input = job
+        .process
+        .stdin_base64
+        .as_ref()
+        .map(|encoded| BASE64.decode(encoded))
+        .transpose()
+        .map_err(|error| SandboxHelperError::Execution(error.to_string()))?
+        .unwrap_or_default();
     let mut completion = job
         .process
         .stdin_completion
         .as_ref()
         .map(StdinCompletionMonitor::new);
-    if completion.is_none() {
-        drop(stdin.take());
-    }
+    let mut stdin = ProtocolStdin::new(pipe, input, completion.is_some());
     let started = Instant::now();
     let timeout = Duration::from_millis(job.remaining_timeout_ms());
     let mut timed_out = false;
@@ -928,18 +927,14 @@ pub(super) fn supervise_windows_job(
             }
             break code;
         }
-        if let Some(completion) = completion.as_mut()
-            && stdin.is_some()
-        {
-            let close = {
+        if let Some(completion) = completion.as_mut() {
+            let action = {
                 let state = state
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                completion.should_close(&state.stdout, state.truncated)
+                completion.observe(&state.stdout, state.truncated)
             };
-            if close {
-                drop(stdin.take());
-            }
+            stdin.apply(action);
         }
         if let Some(limit) = windows_resource_limit(&child)? {
             resource_limit_exceeded = Some(limit);
@@ -956,6 +951,7 @@ pub(super) fn supervise_windows_job(
             break wait_for_windows_termination(&child)?;
         }
     };
+    stdin.finish();
     stdout_handle
         .join()
         .map_err(|_| SandboxHelperError::Execution("stdout capture panicked".into()))??;
