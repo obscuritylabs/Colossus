@@ -7825,12 +7825,12 @@ textarea {
 }
 
 .aside-panel {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   height: 100%;
   max-height: 100%;
   min-width: 0;
   min-height: 0;
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
   overflow: hidden;
   background: var(--main);
 }
@@ -7857,7 +7857,7 @@ textarea {
   gap: 7px;
   margin-top: 3px;
   color: var(--text);
-  font-size: 0.96rem;
+  font-size: var(--font-size-heading-sm);
 }
 
 .aside-header .aside-context-copy {
@@ -7905,6 +7905,7 @@ textarea {
 }
 
 .aside-scroll {
+  flex: 1 1 0;
   min-height: 0;
   padding: 16px;
   overflow: auto;
@@ -9415,8 +9416,7 @@ textarea {
   background: var(--canvas);
 }
 
-.terminal-emulator .xterm,
-.terminal-emulator .xterm-viewport {
+.terminal-emulator .xterm {
   height: 100%;
 }
 

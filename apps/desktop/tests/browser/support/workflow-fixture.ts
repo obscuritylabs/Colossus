@@ -222,6 +222,9 @@ export async function installWorkflowFixture(
               record: {
                 ...record,
                 schedule_id: request.schedule_id,
+                workflow_name: request.task
+                  ? "desktop-task-" + request.schedule_id
+                  : record.workflow_name,
                 inputs: request.inputs,
                 task: request.task ?? null,
                 calendar: request.calendar ?? null,
@@ -317,9 +320,18 @@ export async function installWorkflowFixture(
         if (command === "start_workflow_run") {
           const request = args.request as {
             idempotency_key: string;
+            workflow_id: string;
             inputs: Record<string, unknown>;
           };
-          if (typeof request.inputs.message !== "string")
+          const isTask = schedules.some(
+            (schedule) =>
+              schedule.record.task &&
+              request.workflow_id ===
+                schedule.record.workflow_name +
+                  ":" +
+                  schedule.record.workflow_version,
+          );
+          if (!isTask && typeof request.inputs.message !== "string")
             throw {
               code: "invalid_argument",
               message: "A message is required.",
@@ -330,15 +342,23 @@ export async function installWorkflowFixture(
           if (!manualRun || manualKey !== request.idempotency_key) {
             manualRun = {
               run_id: "manual-run-1",
-              workflow_id: workflow.workflow_id,
+              workflow_id: request.workflow_id,
               workflow_hash: hash,
               status: "completed",
               created_at: record.created_at,
               updated_at: record.updated_at,
               last_sequence: 5,
               result: null,
-              result_json:
-                '{ "result": { "ok": true, "exact": 18446744073709551615 } }',
+              result_json: isTask
+                ? JSON.stringify({
+                    task: {
+                      media_type: "application/json",
+                      text: JSON.stringify({
+                        output: "Workspace is healthy. Manual test completed.",
+                      }),
+                    },
+                  })
+                : '{ "result": { "ok": true, "exact": 18446744073709551615 } }',
               step_states: [
                 {
                   step_id: "result",

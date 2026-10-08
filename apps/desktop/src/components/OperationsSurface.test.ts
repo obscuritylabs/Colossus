@@ -90,6 +90,8 @@ function renderSurface(
   return renderToStaticMarkup(
     createElement(OperationsSurface, {
       surface,
+      onCreateWithAgent: vi.fn(),
+      agentStarting: false,
       connection: status.connection,
       desktop: status,
       connecting: false,

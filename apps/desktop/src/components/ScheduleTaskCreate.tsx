@@ -17,7 +17,6 @@ import {
   type WorkflowSchedule,
 } from "../workflows";
 import { DropdownSelect } from "./DropdownSelect";
-import type { ScheduleExample } from "./schedule-examples";
 import { WorkflowDialog } from "./WorkflowDialog";
 import {
   defaultCalendarDraft,
@@ -30,30 +29,19 @@ export function ScheduleTaskCreate({
   context,
   onClose,
   onCreated,
-  initial,
 }: {
-  initial?: ScheduleExample | null;
   targetId: string;
   context: WorkflowContext;
   onClose: () => void;
   onCreated: (schedule: WorkflowSchedule) => void;
 }) {
-  const [name, setName] = useState(initial?.name || "");
-  const [instructions, setInstructions] = useState(initial?.instructions || "");
-  const [timing, setTiming] = useState(() => ({
-    ...defaultCalendarDraft(),
-    ...(initial
-      ? {
-          repeat: initial.repeat,
-          time: initial.time,
-          weekdays: [...initial.weekdays],
-        }
-      : {}),
-  }));
+  const [name, setName] = useState("");
+  const [instructions, setInstructions] = useState("");
+  const [timing, setTiming] = useState(defaultCalendarDraft);
   const [model, setModel] = useState("");
   const [models, setModels] = useState<string[]>([]);
   const [effort, setEffort] = useState("");
-  const [tools, setTools] = useState(initial?.tools.join(", ") ?? "web.search");
+  const [tools, setTools] = useState("web.search");
   const [misfire, setMisfire] = useState<MisfirePolicy>("fire_once");
   const [enabled, setEnabled] = useState(true);
   const [review, setReview] = useState<CreateScheduleRequest | null>(null);

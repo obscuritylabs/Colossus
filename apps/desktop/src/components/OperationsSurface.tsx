@@ -35,6 +35,8 @@ import { SchedulesSurface } from "./SchedulesSurface";
 import type { WorkspaceSurface } from "./ProductRail";
 
 interface OperationsSurfaceProps {
+  onCreateWithAgent: (prompt: string) => void;
+  agentStarting: boolean;
   scheduleInspection?:
     { scheduleId: string; showRun: boolean } | null | undefined;
   initialSettingsTab?:
@@ -1045,6 +1047,8 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
       {props.surface === "fleet" ? <FleetView {...props} /> : null}
       {props.surface === "workflows" ? (
         <WorkflowsSurface
+          onCreateWithAgent={props.onCreateWithAgent}
+          agentStarting={props.agentStarting}
           key={props.desktop.selectedTargetId}
           targetId={props.desktop.selectedTargetId}
           workspaceName={
@@ -1058,6 +1062,8 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
       ) : null}
       {props.surface === "schedules" ? (
         <SchedulesSurface
+          onCreateWithAgent={props.onCreateWithAgent}
+          agentStarting={props.agentStarting}
           key={props.desktop.selectedTargetId}
           targetId={props.desktop.selectedTargetId}
           workspaceName={

@@ -172,6 +172,7 @@ test("Workflows and Schedules use real manual runs, calendar tasks, model prefer
       .getByRole("button", { name: "Close graph", exact: true })
       .click();
     await page.getByRole("button", { name: "Schedules", exact: true }).click();
+    await page.getByText("More options", { exact: true }).click();
     await page
       .getByRole("button", { name: "Schedule a task", exact: true })
       .click();
@@ -238,14 +239,16 @@ test("Workflows and Schedules use real manual runs, calendar tasks, model prefer
       };
     };
     expect(task.record.task.options.reasoning_effort).toBe("high");
-    const queued = (await host.invoke("start_workflow_run", {
-      request: {
-        workflow_id: `${task.record.workflow_name}:${task.record.workflow_version}`,
-        expected_hash: task.record.workflow_hash,
-        inputs: {},
-        idempotency_key: "task-agent-execution-proof",
-      },
-    })) as { run_id: string };
+    await page.getByRole("button", { name: "Run now", exact: true }).click();
+    await expect(
+      page.getByRole("region", { name: "Independent workflow run" }),
+    ).toBeVisible();
+    const manualHistory = (await host.invoke("list_workflow_runs", {
+      workflowId: `${task.record.workflow_name}:${task.record.workflow_version}`,
+      after: null,
+    })) as { items: { run_id: string }[] };
+    expect(manualHistory.items).toHaveLength(1);
+    const queued = manualHistory.items[0]!;
     await expect
       .poll(
         async () => {
@@ -378,6 +381,7 @@ test("Workflows and Schedules use real manual runs, calendar tasks, model prefer
       runId: queued.run_id,
     })) as { status: string };
     expect(retainedRun.status).toBe("completed");
+    await page.getByText("More options", { exact: true }).click();
     await page
       .getByRole("button", { name: "Schedule a task", exact: true })
       .click();

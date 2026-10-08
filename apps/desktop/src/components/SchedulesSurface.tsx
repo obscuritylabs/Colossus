@@ -7,6 +7,10 @@ import {
   workflowContext,
 } from "../api";
 import { occurrence, workflowFailure } from "../workflows";
+import { Button } from "@colossus/ui";
+import { AutomationSurface } from "@colossus/ui/automations";
+import "@colossus/ui/styles/automations.css";
+import { IconPlus, IconSparkles, IconLayoutGrid } from "@tabler/icons-react";
 import type { WorkflowContext, WorkflowSchedule } from "../workflows";
 import { ScheduleCreate } from "./ScheduleCreate";
 import { ScheduleDetail } from "./ScheduleDetail";
@@ -15,7 +19,10 @@ import { ScheduleTaskCreate } from "./ScheduleTaskCreate";
 import { WorkflowLogicDialog } from "./WorkflowLogicDialog";
 import { ScheduleExamples } from "./ScheduleExamples";
 import { ScheduleInventory } from "./ScheduleInventory";
-import type { ScheduleExample } from "./schedule-examples";
+import {
+  customSchedulePrompt,
+  scheduleExamplePrompt,
+} from "./schedule-examples";
 import "./workflows.css";
 
 export function SchedulesSurface({
@@ -23,10 +30,14 @@ export function SchedulesSurface({
   workspaceName,
   runtimeReady,
   initialInspection,
+  onCreateWithAgent,
+  agentStarting,
 }: {
   targetId: string | null;
   workspaceName: string;
   runtimeReady: boolean;
+  onCreateWithAgent: (prompt: string) => void;
+  agentStarting: boolean;
   initialInspection?:
     { scheduleId: string; showRun: boolean } | null | undefined;
 }) {
@@ -38,7 +49,7 @@ export function SchedulesSurface({
   const [deleting, setDeleting] = useState(false);
   const [logicOpen, setLogicOpen] = useState(false);
   const [dialog, setDialog] = useState<"create" | "task" | null>(null);
-  const [example, setExample] = useState<ScheduleExample | null>(null);
+  const [examplesOpen, setExamplesOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -56,6 +67,7 @@ export function SchedulesSurface({
     setAfter(null);
     setControl(null);
     setDialog(null);
+    setExamplesOpen(false);
     setLogicOpen(false);
     setBusy(false);
     setError("");
@@ -243,36 +255,49 @@ export function SchedulesSurface({
     }
   }
   const record = detail?.record;
+  const canCreateWithAgent =
+    !loading &&
+    !busy &&
+    !agentStarting &&
+    runtimeReady &&
+    !!context?.task_schedules &&
+    !!context.calendar_schedules;
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   useEffect(() => {
     if (record) requestAnimationFrame(() => overviewHeading.current?.focus());
   }, [record?.schedule_id]);
   return (
-    <section className="workflow-surface" aria-label="Workspace schedules">
+    <AutomationSurface className="workflow-surface" label="Workspace schedules">
       <header className="workflow-page-header">
         <div>
           <p className="surface-breadcrumb">
             Workspace / {workspaceName}
-            {detail ? " / Schedules" : ""}
+            {detail || examplesOpen ? " / Schedules" : ""}
           </p>
           <h2 ref={overviewHeading} tabIndex={-1}>
             {detail
               ? detail.record.task?.name || detail.record.schedule_id
-              : "Schedules"}
+              : examplesOpen
+                ? "Schedule examples"
+                : "Schedules"}
           </h2>
           <p>
             {detail
               ? `${detail.record.task ? "Scheduled agent task" : "Workflow schedule"} · ${detail.record.enabled ? "Enabled" : "Paused"}`
-              : "Schedule an agent task or run an existing workflow on repeat."}
+              : examplesOpen
+                ? "Find a starting point for your next task."
+                : "Automate your routine work."}
           </p>
         </div>
         <div className="workflow-actions">
-          {detail && (
+          {(detail || examplesOpen) && (
             <button
               className="button secondary"
               disabled={busy}
               onClick={() => {
                 request.current++;
                 setDetail(null);
+                setExamplesOpen(false);
                 setDetailError("");
                 setLogicOpen(false);
                 requestAnimationFrame(() => overviewHeading.current?.focus());
@@ -292,70 +317,59 @@ export function SchedulesSurface({
           </button>
           {!detail && (
             <>
-              <button
-                className="button primary"
-                disabled={
-                  loading ||
-                  busy ||
-                  !context?.task_schedules ||
-                  !context.calendar_schedules
+              <Button
+                variant="primary"
+                disabled={!canCreateWithAgent}
+                onClick={() =>
+                  onCreateWithAgent(customSchedulePrompt(timezone))
                 }
-                onClick={() => {
-                  setExample(null);
-                  setDialog("task");
-                }}
               >
-                Schedule a task
-              </button>
-              <button
-                className="button secondary"
-                disabled={
-                  loading ||
-                  busy ||
-                  !context?.schedules_create ||
-                  !context.workflows_read
-                }
-                onClick={() => setDialog("create")}
-              >
-                Schedule a workflow
-              </button>
+                <IconSparkles size={16} aria-hidden="true" /> Create with agent
+              </Button>
+              {items.length > 0 && !examplesOpen && (
+                <Button
+                  onClick={() => setExamplesOpen(true)}
+                  disabled={loading || busy}
+                >
+                  <IconLayoutGrid size={16} aria-hidden="true" /> Browse
+                  examples
+                </Button>
+              )}
+              <details className="schedule-create-options">
+                <summary>More options</summary>
+                <div className="workflow-actions">
+                  <button
+                    className="button secondary"
+                    disabled={
+                      loading ||
+                      busy ||
+                      !context?.task_schedules ||
+                      !context.calendar_schedules
+                    }
+                    onClick={() => {
+                      setDialog("task");
+                    }}
+                  >
+                    <IconPlus size={16} aria-hidden="true" /> Schedule a task
+                  </button>
+                  <button
+                    className="button secondary"
+                    disabled={
+                      loading ||
+                      busy ||
+                      !context?.schedules_create ||
+                      !context.workflows_read
+                    }
+                    onClick={() => setDialog("create")}
+                  >
+                    Schedule a workflow
+                  </button>
+                </div>
+              </details>
             </>
           )}
         </div>
       </header>
-      {!detail && (
-        <aside className="workflow-availability">
-          <strong>
-            {!runtimeReady
-              ? "Runtime unavailable"
-              : loading
-                ? "Checking runtime capabilities…"
-                : context?.managed
-                  ? "Managed Local worker is running"
-                  : "Connected External runtime"}
-          </strong>
-          <p>
-            {loading
-              ? "Checking availability in the selected Workspace."
-              : context?.managed
-                ? "Schedules tick while this Workspace's worker is running. Future schedules do not pin or wake sleeping Workspaces."
-                : "Scheduling follows this runtime's own availability. Desktop does not start or enroll an External runtime automatically."}
-          </p>
-          {context?.managed && (
-            <details>
-              <summary>Background and shutdown behavior</summary>
-              <p>
-                Retained unselected workers keep ticking. Desktop retains up to
-                four workers; an idle Workspace can sleep when another needs
-                capacity. Closing the window keeps Colossus in the macOS menu
-                bar or Windows system tray. Shut Down Colossus stops workers and
-                ticks. Resume reconciles missed occurrences with the selected
-                policy.
-              </p>
-            </details>
-          )}
-        </aside>
-      )}
       {!targetId || !runtimeReady ? (
         <p role="status">
           Select and connect this Workspace's runtime to inspect its schedules.
@@ -376,19 +390,6 @@ export function SchedulesSurface({
         </p>
       )}
       {message && <p role="status">{message}</p>}
-      {!detail &&
-        !loading &&
-        context?.schedules_read &&
-        !items.length &&
-        !error && (
-          <div className="workflow-empty">
-            <h3>No schedules in this Workspace</h3>
-            <p>
-              Schedule a task with instructions, or choose a reusable workflow
-              from the Workflows library.
-            </p>
-          </div>
-        )}
       {detailError && (
         <div>
           <p role="alert">{detailError}</p>
@@ -405,25 +406,28 @@ export function SchedulesSurface({
           </button>
         </div>
       )}
-      {context?.schedules_read && !detail && items.length > 0 && (
-        <div className="workflow-inventory-view">
-          <ScheduleInventory
-            items={items}
-            selectedId={undefined}
-            busy={busy || loading}
-            onInspect={(id) => void inspect(id)}
-          />
-          {after && (
-            <button
-              className="button secondary"
-              disabled={busy}
-              onClick={() => void more()}
-            >
-              Load more schedules
-            </button>
-          )}
-        </div>
-      )}
+      {context?.schedules_read &&
+        !detail &&
+        !examplesOpen &&
+        items.length > 0 && (
+          <div className="workflow-inventory-view">
+            <ScheduleInventory
+              items={items}
+              selectedId={undefined}
+              busy={busy || loading}
+              onInspect={(id) => void inspect(id)}
+            />
+            {after && (
+              <button
+                className="button secondary"
+                disabled={busy}
+                onClick={() => void more()}
+              >
+                Load more schedules
+              </button>
+            )}
+          </div>
+        )}
       {detail && targetId && context && (
         <ScheduleDetail
           key={`${context.selection_epoch}:${detail.record.schedule_id}`}
@@ -431,26 +435,45 @@ export function SchedulesSurface({
           context={context}
           schedule={detail}
           busy={busy || loading}
-          onRefresh={() => void inspect(detail.record.schedule_id)}
           onControl={() => void reviewControl()}
           onDelete={() => void reviewControl(true)}
           onLogic={() => setLogicOpen(true)}
         />
       )}
+      {!detail &&
+        !loading &&
+        context?.schedules_read &&
+        !error &&
+        (!items.length || examplesOpen) && (
+          <ScheduleExamples
+            disabled={!canCreateWithAgent}
+            onCreateWithAgent={(example) =>
+              onCreateWithAgent(scheduleExamplePrompt(example, timezone))
+            }
+          />
+        )}
       {!detail && (
-        <ScheduleExamples
-          disabled={
-            loading ||
-            busy ||
-            !runtimeReady ||
-            !context?.task_schedules ||
-            !context.calendar_schedules
-          }
-          onUse={(example) => {
-            setExample(example);
-            setDialog("task");
-          }}
-        />
+        <details className="workflow-availability">
+          <summary>
+            <strong>
+              {!runtimeReady
+                ? "Runtime unavailable"
+                : loading
+                  ? "Checking runtime capabilities…"
+                  : context?.managed
+                    ? "Managed Local worker is running"
+                    : "Connected External runtime"}
+            </strong>
+            <span> · Schedules run while the worker is online</span>
+          </summary>
+          <p>
+            {loading
+              ? "Checking availability in the selected Workspace."
+              : context?.managed
+                ? "Schedules run while this Workspace's worker is online. Sleeping Workspaces are not woken. Closing the window keeps Colossus in the menu bar or system tray; Shut Down stops workers. Resume follows the selected missed-run policy."
+                : "Scheduling follows this runtime's own availability. Desktop does not start or enroll an External runtime automatically."}
+          </p>
+        </details>
       )}
       {logicOpen && targetId && context && record && (
         <WorkflowLogicDialog
@@ -483,13 +506,12 @@ export function SchedulesSurface({
       )}
       {targetId && context && dialog === "task" && (
         <ScheduleTaskCreate
-          key={example?.id || "custom"}
-          initial={example}
           targetId={targetId}
           context={context}
           onClose={() => setDialog(null)}
           onCreated={(schedule) => {
             setDialog(null);
+            setExamplesOpen(false);
             setItems((items) => [schedule, ...items]);
             setDetail(schedule);
             setMessage("Task schedule created.");
@@ -546,6 +568,6 @@ export function SchedulesSurface({
           </footer>
         </WorkflowDialog>
       )}
-    </section>
+    </AutomationSurface>
   );
 }

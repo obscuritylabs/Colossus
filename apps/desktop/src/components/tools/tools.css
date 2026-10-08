@@ -105,9 +105,11 @@
 .work-side-drawer > .work-drawer-panel:not([hidden]),
 .work-side-drawer > .browser-pane,
 .work-side-drawer > .git-pane {
-  flex: 1;
+  flex: 1 1 0;
+  height: auto;
+  max-height: none;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
 }
 .terminal-dock {
   display: flex;
@@ -161,4 +163,11 @@
 
 .tool-switcher-menu[hidden] {
   display: none;
+}
+
+.aside-header,
+.aside-close-confirm,
+.aside-composer,
+.aside-error {
+  flex: 0 0 auto;
 }

@@ -1,4 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
+import { mkdirSync } from "node:fs";
+import { resolve } from "node:path";
 import { expect, test } from "@playwright/test";
 import { installWorkflowFixture } from "./support/workflow-fixture";
 
@@ -82,6 +84,7 @@ test("compact workflow library is keyboard reachable and task timing retains loc
     .getByRole("button", { name: "Open Workspace navigation", exact: true })
     .click();
   await page.getByRole("button", { name: "Schedules", exact: true }).click();
+  await page.getByText("More options", { exact: true }).click();
   await page
     .getByRole("button", { name: "Schedule a task", exact: true })
     .click();
@@ -114,4 +117,51 @@ test("compact workflow library is keyboard reachable and task timing retains loc
       .getByRole("dialog")
       .evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
   ).toBe(true);
+});
+
+test("empty workflow library has a single starting view and launches a new authoring chat", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installWorkflowFixture(page, { empty: true, modern: true });
+  await page.goto("/?fixture=operations-studio");
+  await page.getByRole("button", { name: "Workflows", exact: true }).click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Turn a repeatable task into a workflow",
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Explore a workflow" }),
+  ).toHaveCount(0);
+  expect(
+    (await new AxeBuilder({ page }).include(".workflow-surface").analyze())
+      .violations,
+  ).toEqual([]);
+  if (process.env.COLOSSUS_WORKFLOW_SCREENSHOTS === "1") {
+    const folder = resolve("../../.local/schedules-polish/after");
+    mkdirSync(folder, { recursive: true });
+    await page.screenshot({
+      path: resolve(folder, "workflows-empty.png"),
+      animations: "disabled",
+    });
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => {
+    document.documentElement.dataset.textSize = "large";
+  });
+  expect(
+    await page
+      .locator(".workflow-surface")
+      .evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
+  ).toBe(true);
+  await page
+    .getByRole("button", { name: "Create with agent", exact: true })
+    .click();
+  const message = page.locator(
+    'article[data-role="user"] .shared-message-body',
+  );
+  await expect(message).toHaveCount(1);
+  await expect(message).toContainText("Help me create a reusable workflow");
+  await expect(message).toContainText("strict input schema");
 });

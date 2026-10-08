@@ -2485,6 +2485,60 @@ export default function App() {
     [markConnectionFailure, startWatch],
   );
 
+  async function createAutomationWithAgent(fullPrompt: string) {
+    if (
+      submitInFlight.current ||
+      connectingRef.current ||
+      connection.state !== "connected"
+    )
+      return;
+    const route = targetRoutes.current?.capture() ?? null;
+    if (!route || targetRoutes.current?.isCurrent(route) !== true) return;
+    newWork();
+    setPrompt(fullPrompt);
+    setRole("primary");
+    setMode("execute");
+    const fingerprint = operationFingerprint([
+      fullPrompt.trim(),
+      route.targetId,
+      "",
+      "primary",
+      "execute",
+      maxTurns,
+      "",
+      "",
+      "",
+      "",
+      0,
+    ]);
+    const previous = createAttempt.current;
+    const attempt = stableIdempotentAttempt(
+      previous?.targetId === route.targetId ? previous.attempt : null,
+      fingerprint,
+    );
+    createAttempt.current = { targetId: route.targetId, attempt };
+    const result = await performRunSubmission(
+      {
+        prompt: fullPrompt.trim(),
+        pluginSkillIds: [],
+        attachments: [],
+        role: "primary",
+        mode: "execute",
+        researchDepth,
+        researchSources,
+        maxTurns,
+        idempotencyKey: attempt.key,
+      },
+      route,
+    );
+    if (result.type === "accepted") {
+      createAttempt.current = null;
+      setPrompt("");
+    } else if (result.type === "failed") {
+      setComposerError(result.error);
+    }
+  }
+
   async function enqueueCurrentMessage(
     currentView: NonNullable<ReturnType<typeof chat.views.get>>,
     route: TargetRoute,
@@ -5862,6 +5916,10 @@ export default function App() {
           }
         >
           <OperationsSurface
+            onCreateWithAgent={(prompt) =>
+              void createAutomationWithAgent(prompt)
+            }
+            agentStarting={submitting || connecting}
             scheduleInspection={
               scheduleInspection?.targetId === desktop.selectedTargetId
                 ? scheduleInspection
