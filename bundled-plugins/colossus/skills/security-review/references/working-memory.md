@@ -22,8 +22,11 @@ python3 <absolute skill root>/scripts/init_review.py --workspace <absolute check
 Quote actual paths for the host shell; placeholders are not literal commands. Python
 3.10+ and normal file/process authority are required. The helper:
 
-- Uses checkout-local storage only when Git confirms ignore status and scratch parents
-  are ordinary directories, not links or redirected paths.
+- Resolves the primary checkout with Git, including when `--workspace` names a linked
+  worktree or a subdirectory. Uses that checkout's storage only when Git confirms its
+  ignore status and scratch parents are ordinary directories, not redirected paths.
+- Records the requested workspace separately from the storage checkout in the brief
+  and location JSON. Keep source inspection rooted in the requested target.
 - Otherwise uses a unique OS temporary directory; report the location and that cleanup
   may remove it. Do not promise temporary evidence survives restart.
 - Exclusively creates a review directory, owner-only POSIX directory/file modes,

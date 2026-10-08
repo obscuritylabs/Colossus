@@ -39,14 +39,34 @@ class ReviewWorkspaceTests(unittest.TestCase):
         if ignore:
             (self.workspace / ".gitignore").write_text("/.local/\n", encoding="utf-8")
 
-    def run_helper(self, review_id="review-1"):
+    def commit_fixture(self):
+        (self.workspace / "source.txt").write_text("fixture source\n", encoding="utf-8")
+        for arguments in (
+            ["add", "."],
+            ["-c", "user.name=Review tests", "-c", "user.email=review@example.invalid",
+             "-c", "commit.gpgSign=false", "commit", "--quiet", "-m", "Test fixture"],
+        ):
+            subprocess.run(
+                [shutil.which("git"), *arguments], cwd=self.workspace,
+                check=True, capture_output=True, timeout=10,
+            )
+
+    def linked_worktree(self, name):
+        checkout = self.root / name
+        subprocess.run(
+            [shutil.which("git"), "worktree", "add", "--quiet", "-b", name, str(checkout)],
+            cwd=self.workspace, check=True, capture_output=True, timeout=10,
+        )
+        return checkout
+
+    def run_helper(self, review_id="review-1", workspace=None):
         return subprocess.run(
-            [sys.executable, str(INITIALIZER), "--workspace", str(self.workspace), "--review-id", review_id],
+            [sys.executable, str(INITIALIZER), "--workspace", str(workspace or self.workspace), "--review-id", review_id],
             env=self.environment, text=True, capture_output=True, check=False,
         )
 
-    def success(self, review_id="review-1"):
-        result = self.run_helper(review_id)
+    def success(self, review_id="review-1", workspace=None):
+        result = self.run_helper(review_id, workspace)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
@@ -81,6 +101,41 @@ class ReviewWorkspaceTests(unittest.TestCase):
         result = self.success()
         self.assertEqual(result["storage"], "temporary")
         self.assertTrue((Path(result["review_dir"]) / "checkpoint.md").is_file())
+
+    def test_linked_worktrees_share_primary_notes_and_record_requested_workspace(self):
+        self.git_repository(ignore=True)
+        self.commit_fixture()
+        first = self.linked_worktree("first-worktree")
+        scope = first / "component"
+        scope.mkdir()
+        result = self.success(workspace=scope)
+        review = Path(result["review_dir"])
+        self.assertEqual(review, self.workspace / ".local/security-reviews/review-1")
+        self.assertEqual(result["workspace"], str(scope))
+        self.assertEqual(result["storage_checkout"], str(self.workspace))
+        brief = (review / "brief.md").read_text()
+        self.assertIn(f"Requested workspace: {json.dumps(str(scope))}", brief)
+        self.assertIn(f"Storage checkout: {json.dumps(str(self.workspace))}", brief)
+        checkpoint = review / "checkpoint.md"
+        checkpoint.write_text("retained worktree evidence\n", encoding="utf-8")
+        second = self.linked_worktree("second-worktree")
+        repeated = self.run_helper(workspace=second)
+        self.assertNotEqual(repeated.returncode, 0)
+        self.assertIn("already exists", repeated.stderr)
+        self.assertEqual(checkpoint.read_text(), "retained worktree evidence\n")
+        self.assertFalse((first / ".local").exists())
+        self.assertFalse((second / ".local").exists())
+
+    def test_linked_ignore_rules_do_not_authorize_unignored_primary_storage(self):
+        self.git_repository()
+        self.commit_fixture()
+        linked = self.linked_worktree("linked-worktree")
+        (linked / ".gitignore").write_text("/.local/\n", encoding="utf-8")
+        result = self.success(workspace=linked)
+        self.assertEqual(result["storage"], "temporary")
+        self.assertTrue(Path(result["review_dir"]).is_relative_to(self.temp_root))
+        self.assertFalse((self.workspace / ".local").exists())
+        self.assertFalse((linked / ".local").exists())
 
     def test_existing_review_is_preserved_and_not_reinitialized(self):
         self.git_repository(ignore=True)

@@ -13,6 +13,27 @@ import subprocess
 import tempfile
 
 
+def primary_checkout(workspace: Path) -> Path | None:
+    git = shutil.which("git")
+    if git is None:
+        return None
+    try:
+        result = subprocess.run(
+            [git, "-c", "core.fsmonitor=false", "worktree", "list", "--porcelain", "-z"],
+            cwd=workspace, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=10, check=False,
+        )
+        # Git lists the main worktree first. NUL fields preserve spaces/newlines
+        # without interpreting Git's quoted human-readable path format.
+        fields = result.stdout.split(b"\0\0", 1)[0].split(b"\0")
+        if result.returncode != 0 or b"bare" in fields or not fields[0].startswith(b"worktree "):
+            return None
+        checkout = Path(os.fsdecode(fields[0][len(b"worktree "):])).resolve(strict=True)
+        return checkout if checkout.is_dir() else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
 def git_ignores_notes(workspace: Path, review_id: str) -> bool:
     git = shutil.which("git")
     if git is None:
@@ -59,14 +80,15 @@ def initialize(workspace: Path, review_id: str) -> dict:
     if not workspace.is_dir():
         raise ValueError("workspace must be an existing directory")
 
+    checkout = primary_checkout(workspace)
     review_dir = None
-    reason = "checkout-local notes are not confirmed ignored or their parents are unsafe"
-    if git_ignores_notes(workspace, review_id) and safe_local_parents(workspace):
+    reason = "primary checkout is unavailable, notes are not confirmed ignored, or parents are unsafe"
+    if checkout is not None and git_ignores_notes(checkout, review_id) and safe_local_parents(checkout):
         try:
-            (workspace / ".local").mkdir(mode=0o700, exist_ok=True)
-            root = workspace / ".local/security-reviews"
+            (checkout / ".local").mkdir(mode=0o700, exist_ok=True)
+            root = checkout / ".local/security-reviews"
             root.mkdir(mode=0o700, exist_ok=True)
-            if not safe_local_parents(workspace):
+            if not safe_local_parents(checkout):
                 raise OSError("scratch parent changed during initialization")
             candidate = root / review_id
             candidate.mkdir(mode=0o700)
@@ -74,18 +96,20 @@ def initialize(workspace: Path, review_id: str) -> dict:
         except FileExistsError as error:
             raise ValueError("review directory already exists; resume it or choose a new ID") from error
         except OSError:
-            reason = "checkout-local scratch could not be created; using OS temporary storage"
+            reason = "primary-checkout scratch could not be created; using OS temporary storage"
 
     storage = "workspace"
     if review_dir is None:
         review_dir = Path(tempfile.mkdtemp(prefix=f"colossus-security-review-{review_id}-"))
         storage = "temporary"
+    storage_checkout = str(checkout) if storage == "workspace" else None
 
     templates = {
         "brief.md": (
             "# Review brief\n\n"
             f"Review ID: {review_id}\n"
-            f"Storage checkout: {json.dumps(str(workspace))}\n"
+            f"Requested workspace: {json.dumps(str(workspace))}\n"
+            f"Storage checkout: {json.dumps(storage_checkout)}\n"
             "Reviewed target, revision, and dirty state: not yet recorded\n"
             "Request and in-scope paths/diff: not yet recorded\n"
             "Deployment, supplied model, and assumptions: not yet recorded\n"
@@ -111,9 +135,11 @@ def initialize(workspace: Path, review_id: str) -> dict:
         "status": "initialized",
         "review_id": review_id,
         "review_dir": str(review_dir),
+        "workspace": str(workspace),
+        "storage_checkout": storage_checkout,
         "storage": storage,
         "files": list(templates),
-        "notice": reason if storage == "temporary" else "checkout-local notes are Git-ignored",
+        "notice": reason if storage == "temporary" else "primary-checkout notes are Git-ignored",
     }
 
 
