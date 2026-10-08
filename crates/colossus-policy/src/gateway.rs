@@ -196,6 +196,9 @@ impl QuarantinedEffectObserver for GatewayStreamSink<'_> {
         };
         if let Err(error) = self.observer.observe(released).await {
             let failure = match error {
+                ExecutionError::ProviderRejected(failure) => StreamSinkFailure::Unknown(format!(
+                    "released stream observation failed: {failure}"
+                )),
                 ExecutionError::ReleaseDenied(message) => StreamSinkFailure::Denied(message),
                 ExecutionError::Failed(message)
                 | ExecutionError::OutcomeUnknown(message)
@@ -776,6 +779,20 @@ impl EffectGateway {
         .await
         {
             Ok(Ok(result)) => result,
+            Ok(Err(ExecutionError::ProviderRejected(failure))) => {
+                self.event(
+                    &request,
+                    "effect.failed.v1",
+                    EventClassification::Effect,
+                    json!({
+                        "code": failure.reason.code(),
+                        "message": failure.reason.message(),
+                        "recoverable": false,
+                        "http_status": failure.http_status,
+                    }),
+                )?;
+                return Err(GatewayError::ProviderRejected(failure));
+            }
             Ok(Err(ExecutionError::Failed(message))) => {
                 self.event(
                     &request,

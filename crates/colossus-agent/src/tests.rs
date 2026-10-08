@@ -333,6 +333,7 @@ impl ModelProvider for MidRunDiagnosticProvider {
                     "diagnostic failure must happen on the post-tool continuation"
                 );
                 Err(ModelProviderError::ResponseDiagnostic {
+                    failure: None,
                     diagnostic: Box::new(ProviderResponseDiagnostic {
                         request_method: "POST".into(),
                         request_url: "http://127.0.0.1:9000/v1/chat/completions".into(),
@@ -3094,7 +3095,8 @@ async fn explicit_diagnostics_capture_a_post_tool_failure_without_persisting_the
         )
         .await
         .expect_err("second provider turn must fail");
-    let AgentError::Provider(ModelProviderError::ResponseDiagnostic { diagnostic }) = error else {
+    let AgentError::Provider(ModelProviderError::ResponseDiagnostic { diagnostic, .. }) = error
+    else {
         panic!("expected typed provider response diagnostic");
     };
     assert_eq!(diagnostic.status, 400);

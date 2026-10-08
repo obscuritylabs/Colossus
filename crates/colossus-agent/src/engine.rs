@@ -455,7 +455,46 @@ impl AgentService {
                         context: context.clone(),
                         force: false,
                     })
-                    .await?;
+                    .await;
+                let prepared = match prepared {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        if let ContextError::BudgetExceeded(budget) = &error {
+                            self.append(
+                                &stream_id,
+                                &mut stream_version,
+                                "error.v1",
+                                system_actor(),
+                                &context,
+                                json!({
+                                    "code": budget.code(),
+                                    "message": budget.to_string(),
+                                    "required": budget.required,
+                                    "limit": budget.limit,
+                                    "resource": budget.resource.to_string(),
+                                    "scope": budget.scope.to_string(),
+                                    "recoverable": false,
+                                }),
+                            )?;
+                            emit_run_event(
+                                &mut released_observer,
+                                &run_id,
+                                &session_id,
+                                RunEvent::Error {
+                                    code: budget.code().into(),
+                                    message: budget.to_string(),
+                                    recoverable: false,
+                                    http_status: None,
+                                    retry_after_ms: None,
+                                    turn: Some(turn),
+                                    elapsed_seconds: started.elapsed().as_secs_f64(),
+                                },
+                            )
+                            .await?;
+                        }
+                        return Err(error.into());
+                    }
+                };
                 self.append(
                     &stream_id,
                     &mut stream_version,

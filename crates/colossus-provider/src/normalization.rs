@@ -630,6 +630,13 @@ pub(super) fn normalize_responses(
     let object = data
         .as_object()
         .ok_or_else(|| ProviderError::Malformed("Responses payload is not an object".into()))?;
+    if matches!(
+        object.get("status").and_then(Value::as_str),
+        Some("failed" | "incomplete")
+    ) || object.get("error").is_some_and(|error| !error.is_null())
+    {
+        return Err(terminal_provider_error(&data));
+    }
     let output = object
         .get("output")
         .and_then(Value::as_array)
@@ -723,12 +730,24 @@ pub(super) fn normalize_chat(
     let object = data
         .as_object()
         .ok_or_else(|| ProviderError::Malformed("chat payload is not an object".into()))?;
-    let message = object
+    if object.get("error").is_some_and(|error| !error.is_null()) {
+        return Err(terminal_provider_error(&data));
+    }
+    let choice = object
         .get("choices")
         .and_then(Value::as_array)
         .and_then(|choices| choices.first())
         .and_then(Value::as_object)
-        .and_then(|choice| choice.get("message"))
+        .ok_or_else(|| ProviderError::Malformed(response_shape(object, "choices")))?;
+    if let Some(error) = choice
+        .get("finish_reason")
+        .and_then(Value::as_str)
+        .and_then(chat_finish_error)
+    {
+        return Err(error);
+    }
+    let message = choice
+        .get("message")
         .and_then(Value::as_object)
         .ok_or_else(|| ProviderError::Malformed(response_shape(object, "choices")))?;
     let mut events = reasoning_summary_events(message);

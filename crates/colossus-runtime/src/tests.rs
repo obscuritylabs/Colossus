@@ -310,6 +310,7 @@ fn provider_diagnostic_display_prioritizes_response_and_dotted_tool_names() {
 
     let error = super::RuntimeError::Agent(super::AgentError::Provider(
         ModelProviderError::ResponseDiagnostic {
+            failure: None,
             diagnostic: Box::new(diagnostic),
         },
     ));

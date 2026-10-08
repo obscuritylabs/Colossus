@@ -115,6 +115,11 @@ pub(super) fn recovery_prompt(
 
 pub(super) fn provider_error_code(error: &ModelProviderError) -> &'static str {
     match error {
+        ModelProviderError::Rejected(failure)
+        | ModelProviderError::ResponseDiagnostic {
+            failure: Some(failure),
+            ..
+        } => failure.reason.code(),
         ModelProviderError::Configuration(_) => "provider.configuration",
         ModelProviderError::Recoverable { .. } => "provider.recoverable",
         ModelProviderError::HttpStatus { .. } | ModelProviderError::ResponseDiagnostic { .. } => {
@@ -129,7 +134,8 @@ pub(super) const fn provider_error_http_status(error: &ModelProviderError) -> Op
     match error {
         ModelProviderError::Recoverable { http_status, .. } => *http_status,
         ModelProviderError::HttpStatus { status, .. } => Some(*status),
-        ModelProviderError::ResponseDiagnostic { diagnostic } => Some(diagnostic.status),
+        ModelProviderError::Rejected(failure) => failure.http_status,
+        ModelProviderError::ResponseDiagnostic { diagnostic, .. } => Some(diagnostic.status),
         ModelProviderError::Configuration(_)
         | ModelProviderError::Failed(_)
         | ModelProviderError::OutcomeUnknown(_) => None,
@@ -140,6 +146,7 @@ pub(super) const fn provider_error_retry_after_ms(error: &ModelProviderError) ->
     match error {
         ModelProviderError::Recoverable { retry_after_ms, .. } => *retry_after_ms,
         ModelProviderError::Configuration(_)
+        | ModelProviderError::Rejected(_)
         | ModelProviderError::HttpStatus { .. }
         | ModelProviderError::ResponseDiagnostic { .. }
         | ModelProviderError::Failed(_)

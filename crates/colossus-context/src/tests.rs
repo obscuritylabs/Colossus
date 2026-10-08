@@ -182,7 +182,15 @@ async fn disabled_auto_compaction_still_enforces_input_budget() {
         .prepare(preparation_request(messages, false))
         .await
         .expect_err("over-budget request");
-    assert!(matches!(error, ContextError::Configuration(_)));
+    assert!(matches!(
+        error,
+        ContextError::BudgetExceeded(ContextBudgetExceeded {
+            resource: colossus_ports::ContextBudgetResource::Tokens,
+            scope: ContextBudgetScope::PreparedRequest,
+            required,
+            limit: 3_072,
+        }) if required > 3_072
+    ));
     assert!(snapshots.list("session-1").expect("snapshots").is_empty());
 }
 
@@ -731,9 +739,12 @@ async fn oversized_preserved_turn_returns_context_error_before_provider_dispatch
 
     assert!(matches!(
         error,
-        ContextError::Configuration(message)
-            if message.contains("provider policy budget")
-                && message.contains("cannot be compacted")
+        ContextError::BudgetExceeded(ContextBudgetExceeded {
+            resource: colossus_ports::ContextBudgetResource::RequestBytes,
+            scope: ContextBudgetScope::NewestTurn,
+            required,
+            limit,
+        }) if required > limit && limit == MAX_PREPARED_MODEL_REQUEST_BYTES as u64
     ));
     assert!(snapshots.list("session-1").expect("snapshots").is_empty());
 }
@@ -833,9 +844,12 @@ async fn projected_tool_arguments_exceeding_provider_budget_fail_before_dispatch
 
     assert!(matches!(
         error,
-        ContextError::Configuration(message)
-            if message.contains("provider policy budget")
-                && message.contains("cannot be compacted")
+        ContextError::BudgetExceeded(ContextBudgetExceeded {
+            resource: colossus_ports::ContextBudgetResource::RequestBytes,
+            scope: ContextBudgetScope::NewestTurn,
+            required,
+            limit,
+        }) if required > limit && limit == MAX_PREPARED_MODEL_REQUEST_BYTES as u64
     ));
     assert_eq!(provider.calls.load(Ordering::Acquire), 0);
     assert!(snapshots.list("session-1").expect("snapshots").is_empty());
@@ -900,7 +914,12 @@ async fn snapshot_envelope_is_preflighted_before_summary_effect_or_durable_write
 
     assert!(matches!(
         error,
-        ContextError::Configuration(message) if message.contains("plus snapshot metadata")
+        ContextError::BudgetExceeded(ContextBudgetExceeded {
+            resource: colossus_ports::ContextBudgetResource::RequestBytes,
+            scope: ContextBudgetScope::SnapshotEnvelope,
+            required,
+            limit,
+        }) if required > limit
     ));
     assert_eq!(provider.calls.load(Ordering::Acquire), 0);
     assert!(snapshots.list("session-1").expect("snapshots").is_empty());
