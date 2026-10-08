@@ -125,7 +125,11 @@ inventory, conversation threads/messages, tasks, commands/receipts, session/run 
 enrollment and certificate rotation. `CloudStore` exchanges typed domain values, and
 the PostgreSQL adapter maps ordinary fields to authoritative relational columns and
 reconstructs domain objects on reads. Core records have no JSONB document column;
-login display metadata uses child rows and bounded sets use native arrays. JSONB is
+private Diesel row models perform explicit Rust conversions and bind/read native
+column values without a whole-object JSON intermediate. The generic storage port
+retains shared transactions and revisions while PostgreSQL row types stay inside its
+adapter. Canonical JSON encoding is used separately for audit hashes.
+Login display metadata uses child rows and bounded sets use native arrays. JSONB is
 reserved for SDK requests/snapshots, command operations/replies, runtime policy
 observations, released events and opaque authorization envelopes. Queries filter
 named columns and use SQL `NULL` for an absent command reply. The cloud store commits

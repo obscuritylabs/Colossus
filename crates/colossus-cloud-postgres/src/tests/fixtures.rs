@@ -63,5 +63,20 @@ pub(super) fn value(kind: EntityKind, id: &str, overrides: serde_json::Value) ->
         .as_object_mut()
         .unwrap()
         .extend(overrides.as_object().unwrap().clone());
-    crate::normalized::decode(kind, id, value).unwrap()
+    // JSON is fixture construction only; production rows use explicit conversions.
+    macro_rules! decode {
+        ($variant:ident) => {
+            EntityValue::$variant(serde_json::from_value(value).unwrap())
+        };
+    }
+    match kind {
+        EntityKind::Project => decode!(Project),
+        EntityKind::Host => decode!(Host),
+        EntityKind::Node => decode!(Node),
+        EntityKind::Workspace => decode!(Workspace),
+        EntityKind::Thread => decode!(Thread),
+        EntityKind::ThreadMessage => decode!(ThreadMessage),
+        EntityKind::Task => decode!(Task),
+        _ => unreachable!("fixture construction already rejects unsupported kinds"),
+    }
 }

@@ -10,6 +10,14 @@ workspaces, conversations/messages, tasks, commands/receipts, source-session/run
 mappings, admission counters, invitations and certificate renewals. Each table has
 ordinary typed domain columns, project-scoped keys and indexes. `CloudStore` accepts
 typed domain values; the adapter maps them to columns and reconstructs them on reads.
+Private Diesel row models such as `ProjectRow` and `UserRow` own explicit Rust field
+conversions and native typed parameter bindings. Core reads decode columns directly;
+writes bind row fields directly. They do not serialize whole domain objects into JSON
+parameters or rebuild JSON objects in SQL. The shared revision/audit/outbox statement
+and bounded query clauses remain parameterized SQL executed through Diesel.
+Canonical JSON encoding is separate audit-hash input, and serialization of actual
+JSONB payload fields stays inside the adapter. Database row models never enter the
+domain or the `CloudStore` contract, so another adapter can choose its own representation.
 Accounts, identity bindings, memberships, projects, inventory, conversation metadata,
 messages, references, admission state, enrollment and settings have no JSONB document
 column. Login display metadata lives in child rows, and bounded sets use native arrays.

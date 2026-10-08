@@ -93,6 +93,10 @@ membership, inventory, conversation, enrollment and settings fields. Retain JSON
 SDK payloads, released events and opaque authorization envelopes rather than whole
 core domain records. Project-scoped foreign keys, constraints and column indexes
 support bounded queries and atomic changes to related records.
+Keep PostgreSQL row models private to the adapter and map fields explicitly in Rust.
+Bind and decode native columns through Diesel; do not use whole-object JSON parameters
+or SQL-built JSON projections for core entities. Canonical audit serialization and
+genuine JSONB payload serialization remain independent of the relational row mapping.
 
 Apply checksummed schema migrations transactionally under a schema-specific advisory
 lock. Ordinary cloud writes do not acquire that migration lock. Retained entity/event

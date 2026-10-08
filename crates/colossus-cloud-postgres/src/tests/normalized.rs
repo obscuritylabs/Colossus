@@ -258,7 +258,9 @@ async fn postgres_normalized_domain_roundtrips_queries_and_constraints() {
         .await
         .unwrap();
     for expected in &records {
-        let actual = store.read(&expected.key).await.unwrap();
+        let actual = store.read(&expected.key).await.unwrap_or_else(|error| {
+            panic!("roundtrip {:?}: {error:?}", expected.key);
+        });
         assert_eq!(actual.revision, 1, "{:?}", expected.key);
         assert_eq!(actual.value, expected.value, "{:?}", expected.key);
     }
@@ -426,6 +428,68 @@ async fn postgres_normalized_domain_roundtrips_queries_and_constraints() {
             .unwrap_err(),
         CloudError::NotFound
     );
+
+    // Checked native numeric bindings reject overflow and roll back sibling writes.
+    assert!(
+        store
+            .commit(CloudTransaction {
+                entities: vec![
+                    write(EntityKind::Host, "before-overflow", 0, json!({})),
+                    write(
+                        EntityKind::Host,
+                        "overflow-host",
+                        0,
+                        json!({"last_seen_at":u64::MAX})
+                    ),
+                ],
+                ..Default::default()
+            })
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .read(&key(EntityKind::Host, "before-overflow"))
+            .await
+            .unwrap_err(),
+        CloudError::NotFound
+    );
+
+    // Row-to-domain conversion must not conceal altered set encodings or payload fields.
+    let mut conn = store.pool.get().await.unwrap();
+    let membership = membership_key("acceptance-project", "roundtrip-user");
+    for (tamper, restore, entity) in [
+        (
+            "UPDATE project_memberships SET permissions=ARRAY['execute','read']",
+            "UPDATE project_memberships SET permissions=ARRAY['read','execute']",
+            membership.clone(),
+        ),
+        (
+            "UPDATE runtime_agents SET roles=ARRAY['primary','research','research'] WHERE id='runtime'",
+            "UPDATE runtime_agents SET roles=ARRAY['primary','research'] WHERE id='runtime'",
+            key(EntityKind::Node, "runtime"),
+        ),
+        (
+            "UPDATE tasks SET request=request||'{\"storage_tamper\":true}'::JSONB WHERE id='message-task'",
+            "UPDATE tasks SET request=request-'storage_tamper' WHERE id='message-task'",
+            key(EntityKind::Task, "message-task"),
+        ),
+        (
+            "UPDATE commands SET operation=operation||'{\"storage_tamper\":true}'::JSONB WHERE id='pending-command'",
+            "UPDATE commands SET operation=operation-'storage_tamper' WHERE id='pending-command'",
+            command_key.clone(),
+        ),
+    ] {
+        conn.batch_execute(tamper).await.unwrap();
+        assert_eq!(
+            store.read(&entity).await.unwrap_err(),
+            CloudError::Storage,
+            "{tamper}"
+        );
+        conn.batch_execute(restore).await.unwrap();
+        assert!(store.read(&entity).await.is_ok(), "{restore}");
+    }
+    drop(conn);
 
     let account_key = identity_key(EntityKind::User, "roundtrip-user");
     let mut account =
