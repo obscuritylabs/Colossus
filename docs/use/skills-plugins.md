@@ -10,8 +10,14 @@ icon: lucide/puzzle
 
 A **skill** gives Colossus instructions for a particular kind of work. A **plugin**
 packages skills and may also include resources or MCP server declarations. The CLI
-includes the `colossus` plugin with `coding`, `offline-dev`, `plugin-authoring`, and
-`schedule-task`, and `security-review` skills.
+includes the `colossus` plugin with `coding`, `plugin-authoring`, `schedule-task`, and
+`security-review` skills.
+
+Use `coding` to implement features, fix bugs, debug failures, or refactor software. It
+guides repository inspection, implementation, and verification. Follow your environment's
+instructions for internal package registries, documentation locations, and network
+constraints, including in air-gapped deployments. The former bundled `offline-dev`
+skill has been removed; use `coding` with your environment's development guidance.
 
 ## Choose a skill for one message
 
@@ -20,7 +26,7 @@ a qualified name and **Tab** to insert it. Then write your request and press
 **Enter**:
 
 ```text
-@colossus/coding Review the error handling in this module.
+@colossus/coding Fix the error handling in this module and verify the failure paths.
 ```
 
 ![The terminal skill picker shows built-in Colossus skills, with coding selected.](../assets/screenshots/skill-picker.png)
@@ -46,6 +52,13 @@ the conversation. You can still add a skill to a single message with `@`.
 ```text
 /plugin remove colossus/coding
 /plugin clear
+```
+
+If an existing conversation selected `colossus/offline-dev`, switch it to `coding`:
+
+```text
+/plugin remove colossus/offline-dev
+/plugin use colossus/coding
 ```
 
 Use `@colossus/schedule-task` to create or control recurring tasks through the scheduling tools. See [Workflows and schedules](../desktop/schedules.md#start-with-an-example-or-an-agent) for prompts and timing behavior.
