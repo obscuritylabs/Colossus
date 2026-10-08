@@ -8,7 +8,8 @@ use colossus_contracts::{
     SubagentStatus, TaskRecord, TaskStatus,
 };
 use colossus_ports::{
-    EventJournal, SessionRepository, StoreError, WorkRepository, collect_stream_ids,
+    EventJournal, SessionRepository, StoreError, SubagentRecoveryEntry, WorkRepository,
+    collect_stream_ids,
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, sync::Arc};
@@ -20,6 +21,7 @@ use validation::*;
 
 mod repository;
 pub use repository::*;
+mod subagent_recovery;
 
 mod service;
 pub use service::*;

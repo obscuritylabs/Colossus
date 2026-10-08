@@ -24,6 +24,69 @@ fn fixture() -> (Arc<dyn EventJournal>, Arc<dyn WorkRepository>, WorkService) {
 }
 
 #[test]
+fn subagent_recovery_pages_cross_the_list_limit_with_bounded_canonical_reads() {
+    let journal = Arc::new(InMemoryEventJournal::default());
+    let repository = EventSourcedWorkRepository::new(journal.clone());
+    for index in 0..1_001 {
+        let job = SubagentJob {
+            id: format!("job-{index:04}"),
+            session_id: "session-1".into(),
+            parent_run_id: "run-1".into(),
+            parent_call_id: format!("call-{index}"),
+            task: "Review changes".into(),
+            role: "subagent_default".into(),
+            allowed_tools: None,
+            status: SubagentStatus::Queued,
+            child_session_id: format!("child-{index}"),
+            child_run_id: None,
+            final_output: String::new(),
+            error: String::new(),
+            created_at: "2026-10-08T00:00:00Z".into(),
+            updated_at: "2026-10-08T00:00:00Z".into(),
+            started_at: None,
+            completed_at: None,
+        };
+        let mut job = repository
+            .create_subagent_with_instruction_snapshot(job, Some("a".repeat(64)), user_actor())
+            .unwrap();
+        job.status = SubagentStatus::Cancelled;
+        job.error = "Cancelled fixture job".into();
+        job.completed_at = Some(job.updated_at.clone());
+        repository.update_subagent(job, user_actor()).unwrap();
+    }
+    journal.require_bounded_reads();
+    let first = repository.subagent_recovery_page(None, 1_000).unwrap();
+    assert_eq!(first.len(), 1_000);
+    assert_eq!(first[0].0.id, "job-0000");
+    assert_eq!(first[999].0.id, "job-0999");
+    assert!(first.iter().all(|(job, snapshot)| {
+        job.status == SubagentStatus::Cancelled && snapshot.as_deref() == Some(&"a".repeat(64))
+    }));
+    let last = repository
+        .subagent_recovery_page(Some(&first[999].0.id), 1_000)
+        .unwrap();
+    assert_eq!(last.len(), 1);
+    assert_eq!(last[0].0.id, "job-1000");
+    assert!(
+        repository
+            .subagent_recovery_page(Some(&last[0].0.id), 1_000)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        repository
+            .subagent_recovery_page(None, 0)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        repository
+            .subagent_recovery_page(Some("../job"), 1)
+            .is_err()
+    );
+}
+
+#[test]
 fn tasks_reconstruct_after_updates_and_repository_restart() {
     let (journal, repository, service) = fixture();
     let created = service

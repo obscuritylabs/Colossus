@@ -53,6 +53,10 @@ pub use registry::*;
 mod store;
 pub use store::*;
 
+mod workspace;
+pub use icons::CatalogIconBudget as PluginIconBudget;
+pub use workspace::*;
+
 mod trust;
 pub use trust::*;
 

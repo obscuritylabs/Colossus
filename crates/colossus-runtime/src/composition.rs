@@ -370,6 +370,8 @@ impl Runtime {
             config.observability.logs.journal_payloads,
         ));
         let instruction_snapshots = Arc::new(InstructionSnapshotStore::new(Arc::clone(&journal)));
+        let work: Arc<dyn WorkRepository> =
+            Arc::new(EventSourcedWorkRepository::new(Arc::clone(&journal)));
         let projections = Arc::new(ProjectionWorker::new(
             Arc::clone(&journal),
             Arc::clone(&projection_store),
@@ -416,43 +418,35 @@ impl Runtime {
                 return Err(error.into());
             }
         }
-        let (active_plugins, _startup_plugin_lease) = if config.plugins.enabled {
-            plugin_store.as_ref().map_or_else(
-                || Ok((Vec::new(), None)),
-                |store| {
-                    store
-                        .available_snapshot_with_lease(
-                            &plugin_configuration.include,
-                            &plugin_configuration.exclude,
-                        )
-                        .map(|(plugins, lease)| (plugins, Some(lease)))
-                },
-            )?
-        } else {
-            (Vec::new(), None)
-        };
-        let plugins = Arc::new(active_plugins);
+        let workspace_plugins = Arc::new(crate::workspace_plugins::WorkspacePlugins::new(
+            &workspace,
+            colossus_home.as_deref(),
+            Arc::clone(&work),
+            Arc::clone(&instruction_snapshots),
+        )?);
         let plugin_catalog = Arc::new(PluginCatalogSource {
             store: plugin_store.clone(),
+            workspace_plugins: Arc::clone(&workspace_plugins),
             configuration: Arc::new(plugin_configuration.clone()),
             standalone_mcp: config.mcp.clone(),
             sandbox: config.sandbox.clone(),
             workspace: workspace.clone(),
             mcp_template: std::sync::OnceLock::new(),
         });
+        let (active_plugins, _startup_plugin_leases) = plugin_catalog.snapshot()?;
+        let plugins = Arc::new(active_plugins);
         let active_plugin_extensions = compile_active_plugin_extensions(
             &plugins,
             &config.plugins,
             &config.mcp,
             &config.sandbox,
             plugin_store.as_deref(),
+            workspace_plugins.store.as_deref(),
         )?;
         let security_posture =
             security_posture::build_security_posture(config, &active_plugin_extensions.mcp);
         let sessions: Arc<dyn SessionRepository> =
             Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
-        let work: Arc<dyn WorkRepository> =
-            Arc::new(EventSourcedWorkRepository::new(Arc::clone(&journal)));
         let presentation: Arc<dyn PresentationRepository> = Arc::new(
             EventSourcedPresentationRepository::new(Arc::clone(&journal)),
         );

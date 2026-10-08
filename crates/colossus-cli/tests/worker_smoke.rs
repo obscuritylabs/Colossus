@@ -703,7 +703,7 @@ sandbox:
         .find(|plugin| plugin["manifest"]["name"] == "colossus")
         .expect("bundled core");
     assert_eq!(core["origin"], "bundled");
-    assert_eq!(core["skills"].as_array().map(Vec::len), Some(5));
+    assert_eq!(core["skills"].as_array().map(Vec::len), Some(4));
     let integrations = run(binary, &config, &["integrations", "list"]);
     assert!(integrations.status.success());
     let integrations: Value =

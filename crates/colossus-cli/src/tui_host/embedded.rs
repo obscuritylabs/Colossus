@@ -660,7 +660,13 @@ impl EmbeddedInteractiveHost {
             PluginsCommand::Show(name) => plugin_document(
                 plugins
                     .iter()
-                    .find(|plugin| plugin.manifest.name == name)
+                    .filter(|plugin| plugin.manifest.name == name)
+                    .max_by_key(|plugin| {
+                        (
+                            plugin.available,
+                            plugin.origin == colossus_contracts::PluginOrigin::Workspace,
+                        )
+                    })
                     .ok_or_else(|| format!("plugin not found: {name}"))?,
             ),
         };

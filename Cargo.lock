@@ -1783,6 +1783,7 @@ version = "0.11.7"
 dependencies = [
  "base64 0.22.1",
  "colossus-contracts",
+ "colossus-home",
  "colossus-journal-redb",
  "colossus-network",
  "colossus-ports",

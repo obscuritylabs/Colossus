@@ -3744,9 +3744,13 @@ type AgentPlugin struct {
 	// diagnostics contains independent component failures.
 	Diagnostics []*PluginDiagnostic `protobuf:"bytes,13,rep,name=diagnostics,proto3" json:"diagnostics,omitempty"`
 	// icon_data_url is a bounded PNG data URL; empty when no valid icon is available.
-	IconDataUrl   string `protobuf:"bytes,14,opt,name=icon_data_url,json=iconDataUrl,proto3" json:"icon_data_url,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	IconDataUrl string `protobuf:"bytes,14,opt,name=icon_data_url,json=iconDataUrl,proto3" json:"icon_data_url,omitempty"`
+	// workspace_local identifies an unsigned source owned by this workspace.
+	WorkspaceLocal bool `protobuf:"varint,15,opt,name=workspace_local,json=workspaceLocal,proto3" json:"workspace_local,omitempty"`
+	// workspace_active reports remembered acceptance of that local source.
+	WorkspaceActive bool `protobuf:"varint,16,opt,name=workspace_active,json=workspaceActive,proto3" json:"workspace_active,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *AgentPlugin) Reset() {
@@ -3875,6 +3879,20 @@ func (x *AgentPlugin) GetIconDataUrl() string {
 		return x.IconDataUrl
 	}
 	return ""
+}
+
+func (x *AgentPlugin) GetWorkspaceLocal() bool {
+	if x != nil {
+		return x.WorkspaceLocal
+	}
+	return false
+}
+
+func (x *AgentPlugin) GetWorkspaceActive() bool {
+	if x != nil {
+		return x.WorkspaceActive
+	}
+	return false
 }
 
 // PluginTrust keeps executable provenance distinct from signature verification.
@@ -5315,7 +5333,7 @@ const file_colossus_api_v1alpha1_product_proto_rawDesc = "" +
 	"extensions\x18\x01 \x03(\v2'.colossus.api.v1alpha1.ExtensionSummaryR\n" +
 	"extensions\x127\n" +
 	"\x04page\x18\x02 \x01(\v2#.colossus.api.v1alpha1.PageResponseR\x04page\x12<\n" +
-	"\aplugins\x18\x03 \x03(\v2\".colossus.api.v1alpha1.AgentPluginR\aplugins\"\xcb\x04\n" +
+	"\aplugins\x18\x03 \x03(\v2\".colossus.api.v1alpha1.AgentPluginR\aplugins\"\x9f\x05\n" +
 	"\vAgentPlugin\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12 \n" +
@@ -5332,7 +5350,9 @@ const file_colossus_api_v1alpha1_product_proto_rawDesc = "" +
 	"\vmcp_servers\x18\f \x03(\v2&.colossus.api.v1alpha1.PluginMcpServerR\n" +
 	"mcpServers\x12I\n" +
 	"\vdiagnostics\x18\r \x03(\v2'.colossus.api.v1alpha1.PluginDiagnosticR\vdiagnostics\x12\"\n" +
-	"\ricon_data_url\x18\x0e \x01(\tR\viconDataUrl\"q\n" +
+	"\ricon_data_url\x18\x0e \x01(\tR\viconDataUrl\x12'\n" +
+	"\x0fworkspace_local\x18\x0f \x01(\bR\x0eworkspaceLocal\x12)\n" +
+	"\x10workspace_active\x18\x10 \x01(\bR\x0fworkspaceActive\"q\n" +
 	"\vPluginTrust\x12\x18\n" +
 	"\atrusted\x18\x01 \x01(\bR\atrusted\x12\x18\n" +
 	"\aprofile\x18\x02 \x01(\tR\aprofile\x12\x16\n" +

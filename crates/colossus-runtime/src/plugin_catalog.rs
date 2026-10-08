@@ -1,6 +1,7 @@
 //! Immutable per-run plugin catalogs, distinct from live lifecycle management.
 
 use super::*;
+use colossus_plugins::WorkspacePluginGrant;
 use std::future::Future;
 
 pub(super) fn narrow_plugin_inventory(
@@ -25,10 +26,14 @@ pub(super) fn narrow_plugin_inventory(
             }
         }
         for server in &mut plugin.mcp_servers {
-            server.enabled = config
-                .mcp_servers
-                .get(&server.id)
-                .is_some_and(|overlay| overlay.enabled);
+            server.enabled = config.mcp_servers.get(&server.id).is_some_and(|overlay| {
+                overlay.enabled
+                    && if plugin.origin == colossus_contracts::PluginOrigin::Workspace {
+                        overlay.workspace_plugin_digest.as_deref() == Some(plugin.digest.as_str())
+                    } else {
+                        overlay.workspace_plugin_digest.is_none()
+                    }
+            });
             let failed = plugin.diagnostics.iter().any(|diagnostic| {
                 diagnostic.kind == colossus_contracts::PluginComponentKind::McpServer
                     && diagnostic
@@ -60,7 +65,7 @@ pub(super) struct PluginRunCatalog {
     pub(super) records: Vec<AgentPluginRecord>,
     pub(super) mcp: Option<Arc<McpExecutor>>,
     pub(super) restrictions: Vec<PluginActionRestriction>,
-    _lease: Option<PluginSnapshotLease>,
+    _leases: Vec<PluginSnapshotLease>,
     _parent: Option<Arc<PluginRunCatalog>>,
     pub(super) selected_skills: Vec<String>,
 }
@@ -77,7 +82,7 @@ impl PluginRunCatalog {
                 .into_iter()
                 .map(|skill| skill.id)
                 .collect(),
-            _lease: None,
+            _leases: Vec::new(),
             _parent: Some(self),
         }))
     }
@@ -86,7 +91,11 @@ impl PluginRunCatalog {
             .iter()
             .map(|record| {
                 (
-                    record.installation.manifest.name.clone(),
+                    if record.installation.origin == colossus_contracts::PluginOrigin::Workspace {
+                        format!("workspace:{}", record.installation.manifest.name)
+                    } else {
+                        record.installation.manifest.name.clone()
+                    },
                     record.installation.digest.clone(),
                 )
             })
@@ -130,6 +139,7 @@ impl colossus_ports::RunProvenanceProvider for CatalogRunProvenance {
 
 pub(super) struct PluginCatalogSource {
     pub(super) store: Option<Arc<PluginStore>>,
+    pub(super) workspace_plugins: Arc<crate::workspace_plugins::WorkspacePlugins>,
     pub(super) configuration: Arc<PluginsConfig>,
     pub(super) standalone_mcp: McpConfig,
     pub(super) sandbox: SandboxConfig,
@@ -139,25 +149,59 @@ pub(super) struct PluginCatalogSource {
 
 impl PluginCatalogSource {
     pub(super) fn live_inventory(&self) -> Result<Vec<PluginInventoryEntry>, RuntimeError> {
-        let Some(store) = &self.store else {
-            return Ok(Vec::new());
-        };
-        let mut inventory = store.inventory()?;
+        let grants = self.workspace_grants()?;
+        let mut icons = colossus_plugins::PluginIconBudget::default();
+        let mut inventory = self
+            .store
+            .as_ref()
+            .map(|store| store.inventory_with_icon_budget(&mut icons))
+            .transpose()?
+            .unwrap_or_default();
+        inventory.extend(self.workspace_plugins.inventory(
+            self.configuration.workspace_discovery,
+            &grants,
+            &mut icons,
+        )?);
+        let local_names = self.selected_workspace_names(&grants);
+        for entry in &mut inventory {
+            if entry.origin != colossus_contracts::PluginOrigin::Workspace
+                && local_names.contains(&entry.manifest.name)
+            {
+                entry.available = false;
+                entry.unavailable_reason =
+                    Some("A workspace-local source is selected for this plugin name".into());
+            }
+        }
         if self.configuration.enabled {
-            let (records, _lease) = store.available_snapshot_with_lease(
-                &self.configuration.include,
-                &self.configuration.exclude,
-            )?;
+            let (records, _leases) = self.snapshot_with_grants(&grants)?;
             let extensions = compile_active_plugin_extensions(
                 &records,
                 &self.configuration,
                 &self.standalone_mcp,
                 &self.sandbox,
-                Some(store),
+                self.store.as_deref(),
+                self.workspace_plugins.store.as_deref(),
             )?;
             for entry in &mut inventory {
+                if entry.origin == colossus_contracts::PluginOrigin::Workspace
+                    && entry.available
+                    && !self.configuration.exclude.contains(&entry.manifest.name)
+                    && (self.configuration.include.is_empty()
+                        || self.configuration.include.contains(&entry.manifest.name))
+                    && !records.iter().any(|record| {
+                        record.installation.origin == entry.origin
+                            && record.installation.manifest.name == entry.manifest.name
+                            && record.installation.digest == entry.digest
+                    })
+                {
+                    entry.available = false;
+                    entry.unavailable_reason = Some(
+                        "Workspace snapshot unavailable or source changed; refresh plugins".into(),
+                    );
+                }
                 if records.iter().any(|record| {
-                    record.installation.manifest.name == entry.manifest.name
+                    record.installation.origin == entry.origin
+                        && record.installation.manifest.name == entry.manifest.name
                         && record.installation.digest == entry.digest
                 }) && let Some(diagnostics) = extensions.diagnostics.get(&entry.manifest.name)
                 {
@@ -168,21 +212,72 @@ impl PluginCatalogSource {
         Ok(narrow_plugin_inventory(inventory, &self.configuration))
     }
 
+    fn workspace_grants(&self) -> Result<BTreeMap<String, WorkspacePluginGrant>, RuntimeError> {
+        if !self.configuration.workspace_discovery {
+            return Ok(BTreeMap::new());
+        }
+        self.workspace_plugins.grants()
+    }
+
+    fn selected_workspace_names(
+        &self,
+        grants: &BTreeMap<String, WorkspacePluginGrant>,
+    ) -> BTreeSet<String> {
+        if !self.configuration.workspace_discovery {
+            return BTreeSet::new();
+        }
+        grants
+            .values()
+            .filter(|grant| grant.enabled)
+            .map(|grant| grant.source.name.clone())
+            .collect()
+    }
+
+    pub(super) fn snapshot(
+        &self,
+    ) -> Result<(Vec<AgentPluginRecord>, Vec<PluginSnapshotLease>), RuntimeError> {
+        if !self.configuration.enabled {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        self.snapshot_with_grants(&self.workspace_grants()?)
+    }
+
+    pub(super) fn snapshot_with_grants(
+        &self,
+        grants: &BTreeMap<String, WorkspacePluginGrant>,
+    ) -> Result<(Vec<AgentPluginRecord>, Vec<PluginSnapshotLease>), RuntimeError> {
+        if !self.configuration.enabled {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let mut leases = Vec::new();
+        let mut icons = colossus_plugins::PluginIconBudget::default();
+        let mut records = if let Some(store) = &self.store {
+            let (records, lease) = store.available_snapshot_with_icon_budget(
+                &self.configuration.include,
+                &self.configuration.exclude,
+                &mut icons,
+            )?;
+            leases.push(lease);
+            records
+        } else {
+            Vec::new()
+        };
+        let selected = self.selected_workspace_names(grants);
+        records.retain(|record| !selected.contains(&record.installation.manifest.name));
+        let (local, lease) =
+            self.workspace_plugins
+                .capture(&self.configuration, grants, &mut icons)?;
+        records.extend(local);
+        leases.extend(lease);
+        Ok((records, leases))
+    }
+
     pub(super) fn capture(&self) -> Result<Arc<PluginRunCatalog>, RuntimeError> {
         if let Some(catalog) = active_plugin_catalog() {
             return Ok(catalog);
         }
-        let (records, lease) = match &self.store {
-            Some(store) if self.configuration.enabled => {
-                let (records, lease) = store.available_snapshot_with_lease(
-                    &self.configuration.include,
-                    &self.configuration.exclude,
-                )?;
-                (records, Some(lease))
-            }
-            _ => (Vec::new(), None),
-        };
-        self.compile(records, lease)
+        let (records, leases) = self.snapshot()?;
+        self.compile(records, leases)
     }
 
     pub(super) fn restore(
@@ -195,26 +290,97 @@ impl PluginCatalogSource {
             return Ok(catalog);
         }
         if digests.is_empty() {
-            return self.compile(Vec::new(), None);
+            return self.compile(Vec::new(), Vec::new());
         }
-        let store = self.store.as_ref().ok_or_else(|| {
-            RuntimeError::Config("captured plugins require their original Colossus home".into())
-        })?;
-        let (records, lease) = store.snapshot_digests_with_lease(digests)?;
-        self.compile(records, Some(lease))
+        let mut global = BTreeMap::new();
+        let mut local = BTreeMap::new();
+        for (name, digest) in digests {
+            if let Some(name) = name.strip_prefix("workspace:") {
+                local.insert(name.to_owned(), digest.clone());
+            } else {
+                global.insert(name.clone(), digest.clone());
+            }
+        }
+        if global.keys().any(|name| local.contains_key(name)) {
+            return Err(RuntimeError::Config(
+                "captured plugin sources have conflicting names".into(),
+            ));
+        }
+        let mut records = Vec::new();
+        let mut leases = Vec::new();
+        let mut icons = colossus_plugins::PluginIconBudget::default();
+        for (digests, store) in [
+            (&global, self.store.as_ref()),
+            (&local, self.workspace_plugins.store.as_ref()),
+        ] {
+            if digests.is_empty() {
+                continue;
+            }
+            let store = store.ok_or_else(|| {
+                RuntimeError::Config("captured plugins require their original Colossus home".into())
+            })?;
+            let (restored, lease) = store.snapshot_digests_with_icon_budget(digests, &mut icons)?;
+            records.extend(restored);
+            leases.push(lease);
+        }
+        self.compile(records, leases)
+    }
+
+    pub(super) fn preview_store(
+        &self,
+        name: &str,
+        digest: &str,
+    ) -> Result<&PluginStore, RuntimeError> {
+        // Match live inventory's source selection when identical content exists
+        // in both stores: acceptance never transfers global trust to a workspace.
+        if self
+            .selected_workspace_names(&self.workspace_grants()?)
+            .contains(name)
+            && let Some(store) = &self.workspace_plugins.store
+            && store.installation(name, digest)?.is_some()
+        {
+            return Ok(store);
+        }
+        if let Some(store) = &self.store
+            && store
+                .installation(name, digest)?
+                .is_some_and(|installation| {
+                    installation.status != colossus_contracts::PluginStatus::Uninstalled
+                })
+        {
+            return Ok(store);
+        }
+        if let Some(store) = &self.workspace_plugins.store
+            && store.installation(name, digest)?.is_some()
+        {
+            return Ok(store);
+        }
+        self.store.as_deref().ok_or_else(|| {
+            RuntimeError::Config("plugin preview requires an explicit Colossus home".into())
+        })
     }
 
     fn compile(
         &self,
         mut records: Vec<AgentPluginRecord>,
-        lease: Option<PluginSnapshotLease>,
+        leases: Vec<PluginSnapshotLease>,
     ) -> Result<Arc<PluginRunCatalog>, RuntimeError> {
+        let mut names = BTreeSet::new();
+        if records
+            .iter()
+            .any(|record| !names.insert(&record.installation.manifest.name))
+        {
+            return Err(RuntimeError::Config(
+                "captured plugin sources have conflicting names".into(),
+            ));
+        }
         let extensions = compile_active_plugin_extensions(
             &records,
             &self.configuration,
             &self.standalone_mcp,
             &self.sandbox,
             self.store.as_deref(),
+            self.workspace_plugins.store.as_deref(),
         )?;
         for record in &mut records {
             if let Some(diagnostics) = extensions
@@ -240,7 +406,7 @@ impl PluginCatalogSource {
             records,
             mcp,
             restrictions: extensions.restrictions,
-            _lease: lease,
+            _leases: leases,
             _parent: None,
             selected_skills: Vec::new(),
         }))

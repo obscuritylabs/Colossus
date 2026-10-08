@@ -76,6 +76,9 @@ mod work;
 mod workflow_tools;
 mod workflows_research;
 mod workspace;
+#[cfg(test)]
+mod workspace_plugin_tests;
+mod workspace_plugins;
 use process_sessions::ProcessSessions;
 
 mod workspace_binding;

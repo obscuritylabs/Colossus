@@ -62,6 +62,17 @@ pub enum PluginManagementRequest {
         source: PluginInstallSource,
         trust_profile: String,
     },
+    Add {
+        source: PluginInstallSource,
+        trust_profile: String,
+    },
+    AcceptWorkspace {
+        path: String,
+        digest: Option<String>,
+    },
+    DisableWorkspace {
+        path: String,
+    },
     Enable {
         name: String,
         digest: String,
@@ -115,6 +126,9 @@ impl PluginManagementRequest {
             Self::Validate { .. } => "plugin.validate",
             Self::Verify { .. } => "plugin.verify",
             Self::Install { .. } => "plugin.install",
+            Self::Add { .. } => "plugin.install",
+            Self::AcceptWorkspace { .. } => "plugin.workspace.accept",
+            Self::DisableWorkspace { .. } => "plugin.workspace.disable",
             Self::Enable { .. } => "plugin.enable",
             Self::Disable { .. } => "plugin.disable",
             Self::Update { .. } => "plugin.update",
@@ -142,8 +156,11 @@ impl PluginManagementRequest {
             Self::SkillRead { skill_id, .. }
             | Self::ResourceList { skill_id, .. }
             | Self::ResourceRead { skill_id, .. } => format!("plugin-skill:{skill_id}"),
-            Self::Validate { path } | Self::Verify { path, .. } => path.clone(),
-            Self::Install { source, .. } => match source {
+            Self::Validate { path }
+            | Self::Verify { path, .. }
+            | Self::AcceptWorkspace { path, .. }
+            | Self::DisableWorkspace { path } => path.clone(),
+            Self::Install { source, .. } | Self::Add { source, .. } => match source {
                 PluginInstallSource::Directory { path }
                 | PluginInstallSource::Layout { path, .. }
                 | PluginInstallSource::Archive { path, .. } => path.clone(),

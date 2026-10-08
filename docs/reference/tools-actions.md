@@ -251,7 +251,7 @@ from the active run snapshot and workspace overlay.
 | Workspace mutation | `filesystem.write`, `patch.apply`, `patch.reverse`, `trace.export`, `audit.export.write` |
 | Execution | `process.spawn`, `shell.run`, `plugin.registry.credential_helper`, `workflow.execute`, `workflow.start`, `agent.run`, `plan.execute` |
 | External network | `network.http`, `web.search`, `embedding.openai.create`, `memory.index.chroma.search`, `memory.index.chroma.status`, `memory.index.chroma.upsert`, `memory.index.chroma.remove`, `memory.index.chroma.reset`, `research.run`, `integration.openapi.import`, `integration.connect`, `integration.disconnect`, `integration.invoke`, `mcp.invoke`, `mcp.call` |
-| Administration | `plan.approve_request`, `audit.export.worm.write`, `plugin.install`, `plugin.enable`, `plugin.disable`, `plugin.update`, `plugin.uninstall`, `plugin.gc`, `plugin.package`, `plugin.pull`, `plugin.push`, `plugin.export`, `bundle.build`, `bundle.install` |
+| Administration | `plan.approve_request`, `audit.export.worm.write`, `plugin.install`, `plugin.enable`, `plugin.disable`, `plugin.workspace.accept`, `plugin.workspace.disable`, `plugin.update`, `plugin.uninstall`, `plugin.gc`, `plugin.package`, `plugin.pull`, `plugin.push`, `plugin.export`, `bundle.build`, `bundle.install` |
 
 ## Effect action classes
 

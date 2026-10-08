@@ -221,6 +221,8 @@ pub enum PluginOrigin {
     Installed,
     /// Compiled into the Colossus executable and managed by its bootstrap.
     Bundled,
+    /// An unsigned source accepted only for the selected workspace.
+    Workspace,
 }
 
 /// One installed Agent Plugin digest and its current lifecycle state.
@@ -238,7 +240,7 @@ pub struct PluginInstallation {
     pub source: String,
     /// Absolute immutable extracted plugin root.
     pub root: String,
-    /// Current machine-scoped status.
+    /// Global activation for installed packages, or source acceptance for workspace origin.
     pub status: PluginStatus,
     /// Retained trust result.
     pub trust: PluginTrustEvidence,
@@ -339,6 +341,7 @@ impl AgentPluginRecord {
                     "update",
                     "uninstall",
                 ],
+                PluginOrigin::Workspace => vec!["inspect", "workspace_accept", "workspace_disable"],
             }
             .into_iter()
             .map(str::to_owned)

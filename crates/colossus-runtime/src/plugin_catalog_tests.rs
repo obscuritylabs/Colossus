@@ -50,7 +50,17 @@ fn installed_plugin_stdio_status_matches_runtime_component_validation() {
         )]),
         ..PluginsConfig::default()
     });
+    let runtime = open(&root.join("workspace"), None, &[]);
     let catalog = PluginCatalogSource {
+        workspace_plugins: Arc::new(
+            crate::workspace_plugins::WorkspacePlugins::new(
+                &root,
+                None,
+                Arc::clone(&runtime.work),
+                Arc::clone(&runtime.instruction_snapshots),
+            )
+            .expect("workspace sources"),
+        ),
         store: Some(store),
         configuration,
         standalone_mcp: McpConfig::default(),
@@ -214,7 +224,7 @@ async fn core_catalog_is_home_scoped_metadata_only_and_stable_for_an_active_run(
     );
     let catalog = runtime.plugin_catalog.capture().expect("snapshot");
     assert_eq!(catalog.records.len(), 1);
-    assert_eq!(catalog.records[0].skills.len(), 5);
+    assert_eq!(catalog.records[0].skills.len(), 4);
     let metadata = runtime
         .compose_plugin_skills("base", &[], &[])
         .expect("metadata");
