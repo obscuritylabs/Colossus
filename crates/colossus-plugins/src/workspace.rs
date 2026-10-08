@@ -14,6 +14,8 @@ mod tests;
 pub const MAX_WORKSPACE_PLUGINS: usize = 128;
 /// Aggregate source bytes admitted by automatic workspace discovery.
 pub const MAX_WORKSPACE_PLUGIN_BYTES: u64 = 256 * 1024 * 1024;
+/// Aggregate file and directory entries inspected across all workspace sources.
+pub const MAX_WORKSPACE_PLUGIN_ENTRIES: usize = MAX_FILES * 2;
 const MAX_WORKSPACE_INSPECTION_BYTES: u64 =
     MAX_WORKSPACE_PLUGIN_BYTES + MAX_WORKSPACE_PLUGINS as u64 * MAX_MANIFEST_BYTES;
 
@@ -96,11 +98,13 @@ pub fn capture_workspace_plugin(
 ) -> Result<WorkspacePluginCandidate, StoreError> {
     let mut remaining = MAX_WORKSPACE_PLUGIN_BYTES;
     let mut inspection_remaining = MAX_WORKSPACE_INSPECTION_BYTES;
+    let mut entries_remaining = MAX_WORKSPACE_PLUGIN_ENTRIES;
     capture_with_budget(
         workspace,
         relative,
         &mut remaining,
         &mut inspection_remaining,
+        &mut entries_remaining,
         &mut crate::icons::IconBudget::default(),
     )
 }
@@ -110,12 +114,13 @@ fn capture_with_budget(
     relative: &Path,
     remaining: &mut u64,
     inspection_remaining: &mut u64,
+    entries_remaining: &mut usize,
     icons: &mut crate::icons::IconBudget,
 ) -> Result<WorkspacePluginCandidate, StoreError> {
     let root = workspace_plugin_root(workspace, relative)?;
     let identity = detect_workspace_identity(&root).map_err(adapter)?;
     let mut files = Vec::new();
-    collect_regular_files(&root, &root, 0, &mut files)?;
+    collect_regular_files_with_entry_budget(&root, &mut files, entries_remaining)?;
     let reader = ReadRoot::bind(&root)?;
     if !files.iter().any(|path| path == Path::new("plugin.json")) {
         return Err(adapter("plugin.json is required"));

@@ -41,6 +41,7 @@ pub(super) fn discover_with_budget(
         icons,
         remaining,
         remaining.saturating_add(MAX_WORKSPACE_PLUGINS as u64 * MAX_MANIFEST_BYTES),
+        MAX_WORKSPACE_PLUGIN_ENTRIES,
     )
 }
 
@@ -50,6 +51,7 @@ pub(super) fn discover_with_budgets(
     icons: &mut crate::PluginIconBudget,
     mut remaining: u64,
     mut inspection_remaining: u64,
+    mut entries_remaining: usize,
 ) -> WorkspacePluginDiscovery {
     let mut result = WorkspacePluginDiscovery::default();
     if registered.len() > MAX_WORKSPACE_PLUGINS {
@@ -130,13 +132,14 @@ pub(super) fn discover_with_budgets(
             Path::new(path),
             &mut remaining,
             &mut inspection_remaining,
+            &mut entries_remaining,
             icons.for_origin(PluginOrigin::Workspace),
         ) {
             Ok(candidate) => result.candidates.push(candidate),
             Err(_) => issue(
                 &mut result,
                 path,
-                "Invalid workspace plugin: check plugin.json, contained regular files, and the 256 MiB discovery limit",
+                "Invalid workspace plugin: check plugin.json, contained regular files, and the 256 MiB / 20,000-entry discovery limits",
             ),
         }
     }

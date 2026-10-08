@@ -138,17 +138,33 @@ impl ReadRoot {
     }
 
     pub fn entries(&self, relative: &Path) -> Result<Vec<ReadEntry>, StoreError> {
+        let mut remaining = MAX_FILES;
+        self.entries_with_budget(relative, &mut remaining)
+    }
+
+    pub fn entries_with_budget(
+        &self,
+        relative: &Path,
+        remaining: &mut usize,
+    ) -> Result<Vec<ReadEntry>, StoreError> {
+        if *remaining == 0 {
+            return Err(adapter("plugin tree inspection entry budget exhausted"));
+        }
         self.revalidate()?;
         #[cfg(unix)]
-        let entries = self.unix_entries(relative)?;
+        let entries = self.unix_entries(relative, remaining)?;
         #[cfg(windows)]
-        let entries = self.windows_entries(relative)?;
+        let entries = self.windows_entries(relative, remaining)?;
         self.revalidate()?;
         Ok(entries)
     }
 
     #[cfg(unix)]
-    fn unix_entries(&self, relative: &Path) -> Result<Vec<ReadEntry>, StoreError> {
+    fn unix_entries(
+        &self,
+        relative: &Path,
+        remaining: &mut usize,
+    ) -> Result<Vec<ReadEntry>, StoreError> {
         use std::os::unix::ffi::OsStrExt as _;
         let directory = self.open(relative, true)?;
         let mut entries = Vec::new();
@@ -161,6 +177,9 @@ impl ReadRoot {
             if entries.len() >= MAX_FILES {
                 return Err(adapter("plugin directory entry limit exceeded"));
             }
+            *remaining = remaining
+                .checked_sub(1)
+                .ok_or_else(|| adapter("plugin tree inspection entry budget exhausted"))?;
             let stat = rustix::fs::statat(&directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
                 .map_err(adapter)?;
             let kind = rustix::fs::FileType::from_raw_mode(stat.st_mode);
@@ -181,7 +200,11 @@ impl ReadRoot {
     }
 
     #[cfg(windows)]
-    fn windows_entries(&self, relative: &Path) -> Result<Vec<ReadEntry>, StoreError> {
+    fn windows_entries(
+        &self,
+        relative: &Path,
+        remaining: &mut usize,
+    ) -> Result<Vec<ReadEntry>, StoreError> {
         if !relative.as_os_str().is_empty() {
             posix_path(relative)?;
         }
@@ -194,6 +217,9 @@ impl ReadRoot {
             if entries.len() >= MAX_FILES {
                 return Err(adapter("plugin directory entry limit exceeded"));
             }
+            *remaining = remaining
+                .checked_sub(1)
+                .ok_or_else(|| adapter("plugin tree inspection entry budget exhausted"))?;
             let metadata = fs::symlink_metadata(entry.path()).map_err(adapter)?;
             if metadata.file_type().is_symlink() || (!metadata.is_file() && !metadata.is_dir()) {
                 return Err(adapter("plugin contains a link or special file"));

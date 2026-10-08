@@ -2,6 +2,70 @@ use super::*;
 use crate::tests::write_plugin;
 
 #[test]
+fn file_and_directory_work_is_shared_without_refunding_rejected_sources() {
+    let temporary = tempfile::tempdir().expect("workspace");
+    let root = temporary.path();
+    let rejected = root.join("rejected");
+    fs::create_dir_all(rejected.join("empty/nested")).unwrap();
+    fs::write(rejected.join("plugin.json"), b"{").unwrap();
+    fs::write(rejected.join("zero-bytes"), b"").unwrap();
+    write_plugin(&root.join("selected"));
+    let mut remaining = MAX_WORKSPACE_PLUGIN_BYTES;
+    let mut bytes_remaining = MAX_WORKSPACE_INSPECTION_BYTES;
+    // Four rejected entries, then seven entries in the valid source.
+    let mut entries_remaining = 11;
+    assert!(
+        capture_with_budget(
+            root,
+            Path::new("rejected"),
+            &mut remaining,
+            &mut bytes_remaining,
+            &mut entries_remaining,
+            &mut crate::icons::IconBudget::default(),
+        )
+        .is_err()
+    );
+    assert_eq!(entries_remaining, 7);
+    assert_eq!(remaining, MAX_WORKSPACE_PLUGIN_BYTES);
+    capture_with_budget(
+        root,
+        Path::new("selected"),
+        &mut remaining,
+        &mut bytes_remaining,
+        &mut entries_remaining,
+        &mut crate::icons::IconBudget::default(),
+    )
+    .expect("successful source uses the same entry counter");
+    assert_eq!(entries_remaining, 0);
+    let bytes_before = bytes_remaining;
+    assert!(
+        capture_with_budget(
+            root,
+            Path::new("selected"),
+            &mut remaining,
+            &mut bytes_remaining,
+            &mut entries_remaining,
+            &mut crate::icons::IconBudget::default(),
+        )
+        .is_err()
+    );
+    assert_eq!(bytes_remaining, bytes_before);
+    assert_eq!(entries_remaining, 0);
+    write_plugin(&root.join("later"));
+    let discovered = discovery::discover_with_budgets(
+        root,
+        &["rejected".into(), "selected".into(), "later".into()],
+        &mut crate::PluginIconBudget::default(),
+        MAX_WORKSPACE_PLUGIN_BYTES,
+        MAX_WORKSPACE_INSPECTION_BYTES,
+        11,
+    );
+    assert_eq!(discovered.candidates.len(), 1);
+    assert_eq!(discovered.candidates[0].source.path, "selected");
+    assert_eq!(discovered.issues.len(), 2);
+}
+
+#[test]
 fn oversized_sources_use_no_payload_work_and_failed_reads_keep_the_work_charge() {
     let temporary = tempfile::tempdir().expect("workspace");
     let root = temporary.path();
@@ -10,12 +74,14 @@ fn oversized_sources_use_no_payload_work_and_failed_reads_keep_the_work_charge()
     fs::write(source.join("000-data"), vec![b'x'; 4_096]).unwrap();
     let mut remaining = 4_096;
     let mut inspection_remaining = 4_096;
+    let mut entries_remaining = MAX_WORKSPACE_PLUGIN_ENTRIES;
     assert!(
         capture_with_budget(
             root,
             Path::new("oversized"),
             &mut remaining,
             &mut inspection_remaining,
+            &mut entries_remaining,
             &mut crate::icons::IconBudget::default(),
         )
         .is_err()
@@ -33,6 +99,7 @@ fn oversized_sources_use_no_payload_work_and_failed_reads_keep_the_work_charge()
                 Path::new("malformed"),
                 &mut remaining,
                 &mut inspection_remaining,
+                &mut entries_remaining,
                 &mut crate::icons::IconBudget::default(),
             )
             .is_err()
@@ -67,12 +134,14 @@ fn rejected_sources_leave_the_shared_budget_for_valid_siblings() {
         }
         let mut remaining = budget;
         let mut inspection_remaining = budget;
+        let mut entries_remaining = MAX_WORKSPACE_PLUGIN_ENTRIES;
         assert!(
             capture_with_budget(
                 root,
                 Path::new(".agents/plugins/a-broken"),
                 &mut remaining,
                 &mut inspection_remaining,
+                &mut entries_remaining,
                 &mut crate::icons::IconBudget::default(),
             )
             .is_err()
@@ -309,12 +378,14 @@ fn explicit_capture_obeys_byte_budget_and_reserved_core_name() {
     write_plugin(&temporary.path().join("plugin"));
     let mut remaining = 1;
     let mut inspection_remaining = MAX_WORKSPACE_INSPECTION_BYTES;
+    let mut entries_remaining = MAX_WORKSPACE_PLUGIN_ENTRIES;
     assert!(
         capture_with_budget(
             temporary.path(),
             Path::new("plugin"),
             &mut remaining,
             &mut inspection_remaining,
+            &mut entries_remaining,
             &mut crate::icons::IconBudget::default()
         )
         .is_err()
