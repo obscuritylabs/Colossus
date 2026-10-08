@@ -40,12 +40,16 @@ test("Workflows and Schedules use real manual runs, calendar tasks, model prefer
         __TAURI_INTERNALS__: unknown;
         loseTaskResponse: boolean;
         loseDeletionResponse: boolean;
+        lastManualRunId: string | null;
       };
       host.loseTaskResponse = false;
       host.loseDeletionResponse = false;
+      host.lastManualRunId = null;
       host.__TAURI_INTERNALS__ = {
         invoke: async (command: string, args: unknown) => {
           const result = await host.workflowBridge(command, args);
+          if (command === "start_workflow_run")
+            host.lastManualRunId = (result as { run_id: string }).run_id;
           if (
             command === "delete_workflow_schedule" &&
             host.loseDeletionResponse
@@ -239,16 +243,40 @@ test("Workflows and Schedules use real manual runs, calendar tasks, model prefer
       };
     };
     expect(task.record.task.options.reasoning_effort).toBe("high");
+    await page.evaluate(() => {
+      (
+        window as unknown as { lastManualRunId: string | null }
+      ).lastManualRunId = null;
+    });
     await page.getByRole("button", { name: "Run now", exact: true }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { lastManualRunId: string | null })
+              .lastManualRunId,
+        ),
+      )
+      .not.toBeNull();
+    const queued = {
+      run_id: await page.evaluate(
+        () =>
+          (window as unknown as { lastManualRunId: string }).lastManualRunId,
+      ),
+    };
+    const output = page.getByRole("region", {
+      name: "Independent workflow run",
+    });
     await expect(
-      page.getByRole("region", { name: "Independent workflow run" }),
-    ).toBeVisible();
+      output.locator(".workflow-run-metadata code").first(),
+    ).toHaveText(queued.run_id);
     const manualHistory = (await host.invoke("list_workflow_runs", {
       workflowId: `${task.record.workflow_name}:${task.record.workflow_version}`,
       after: null,
     })) as { items: { run_id: string }[] };
-    expect(manualHistory.items).toHaveLength(1);
-    const queued = manualHistory.items[0]!;
+    expect(
+      manualHistory.items.some((run) => run.run_id === queued.run_id),
+    ).toBe(true);
     await expect
       .poll(
         async () => {
