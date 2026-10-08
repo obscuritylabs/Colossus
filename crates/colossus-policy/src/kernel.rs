@@ -46,6 +46,9 @@ pub(super) fn approval_proof(
 /// Effect gateway failure. Denied content is deliberately absent.
 #[derive(Debug, Error)]
 pub enum GatewayError {
+    /// Adapter reported a categorized provider rejection without response text.
+    #[error(transparent)]
+    ProviderRejected(colossus_contracts::ProviderFailure),
     /// The safety kernel rejected the request or policy obligations.
     #[error("safety kernel rejected request: {0}")]
     Safety(String),
@@ -95,6 +98,9 @@ pub enum GatewayError {
 /// Adapter execution failure classification.
 #[derive(Debug, Error)]
 pub enum ExecutionError {
+    /// Provider reported a known terminal rejection without response text.
+    #[error(transparent)]
+    ProviderRejected(colossus_contracts::ProviderFailure),
     /// Adapter knows the effect failed.
     #[error("{0}")]
     Failed(String),

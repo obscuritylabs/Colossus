@@ -8,7 +8,7 @@ use colossus_policy::{
     ReleasedEffectObserver, ReleasedEffectResult, SafetyKernel, SandboxBoundaryGate,
     effect_request, system_actor,
 };
-use colossus_ports::{EventJournal, PolicyDecisionPoint};
+use colossus_ports::{CredentialResolutionError, EventJournal, PolicyDecisionPoint};
 use colossus_testkit::InMemoryEventJournal;
 use rcgen::{
     BasicConstraints, CertificateParams, CertifiedIssuer, ExtendedKeyUsagePurpose, IsCa, KeyPair,
@@ -32,6 +32,8 @@ use tokio::{
 };
 use tokio_rustls::TlsAcceptor;
 
+#[path = "error/gateway_tests.rs"]
+mod failure_tests;
 #[path = "retry_tests.rs"]
 mod retry_tests;
 

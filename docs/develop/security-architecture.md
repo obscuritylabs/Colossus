@@ -148,8 +148,10 @@ or transport-incompatible response body after exact configured-credential redact
 the current TUI process, including post-tool continuations, until the operator runs
 `/provider diagnostics off` or exits. These captures are represented as quarantined
 adapter output and must pass the ordinary post-effect decision before the authenticated
-local worker or direct TUI receives them. Default Doctor output, default run failures
-and events, and durable audit payloads remain status-only and never receive the body.
+local worker or direct TUI receives them. Default failures, events, and durable audit
+payloads may include numeric HTTP status, recognized provider failure categories with
+fixed guidance, and local context-budget counts. They never receive raw provider
+messages, request content, or response bodies.
 An in-run diagnostic request can contain user, session, and tool-result content, so the
 TUI warns the operator to review it before sharing.
 

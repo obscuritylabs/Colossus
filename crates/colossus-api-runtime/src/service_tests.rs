@@ -41,6 +41,7 @@ use std::{
 use tempfile::TempDir;
 use uuid::Uuid;
 
+mod context_failures;
 mod plan_interaction;
 mod process_sessions;
 mod schedule_approval;
@@ -1557,6 +1558,10 @@ fn runtime_service_conformance() {
         .build()
         .expect("test runtime")
         .block_on(async {
+            context_failures::oversized_context_reaches_public_failure(Arc::clone(
+                &fixture.runtime,
+            ))
+            .await;
             policy_metadata_is_scoped_path_free_and_updates_with_native_mode(Arc::clone(
                 &fixture.runtime,
             ))

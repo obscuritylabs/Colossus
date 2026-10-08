@@ -483,6 +483,7 @@ impl GatewayModelProvider {
                 serde_json::from_slice::<ProviderResponseDiagnostic>(&released.bytes)
         {
             return Err(ModelProviderError::ResponseDiagnostic {
+                failure: colossus_provider::classify_response_diagnostic(&diagnostic),
                 diagnostic: Box::new(diagnostic),
             });
         }
@@ -745,6 +746,7 @@ impl<'a> ReleasedProviderStream<'a> {
                 && self.diagnostic.as_ref() == Some(&diagnostic)
             {
                 return Err(ModelProviderError::ResponseDiagnostic {
+                    failure: colossus_provider::classify_response_diagnostic(&diagnostic),
                     diagnostic: Box::new(diagnostic),
                 });
             }
@@ -908,6 +910,7 @@ fn resolved_output_limit(
 
 pub(super) fn model_gateway_error(error: GatewayError) -> ModelProviderError {
     match error {
+        GatewayError::ProviderRejected(failure) => ModelProviderError::Rejected(failure),
         GatewayError::RecoverableExecution {
             code,
             message,

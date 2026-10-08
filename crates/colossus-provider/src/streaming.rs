@@ -245,9 +245,9 @@ impl ResponsesStreamState {
                     .map(|event| event.into_iter().collect())
             }
             "response.completed" => self.complete(object),
-            "response.failed" | "response.incomplete" | "error" => Err(ProviderError::Malformed(
-                format!("provider stream terminated with {event_type}"),
-            )),
+            "response.failed" | "response.incomplete" | "error" => {
+                Err(terminal_provider_error(&value))
+            }
             _ => Ok(Vec::new()),
         }
     }
@@ -393,6 +393,9 @@ impl ChatStreamState {
         let object = value
             .as_object()
             .ok_or_else(|| ProviderError::Malformed("chat stream chunk is not an object".into()))?;
+        if object.get("error").is_some_and(|error| !error.is_null()) {
+            return Err(terminal_provider_error(&value));
+        }
         if let Some(id) = object
             .get("id")
             .and_then(Value::as_str)
@@ -444,17 +447,15 @@ impl ChatStreamState {
             }
             self.ingest_tool_deltas(delta.get("tool_calls"))?;
             if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
+                if let Some(error) = chat_finish_error(reason) {
+                    return Err(error);
+                }
                 match reason {
                     "stop" | "tool_calls" | "function_call" => self.terminal_seen = true,
-                    "length" | "content_filter" => {
-                        return Err(ProviderError::Malformed(format!(
-                            "chat stream terminated with finish_reason={reason}"
-                        )));
-                    }
-                    other => {
-                        return Err(ProviderError::Malformed(format!(
-                            "chat stream returned unknown finish_reason={other}"
-                        )));
+                    _ => {
+                        return Err(ProviderError::Malformed(
+                            "chat stream returned an unrecognized finish reason".into(),
+                        ));
                     }
                 }
             }
