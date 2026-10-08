@@ -26,7 +26,17 @@ pub fn discover_workspace_plugins_with_icon_budget(
     icons: &mut crate::PluginIconBudget,
 ) -> WorkspacePluginDiscovery {
     let mut result = WorkspacePluginDiscovery::default();
-    let mut paths = registered.iter().cloned().collect::<BTreeSet<_>>();
+    if registered.len() > MAX_WORKSPACE_PLUGINS {
+        issue(
+            &mut result,
+            ".agents/plugins",
+            "Registered workspace sources exceed 128 entries",
+        );
+        return result;
+    }
+    let registered = registered.iter().cloned().collect::<BTreeSet<_>>();
+    let mut paths = registered.clone();
+    let mut automatic = BTreeSet::new();
     if fs::symlink_metadata(workspace.join(".agents")).is_ok() {
         match workspace_plugin_root(workspace, Path::new(".agents")) {
             Ok(root) => {
@@ -46,9 +56,9 @@ pub fn discover_workspace_plugins_with_icon_budget(
                     );
                     paths.retain(|path| path != ".agents" && !path.starts_with(".agents/plugins/"));
                 } else if direct {
-                    paths.insert(".agents".into());
+                    automatic.insert(".agents".into());
                 } else {
-                    paths.extend(collection);
+                    automatic.extend(collection);
                 }
             }
             Err(_) => issue(
@@ -58,26 +68,42 @@ pub fn discover_workspace_plugins_with_icon_budget(
             ),
         }
     }
-    if paths.len() > MAX_WORKSPACE_PLUGINS {
+    let mut overflow = false;
+    for path in automatic {
+        if paths.contains(&path) {
+            continue;
+        }
+        if paths.len() == MAX_WORKSPACE_PLUGINS {
+            overflow = true;
+        } else {
+            paths.insert(path);
+        }
+    }
+    if overflow {
         issue(
             &mut result,
             ".agents/plugins",
             "Workspace discovery exceeds 128 plugin sources",
         );
-        return result;
     }
     let mut remaining = MAX_WORKSPACE_PLUGIN_BYTES;
-    for path in paths {
+    // Registered sources consume the bounded byte/icon budgets before unrelated
+    // unaccepted discoveries, preserving the explicit workspace selection.
+    for path in paths
+        .iter()
+        .filter(|path| registered.contains(*path))
+        .chain(paths.iter().filter(|path| !registered.contains(*path)))
+    {
         match capture_with_budget(
             workspace,
-            Path::new(&path),
+            Path::new(path),
             &mut remaining,
             icons.for_origin(PluginOrigin::Workspace),
         ) {
             Ok(candidate) => result.candidates.push(candidate),
             Err(_) => issue(
                 &mut result,
-                &path,
+                path,
                 "Invalid workspace plugin: check plugin.json, contained regular files, and the 256 MiB discovery limit",
             ),
         }

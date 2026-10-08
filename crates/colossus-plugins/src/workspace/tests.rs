@@ -2,6 +2,54 @@ use super::*;
 use crate::tests::write_plugin;
 
 #[test]
+fn excess_automatic_sources_do_not_hide_the_bounded_registered_set() {
+    let temporary = tempfile::tempdir().expect("workspace");
+    let root = temporary.path();
+    let registered = (0..MAX_WORKSPACE_PLUGINS)
+        .map(|index| {
+            let path = format!("registered-{index:03}");
+            write_plugin(&root.join(&path));
+            path
+        })
+        .collect::<Vec<_>>();
+    write_plugin(&root.join(".agents"));
+    let direct = discover_workspace_plugins(root, &registered);
+    assert_eq!(direct.candidates.len(), MAX_WORKSPACE_PLUGINS);
+    assert_eq!(
+        direct
+            .candidates
+            .iter()
+            .map(|candidate| &candidate.source.path)
+            .collect::<Vec<_>>(),
+        registered.iter().collect::<Vec<_>>()
+    );
+    assert!(
+        direct
+            .issues
+            .iter()
+            .any(|issue| issue.detail.contains("128"))
+    );
+    fs::remove_file(root.join(".agents/plugin.json")).unwrap();
+    write_plugin(&root.join(".agents/plugins/extra"));
+    let collection = discover_workspace_plugins(root, &registered);
+    assert_eq!(collection.candidates.len(), MAX_WORKSPACE_PLUGINS);
+    assert_eq!(
+        collection
+            .candidates
+            .iter()
+            .map(|candidate| &candidate.source.path)
+            .collect::<Vec<_>>(),
+        registered.iter().collect::<Vec<_>>()
+    );
+    assert!(
+        collection
+            .issues
+            .iter()
+            .any(|issue| issue.detail.contains("128"))
+    );
+}
+
+#[test]
 fn discovery_is_fixed_deterministic_and_isolates_invalid_siblings() {
     let temporary = tempfile::tempdir().expect("workspace");
     let root = temporary.path();
