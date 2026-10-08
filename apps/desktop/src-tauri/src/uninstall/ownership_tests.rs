@@ -38,7 +38,7 @@ fn plugin_writer_lock_scope_matches_only_generated_store_roots() {
         ));
     }
     assert!(!plugin_store(&workspace_store("user-project")));
-    assert!(!plugin_writer_lock(&Path::new(
+    assert!(!plugin_writer_lock(Path::new(
         "desktop/state.redb.writer.lock"
     )));
 }
