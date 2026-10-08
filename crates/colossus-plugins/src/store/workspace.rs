@@ -72,12 +72,12 @@ impl PluginStore {
         self.with_write(EventSourcedPluginRepository::workspace_grants)
     }
 
-    /// Remember one local source after the host obtains request-bound approval.
+    /// Publish an immutable snapshot before remembering request-bound source approval.
     pub fn accept_workspace_plugin(
         &self,
         candidate: &WorkspacePluginCandidate,
         actor: Actor,
-    ) -> Result<(), StoreError> {
+    ) -> Result<PluginInstallation, StoreError> {
         candidate.revalidate()?;
         reject_managed_name(&candidate.source.name)?;
         self.with_write(|repository| {
@@ -86,6 +86,9 @@ impl PluginStore {
             {
                 return Err(adapter("workspace source catalog exceeds 128 sources"));
             }
+            // Publication and its disabled receipt must succeed before source permission
+            // changes. A failed capture preserves the previous selected source.
+            let installation = self.cache_workspace_plugin(repository, candidate, actor.clone())?;
             // One chosen local source per portable name. Acceptance is an explicit
             // workspace selection; it does not alter the global active digest.
             for grant in grants
@@ -102,7 +105,8 @@ impl PluginStore {
                 },
             );
             candidate.revalidate()?;
-            repository.append_workspace_grants(&grants, actor)
+            repository.append_workspace_grants(&grants, actor)?;
+            Ok(installation)
         })
     }
 
@@ -136,46 +140,55 @@ impl PluginStore {
                     "workspace plugin source requires explicit acceptance",
                 ));
             }
-            let destination = self.publish_artifact(&candidate.artifact)?;
-            let record = load_plugin(&destination)?;
-            if record.installation.manifest.name != candidate.source.name {
-                return Err(adapter(
-                    "workspace source and captured manifest identity differ",
-                ));
-            }
-            let timestamp = now()?;
-            let mut installation = PluginInstallation {
-                origin: PluginOrigin::Workspace,
-                manifest: record.installation.manifest,
-                digest: candidate.artifact.manifest_digest.clone(),
-                source: candidate.source.path.clone(),
-                root: destination.display().to_string(),
-                status: PluginStatus::Disabled,
-                trust: PluginTrustEvidence {
-                    trusted: false,
-                    profile: None,
-                    signer: None,
-                    method: "workspace-directory".into(),
-                },
-                installed_at: timestamp.clone(),
-                updated_at: timestamp,
-            };
-            let previous = repository
-                .reduce_installation(&installation.manifest.name, &installation.digest)?;
-            if let Some(previous) = &previous {
-                if previous.origin != PluginOrigin::Workspace {
-                    return Err(adapter("workspace snapshot has conflicting ownership"));
-                }
-                installation.installed_at = previous.installed_at.clone();
-            }
-            candidate.revalidate()?;
-            if previous
-                .as_ref()
-                .is_none_or(|value| value.source != installation.source)
-            {
-                repository.append_installation(&installation, actor, "plugin.installed.v1")?;
-            }
-            Ok(installation)
+            self.cache_workspace_plugin(repository, candidate, actor)
         })
+    }
+
+    fn cache_workspace_plugin(
+        &self,
+        repository: &EventSourcedPluginRepository,
+        candidate: &WorkspacePluginCandidate,
+        actor: Actor,
+    ) -> Result<PluginInstallation, StoreError> {
+        let destination = self.publish_artifact(&candidate.artifact)?;
+        let record = load_plugin(&destination)?;
+        if record.installation.manifest.name != candidate.source.name {
+            return Err(adapter(
+                "workspace source and captured manifest identity differ",
+            ));
+        }
+        let timestamp = now()?;
+        let mut installation = PluginInstallation {
+            origin: PluginOrigin::Workspace,
+            manifest: record.installation.manifest,
+            digest: candidate.artifact.manifest_digest.clone(),
+            source: candidate.source.path.clone(),
+            root: destination.display().to_string(),
+            status: PluginStatus::Disabled,
+            trust: PluginTrustEvidence {
+                trusted: false,
+                profile: None,
+                signer: None,
+                method: "workspace-directory".into(),
+            },
+            installed_at: timestamp.clone(),
+            updated_at: timestamp,
+        };
+        let previous =
+            repository.reduce_installation(&installation.manifest.name, &installation.digest)?;
+        if let Some(previous) = &previous {
+            if previous.origin != PluginOrigin::Workspace {
+                return Err(adapter("workspace snapshot has conflicting ownership"));
+            }
+            installation.installed_at = previous.installed_at.clone();
+        }
+        candidate.revalidate()?;
+        if previous
+            .as_ref()
+            .is_none_or(|value| value.source != installation.source)
+        {
+            repository.append_installation(&installation, actor, "plugin.installed.v1")?;
+        }
+        Ok(installation)
     }
 }

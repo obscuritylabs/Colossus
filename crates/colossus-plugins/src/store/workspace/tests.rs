@@ -2,6 +2,54 @@ use super::*;
 use crate::tests::{actor, write_plugin};
 
 #[test]
+fn failed_publication_preserves_permissions_and_requires_acceptance_after_repair() {
+    let temporary = tempfile::tempdir().expect("root");
+    let root = temporary.path().canonicalize().expect("root");
+    for path in ["one", "two"] {
+        write_plugin(&root.join(path));
+    }
+    fs::write(
+        root.join("two/skills/review/SKILL.md"),
+        "---\nname: review\ndescription: A different review\n---\nDifferent instructions\n",
+    )
+    .expect("different snapshot");
+    let first = capture_workspace_plugin(&root, Path::new("one")).expect("first");
+    let second = capture_workspace_plugin(&root, Path::new("two")).expect("second");
+    let store = PluginStore::new(root.join("store")).expect("store");
+    // A non-directory destination forces immutable publication to fail without
+    // depending on platform-specific permission changes or filling the test disk.
+    let blocked = store.root().join("content/sha256").join(
+        second
+            .artifact
+            .manifest_digest
+            .strip_prefix("sha256:")
+            .expect("digest"),
+    );
+    fs::write(&blocked, "publication blocked").expect("block publication");
+    assert!(store.accept_workspace_plugin(&second, actor()).is_err());
+    assert!(
+        store
+            .workspace_plugin_grants()
+            .expect("no permission")
+            .is_empty()
+    );
+    store
+        .accept_workspace_plugin(&first, actor())
+        .expect("first source");
+    assert!(store.accept_workspace_plugin(&second, actor()).is_err());
+    let grants = store.workspace_plugin_grants().expect("old permission");
+    assert_eq!(grants.len(), 1);
+    assert!(grants["one"].enabled);
+    fs::remove_file(blocked).expect("repair publication");
+    assert!(store.snapshot_workspace_plugin(&second, actor()).is_err());
+    store
+        .accept_workspace_plugin(&second, actor())
+        .expect("fresh acceptance");
+    let grants = store.workspace_plugin_grants().expect("new permission");
+    assert!(!grants["one"].enabled && grants["two"].enabled);
+}
+
+#[test]
 fn source_acceptance_snapshots_and_recovery_are_scoped_and_never_globally_active() {
     let temporary = tempfile::tempdir().expect("root");
     let root = temporary.path().canonicalize().expect("root");

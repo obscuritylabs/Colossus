@@ -223,11 +223,8 @@ impl PluginManagementExecutor {
                     .store
                     .as_ref()
                     .ok_or_else(|| failed("workspace plugins require an explicit Colossus home"))?;
-                store
-                    .accept_workspace_plugin(&candidate, actor.clone())
-                    .map_err(failed)?;
                 let mut installation = store
-                    .snapshot_workspace_plugin(&candidate, actor)
+                    .accept_workspace_plugin(&candidate, actor)
                     .map_err(failed)?;
                 installation.status = colossus_contracts::PluginStatus::Enabled;
                 serde_json::to_value(installation)
