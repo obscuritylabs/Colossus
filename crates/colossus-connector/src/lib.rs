@@ -9,6 +9,7 @@ mod discovery;
 mod headless;
 mod history;
 mod inventory;
+pub use inventory::native_host_label;
 mod outbound;
 mod released;
 pub use cli::{

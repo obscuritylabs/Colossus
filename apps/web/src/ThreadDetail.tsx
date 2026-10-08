@@ -40,6 +40,7 @@ import { Interactions } from "./Interactions";
 import { RunComposer, type RunRequest } from "./RunComposer";
 import { conversationProjection } from "./conversation";
 import { ThreadRunActivity } from "./ThreadRunActivity";
+import { workspaceName } from "./workspace-navigation";
 
 function mergeMessages(current: ThreadMessage[], incoming: ThreadMessage[]) {
   const byId = new Map(current.map((item) => [item.message_id, item]));
@@ -441,10 +442,7 @@ export function ThreadDetail({
       <div className="detail-header">
         <div>
           <div className="eyebrow">
-            {target?.node.label ?? thread.node_id}
-            {target?.node.workspace_label
-              ? ` / ${target.node.workspace_label}`
-              : ""}
+            {target ? workspaceName(target) : thread.node_id}
           </div>
           {editing ? (
             <form

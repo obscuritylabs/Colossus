@@ -26,6 +26,7 @@ pub(crate) fn router(state: Arc<State>) -> Router {
         .route("/api/projects/{project}/nodes/{node}",get(node_detail))
         .route("/api/projects/{project}/nodes/{node}/revoke",post(revoke))
         .route("/api/projects/{project}/hosts",get(hosts))
+        .route("/api/projects/{project}/hosts/{host}",get(host_detail))
         .route("/api/projects/{project}/workspaces",get(workspaces))
         .route("/api/projects/{project}/threads",get(threads).post(create_thread))
         .route("/api/projects/{project}/threads/{thread}",get(thread_detail).patch(edit_thread))
@@ -200,6 +201,7 @@ async fn me(
 struct Page {
     after: Option<String>,
     limit: Option<usize>,
+    host_id: Option<String>,
 }
 async fn nodes(
     Extract(state): Extract<Arc<State>>,
@@ -209,8 +211,18 @@ async fn nodes(
 ) -> Result<Json<serde_json::Value>> {
     let caller = state.auth.caller(&headers, &project, false).await?;
     let nodes = db(state.repo.clone(), move |repo| async move {
-        repo.list_nodes(&caller, page.after.as_deref(), page.limit.unwrap_or(100))
+        if let Some(host) = &page.host_id {
+            repo.list_host_nodes(
+                &caller,
+                host,
+                page.after.as_deref(),
+                page.limit.unwrap_or(100),
+            )
             .await
+        } else {
+            repo.list_nodes(&caller, page.after.as_deref(), page.limit.unwrap_or(100))
+                .await
+        }
     })
     .await?;
     let local_presence = state
@@ -649,6 +661,15 @@ async fn hosts(
     Ok(Json(
         serde_json::json!({"hosts":hosts,"next_cursor":next_cursor}),
     ))
+}
+async fn host_detail(
+    Extract(state): Extract<Arc<State>>,
+    Path((project, host)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>> {
+    let caller = state.auth.caller(&headers, &project, false).await?;
+    let host = state.repo.get_host(&caller, &host).await?;
+    Ok(Json(serde_json::json!({"host":host})))
 }
 async fn workspaces(
     Extract(state): Extract<Arc<State>>,

@@ -597,7 +597,14 @@ export function WorkSidebar({
               >
                 <IconDots size={16} stroke={1.9} aria-hidden="true" />
               </summary>
-              <div className="space-library-popover">
+              <div
+                className="space-library-popover"
+                onMouseDown={(event) => {
+                  // WebKit does not focus buttons on mouse press. Keep the trigger
+                  // focused so its blur handler cannot hide an item before click.
+                  event.preventDefault();
+                }}
+              >
                 <button
                   type="button"
                   disabled={actionsDisabled}

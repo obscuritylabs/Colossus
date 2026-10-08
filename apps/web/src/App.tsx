@@ -50,6 +50,8 @@ import { RunComposer, type RunRequest } from "./RunComposer";
 import { Home, LoadState } from "./Home";
 import { Projects } from "./Projects";
 import { AgentSidebar, AgentWorkspace } from "./AgentScope";
+import { HostSidebar, HostOverview, useHostRoster } from "./HostScope";
+import { workspaceName } from "./workspace-navigation";
 import { SignIn } from "./SignIn";
 import { DocumentationLink } from "./DocumentationLink";
 import { useResource } from "./resources";
@@ -70,6 +72,7 @@ import {
 import {
   agentHref,
   globalHref,
+  hostHref,
   projectHref,
   routeSurface,
   taskHref,
@@ -269,7 +272,9 @@ function AuthenticatedApp({
       ? taskResource.data.task
       : null;
   const agentId =
-    route.kind === "agent" ? route.node : (selectedThread?.node_id ?? "");
+    route.kind === "agent"
+      ? route.node
+      : (selectedThread?.node_id ?? selectedTask?.node_id ?? "");
   const selectedAgent = useResource<FleetNode>(
     authorizedProject &&
       agentId &&
@@ -285,12 +290,41 @@ function AuthenticatedApp({
     selectedAgent.data.node.node_id === agentId
       ? selectedAgent.data
       : null;
-  const scopedNodes =
+  const projectNodes =
     resolvedAgent &&
     !nodes.some((item) => item.node.node_id === resolvedAgent.node.node_id)
       ? [...nodes, resolvedAgent]
       : nodes;
-  const agent = scopedNodes.find((item) => item.node.node_id === agentId);
+  const agent = projectNodes.find((item) => item.node.node_id === agentId);
+  const hostId =
+    route.kind === "host"
+      ? route.host
+      : (agent?.node.host_id ?? selectedThread?.host_id ?? "");
+  const hostDetail = useResource<{ host: Host }>(
+    authorizedProject && hostId
+      ? `${projectPath(project)}/hosts/${encodeURIComponent(hostId)}`
+      : null,
+    5000,
+    me.user.id,
+  );
+  const host =
+    hostDetail.data?.host.project_id === project &&
+    hostDetail.data.host.host_id === hostId
+      ? hostDetail.data.host
+      : hosts.find((item) => item.host_id === hostId);
+  const roster = useHostRoster(
+    authorizedProject ? project : "",
+    authorizedProject ? hostId : "",
+    me.user.id,
+  );
+  const scopedNodes = [
+    ...new Map(
+      [...projectNodes, ...roster.nodes].map((item) => [
+        item.node.node_id,
+        item,
+      ]),
+    ).values(),
+  ];
   const refresh = useCallback(
     async (signal?: AbortSignal) => {
       if (!project || !authorizedProject) return;
@@ -415,6 +449,31 @@ function AuthenticatedApp({
   }
   function openAgent(id: string, view: "overview" | "policy" = "overview") {
     navigation.go(agentHref(project, id, view));
+  }
+  async function revokeWorkspace() {
+    if (!agent || busy || !permissions.includes("administer")) return;
+    if (
+      !confirm(
+        `Revoke ${workspaceName(agent)}? Its Control Plane connection will close. Accepted work continues locally.`,
+      )
+    )
+      return;
+    setBusy(true);
+    setError("");
+    try {
+      await request(
+        `${projectPath(project)}/nodes/${encodeURIComponent(agentId)}/revoke`,
+        { revision: agent.node.revision },
+      );
+      roster.refresh();
+      void refresh();
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "The connection could not be revoked.",
+      );
+    } finally {
+      setBusy(false);
+    }
   }
   function selectProject(id: string) {
     setPreferredProject(id);
@@ -577,6 +636,8 @@ function AuthenticatedApp({
     !agent
   )
     unavailable = "The requested agent could not be found in this project.";
+  else if (route.kind === "host" && hostDetail.error)
+    unavailable = hostDetail.error;
   return (
     <SendShortcutContext value={appearance.sendShortcut}>
       <ControlPlaneFrame
@@ -647,7 +708,28 @@ function AuthenticatedApp({
           </>
         }
         sidebar={
-          !unavailable && agentId ? (
+          !unavailable && host && hostId ? (
+            <HostSidebar
+              key={`${me.user.id}:${project}:${hostId}`}
+              project={project}
+              host={host}
+              nodes={roster.nodes}
+              identity={me.user.id}
+              agentId={agentId}
+              selected={selectedThread?.thread_id ?? ""}
+              canExecute={permissions.includes("execute")}
+              onAgent={(id) => openAgent(id)}
+              onOpen={openThread}
+              onNew={(id) =>
+                navigation.go(agentHref(project, id, "threads", true))
+              }
+              onBack={() => navigation.go(globalHref("fleet", project))}
+              hasMore={roster.hasMore}
+              onMore={() => void roster.more()}
+              moreBusy={roster.busy}
+              error={roster.error}
+            />
+          ) : !unavailable && agentId && !hostId ? (
             <AgentSidebar
               key={`${me.user.id}:${project}:${agentId}`}
               project={project}
@@ -745,6 +827,17 @@ function AuthenticatedApp({
                 Go Home
               </RouteLink>
             </section>
+          ) : route.kind === "host" ? (
+            host ? (
+              <HostOverview
+                host={host}
+                nodes={roster.nodes}
+                project={project}
+                onAgent={(id) => openAgent(id)}
+              />
+            ) : (
+              <LoadState {...hostDetail} retry={hostDetail.refresh} />
+            )
           ) : route.kind === "thread" ? (
             selectedThread ? (
               <ThreadDetail
@@ -771,11 +864,12 @@ function AuthenticatedApp({
                 initial={selectedTask}
                 project={project}
                 permissions={selectedTask.source_read_only ? [] : permissions}
-                nodeLabel={
-                  nodes.find(
+                nodeLabel={(() => {
+                  const item = scopedNodes.find(
                     (item) => item.node.node_id === selectedTask.node_id,
-                  )?.node.label ?? selectedTask.node_id
-                }
+                  );
+                  return item ? workspaceName(item) : selectedTask.node_id;
+                })()}
                 onBack={() => navigation.back(projectHref(project, "tasks"))}
                 backHref={projectHref(project, "tasks")}
               />
@@ -857,6 +951,7 @@ function AuthenticatedApp({
               }
               onOpen={openThread}
               view={route.view}
+              onRevoke={() => void revokeWorkspace()}
               onView={(view) =>
                 navigation.go(agentHref(project, agentId, view))
               }
@@ -875,6 +970,7 @@ function AuthenticatedApp({
               onMoreHosts={() => setHostPages((value) => value + 1)}
               onMore={() => setNodePages((value) => value + 1)}
               onOpenAgent={(id) => openAgent(id)}
+              onOpenHost={(id) => navigation.go(hostHref(project, id))}
             />
           )}
         </Suspense>

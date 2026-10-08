@@ -55,7 +55,7 @@ pub fn native_inventory(
         let inventory = RuntimeInventory {
             policy: None,
             host_id,
-            host_label: "Colossus host".into(),
+            host_label: native_host_label(),
             platform: std::env::consts::OS.into(),
             deployment_kind,
             workspace_id: format!(
@@ -75,4 +75,35 @@ pub fn native_inventory(
     })();
     FileExt::unlock(file).map_err(|_| "native host identity unavailable")?;
     result
+}
+
+/// Bounded native computer name for display; it never contributes to host identity.
+pub fn native_host_label() -> String {
+    display_host_label(sysinfo::System::host_name())
+}
+
+fn display_host_label(name: Option<String>) -> String {
+    name.map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty() && name.len() <= 256 && !name.chars().any(char::is_control))
+        .unwrap_or_else(|| "Colossus host".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_host_label;
+    #[test]
+    fn computer_names_are_bounded_display_metadata() {
+        assert_eq!(
+            display_host_label(Some("  Workstation  ".into())),
+            "Workstation"
+        );
+        for name in [
+            None,
+            Some(String::new()),
+            Some("bad\nname".into()),
+            Some("a".repeat(257)),
+        ] {
+            assert_eq!(display_host_label(name), "Colossus host");
+        }
+    }
 }

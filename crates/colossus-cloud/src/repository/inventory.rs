@@ -143,6 +143,52 @@ impl CloudRepository {
         )
         .await
     }
+    /// Read one native host beneath the caller's project visibility.
+    pub async fn get_host(&self, caller: &CloudCaller, host_id: &str) -> CloudResult<CloudHost> {
+        caller.require(CloudPermission::Read)?;
+        crate::validate_identifier(host_id)?;
+        self.read(&format!("cloud.host:{}:{host_id}", caller.project_id()))
+            .await
+            .map(|(host, _)| host)
+    }
+
+    /// Read only this project's runtime placements on one exact native host.
+    pub async fn list_host_nodes(
+        &self,
+        caller: &CloudCaller,
+        host_id: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> CloudResult<Vec<CloudNode>> {
+        self.get_host(caller, host_id).await?;
+        if !(1..=100).contains(&limit) {
+            return Err(CloudError::InvalidArgument);
+        }
+        if let Some(after) = after {
+            crate::validate_identifier(after)?;
+        }
+        let query = crate::storage::EntityQuery {
+            kind: crate::storage::EntityKind::Node,
+            project_id: caller.project_id().into(),
+            host_id: Some(host_id.into()),
+            after: after.map(str::to_owned),
+            limit,
+            ..Default::default()
+        };
+        self.storage()
+            .list(&query)
+            .await?
+            .into_iter()
+            .map(|record| {
+                if let crate::storage::EntityValue::Node(node) = record.value {
+                    Ok(node)
+                } else {
+                    Err(CloudError::Storage)
+                }
+            })
+            .collect()
+    }
+
     /// List advertised workspace identities without releasing local paths.
     pub async fn list_workspaces(
         &self,
@@ -458,6 +504,7 @@ impl CloudRepository {
                     after: after.clone(),
                     limit: 100,
                     node_id: Some(node.node_id.clone()),
+                    host_id: None,
                     query: None,
                     status: None,
                     archived: None,

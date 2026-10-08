@@ -14,6 +14,87 @@ fn inventory() -> RuntimeInventory {
     }
 }
 
+#[tokio::test]
+async fn host_workspace_queries_keep_project_and_host_boundaries_and_page_exactly() {
+    use crate::storage::{CloudTransaction, EntityKey, EntityKind, EntityMutation, EntityValue};
+    let (repo, reader, first) = fixture().await;
+    repo.register_inventory(&first, inventory(), 100)
+        .await
+        .unwrap();
+    for (id, host, workspace) in [
+        ("second", "host-a", "workspace-b"),
+        ("foreign", "host-b", "workspace-c"),
+    ] {
+        let mut node = first.clone();
+        node.node_id = id.into();
+        repo.storage()
+            .commit(CloudTransaction {
+                entities: vec![EntityMutation {
+                    key: EntityKey {
+                        kind: EntityKind::Node,
+                        project_id: node.project_id.clone(),
+                        parent_id: None,
+                        id: id.into(),
+                    },
+                    expected_revision: 0,
+                    value: EntityValue::Node(node.clone()),
+                    actor: "fixture".into(),
+                    operation: "cloud.node.fixture".into(),
+                }],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let mut observed = inventory();
+        observed.host_id = host.into();
+        observed.workspace_id = workspace.into();
+        repo.register_inventory(&node, observed, 100).await.unwrap();
+    }
+    let all = repo
+        .list_host_nodes(&reader, "host-a", None, 10)
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 2);
+    assert!(
+        all.iter()
+            .all(|node| node.host_id.as_deref() == Some("host-a"))
+    );
+    let page = repo
+        .list_host_nodes(&reader, "host-a", None, 1)
+        .await
+        .unwrap();
+    assert_eq!(page, all[..1]);
+    assert_eq!(
+        repo.list_host_nodes(&reader, "host-a", Some(&page[0].node_id), 1)
+            .await
+            .unwrap(),
+        all[1..]
+    );
+    assert_eq!(
+        repo.get_host(&reader, "host-a").await.unwrap().host_id,
+        "host-a"
+    );
+    assert!(matches!(
+        repo.list_host_nodes(
+            &caller("project-b", &[CloudPermission::Read]),
+            "host-a",
+            None,
+            10
+        )
+        .await,
+        Err(CloudError::NotFound)
+    ));
+    assert!(matches!(
+        repo.get_host(&caller(reader.project_id(), &[]), "host-a")
+            .await,
+        Err(CloudError::PermissionDenied)
+    ));
+    assert!(matches!(
+        repo.list_host_nodes(&reader, "host-a", None, 101).await,
+        Err(CloudError::InvalidArgument)
+    ));
+}
+
 fn policy() -> RuntimePolicyPosture {
     RuntimePolicyPosture {
         schema_version: 1,

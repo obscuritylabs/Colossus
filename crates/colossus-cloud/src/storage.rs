@@ -214,7 +214,7 @@ struct EncodedCloudCursor {
 }
 fn cursor_query_hash(query: &EntityQuery) -> CloudResult<String> {
     use sha2::Digest;
-    let bytes = serde_json::to_vec(&(
+    let base = (
         query.kind,
         &query.project_id,
         &query.parent_id,
@@ -223,7 +223,13 @@ fn cursor_query_hash(query: &EntityQuery) -> CloudResult<String> {
         &query.status,
         query.archived,
         query.order,
-    ))
+    );
+    // Preserve existing cursors when no new host filter is selected.
+    let bytes = if let Some(host) = &query.host_id {
+        serde_json::to_vec(&(base, host))
+    } else {
+        serde_json::to_vec(&base)
+    }
     .map_err(|_| CloudError::InvalidArgument)?;
     Ok(hex::encode(sha2::Sha256::digest(bytes)))
 }
@@ -305,6 +311,8 @@ pub struct EntityQuery {
     pub limit: usize,
     /// Optional immutable runtime placement filter.
     pub node_id: Option<String>,
+    /// Optional native host grouping filter, beneath the authenticated project.
+    pub host_id: Option<String>,
     /// Literal substring search against the projected title/label.
     pub query: Option<String>,
     /// Exact domain status filter.
@@ -323,6 +331,7 @@ impl Default for EntityQuery {
             after: None,
             limit: 100,
             node_id: None,
+            host_id: None,
             query: None,
             status: None,
             archived: None,
@@ -650,6 +659,12 @@ impl CloudStore for MemoryCloudStore {
                             .search_text()
                             .to_lowercase()
                             .contains(&q.to_lowercase())
+                    })
+                    && query.host_id.as_ref().is_none_or(|host| match &r.value {
+                        EntityValue::Node(value) => value.host_id.as_ref() == Some(host),
+                        EntityValue::Workspace(value) => &value.host_id == host,
+                        EntityValue::Thread(value) => value.host_id.as_ref() == Some(host),
+                        _ => false,
                     })
                     && query.status.as_ref().is_none_or(|status| {
                         if query.kind == EntityKind::User && status == "administrator" {

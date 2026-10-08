@@ -2,6 +2,7 @@ import { useContext, useEffect, useRef, useState } from "react";
 import { Button, ComposerModeSwitch, DropdownSelect } from "@colossus/ui";
 import { ConversationComposer } from "@colossus/ui/conversation";
 import { type FleetNode } from "./api";
+import { workspaceName } from "./workspace-navigation";
 import { SendShortcutContext } from "./Appearance";
 import { IconShieldCheck } from "@tabler/icons-react";
 
@@ -118,7 +119,7 @@ export function RunComposer({
       context={
         <>
           <span className="composer-context-runtime">
-            {target?.node.label ?? "Select an agent"}
+            {target ? workspaceName(target) : "Select a workspace"}
           </span>
           <span
             className="composer-model"
@@ -164,7 +165,7 @@ export function RunComposer({
                 .filter((item) => !item.node.revoked)
                 .map((item) => (
                   <option key={item.node.node_id} value={item.node.node_id}>
-                    {item.node.label}
+                    {workspaceName(item)}
                     {item.node.workspace_label
                       ? ` · ${item.node.workspace_label}`
                       : ""}
@@ -174,7 +175,7 @@ export function RunComposer({
             </DropdownSelect>
           ) : (
             <span className="composer-target">
-              {target?.node.label ?? "Assigned agent"}
+              {target ? workspaceName(target) : "Assigned workspace"}
             </span>
           )}
           <ComposerModeSwitch

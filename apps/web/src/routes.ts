@@ -6,6 +6,7 @@ export type AdminView = "users" | "projects" | "settings";
 export type Route =
   | { kind: "global"; surface: Surface; project?: string; view?: AdminView }
   | { kind: "project"; project: string; view: ProjectView }
+  | { kind: "host"; project: string; host: string }
   | {
       kind: "agent";
       project: string;
@@ -57,6 +58,8 @@ export function globalHref(
 }
 export const projectHref = (project: string, view: ProjectView = "overview") =>
   `/projects/${id(project)}/${view}`;
+export const hostHref = (project: string, host: string) =>
+  `/projects/${id(project)}/hosts/${id(host)}`;
 export const agentHref = (
   project: string,
   node: string,
@@ -124,6 +127,8 @@ export function parseRoute(href: string, origin: string): Route {
       };
     }
     if (parts.length === 4 && !query.size) {
+      if (parts[2] === "hosts")
+        return { kind: "host", project, host: parts[3]! };
       if (parts[2] === "threads")
         return { kind: "thread", project, thread: parts[3]! };
       if (parts[2] === "tasks")
@@ -142,6 +147,11 @@ export function safeReturnPath(href: string, origin: string): string | null {
 export function routeSurface(route: Route): Surface {
   if (route.kind === "global") return route.surface;
   if (route.kind === "project" || route.kind === "task") return "projects";
-  if (route.kind === "agent" || route.kind === "thread") return "fleet";
+  if (
+    route.kind === "host" ||
+    route.kind === "agent" ||
+    route.kind === "thread"
+  )
+    return "fleet";
   return "home";
 }

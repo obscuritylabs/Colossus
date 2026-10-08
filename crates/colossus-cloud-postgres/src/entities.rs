@@ -173,6 +173,14 @@ pub(super) async fn list(
     } else {
         "''::TEXT"
     };
+    let host = if matches!(
+        query.kind,
+        EntityKind::Node | EntityKind::Workspace | EntityKind::Thread
+    ) {
+        "host_id"
+    } else {
+        "NULL::TEXT"
+    };
     let archived = if matches!(query.kind, EntityKind::Thread | EntityKind::Project) {
         "archived"
     } else {
@@ -241,7 +249,7 @@ pub(super) async fn list(
         _ => "''::TEXT",
     };
     let page = format!(
-        "SELECT source.*,{page_time} AS page_time,ROW_NUMBER() OVER (ORDER BY {order}) AS page_ordinal FROM {table} source WHERE project_id=$1 AND ($2::TEXT IS NULL OR {parent}=$2) AND ($3::TEXT IS NULL OR {comparison}) AND NOT deleted AND ($4::TEXT IS NULL OR {node}=$4) AND ($5::TEXT IS NULL OR strpos(lower({search}),lower($5))>0) AND {status_filter} AND ($7 IS NULL OR {archived}=$7) ORDER BY {order} LIMIT $8"
+        "SELECT source.*,{page_time} AS page_time,ROW_NUMBER() OVER (ORDER BY {order}) AS page_ordinal FROM {table} source WHERE project_id=$1 AND ($2::TEXT IS NULL OR {parent}=$2) AND ($3::TEXT IS NULL OR {comparison}) AND NOT deleted AND ($4::TEXT IS NULL OR {node}=$4) AND ($5::TEXT IS NULL OR strpos(lower({search}),lower($5))>0) AND {status_filter} AND ($7 IS NULL OR {archived}=$7) AND ($11::TEXT IS NULL OR {host}=$11) ORDER BY {order} LIMIT $8"
     );
     let selection = rows::selection(query.kind, "r", "r.page_time");
     let joins = rows::joins(query.kind, "r");
@@ -257,7 +265,8 @@ pub(super) async fn list(
         .bind::<Nullable<Bool>, _>(query.archived)
         .bind::<BigInt, _>(query.limit.min(100) as i64)
         .bind::<Nullable<Text>, _>(after_time.map(str::to_owned))
-        .bind::<Nullable<Text>, _>(after_parent.map(str::to_owned));
+        .bind::<Nullable<Text>, _>(after_parent.map(str::to_owned))
+        .bind::<Nullable<Text>, _>(query.host_id.clone());
     let rows = rows::load(conn, query.kind, statement, None)
         .await
         .map_err(CloudError::from)?;

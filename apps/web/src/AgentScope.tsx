@@ -34,6 +34,7 @@ import {
 } from "./api";
 import type { AgentPolicy } from "./control-api";
 import { useResource } from "./resources";
+import { workspaceName, workspaceState } from "./workspace-navigation";
 import { AnalyticsPanel, LoadState, Metrics } from "./Home";
 import { SectionTabs } from "./Projects";
 import { RunComposer, type RunRequest } from "./RunComposer";
@@ -467,6 +468,7 @@ export function AgentWorkspace({
   view,
   onView,
   onOpen,
+  onRevoke,
 }: {
   project: string;
   agent: FleetNode | undefined;
@@ -480,6 +482,7 @@ export function AgentWorkspace({
   view?: AgentView;
   onView?: (value: AgentView) => void;
   onOpen?: (thread: Thread) => void;
+  onRevoke?: () => void;
 }) {
   const [localTab, setTab] = useState(initialTab);
   const [draftSeed, setDraftSeed] = useState<
@@ -547,11 +550,12 @@ export function AgentWorkspace({
     <section className="control-page agent-workspace">
       <header className="page-heading">
         <div>
-          <span className="eyebrow">Fleet / agent</span>
-          <h1>{agent?.node.label ?? "Agent"}</h1>
+          <span className="eyebrow">Host / workspace</span>
+          <h1>{agent ? workspaceName(agent) : "Workspace"}</h1>
           <p>
-            {agent?.node.workspace_label ??
-              "Open a conversation from the sidebar or start new work."}
+            {agent
+              ? workspaceState(agent)
+              : "Open a conversation from the sidebar or start new work."}
           </p>
         </div>
         <Button
@@ -581,6 +585,30 @@ export function AgentWorkspace({
           { id: "policy", label: "Policy & configuration" },
         ]}
       />
+      {agent && tab === "overview" ? (
+        <details className="workspace-connection-details">
+          <summary>Connection details</summary>
+          <dl>
+            <dt>Enrollment alias</dt>
+            <dd>{agent.node.label}</dd>
+            <dt>Runtime identity</dt>
+            <dd className="mono">{agent.node.instance_id}</dd>
+            <dt>Agent identity</dt>
+            <dd className="mono">{agent.node.node_id}</dd>
+            <dt>Allowed roles</dt>
+            <dd>{agent.node.roles.join(", ")}</dd>
+          </dl>
+          {permissions.includes("administer") && onRevoke ? (
+            <Button
+              variant="danger"
+              disabled={busy || agent.node.revoked}
+              onClick={onRevoke}
+            >
+              Revoke workspace connection
+            </Button>
+          ) : null}
+        </details>
+      ) : null}
       {agent ? (
         tab === "threads" ? (
           <AgentConversations
