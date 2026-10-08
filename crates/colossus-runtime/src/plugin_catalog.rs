@@ -331,6 +331,16 @@ impl PluginCatalogSource {
         name: &str,
         digest: &str,
     ) -> Result<&PluginStore, RuntimeError> {
+        // Match live inventory's source selection when identical content exists
+        // in both stores: acceptance never transfers global trust to a workspace.
+        if self
+            .selected_workspace_names(&self.workspace_grants()?)
+            .contains(name)
+            && let Some(store) = &self.workspace_plugins.store
+            && store.installation(name, digest)?.is_some()
+        {
+            return Ok(store);
+        }
         if let Some(store) = &self.store
             && store
                 .installation(name, digest)?

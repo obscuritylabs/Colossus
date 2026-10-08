@@ -13,7 +13,7 @@ fn write_source(root: &Path, body: &str) {
 }
 
 #[tokio::test]
-async fn uninstalled_global_receipts_do_not_hide_workspace_previews_before_or_after_gc() {
+async fn workspace_previews_preserve_origin_through_global_lifecycle_and_gc() {
     let temporary = crate::test_support::private_tempdir();
     let root = temporary.path().canonicalize().unwrap();
     let workspace = root.join("workspace");
@@ -43,12 +43,21 @@ async fn uninstalled_global_receipts_do_not_hide_workspace_previews_before_or_af
         .find(|entry| entry.origin == PluginOrigin::Workspace)
         .unwrap();
     assert_eq!(local.digest, installed.digest);
-    store
-        .uninstall("review-tools", &installed.digest, false, terminal_actor())
-        .unwrap();
-    for collected in [false, true] {
-        if collected {
-            assert!(store.gc().unwrap().contains(&installed.digest));
+    for lifecycle in 0..5 {
+        match lifecycle {
+            0 => {} // Initially installed and disabled.
+            1 => {
+                store
+                    .enable("review-tools", &installed.digest, true, terminal_actor())
+                    .unwrap();
+            }
+            2 => store.disable("review-tools", terminal_actor()).unwrap(),
+            3 => {
+                store
+                    .uninstall("review-tools", &installed.digest, false, terminal_actor())
+                    .unwrap();
+            }
+            _ => assert!(store.gc().unwrap().contains(&installed.digest)),
         }
         let skill = runtime
             .manage_plugin(Op::SkillRead {
@@ -80,6 +89,8 @@ async fn uninstalled_global_receipts_do_not_hide_workspace_previews_before_or_af
             .await
             .expect("verify the workspace snapshot");
         assert_eq!(verification["trust"]["method"], "workspace-directory");
+        assert_eq!(verification["origin"], "workspace");
+        assert_eq!(verification["trust"]["trusted"], false);
     }
 }
 
