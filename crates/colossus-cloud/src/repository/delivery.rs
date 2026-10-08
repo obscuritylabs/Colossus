@@ -60,7 +60,7 @@ impl CloudRepository {
             })
             .await?
             .into_iter()
-            .map(|record| serde_json::from_value(record.value).map_err(|_| CloudError::Storage))
+            .map(|record| record.value.try_into())
             .collect()
     }
 
@@ -126,7 +126,7 @@ impl CloudRepository {
                         allocation_stream,
                         0,
                         "cloud.run.allocated.v1",
-                        &task_id,
+                        &task_id.to_owned(),
                     )?),
                     Err(error) => return Err(error),
                 }
@@ -370,7 +370,7 @@ impl CloudRepository {
         task.last_sequence = update.sequence;
         task.released_bytes += bytes;
         let mut writes = vec![
-            self.event(
+            self.released_event(
                 &node.node_id,
                 stream,
                 update.sequence - 1,
@@ -519,7 +519,7 @@ impl CloudRepository {
             })
             .await?
             .into_iter()
-            .map(|record| serde_json::from_value(record.value).map_err(|_| CloudError::Storage))
+            .map(|record| record.value.try_into())
             .collect()
     }
 }

@@ -8,8 +8,6 @@ pub mod cli;
 pub mod config;
 mod connection;
 mod http;
-/// Explicit offline import from the former protected cloud journal.
-pub mod migration;
 mod observability;
 /// Composed HTTP/OIDC and mutual-TLS server lifecycle.
 pub mod server;

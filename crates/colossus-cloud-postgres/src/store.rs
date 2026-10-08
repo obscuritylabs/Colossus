@@ -111,10 +111,10 @@ impl CloudPostgresStore {
             sql_query("SELECT pg_advisory_xact_lock(hashtext($1))").bind::<Text,_>(format!("colossus-cloud-migrate:{}",config.schema)).execute(conn).await?;
             #[derive(diesel::QueryableByName)]struct Legacy{#[diesel(sql_type=Bool)]present:bool}
             let legacy=sql_query("SELECT to_regclass('journal_metadata') IS NOT NULL OR to_regclass('journal_events') IS NOT NULL AS present").get_result::<Legacy>(conn).await?;
-            if legacy.present{return Err(TransactionError::Store(StoreError::Adapter("legacy journal schema requires explicit offline migration into a distinct cloud schema".into())));}
+            if legacy.present{return Err(TransactionError::Store(StoreError::Adapter("cloud storage requires a distinct schema from runtime journals".into())));}
             conn.batch_execute("CREATE TABLE IF NOT EXISTS cloud_schema_migrations(version BIGINT PRIMARY KEY,checksum TEXT NOT NULL,applied_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp())").await?;
             #[derive(diesel::QueryableByName)]struct Applied{#[diesel(sql_type=Text)]checksum:String}
-            for (version,sql) in [(1_i64,include_str!("../migrations/00000000000001_cloud_relational/up.sql")),(2_i64,include_str!("../migrations/00000000000002_operational_retention/up.sql")),(3_i64,include_str!("../migrations/00000000000003_coalesced_hints/up.sql")),(4_i64,include_str!("../migrations/00000000000004_project_hints/up.sql")),(5_i64,include_str!("../migrations/00000000000005_pending_commands/up.sql")),(6_i64,include_str!("../migrations/00000000000006_thread_sync_status/up.sql")),(7_i64,include_str!("../migrations/00000000000007_identity_projects/up.sql"))] {
+            for (version,sql) in [(1_i64,include_str!("../migrations/00000000000001_cloud_relational/up.sql"))] {
             let checksum=entities::digest(&serde_json::Value::String(sql.into())).map_err(TransactionError::Store)?;
             match sql_query("SELECT checksum FROM cloud_schema_migrations WHERE version=$1").bind::<BigInt,_>(version).get_result::<Applied>(conn).await{
                 Ok(applied) if applied.checksum==checksum=>{},

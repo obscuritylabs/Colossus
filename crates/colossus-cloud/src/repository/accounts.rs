@@ -10,7 +10,7 @@ pub(super) fn timestamp() -> CloudResult<String> {
         .format(&Rfc3339)
         .map_err(|_| CloudError::Storage)
 }
-pub(super) fn mutation<T: Serialize>(
+pub(super) fn mutation<T: crate::storage::EntityData>(
     actor: &str,
     key: EntityKey,
     revision: u64,
@@ -20,7 +20,7 @@ pub(super) fn mutation<T: Serialize>(
     Ok(EntityMutation {
         key,
         expected_revision: revision,
-        value: serde_json::to_value(value).map_err(|_| CloudError::InvalidArgument)?,
+        value: value.entity_value(),
         actor: actor.into(),
         operation: operation.into(),
     })
@@ -38,8 +38,7 @@ impl CloudRepository {
     pub async fn account(&self, id: &str) -> CloudResult<UserAccount> {
         crate::validate_identifier(id)?;
         let record = self.store.read(&identity_key(EntityKind::User, id)).await?;
-        let mut account: UserAccount =
-            serde_json::from_value(record.value).map_err(|_| CloudError::Storage)?;
+        let mut account: UserAccount = record.value.try_into()?;
         if account.user.id != id {
             return Err(CloudError::Storage);
         }
@@ -166,8 +165,7 @@ impl CloudRepository {
             .into_iter()
             .find(|r| r.key.kind == EntityKind::LocalCredential)
             .ok_or(CloudError::NotFound)?;
-        let mut credential: LocalCredential =
-            serde_json::from_value(record.value).map_err(|_| CloudError::Storage)?;
+        let mut credential: LocalCredential = record.value.try_into()?;
         credential.password_hash = password_hash;
         account.security_epoch += 1;
         account.user.revision += 1;
@@ -213,8 +211,7 @@ impl CloudRepository {
             .await?
             .into_iter()
             .map(|r| {
-                let mut account: UserAccount =
-                    serde_json::from_value(r.value).map_err(|_| CloudError::Storage)?;
+                let mut account: UserAccount = r.value.try_into()?;
                 account.user.revision = r.revision;
                 Ok(account.user)
             })
@@ -227,8 +224,7 @@ impl CloudRepository {
             .await?
             .into_iter()
             .map(|r| {
-                let mut member: ProjectMembership =
-                    serde_json::from_value(r.value).map_err(|_| CloudError::Storage)?;
+                let mut member: ProjectMembership = r.value.try_into()?;
                 member.revision = r.revision;
                 Ok(member)
             })
@@ -250,14 +246,7 @@ impl CloudRepository {
                 .read(&membership_key(caller.project_id(), user))
                 .await
             {
-                Ok(r)
-                    if r.value
-                        .get("permissions")
-                        .and_then(serde_json::Value::as_array)
-                        .is_some_and(Vec::is_empty) =>
-                {
-                    r.revision
-                }
+                Ok(r) if r.value.status() == "removed" => r.revision,
                 Ok(_) => return Err(CloudError::Conflict),
                 Err(CloudError::NotFound) => 0,
                 Err(e) => return Err(e),
@@ -300,8 +289,7 @@ impl CloudRepository {
         if record.revision != expected {
             return Err(CloudError::Conflict);
         }
-        let mut member: ProjectMembership =
-            serde_json::from_value(record.value).map_err(|_| CloudError::Storage)?;
+        let mut member: ProjectMembership = record.value.try_into()?;
         member.permissions.clear();
         member.revision += 1;
         self.store
@@ -334,16 +322,9 @@ impl CloudRepository {
             .list(&query)
             .await?
             .into_iter()
-            .filter(|r| {
-                r.value.get("user_id").is_some()
-                    && r.value
-                        .get("permissions")
-                        .and_then(serde_json::Value::as_array)
-                        .is_some_and(|p| !p.is_empty())
-            })
+            .filter(|r| r.value.status() == "active")
             .map(|r| {
-                let mut member: ProjectMembership =
-                    serde_json::from_value(r.value).map_err(|_| CloudError::Storage)?;
+                let mut member: ProjectMembership = r.value.try_into()?;
                 member.revision = r.revision;
                 Ok(member)
             })
@@ -368,7 +349,7 @@ impl CloudRepository {
             .await?
             .into_iter()
             .map(|r| {
-                serde_json::from_value::<UserAccount>(r.value)
+                UserAccount::try_from(r.value)
                     .map(|a| a.user)
                     .map_err(|_| CloudError::Storage)
             })

@@ -122,8 +122,14 @@ sh scripts/package-desktop-linux` after installing Desktop npm dependencies.
 
 The relational tables are separated by domain: project membership, host/agent/workspace
 inventory, conversation threads/messages, tasks, commands/receipts, session/run mappings,
-enrollment and certificate rotation. Indexed domain columns accompany versioned JSONB
-SDK snapshots. The cloud store commits related entity revisions, command delivery,
+enrollment and certificate rotation. `CloudStore` exchanges typed domain values, and
+the PostgreSQL adapter maps ordinary fields to authoritative relational columns and
+reconstructs domain objects on reads. Core records have no JSONB document column;
+login display metadata uses child rows and bounded sets use native arrays. JSONB is
+reserved for SDK requests/snapshots, command operations/replies, runtime policy
+observations, released events and opaque authorization envelopes. Queries filter
+named columns and use SQL `NULL` for an absent command reply. The cloud store commits
+related entity revisions, command delivery,
 released events and sync cursors with audit and outbox records in the same transaction.
 Entity compare-and-swap and per-feed ordering replace the old global journal-head lock.
 
@@ -153,37 +159,33 @@ transactions so a stale replica cannot commit output after replacement ownership
 
 Configured legacy memberships seed audited database identities and memberships once,
 preserving their exact existing permission ceilings. Database roles are authoritative
-after migration; restart does not overwrite administrator edits. Explicitly assigning a
+after bootstrap; restart does not overwrite administrator edits. Explicitly assigning a
 built-in role replaces a legacy customized permission set with that role's exact bundle.
 Every request and SSE revalidation checks the active user, session security epoch and
 current project membership. All replicas share authentication configuration and keys.
 Session and PKCE-flow hashes bind the issuer/client namespace; changing identity
-configuration requires new browser sign-ins. Upgrade the former configuration-only
-authentication deployment with all old replicas stopped before admitting users under
-the new identity schema; do not depend on revocation enforcement across mixed versions.
+configuration requires new browser sign-ins.
 
 `CloudStore::maintain` drains coalesced project wakeup hints with `FOR UPDATE SKIP LOCKED`,
 marks publication and prunes delivered hints older than one day. Minute maintenance
 passes also remove expired browser sessions and consumed expired OIDC flows in bounded
-batches of 256 records per collection. Import/maintenance markers remain unexpired.
+batches of 256 records per collection. Maintenance metadata remains unexpired.
 The maintenance contract never deletes canonical thread/run events, messages, tasks,
 cursors or audit chains; their archive boundary requires an explicit retention design.
 
 Numbered SQL migrations under `crates/colossus-cloud-postgres/migrations` run transactionally
 at store startup under a schema-specific advisory lock. Applied checksums are persisted.
-Add a new migration for a deployed schema; do not change already applied SQL. Schema
+The initial migration is a fresh relational baseline. Recreate disposable development
+schemas from older baselines; no cloud data import is supported. Add a new migration
+for a deployed schema; do not change already applied SQL. Schema
 rollback files are destructive operator tools and are never executed by ordinary startup.
 The database and independently archived audit heads require tested restore procedures;
 [cloud operations](../admin/cloud-control-plane.md#back-up-and-restore-the-cloud-database)
 owns those steps and the credential references.
 
-The offline `migrate-journal` entry point imports the prior cloud journal into an empty
-SQL store, preserving stable task/run/command identities and source event/cursor state.
-It records a verified source marker and resumable progress; ordinary startup refuses an
-incomplete import. Keep the source frozen and target server stopped during import.
-[Operator migration](../admin/cloud-control-plane.md#migrate-an-existing-cloud-journal)
-owns the installed-binary command, source backup and production cutover sequence. This
-conversion never migrates or opens local runtime journals.
+[Cloud storage initialization](../admin/cloud-control-plane.md#initialize-cloud-storage)
+owns the installed-binary startup and database preparation steps. Cloud schema changes
+never migrate or open local runtime journals.
 
 ## Export and verify an independent audit checkpoint
 

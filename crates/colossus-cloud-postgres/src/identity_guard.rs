@@ -30,10 +30,7 @@ pub(super) async fn begin(
         && mutations.iter().any(|m| {
             m.key.kind == EntityKind::User
                 && m.actor == "operator-bootstrap"
-                && m.value
-                    .pointer("/user/is_admin")
-                    .and_then(serde_json::Value::as_bool)
-                    == Some(true)
+                && matches!(&m.value, colossus_cloud::storage::EntityValue::User(value) if value.user.is_admin)
         })
     {
         return Err(StoreError::Conflict {

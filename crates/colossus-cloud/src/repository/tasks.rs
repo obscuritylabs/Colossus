@@ -4,14 +4,9 @@ use colossus_sdk::{
     CreateRunRequest, IdempotencyKey, InputContentPart, InteractionAnswer,
     RespondInteractionRequest,
 };
-use serde::Deserialize;
 use std::collections::BTreeSet;
 
-#[derive(Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Admission {
-    active: BTreeSet<String>,
-}
+use crate::storage::Admission;
 
 pub(super) fn stream(project: &str, task: &str) -> String {
     format!("cloud.task:{project}:{task}")

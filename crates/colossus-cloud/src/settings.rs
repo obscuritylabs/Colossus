@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 /// Closed visual severity choices; no arbitrary CSS colors.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClassificationTone {
     /// Neutral display marking.
@@ -19,7 +19,7 @@ pub enum ClassificationTone {
     Danger,
 }
 /// Classification marking placement around the application chrome.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClassificationPosition {
     /// Show the marking above the application chrome.
@@ -29,7 +29,7 @@ pub enum ClassificationPosition {
     TopAndBottom,
 }
 /// Plain-text deployment marking, rendered in the application chrome and sign-in view.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClassificationBanner {
     /// Whether the deployment marking is visible.
@@ -54,7 +54,7 @@ impl ClassificationBanner {
     }
 }
 /// Public deployment display settings with an optimistic database revision.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ControlPlaneSettings {
     /// Exact optimistic database revision; zero creates the initial setting.
@@ -63,7 +63,7 @@ pub struct ControlPlaneSettings {
     pub classification: ClassificationBanner,
 }
 /// Display baseline only; setting it never changes native execution policy or grants.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectPolicyExpectation {
     /// Exact optimistic database revision; zero creates the initial setting.
@@ -164,7 +164,7 @@ impl CloudRepository {
     /// Public display settings contain no operational data, user identities or secrets.
     pub async fn display_settings(&self) -> CloudResult<ControlPlaneSettings> {
         match self.store.read(&setting_key("__identity", "display")).await {
-            Ok(record) => serde_json::from_value(record.value).map_err(|_| CloudError::Storage),
+            Ok(record) => record.value.try_into(),
             Err(CloudError::NotFound) => Ok(ControlPlaneSettings::default()),
             Err(error) => Err(error),
         }
@@ -189,8 +189,7 @@ impl CloudRepository {
                 entities: vec![EntityMutation {
                     key: setting_key("__identity", "display"),
                     expected_revision,
-                    value: serde_json::to_value(&settings)
-                        .map_err(|_| CloudError::InvalidArgument)?,
+                    value: settings.clone().into(),
                     actor: actor.into(),
                     operation: "control_plane.display.updated.v1".into(),
                 }],
@@ -210,7 +209,7 @@ impl CloudRepository {
             .read(&setting_key(caller.project_id(), "policy-expectation"))
             .await
         {
-            Ok(record) => serde_json::from_value(record.value).map_err(|_| CloudError::Storage),
+            Ok(record) => record.value.try_into(),
             Err(CloudError::NotFound) => Ok(ProjectPolicyExpectation::default()),
             Err(error) => Err(error),
         }
@@ -248,8 +247,7 @@ impl CloudRepository {
                 entities: vec![EntityMutation {
                     key: setting_key(caller.project_id(), "policy-expectation"),
                     expected_revision,
-                    value: serde_json::to_value(&policy)
-                        .map_err(|_| CloudError::InvalidArgument)?,
+                    value: policy.clone().into(),
                     actor: caller.subject().into(),
                     operation: "control_plane.policy_expectation.updated.v1".into(),
                 }],

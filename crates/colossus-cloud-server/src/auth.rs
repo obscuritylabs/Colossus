@@ -184,7 +184,7 @@ impl Authentication {
                 entities: vec![EntityMutation {
                     key: flow_key(&id),
                     expected_revision: 0,
-                    value,
+                    value: colossus_cloud::storage::EntityValue::AuthFlow(value),
                     actor: "oidc".into(),
                     operation: "cloud.auth.flow-created.v2".into(),
                 }],
@@ -212,7 +212,7 @@ impl Authentication {
             .read(&key)
             .await
             .map_err(|_| CloudError::PermissionDenied)?;
-        let flow = self.open_flow(&key.id, &record.value)?;
+        let flow = self.open_flow(&key.id, record.value.auth_flow()?)?;
         if flow.expires_at <= crate::http::now() {
             return Err(CloudError::PermissionDenied);
         }
@@ -267,7 +267,7 @@ impl Authentication {
             EntityKind::OidcIdentity,
             &colossus_cloud::hash_identity(&[&oidc.issuer, claims.subject().as_str()]),
         );
-        let binding: colossus_cloud::OidcIdentity = serde_json::from_value(
+        let binding = colossus_cloud::OidcIdentity::try_from(
             self.store
                 .read(&binding_key)
                 .await

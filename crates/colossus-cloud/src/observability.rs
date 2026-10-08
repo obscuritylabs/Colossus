@@ -145,20 +145,12 @@ pub(crate) async fn collect<S: CloudStore + ?Sized>(
     let (nodes, complete) = records(store, project, EntityKind::Node, node).await?;
     result.complete &= complete;
     for record in &nodes {
-        if !record
-            .value
-            .get("revoked")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
-        {
+        let crate::storage::EntityValue::Node(value) = &record.value else {
+            return Err(CloudError::Storage);
+        };
+        if !value.revoked {
             result.counts.agents += 1;
-            if record
-                .value
-                .get("runtime_ready")
-                .and_then(serde_json::Value::as_bool)
-                == Some(true)
-                && store.read_lease(project, &record.key.id, now).await.is_ok()
-            {
+            if value.runtime_ready && store.read_lease(project, &record.key.id, now).await.is_ok() {
                 result.counts.online_agents += 1;
             }
         }
@@ -166,7 +158,10 @@ pub(crate) async fn collect<S: CloudStore + ?Sized>(
     if node.is_some() {
         result.counts.hosts = nodes
             .iter()
-            .filter_map(|r| r.value.get("host_id").and_then(serde_json::Value::as_str))
+            .filter_map(|r| match &r.value {
+                crate::storage::EntityValue::Node(value) => value.host_id.as_deref(),
+                _ => None,
+            })
             .collect::<std::collections::BTreeSet<_>>()
             .len() as u64;
     } else {
@@ -181,29 +176,13 @@ pub(crate) async fn collect<S: CloudStore + ?Sized>(
     result.complete &= complete;
     for record in tasks {
         let value = &record.value;
-        let status = if value
-            .pointer("/dispatch_error/code")
-            .and_then(serde_json::Value::as_str)
-            == Some("outcome_unknown")
-        {
-            "outcome_unknown"
-        } else if value
-            .get("dispatch_error")
-            .is_some_and(|value| !value.is_null())
-        {
-            "failed"
-        } else {
-            value
-                .pointer("/snapshot/run/status")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("queued")
-        };
+        let status = value.status();
         match status {
             "running" | "waiting" | "cancelling" => result.counts.active += 1,
             "queued" => result.counts.queued += 1,
             _ => {}
         }
-        let Some(created) = value.get("created_at").and_then(serde_json::Value::as_str) else {
+        let Some(created) = value.created_at() else {
             continue;
         };
         let Ok(created) =
@@ -322,17 +301,42 @@ mod tests {
     #[tokio::test]
     async fn scoped_counts_distinguish_unknown_usage_and_ignore_thread_feed_duplicates() {
         let store = std::sync::Arc::new(MemoryCloudStore::default());
-        let entity = |project: &str, id: &str, value: serde_json::Value| EntityMutation {
-            key: EntityKey {
-                kind: EntityKind::Task,
-                project_id: project.into(),
-                parent_id: None,
-                id: id.into(),
-            },
-            expected_revision: 0,
-            value,
-            actor: "fixture".into(),
-            operation: "fixture.task.created".into(),
+        let entity = |project: &str, id: &str, value: serde_json::Value| {
+            let mut snapshot = crate::tests::snapshot();
+            snapshot.run.status =
+                serde_json::from_value(value["snapshot"]["run"]["status"].clone()).unwrap();
+            EntityMutation {
+                key: EntityKey {
+                    kind: EntityKind::Task,
+                    project_id: project.into(),
+                    parent_id: None,
+                    id: id.into(),
+                },
+                expected_revision: 0,
+                value: crate::CloudTask {
+                    task_id: id.into(),
+                    project_id: project.into(),
+                    node_id: value["node_id"].as_str().unwrap().into(),
+                    subject: "fixture".into(),
+                    created_at: value["created_at"].as_str().unwrap().into(),
+                    updated_at: String::new(),
+                    request: crate::tests::request(),
+                    thread_id: None,
+                    source_read_only: false,
+                    history_complete: true,
+                    history_bounded: false,
+                    run_id: Some(snapshot.run.run_id.clone()),
+                    snapshot: Some(snapshot),
+                    dispatch_error: None,
+                    last_sequence: 0,
+                    released_bytes: 0,
+                    output_limited: false,
+                    revision: 1,
+                }
+                .into(),
+                actor: "fixture".into(),
+                operation: "fixture.task.created".into(),
+            }
         };
         let usage = serde_json::json!({"update":{"usage":{"input_tokens":17,"output_tokens":0}}});
         store.commit(CloudTransaction { entities:vec![

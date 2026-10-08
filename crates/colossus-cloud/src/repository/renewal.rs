@@ -1,17 +1,6 @@
 use super::*;
+use crate::storage::CertificateRenewal as Renewal;
 use crate::{CertificateRedemption, validate_identifier, validation::bounded_fingerprint};
-use serde::Deserialize;
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Renewal {
-    id: String,
-    previous_fingerprint: String,
-    csr_sha256: String,
-    certificate_pem: String,
-    certificate_sha256: String,
-    issued_at: u64,
-}
 
 impl CloudRepository {
     /// Rotate a fixed node's leaf beneath its existing mTLS authority. The key stays

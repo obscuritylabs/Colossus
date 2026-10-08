@@ -195,7 +195,7 @@ impl CloudRepository {
             .flatten();
         let tasks: Vec<CloudTask> = records
             .into_iter()
-            .map(|record| serde_json::from_value(record.value).map_err(|_| CloudError::Storage))
+            .map(|record| record.value.try_into())
             .collect::<CloudResult<_>>()?;
         let records = self
             .store
@@ -217,7 +217,7 @@ impl CloudRepository {
             .flatten();
         let mut messages: Vec<CloudMessage> = records
             .into_iter()
-            .map(|record| serde_json::from_value(record.value).map_err(|_| CloudError::Storage))
+            .map(|record| record.value.try_into())
             .collect::<CloudResult<_>>()?;
         messages.reverse();
         for task in &tasks {
@@ -336,7 +336,7 @@ impl CloudRepository {
             .flatten();
         let threads = records
             .into_iter()
-            .map(|record| serde_json::from_value(record.value).map_err(|_| CloudError::Storage))
+            .map(|record| record.value.try_into())
             .collect::<CloudResult<_>>()?;
         Ok((threads, cursor))
     }
@@ -648,8 +648,7 @@ impl CloudRepository {
             }
             after = records.last().map(|record| record.key.id.clone());
             for record in records {
-                let mut task: CloudTask =
-                    serde_json::from_value(record.value).map_err(|_| CloudError::Storage)?;
+                let mut task: CloudTask = record.value.try_into()?;
                 let node = self.node(project, &task.node_id).await?;
                 let session = task
                     .snapshot

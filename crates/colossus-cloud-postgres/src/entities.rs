@@ -1,3 +1,4 @@
+use crate::normalized;
 use colossus_cloud::{
     CloudError, CloudResult,
     storage::{
@@ -86,12 +87,20 @@ pub(super) fn digest(value: &Value) -> Result<String, StoreError> {
     crate::canonical::bytes(value).map(|bytes| hex::encode(Sha256::digest(bytes)))
 }
 
+fn selection(kind: EntityKind, alias: &str) -> String {
+    let projection = normalized::projection(kind, alias);
+    format!(
+        "{alias}.project_id,{alias}.parent_id,{alias}.id,{alias}.revision,{projection} AS record,{alias}.audit_hash,a.actor,a.operation,a.content_digest,a.previous_hash,a.chain_hash"
+    )
+}
+
 pub(super) async fn read(
     conn: &mut AsyncPgConnection,
     key: &EntityKey,
 ) -> CloudResult<EntityRecord> {
     let table = table(key.kind);
-    let verified=sql_query(format!("SELECT r.project_id,r.parent_id,r.id,r.revision,r.record,r.audit_hash,a.actor,a.operation,a.content_digest,a.previous_hash,a.chain_hash FROM {table} r LEFT JOIN cloud_audit a ON a.project_id=r.project_id AND a.entity_kind='{table}' AND a.parent_id=r.parent_id AND a.id=r.id AND a.revision=r.revision WHERE ($1 = r.project_id OR ($1 = '' AND $4)) AND r.parent_id=$2 AND r.id=$3 AND NOT r.deleted"))
+    let selection = selection(key.kind, "r");
+    let verified=sql_query(format!("SELECT {selection} FROM {table} r LEFT JOIN cloud_audit a ON a.project_id=r.project_id AND a.entity_kind='{table}' AND a.parent_id=r.parent_id AND a.id=r.id AND a.revision=r.revision WHERE ($1 = r.project_id OR ($1 = '' AND $4)) AND r.parent_id=$2 AND r.id=$3 AND NOT r.deleted"))
         .bind::<Text,_>(&key.project_id).bind::<Text,_>(key.parent_id.as_deref().unwrap_or_default()).bind::<Text,_>(&key.id).bind::<Bool,_>(key.kind==EntityKind::Invitation)
         .get_result::<VerifiedRow>(conn).await.map_err(|error|if matches!(error,diesel::result::Error::NotFound){CloudError::NotFound}else{CloudError::Storage})?;
     verify_audit(key.kind, &verified.entity, &verified.audit)?;
@@ -106,7 +115,8 @@ pub(super) async fn projects(
     if !(1..=100).contains(&limit) {
         return Err(CloudError::InvalidArgument);
     }
-    let rows=sql_query("SELECT r.project_id,r.parent_id,r.id,r.revision,r.record,r.audit_hash,a.actor,a.operation,a.content_digest,a.previous_hash,a.chain_hash FROM projects r LEFT JOIN cloud_audit a ON a.project_id=r.project_id AND a.entity_kind='projects' AND a.parent_id=r.parent_id AND a.id=r.id AND a.revision=r.revision WHERE NOT r.deleted AND ($1::TEXT IS NULL OR r.id>$1) ORDER BY r.id LIMIT $2")
+    let selection = selection(EntityKind::Project, "r");
+    let rows=sql_query(format!("SELECT {selection} FROM projects r LEFT JOIN cloud_audit a ON a.project_id=r.project_id AND a.entity_kind='projects' AND a.parent_id=r.parent_id AND a.id=r.id AND a.revision=r.revision WHERE NOT r.deleted AND ($1::TEXT IS NULL OR r.id>$1) ORDER BY r.id LIMIT $2"))
         .bind::<Nullable<Text>,_>(after).bind::<BigInt,_>(limit as i64).load::<VerifiedRow>(conn).await.map_err(|_|CloudError::Storage)?;
     rows.into_iter()
         .map(|row| {
@@ -123,7 +133,8 @@ pub(super) async fn identities(
     let mut result = Vec::new();
     for kind in [EntityKind::LocalCredential, EntityKind::OidcIdentity] {
         let table = table(kind);
-        let rows=sql_query(format!("SELECT r.project_id,r.parent_id,r.id,r.revision,r.record,r.audit_hash,a.actor,a.operation,a.content_digest,a.previous_hash,a.chain_hash FROM {table} r LEFT JOIN cloud_audit a ON a.project_id=r.project_id AND a.entity_kind='{table}' AND a.parent_id=r.parent_id AND a.id=r.id AND a.revision=r.revision WHERE r.user_id=$1 AND NOT r.deleted ORDER BY r.id LIMIT 16"))
+        let selection = selection(kind, "r");
+        let rows=sql_query(format!("SELECT {selection} FROM {table} r LEFT JOIN cloud_audit a ON a.project_id=r.project_id AND a.entity_kind='{table}' AND a.parent_id=r.parent_id AND a.id=r.id AND a.revision=r.revision WHERE r.user_id=$1 AND NOT r.deleted ORDER BY r.id LIMIT 16"))
             .bind::<Text,_>(user).load::<VerifiedRow>(conn).await.map_err(|_|CloudError::Storage)?;
         for row in rows {
             verify_audit(kind, &row.entity, &row.audit)?;
@@ -140,7 +151,8 @@ pub(super) async fn accounts(
     if users.len() > 100 {
         return Err(CloudError::InvalidArgument);
     }
-    let rows=sql_query("SELECT r.project_id,r.parent_id,r.id,r.revision,r.record,r.audit_hash,a.actor,a.operation,a.content_digest,a.previous_hash,a.chain_hash FROM cloud_users r LEFT JOIN cloud_audit a ON a.project_id=r.project_id AND a.entity_kind='cloud_users' AND a.parent_id=r.parent_id AND a.id=r.id AND a.revision=r.revision WHERE r.id=ANY($1) AND NOT r.deleted ORDER BY r.id")
+    let selection = selection(EntityKind::User, "r");
+    let rows=sql_query(format!("SELECT {selection} FROM cloud_users r LEFT JOIN cloud_audit a ON a.project_id=r.project_id AND a.entity_kind='cloud_users' AND a.parent_id=r.parent_id AND a.id=r.id AND a.revision=r.revision WHERE r.id=ANY($1) AND NOT r.deleted ORDER BY r.id"))
         .bind::<Array<Text>,_>(users).load::<VerifiedRow>(conn).await.map_err(|_|CloudError::Storage)?;
     rows.into_iter()
         .map(|row| {
@@ -172,41 +184,36 @@ pub(super) async fn list(
         | EntityKind::Invitation
         | EntityKind::Renewal
         | EntityKind::SessionMapping => "node_id",
-        _ => "record->>'node_id'",
+        _ => "NULL::TEXT",
     };
     let status = if query.kind == EntityKind::User {
         "CASE WHEN active THEN 'active' ELSE 'disabled' END"
     } else if query.kind == EntityKind::Membership {
-        "CASE WHEN user_id IS NOT NULL AND jsonb_array_length(COALESCE(permissions,'[]'::JSONB))>0 THEN 'active' ELSE 'removed' END"
+        "CASE WHEN cardinality(permissions)>0 THEN 'active' ELSE 'removed' END"
     } else if query.kind == EntityKind::Task {
         "status"
     } else if query.kind == EntityKind::Command {
-        "CASE WHEN reply IS NULL OR reply='null'::JSONB THEN 'pending' ELSE 'reconciled' END"
+        "CASE WHEN reply IS NULL THEN 'pending' ELSE 'reconciled' END"
     } else {
-        "COALESCE(record->>'status','')"
+        "''::TEXT"
     };
-    let archived = if query.kind == EntityKind::Thread {
+    let archived = if matches!(query.kind, EntityKind::Thread | EntityKind::Project) {
         "archived"
     } else {
-        "COALESCE((record->>'archived')::BOOLEAN,FALSE)"
+        "FALSE"
     };
-    let status_filter = if query.kind == EntityKind::User
-        && query.status.as_deref() == Some("administrator")
-    {
-        "($6::TEXT='administrator' AND active AND is_admin)".to_owned()
-    } else if query.kind == EntityKind::Command {
-        match query.status.as_deref() {
-            Some("pending") => {
-                "($6::TEXT='pending' AND (reply IS NULL OR reply='null'::JSONB))".to_owned()
+    let status_filter =
+        if query.kind == EntityKind::User && query.status.as_deref() == Some("administrator") {
+            "($6::TEXT='administrator' AND active AND is_admin)".to_owned()
+        } else if query.kind == EntityKind::Command {
+            match query.status.as_deref() {
+                Some("pending") => "($6::TEXT='pending' AND reply IS NULL)".to_owned(),
+                Some("reconciled") => "($6::TEXT='reconciled' AND reply IS NOT NULL)".to_owned(),
+                _ => "$6::TEXT IS NULL".to_owned(),
             }
-            Some("reconciled") => {
-                "($6::TEXT='reconciled' AND reply IS NOT NULL AND reply<>'null'::JSONB)".to_owned()
-            }
-            _ => "$6::TEXT IS NULL".to_owned(),
-        }
-    } else {
-        format!("($6 IS NULL OR {status}=$6)")
-    };
+        } else {
+            format!("($6 IS NULL OR {status}=$6)")
+        };
     let position = decode_page_cursor(query)?;
     let after_id = if matches!(query.order, EntityOrder::IdAsc | EntityOrder::IdDesc) {
         query.after.as_deref()
@@ -248,8 +255,18 @@ pub(super) async fn list(
     };
     let page_time =
         format!("to_char({time_column} AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')");
+    let search = match query.kind {
+        EntityKind::User => "display_name",
+        EntityKind::Project => "project_name",
+        EntityKind::Host => "host_name",
+        EntityKind::Node | EntityKind::Invitation => "label",
+        EntityKind::Workspace => "workspace_name",
+        EntityKind::Thread => "title",
+        _ => "''::TEXT",
+    };
+    let projection = normalized::projection(query.kind, "source");
     let page = format!(
-        "SELECT project_id,parent_id,id,revision,record,audit_hash,{page_time} AS page_time,ROW_NUMBER() OVER (ORDER BY {order}) AS page_ordinal FROM {table} WHERE project_id=$1 AND ($2 IS NULL OR {parent}=$2) AND ($3 IS NULL OR {comparison}) AND NOT deleted AND ($4 IS NULL OR {node}=$4) AND ($5 IS NULL OR strpos(lower(COALESCE(record#>>'{{user,display_name}}',record->>'title',record->>'label',record->>'name',record#>>'{{request,prompt}}','')),lower($5))>0) AND {status_filter} AND ($7 IS NULL OR {archived}=$7) ORDER BY {order} LIMIT $8"
+        "SELECT project_id,parent_id,id,revision,{projection} AS record,audit_hash,{page_time} AS page_time,ROW_NUMBER() OVER (ORDER BY {order}) AS page_ordinal FROM {table} source WHERE project_id=$1 AND ($2::TEXT IS NULL OR {parent}=$2) AND ($3::TEXT IS NULL OR {comparison}) AND NOT deleted AND ($4::TEXT IS NULL OR {node}=$4) AND ($5::TEXT IS NULL OR strpos(lower({search}),lower($5))>0) AND {status_filter} AND ($7 IS NULL OR {archived}=$7) ORDER BY {order} LIMIT $8"
     );
     let sql = format!(
         "SELECT r.*,a.actor,a.operation,a.content_digest,a.previous_hash,a.chain_hash FROM ({page}) r LEFT JOIN cloud_audit a ON a.project_id=r.project_id AND a.entity_kind='{table}' AND a.parent_id=r.parent_id AND a.id=r.id AND a.revision=r.revision ORDER BY r.page_ordinal"
@@ -285,6 +302,7 @@ pub(super) async fn list(
     Ok(result)
 }
 fn record(kind: EntityKind, row: Row) -> CloudResult<EntityRecord> {
+    let value = normalized::decode(kind, &row.id, row.record)?;
     Ok(EntityRecord {
         key: EntityKey {
             kind,
@@ -293,7 +311,7 @@ fn record(kind: EntityKind, row: Row) -> CloudResult<EntityRecord> {
             id: row.id,
         },
         revision: u64::try_from(row.revision).map_err(|_| CloudError::Storage)?,
-        value: row.record,
+        value,
         page_cursor: None,
     })
 }
@@ -302,7 +320,8 @@ pub(super) async fn thread_incomplete(
     project: &str,
     thread: &str,
 ) -> CloudResult<bool> {
-    let candidate=sql_query("SELECT r.project_id,r.parent_id,r.id,r.revision,r.record,r.audit_hash,a.actor,a.operation,a.content_digest,a.previous_hash,a.chain_hash FROM (SELECT project_id,parent_id,id,revision,record,audit_hash FROM tasks WHERE project_id=$1 AND thread_id=$2 AND NOT deleted AND (COALESCE((record->>'output_limited')::BOOLEAN,FALSE) OR COALESCE((record->>'history_bounded')::BOOLEAN,FALSE) OR (record->>'subject'='runtime' AND NOT COALESCE((record->>'history_complete')::BOOLEAN,FALSE)) OR COALESCE((record#>>'{snapshot,run,last_sequence}')::BIGINT,0)>COALESCE(last_sequence,0)) ORDER BY id LIMIT 1) r LEFT JOIN cloud_audit a ON a.project_id=r.project_id AND a.entity_kind='tasks' AND a.parent_id=r.parent_id AND a.id=r.id AND a.revision=r.revision")
+    let selection = selection(EntityKind::Task, "r");
+    let candidate=sql_query(format!("SELECT {selection} FROM tasks r LEFT JOIN cloud_audit a ON a.project_id=r.project_id AND a.entity_kind='tasks' AND a.parent_id=r.parent_id AND a.id=r.id AND a.revision=r.revision WHERE r.project_id=$1 AND r.thread_id=$2 AND NOT r.deleted AND (r.output_limited OR r.history_bounded OR (r.subject='runtime' AND NOT r.history_complete) OR r.snapshot_last_sequence>r.last_sequence) ORDER BY r.id LIMIT 1"))
         .bind::<Text,_>(project).bind::<Text,_>(thread).get_result::<VerifiedRow>(conn).await;
     match candidate {
         Ok(candidate) => {
@@ -317,7 +336,8 @@ pub(super) async fn memberships(
     conn: &mut AsyncPgConnection,
     subject: &str,
 ) -> CloudResult<Vec<EntityRecord>> {
-    let rows=sql_query("SELECT r.project_id,r.parent_id,r.id,r.revision,r.record,r.audit_hash,a.actor,a.operation,a.content_digest,a.previous_hash,a.chain_hash FROM project_memberships r LEFT JOIN cloud_audit a ON a.project_id=r.project_id AND a.entity_kind='project_memberships' AND a.parent_id=r.parent_id AND a.id=r.id AND a.revision=r.revision WHERE r.subject=$1 AND NOT r.deleted ORDER BY r.project_id LIMIT 1024").bind::<Text,_>(subject).load::<VerifiedRow>(conn).await.map_err(|_|CloudError::Storage)?;
+    let selection = selection(EntityKind::Membership, "r");
+    let rows=sql_query(format!("SELECT {selection} FROM project_memberships r LEFT JOIN cloud_audit a ON a.project_id=r.project_id AND a.entity_kind='project_memberships' AND a.parent_id=r.parent_id AND a.id=r.id AND a.revision=r.revision WHERE r.user_id=$1 AND NOT r.deleted ORDER BY r.project_id LIMIT 1024")).bind::<Text,_>(subject).load::<VerifiedRow>(conn).await.map_err(|_|CloudError::Storage)?;
     let mut result = Vec::with_capacity(rows.len());
     for verified in rows {
         verify_audit(EntityKind::Membership, &verified.entity, &verified.audit)?;
@@ -394,15 +414,27 @@ pub(super) async fn mutate(
 }
 pub(super) async fn mutate_profiled(
     conn: &mut AsyncPgConnection,
-    mutation: EntityMutation,
+    mut mutation: EntityMutation,
     profile: &crate::profiling::Profiler,
 ) -> Result<(), StoreError> {
+    if mutation.value.validate_key(&mutation.key).is_err() {
+        return Err(StoreError::Adapter("cloud entity kind mismatch".into()));
+    }
+    mutation.value.set_revision(
+        mutation
+            .expected_revision
+            .checked_add(1)
+            .ok_or_else(|| StoreError::Adapter("cloud revision bound exceeded".into()))?,
+    );
+    let value = serde_json::to_value(&mutation.value)
+        .map_err(|_| StoreError::Adapter("cloud entity encoding failed".into()))?;
     let key = &mutation.key;
     let table = table(key.kind);
     let parent = key.parent_id.as_deref().unwrap_or_default();
+    let selection = selection(key.kind, "r");
     let expected = integer(mutation.expected_revision)?;
     let sql_span = profile.span(crate::profiling::Stage::Sql);
-    let prior=sql_query(format!("SELECT r.project_id,r.parent_id,r.id,r.revision,r.record,r.audit_hash,a.actor,a.operation,a.content_digest,a.previous_hash,a.chain_hash FROM {table} r LEFT JOIN cloud_audit a ON a.project_id=r.project_id AND a.entity_kind='{table}' AND a.parent_id=r.parent_id AND a.id=r.id AND a.revision=r.revision WHERE r.project_id=$1 AND r.parent_id=$2 AND r.id=$3 FOR UPDATE OF r"))
+    let prior=sql_query(format!("SELECT {selection} FROM {table} r LEFT JOIN cloud_audit a ON a.project_id=r.project_id AND a.entity_kind='{table}' AND a.parent_id=r.parent_id AND a.id=r.id AND a.revision=r.revision WHERE r.project_id=$1 AND r.parent_id=$2 AND r.id=$3 FOR UPDATE OF r"))
         .bind::<Text,_>(&key.project_id).bind::<Text,_>(parent).bind::<Text,_>(&key.id).get_result::<VerifiedRow>(conn).await;
     drop(sql_span);
     let cpu_span = profile.span(crate::profiling::Stage::Cpu);
@@ -425,14 +457,12 @@ pub(super) async fn mutate_profiled(
     if actual != expected {
         return Err(conflict(key, mutation.expected_revision, actual as u64));
     }
-    let revision = actual + 1;
-    let created = mutation
-        .value
-        .get("created_at")
-        .or_else(|| mutation.value.pointer("/snapshot/run/created_at"))
-        .and_then(Value::as_str);
-    let updated = mutation.value.get("updated_at").and_then(Value::as_str);
-    let content = digest(&mutation.value)?;
+    let revision = actual
+        .checked_add(1)
+        .ok_or_else(|| StoreError::Adapter("cloud revision bound exceeded".into()))?;
+    let created = mutation.value.created_at();
+    let updated = mutation.value.updated_at();
+    let content = digest(&value)?;
     let hash = chain(
         key,
         revision as u64,
@@ -441,13 +471,29 @@ pub(super) async fn mutate_profiled(
         &content,
         &previous,
     )?;
+    let columns = normalized::columns(key.kind);
+    let names = columns
+        .iter()
+        .map(|column| column.name)
+        .collect::<Vec<_>>()
+        .join(",");
+    let inputs = columns
+        .iter()
+        .map(normalized::input)
+        .collect::<Vec<_>>()
+        .join(",");
+    let assignments = columns
+        .iter()
+        .map(|column| format!("{}={}", column.name, normalized::input(column)))
+        .collect::<Vec<_>>()
+        .join(",");
     let change = if actual == 0 {
         format!(
-            "INSERT INTO {table}(project_id,parent_id,id,revision,record,audit_hash,domain_created_at,domain_updated_at) SELECT $1,$2,$3,$4,$5,$6,COALESCE(NULLIF($12,'')::TIMESTAMPTZ,clock_timestamp()),COALESCE(NULLIF($13,'')::TIMESTAMPTZ,clock_timestamp()) WHERE $11=0 ON CONFLICT DO NOTHING RETURNING project_id,parent_id,id,revision"
+            "INSERT INTO {table}(project_id,parent_id,id,revision,{names},audit_hash,domain_created_at,domain_updated_at) SELECT $1,$2,$3,$4,{inputs},$6,COALESCE(NULLIF($12,'')::TIMESTAMPTZ,clock_timestamp()),COALESCE(NULLIF($13,'')::TIMESTAMPTZ,clock_timestamp()) WHERE $11=0 ON CONFLICT DO NOTHING RETURNING project_id,parent_id,id,revision"
         )
     } else {
         format!(
-            "UPDATE {table} SET revision=$4,record=$5,audit_hash=$6,updated_at=clock_timestamp(),domain_created_at=COALESCE(NULLIF($12,'')::TIMESTAMPTZ,domain_created_at),domain_updated_at=COALESCE(NULLIF($13,'')::TIMESTAMPTZ,clock_timestamp()) WHERE project_id=$1 AND parent_id=$2 AND id=$3 AND revision=$11 AND NOT deleted RETURNING project_id,parent_id,id,revision"
+            "UPDATE {table} SET revision=$4,{assignments},audit_hash=$6,updated_at=clock_timestamp(),domain_created_at=COALESCE(NULLIF($12,'')::TIMESTAMPTZ,domain_created_at),domain_updated_at=COALESCE(NULLIF($13,'')::TIMESTAMPTZ,clock_timestamp()) WHERE project_id=$1 AND parent_id=$2 AND id=$3 AND revision=$11 AND NOT deleted RETURNING project_id,parent_id,id,revision"
         )
     };
     let sql = format!(
@@ -460,7 +506,7 @@ pub(super) async fn mutate_profiled(
         .bind::<Text, _>(parent)
         .bind::<Text, _>(&key.id)
         .bind::<BigInt, _>(revision)
-        .bind::<Jsonb, _>(&mutation.value)
+        .bind::<Jsonb, _>(&value)
         .bind::<Text, _>(&hash)
         .bind::<Text, _>(&mutation.actor)
         .bind::<Text, _>(&mutation.operation)
@@ -474,6 +520,24 @@ pub(super) async fn mutate_profiled(
         .map_err(db_error)?;
     if changed.count != 1 {
         return Err(conflict(key, mutation.expected_revision, revision as u64));
+    }
+    if let colossus_cloud::storage::EntityValue::User(account) = &mutation.value {
+        if account.user.identities.len() > 16 {
+            return Err(StoreError::Adapter(
+                "cloud login metadata bound exceeded".into(),
+            ));
+        }
+        sql_query("DELETE FROM user_login_metadata WHERE user_id=$1")
+            .bind::<Text, _>(&key.id)
+            .execute(conn)
+            .await
+            .map_err(db_error)?;
+        for (ordinal, metadata) in account.user.identities.iter().enumerate() {
+            sql_query("INSERT INTO user_login_metadata(user_id,ordinal,kind,label,username,issuer,subject) VALUES($1,$2::INTEGER,$3,$4,$5,$6,$7)")
+                .bind::<Text,_>(&key.id).bind::<BigInt,_>(ordinal as i64).bind::<Text,_>(&metadata.kind).bind::<Text,_>(&metadata.label)
+                .bind::<Nullable<Text>,_>(&metadata.username).bind::<Nullable<Text>,_>(&metadata.issuer).bind::<Nullable<Text>,_>(&metadata.subject)
+                .execute(conn).await.map_err(db_error)?;
+        }
     }
     Ok(())
 }

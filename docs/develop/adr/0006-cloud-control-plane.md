@@ -87,6 +87,13 @@ monotonic fencing generation; validate that lease within runtime-output transact
 A replaced replica cannot commit under its earlier generation. PostgreSQL notifications
 wake consumers, while durable outbox/state reads and cursors establish recovery.
 
+Exchange typed domain values through `CloudStore`; the PostgreSQL adapter owns their
+mapping to relational columns and reconstruction. Normalize core account, project,
+membership, inventory, conversation, enrollment and settings fields. Retain JSONB for
+SDK payloads, released events and opaque authorization envelopes rather than whole
+core domain records. Project-scoped foreign keys, constraints and column indexes
+support bounded queries and atomic changes to related records.
+
 Apply checksummed schema migrations transactionally under a schema-specific advisory
 lock. Ordinary cloud writes do not acquire that migration lock. Retained entity/event
 audit chains detect changed retained content, but do not protect against replacement,

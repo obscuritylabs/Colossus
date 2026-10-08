@@ -1,12 +1,12 @@
 use crate::storage::{
-    CloudStore, CloudTransaction, ConnectionLease, CursorMutation, EntityKey, EntityKind,
-    EntityMutation, EntityOrder, EntityQuery, ReleasedEvent,
+    CloudStore, CloudTransaction, ConnectionLease, CursorMutation, EntityData, EntityKey,
+    EntityKind, EntityMutation, EntityOrder, EntityQuery, ReleasedEvent,
 };
 use crate::{
     CloudCaller, CloudError, CloudNode, CloudPermission, CloudResult, CloudTask, PendingCommand,
 };
 use colossus_cloud_protocol::{CloudReply, Command};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::Serialize;
 use std::sync::Arc;
 
 mod accounts;
@@ -28,7 +28,7 @@ pub struct CloudRepository {
     ingest: Arc<tokio::sync::Semaphore>,
 }
 pub(super) enum Write {
-    Entity(EntityMutation),
+    Entity(Box<EntityMutation>),
     Event(ReleasedEvent),
     Cursor(CursorMutation),
 }
@@ -57,14 +57,11 @@ impl CloudRepository {
     pub fn storage(&self) -> Arc<dyn CloudStore> {
         self.store.clone()
     }
-    async fn read<T: DeserializeOwned>(&self, identity: &str) -> CloudResult<(T, u64)> {
+    async fn read<T: EntityData>(&self, identity: &str) -> CloudResult<(T, u64)> {
         let record = self.store.read(&key(identity)?).await?;
-        Ok((
-            serde_json::from_value(record.value).map_err(|_| CloudError::Storage)?,
-            record.revision,
-        ))
+        Ok((T::from_entity(record.value)?, record.revision))
     }
-    async fn list<T: DeserializeOwned>(
+    async fn list<T: EntityData>(
         &self,
         prefix: &str,
         after: Option<&str>,
@@ -75,15 +72,15 @@ impl CloudRepository {
             .list(&query)
             .await?
             .into_iter()
-            .map(|record| serde_json::from_value(record.value).map_err(|_| CloudError::Storage))
+            .map(|record| T::from_entity(record.value))
             .collect()
     }
-    fn event<T: Serialize>(
+    fn released_event<T: Serialize>(
         &self,
-        subject: &str,
+        _subject: &str,
         identity: String,
         version: u64,
-        operation: &str,
+        _operation: &str,
         value: &T,
     ) -> CloudResult<Write> {
         let value = serde_json::to_value(value).map_err(|_| CloudError::InvalidArgument)?;
@@ -97,23 +94,36 @@ impl CloudRepository {
                 value,
             }));
         }
+        Err(CloudError::InvalidArgument)
+    }
+    fn event<T: EntityData>(
+        &self,
+        subject: &str,
+        identity: String,
+        version: u64,
+        operation: &str,
+        value: &T,
+    ) -> CloudResult<Write> {
         let mut key = key(&identity)?;
+        let value = value.entity_value();
         if key.kind == EntityKind::Invitation {
-            key.project_id = value
-                .get("project_id")
-                .and_then(serde_json::Value::as_str)
-                .ok_or(CloudError::InvalidArgument)?
-                .into();
+            let crate::storage::EntityValue::Invitation(invitation) = &value else {
+                return Err(CloudError::InvalidArgument);
+            };
+            key.project_id = invitation.project_id.clone();
         }
-        Ok(Write::Entity(EntityMutation {
+        if !value.matches_kind(key.kind) {
+            return Err(CloudError::InvalidArgument);
+        }
+        Ok(Write::Entity(Box::new(EntityMutation {
             key,
             expected_revision: version,
             value,
             actor: subject.into(),
             operation: operation.into(),
-        }))
+        })))
     }
-    async fn append<T: Serialize>(
+    async fn append<T: EntityData>(
         &self,
         subject: &str,
         identity: String,
@@ -134,7 +144,7 @@ impl CloudRepository {
         };
         for write in writes {
             match write {
-                Write::Entity(entity) => transaction.entities.push(entity),
+                Write::Entity(entity) => transaction.entities.push(*entity),
                 Write::Event(event) => transaction.events.push(event),
                 Write::Cursor(cursor) => transaction.cursors.push(cursor),
             }
@@ -142,8 +152,8 @@ impl CloudRepository {
         self.store.commit(transaction).await
     }
 }
-// Transitional application identity syntax preserves existing receipts during migration;
-// storage receives explicit table kind, project, parent and entity identities.
+// Application resource names encode an exact project and optional parent.
+// Storage receives their explicit table kind, project, parent and entity identities.
 pub(super) fn key(identity: &str) -> CloudResult<EntityKey> {
     let (kind, tail) = identity
         .split_once(':')

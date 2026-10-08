@@ -8,10 +8,15 @@ deterministic test fixture.
 The domain has separate tables for projects, memberships, hosts, runtime agents,
 workspaces, conversations/messages, tasks, commands/receipts, source-session/run
 mappings, admission counters, invitations and certificate renewals. Each table has
-its domain columns, project-scoped keys and indexes. A JSONB service representation
-retains versioned SDK snapshots alongside those indexed columns. Foreign keys are
-project-scoped and deferred until transaction commit so related records can be
-written together.
+ordinary typed domain columns, project-scoped keys and indexes. `CloudStore` accepts
+typed domain values; the adapter maps them to columns and reconstructs them on reads.
+Accounts, identity bindings, memberships, projects, inventory, conversation metadata,
+messages, references, admission state, enrollment and settings have no JSONB document
+column. Login display metadata lives in child rows, and bounded sets use native arrays.
+JSONB remains for versioned SDK requests/snapshots, command operations/replies, runtime
+policy observations, released event payloads and opaque authorization envelopes.
+Foreign keys are project-scoped and deferred until transaction commit so related
+records can be written together.
 
 Entity revisions use compare-and-swap and row locks. Released feeds use independent
 stream heads; there is no cloud-wide journal-head lock. Commands, domain mutations,
@@ -22,6 +27,9 @@ reconcile the immutable request identity before retrying.
 
 Lists fetch records and audit metadata in one bounded query. Creation/update times
 have indexed `TIMESTAMPTZ` columns and cursor ordering uses timestamp plus identifier.
+Exact domain timestamp strings are also retained so reconstruction and audit verification
+preserve their original precision. Search, membership, inventory and pending-command
+filters use named columns; an absent command reply is SQL `NULL`.
 Conversation task queries filter the task's `thread_id`, while message queries use
 their thread parent. Source inventory and released events remain caller authorized.
 
@@ -43,7 +51,7 @@ wakeups are recovered from the durable source cursor.
 then removes at most 256 expired rows from each operational collection. Published
 outbox hints default to one day of retention. Expired browser sessions and OIDC
 flows are removed; flow consumption and maintenance counts are audited. Markers
-without an expiry, including offline imports, remain. The host runs bounded passes
+without an expiry, including maintenance metadata, remain. The host runs bounded passes
 every minute. Canonical messages, released events, tasks, receipts, cursors and audit
 history are never automatically deleted by this janitor.
 
@@ -74,12 +82,16 @@ hostname and CA verification using rustls. Custom CA bundles and configured clie
 identities are supported. Disabling TLS explicitly is restricted to loopback and
 Unix-socket acceptance fixtures.
 
+The initial schema is a fresh relational baseline; there is no cloud journal importer.
+Disposable development schemas from earlier baselines must be recreated. Runtime
+journals use their own adapters and are unaffected by this cloud schema reset.
+
 Numbered SQL migrations are applied transactionally under a schema-specific advisory
 lock. Applied SQL checksums are retained and changed migration files fail startup.
 This lock is used only during migration, never during normal cloud mutations.
 Schema rollback SQL is intentionally destructive and requires an explicit operator
-decision; application startup never runs it. Keep runtime-journal import separate
-from ordinary service writes and retain an independently restorable source backup.
+decision; application startup never runs it. Once a cloud schema is deployed, evolve it
+with new migrations rather than editing applied SQL.
 
 ## Audit boundary
 

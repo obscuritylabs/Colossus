@@ -4,7 +4,7 @@ use colossus_cloud::{
     ProjectRole, UserAccount,
 };
 use std::sync::Arc;
-fn account(id: &str, admin: bool) -> UserAccount {
+pub(super) fn account(id: &str, admin: bool) -> UserAccount {
     let now = time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap();
@@ -98,10 +98,7 @@ async fn postgres_identity_membership_hierarchy_and_administrator_invariants() {
     );
     let names = store.user_accounts(&["operator".into()]).await.unwrap();
     assert_eq!(names.len(), 1);
-    assert_eq!(
-        names[0].value.pointer("/user/display_name"),
-        Some(&json!("Fixture operator"))
-    );
+    assert_eq!(names[0].value.search_text(), "Fixture operator");
     repo.remove_membership(&caller, "operator", role.revision)
         .await
         .unwrap();

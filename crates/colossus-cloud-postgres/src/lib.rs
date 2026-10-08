@@ -14,6 +14,7 @@ mod entities;
 mod identity_guard;
 mod maintenance;
 mod metrics;
+mod normalized;
 mod observability;
 mod operational;
 mod profiling;
