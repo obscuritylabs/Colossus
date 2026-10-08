@@ -471,8 +471,13 @@ fn native_uninstall_removes_exact_owned_keys_and_preserves_unrelated_entries() {
     runtime(&home, RUNTIME_SERVICE, id);
     let modifiers = std::collections::HashMap::from([("persistence", "Local")]);
     let store = windows_native_keyring_store::Store::new().unwrap();
-    let plan = plan::CleanupPlan::inspect(&home).unwrap();
-    for (service, account) in &plan.keys {
+    let keys = {
+        let plan = plan::CleanupPlan::inspect(&home).unwrap();
+        // Inspection owns the plugin writer lock. Release this fixture plan
+        // before uninstall acquires its own plan; retain only the key names.
+        plan.keys.clone()
+    };
+    for (service, account) in &keys {
         store
             .build(service, account, Some(&modifiers))
             .unwrap()
@@ -489,7 +494,7 @@ fn native_uninstall_removes_exact_owned_keys_and_preserves_unrelated_entries() {
     unrelated.delete_credential().unwrap();
     result.unwrap();
     assert!(preserved);
-    for (service, account) in &plan.keys {
+    for (service, account) in &keys {
         let observed = store
             .build(service, account, Some(&modifiers))
             .unwrap()

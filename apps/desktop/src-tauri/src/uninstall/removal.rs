@@ -101,10 +101,10 @@ impl CleanupRemoval {
                 return Err(CleanupError::UnsafeData);
             }
             binding.revalidate().map_err(|_| CleanupError::UnsafeData)?;
-            if let Some(expected) = links.get(&file_key(entry.identity)) {
-                if binding.link_count().map_err(|_| CleanupError::UnsafeData)? != *expected {
-                    return Err(CleanupError::UnsafeData);
-                }
+            if let Some(expected) = links.get(&file_key(entry.identity))
+                && binding.link_count().map_err(|_| CleanupError::UnsafeData)? != *expected
+            {
+                return Err(CleanupError::UnsafeData);
             }
             if matches!(
                 entry.kind,
