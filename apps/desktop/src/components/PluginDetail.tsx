@@ -197,7 +197,9 @@ export function PluginDetail({
               ? "Bundled with Colossus"
               : plugin.source}
           </dd>
-          <dt>Global state</dt>
+          <dt>
+            {plugin.origin === "workspace" ? "Workspace state" : "Global state"}
+          </dt>
           <dd>{plugin.status}</dd>
           <dt>Trust</dt>
           <dd>
