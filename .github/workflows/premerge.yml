@@ -448,6 +448,8 @@ jobs:
           cargo test --locked -p colossus-sdk --lib --features sidecar native_sidecar::tests::ordinary_windows_instance_path_matches_its_bound_canonical_identity -- --exact --nocapture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p colossus-sdk --lib --features sidecar sidecar_agent_runs::tests -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p colossus-runtime --lib plugin -- --nocapture
       - name: Run Windows Colossus-home acceptance
         id: windows_home
         continue-on-error: true
