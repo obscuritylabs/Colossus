@@ -482,14 +482,28 @@ fn merge_plugin_server_overrides(
             None => serde_json::Map::new(),
         };
         let patch = override_value.as_object().ok_or_else(configuration_error)?;
-        if let Some(binding) = patch.get("workspacePluginDigest")
-            && binding != server.get("workspacePluginDigest").unwrap_or(&Value::Null)
-        {
-            // Source changes start with a new connection. Global or previous local
-            // credentials and authority cannot flow into an explicitly rebound source.
+        let inherited_binding = server
+            .get("workspacePluginDigest")
+            .cloned()
+            .unwrap_or(Value::Null);
+        if !patch.contains_key("workspacePluginDigest") && inherited_binding != Value::Null {
+            // A legacy child patch has no evidence that its credentials or tool
+            // authority belong to the newly inherited workspace source. Require
+            // an explicit reconnect, releasing neither parent's nor child's secrets.
             server.clear();
+            server.insert("workspacePluginDigest".into(), inherited_binding);
+            server.insert("enabled".into(), Value::Bool(false));
+            server.insert("allowedTools".into(), Value::Array(Vec::new()));
+        } else {
+            if let Some(binding) = patch.get("workspacePluginDigest")
+                && binding != &inherited_binding
+            {
+                // Source changes start with a new connection. Global or previous local
+                // credentials and authority cannot flow into an explicitly rebound source.
+                server.clear();
+            }
+            server.extend(patch.clone());
         }
-        server.extend(patch.clone());
         servers.insert(name.clone(), Value::Object(server));
     }
     Ok(Value::Object(servers))
@@ -1396,6 +1410,37 @@ mod tests {
         let reverted =
             merge_plugin_server_overrides(Some(&merged), &global).expect("installed binding");
         assert_eq!(reverted["example/mail"], global["example/mail"]);
+    }
+
+    #[test]
+    fn source_binding_inherited_workspace_requires_explicit_child_reconnection() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let mut spaces = vec![space("one", provider("https://example.test/v1"))];
+        let mut global = GlobalConfigurationSetting::default();
+        initialize_catalog(&mut global, &mut spaces);
+        global.defaults.revisions[0].value.field_overrides.push(FieldOverrideSetting {
+            field_id: "plugins.mcpServers".into(),
+            value: json!({ "example/mail": { "workspacePluginDigest": digest, "enabled": true, "allowedTools": ["parent"], "credentialHeaders": { "Authorization": "vault:parent" } }, "other/docs": { "enabled": true } }),
+        });
+        spaces[0].configuration.field_overrides.push(FieldOverrideSetting {
+            field_id: "plugins.mcpServers".into(),
+            value: json!({ PLUGIN_SERVER_PATCH_MARKER: true, "example/mail": { "enabled": true, "allowedTools": ["old"], "credentialHeaders": { "Authorization": "vault:old" }, "environment": { "TOKEN": "env:OLD" }, "oauth": { "clientId": "old" } } }),
+        });
+        let resolved = resolve_space_configuration(&global, &spaces[0]).expect("resolved defaults");
+        let servers = &resolved
+            .field_overrides
+            .iter()
+            .find(|field| field.field_id == "plugins.mcpServers")
+            .unwrap()
+            .value;
+        assert_eq!(
+            servers["example/mail"],
+            json!({ "workspacePluginDigest": digest, "enabled": false, "allowedTools": [] })
+        );
+        assert_eq!(servers["other/docs"], json!({ "enabled": true }));
+        let explicit = json!({ PLUGIN_SERVER_PATCH_MARKER: true, "example/mail": { "workspacePluginDigest": digest, "enabled": true, "allowedTools": ["search"], "credentialHeaders": { "Authorization": "vault:fresh" } } });
+        let reconnected = merge_plugin_server_overrides(Some(servers), &explicit).unwrap();
+        assert_eq!(reconnected["example/mail"], explicit["example/mail"]);
     }
 
     #[test]
