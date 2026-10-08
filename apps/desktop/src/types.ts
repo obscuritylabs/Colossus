@@ -391,6 +391,8 @@ export interface ManagedMcpResearchTool {
   arguments: Record<string, unknown>;
 }
 
+export type McpProtocolVersion = "auto" | "2026-07-28" | "2025-11-25";
+
 export interface ManagedMcpServer {
   name: string;
   transport: "stdio" | "streamable_http";
@@ -402,6 +404,7 @@ export interface ManagedMcpServer {
   headers: Record<string, string>;
   credentialHeaders: Record<string, ManagedMcpCredentialHeader>;
   allowStateless: boolean;
+  protocolVersion?: McpProtocolVersion;
   oauth: ManagedMcpOAuth | null;
   allowedTools: string[];
   researchTools: ManagedMcpResearchTool[];
@@ -439,6 +442,7 @@ export interface McpHealthReport {
     credentialHeaders: number;
     oauth: boolean;
     allowStateless: boolean;
+    protocolVersion?: McpProtocolVersion;
     configuredTimeoutMs: number | null;
   } | null;
 }

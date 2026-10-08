@@ -10,7 +10,7 @@ use super::{
 };
 #[cfg(unix)]
 use super::{ProcessSpec, execute_sandbox_job, normalize_path_arguments};
-use super::{ProcessStdinCompletion, StdinCompletionMonitor};
+use super::{ProcessStdinCompletion, StdinAction, StdinCompletionMonitor};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::{native_helper_diagnostics, native_target_pid};
 use base64::Engine as _;
@@ -365,6 +365,60 @@ fn json_rpc_stdin_completion_rejects_oversized_lines_before_eof() {
     );
     let mut incomplete = StdinCompletionMonitor::new(&completion);
     assert!(incomplete.should_close(incomplete_notification.as_bytes(), false));
+}
+
+#[test]
+fn mcp_exchange_waits_for_supported_initialize_before_writing_a_call() {
+    let request = serde_json::json!({"jsonrpc":"2.0", "id":2, "method":"tools/call", "params":{"name":"effect", "arguments":{}}});
+    for version in ["2026-07-28", "2099-01-01", "2025-11-25"] {
+        let mut monitor = StdinCompletionMonitor::new(&ProcessStdinCompletion::McpExchange {
+            request: request.clone(),
+        });
+        assert!(matches!(monitor.observe(b"", false), StdinAction::Continue));
+        let response = serde_json::json!({"jsonrpc":"2.0", "id":1, "result":{"protocolVersion":version, "capabilities":{"tools":{}}, "serverInfo":{"name":"fixture", "version":"1"}}});
+        let action = monitor.observe(format!("{response}\n").as_bytes(), false);
+        if version == "2025-11-25" {
+            let StdinAction::Write(bytes) = action else {
+                panic!("validated request must be sent");
+            };
+            let frames: Vec<serde_json::Value> = std::str::from_utf8(&bytes)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(frames[0]["method"], "notifications/initialized");
+            assert_eq!(frames[1], request);
+        } else {
+            assert!(
+                matches!(action, StdinAction::Close),
+                "unsupported negotiation must close without a call"
+            );
+        }
+    }
+}
+
+#[test]
+fn mcp_exchange_follows_cursors_in_one_child_and_stops_cycles() {
+    let mut monitor = StdinCompletionMonitor::new(&ProcessStdinCompletion::McpExchange {
+        request: serde_json::json!({"jsonrpc":"2.0", "id":2, "method":"tools/list", "params":{}}),
+    });
+    let mut stdout = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"fixture\",\"version\":\"1\"}}}\n".to_vec();
+    assert!(matches!(
+        monitor.observe(&stdout, false),
+        StdinAction::Write(_)
+    ));
+    stdout.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[],\"nextCursor\":\"session-cursor\"}}\n");
+    let StdinAction::Write(bytes) = monitor.observe(&stdout, false) else {
+        panic!("next page must be sent");
+    };
+    let next: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(next["id"], 3);
+    assert_eq!(next["params"]["cursor"], "session-cursor");
+    stdout.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"tools\":[],\"nextCursor\":\"session-cursor\"}}\n");
+    assert!(matches!(
+        monitor.observe(&stdout, false),
+        StdinAction::Close
+    ));
 }
 
 #[cfg(target_os = "linux")]

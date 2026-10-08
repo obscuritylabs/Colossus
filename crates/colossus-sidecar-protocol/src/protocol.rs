@@ -716,6 +716,9 @@ pub struct ManagedMcpServerConfig {
     pub credential_headers: BTreeMap<String, ManagedMcpCredentialHeader>,
     /// Permit an explicitly configured remote server to omit session identifiers.
     pub allow_stateless: bool,
+    /// Remote MCP protocol lifecycle.
+    #[serde(default)]
+    pub protocol_version: colossus_contracts::McpProtocolVersion,
     /// Optional OAuth client metadata.
     pub oauth: Option<ManagedMcpOAuthConfig>,
     /// Exact allowed MCP tools or star patterns; `*` must stand alone.
@@ -800,6 +803,7 @@ impl ManagedMcpServerConfig {
                     || !self.headers.is_empty()
                     || !self.credential_headers.is_empty()
                     || self.allow_stateless
+                    || self.protocol_version != colossus_contracts::McpProtocolVersion::Auto
                     || self.oauth.is_some()
                 {
                     return Err(ProtocolError::InvalidFrame);
@@ -2318,6 +2322,7 @@ mod tests {
             headers: BTreeMap::new(),
             credential_headers: BTreeMap::new(),
             allow_stateless: false,
+            protocol_version: Default::default(),
             oauth: None,
             allowed_tools: vec!["search".into()],
             research_tools: Vec::new(),
@@ -2370,6 +2375,7 @@ mod tests {
                 },
             )]),
             allow_stateless: false,
+            protocol_version: Default::default(),
             oauth: None,
             allowed_tools: vec!["search".into()],
             research_tools: vec![ManagedMcpResearchTool {

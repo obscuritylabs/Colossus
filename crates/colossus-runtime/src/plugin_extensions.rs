@@ -260,6 +260,7 @@ fn compile_plugin_extensions(
                         headers: portable.headers.clone(),
                         credential_headers: overlay.credential_headers.clone(),
                         allow_stateless: overlay.allow_stateless,
+                        protocol_version: overlay.protocol_version,
                         oauth: overlay.oauth.clone(),
                         allowed_tools: overlay.allowed_tools.clone(),
                         research_tools: overlay.research_tools.clone(),

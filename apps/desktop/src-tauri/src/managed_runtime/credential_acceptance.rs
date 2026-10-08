@@ -354,6 +354,7 @@ fn resolved_configuration(origin: &str, size: usize) -> ResolvedSpaceConfigurati
                 },
             )]),
             allow_stateless: true,
+            protocol_version: colossus_contracts::McpProtocolVersion::V2025,
             oauth: None,
             allowed_tools: vec!["credential_roundtrip".into()],
             research_tools: Vec::new(),

@@ -131,6 +131,9 @@ pub(crate) struct McpServerSetting {
     pub(crate) credential_headers: BTreeMap<String, McpCredentialHeaderSetting>,
     #[serde(default)]
     pub(crate) allow_stateless: bool,
+    /// Remote MCP protocol lifecycle.
+    #[serde(default)]
+    pub(crate) protocol_version: colossus_contracts::McpProtocolVersion,
     #[serde(default)]
     pub(crate) oauth: Option<McpOAuthSetting>,
     #[serde(default)]

@@ -34,6 +34,7 @@ fn cloudflare_docs_discovery_and_call_require_stateless_opt_in() {
             "transport": "streamable_http",
             "url": "https://docs.mcp.cloudflare.com/mcp",
             "allowedTools": ["search_cloudflare_documentation"],
+            "protocolVersion": "2025-11-25",
             "allowStateless": false,
             "timeoutMs": 30000,
             "maxOutputBytes": 1048576
@@ -52,7 +53,7 @@ fn cloudflare_docs_discovery_and_call_require_stateless_opt_in() {
         "stateless server requires opt-in"
     );
     assert!(
-        String::from_utf8_lossy(&rejected.stderr).contains("initialization failed"),
+        String::from_utf8_lossy(&rejected.stderr).contains("protocol negotiation failed"),
         "{}",
         String::from_utf8_lossy(&rejected.stderr)
     );

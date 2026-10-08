@@ -1021,6 +1021,7 @@ fn configure_outlook_companion(
             },
         )]),
         allow_stateless: true,
+        protocol_version: colossus_contracts::McpProtocolVersion::Auto,
         oauth: None,
         allowed_tools: [
             "get_status",
@@ -1156,6 +1157,7 @@ pub(crate) fn managed_runtime_config(
                     })
                     .collect(),
                 allow_stateless: server.allow_stateless,
+                protocol_version: server.protocol_version,
                 oauth: server.oauth.as_ref().map(|oauth| ManagedMcpOAuthConfig {
                     client_id: oauth.client_id.clone(),
                     client_secret_credential_id: oauth.client_secret_credential_id.clone(),

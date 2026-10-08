@@ -764,6 +764,7 @@ fn managed_runtime_config(
                         })
                         .collect(),
                     allow_stateless: server.allow_stateless,
+                    protocol_version: server.protocol_version,
                     oauth: server.oauth.as_ref().map(|oauth| McpOAuthConfig {
                         client_id: oauth.client_id.clone(),
                         client_secret_reference: oauth
@@ -1810,14 +1811,20 @@ mod tests {
             headers: BTreeMap::new(),
             credential_headers: BTreeMap::new(),
             allow_stateless: true,
+            protocol_version: colossus_mcp::McpProtocolVersion::V2026,
             oauth: None,
             allowed_tools: vec!["*".into()],
             research_tools: Vec::new(),
             timeout_ms: Some(5_000),
             max_output_bytes: Some(1_048_576),
         });
-        managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
-            .expect("managed MCP configuration");
+        let compiled =
+            managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+                .expect("managed MCP configuration");
+        assert_eq!(
+            compiled.mcp.servers["docs"].protocol_version,
+            colossus_mcp::McpProtocolVersion::V2026
+        );
     }
 
     #[test]
@@ -1906,6 +1913,7 @@ mod tests {
                 headers: BTreeMap::new(),
                 credential_headers: BTreeMap::new(),
                 allow_stateless: true,
+                protocol_version: Default::default(),
                 oauth: None,
                 allowed_tools: vec!["*".into()],
                 research_tools: Vec::new(),
@@ -2056,6 +2064,7 @@ mod tests {
                 },
             )]),
             allow_stateless: false,
+            protocol_version: Default::default(),
             oauth: None,
             allowed_tools: vec!["search".into()],
             research_tools: Vec::new(),

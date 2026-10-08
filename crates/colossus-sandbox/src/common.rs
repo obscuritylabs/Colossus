@@ -55,6 +55,12 @@ pub enum ProcessStdinCompletion {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         abort_error_ids: Vec<i64>,
     },
+    /// Validate the legacy MCP initialize reply before sending the authorized
+    /// request. Follow tools/list cursors on this same bounded child process.
+    McpExchange {
+        /// Exact tools/list or tools/call JSON-RPC request, using response ID 2.
+        request: Value,
+    },
 }
 
 /// Strict process request carried inside an effect request.
