@@ -1021,7 +1021,7 @@ fn configure_outlook_companion(
             },
         )]),
         allow_stateless: true,
-        protocol_version: Default::default(),
+        protocol_version: colossus_contracts::McpProtocolVersion::Auto,
         oauth: None,
         allowed_tools: [
             "get_status",
