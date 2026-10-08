@@ -69,8 +69,7 @@ The following modes are not enabled:
 - Tasks, client-input continuations, subscriptions, and durable background execution.
 
 Each complete discovery uses one permit and one connection or subprocess, including
-all pagination. Cursors never cross connections. Each call owns a separate transport;
-HTTP calls verify the tool declaration again on that transport before dispatch.
+all pagination. Cursors never cross connections. Each call owns a separate transport.
 Task-required tools are filtered from discovery. Declared output schemas are bound
 into the call permit and enforced against successful `structuredContent` before release.
 Input and output schemas must be self-contained. References to embedded definitions
