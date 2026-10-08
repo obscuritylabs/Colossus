@@ -18,13 +18,14 @@ pub(in crate::store) struct WorkspaceCache {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::store) struct CacheEntry {
+    pub(in crate::store) name: String,
     path: String,
     bytes: u64,
     generation: u64,
 }
 
 impl EventSourcedPluginRepository {
-    pub(in crate::store) fn workspace_cache(&self) -> Result<WorkspaceCache, StoreError> {
+    pub(in crate::store) fn workspace_cache(&self) -> Result<Option<WorkspaceCache>, StoreError> {
         let cache = self
             .journal
             .read_stream_backwards(CACHE_STREAM, None, 1)?
@@ -33,8 +34,10 @@ impl EventSourcedPluginRepository {
                 serde_json::from_value::<WorkspaceCache>(self.journal.decrypt_payload(event)?)
                     .map_err(adapter)
             })
-            .transpose()?
-            .unwrap_or_default();
+            .transpose()?;
+        let Some(cache) = cache else {
+            return Ok(None);
+        };
         if cache.entries.len() > MAX_CACHED_SNAPSHOTS || cache.current.len() > MAX_WORKSPACE_PLUGINS
         {
             return Err(adapter(
@@ -44,7 +47,10 @@ impl EventSourcedPluginRepository {
         for digest in cache.entries.keys().chain(cache.current.values()) {
             validate_lease_digest(digest)?;
         }
-        Ok(cache)
+        for entry in cache.entries.values() {
+            validate_plugin_name(&entry.name)?;
+        }
+        Ok(Some(cache))
     }
 
     pub(super) fn append_workspace_cache(
@@ -52,7 +58,7 @@ impl EventSourcedPluginRepository {
         cache: &WorkspaceCache,
         actor: Actor,
     ) -> Result<(), StoreError> {
-        if self.workspace_cache()? == *cache {
+        if self.workspace_cache()?.as_ref() == Some(cache) {
             return Ok(());
         }
         self.journal.append(NewEvent {
@@ -84,7 +90,13 @@ impl PluginStore {
         recoverable: &BTreeSet<String>,
         actor: Actor,
     ) -> Result<WorkspaceCache, StoreError> {
-        let old = repository.workspace_cache()?;
+        let previous = repository.workspace_cache()?;
+        if previous.is_none() && !repository.list_plugins(1)?.is_empty() {
+            return Err(adapter(
+                "workspace snapshots require a separate store from globally installed plugins",
+            ));
+        }
+        let old = previous.unwrap_or_default();
         let grants = repository.workspace_grants()?;
         let mut protected = self.live_snapshot_digests()?;
         protected.extend(recoverable.iter().cloned());
@@ -106,7 +118,9 @@ impl PluginStore {
         trimmed
             .current
             .retain(|_, digest| trimmed.entries.contains_key(digest));
-        if trimmed != old {
+        // The empty index marks this as a dedicated workspace store before any
+        // publication, including a failed first capture or interrupted write.
+        if trimmed != old || repository.workspace_cache()?.is_none() {
             repository.append_workspace_cache(&trimmed, actor)?;
         }
         // Also collect an unjournaled publication left by a failed write or crash.
@@ -133,6 +147,7 @@ fn plan_cache(
         cache.entries.insert(
             digest.clone(),
             CacheEntry {
+                name: candidate.source.name.clone(),
                 path: candidate.source.path.clone(),
                 bytes: candidate.cache_bytes,
                 generation: cache.generation,

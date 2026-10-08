@@ -63,6 +63,7 @@ impl PluginStore {
         }
         let _writer = acquire_plugin_writer(self.state_path())?;
         let repository = self.open_repository()?;
+        repository.require_global_store()?;
         let destination = self.publish_artifact(&artifact)?;
         let record = load_plugin(&destination)?;
         if !record.diagnostics.is_empty() {

@@ -116,23 +116,27 @@ impl EventSourcedPluginRepository {
         digest: &str,
     ) -> Result<Option<PluginInstallation>, StoreError> {
         let stream = Self::installation_stream(name, digest)?;
-        let mut installation = None;
-        for event in self.journal.read_stream(&stream)? {
-            if matches!(
-                event.event_type.as_str(),
-                "plugin.installed.v1" | "plugin.uninstalled.v1"
-            ) {
-                installation = Some(
-                    serde_json::from_value(self.journal.decrypt_payload(&event)?)
-                        .map_err(adapter)?,
-                );
-            }
-        }
-        Ok(installation)
+        self.journal
+            .read_stream_backwards(&stream, None, 1)?
+            .first()
+            .map(|event| {
+                if !matches!(
+                    event.event_type.as_str(),
+                    "plugin.installed.v1" | "plugin.uninstalled.v1"
+                ) {
+                    return Err(StoreError::Verification(
+                        "invalid plugin receipt event".into(),
+                    ));
+                }
+                serde_json::from_value(self.journal.decrypt_payload(event)?).map_err(adapter)
+            })
+            .transpose()
     }
 
     fn active_digest(&self, name: &str) -> Result<Option<String>, StoreError> {
-        let events = self.journal.read_stream(&Self::active_stream(name)?)?;
+        let events = self
+            .journal
+            .read_stream_backwards(&Self::active_stream(name)?, None, 1)?;
         events
             .last()
             .map(|event| {
@@ -152,7 +156,11 @@ impl EventSourcedPluginRepository {
     ) -> Result<(), StoreError> {
         let stream_id =
             Self::installation_stream(&installation.manifest.name, &installation.digest)?;
-        let expected_stream_version = self.journal.read_stream(&stream_id)?.len() as u64;
+        let expected_stream_version = self
+            .journal
+            .read_stream_backwards(&stream_id, None, 1)?
+            .first()
+            .map_or(0, |event| event.stream_version);
         self.journal.append(colossus_contracts::NewEvent {
             event_version: 1,
             stream_id,
@@ -176,7 +184,11 @@ impl EventSourcedPluginRepository {
         actor: Actor,
     ) -> Result<(), StoreError> {
         let stream_id = Self::active_stream(name)?;
-        let expected_stream_version = self.journal.read_stream(&stream_id)?.len() as u64;
+        let expected_stream_version = self
+            .journal
+            .read_stream_backwards(&stream_id, None, 1)?
+            .first()
+            .map_or(0, |event| event.stream_version);
         self.journal.append(colossus_contracts::NewEvent {
             event_version: 1,
             stream_id,
@@ -209,22 +221,42 @@ impl PluginRepository for EventSourcedPluginRepository {
                 "plugin list limit must be in 1..=10000".into(),
             ));
         }
-        let cached = self.workspace_cache()?.entries;
+        let cached = self.workspace_cache()?;
+        let workspace_only = cached.is_some();
+        let identities = if let Some(cached) = cached {
+            cached
+                .entries
+                .into_iter()
+                .map(|(digest, entry)| (entry.name, digest))
+                .collect::<Vec<_>>()
+        } else {
+            collect_stream_ids(self.journal.as_ref(), "plugin:")?
+                .into_iter()
+                .map(|stream| {
+                    let suffix = stream.strip_prefix("plugin:").ok_or_else(|| {
+                        StoreError::Verification("invalid plugin stream index".into())
+                    })?;
+                    let (name, hex) = suffix.rsplit_once(':').ok_or_else(|| {
+                        StoreError::Verification("invalid plugin stream identity".into())
+                    })?;
+                    Ok((name.to_owned(), format!("sha256:{hex}")))
+                })
+                .collect::<Result<Vec<_>, StoreError>>()?
+        };
         let mut installations = Vec::new();
-        for stream in collect_stream_ids(self.journal.as_ref(), "plugin:")? {
-            let suffix = stream
-                .strip_prefix("plugin:")
-                .ok_or_else(|| StoreError::Verification("invalid plugin stream index".into()))?;
-            let (name, hex) = suffix
-                .rsplit_once(':')
-                .ok_or_else(|| StoreError::Verification("invalid plugin stream identity".into()))?;
-            let digest = format!("sha256:{hex}");
-            if let Some(mut installation) = self.reduce_installation(name, &digest)? {
-                if installation.origin == PluginOrigin::Workspace && !cached.contains_key(&digest) {
+        for (name, digest) in identities {
+            if let Some(mut installation) = self.reduce_installation(&name, &digest)? {
+                if installation.origin == PluginOrigin::Workspace && !workspace_only {
                     continue;
                 }
+                if workspace_only && installation.origin != PluginOrigin::Workspace {
+                    return Err(StoreError::Verification(
+                        "workspace cache references a global installation".into(),
+                    ));
+                }
                 if installation.status != PluginStatus::Uninstalled {
-                    installation.status = if self.active_digest(name)?.as_deref() == Some(&digest) {
+                    installation.status = if self.active_digest(&name)?.as_deref() == Some(&digest)
+                    {
                         PluginStatus::Enabled
                     } else {
                         PluginStatus::Disabled
@@ -273,6 +305,7 @@ impl PluginRepository for EventSourcedPluginRepository {
         installation: PluginInstallation,
         actor: Actor,
     ) -> Result<PluginInstallation, StoreError> {
+        self.require_global_store()?;
         validate_plugin_name(&installation.manifest.name)?;
         if installation.status != PluginStatus::Disabled {
             return Err(StoreError::Adapter(
@@ -299,6 +332,7 @@ impl PluginRepository for EventSourcedPluginRepository {
         actor: Actor,
         updated_at: &str,
     ) -> Result<Option<PluginInstallation>, StoreError> {
+        self.require_global_store()?;
         let selected = digest
             .map(|digest| {
                 self.reduce_installation(name, digest)?
@@ -328,6 +362,7 @@ impl PluginRepository for EventSourcedPluginRepository {
         actor: Actor,
         updated_at: &str,
     ) -> Result<PluginInstallation, StoreError> {
+        self.require_global_store()?;
         let mut installation = self
             .reduce_installation(name, digest)?
             .ok_or_else(|| StoreError::NotFound(format!("plugin {name} at {digest}")))?;
@@ -585,6 +620,7 @@ impl PluginStore {
         // immutable root.
         let _writer = acquire_plugin_writer(self.state_path())?;
         let repository = self.open_repository()?;
+        repository.require_global_store()?;
         let destination = self.publish_artifact(&artifact)?;
         let record = load_plugin(&destination)?;
         let timestamp = now()?;

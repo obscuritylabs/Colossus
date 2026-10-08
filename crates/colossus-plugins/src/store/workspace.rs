@@ -20,6 +20,15 @@ pub struct WorkspacePluginGrant {
 }
 
 impl EventSourcedPluginRepository {
+    pub(super) fn require_global_store(&self) -> Result<(), StoreError> {
+        if self.workspace_cache()?.is_some() {
+            return Err(adapter(
+                "global plugin installation and activation require the global store",
+            ));
+        }
+        Ok(())
+    }
+
     fn workspace_grants(&self) -> Result<BTreeMap<String, WorkspacePluginGrant>, StoreError> {
         let grants = self
             .journal

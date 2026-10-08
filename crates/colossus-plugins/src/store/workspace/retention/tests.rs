@@ -1,5 +1,6 @@
 use super::*;
 use crate::tests::{actor, write_plugin};
+mod bounded_reads;
 
 fn edit(root: &Path, version: usize) -> WorkspacePluginCandidate {
     fs::write(
@@ -93,6 +94,66 @@ fn old_copies_are_pruned_but_leases_and_durable_recovery_pins_survive_reopening(
         reopened.list(10_000).expect("unchanged cache").len(),
         RECENT_PER_SOURCE
     );
+    bounded_reads::assert_inventory_and_collection_skip_history(&reopened);
+}
+
+#[test]
+fn workspace_cache_and_global_lifecycle_cannot_share_a_store() {
+    let temporary = tempfile::tempdir().expect("root");
+    let root = temporary.path().canonicalize().expect("root");
+    write_plugin(&root.join("source"));
+    let candidate = edit(&root, 0);
+    let global = PluginStore::new(root.join("global")).expect("global store");
+    global
+        .install_directory(&root.join("source"), actor())
+        .expect("install");
+    assert!(
+        global
+            .accept_workspace_plugin(&candidate, &BTreeSet::new(), actor())
+            .is_err()
+    );
+    assert!(
+        global
+            .workspace_plugin_grants()
+            .expect("no source grant")
+            .is_empty()
+    );
+    assert!(
+        global
+            .with_write(|repository| repository.workspace_cache())
+            .expect("global mode")
+            .is_none()
+    );
+    let local = PluginStore::new(root.join("workspace")).expect("workspace store");
+    local
+        .accept_workspace_plugin(&candidate, &BTreeSet::new(), actor())
+        .expect("accept");
+    assert!(
+        local
+            .install_directory(&root.join("source"), actor())
+            .is_err()
+    );
+    assert!(
+        local
+            .enable(
+                &candidate.source.name,
+                &candidate.artifact.manifest_digest,
+                true,
+                actor()
+            )
+            .is_err()
+    );
+    assert!(
+        local
+            .uninstall(
+                &candidate.source.name,
+                &candidate.artifact.manifest_digest,
+                true,
+                actor()
+            )
+            .is_err()
+    );
+    assert_eq!(local.list(10_000).expect("unchanged local cache").len(), 1);
 }
 
 #[test]
@@ -150,6 +211,7 @@ fn total_count_is_bounded_even_when_all_history_is_pinned() {
         old.entries.insert(
             format!("sha256:{generation:064x}"),
             CacheEntry {
+                name: candidate.source.name.clone(),
                 path: "source".into(),
                 bytes: 1,
                 generation: generation as u64,
