@@ -83,6 +83,7 @@ test("schedule UI → production managed SDK → authenticated sidecar: registra
       page.getByRole("status").filter({ hasText: "Workflow registered" }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Schedules", exact: true }).click();
+    await page.getByText("More options", { exact: true }).click();
     await page
       .getByRole("button", { name: "Schedule a workflow", exact: true })
       .click();
@@ -249,9 +250,7 @@ test("complex workflow graph reflects real condition routing and loop executions
         { timeout: 60_000 },
       )
       .toBeTruthy();
-    await page
-      .getByRole("button", { name: "Refresh detail", exact: true })
-      .click();
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
     await expect(
       page.getByRole("button", {
         name: "Inspect last workflow run",

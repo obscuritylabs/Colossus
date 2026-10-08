@@ -109,3 +109,13 @@ missing days or turns unknown values into zero, and exposes the same data in a t
 Its accessible Recharts layer supports keyboard inspection. Date-window selection,
 authorization, querying, and coverage remain host decisions. The separate entry point
 keeps chart code out of Desktop and editor renderers that do not use it.
+
+## Automation screens
+
+Import reusable workflow and schedule presentation from `@colossus/ui/automations`
+and its stylesheet from `@colossus/ui/styles/automations.css`. `AutomationSurface`,
+`AutomationWelcome`, `AutomationExampleGallery`, `AutomationInventory`, and
+`AutomationOverview` share the same tokens in Desktop and Web. The inventory uses
+the owned shadcn table, input, badge, and button foundations. Hosts provide released
+records, labels, icons, disabled states, and callbacks; they retain prompts, timing
+conversion, pagination, thread creation, execution, and capability decisions.

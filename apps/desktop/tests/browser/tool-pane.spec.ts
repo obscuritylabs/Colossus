@@ -365,3 +365,52 @@ test("Retry preserves an explicit terminal request without selecting generic Ter
     requestSequence: 1,
   });
 });
+
+test("Aside composer stays inside the pane while long content scrolls and the window resizes", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 950 });
+  await page.goto("/?fixture=operations-studio");
+  await page.getByRole("button", { name: "Open tools", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: /^Aside/ }).click();
+  const aside = page.getByRole("region", {
+    name: "Aside conversation",
+    exact: true,
+  });
+  await expect(aside).toBeVisible();
+  await page.locator(".aside-scroll").evaluate((element) => {
+    const content = document.createElement("p");
+    content.textContent =
+      "A long conversation should scroll inside its pane. ".repeat(300);
+    element.append(content);
+  });
+  for (const size of [
+    { width: 1440, height: 950 },
+    { width: 880, height: 640 },
+    { width: 390, height: 844 },
+    { width: 1100, height: 600 },
+  ]) {
+    await page.setViewportSize(size);
+    await page.evaluate(() => {
+      document.documentElement.dataset.textSize = "large";
+    });
+    const composer = aside.locator(".aside-composer");
+    const bounds = await aside.boundingBox();
+    const input = await composer.boundingBox();
+    expect(input!.y + input!.height).toBeLessThanOrEqual(
+      bounds!.y + bounds!.height + 1,
+    );
+    expect(input!.y + input!.height).toBeLessThanOrEqual(size.height + 1);
+    expect(
+      await aside
+        .locator(".aside-scroll")
+        .evaluate((element) => element.scrollHeight > element.clientHeight),
+    ).toBe(true);
+    await aside
+      .getByRole("textbox", { name: "Aside message", exact: true })
+      .fill("Keep this composer visible");
+    await expect(
+      aside.getByRole("button", { name: "Send Aside message" }),
+    ).toBeInViewport();
+  }
+});

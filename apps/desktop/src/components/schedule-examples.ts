@@ -102,3 +102,12 @@ Initial state: enabled
 
 Choose the next future occurrence, preserve this local time through DST, and use workflow.task.schedule with one durable retry identity. Follow workspace permissions and approval rules. If scheduling or a requested tool is unavailable, explain what is missing. Confirm the stored schedule and report its next occurrence. The worker must be running for the task to execute.`;
 }
+
+export function customSchedulePrompt(timezone: string): string {
+  return `@colossus/schedule-task
+Help me create a scheduled task in this workspace.
+
+Ask what I want the agent to do and when it should repeat. My time zone is ${timezone}.
+Use workspace model and effort defaults and only the tools the task needs. Review instructions, local timing, the next occurrence, missed-run behavior, and initial enabled state with me before saving. Preserve local time through DST.
+Use workflow.task.schedule with one durable retry identity. Follow workspace permissions and approval rules; explain missing capabilities. Confirm the stored schedule and its next occurrence. Execution needs a running worker.`;
+}

@@ -235,6 +235,11 @@ export interface WorkflowTask {
   tools: string[];
   options: { model_profile: string | null; reasoning_effort: string | null };
 }
+export interface ScheduleRunAttempt {
+  request: StartWorkflowRunRequest;
+  uncertain: boolean;
+}
+
 export interface StartWorkflowRunRequest {
   workflow_id: string;
   expected_hash: string;

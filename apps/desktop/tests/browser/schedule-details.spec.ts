@@ -85,9 +85,16 @@ test("task deletion requires confirmation, uses the reviewed revision and return
   await page.setViewportSize({ width: 1600, height: 1000 });
   await page.goto("/?fixture=operations-studio");
   await page.getByRole("button", { name: "Schedules", exact: true }).click();
+  await page.getByText("More options", { exact: true }).click();
   await page
-    .getByRole("button", { name: "Use Workspace health check example" })
+    .getByRole("button", { name: "Schedule a task", exact: true })
     .click();
+  await page
+    .getByRole("textbox", { name: "Task name", exact: true })
+    .fill("Workspace health check");
+  await page
+    .getByRole("textbox", { name: "Instructions", exact: true })
+    .fill("Inspect workspace health and return a report.");
   await page.getByRole("button", { name: "Review task", exact: true }).click();
   await page
     .getByRole("button", { name: "Create task schedule", exact: true })
@@ -126,7 +133,7 @@ test("task deletion requires confirmation, uses the reviewed revision and return
     page.getByRole("heading", { name: "Schedules", exact: true }),
   ).toBeFocused();
   await expect(
-    page.getByRole("heading", { name: "No schedules in this Workspace" }),
+    page.getByRole("heading", { name: "Start with an example" }),
   ).toBeVisible();
   const requests = await page.evaluate(() =>
     (
@@ -144,7 +151,7 @@ test("task deletion requires confirmation, uses the reviewed revision and return
   expect(requests[0]!.args.request.etag).toMatch(/^[a-f0-9]{64}$/);
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "No schedules in this Workspace" }),
+    page.getByRole("heading", { name: "Start with an example" }),
   ).toBeVisible();
 });
 test("stale deletion stays visible for reconciliation and never retries", async ({
@@ -276,4 +283,119 @@ test("workflow runs place exact released output in a right-side panel", async ({
   ).toEqual([]);
   await page.getByRole("button", { name: "Close output" }).click();
   await expect(output).toHaveCount(0);
+});
+
+test("Run now executes a paused task with pinned inputs and keeps its schedule unchanged", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await installWorkflowFixture(page, { empty: true, modern: true });
+  await page.goto("/?fixture=operations-studio");
+  await page.getByRole("button", { name: "Schedules", exact: true }).click();
+  await page.getByText("More options", { exact: true }).click();
+  await page
+    .getByRole("button", { name: "Schedule a task", exact: true })
+    .click();
+  await page
+    .getByRole("textbox", { name: "Task name", exact: true })
+    .fill("Manual health test");
+  await page
+    .getByRole("textbox", { name: "Instructions", exact: true })
+    .fill("Inspect workspace health and return a report.");
+  await page.getByText("Advanced", { exact: true }).click();
+  await page
+    .getByRole("checkbox", { name: "Enable immediately", exact: true })
+    .uncheck();
+  await page.getByRole("button", { name: "Review task", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Create task schedule", exact: true })
+    .click();
+  const timing = await page.locator(".automation-overview").innerText();
+  await page.evaluate(() => {
+    (
+      window as unknown as { workflowRunUncertain: boolean }
+    ).workflowRunUncertain = true;
+  });
+  await page.getByRole("button", { name: "Run now", exact: true }).click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "run is unconfirmed" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Back to schedules" }).click();
+  await page.getByRole("button", { name: "Workflows", exact: true }).click();
+  await page.getByRole("button", { name: "Schedules", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Manual health test Agent task", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Confirm same run request", exact: true })
+    .click();
+  await expect(page.getByRole("region", { name: "Task result" })).toContainText(
+    "Workspace is healthy",
+  );
+  expect(await page.locator(".automation-overview").innerText()).toBe(timing);
+  const calls = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          workflowCalls: {
+            command: string;
+            args: { request: Record<string, unknown> };
+          }[];
+        }
+      ).workflowCalls,
+  );
+  const starts = calls.filter((call) => call.command === "start_workflow_run");
+  expect(starts).toHaveLength(2);
+  expect(starts[0]!.args).toEqual(starts[1]!.args);
+  expect(starts[0]!.args.request.inputs).toEqual({});
+  expect(starts[0]!.args.request.expected_hash).toBe("a".repeat(64));
+  expect(starts[0]!.args.request.workflow_id).toMatch(/^desktop-task-/u);
+  expect(
+    calls.filter((call) => call.command === "set_workflow_schedule_enabled"),
+  ).toHaveLength(0);
+  await capture(page, "05-task-run-now.png");
+});
+
+test("a pending manual run retains its request identity after leaving the detail and surface", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await open(page);
+  await page.evaluate(() => {
+    (window as unknown as { workflowRunDelay: boolean }).workflowRunDelay =
+      true;
+  });
+  await page.getByRole("button", { name: "Run now", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Starting…", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Back to schedules" }).click();
+  await page.getByRole("button", { name: "Workflows", exact: true }).click();
+  await page.getByRole("button", { name: "Schedules", exact: true }).click();
+  await page
+    .getByRole("button", { name: /hourly-health workspace-health/u })
+    .click();
+  await page
+    .getByRole("button", { name: "Confirm same run request", exact: true })
+    .click();
+  await expect(
+    page.getByRole("region", { name: "Independent workflow run" }),
+  ).toContainText("18446744073709551615");
+  const calls = await page.evaluate(() =>
+    (
+      window as unknown as {
+        workflowCalls: { command: string; args: unknown }[];
+      }
+    ).workflowCalls.filter((call) => call.command === "start_workflow_run"),
+  );
+  expect(calls).toHaveLength(2);
+  expect(calls[0]!.args).toEqual(calls[1]!.args);
+  await page.evaluate(() => {
+    (
+      window as unknown as { resumeWorkflowRun?: () => void }
+    ).resumeWorkflowRun?.();
+  });
+  await expect(
+    page.getByRole("button", { name: "Run now", exact: true }),
+  ).toBeVisible();
 });
