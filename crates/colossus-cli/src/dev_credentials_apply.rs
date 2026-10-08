@@ -60,7 +60,7 @@ pub(super) fn apply_with_vault_keys(
         std::slice::from_ref(&plan.workspace),
     )
     .map_err(|_| Failure("prepared development authority is unavailable"))?;
-    let _source_leases = source_leases(plan)?;
+    let source_file_leases = source_leases(plan)?;
     if plan
         .sources
         .iter()
@@ -231,7 +231,11 @@ pub(super) fn apply_with_vault_keys(
                 config,
                 config_sha256,
             } => {
-                if plan::file_digest(journal)? != *journal_sha256
+                let (root, lease) = source_file_leases
+                    .iter()
+                    .find(|(_, lease)| lease.file().path() == journal)
+                    .ok_or(Failure("journal source lease is unavailable"))?;
+                if plan::confined_file_digest(root, lease.file())? != *journal_sha256
                     || plan::sha256(&plan::read_private(config, 1024 * 1024)?.1) != *config_sha256
                 {
                     return Err(Failure("journal source changed during offline rewrap"));
@@ -259,7 +263,7 @@ pub(super) fn apply_with_vault_keys(
             _ => {}
         }
     }
-    for (root, file) in &_source_leases {
+    for (root, file) in &source_file_leases {
         file.file()
             .revalidate(root)
             .map_err(|_| Failure("source identity changed during offline rewrap"))?;
@@ -323,7 +327,9 @@ fn source_leases(plan: &Plan) -> Result<Vec<(ConfinedRoot, OfflineFileLease)>> {
                     "journal source lease failed",
                     "stop the source journal writer before rewrapping custody",
                 )?;
-                if plan::file_digest(journal)? != *journal_sha256 {
+                // Windows byte-range locks reject reads through a separately opened
+                // handle, so fingerprint the retained lease without releasing it.
+                if plan::confined_file_digest(&root, file.file())? != *journal_sha256 {
                     return Err(Failure("journal source changed before its offline lease"));
                 }
                 file.file()

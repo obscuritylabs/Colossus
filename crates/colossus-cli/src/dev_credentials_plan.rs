@@ -3,7 +3,7 @@ use colossus_home::{ConfinedFile, ConfinedRoot};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::{
-    io::{Read as _, Write as _},
+    io::{Read as _, Seek as _, Write as _},
     path::{Component, Path, PathBuf},
 };
 use zeroize::Zeroizing;
@@ -146,6 +146,12 @@ pub(super) fn read_private(path: &Path, limit: u64) -> Result<(PathBuf, Zeroizin
 
 pub(super) fn file_digest(path: &Path) -> Result<String> {
     let (root, file) = existing_file(path)?;
+    confined_file_digest(&root, &file)
+}
+
+pub(super) fn confined_file_digest(root: &ConfinedRoot, file: &ConfinedFile) -> Result<String> {
+    file.revalidate(root)
+        .map_err(|_| Failure("source journal identity changed"))?;
     if file
         .file()
         .metadata()
@@ -157,6 +163,9 @@ pub(super) fn file_digest(path: &Path) -> Result<String> {
     }
     let mut hash = Sha256::new();
     let mut reader = file.file();
+    reader
+        .rewind()
+        .map_err(|_| Failure("source journal position could not be reset"))?;
     let mut buffer = [0_u8; 16 * 1024];
     let mut total = 0_u64;
     loop {
@@ -172,7 +181,7 @@ pub(super) fn file_digest(path: &Path) -> Result<String> {
         }
         hash.update(&buffer[..count]);
     }
-    file.revalidate(&root)
+    file.revalidate(root)
         .map_err(|_| Failure("source journal identity changed"))?;
     Ok(hex::encode(hash.finalize()))
 }
