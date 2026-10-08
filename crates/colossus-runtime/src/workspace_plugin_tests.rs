@@ -148,6 +148,64 @@ async fn native_selection_preserves_literal_backslashes_in_unix_directory_names(
     );
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn native_windows_source_casing_reuses_one_grant_and_can_revoke_a_deleted_source() {
+    let temporary = crate::test_support::private_tempdir();
+    let root = temporary.path().canonicalize().unwrap();
+    let workspace = root.join("workspace");
+    let selected = workspace.join(".agents/plugins/Review");
+    write_source(&selected, "Case-preserving selected instructions.");
+    let home = colossus_home::ColossusHome::ensure_at(root.join("home")).unwrap();
+    let runtime = open(&workspace, Some(home.root()), true);
+    let native = selected.to_string_lossy();
+    let native = native.strip_prefix(r"\\?\").unwrap();
+    for spelling in [native.to_uppercase(), native.to_lowercase()] {
+        runtime
+            .manage_plugin(Op::Add {
+                source: PluginInstallSource::Directory { path: spelling },
+                trust_profile: "default".into(),
+            })
+            .await
+            .unwrap();
+        let grants = runtime.plugin_catalog.workspace_plugins.grants().unwrap();
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants.keys().next().unwrap(), ".agents/plugins/Review");
+        assert!(grants.values().next().unwrap().enabled);
+        let captured = runtime.plugin_catalog.capture().unwrap();
+        assert!(captured.records.iter().any(|record| {
+            record.installation.origin == PluginOrigin::Workspace
+                && record.skills[0]
+                    .instructions
+                    .contains("Case-preserving selected instructions")
+        }));
+        runtime
+            .manage_plugin(Op::DisableWorkspace {
+                path: native.to_lowercase(),
+            })
+            .await
+            .unwrap();
+        assert!(
+            !runtime
+                .plugin_catalog
+                .workspace_plugins
+                .grants()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()
+                .enabled
+        );
+    }
+    fs::remove_dir_all(&selected).unwrap();
+    runtime
+        .manage_plugin(Op::DisableWorkspace {
+            path: native.to_uppercase(),
+        })
+        .await
+        .expect("revocation does not require a surviving source directory");
+}
+
 #[tokio::test]
 async fn concurrent_source_selection_uses_one_grant_snapshot_for_filtering_and_capture() {
     let temporary = crate::test_support::private_tempdir();

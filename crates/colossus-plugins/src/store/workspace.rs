@@ -140,8 +140,9 @@ impl PluginStore {
     pub fn disable_workspace_plugin(&self, path: &str, actor: Actor) -> Result<(), StoreError> {
         self.with_write(|repository| {
             let mut grants = repository.workspace_grants()?;
+            let key = workspace_grant_key(&grants, path)?;
             let grant = grants
-                .get_mut(path)
+                .get_mut(&key)
                 .ok_or_else(|| StoreError::NotFound("workspace plugin source".into()))?;
             grant.enabled = false;
             repository.append_workspace_grants(&grants, actor)
@@ -232,4 +233,27 @@ impl PluginStore {
         repository.append_workspace_cache(&cache, actor)?;
         Ok(installation)
     }
+}
+
+fn workspace_grant_key(
+    grants: &BTreeMap<String, WorkspacePluginGrant>,
+    path: &str,
+) -> Result<String, StoreError> {
+    if grants.contains_key(path) {
+        return Ok(path.into());
+    }
+    #[cfg(windows)]
+    {
+        // Revocation must remain possible when the source no longer exists.
+        // Exact spellings win; ambiguous case aliases fail closed on volumes
+        // with case-sensitive directories.
+        let folded = path.to_lowercase();
+        let mut matches = grants.keys().filter(|key| key.to_lowercase() == folded);
+        if let Some(key) = matches.next()
+            && matches.next().is_none()
+        {
+            return Ok(key.clone());
+        }
+    }
+    Err(StoreError::NotFound("workspace plugin source".into()))
 }

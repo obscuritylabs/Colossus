@@ -85,7 +85,8 @@ pub fn workspace_plugin_root(workspace: &Path, relative: &Path) -> Result<PathBu
             ));
         };
         path.push(name);
-        let _binding = ReadRoot::bind(&path)?;
+        let binding = ReadRoot::bind(&path)?;
+        path = binding.path().to_owned();
     }
     workspace.revalidate()?;
     Ok(path)
@@ -220,12 +221,17 @@ fn capture_with_budget(
     }
     identity.revalidate().map_err(adapter)?;
     workspace_plugin_root(workspace, relative)?;
+    let workspace_binding = ReadRoot::bind(workspace)?;
     let source = WorkspacePluginSource {
-        path: posix_path(relative)?,
+        path: posix_path(
+            root.strip_prefix(workspace_binding.path())
+                .map_err(adapter)?,
+        )?,
         name: config.name,
         identity_version: identity.version(),
         identity_sha256: identity.sha256().into(),
     };
+    workspace_binding.revalidate()?;
     record.installation.origin = PluginOrigin::Workspace;
     record.installation.root = root.display().to_string();
     record.installation.digest = artifact.manifest_digest.clone();
