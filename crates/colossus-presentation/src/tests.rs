@@ -325,10 +325,10 @@ fn transcript_collections_render_as_readable_borderless_scan_rows() {
             },
             {
                 "active": false,
-                "name": "offline-dev",
-                "description": "Prefer credential-free and network-free verification paths.",
+                "name": "security-review",
+                "description": "Review security boundaries and report supported findings.",
                 "version": "0.1.0",
-                "source": "bundled:offline-dev"
+                "source": "bundled:security-review"
             }
         ]),
         Some("Skills"),
@@ -343,7 +343,10 @@ fn transcript_collections_render_as_readable_borderless_scan_rows() {
 
     assert!(rendered.contains("◆ Skills"), "{rendered}");
     assert!(rendered.contains("• coding  ✓ active"), "{rendered}");
-    assert!(rendered.contains("• offline-dev  · inactive"), "{rendered}");
+    assert!(
+        rendered.contains("• security-review  · inactive"),
+        "{rendered}"
+    );
     assert!(rendered.contains("Description: Implement"), "{rendered}");
     assert!(
         !rendered.contains(['┌', '┐', '└', '┘', '│', '─']),

@@ -13,6 +13,77 @@ fn write_source(root: &Path, body: &str) {
 }
 
 #[tokio::test]
+async fn uninstalled_global_receipts_do_not_hide_workspace_previews_before_or_after_gc() {
+    let temporary = crate::test_support::private_tempdir();
+    let root = temporary.path().canonicalize().unwrap();
+    let workspace = root.join("workspace");
+    let source = workspace.join(".agents/plugins/review");
+    write_source(&source, "Retained workspace instructions.");
+    fs::create_dir_all(source.join("skills/review/references")).unwrap();
+    fs::write(
+        source.join("skills/review/references/checklist.txt"),
+        "Retained workspace checklist.",
+    )
+    .unwrap();
+    let home = colossus_home::ColossusHome::ensure_at(root.join("home")).unwrap();
+    let runtime = open(&workspace, Some(home.root()), true);
+    let store = runtime.plugin_store.as_ref().unwrap();
+    let installed = store.install_directory(&source, terminal_actor()).unwrap();
+    runtime
+        .manage_plugin(Op::AcceptWorkspace {
+            path: ".agents/plugins/review".into(),
+            digest: None,
+        })
+        .await
+        .unwrap();
+    let local = runtime
+        .plugin_inventory()
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.origin == PluginOrigin::Workspace)
+        .unwrap();
+    assert_eq!(local.digest, installed.digest);
+    store
+        .uninstall("review-tools", &installed.digest, false, terminal_actor())
+        .unwrap();
+    for collected in [false, true] {
+        if collected {
+            assert!(store.gc().unwrap().contains(&installed.digest));
+        }
+        let skill = runtime
+            .manage_plugin(Op::SkillRead {
+                skill_id: "review-tools/review".into(),
+                digest: installed.digest.clone(),
+            })
+            .await
+            .expect("workspace instructions remain available");
+        assert!(
+            skill["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("Retained workspace instructions.")
+        );
+        let resource = runtime
+            .manage_plugin(Op::ResourceRead {
+                skill_id: "review-tools/review".into(),
+                digest: installed.digest.clone(),
+                path: "references/checklist.txt".into(),
+            })
+            .await
+            .expect("workspace resources remain available");
+        assert_eq!(resource["content"], "Retained workspace checklist.");
+        let verification = runtime
+            .manage_plugin(Op::VerifyInstalled {
+                name: "review-tools".into(),
+                digest: installed.digest.clone(),
+            })
+            .await
+            .expect("verify the workspace snapshot");
+        assert_eq!(verification["trust"]["method"], "workspace-directory");
+    }
+}
+
+#[tokio::test]
 async fn native_absolute_sources_add_disable_and_reaccept_without_escaping_the_workspace() {
     let temporary = crate::test_support::private_tempdir();
     let root = temporary.path().canonicalize().unwrap();

@@ -332,7 +332,11 @@ impl PluginCatalogSource {
         digest: &str,
     ) -> Result<&PluginStore, RuntimeError> {
         if let Some(store) = &self.store
-            && store.installation(name, digest)?.is_some()
+            && store
+                .installation(name, digest)?
+                .is_some_and(|installation| {
+                    installation.status != colossus_contracts::PluginStatus::Uninstalled
+                })
         {
             return Ok(store);
         }
