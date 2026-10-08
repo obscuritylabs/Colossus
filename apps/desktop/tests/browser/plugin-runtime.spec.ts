@@ -236,7 +236,7 @@ test("browser → production native adapter → authenticated worker: offline co
     const detail = page.getByRole("article", { name: "colossus details" });
     for (const name of [
       "coding",
-      "offline-dev",
+      "schedule-task",
       "security-review",
       "plugin-authoring",
     ])

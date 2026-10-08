@@ -242,10 +242,9 @@ async fn verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof() {
     assert_eq!(inventory[0]["manifest"]["name"], "colossus");
     assert_eq!(inventory[0]["origin"], "bundled");
     let skills = inventory[0]["skills"].as_array().expect("core skills");
-    assert_eq!(skills.len(), 5);
+    assert_eq!(skills.len(), 4);
     for name in [
         "coding",
-        "offline-dev",
         "security-review",
         "plugin-authoring",
         "schedule-task",

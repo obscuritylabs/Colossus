@@ -21,7 +21,7 @@ manifest digest globally; each workspace can narrow that active set with `plugin
 ## Built-in skills
 
 The CLI and Managed Local sidecar embed the `colossus` plugin, including `coding`,
-`offline-dev`, `security-review`, `plugin-authoring`, and `schedule-task`. First startup with an explicit
+`security-review`, `plugin-authoring`, and `schedule-task`. First startup with an explicit
 Colossus home installs and enables it without a checkout, registry or interpreter.
 Standalone SDK runtimes without a home remain isolated and do not open your personal home.
 

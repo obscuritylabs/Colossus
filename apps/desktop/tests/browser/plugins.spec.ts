@@ -27,7 +27,7 @@ test.beforeEach(async ({ page }) => {
       },
       skills: [
         "coding",
-        "offline-dev",
+        "schedule-task",
         "security-review",
         "plugin-authoring",
       ].map((name) => ({

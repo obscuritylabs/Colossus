@@ -214,7 +214,7 @@ async fn core_catalog_is_home_scoped_metadata_only_and_stable_for_an_active_run(
     );
     let catalog = runtime.plugin_catalog.capture().expect("snapshot");
     assert_eq!(catalog.records.len(), 1);
-    assert_eq!(catalog.records[0].skills.len(), 5);
+    assert_eq!(catalog.records[0].skills.len(), 4);
     let metadata = runtime
         .compose_plugin_skills("base", &[], &[])
         .expect("metadata");

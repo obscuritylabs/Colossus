@@ -2021,7 +2021,7 @@ fn structured_completion_tracks_slash_commands_and_skill_tokens() {
     let mut state = TuiState::from_snapshot(snapshot());
     state.completions.extend([
         "@coding".into(),
-        "@offline-dev".into(),
+        "@plugin-authoring".into(),
         "@security-review".into(),
     ]);
 
@@ -2039,17 +2039,17 @@ fn structured_completion_tracks_slash_commands_and_skill_tokens() {
     assert!(commands.contains(&"/plan execute goal"));
 
     state.composer.clear();
-    state.composer.insert("please @off");
+    state.composer.insert("please @plu");
     assert_eq!(
         state.structured_completion_context(),
         Some(CompletionContext {
-            prefix: "@off",
+            prefix: "@plu",
             kind: CompletionKind::Skill,
         })
     );
-    assert_eq!(state.ghost_text(), Some("line-dev"));
+    assert_eq!(state.ghost_text(), Some("gin-authoring"));
     assert!(state.accept_completion());
-    assert_eq!(state.draft(), "please @offline-dev ");
+    assert_eq!(state.draft(), "please @plugin-authoring ");
 }
 
 #[test]
