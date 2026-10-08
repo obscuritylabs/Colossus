@@ -2,6 +2,44 @@ use super::*;
 use crate::tests::write_plugin;
 
 #[test]
+fn selected_source_priority_preserves_its_budget_ahead_of_disabled_hints() {
+    let temporary = tempfile::tempdir().expect("workspace");
+    let root = temporary.path();
+    write_plugin(&root.join("z-selected"));
+    write_plugin(&root.join("a-disabled"));
+    let selected = root.join("z-selected");
+    let mut files = Vec::new();
+    collect_regular_files(&selected, &selected, 0, &mut files).unwrap();
+    let budget = files
+        .iter()
+        .map(|path| fs::metadata(selected.join(path)).unwrap().len())
+        .sum::<u64>();
+    fs::write(
+        root.join("a-disabled/000-budget.txt"),
+        vec![b'x'; usize::try_from(budget).unwrap()],
+    )
+    .unwrap();
+    let discovered = discovery::discover_with_budget(
+        root,
+        &[
+            "z-selected".into(),
+            "a-disabled".into(),
+            "z-selected".into(),
+        ],
+        &mut crate::PluginIconBudget::default(),
+        budget,
+    );
+    assert_eq!(discovered.candidates.len(), 1);
+    assert_eq!(discovered.candidates[0].source.path, "z-selected");
+    assert!(
+        discovered
+            .issues
+            .iter()
+            .any(|issue| issue.path == "a-disabled")
+    );
+}
+
+#[test]
 fn excess_automatic_sources_do_not_hide_the_bounded_registered_set() {
     let temporary = tempfile::tempdir().expect("workspace");
     let root = temporary.path();

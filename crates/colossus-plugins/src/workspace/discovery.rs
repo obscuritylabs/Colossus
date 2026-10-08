@@ -20,10 +20,20 @@ pub fn discover_workspace_plugins(
 }
 
 /// Discover local sources within the caller's cumulative display budget.
+/// Registered paths retain caller priority; place enabled selections before hints.
 pub fn discover_workspace_plugins_with_icon_budget(
     workspace: &Path,
     registered: &[String],
     icons: &mut crate::PluginIconBudget,
+) -> WorkspacePluginDiscovery {
+    discover_with_budget(workspace, registered, icons, MAX_WORKSPACE_PLUGIN_BYTES)
+}
+
+pub(super) fn discover_with_budget(
+    workspace: &Path,
+    registered: &[String],
+    icons: &mut crate::PluginIconBudget,
+    mut remaining: u64,
 ) -> WorkspacePluginDiscovery {
     let mut result = WorkspacePluginDiscovery::default();
     if registered.len() > MAX_WORKSPACE_PLUGINS {
@@ -34,8 +44,13 @@ pub fn discover_workspace_plugins_with_icon_budget(
         );
         return result;
     }
-    let registered = registered.iter().cloned().collect::<BTreeSet<_>>();
-    let mut paths = registered.clone();
+    let mut paths = BTreeSet::new();
+    let priority = registered
+        .iter()
+        .filter(|path| paths.insert((*path).clone()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let registered = paths.clone();
     let mut automatic = BTreeSet::new();
     if fs::symlink_metadata(workspace.join(".agents")).is_ok() {
         match workspace_plugin_root(workspace, Path::new(".agents")) {
@@ -86,12 +101,11 @@ pub fn discover_workspace_plugins_with_icon_budget(
             "Workspace discovery exceeds 128 plugin sources",
         );
     }
-    let mut remaining = MAX_WORKSPACE_PLUGIN_BYTES;
     // Registered sources consume the bounded byte/icon budgets before unrelated
     // unaccepted discoveries, preserving the explicit workspace selection.
-    for path in paths
+    for path in priority
         .iter()
-        .filter(|path| registered.contains(*path))
+        .filter(|path| paths.contains(*path))
         .chain(paths.iter().filter(|path| !registered.contains(*path)))
     {
         match capture_with_budget(

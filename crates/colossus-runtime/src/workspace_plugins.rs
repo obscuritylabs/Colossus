@@ -137,7 +137,7 @@ impl WorkspacePlugins {
         let grants = self.grants()?;
         let discovered = discover_workspace_plugins_with_icon_budget(
             &self.workspace,
-            &grants.keys().cloned().collect::<Vec<_>>(),
+            &prioritized_sources(&grants),
             icons,
         );
         let mut inventory = Vec::new();
@@ -211,7 +211,16 @@ impl WorkspacePlugins {
         }
         let discovered = discover_workspace_plugins_with_icon_budget(
             &self.workspace,
-            &grants.keys().cloned().collect::<Vec<_>>(),
+            &grants
+                .iter()
+                .filter(|(_, grant)| {
+                    grant.enabled
+                        && !config.exclude.contains(&grant.source.name)
+                        && (config.include.is_empty()
+                            || config.include.contains(&grant.source.name))
+                })
+                .map(|(path, _)| path.clone())
+                .collect::<Vec<_>>(),
             &mut colossus_plugins::PluginIconBudget::exhausted(),
         );
         let mut digests = BTreeMap::new();
@@ -244,6 +253,15 @@ impl WorkspacePlugins {
         drop(publication_leases);
         Ok((records, Some(lease)))
     }
+}
+
+fn prioritized_sources(grants: &BTreeMap<String, WorkspacePluginGrant>) -> Vec<String> {
+    grants
+        .iter()
+        .filter(|(_, grant)| grant.enabled)
+        .chain(grants.iter().filter(|(_, grant)| !grant.enabled))
+        .map(|(path, _)| path.clone())
+        .collect()
 }
 
 fn rejected_source(path: String, detail: String) -> PluginInventoryEntry {
