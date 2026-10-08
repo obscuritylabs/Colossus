@@ -8,12 +8,29 @@ pub(super) struct PluginsCommand {
 
 #[derive(Subcommand)]
 pub(super) enum PluginsAction {
-    /// List globally installed plugin digests and active state.
+    /// Use a workspace directory, or verify, install and activate a signed OCI source.
+    Add {
+        /// Workspace-relative directory or oci://HOST/REPOSITORY:TAG.
+        source: String,
+        #[arg(long)]
+        registry: Option<String>,
+        #[arg(long, default_value = "default")]
+        trust_profile: String,
+    },
+    /// Accept a discovered workspace source after reviewing its exact snapshot.
+    WorkspaceAccept {
+        path: PathBuf,
+        #[arg(long)]
+        digest: Option<String>,
+    },
+    /// Disable subsequent use of a workspace source.
+    WorkspaceDisable { path: PathBuf },
+    /// List installed packages and workspace sources with their available state.
     List {
         #[arg(long, default_value_t = 100)]
         limit: usize,
     },
-    /// Show every installed digest for one plugin name.
+    /// Show available and unavailable sources for one plugin name.
     Show { name: String },
     /// Validate an unpacked portable Agent Plugin directory.
     Validate { directory: PathBuf },

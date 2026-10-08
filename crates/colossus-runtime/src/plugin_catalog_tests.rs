@@ -50,7 +50,17 @@ fn installed_plugin_stdio_status_matches_runtime_component_validation() {
         )]),
         ..PluginsConfig::default()
     });
+    let runtime = open(&root.join("workspace"), None, &[]);
     let catalog = PluginCatalogSource {
+        workspace_plugins: Arc::new(
+            crate::workspace_plugins::WorkspacePlugins::new(
+                &root,
+                None,
+                Arc::clone(&runtime.work),
+                Arc::clone(&runtime.instruction_snapshots),
+            )
+            .expect("workspace sources"),
+        ),
         store: Some(store),
         configuration,
         standalone_mcp: McpConfig::default(),

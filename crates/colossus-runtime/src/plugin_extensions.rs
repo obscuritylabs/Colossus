@@ -24,6 +24,7 @@ pub(super) fn compile_active_plugin_extensions(
     configured_mcp: &McpConfig,
     sandbox: &SandboxConfig,
     store: Option<&PluginStore>,
+    workspace_store: Option<&PluginStore>,
 ) -> Result<ActivePluginExtensions, RuntimeError> {
     let mut output = ActivePluginExtensions {
         mcp: configured_mcp.clone(),
@@ -57,6 +58,20 @@ pub(super) fn compile_active_plugin_extensions(
             {
                 continue;
             }
+            let overlay = &configured_plugins.mcp_servers[&server.id];
+            let local = plugin.installation.origin == colossus_contracts::PluginOrigin::Workspace;
+            if (local
+                && overlay.workspace_plugin_digest.as_deref()
+                    != Some(plugin.installation.digest.as_str()))
+                || (!local && overlay.workspace_plugin_digest.is_some())
+            {
+                output.diagnostics.entry(plugin.installation.manifest.name.clone()).or_default().push(colossus_contracts::PluginComponentDiagnostic {
+                    kind: colossus_contracts::PluginComponentKind::McpServer,
+                    name: Some(server.name.clone()), code: "mcp_source_binding_required".into(),
+                    detail: "Configure this connection for the selected source and exact workspace snapshot before exposing tools".into(),
+                });
+                continue;
+            }
             let mut single = plugin.clone();
             single.mcp_servers = vec![server.clone()];
             let compiled = compile_plugin_extensions(
@@ -64,7 +79,7 @@ pub(super) fn compile_active_plugin_extensions(
                 configured_plugins,
                 &output.mcp,
                 sandbox,
-                store,
+                if local { workspace_store } else { store },
             )
             .and_then(|candidate| {
                 let mut filesystem = sandbox.filesystem.clone();
@@ -376,13 +391,13 @@ impl PolicyDecisionPoint for PluginScopedPolicy {
                 colossus_contracts::PluginManagementRequest::Enable {
                     allow_untrusted: true,
                     ..
-                }
+                } | colossus_contracts::PluginManagementRequest::AcceptWorkspace { .. }
             ) && request.approval.is_none()
                 && decision.outcome != DecisionOutcome::Deny
             {
                 decision.outcome = DecisionOutcome::RequireApproval;
                 decision.reason =
-                    "Explicit approval is required to enable untrusted plugin content".into();
+                    "Explicit approval is required to accept unsigned plugin content".into();
             }
             if self.builtin_policy && decision.outcome != DecisionOutcome::Deny {
                 let paths = plugin_management::management_paths(
@@ -551,6 +566,7 @@ mod tests {
             &standalone,
             &sandbox,
             Some(&store),
+            None,
         )
         .expect("disabled plugin MCP compilation");
         assert!(
@@ -577,6 +593,7 @@ mod tests {
             &standalone,
             &sandbox,
             Some(&store),
+            None,
         )
         .expect("enabled plugin MCP compilation");
         let server = enabled

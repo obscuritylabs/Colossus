@@ -936,6 +936,21 @@ The owner-private `$COLOSSUS_HOME/plugins` store uses a dedicated redb writer le
 lifecycle changes and shared cross-process snapshot leases for immutable content. Disable,
 uninstall, and garbage collection cannot invalidate a running snapshot. Stable writable
 `PLUGIN_DATA` is separate from read-only content and is preserved unless purge is explicit.
+Workspace discovery adds no ambient authority: fixed `.agents` locations and registered
+directories are metadata-only until request-bound source acceptance. The host records
+acceptance outside the repository, scoped to workspace identity, relative source path,
+directory object identity, and manifest name. Accepted instruction edits are captured
+into immutable OCI snapshots in a separate workspace-owned store. Recovery retains
+`workspace:NAME` provenance keys and restores the original scoped cache rather than
+substituting global packages or live directories. Missing or replaced selected sources
+fail unavailable without silently falling back to a global name.
+
+Local MCP overlays require the exact `workspacePluginDigest` before credentials, tool
+allowlists, writable data, or process grants are compiled. Global overlays cannot bind
+local servers implicitly. Acceptance remains separate from Sigstore trust and cannot
+claim bundled ownership. The shared add workflow delegates to the existing authorized
+installation and exact-digest activation effects; signature failures leave activation
+unchanged, and untrusted OCI activation still requires its independent approval.
 Registry transfers validate exact origins, independently pin DNS and CA policy for registry,
 token, and blob redirect services, strip authorization on redirects, and verify every
 descriptor before extraction. Runtime pre/post identity checks still reject stable

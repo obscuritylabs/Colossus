@@ -25,6 +25,10 @@ function failure(error: unknown): string {
     : "The plugin request failed. Check the selected target and retry.";
 }
 
+function entryKey(plugin: PluginEntry): string {
+  return JSON.stringify([plugin.origin, plugin.source, plugin.digest]);
+}
+
 export function PluginsSurface({
   targetId,
   spaceId,
@@ -115,7 +119,11 @@ export function PluginsSurface({
         setMessage(
           result.cancelled
             ? "Operation cancelled."
-            : `${request.operation.replaceAll("_", " ")} completed.${result.integrity ? ` Integrity: ${result.integrity}.` : ""}${request.operation === "install" || request.operation === "update" ? " Candidate installed; activation is separate." : ""}`,
+            : request.operation === "accept_workspace"
+              ? "Workspace source accepted."
+              : request.operation === "disable_workspace"
+                ? "Workspace source disabled."
+                : `${request.operation.replaceAll("_", " ")} completed.${result.integrity ? ` Integrity: ${result.integrity}.` : ""}${request.operation === "install" || request.operation === "update" ? " Candidate installed; activation is separate." : ""}`,
         );
         setOperation(null);
       }
@@ -148,7 +156,7 @@ export function PluginsSurface({
       (filter === "available" ? entry.available : !entry.available),
   );
   const plugin =
-    visible.find((entry) => entry.digest === selected) ?? visible[0];
+    visible.find((entry) => entryKey(entry) === selected) ?? visible[0];
   const availableCount = plugins.filter((entry) => entry.available).length;
   return (
     <section className="overview-scroll plugin-surface" aria-label="Plugins">
@@ -162,10 +170,10 @@ export function PluginsSurface({
           <button
             className="button primary"
             disabled={busy !== null}
-            onClick={() => setOperation({ action: "install" })}
+            onClick={() => setOperation({ action: "add" })}
           >
             <IconPlus size={17} aria-hidden="true" />
-            Install
+            Add plugin
           </button>
         )}
       </header>
@@ -194,7 +202,15 @@ export function PluginsSurface({
             <summary>Developer tools</summary>
             <div className="plugin-actions" aria-label="Plugin management">
               {(
-                ["validate", "verify", "package", "pull", "push", "gc"] as const
+                [
+                  "install",
+                  "validate",
+                  "verify",
+                  "package",
+                  "pull",
+                  "push",
+                  "gc",
+                ] as const
               ).map((action) => (
                 <button
                   className="button secondary"
@@ -278,7 +294,7 @@ export function PluginsSurface({
           </h3>
           <p>
             {plugins.length === 0
-              ? "Install a plugin to add skills and connections to Colossus."
+              ? "Add a plugin to give Colossus skills and connections."
               : "Try another search or show all plugins."}
           </p>
           {plugins.length > 0 && (
@@ -300,9 +316,11 @@ export function PluginsSurface({
             <button
               type="button"
               className="plugin-card"
-              key={entry.digest}
-              aria-pressed={plugin?.digest === entry.digest}
-              onClick={() => setSelected(entry.digest)}
+              key={entryKey(entry)}
+              aria-pressed={
+                plugin ? entryKey(plugin) === entryKey(entry) : false
+              }
+              onClick={() => setSelected(entryKey(entry))}
             >
               <div className="plugin-card-heading">
                 <PluginIcon
@@ -335,7 +353,9 @@ export function PluginsSurface({
                 <span>
                   {entry.origin === "bundled"
                     ? "Bundled with Colossus"
-                    : "Installed"}
+                    : entry.origin === "workspace"
+                      ? "Workspace source"
+                      : "Installed"}
                 </span>
               </span>
             </button>
@@ -343,7 +363,7 @@ export function PluginsSurface({
         </div>
         {plugin ? (
           <PluginDetail
-            key={plugin.digest}
+            key={entryKey(plugin)}
             plugin={plugin}
             targetId={targetId}
             spaceId={spaceId ?? null}

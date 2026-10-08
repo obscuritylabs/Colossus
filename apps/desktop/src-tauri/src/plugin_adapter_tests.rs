@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn local_add_uses_native_selection_but_acceptance_retains_reviewed_source_and_digest() {
+    let add = PluginManagementRequest::Add {
+        source: PluginInstallSource::Directory {
+            path: "/renderer/path".into(),
+        },
+        trust_profile: "default".into(),
+    };
+    let selected = select_paths::<()>(add, false, |file, save| {
+        assert!(!file && !save);
+        Ok(Some("/native/workspace/plugin".into()))
+    })
+    .expect("selection")
+    .expect("request");
+    assert!(
+        matches!(selected, PluginManagementRequest::Add { source: PluginInstallSource::Directory { path }, .. } if path == "/native/workspace/plugin")
+    );
+    let accept = PluginManagementRequest::AcceptWorkspace {
+        path: ".agents/plugins/review".into(),
+        digest: Some(format!("sha256:{}", "a".repeat(64))),
+    };
+    assert_eq!(
+        select_paths::<()>(accept.clone(), false, |_, _| panic!(
+            "acceptance is bound by the runtime to the selected workspace"
+        ))
+        .expect("acceptance")
+        .expect("request"),
+        accept
+    );
+}
+
+#[test]
 fn renderer_paths_are_replaced_and_cancelled_dialogs_release_no_request() {
     let request = PluginManagementRequest::Package {
         directory: "/renderer/input".into(),

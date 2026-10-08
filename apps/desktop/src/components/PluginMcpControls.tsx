@@ -20,6 +20,7 @@ export function PluginMcpControls({
   pluginActive,
   http,
   sessionRequired = false,
+  workspacePluginDigest,
   onChanged,
 }: {
   spaceId: string;
@@ -28,6 +29,7 @@ export function PluginMcpControls({
   pluginActive: boolean;
   http: boolean;
   sessionRequired?: boolean;
+  workspacePluginDigest?: string | undefined;
   onChanged?: (() => void) | undefined;
 }) {
   const [busy, setBusy] = useState(false);
@@ -62,7 +64,13 @@ export function PluginMcpControls({
     setMessage("");
     try {
       const snapshot = await getManagedConfiguration();
-      const request = pluginConnectionRequest(snapshot, spaceId, server, next);
+      const request = pluginConnectionRequest(
+        snapshot,
+        spaceId,
+        server,
+        next,
+        workspacePluginDigest,
+      );
       await saveSpaceConfiguration(request);
       setDiagnostic(null);
       setStatus(null);
@@ -127,7 +135,9 @@ export function PluginMcpControls({
       </div>
       {!pluginActive ? (
         <small>
-          Activate this plugin digest before configuring its connection.
+          {workspacePluginDigest
+            ? "Accept this workspace source before configuring its connection."
+            : "Activate this plugin digest before configuring its connection."}
         </small>
       ) : sessionRequired ? (
         <small>
@@ -137,9 +147,10 @@ export function PluginMcpControls({
         </small>
       ) : !enabled ? (
         <small>
-          A new connection permits every tool from this plugin, including tools
-          added by a later update. Configure an exact tool list in plugin
-          settings for narrower access.
+          {workspacePluginDigest
+            ? "Enable the tools in this workspace snapshot. Later edits require connection approval again."
+            : "A new connection permits every tool from this plugin, including tools added by a later update."}{" "}
+          Configure an exact tool list in plugin settings for narrower access.
         </small>
       ) : null}
       {busy && <p role="status">Updating or checking MCP connection…</p>}

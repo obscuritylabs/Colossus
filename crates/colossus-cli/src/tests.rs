@@ -805,6 +805,38 @@ fn plugin_install_accepts_one_oci_reference_without_registry_flags() {
 }
 
 #[test]
+fn plugin_add_translates_local_and_oci_sources_to_shared_orchestration() {
+    use colossus_contracts::{PluginInstallSource as Source, PluginManagementRequest as Request};
+    for (input, expected) in [
+        (
+            ".agents/plugins/review",
+            Source::Directory {
+                path: ".agents/plugins/review".into(),
+            },
+        ),
+        (
+            "oci://registry.example/team/review:v1",
+            Source::Reference {
+                registry: String::new(),
+                reference: "registry.example/team/review:v1".into(),
+            },
+        ),
+    ] {
+        let cli = Cli::try_parse_from(["colossus", "plugins", "add", input]).expect("syntax");
+        let Command::Plugins(command) = cli.command else {
+            panic!("plugins command");
+        };
+        assert_eq!(
+            command.command.request().expect("request"),
+            Request::Add {
+                source: expected,
+                trust_profile: "default".into()
+            }
+        );
+    }
+}
+
+#[test]
 fn config_init_local_conflicts_with_an_explicit_config() {
     let parsed = Cli::try_parse_from([
         "colossus",

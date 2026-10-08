@@ -39,6 +39,7 @@ nav = [
       { "Decisions" = "use/decisions.md" },
       { "Tools" = "use/tools.md" },
       { "Skills and plugins" = "use/skills-plugins.md" },
+      { "Classic Outlook" = "use/outlook-classic.md" },
       { "MCP servers" = "use/mcp-servers.md" },
       { "Theme" = "use/theme.md" },
     ] },
@@ -97,6 +98,8 @@ nav = [
     ] },
     { "Tools and editors" = [
       { "Agent Plugins" = "extend/plugins.md" },
+      { "Create a plugin" = "extend/plugin-authoring.md" },
+      { "Distribute and trust plugins" = "extend/plugin-distribution.md" },
       { "Integrations" = "extend/integrations.md" },
       { "MCP" = "extend/mcp.md" },
     ] },

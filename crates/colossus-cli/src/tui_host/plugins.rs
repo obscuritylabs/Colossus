@@ -106,6 +106,8 @@ pub(super) fn plugins_document(plugins: &[PluginInventoryEntry]) -> Presentation
             plugin_status(plugin.status).into(),
             if plugin.origin == colossus_contracts::PluginOrigin::Bundled {
                 "Bundled with Colossus".into()
+            } else if plugin.origin == colossus_contracts::PluginOrigin::Workspace {
+                "Workspace source (unsigned)".into()
             } else if plugin.trust.trusted {
                 "trusted".into()
             } else {
@@ -131,6 +133,8 @@ pub(super) fn plugin_document(plugin: &PluginInventoryEntry) -> PresentationDocu
             "Trust".into(),
             if plugin.origin == colossus_contracts::PluginOrigin::Bundled {
                 "Bundled with Colossus (not a Cosign signature)".into()
+            } else if plugin.origin == colossus_contracts::PluginOrigin::Workspace {
+                "Workspace source (unsigned)".into()
             } else if plugin.trust.trusted {
                 "trusted".into()
             } else {

@@ -6,6 +6,7 @@ mod plan;
 mod removal;
 #[cfg(test)]
 mod tests;
+mod writers;
 
 use colossus_credentials::PlatformCredentialVault;
 use colossus_home::ConfinedRoot;

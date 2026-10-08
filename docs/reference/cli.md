@@ -92,7 +92,7 @@ model output.
 | `memories` | Create, search, archive, supersede, and index memories |
 | `research` | Run and inspect source-backed research |
 | `telemetry` | Inspect metadata-only run telemetry |
-| `plugins` | Validate, verify, install, activate, package, pull, push, export, and collect Agent Plugins |
+| `plugins` | Discover workspace sources, add signed packages, inspect, configure availability, and manage Agent Plugins |
 | `bundle` | Build, verify, and install signed offline bundles |
 | `integrations` | Manage persisted integrations and imported OpenAPI tools |
 | `mcp` | Discover and invoke configured MCP servers |
@@ -141,7 +141,7 @@ positional:
 | `memories index` | `status`, `sync`, `rebuild` |
 | `research` | `run QUESTION`, `list`, `show RUN_ID`, `sources RUN_ID`, `claims RUN_ID` |
 | `telemetry` | `runs`, `show RUN_ID`, `metrics` |
-| `plugins` | `list`, `show NAME`, `validate DIRECTORY`, `verify PATH`, `install (--directory|--reference|--layout|--archive)`, `enable NAME --digest DIGEST`, `disable NAME`, `update NAME REFERENCE`, `uninstall NAME --digest DIGEST [--purge-data]`, `gc`, `package DIRECTORY --output LAYOUT`, `push LAYOUT REFERENCE`, `pull REFERENCE --output LAYOUT`, `export NAME --output LAYOUT_TAR` |
+| `plugins` | `list`, `show NAME`, `add PATH_OR_OCI_REFERENCE [--registry NAME]`, `workspace-accept PATH [--digest DIGEST]`, `workspace-disable PATH`, `validate DIRECTORY`, `verify PATH`, `install (--directory|--reference|--layout|--archive)`, `enable NAME --digest DIGEST`, `disable NAME`, `update NAME REFERENCE`, `uninstall NAME --digest DIGEST [--purge-data]`, `gc`, `package DIRECTORY --output LAYOUT`, `push LAYOUT REFERENCE`, `pull REFERENCE --output LAYOUT`, `export NAME --output LAYOUT_TAR` |
 | `bundle` | `key-info`, `verify PATH`, `build SOURCE DESTINATION`, `install PATH --prefix PATH` |
 | `integrations` | `list`, `show NAME`, `connect NAME`, `import-openapi NAME SPEC`, `disconnect NAME`, `call TOOL ARGUMENTS` |
 | `mcp` | `servers`, `tools`, `doctor SERVER`, `call SERVER TOOL ARGUMENTS`, `auth login SERVER [--manual]`, `auth status SERVER`, `auth logout SERVER` |

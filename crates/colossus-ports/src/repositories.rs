@@ -346,7 +346,26 @@ pub trait WorkRepository: Send + Sync {
         status: Option<SubagentStatus>,
         limit: usize,
     ) -> Result<Vec<SubagentJob>, StoreError>;
+
+    /// Page all child jobs in ascending ID order with their creation snapshot references.
+    /// The cursor is exclusive; zero limit returns an empty page. Recovery adapters must
+    /// use bounded indexed discovery and canonical creation/tail reads.
+    fn subagent_recovery_page(
+        &self,
+        _after_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SubagentRecoveryEntry>, StoreError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        Err(StoreError::Adapter(
+            "paginated subagent recovery is unsupported by this work repository".into(),
+        ))
+    }
 }
+/// One current child job and its immutable private instruction snapshot reference.
+pub type SubagentRecoveryEntry = (SubagentJob, Option<String>);
+
 /// Canonical event-sourced memory lifecycle repository.
 pub trait MemoryRepository: Send + Sync {
     /// Create a new active canonical record.

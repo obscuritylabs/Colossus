@@ -3,6 +3,73 @@ import type { ManagedSettingsSnapshot } from "./types";
 import { pluginConnectionRequest } from "./pluginConnection";
 
 describe("plugin connection save", () => {
+  it("binds a local snapshot and clears credentials when selecting a different source", () => {
+    const snapshot = {
+      globalConfiguration: { revision: 1 },
+      spaces: [
+        {
+          id: "workspace",
+          archived: false,
+          configuration: {
+            fieldOverrides: [
+              {
+                fieldId: "plugins.mcpServers",
+                value: {
+                  "example/mail": {
+                    enabled: true,
+                    allowedTools: ["old_tool"],
+                    environment: { TOKEN: "env:OLD" },
+                    credentialHeaders: { Authorization: "vault:old" },
+                    oauth: { clientId: "old" },
+                  },
+                },
+              },
+            ],
+            catalogRevisions: {},
+            searchRoles: {},
+            modelRoles: {},
+            credentialOverrides: {},
+          },
+        },
+      ],
+    } as unknown as ManagedSettingsSnapshot;
+    const digest = `sha256:${"1".repeat(64)}`;
+    const request = pluginConnectionRequest(
+      snapshot,
+      "workspace",
+      "example/mail",
+      true,
+      digest,
+    );
+    const field = request.fieldOverrides.find(
+      (field) => field.fieldId === "plugins.mcpServers",
+    );
+    expect(field?.value).toEqual({
+      "example/mail": {
+        enabled: true,
+        allowedTools: ["*"],
+        workspacePluginDigest: digest,
+      },
+    });
+    snapshot.spaces[0]!.configuration.fieldOverrides = request.fieldOverrides;
+    const installed = pluginConnectionRequest(
+      snapshot,
+      "workspace",
+      "example/mail",
+      false,
+    );
+    expect(
+      installed.fieldOverrides.find(
+        (field) => field.fieldId === "plugins.mcpServers",
+      )?.value,
+    ).toEqual({
+      "example/mail": {
+        enabled: false,
+        allowedTools: [],
+        workspacePluginDigest: null,
+      },
+    });
+  });
   it("preserves unrelated workspace settings while explicitly allowing all plugin tools", () => {
     const snapshot = {
       globalConfiguration: { revision: 17 },
@@ -52,7 +119,11 @@ describe("plugin connection save", () => {
         fieldId: "plugins.mcpServers",
         value: {
           $colossusPatchV1: true,
-          "example/mail": { enabled: true, allowedTools: ["*"] },
+          "example/mail": {
+            enabled: true,
+            allowedTools: ["*"],
+            workspacePluginDigest: null,
+          },
         },
       },
     ]);
@@ -89,7 +160,13 @@ describe("plugin connection save", () => {
     expect(request.fieldOverrides).toEqual([
       {
         fieldId: "plugins.mcpServers",
-        value: { "local/docs": { enabled: false, allowedTools: [] } },
+        value: {
+          "local/docs": {
+            enabled: false,
+            allowedTools: [],
+            workspacePluginDigest: null,
+          },
+        },
       },
     ]);
   });

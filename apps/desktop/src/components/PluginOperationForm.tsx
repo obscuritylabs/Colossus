@@ -4,6 +4,9 @@ import type { FormEvent } from "react";
 import type { PluginEntry, PluginRequest, PluginSource } from "../plugins";
 
 export type PluginAction =
+  | "add"
+  | "workspace_accept"
+  | "workspace_disable"
   | "install"
   | "validate"
   | "verify"
@@ -48,15 +51,22 @@ export function PluginOperationForm({
   const [archive, setArchive] = useState(false);
   const [purge, setPurge] = useState(false);
   const [untrusted, setUntrusted] = useState(false);
+  const label =
+    action === "workspace_accept"
+      ? "Use workspace source"
+      : action === "workspace_disable"
+        ? "Disable workspace source"
+        : action.replaceAll("_", " ");
   const network =
     ["pull", "push", "update"].includes(action) ||
-    (action === "install" && source === "reference");
+    (["add", "install"].includes(action) && source === "reference");
   function submit(event: FormEvent) {
     event.preventDefault();
     let request: PluginRequest;
     const name = plugin?.manifest.name ?? "";
     const identity = plugin?.digest ?? "";
     switch (action) {
+      case "add":
       case "install": {
         const input: PluginSource =
           source === "reference"
@@ -71,6 +81,19 @@ export function PluginOperationForm({
         request = { operation: action, source: input, trust_profile: profile };
         break;
       }
+      case "workspace_accept":
+        request = {
+          operation: "accept_workspace",
+          path: plugin?.source ?? "",
+          digest: identity,
+        };
+        break;
+      case "workspace_disable":
+        request = {
+          operation: "disable_workspace",
+          path: plugin?.source ?? "",
+        };
+        break;
       case "verify":
         request = {
           operation: action,
@@ -131,20 +154,23 @@ export function PluginOperationForm({
       tabIndex={-1}
       className="plugin-operation"
       onSubmit={submit}
-      aria-label={`${action.replaceAll("_", " ")} plugin`}
+      aria-label={`${label} plugin`}
     >
       <h3>
-        {action.replaceAll("_", " ")}
+        {label}
         {plugin ? ` · ${plugin.manifest.name}` : ""}
       </h3>
       <p>
-        Lifecycle changes affect every workspace sharing this Colossus home.
-        Workspace exclusions remain in Settings.
+        {action === "workspace_accept" ||
+        action === "workspace_disable" ||
+        (action === "add" && source === "directory")
+          ? "This source is used only in this workspace. Acceptance also covers later instruction edits in this directory. Tools and connections require separate permission."
+          : "Installed plugins are shared by workspaces using this Colossus home. Workspace exclusions remain in Settings."}
       </p>
       <fieldset disabled={busy}>
-        {action === "install" && (
+        {["add", "install"].includes(action) && (
           <label>
-            Installation source
+            Plugin source
             <DropdownSelect
               value={source}
               onChange={(event) =>
@@ -161,7 +187,7 @@ export function PluginOperationForm({
         {network && (
           <>
             <label>
-              {action === "install"
+              {["add", "install"].includes(action)
                 ? "OCI plugin reference"
                 : "Registry reference"}
               <input
@@ -171,7 +197,7 @@ export function PluginOperationForm({
                 placeholder="oci://ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:version"
               />
             </label>
-            {action === "install" ? (
+            {["add", "install"].includes(action) ? (
               <details>
                 <summary>Registry options</summary>
                 <label>
@@ -197,6 +223,7 @@ export function PluginOperationForm({
           </>
         )}
         {((action === "install" && source !== "reference") ||
+          (action === "add" && ["layout", "archive"].includes(source)) ||
           action === "verify") && (
           <label>
             Trust profile
@@ -207,7 +234,7 @@ export function PluginOperationForm({
             />
           </label>
         )}
-        {action === "install" && source === "reference" && (
+        {["add", "install"].includes(action) && source === "reference" && (
           <p>
             The matching registry profile verifies the package signature. The
             built-in Obscurity Labs profile accepts only its published plugin
@@ -215,7 +242,7 @@ export function PluginOperationForm({
           </p>
         )}
         {(action === "verify" ||
-          (action === "install" &&
+          (["add", "install"].includes(action) &&
             (source === "layout" || source === "archive"))) && (
           <label>
             Exact manifest digest
@@ -260,6 +287,12 @@ export function PluginOperationForm({
             Also permanently remove this plugin’s writable data
           </label>
         )}
+        {plugin &&
+          (action === "workspace_accept" || action === "workspace_disable") && (
+            <p>
+              Directory: <code>{plugin.source}</code>
+            </p>
+          )}
         {plugin && (
           <p className="plugin-digest">Exact version: {plugin.digest}</p>
         )}
@@ -269,7 +302,14 @@ export function PluginOperationForm({
             separately.
           </p>
         ) : null}
+        {action === "add" && source !== "directory" && (
+          <p>
+            The signature is verified before the exact installed version is
+            activated.
+          </p>
+        )}
         {[
+          "add",
           "install",
           "validate",
           "verify",
@@ -285,7 +325,9 @@ export function PluginOperationForm({
         )}
         <div className="plugin-actions">
           <button type="submit" className="button primary">
-            Continue {action.replaceAll("_", " ")}
+            {action === "workspace_accept" || action === "workspace_disable"
+              ? "Continue"
+              : `Continue ${label}`}
           </button>
           <button type="button" className="button secondary" onClick={onClose}>
             Close

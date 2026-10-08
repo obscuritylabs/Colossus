@@ -4,11 +4,18 @@ use colossus_contracts::{PluginInventoryEntry, PluginOrigin};
 impl PluginStore {
     /// Live management inventory, including disabled candidates, without instruction bodies.
     pub fn inventory(&self) -> Result<Vec<PluginInventoryEntry>, StoreError> {
+        self.inventory_with_icon_budget(&mut crate::PluginIconBudget::default())
+    }
+
+    /// Share display bounds with other stores and workspace sources in one catalog.
+    pub fn inventory_with_icon_budget(
+        &self,
+        icons: &mut crate::PluginIconBudget,
+    ) -> Result<Vec<PluginInventoryEntry>, StoreError> {
         let _writer = acquire_plugin_writer(self.state_path())?;
         let repository = self.open_repository()?;
         let current_core = repository.bundled_digest()?;
         let mut entries = Vec::new();
-        let mut icons = crate::icons::CatalogIconBudget::default();
         for installation in repository.list_plugins(MAX_PLUGIN_INSTALLATIONS)? {
             if installation.status == PluginStatus::Uninstalled
                 || (installation.origin == PluginOrigin::Bundled

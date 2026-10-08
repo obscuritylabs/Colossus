@@ -297,9 +297,11 @@ fn native_terminal_pane_keeps_pty_and_rejects_main_authority() {
                 }
                 .await;
                 state.close_all().await;
-                crate::uninstall::cleanup(store.home_root().expect("test home"))
-                    .expect("test cleanup");
-                *result.lock().expect("test result") = Some(checked);
+                let cleanup = crate::uninstall::cleanup(store.home_root().expect("test home"))
+                    .map_err(|error| format!("test cleanup failed: {error:?}"));
+                // Report cleanup failure through the test outcome so the native
+                // event loop exits even when preserving unsafe data is required.
+                *result.lock().expect("test result") = Some(checked.and(cleanup));
                 app.exit(0);
             });
             Ok(())

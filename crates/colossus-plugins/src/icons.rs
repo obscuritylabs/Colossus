@@ -46,7 +46,7 @@ impl IconBudget {
 
 /// Reserve one maximum-size image for the executable-owned plugin without
 /// changing catalog order or letting operator-installed names claim its budget.
-pub(crate) struct CatalogIconBudget {
+pub struct CatalogIconBudget {
     bundled: IconBudget,
     installed: IconBudget,
 }
@@ -69,6 +69,13 @@ impl Default for CatalogIconBudget {
 }
 
 impl CatalogIconBudget {
+    /// Skip display decoding when capture needs only immutable package bytes.
+    pub fn exhausted() -> Self {
+        Self {
+            bundled: IconBudget::exhausted(),
+            installed: IconBudget::exhausted(),
+        }
+    }
     pub(crate) fn for_origin(&mut self, origin: PluginOrigin) -> &mut IconBudget {
         if origin == PluginOrigin::Bundled {
             &mut self.bundled

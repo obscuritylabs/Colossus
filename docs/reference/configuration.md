@@ -150,6 +150,7 @@ mcp:
   servers: {}
 plugins:
   enabled: true
+  workspaceDiscovery: true
   include: []
   exclude: []
   trustProfiles:

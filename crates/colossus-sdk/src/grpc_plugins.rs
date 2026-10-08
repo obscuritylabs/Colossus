@@ -232,6 +232,11 @@ fn plugin_from_proto(
     budget: &mut icons::NormalizationBudget,
 ) -> ApiResult<PluginInventoryEntry> {
     let trust = required(value.trust)?;
+    if value.workspace_local && (value.bundled || value.globally_active || trust.trusted)
+        || value.workspace_active && !value.workspace_local
+    {
+        return Err(protocol_error());
+    }
     let skills = value
         .skills
         .into_iter()
@@ -242,7 +247,9 @@ fn plugin_from_proto(
     }
     Ok(PluginInventoryEntry {
         icon_data_url: icons::validated(value.icon_data_url, budget)?,
-        origin: if value.bundled {
+        origin: if value.workspace_local {
+            PluginOrigin::Workspace
+        } else if value.bundled {
             PluginOrigin::Bundled
         } else {
             PluginOrigin::Installed
@@ -265,7 +272,7 @@ fn plugin_from_proto(
         },
         digest: value.digest,
         source: value.source,
-        status: if value.globally_active {
+        status: if value.globally_active || value.workspace_active {
             PluginStatus::Enabled
         } else {
             PluginStatus::Disabled

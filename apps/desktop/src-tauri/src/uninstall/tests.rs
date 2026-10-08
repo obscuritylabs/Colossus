@@ -1,5 +1,6 @@
 use super::*;
 use colossus_windows_native::{create_private_directory, create_private_file};
+use fs4::fs_std::FileExt as _;
 use std::os::windows::fs::OpenOptionsExt as _;
 
 // Windows Credential Manager can retain a deleted entry while another native
@@ -72,11 +73,15 @@ fn cleanup_rejects_busy_data_before_removing_any_files() {
 }
 
 fn plugin_blob(home: &Path, linked: bool) -> std::path::PathBuf {
+    plugin_blob_at(&home.join("plugins"), linked)
+}
+
+fn plugin_blob_at(store: &Path, linked: bool) -> std::path::PathBuf {
     let blob = "a".repeat(64);
     let layout = "b".repeat(64);
-    let global = home.join("plugins/blobs/sha256").join(&blob);
-    let retained = home
-        .join("plugins/layouts/sha256")
+    let global = store.join("blobs/sha256").join(&blob);
+    let retained = store
+        .join("layouts/sha256")
         .join(layout)
         .join("blobs/sha256")
         .join(blob);
@@ -105,6 +110,175 @@ fn plugin_blob(home: &Path, linked: bool) -> std::path::PathBuf {
         fs::set_permissions(path, permissions).unwrap();
     }
     global
+}
+
+fn workspace_plugin_store(home: &Path) -> std::path::PathBuf {
+    let partition = home.join("workspaces").join("c".repeat(64));
+    for directory in [home.join("workspaces"), partition.clone()] {
+        create_private_directory(&directory).unwrap();
+    }
+    let store = partition.join("workspace-plugins");
+    create_private_directory(&store).unwrap();
+    colossus_plugins::PluginStore::new(store)
+        .unwrap()
+        .root()
+        .to_owned()
+}
+
+#[test]
+fn cleanup_removes_empty_workspace_plugin_store_created_by_runtime_startup() {
+    let (_guard, home) = fixture();
+    workspace_plugin_store(&home);
+    cleanup(&home).unwrap();
+    assert!(!home.exists());
+}
+
+#[test]
+fn cleanup_removes_workspace_plugin_snapshots_and_pending_layouts() {
+    for linked in [false, true] {
+        let (_guard, home) = fixture();
+        let store = workspace_plugin_store(&home);
+        let blob = plugin_blob_at(&store, linked);
+        for prefix in ["generated-layout-", "retained-layout-"] {
+            let staging = store
+                .join("staging")
+                .join(format!("{prefix}{}", uuid::Uuid::new_v4()))
+                .join("blobs/sha256");
+            fs::create_dir_all(&staging).unwrap();
+            fs::hard_link(&blob, staging.join(blob.file_name().unwrap())).unwrap();
+        }
+        cleanup(&home).unwrap();
+        assert!(!home.exists());
+    }
+}
+
+#[test]
+fn cleanup_preserves_external_workspace_plugin_blob_links_and_attributes() {
+    let (guard, home) = fixture();
+    let store = workspace_plugin_store(&home);
+    let blob = plugin_blob_at(&store, true);
+    let external = guard.path().join("external-workspace-blob");
+    fs::hard_link(&blob, &external).unwrap();
+    assert_eq!(cleanup(&home), Err(CleanupError::UnsafeData));
+    assert_eq!(fs::read(&external).unwrap(), b"installed plugin blob");
+    assert!(fs::metadata(&external).unwrap().permissions().readonly());
+    assert!(store.is_dir());
+}
+
+#[test]
+fn cleanup_rechecks_workspace_plugin_blob_links_added_after_inspection() {
+    let (guard, home) = fixture();
+    let store = workspace_plugin_store(&home);
+    let blob = plugin_blob_at(&store, true);
+    let plan = plan::CleanupPlan::inspect(&home).unwrap();
+    fs::hard_link(blob, guard.path().join("late-workspace-blob-link")).unwrap();
+    assert_eq!(plan.check_idle(), Err(CleanupError::UnsafeData));
+}
+
+#[test]
+fn cleanup_preserves_plugin_data_created_after_the_final_idle_check() {
+    for workspace in [false, true] {
+        let (_guard, home) = fixture();
+        let store = if workspace {
+            workspace_plugin_store(&home)
+        } else {
+            create_private_directory(&home.join("plugins")).unwrap();
+            home.join("plugins")
+        };
+        let original = plugin_blob_at(&store, true);
+        let plan = plan::CleanupPlan::inspect(&home).unwrap();
+        plan.check_idle().unwrap();
+        let concurrent = store.join("new-grants.redb");
+        create_private_file(&concurrent, b"concurrent CLI grants").unwrap();
+        assert_eq!(plan.remove_data(), Err(CleanupError::UnsafeData));
+        assert_eq!(fs::read(concurrent).unwrap(), b"concurrent CLI grants");
+        assert_eq!(fs::read(&original).unwrap(), b"installed plugin blob");
+        assert!(fs::metadata(original).unwrap().permissions().readonly());
+    }
+}
+
+#[test]
+fn cleanup_holds_plugin_writers_from_inspection_through_removal() {
+    for workspace in [false, true] {
+        let (_guard, home) = fixture();
+        let store = if workspace {
+            workspace_plugin_store(&home)
+        } else {
+            create_private_directory(&home.join("plugins")).unwrap();
+            home.join("plugins")
+        };
+        let state = store.join("state.redb");
+        create_private_file(&state, b"original committed grants").unwrap();
+        let plan = plan::CleanupPlan::inspect(&home).unwrap();
+        plan.check_idle().unwrap();
+        let competing = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(store.join("state.redb.writer.lock"))
+            .unwrap();
+        assert!(!competing.try_lock_exclusive().unwrap());
+        drop(competing);
+        assert_eq!(fs::read(&state).unwrap(), b"original committed grants");
+        plan.remove_data().unwrap();
+        assert!(!home.exists());
+    }
+}
+
+#[test]
+fn cleanup_rejects_an_active_plugin_writer_before_inspecting_its_state() {
+    let (_guard, home) = fixture();
+    let store = workspace_plugin_store(&home);
+    let state = store.join("state.redb");
+    create_private_file(&state, b"committed grants").unwrap();
+    let path = store.join("state.redb.writer.lock");
+    create_private_file(&path, b"").unwrap();
+    let writer = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    assert!(writer.try_lock_exclusive().unwrap());
+    assert!(matches!(
+        plan::CleanupPlan::inspect(&home),
+        Err(CleanupError::Busy)
+    ));
+    assert_eq!(fs::read(state).unwrap(), b"committed grants");
+    drop(writer);
+    cleanup(&home).unwrap();
+}
+
+#[test]
+fn cleanup_preserves_nested_plugin_snapshots_created_after_inspection() {
+    let (_guard, home) = fixture();
+    let store = workspace_plugin_store(&home);
+    plugin_blob_at(&store, true);
+    let plan = plan::CleanupPlan::inspect(&home).unwrap();
+    plan.check_idle().unwrap();
+    // The deep workspace cache needs a verbatim path for native Win32 creation.
+    let concurrent = fs::canonicalize(store.join("layouts/sha256"))
+        .unwrap()
+        .join("d".repeat(64));
+    create_private_directory(&concurrent).unwrap();
+    create_private_file(&concurrent.join("index.json"), b"new CLI snapshot").unwrap();
+    assert_eq!(plan.remove_data(), Err(CleanupError::UnsafeData));
+    assert_eq!(
+        fs::read(concurrent.join("index.json")).unwrap(),
+        b"new CLI snapshot"
+    );
+}
+
+#[test]
+fn cleanup_preserves_cache_blobs_linked_externally_after_the_final_idle_check() {
+    let (guard, home) = fixture();
+    let store = workspace_plugin_store(&home);
+    let blob = plugin_blob_at(&store, true);
+    let plan = plan::CleanupPlan::inspect(&home).unwrap();
+    plan.check_idle().unwrap();
+    let external = guard.path().join("late-external-cache-link");
+    fs::hard_link(&blob, &external).unwrap();
+    assert_eq!(plan.remove_data(), Err(CleanupError::UnsafeData));
+    assert_eq!(fs::read(&external).unwrap(), b"installed plugin blob");
+    assert!(fs::metadata(external).unwrap().permissions().readonly());
 }
 
 #[test]
@@ -297,8 +471,13 @@ fn native_uninstall_removes_exact_owned_keys_and_preserves_unrelated_entries() {
     runtime(&home, RUNTIME_SERVICE, id);
     let modifiers = std::collections::HashMap::from([("persistence", "Local")]);
     let store = windows_native_keyring_store::Store::new().unwrap();
-    let plan = plan::CleanupPlan::inspect(&home).unwrap();
-    for (service, account) in &plan.keys {
+    let keys = {
+        let plan = plan::CleanupPlan::inspect(&home).unwrap();
+        // Inspection owns the plugin writer lock. Release this fixture plan
+        // before uninstall acquires its own plan; retain only the key names.
+        plan.keys.clone()
+    };
+    for (service, account) in &keys {
         store
             .build(service, account, Some(&modifiers))
             .unwrap()
@@ -315,7 +494,7 @@ fn native_uninstall_removes_exact_owned_keys_and_preserves_unrelated_entries() {
     unrelated.delete_credential().unwrap();
     result.unwrap();
     assert!(preserved);
-    for (service, account) in &plan.keys {
+    for (service, account) in &keys {
         let observed = store
             .build(service, account, Some(&modifiers))
             .unwrap()

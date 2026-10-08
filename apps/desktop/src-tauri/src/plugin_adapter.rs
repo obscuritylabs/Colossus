@@ -110,8 +110,17 @@ pub(crate) fn select_paths<E>(
                 PluginInstallSource::Directory { path } | PluginInstallSource::Layout { path, .. },
             ..
         }
+        | Op::Add {
+            source:
+                PluginInstallSource::Directory { path } | PluginInstallSource::Layout { path, .. },
+            ..
+        }
         | Op::Validate { path } => paths.push((path, false, false)),
         Op::Install {
+            source: PluginInstallSource::Archive { path, .. },
+            ..
+        }
+        | Op::Add {
             source: PluginInstallSource::Archive { path, .. },
             ..
         } => paths.push((path, true, false)),
