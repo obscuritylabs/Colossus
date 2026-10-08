@@ -114,7 +114,7 @@ impl PluginStore {
             // Publication and its disabled receipt must succeed before source permission
             // changes. A failed capture preserves the previous selected source.
             let installation =
-                self.cache_workspace_plugin(repository, candidate, recoverable, actor.clone())?;
+                self.cache_workspace_plugin(repository, candidate, &grants, recoverable, actor.clone())?;
             // One chosen local source per portable name. Acceptance is an explicit
             // workspace selection; it does not alter the global active digest.
             for grant in grants
@@ -159,8 +159,8 @@ impl PluginStore {
     ) -> Result<(PluginInstallation, PluginSnapshotLease), StoreError> {
         candidate.revalidate()?;
         self.with_write(|repository| {
-            if !repository
-                .workspace_grants()?
+            let grants = repository.workspace_grants()?;
+            if !grants
                 .get(&candidate.source.path)
                 .is_some_and(|grant| grant.enabled && grant.source == candidate.source)
             {
@@ -169,7 +169,7 @@ impl PluginStore {
                 ));
             }
             let installation =
-                self.cache_workspace_plugin(repository, candidate, recoverable, actor)?;
+                self.cache_workspace_plugin(repository, candidate, &grants, recoverable, actor)?;
             let lease = self.lease_digests(&BTreeSet::from([installation.digest.clone()]))?;
             Ok((installation, lease))
         })
@@ -179,11 +179,17 @@ impl PluginStore {
         &self,
         repository: &EventSourcedPluginRepository,
         candidate: &WorkspacePluginCandidate,
+        grants: &BTreeMap<String, WorkspacePluginGrant>,
         recoverable: &BTreeSet<String>,
         actor: Actor,
     ) -> Result<PluginInstallation, StoreError> {
-        let cache =
-            self.prepare_workspace_cache(repository, candidate, recoverable, actor.clone())?;
+        let cache = self.prepare_workspace_cache(
+            repository,
+            candidate,
+            grants,
+            recoverable,
+            actor.clone(),
+        )?;
         let destination = self.publish_artifact(&candidate.artifact)?;
         let record = load_plugin(&destination)?;
         if record.installation.manifest.name != candidate.source.name {

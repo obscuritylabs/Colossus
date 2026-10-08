@@ -2,6 +2,77 @@ use super::*;
 use crate::tests::{actor, write_plugin};
 mod bounded_reads;
 
+#[test]
+fn source_churn_keeps_committed_grants_and_current_cache_mappings_bounded() {
+    let temporary = tempfile::tempdir().expect("root");
+    let root = temporary.path().canonicalize().expect("root");
+    let store = PluginStore::new(root.join("store")).expect("store");
+    for index in 0..MAX_WORKSPACE_PLUGINS + 4 {
+        let path = format!("source-{index:03}");
+        write_plugin(&root.join(&path));
+        if index >= MAX_WORKSPACE_PLUGINS {
+            fs::write(
+                root.join(&path)
+                    .join("skills/review/references/checklist.txt"),
+                "New captured content\n",
+            )
+            .unwrap();
+        }
+        let candidate = capture_workspace_plugin(&root, Path::new(&path)).expect("capture");
+        if index == MAX_WORKSPACE_PLUGINS {
+            let previous = serde_json::to_value(store.workspace_plugin_grants().unwrap()).unwrap();
+            let blocked = store.root().join("content/sha256").join(
+                candidate
+                    .artifact
+                    .manifest_digest
+                    .strip_prefix("sha256:")
+                    .unwrap(),
+            );
+            fs::write(&blocked, "publication blocked").unwrap();
+            assert!(
+                store
+                    .accept_workspace_plugin(&candidate, &BTreeSet::new(), actor())
+                    .is_err()
+            );
+            assert_eq!(
+                serde_json::to_value(store.workspace_plugin_grants().unwrap()).unwrap(),
+                previous
+            );
+            store
+                .with_write(|repository| {
+                    assert_eq!(
+                        repository.workspace_cache()?.unwrap().current.len(),
+                        MAX_WORKSPACE_PLUGINS
+                    );
+                    Ok(())
+                })
+                .expect("failed publication preserves the bounded cache");
+            fs::remove_file(blocked).unwrap();
+        }
+        store
+            .accept_workspace_plugin(&candidate, &BTreeSet::new(), actor())
+            .expect("accept or reclaim a disabled slot");
+        let grants = store.workspace_plugin_grants().expect("bounded grants");
+        assert_eq!(grants.len(), (index + 1).min(MAX_WORKSPACE_PLUGINS));
+        assert!(grants[&path].enabled);
+        store
+            .with_write(|repository| {
+                let cache = repository.workspace_cache()?.expect("bounded cache");
+                assert_eq!(cache.current.len(), grants.len());
+                assert!(cache.current.contains_key(&path));
+                Ok(())
+            })
+            .expect("cache remains readable after each acceptance");
+    }
+    drop(store);
+    let reopened = PluginStore::new(root.join("store")).expect("reopen");
+    assert_eq!(
+        reopened.workspace_plugin_grants().unwrap().len(),
+        MAX_WORKSPACE_PLUGINS
+    );
+    assert_eq!(reopened.list(10_000).expect("readable inventory").len(), 2);
+}
+
 fn edit(root: &Path, version: usize) -> WorkspacePluginCandidate {
     fs::write(
         root.join("source/skills/review/SKILL.md"),

@@ -61,7 +61,7 @@ impl CleanupFiles {
         Ok(())
     }
 
-    pub fn check_idle(&self) -> Result<(), CleanupError> {
+    pub fn check_idle(&self, writers: &super::writers::CleanupWriters) -> Result<(), CleanupError> {
         for file in &self.0 {
             let binding = BoundPath::open_file(&file.path)
                 .map_err(|error| CleanupError::from_native(&error))?;
@@ -71,6 +71,9 @@ impl CleanupFiles {
                 return Err(CleanupError::UnsafeData);
             }
             drop(binding);
+            if writers.contains(&file.path) {
+                continue; // The cleanup plan itself retains this writer handle.
+            }
             // Do not mistake our own inspection handle for an active runtime.
             fs::OpenOptions::new()
                 .read(true)

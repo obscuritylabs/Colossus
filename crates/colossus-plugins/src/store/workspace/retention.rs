@@ -87,6 +87,7 @@ impl PluginStore {
         &self,
         repository: &EventSourcedPluginRepository,
         candidate: &WorkspacePluginCandidate,
+        grants: &BTreeMap<String, WorkspacePluginGrant>,
         recoverable: &BTreeSet<String>,
         actor: Actor,
     ) -> Result<WorkspaceCache, StoreError> {
@@ -97,10 +98,12 @@ impl PluginStore {
             ));
         }
         let old = previous.unwrap_or_default();
-        let grants = repository.workspace_grants()?;
+        // Protect the committed selection until publication and the grant update
+        // both succeed, while planning current mappings from the proposed grants.
+        let committed = repository.workspace_grants()?;
         let mut protected = self.live_snapshot_digests()?;
         protected.extend(recoverable.iter().cloned());
-        for (path, grant) in &grants {
+        for (path, grant) in &committed {
             if grant.enabled
                 && let Some(digest) = old.current.get(path)
             {
@@ -108,7 +111,7 @@ impl PluginStore {
             }
         }
         protected.insert(candidate.artifact.manifest_digest.clone());
-        let cache = plan_cache(&old, candidate, &grants, &protected)?;
+        let cache = plan_cache(&old, candidate, grants, &protected)?;
         // Free superseded bytes before publication. If publication fails, every
         // accepted source's previous current snapshot and every run pin survives.
         let mut trimmed = old.clone();
@@ -186,7 +189,10 @@ fn plan_cache(
             cache.entries.remove(&digest);
         }
     }
-    if cache.entries.len() > MAX_CACHED_SNAPSHOTS || bytes > MAX_CACHE_BYTES {
+    if cache.entries.len() > MAX_CACHED_SNAPSHOTS
+        || cache.current.len() > MAX_WORKSPACE_PLUGINS
+        || bytes > MAX_CACHE_BYTES
+    {
         return Err(adapter(
             "workspace plugin cache is full of retained snapshots; complete pending or retryable jobs, or disable unused workspace sources, before capturing more edits",
         ));

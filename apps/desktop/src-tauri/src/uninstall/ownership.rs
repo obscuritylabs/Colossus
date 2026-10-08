@@ -79,6 +79,22 @@ fn is_partition(part: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
+pub(super) fn plugin_store(relative: &Path) -> bool {
+    let parts = relative
+        .iter()
+        .map(|part| part.to_str())
+        .collect::<Option<Vec<_>>>();
+    matches!(parts.as_deref(), Some(["plugins"]))
+        || matches!(parts.as_deref(), Some(["workspaces", partition, "workspace-plugins", "plugins"]) if is_partition(partition))
+}
+
+pub(super) fn plugin_writer_lock(relative: &Path) -> bool {
+    relative
+        .file_name()
+        .is_some_and(|name| name == "state.redb.writer.lock")
+        && relative.parent().is_some_and(plugin_store)
+}
+
 pub(super) fn plugin_blob(relative: &Path) -> bool {
     let Some(parts) = relative
         .iter()
@@ -89,9 +105,13 @@ pub(super) fn plugin_blob(relative: &Path) -> bool {
     };
     let cache = match parts.as_slice() {
         ["plugins", cache @ ..] => cache,
-        ["workspaces", partition, "workspace-plugins", cache @ ..] if is_partition(partition) => {
-            cache
-        }
+        [
+            "workspaces",
+            partition,
+            "workspace-plugins",
+            "plugins",
+            cache @ ..,
+        ] if is_partition(partition) => cache,
         _ => return false,
     };
     match cache {

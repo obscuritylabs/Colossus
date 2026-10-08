@@ -26,11 +26,29 @@ fn workspace_plugin_cache_ownership_does_not_admit_other_workspace_state() {
 }
 
 #[test]
+fn plugin_writer_lock_scope_matches_only_generated_store_roots() {
+    for store in [
+        Path::new("plugins").to_owned(),
+        workspace_store(&"a".repeat(64)).join("plugins"),
+    ] {
+        assert!(plugin_store(&store));
+        assert!(plugin_writer_lock(&store.join("state.redb.writer.lock")));
+        assert!(!plugin_writer_lock(
+            &store.join("data/state.redb.writer.lock")
+        ));
+    }
+    assert!(!plugin_store(&workspace_store("user-project")));
+    assert!(!plugin_writer_lock(&Path::new(
+        "desktop/state.redb.writer.lock"
+    )));
+}
+
+#[test]
 fn hard_link_admission_is_limited_to_valid_blobs_in_generated_plugin_caches() {
     let digest = "b".repeat(64);
     for store in [
         Path::new("plugins").to_owned(),
-        workspace_store(&"a".repeat(64)),
+        workspace_store(&"a".repeat(64)).join("plugins"),
     ] {
         for blob in [
             store.join("blobs/sha256").join(&digest),
@@ -68,7 +86,7 @@ fn hard_link_admission_is_limited_to_valid_blobs_in_generated_plugin_caches() {
     }
     assert!(!plugin_blob(
         &workspace_store("user-project")
-            .join("blobs/sha256")
+            .join("plugins/blobs/sha256")
             .join(digest)
     ));
 }

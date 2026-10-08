@@ -1,5 +1,6 @@
 use super::*;
 use colossus_windows_native::{create_private_directory, create_private_file};
+use fs4::fs_std::FileExt as _;
 use std::os::windows::fs::OpenOptionsExt as _;
 
 // Windows Credential Manager can retain a deleted entry while another native
@@ -118,7 +119,10 @@ fn workspace_plugin_store(home: &Path) -> std::path::PathBuf {
     }
     let store = partition.join("workspace-plugins");
     create_private_directory(&store).unwrap();
-    store
+    colossus_plugins::PluginStore::new(store)
+        .unwrap()
+        .root()
+        .to_owned()
 }
 
 #[test]
@@ -191,6 +195,56 @@ fn cleanup_preserves_plugin_data_created_after_the_final_idle_check() {
         assert_eq!(fs::read(&original).unwrap(), b"installed plugin blob");
         assert!(fs::metadata(original).unwrap().permissions().readonly());
     }
+}
+
+#[test]
+fn cleanup_holds_plugin_writers_from_inspection_through_removal() {
+    for workspace in [false, true] {
+        let (_guard, home) = fixture();
+        let store = if workspace {
+            workspace_plugin_store(&home)
+        } else {
+            create_private_directory(&home.join("plugins")).unwrap();
+            home.join("plugins")
+        };
+        let state = store.join("state.redb");
+        create_private_file(&state, b"original committed grants").unwrap();
+        let plan = plan::CleanupPlan::inspect(&home).unwrap();
+        plan.check_idle().unwrap();
+        let competing = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(store.join("state.redb.writer.lock"))
+            .unwrap();
+        assert!(!competing.try_lock_exclusive().unwrap());
+        drop(competing);
+        assert_eq!(fs::read(&state).unwrap(), b"original committed grants");
+        plan.remove_data().unwrap();
+        assert!(!home.exists());
+    }
+}
+
+#[test]
+fn cleanup_rejects_an_active_plugin_writer_before_inspecting_its_state() {
+    let (_guard, home) = fixture();
+    let store = workspace_plugin_store(&home);
+    let state = store.join("state.redb");
+    create_private_file(&state, b"committed grants").unwrap();
+    let path = store.join("state.redb.writer.lock");
+    create_private_file(&path, b"").unwrap();
+    let writer = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    assert!(writer.try_lock_exclusive().unwrap());
+    assert!(matches!(
+        plan::CleanupPlan::inspect(&home),
+        Err(CleanupError::Busy)
+    ));
+    assert_eq!(fs::read(state).unwrap(), b"committed grants");
+    drop(writer);
+    cleanup(&home).unwrap();
 }
 
 #[test]

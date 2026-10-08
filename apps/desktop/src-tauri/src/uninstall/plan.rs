@@ -20,6 +20,7 @@ pub(super) struct CleanupPlan {
     pub vaults: Vec<(PathBuf, String)>,
     files: super::files::CleanupFiles,
     removal: super::removal::CleanupRemoval,
+    writers: super::writers::CleanupWriters,
     empty_cli_directories: Vec<EmptyCliDirectory>,
 }
 
@@ -35,6 +36,7 @@ impl CleanupPlan {
             vaults: Vec::new(),
             files: super::files::CleanupFiles::default(),
             removal: super::removal::CleanupRemoval::default(),
+            writers: super::writers::CleanupWriters::default(),
             empty_cli_directories: Vec::new(),
         };
         let mut directories = vec![(home.to_owned(), 0)];
@@ -45,6 +47,13 @@ impl CleanupPlan {
             }
             let binding = BoundPath::open_directory(&directory)
                 .map_err(|error| CleanupError::from_native(&error))?;
+            if super::ownership::plugin_store(
+                directory
+                    .strip_prefix(home)
+                    .map_err(|_| CleanupError::UnsafeData)?,
+            ) {
+                plan.writers.acquire(&directory)?;
+            }
             plan.removal.record(home, &directory, &binding, true)?;
             for entry in fs::read_dir(&directory).map_err(|error| CleanupError::from_io(&error))? {
                 entries += 1;
@@ -188,7 +197,7 @@ impl CleanupPlan {
     }
 
     pub fn remove_data(&self) -> Result<(), CleanupError> {
-        self.removal.remove()
+        self.removal.remove(&self.writers)
     }
 
     pub fn check_idle(&self) -> Result<(), super::CleanupError> {
@@ -207,7 +216,7 @@ impl CleanupPlan {
             }
             binding.revalidate().map_err(|_| CleanupError::UnsafeData)?;
         }
-        self.files.check_idle()
+        self.files.check_idle(&self.writers)
     }
 }
 

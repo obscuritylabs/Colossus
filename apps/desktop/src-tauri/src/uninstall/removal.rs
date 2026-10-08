@@ -25,6 +25,7 @@ enum Kind {
     InspectedDirectory,
     DesktopTree,
     File,
+    WriterLock,
 }
 
 impl CleanupRemoval {
@@ -45,6 +46,7 @@ impl CleanupRemoval {
             .collect::<Option<Vec<_>>>()
             .ok_or(CleanupError::UnsafeData)?;
         let kind = match parts.as_slice() {
+            _ if super::ownership::plugin_writer_lock(relative) => Kind::WriterLock,
             ["plugins", ..] | ["workspaces", _, "workspace-plugins", ..] => {
                 if directory {
                     Kind::InspectedDirectory
@@ -72,10 +74,15 @@ impl CleanupRemoval {
         Ok(())
     }
 
-    pub fn remove(&self) -> Result<(), CleanupError> {
+    pub fn remove(&self, writers: &super::writers::CleanupWriters) -> Result<(), CleanupError> {
         self.check_plugin_directories()?;
         let mut entries = self.0.iter().collect::<Vec<_>>();
-        entries.sort_by_key(|entry| Reverse(entry.path.components().count()));
+        entries.sort_by_key(|entry| {
+            (
+                Reverse(entry.path.components().count()),
+                matches!(entry.kind, Kind::WriterLock),
+            )
+        });
         let mut links = BTreeMap::new();
         for entry in &entries {
             if let Some(count) = entry.links {
@@ -84,7 +91,7 @@ impl CleanupRemoval {
         }
         for entry in entries {
             let binding = match entry.kind {
-                Kind::File => BoundPath::open_file(&entry.path),
+                Kind::File | Kind::WriterLock => BoundPath::open_file(&entry.path),
                 Kind::EmptyDirectory | Kind::InspectedDirectory | Kind::DesktopTree => {
                     BoundPath::open_directory(&entry.path)
                 }
@@ -99,7 +106,10 @@ impl CleanupRemoval {
                     return Err(CleanupError::UnsafeData);
                 }
             }
-            if matches!(entry.kind, Kind::File | Kind::InspectedDirectory) {
+            if matches!(
+                entry.kind,
+                Kind::File | Kind::WriterLock | Kind::InspectedDirectory
+            ) {
                 let mut permissions = fs::metadata(&entry.path)
                     .map_err(|error| CleanupError::from_io(&error))?
                     .permissions();
@@ -119,7 +129,7 @@ impl CleanupRemoval {
                 // and entirely new workspace partitions after the final idle check.
                 Kind::EmptyDirectory | Kind::InspectedDirectory => fs::remove_dir(&entry.path),
                 Kind::DesktopTree => fs::remove_dir_all(&entry.path),
-                Kind::File => fs::remove_file(&entry.path),
+                Kind::File | Kind::WriterLock => fs::remove_file(&entry.path),
             };
             result.map_err(|error| {
                 if error.kind() == std::io::ErrorKind::DirectoryNotEmpty {
@@ -130,6 +140,9 @@ impl CleanupRemoval {
             })?;
             if let Some(count) = links.get_mut(&file_key(entry.identity)) {
                 *count -= 1;
+            }
+            if matches!(entry.kind, Kind::WriterLock) {
+                writers.release_removed(&entry.path);
             }
         }
         Ok(())
