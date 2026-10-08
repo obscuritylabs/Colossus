@@ -70,6 +70,59 @@ async function open(page: Page, view: WorkView, palette = "editor") {
   await update(page, view, palette);
 }
 
+test("MCP headings identify the released server through lifecycle updates", async ({
+  page,
+}, testInfo) => {
+  const mcpTool: ToolView = {
+    ...tool,
+    name: "mcp.call",
+    input: JSON.stringify({
+      server: "Splunk",
+      tool: "search",
+      arguments: { server: "payload-server" },
+    }),
+  };
+  await open(page, { ...base, tools: [mcpTool] });
+  const heading = page.locator(".tool-progress-heading");
+  await expect(heading).toContainText("mcp.call · Splunk · search");
+  await expect(heading).not.toContainText("payload-server");
+  await expect(heading.locator(".icon-plug-connected")).toHaveCount(1);
+  await heading.focus();
+  for (const state of ["completed", "failed", "cancelled", "outcome unknown"]) {
+    await update(page, {
+      ...base,
+      tools: [{ ...mcpTool, state }],
+    });
+    await expect(heading).toContainText("mcp.call · Splunk · search");
+    await expect(heading).toBeFocused();
+  }
+  await page.screenshot({
+    path: testInfo.outputPath("mcp-server-label.png"),
+    fullPage: true,
+  });
+  await update(page, {
+    ...base,
+    tools: [{ ...mcpTool, input: '{"arguments":{"server":"payload-server"}}' }],
+  });
+  await expect(page.locator(".tool-progress-name")).toHaveText("mcp.call");
+  const { input: _input, ...restored } = mcpTool;
+  await update(page, {
+    ...base,
+    tools: [
+      {
+        ...restored,
+        state: "completed",
+        preview: JSON.stringify({
+          server: "GitLab",
+          tool: "list_issues",
+          result: {},
+        }),
+      },
+    ],
+  });
+  await expect(heading).toContainText("mcp.call · GitLab · list_issues");
+});
+
 test("tool progress updates in place, preserves expansion/focus, and stays between each prompt and response", async ({
   page,
 }) => {

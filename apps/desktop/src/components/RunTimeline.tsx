@@ -20,6 +20,7 @@ import {
   IconPencil,
   IconPlayerPlay,
   IconPlayerStop,
+  IconPlug,
   IconSearch,
   IconSparkles,
   IconTargetArrow,
@@ -431,6 +432,8 @@ function ToolActivityIcon({ kind }: { kind: ActivityLabelKind }) {
       return <IconPencil size={16} stroke={1.7} />;
     case "web":
       return <IconWorld size={16} stroke={1.7} />;
+    case "mcp":
+      return <IconPlug size={16} stroke={1.7} />;
     case "delegate":
       return <IconArrowRight size={16} stroke={1.8} />;
     case "run":
@@ -494,7 +497,9 @@ function ToolActivityItem({
           </span>
           <span className="compact-tool-copy">
             <span className="compact-tool-heading">
-              <strong>{label.title}</strong>
+              <strong title={label.kind === "mcp" ? label.title : undefined}>
+                {label.title}
+              </strong>
               <span className="compact-tool-name">{activity.toolName}</span>
               <span className={`event-state tool-state-${activity.state}`}>
                 {readable(activity.state)}
