@@ -109,12 +109,22 @@ fn capture_with_budget(
 ) -> Result<WorkspacePluginCandidate, StoreError> {
     let root = workspace_plugin_root(workspace, relative)?;
     let identity = detect_workspace_identity(&root).map_err(adapter)?;
+    // Reject malformed manifests before inspecting potentially large payloads.
+    let (manifest, _) = load_manifest(&root)?;
+    if manifest.name == "colossus" {
+        return Err(adapter(
+            "colossus is reserved for the executable-bundled plugin",
+        ));
+    }
     let mut files = Vec::new();
     collect_regular_files(&root, &root, 0, &mut files)?;
     let reader = ReadRoot::bind(&root)?;
+    // Only validated captures spend the shared availability budget. Each attempt
+    // retains its byte bound; discovery also limits the number of attempts.
+    let mut candidate_remaining = *remaining;
     let mut owned = Vec::new();
     for relative in files {
-        let file = reader.open_file(&relative, (*remaining).min(MAX_FILE_BYTES))?;
+        let file = reader.open_file(&relative, candidate_remaining.min(MAX_FILE_BYTES))?;
         #[cfg(unix)]
         let executable = {
             use std::os::unix::fs::PermissionsExt as _;
@@ -123,10 +133,10 @@ fn capture_with_budget(
         #[cfg(not(unix))]
         let executable = false;
         let mut bytes = Vec::new();
-        file.take(remaining.saturating_add(1))
+        file.take(candidate_remaining.saturating_add(1))
             .read_to_end(&mut bytes)
             .map_err(adapter)?;
-        *remaining = remaining
+        candidate_remaining = candidate_remaining
             .checked_sub(bytes.len() as u64)
             .ok_or_else(|| adapter("workspace plugin discovery exceeds 256 MiB"))?;
         owned.push((posix_path(&relative)?, bytes, executable));
@@ -179,6 +189,7 @@ fn capture_with_budget(
     record.installation.digest = artifact.manifest_digest.clone();
     record.installation.source = source.path.clone();
     record.installation.trust.method = "workspace-directory".into();
+    *remaining = candidate_remaining;
     Ok(WorkspacePluginCandidate {
         source,
         record,

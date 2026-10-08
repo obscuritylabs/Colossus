@@ -24,7 +24,9 @@ Colossus convention.
 Presence alone does not grant instruction or execution authority.
 
 Automatic discovery is bounded to 128 sources, 128 collection entries, and 256 MiB of
-cumulative source bytes, in deterministic path order. Linked ancestry, linked files,
+cumulative validated source bytes, in deterministic path order. Failed captures do not
+spend that shared budget; each attempt remains bounded and malformed manifests are
+rejected before payload reads. Linked ancestry, linked files,
 special files, and out-of-workspace paths are rejected. Accepted source grants bind the
 workspace partition, relative directory path, platform directory identity, and manifest
 name. Each run uses a deterministic OCI snapshot of captured bytes. Recovery uses the

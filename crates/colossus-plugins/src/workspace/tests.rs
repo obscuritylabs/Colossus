@@ -2,6 +2,64 @@ use super::*;
 use crate::tests::write_plugin;
 
 #[test]
+fn rejected_sources_leave_the_shared_budget_for_valid_siblings() {
+    for malformed in [false, true] {
+        let temporary = tempfile::tempdir().expect("workspace");
+        let root = temporary.path();
+        let selected = root.join(".agents/plugins/z-selected");
+        let broken = root.join(".agents/plugins/a-broken");
+        write_plugin(&selected);
+        write_plugin(&broken);
+        let mut files = Vec::new();
+        collect_regular_files(&selected, &selected, 0, &mut files).unwrap();
+        let budget = files
+            .iter()
+            .map(|path| fs::metadata(selected.join(path)).unwrap().len())
+            .sum::<u64>();
+        fs::write(
+            broken.join("000-data"),
+            vec![b'x'; usize::try_from(budget - 1).unwrap()],
+        )
+        .unwrap();
+        if malformed {
+            fs::write(broken.join("plugin.json"), b"{").unwrap();
+        }
+        let mut remaining = budget;
+        assert!(
+            capture_with_budget(
+                root,
+                Path::new(".agents/plugins/a-broken"),
+                &mut remaining,
+                &mut crate::icons::IconBudget::default(),
+            )
+            .is_err()
+        );
+        assert_eq!(remaining, budget);
+        for registered in [
+            Vec::new(),
+            vec![
+                ".agents/plugins/a-broken".into(),
+                ".agents/plugins/z-selected".into(),
+            ],
+        ] {
+            let discovery = discovery::discover_with_budget(
+                root,
+                &registered,
+                &mut crate::PluginIconBudget::default(),
+                budget,
+            );
+            assert_eq!(discovery.candidates.len(), 1);
+            assert_eq!(
+                discovery.candidates[0].source.path,
+                ".agents/plugins/z-selected"
+            );
+            assert_eq!(discovery.issues.len(), 1);
+            assert_eq!(discovery.issues[0].path, ".agents/plugins/a-broken");
+        }
+    }
+}
+
+#[test]
 fn selected_source_priority_preserves_its_budget_ahead_of_disabled_hints() {
     let temporary = tempfile::tempdir().expect("workspace");
     let root = temporary.path();
