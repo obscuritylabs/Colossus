@@ -63,7 +63,7 @@ The following identities must all be the same stable `X.Y.Z` value:
 - the npm package and lockfile;
 - the Python distribution;
 - TypeScript, Python, and Go SDK user-agent versions;
-- the `CHANGELOG.md` heading; and
+- the generated `CHANGELOG.md` release section; and
 - the requested `vX.Y.Z` tag.
 
 Release SDK compatibility is pinned to the most recent earlier stable `vX.Y.Z`
@@ -75,6 +75,42 @@ normalizes the Python source archive's order, ownership, permissions, and timest
 setuptools does not apply `SOURCE_DATE_EPOCH` to all sdist metadata itself.
 
 All internal Rust packages must retain `publish = false`.
+
+### Generate the changelog and release notes
+
+Release CI automatically generates `CHANGELOG.md` and `RELEASE_NOTES.md` from
+Conventional Commits at the exact source commit. It groups breaking changes,
+features, fixes, security changes, documentation, and maintenance, with links to
+pull requests or commits. The baseline is the most recent earlier **published
+stable release** reachable from that commit; previews include all changes since
+that stable release. Drafts, failed release tags, and later or unrelated releases
+do not advance the baseline.
+
+During version preparation, update the checked-in history with the same generator
+from the repository root. Use the pinned Node.js toolchain and an authenticated
+GitHub CLI, and fetch the complete release history first.
+
+For a shallow clone, run `git fetch --unshallow origin` before fetching tags:
+
+```bash
+git fetch origin --tags
+node scripts/ci/release-notes.mjs --tag vX.Y.Z --write-changelog
+```
+
+Review and commit the generated entry with the coordinated version changes. New
+entries move curated `Unreleased` highlights into the release. Regeneration
+preserves manual release edits and older history and replaces only the generated
+block. Its recorded baseline keeps later reruns independent of new releases.
+For recovery, `--previous-tag vA.B.C` selects an explicit earlier stable baseline.
+To preview the notes without changing files, omit `--write-changelog`.
+
+Tag builds and validation-only dispatches retain both Markdown files in the
+`release-history` Actions artifact for fourteen days. The release draft uses those
+same notes after the release gate passes and includes the existing Developer
+Preview notices. Rerunning a draft build preserves any operator edits to its body.
+Commit the preparation output to keep the repository's release history current.
+
+### Validate the coordinated version
 
 Set `workspace.metadata.release.publish-sdks` in `Cargo.toml` for each release:
 `true` allows coordinated SDK registry publication; `false` publishes the application

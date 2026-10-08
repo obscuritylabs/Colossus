@@ -306,6 +306,32 @@ fn invalid_existing_bearers_are_never_replaced_or_exposed() {
 }
 
 #[test]
+fn journal_fingerprint_rewinds_retained_handle_without_releasing_offline_lease() {
+    use crate::dev_credentials_lease::OfflineFileLease;
+    use fs4::fs_std::FileExt;
+
+    let home = private_root();
+    let root = ConfinedRoot::bind(home.path()).unwrap();
+    let file = root.open_file(Path::new("journal.bin")).unwrap();
+    let bytes = vec![7_u8; 32 * 1024 + 3];
+    file.file().write_all(&bytes).unwrap();
+    file.file().sync_all().unwrap();
+    let contender = fs::File::open(file.path()).unwrap();
+    let lease = OfflineFileLease::acquire(file, "lease failed", "lease busy").unwrap();
+
+    for _ in 0..2 {
+        assert_eq!(
+            dev_credentials_plan::confined_file_digest(&root, lease.file()).unwrap(),
+            dev_credentials_plan::sha256(&bytes)
+        );
+        assert!(!FileExt::try_lock_exclusive(&contender).unwrap());
+    }
+    drop(lease);
+    assert!(FileExt::try_lock_exclusive(&contender).unwrap());
+    FileExt::unlock(&contender).unwrap();
+}
+
+#[test]
 fn plaintext_journal_plan_requires_frozen_canonical_metadata_and_retains_source_bytes() {
     use colossus_journal_redb::{DisabledCheckpointSigner, PlaintextKeyProvider, RedbEventJournal};
     let home = private_root();

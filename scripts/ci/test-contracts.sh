@@ -222,4 +222,5 @@ trap - EXIT HUP INT TERM
 "${NODE:-node}" --test "$script_dir/control-plane-assets.test.mjs"
 "${NODE:-node}" --test "$script_dir/documentation-candidate.test.mjs"
 "${NODE:-node}" --test "$script_dir/release-source-version.test.mjs"
+"${NODE:-node}" --test "$script_dir/release-notes.test.mjs"
 "${NODE:-node}" --test "$script_dir/../development-launch.test.mjs"
