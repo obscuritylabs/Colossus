@@ -17,8 +17,10 @@ while loading a plugin.
 
 Workspace discovery examines `.agents/plugin.json` or immediate
 `.agents/plugins/NAME/plugin.json` sources, plus directories explicitly registered
-inside the workspace. The direct and collection layouts cannot coexist. The v1
-specification defines directory loading; these discovery paths are a Colossus convention.
+inside the workspace. Mixing the direct and collection layouts stops automatic
+discovery and reports a conflict; previously accepted sources remain registered and
+usable. The v1 specification defines directory loading; these discovery paths are a
+Colossus convention.
 Presence alone does not grant instruction or execution authority.
 
 Automatic discovery is bounded to 128 sources, 128 collection entries, and 256 MiB of

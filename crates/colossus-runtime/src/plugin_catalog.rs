@@ -1,6 +1,7 @@
 //! Immutable per-run plugin catalogs, distinct from live lifecycle management.
 
 use super::*;
+use colossus_plugins::WorkspacePluginGrant;
 use std::future::Future;
 
 pub(super) fn narrow_plugin_inventory(
@@ -148,6 +149,7 @@ pub(super) struct PluginCatalogSource {
 
 impl PluginCatalogSource {
     pub(super) fn live_inventory(&self) -> Result<Vec<PluginInventoryEntry>, RuntimeError> {
+        let grants = self.workspace_grants()?;
         let mut icons = colossus_plugins::PluginIconBudget::default();
         let mut inventory = self
             .store
@@ -155,11 +157,12 @@ impl PluginCatalogSource {
             .map(|store| store.inventory_with_icon_budget(&mut icons))
             .transpose()?
             .unwrap_or_default();
-        inventory.extend(
-            self.workspace_plugins
-                .inventory(self.configuration.workspace_discovery, &mut icons)?,
-        );
-        let local_names = self.selected_workspace_names()?;
+        inventory.extend(self.workspace_plugins.inventory(
+            self.configuration.workspace_discovery,
+            &grants,
+            &mut icons,
+        )?);
+        let local_names = self.selected_workspace_names(&grants);
         for entry in &mut inventory {
             if entry.origin != colossus_contracts::PluginOrigin::Workspace
                 && local_names.contains(&entry.manifest.name)
@@ -170,7 +173,7 @@ impl PluginCatalogSource {
             }
         }
         if self.configuration.enabled {
-            let (records, _leases) = self.snapshot()?;
+            let (records, _leases) = self.snapshot_with_grants(&grants)?;
             let extensions = compile_active_plugin_extensions(
                 &records,
                 &self.configuration,
@@ -209,20 +212,40 @@ impl PluginCatalogSource {
         Ok(narrow_plugin_inventory(inventory, &self.configuration))
     }
 
-    fn selected_workspace_names(&self) -> Result<BTreeSet<String>, RuntimeError> {
+    fn workspace_grants(&self) -> Result<BTreeMap<String, WorkspacePluginGrant>, RuntimeError> {
         if !self.configuration.workspace_discovery {
-            return Ok(BTreeSet::new());
+            return Ok(BTreeMap::new());
         }
-        Ok(self
-            .workspace_plugins
-            .grants()?
-            .into_values()
-            .filter(|grant| grant.enabled)
-            .map(|grant| grant.source.name)
-            .collect())
+        self.workspace_plugins.grants()
     }
 
-    fn snapshot(&self) -> Result<(Vec<AgentPluginRecord>, Vec<PluginSnapshotLease>), RuntimeError> {
+    fn selected_workspace_names(
+        &self,
+        grants: &BTreeMap<String, WorkspacePluginGrant>,
+    ) -> BTreeSet<String> {
+        if !self.configuration.workspace_discovery {
+            return BTreeSet::new();
+        }
+        grants
+            .values()
+            .filter(|grant| grant.enabled)
+            .map(|grant| grant.source.name.clone())
+            .collect()
+    }
+
+    pub(super) fn snapshot(
+        &self,
+    ) -> Result<(Vec<AgentPluginRecord>, Vec<PluginSnapshotLease>), RuntimeError> {
+        if !self.configuration.enabled {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        self.snapshot_with_grants(&self.workspace_grants()?)
+    }
+
+    pub(super) fn snapshot_with_grants(
+        &self,
+        grants: &BTreeMap<String, WorkspacePluginGrant>,
+    ) -> Result<(Vec<AgentPluginRecord>, Vec<PluginSnapshotLease>), RuntimeError> {
         if !self.configuration.enabled {
             return Ok((Vec::new(), Vec::new()));
         }
@@ -239,11 +262,11 @@ impl PluginCatalogSource {
         } else {
             Vec::new()
         };
-        let selected = self.selected_workspace_names()?;
+        let selected = self.selected_workspace_names(grants);
         records.retain(|record| !selected.contains(&record.installation.manifest.name));
-        let (local, lease) = self
-            .workspace_plugins
-            .capture(&self.configuration, &mut icons)?;
+        let (local, lease) =
+            self.workspace_plugins
+                .capture(&self.configuration, grants, &mut icons)?;
         records.extend(local);
         leases.extend(lease);
         Ok((records, leases))
@@ -328,6 +351,15 @@ impl PluginCatalogSource {
         mut records: Vec<AgentPluginRecord>,
         leases: Vec<PluginSnapshotLease>,
     ) -> Result<Arc<PluginRunCatalog>, RuntimeError> {
+        let mut names = BTreeSet::new();
+        if records
+            .iter()
+            .any(|record| !names.insert(&record.installation.manifest.name))
+        {
+            return Err(RuntimeError::Config(
+                "captured plugin sources have conflicting names".into(),
+            ));
+        }
         let extensions = compile_active_plugin_extensions(
             &records,
             &self.configuration,

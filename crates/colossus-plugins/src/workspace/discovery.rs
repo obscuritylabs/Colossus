@@ -69,7 +69,8 @@ pub(super) fn discover_with_budget(
                         ".agents",
                         "Choose one layout: .agents/plugin.json or .agents/plugins/<name>/plugin.json",
                     );
-                    paths.retain(|path| path != ".agents" && !path.starts_with(".agents/plugins/"));
+                    // Reject ambiguous automatic candidates without revoking a
+                    // source the user already registered explicitly.
                 } else if direct {
                     automatic.insert(".agents".into());
                 } else {

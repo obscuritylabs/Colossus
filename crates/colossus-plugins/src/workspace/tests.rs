@@ -126,6 +126,12 @@ fn direct_layout_conflicts_and_overflow_fail_closed() {
     assert_eq!(discover_workspace_plugins(root, &[]).candidates.len(), 1);
     write_plugin(&root.join(".agents/plugins/one"));
     assert!(discover_workspace_plugins(root, &[]).candidates.is_empty());
+    for registered in [".agents", ".agents/plugins/one"] {
+        let explicit = discover_workspace_plugins(root, &[registered.into()]);
+        assert_eq!(explicit.candidates.len(), 1);
+        assert_eq!(explicit.candidates[0].source.path, registered);
+        assert!(explicit.issues.iter().any(|issue| issue.path == ".agents"));
+    }
     fs::remove_file(root.join(".agents/plugin.json")).expect("remove direct manifest");
     for index in 0..MAX_WORKSPACE_PLUGINS {
         fs::create_dir_all(root.join(format!(".agents/plugins/entry-{index}"))).expect("entry");

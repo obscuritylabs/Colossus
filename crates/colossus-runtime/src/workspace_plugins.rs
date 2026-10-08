@@ -129,15 +129,15 @@ impl WorkspacePlugins {
     pub(super) fn inventory(
         &self,
         enabled: bool,
+        grants: &BTreeMap<String, WorkspacePluginGrant>,
         icons: &mut colossus_plugins::PluginIconBudget,
     ) -> Result<Vec<PluginInventoryEntry>, RuntimeError> {
         if !enabled {
             return Ok(Vec::new());
         }
-        let grants = self.grants()?;
         let discovered = discover_workspace_plugins_with_icon_budget(
             &self.workspace,
-            &prioritized_sources(&grants),
+            &prioritized_sources(grants),
             icons,
         );
         let mut inventory = Vec::new();
@@ -176,6 +176,18 @@ impl WorkspacePlugins {
             inventory.push(entry);
         }
         for issue in discovered.issues {
+            if let Some(entry) = inventory
+                .iter_mut()
+                .find(|entry| entry.source == issue.path)
+            {
+                entry.diagnostics.push(PluginComponentDiagnostic {
+                    kind: PluginComponentKind::Plugin,
+                    name: None,
+                    code: "workspace_discovery_issue".into(),
+                    detail: issue.detail,
+                });
+                continue;
+            }
             let grant = grants.get(&issue.path);
             let mut entry = rejected_source(issue.path, issue.detail);
             if let Some(grant) = grant {
@@ -193,6 +205,7 @@ impl WorkspacePlugins {
     pub(super) fn capture(
         &self,
         config: &PluginsConfig,
+        grants: &BTreeMap<String, WorkspacePluginGrant>,
         icons: &mut colossus_plugins::PluginIconBudget,
     ) -> Result<(Vec<AgentPluginRecord>, Option<PluginSnapshotLease>), RuntimeError> {
         if !config.enabled || !config.workspace_discovery {
@@ -201,7 +214,6 @@ impl WorkspacePlugins {
         let Some(store) = &self.store else {
             return Ok((Vec::new(), None));
         };
-        let grants = self.grants()?;
         if !grants.values().any(|grant| {
             grant.enabled
                 && !config.exclude.contains(&grant.source.name)

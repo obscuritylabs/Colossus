@@ -12,6 +12,134 @@ fn write_source(root: &Path, body: &str) {
     .expect("instructions");
 }
 
+#[tokio::test]
+async fn concurrent_source_selection_uses_one_grant_snapshot_for_filtering_and_capture() {
+    let temporary = crate::test_support::private_tempdir();
+    let root = temporary.path().canonicalize().expect("root");
+    let workspace = root.join("workspace");
+    write_source(
+        &workspace.join(".agents/plugins/review"),
+        "Local instructions.",
+    );
+    let home = colossus_home::ColossusHome::ensure_at(root.join("home")).expect("home");
+    let runtime = open(&workspace, Some(home.root()), true);
+    let global = root.join("global");
+    write_source(&global, "Global instructions.");
+    let store = runtime.plugin_store.as_ref().unwrap();
+    let installed = store.install_directory(&global, terminal_actor()).unwrap();
+    store
+        .enable("review-tools", &installed.digest, true, terminal_actor())
+        .unwrap();
+    let before_accept = runtime.plugin_catalog.workspace_plugins.grants().unwrap();
+    runtime
+        .manage_plugin(Op::AcceptWorkspace {
+            path: ".agents/plugins/review".into(),
+            digest: None,
+        })
+        .await
+        .unwrap();
+    let (old, _leases) = runtime
+        .plugin_catalog
+        .snapshot_with_grants(&before_accept)
+        .unwrap();
+    let old = old
+        .iter()
+        .filter(|record| record.installation.manifest.name == "review-tools")
+        .collect::<Vec<_>>();
+    assert_eq!(old.len(), 1);
+    assert_ne!(old[0].installation.origin, PluginOrigin::Workspace);
+    assert!(
+        old[0].skills[0]
+            .instructions
+            .contains("Global instructions")
+    );
+    let current = runtime.plugin_catalog.capture().unwrap();
+    let local = current
+        .records
+        .iter()
+        .filter(|record| record.installation.manifest.name == "review-tools")
+        .collect::<Vec<_>>();
+    assert_eq!(local.len(), 1);
+    assert_eq!(local[0].installation.origin, PluginOrigin::Workspace);
+    let composed = compose_plugins(
+        &current.records,
+        "",
+        &["review-tools/review".into()],
+        &[],
+        true,
+    )
+    .unwrap();
+    assert!(composed.instructions.contains("Local instructions"));
+    assert_eq!(
+        composed.active_plugin_roots,
+        [local[0].installation.root.clone()]
+    );
+    let before_disable = runtime.plugin_catalog.workspace_plugins.grants().unwrap();
+    runtime
+        .manage_plugin(Op::DisableWorkspace {
+            path: ".agents/plugins/review".into(),
+        })
+        .await
+        .unwrap();
+    let (revoked, _leases) = runtime
+        .plugin_catalog
+        .snapshot_with_grants(&before_disable)
+        .unwrap();
+    assert!(
+        revoked
+            .iter()
+            .all(|record| record.installation.manifest.name != "review-tools")
+    );
+}
+
+#[tokio::test]
+async fn conflicting_unaccepted_layout_keeps_the_registered_source_available() {
+    for direct in [false, true] {
+        let temporary = crate::test_support::private_tempdir();
+        let root = temporary.path().canonicalize().unwrap();
+        let workspace = root.join("workspace");
+        let selected = if direct {
+            ".agents"
+        } else {
+            ".agents/plugins/review"
+        };
+        let conflicting = if direct {
+            ".agents/plugins/extra"
+        } else {
+            ".agents"
+        };
+        write_source(&workspace.join(selected), "Accepted instructions.");
+        let home = colossus_home::ColossusHome::ensure_at(root.join("home")).unwrap();
+        let runtime = open(&workspace, Some(home.root()), true);
+        runtime
+            .manage_plugin(Op::AcceptWorkspace {
+                path: selected.into(),
+                digest: None,
+            })
+            .await
+            .unwrap();
+        write_source(&workspace.join(conflicting), "Unaccepted instructions.");
+        let composed = runtime
+            .compose_plugin_skills("", &["review-tools/review".into()], &[])
+            .unwrap();
+        assert!(composed.instructions.contains("Accepted instructions"));
+        assert!(!composed.instructions.contains("Unaccepted instructions"));
+        let inventory = runtime.plugin_catalog.live_inventory().unwrap();
+        let selected = inventory
+            .iter()
+            .filter(|entry| entry.source == selected)
+            .collect::<Vec<_>>();
+        assert_eq!(selected.len(), 1);
+        assert!(selected[0].available);
+        assert!(
+            selected[0]
+                .actions
+                .iter()
+                .any(|action| action == "workspace_disable")
+        );
+    }
+}
+
 #[test]
 fn local_connections_require_exact_snapshot_before_compiling_credentials_or_grants() {
     let temporary = crate::test_support::private_tempdir();
