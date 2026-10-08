@@ -118,6 +118,9 @@ pub struct McpServerConfig {
     /// Permit explicitly configured remote servers to omit MCP session identifiers.
     #[serde(default)]
     pub allow_stateless: bool,
+    /// Remote protocol lifecycle; automatic discovery preserves legacy compatibility.
+    #[serde(default)]
+    pub protocol_version: McpProtocolVersion,
     /// Optional OAuth 2.1 authorization-code flow.
     #[serde(default)]
     pub oauth: Option<McpOAuthConfig>,
@@ -173,6 +176,9 @@ pub struct McpServerSummary {
     /// Whether this remote server may operate without MCP session identifiers.
     #[serde(default)]
     pub allow_stateless: bool,
+    /// Selected remote protocol lifecycle.
+    #[serde(default)]
+    pub protocol_version: McpProtocolVersion,
     /// Exact tool allowlist.
     pub allowed_tools: Vec<String>,
     /// Tool names configured for research collection.
@@ -199,6 +205,9 @@ pub struct McpToolSummary {
     pub annotations: Option<McpToolAnnotations>,
     /// Valid JSON object schema for arguments.
     pub input_schema: Value,
+    /// Optional server-declared schema for successful structured results.
+    #[serde(default)]
+    pub output_schema: Option<Value>,
     /// SHA-256 of the canonical schema sent with an invocation request.
     pub schema_sha256: String,
 }
@@ -305,6 +314,9 @@ pub enum McpOperation {
         arguments: Value,
         /// Exact discovered input schema, bound into policy and permit hashing.
         input_schema: Box<Value>,
+        /// Exact discovered output schema, bound into the invocation permit.
+        #[serde(default)]
+        output_schema: Option<Box<Value>>,
         /// SHA-256 of the exact discovered input schema.
         schema_sha256: String,
     },
@@ -344,6 +356,8 @@ pub(super) struct McpEffectInput {
     pub(super) credential_headers: BTreeMap<String, McpCredentialHeaderConfig>,
     #[serde(default)]
     pub(super) allow_stateless: bool,
+    #[serde(default)]
+    pub(super) protocol_version: McpProtocolVersion,
     pub(super) oauth: Option<McpOAuthConfig>,
     pub(super) timeout_ms: Option<u64>,
     pub(super) max_output_bytes: Option<u64>,
@@ -428,6 +442,7 @@ pub(super) struct ConfiguredServer {
     pub(super) headers: BTreeMap<String, String>,
     pub(super) credential_headers: BTreeMap<String, McpCredentialHeaderConfig>,
     pub(super) allow_stateless: bool,
+    pub(super) protocol_version: McpProtocolVersion,
     pub(super) oauth: Option<McpOAuthConfig>,
     pub(super) allowed_tools: ToolAllowlist,
     pub(super) research_tools: Vec<McpResearchToolConfig>,
@@ -598,6 +613,7 @@ fn validate_stdio_server(
         || !server.headers.is_empty()
         || !server.credential_headers.is_empty()
         || server.allow_stateless
+        || server.protocol_version != McpProtocolVersion::Auto
         || server.oauth.is_some()
     {
         return Err(McpError::Invalid(format!(

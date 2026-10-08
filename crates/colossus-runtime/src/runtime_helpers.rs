@@ -376,6 +376,7 @@ pub(super) async fn invoke_mcp_tool(
             annotations: tool_spec.annotations.clone(),
             arguments,
             input_schema: Box::new(tool_spec.input_schema.clone()),
+            output_schema: tool_spec.output_schema.clone().map(Box::new),
             schema_sha256: tool_spec.schema_sha256.clone(),
         },
     )?;

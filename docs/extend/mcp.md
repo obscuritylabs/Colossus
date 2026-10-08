@@ -12,10 +12,12 @@ icon: lucide/network
 
 Configure a local stdio or remote Streamable HTTP MCP server, select explicit tools or
 opt into dynamic wildcard discovery, and invoke tools without bypassing Colossus policy.
-The native remote transport targets MCP `2025-11-25`. Stateful sessions are required
-by default; exact remote declarations may explicitly allow a server that omits
-`Mcp-Session-Id`. Legacy HTTP+SSE and `2026-07-28` release-candidate semantics are not
-enabled.
+Remote HTTP defaults to `protocolVersion: auto`: discover stable MCP `2026-07-28`,
+then fall back to `2025-11-25` initialization for older endpoints. Select either
+version explicitly in configuration or Desktop's Protocol version control. The
+2026 protocol is sessionless; 2025 requires a session ID unless `allowStateless: true`
+is explicitly configured. Stdio retains the 2025 initialization lifecycle.
+Legacy HTTP+SSE with separate endpoints is unsupported.
 
 ## Prerequisites
 
@@ -143,9 +145,10 @@ colossus --config .colossus/config.yaml mcp tools \
   --server local-docs
 ```
 
-Discovery launches the exact executable or creates a fresh initialized HTTP exchange
-and returns only selected, validated tool schemas. Stateful remote servers receive
-best-effort session cleanup; explicitly stateless servers have no session to close.
+Discovery launches the exact executable or negotiates a fresh HTTP exchange and
+collects all pages on that transport. It returns selected, validated tool schemas.
+Legacy stateful servers receive best-effort session cleanup; 2026 and explicitly
+stateless legacy servers have no session to close.
 
 ### 4. Invoke the exact tool
 

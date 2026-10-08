@@ -261,6 +261,7 @@ mod tests {
             description: Some(description.into()),
             annotations: None,
             input_schema: json!({"type": "object"}),
+            output_schema: None,
             schema_sha256: "hash".into(),
         }
     }
@@ -279,6 +280,7 @@ mod tests {
             headers: BTreeMap::new(),
             credential_headers: BTreeMap::new(),
             allow_stateless: false,
+            protocol_version: Default::default(),
             oauth: None,
             allowed_tools: vec!["*".into()],
             research_tools: Vec::new(),
@@ -353,6 +355,7 @@ mod tests {
             description: Some("Search Splunk events with SPL".into()),
             annotations: None,
             input_schema: json!({"type": "object"}),
+            output_schema: None,
             schema_sha256: "hash".into(),
         };
         assert!(

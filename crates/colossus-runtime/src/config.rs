@@ -459,6 +459,9 @@ pub struct PluginMcpServerConfig {
     pub research_tools: Vec<McpResearchToolConfig>,
     /// Permit a remote server to omit MCP session identifiers.
     pub allow_stateless: bool,
+    /// Remote MCP protocol lifecycle.
+    #[serde(default)]
+    pub protocol_version: colossus_contracts::McpProtocolVersion,
     /// Optional server timeout bounded by normal sandbox policy.
     pub timeout_ms: Option<u64>,
     /// Optional output cap bounded by normal sandbox policy.

@@ -325,6 +325,7 @@ export interface McpEditorDraft {
   headers: Record<string, string>;
   credentialHeaders: McpCredentialBindingDraft[];
   allowStateless: boolean;
+  protocolVersion?: ManagedMcpServer["protocolVersion"];
   oauthEnabled: boolean;
   oauthClientId: string;
   oauthClientSecretCredentialId: string;
@@ -457,6 +458,7 @@ const EMPTY_MCP_DRAFT: McpEditorDraft = {
   headers: {},
   credentialHeaders: [],
   allowStateless: false,
+  protocolVersion: "auto",
   oauthEnabled: false,
   oauthClientId: "",
   oauthClientSecretCredentialId: "",
@@ -7503,6 +7505,10 @@ export function McpEditor({
                     event.target.value === "streamable_http"
                       ? draft.allowStateless
                       : false,
+                  protocolVersion:
+                    event.target.value === "streamable_http"
+                      ? (draft.protocolVersion ?? "auto")
+                      : "auto",
                 })
               }
             >
@@ -7554,6 +7560,28 @@ export function McpEditor({
           ) : (
             <>
               <label className="mcp-editor-wide">
+                <span>Protocol version</span>
+                <DropdownSelect
+                  aria-label="Protocol version"
+                  value={draft.protocolVersion ?? "auto"}
+                  onChange={(event) =>
+                    onChange({
+                      ...draft,
+                      protocolVersion: event.target
+                        .value as ManagedMcpServer["protocolVersion"],
+                    })
+                  }
+                >
+                  <option value="auto">Automatic (recommended)</option>
+                  <option value="2026-07-28">2026-07-28</option>
+                  <option value="2025-11-25">2025-11-25 compatibility</option>
+                </DropdownSelect>
+                <small>
+                  Automatic tries 2026 discovery, then falls back to 2025
+                  initialization for older servers.
+                </small>
+              </label>
+              <label className="mcp-editor-wide">
                 <span>Static headers (non-secret JSON)</span>
                 <JsonFieldEditor
                   label="Static headers"
@@ -7571,20 +7599,26 @@ export function McpEditor({
                   Use credential headers below for every secret value.
                 </small>
               </label>
-              <label className="compact-switch mcp-editor-wide">
-                <SwitchInput
-                  checked={draft.allowStateless}
-                  onChange={(event) =>
-                    onChange({ ...draft, allowStateless: event.target.checked })
-                  }
-                />
-                <span>
-                  Allow stateless HTTP
-                  <small>
-                    Use only when the endpoint documents stateless MCP support.
-                  </small>
-                </span>
-              </label>
+              {draft.protocolVersion !== "2026-07-28" && (
+                <label className="compact-switch mcp-editor-wide">
+                  <SwitchInput
+                    checked={draft.allowStateless}
+                    onChange={(event) =>
+                      onChange({
+                        ...draft,
+                        allowStateless: event.target.checked,
+                      })
+                    }
+                  />
+                  <span>
+                    Allow stateless HTTP
+                    <small>
+                      Accept missing session IDs in 2025 compatibility
+                      connections. The 2026 protocol is always sessionless.
+                    </small>
+                  </span>
+                </label>
+              )}
             </>
           )}
         </div>
@@ -7981,6 +8015,7 @@ export function mcpDraft(
       }),
     ),
     allowStateless: server.allowStateless,
+    protocolVersion: server.protocolVersion ?? "auto",
     oauthEnabled: server.oauth !== null,
     oauthClientId: server.oauth?.clientId ?? "",
     oauthClientSecretCredentialId: server.oauth?.clientSecretCredentialId ?? "",
@@ -8022,6 +8057,10 @@ export function managedMcpServer(draft: McpEditorDraft): ManagedMcpServer {
         : {},
     allowStateless:
       draft.transport === "streamable_http" && draft.allowStateless,
+    protocolVersion:
+      draft.transport === "streamable_http"
+        ? (draft.protocolVersion ?? "auto")
+        : "auto",
     oauth:
       draft.transport === "streamable_http" && draft.oauthEnabled
         ? {

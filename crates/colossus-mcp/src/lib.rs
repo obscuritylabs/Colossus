@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+pub use colossus_contracts::McpProtocolVersion;
 use colossus_contracts::{
     Actor, CredentialReference, EffectRequest, ExecutionContext, FilesystemGrant,
     QuarantinedEffectResult, ResourceAuthority,
@@ -27,6 +28,10 @@ use thiserror::Error;
 
 mod diagnostics;
 mod executor;
+mod param_headers;
+mod remote;
+mod schema;
+mod wire;
 pub use diagnostics::McpDiagnosticCapture;
 use executor::resolve_path;
 pub use executor::*;

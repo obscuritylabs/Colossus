@@ -575,6 +575,22 @@ pub(super) fn validate_stdin_completion(
         ));
     }
     match completion {
+        ProcessStdinCompletion::McpExchange { request } => {
+            let method = request.get("method").and_then(Value::as_str);
+            if request.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+                || request.get("id").and_then(Value::as_i64) != Some(2)
+                || !matches!(method, Some("tools/list" | "tools/call"))
+                || serde_json::to_vec(request).map_err(adapter_failure)?.len() > 1024 * 1024
+                || (method == Some("tools/list")
+                    && request
+                        .pointer("/params/cursor")
+                        .is_some_and(|v| !v.is_null()))
+            {
+                return Err(adapter_failure(
+                    "MCP exchange request is invalid or exceeds its bound",
+                ));
+            }
+        }
         ProcessStdinCompletion::JsonRpcResponse {
             response_id,
             abort_error_ids,

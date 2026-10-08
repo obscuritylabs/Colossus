@@ -965,7 +965,20 @@ describe("ManagedSettingsPane", () => {
     });
 
     expect(draft.allowStateless).toBe(true);
+    expect(draft.protocolVersion).toBe("auto");
     expect(managedMcpServer(draft).allowStateless).toBe(true);
+    for (const protocolVersion of [
+      "auto",
+      "2026-07-28",
+      "2025-11-25",
+    ] as const) {
+      const saved = managedMcpServer({ ...draft, protocolVersion });
+      expect(saved.protocolVersion).toBe(protocolVersion);
+      expect(
+        managedMcpServer({ ...draft, transport: "stdio", protocolVersion })
+          .protocolVersion,
+      ).toBe("auto");
+    }
     expect(
       managedMcpServer({ ...draft, transport: "stdio" }).allowStateless,
     ).toBe(false);
@@ -1184,7 +1197,10 @@ describe("ManagedSettingsPane", () => {
 
     const draft = mcpDraft(entry);
 
-    expect(managedMcpServer(draft)).toEqual(server);
+    expect(managedMcpServer(draft)).toEqual({
+      ...server,
+      protocolVersion: "auto",
+    });
     expect(draft.argsText).toContain(server.args[0] ?? "");
   });
 

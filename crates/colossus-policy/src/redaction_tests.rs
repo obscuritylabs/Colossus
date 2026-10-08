@@ -96,6 +96,7 @@ fn mcp_schema_property_names_survive_preparation_while_argument_secrets_are_reda
         let mut request = mcp_call_request("streamable_http", "https://example.test/mcp", None);
         request.action = action.into();
         request.content["operation"]["input_schema"] = schema.clone();
+        request.content["operation"]["output_schema"] = schema.clone();
         request.content["operation"]["schema_sha256"] = json!(crate::sha256_hex(
             &crate::canonical_bytes(&schema).expect("schema bytes")
         ));
@@ -108,6 +109,7 @@ fn mcp_schema_property_names_survive_preparation_while_argument_secrets_are_reda
             .prepare(&request)
             .expect("prepare MCP request");
         assert_eq!(prepared.content["operation"]["input_schema"], schema);
+        assert_eq!(prepared.content["operation"]["output_schema"], schema);
         assert_eq!(
             prepared.content["operation"]["schema_sha256"],
             request.content["operation"]["schema_sha256"]

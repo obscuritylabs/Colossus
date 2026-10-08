@@ -99,6 +99,9 @@ pub struct McpDiagnosticConfiguration {
     pub oauth: bool,
     /// Whether a server without session IDs is accepted.
     pub allow_stateless: bool,
+    /// Selected remote lifecycle, without endpoint or credential values.
+    #[serde(default)]
+    pub protocol_version: crate::McpProtocolVersion,
     /// Configured server deadline in milliseconds; policy may tighten it.
     pub configured_timeout_ms: Option<u64>,
 }
