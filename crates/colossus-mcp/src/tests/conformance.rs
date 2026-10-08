@@ -7,6 +7,8 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
+mod cleanup;
+
 async fn request(stream: &mut TcpStream) -> (BTreeMap<String, String>, Value) {
     let mut bytes = Vec::new();
     let end = loop {

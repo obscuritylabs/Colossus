@@ -162,6 +162,10 @@ where
         Ok(RemoteOperationResult::Tools(inventory))
     }
     .await;
-    let _ = service.close_with_timeout(Duration::from_millis(500)).await;
+    // A confirmed response must not become an unknown outcome because a
+    // best-effort legacy session DELETE outlives the operation deadline.
+    tokio::spawn(async move {
+        let _ = service.close_with_timeout(Duration::from_millis(500)).await;
+    });
     result
 }
