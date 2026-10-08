@@ -282,7 +282,11 @@ merging; a conflict-free merge alone does not prove the combined result was test
 
 A release tag must be annotated, match either `vX.Y.Z` or `vX.Y.Z-preview.N` with
 `N > 0`, point to a commit contained in `main`, and match both the workspace version and
-changelog heading. Tag pushes run local release-readiness verification and exactly six
+prepared changelog heading. Release validation automatically generates the changelog
+and draft notes from the exact source commit and retains both in the `release-history`
+Actions artifact. The generator uses the previous published stable release and
+preserves curated highlights; see [release preparation](releasing.md#generate-the-changelog-and-release-notes)
+for updating the checked-in history. Tag pushes run local release-readiness verification and exactly six
 native CLI targets. Each CLI target combines its security acceptance, locked release
 build, archive and checksum generation, clean installation, offline echo/audit, and
 signed-bundle smoke.

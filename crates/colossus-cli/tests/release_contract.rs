@@ -105,9 +105,11 @@ fn tag_validation_and_draft_publication_fail_closed() {
         "git merge-base --is-ancestor",
         "workspace_version",
         "grep -F \"## [$version]\" CHANGELOG.md",
+        "node scripts/ci/release-notes.mjs",
+        "--tag \"$RELEASE_TAG\" --source \"$SOURCE_COMMIT\"",
         "publish_draft=false",
         "release_channel=validation_only",
-        "--draft --verify-tag --generate-notes",
+        "--draft --verify-tag --notes-file \"$RELEASE_NOTES_FILE\"",
         "refusing to retain unexpected draft asset",
         "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 45",
         "expected_assets=42",
@@ -137,6 +139,19 @@ fn tag_validation_and_draft_publication_fail_closed() {
     );
     named_step(draft, "Check out the exact release verifier");
     named_step(draft, "Verify complete release asset set");
+    named_step(
+        job(jobs, "validate"),
+        "Generate changelog and release notes",
+    );
+    let history = named_step(draft, "Download generated release history");
+    assert_eq!(
+        field(
+            mapping(field(history, "with"), "release history artifact"),
+            "name"
+        )
+        .as_str(),
+        Some("release-history")
+    );
 }
 
 #[test]
@@ -201,7 +216,8 @@ fn developer_preview_is_explicitly_ad_hoc_labeled_and_prerelease() {
         "tag_channel=developer_preview",
         "COLOSSUS_DESKTOP_RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}",
         "Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip",
-        "--draft --prerelease --verify-tag --generate-notes",
+        "--draft --prerelease --verify-tag",
+        "--notes-file \"$preview_notes_file\"",
         "Developer Preview (Unnotarized)",
         "ad-hoc signed and not notarized by Apple",
         "preview_checksum=\"Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip.sha256\"",
