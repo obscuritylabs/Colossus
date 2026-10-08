@@ -114,6 +114,19 @@ colossus -w . run \
   "Reply with exactly: connected"
 ```
 
+### 5. Attach PDFs when supported
+
+A compatible endpoint must implement `/files` multipart uploads with
+`purpose=user_data`, return a file `id`, and accept Chat Completions content parts
+of the form `{"type":"file","file":{"file_id":"..."}}`. Its model must support PDF
+text and page images; enable `imageInputs: on` for that model. Basic Chat Completions
+compatibility alone does not guarantee PDF support.
+
+Use `colossus -w . run --attach report.pdf "Summarize this report"` or Desktop's
+attachment picker. Colossus uses the same bearer credential and configured origin
+for uploads, generation, and best-effort file deletion. See the
+[PDF bounds and upload lifecycle](openai-api.md#5-attach-a-pdf).
+
 ## Expected result
 
 The route names `compatible`, the catalog and generation diagnostics succeed with the

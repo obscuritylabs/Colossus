@@ -195,7 +195,7 @@ fn responses_continuation_preserves_tool_ids_without_duplicate_assistant_calls()
         max_output_tokens: None,
     };
     let names = ProviderToolNames::default();
-    let images = ProviderResolvedImages::default();
+    let images = ProviderResolvedMedia::default();
     let payload = responses_payload_with_images(
         &request,
         ProviderKind::OpenAiResponses,

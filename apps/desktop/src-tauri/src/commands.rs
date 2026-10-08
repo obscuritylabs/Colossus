@@ -44,7 +44,7 @@ pub(crate) async fn choose_run_attachment(
     let media_type = attachment_media_type(&path).ok_or_else(|| {
         CommandErrorDto::invalid(
             "attachment",
-            "Supported attachments are PNG, JPEG, static WebP, UTF-8 text, and source code.",
+            "Supported attachments are PDF, PNG, JPEG, static WebP, UTF-8 text, and source code.",
         )
     })?;
     let file = File::open(&path).map_err(|_| {
@@ -84,6 +84,13 @@ pub(crate) async fn choose_run_attachment(
                 )
             },
         )?;
+    } else if media_type == "application/pdf" {
+        colossus_media::validate_pdf_bytes(&file_name, &bytes).map_err(|_| {
+            CommandErrorDto::invalid(
+                "attachment",
+                "PDF attachments must have a valid PDF envelope and be no larger than 16 MiB.",
+            )
+        })?;
     } else if std::str::from_utf8(&bytes).is_err() {
         return Err(CommandErrorDto::invalid(
             "attachment",
@@ -92,6 +99,18 @@ pub(crate) async fn choose_run_attachment(
     }
     let idempotency_key = attachment_idempotency_key(&file_name, media_type, &bytes)?;
     let target = target(&state, &target_id).await?;
+    if media_type == "application/pdf"
+        && !target
+            .target
+            .client
+            .capabilities()
+            .contains("attachments.pdf_input")
+    {
+        return Err(CommandErrorDto::invalid(
+            "attachment",
+            "This runtime does not support PDF attachments. Update the runtime to attach a PDF.",
+        ));
+    }
     let _unary_slot = unary_slot(&target.target)?;
     let artifact = target
         .target
@@ -173,6 +192,7 @@ fn attachment_media_type(path: &Path) -> Option<&'static str> {
         Some("png") => Some("image/png"),
         Some("jpg" | "jpeg") => Some("image/jpeg"),
         Some("webp") => Some("image/webp"),
+        Some("pdf") => Some("application/pdf"),
         Some(
             "txt" | "md" | "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "java" | "c" | "h"
             | "cpp" | "hpp" | "cs" | "rb" | "php" | "sh" | "zsh" | "fish" | "css" | "scss" | "html"

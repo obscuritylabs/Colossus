@@ -160,6 +160,12 @@ fn user_content_document(content: &ModelContent) -> PresentationDocument {
                         image_index += 1;
                         document.push(image_metadata_block(image_index, image));
                     }
+                    ModelContentPart::File { file } => {
+                        document.push(PresentationBlock::Text(format!(
+                            "PDF attachment: {} ({} bytes)",
+                            file.file_name, file.size_bytes
+                        )));
+                    }
                     ModelContentPart::Text { .. } => {}
                 }
             }

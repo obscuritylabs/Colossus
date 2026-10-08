@@ -1,9 +1,10 @@
 use crate::validation::{ValidatedImage, normalize_media_type, validate_image_bytes};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use colossus_contracts::{ModelImageDetail, ModelImageReference};
+use colossus_contracts::{ModelFileReference, ModelImageDetail, ModelImageReference};
 use colossus_ports::{
-    EventJournal, ResolvedRunInputImage, RunInputMediaError, RunInputMediaResolver,
+    EventJournal, ResolvedRunInputFile, ResolvedRunInputImage, RunInputMediaError,
+    RunInputMediaResolver,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -35,6 +36,16 @@ impl JournalRunInputMediaResolver {
         )?;
         metadata_matches(&stored.artifact, &validated)?;
         Ok(reference_from(stored.artifact, validated))
+    }
+
+    /// Authorize ownership and derive a durable metadata-only PDF reference.
+    pub fn file_reference(
+        &self,
+        owner_id: &str,
+        artifact_id: &str,
+    ) -> Result<ModelFileReference, RunInputMediaError> {
+        let stored = self.stored(owner_id, artifact_id)?;
+        pdf_reference(&stored)
     }
 
     fn stored(
@@ -93,6 +104,21 @@ impl JournalRunInputMediaResolver {
 
 #[async_trait]
 impl RunInputMediaResolver for JournalRunInputMediaResolver {
+    async fn resolve_file(
+        &self,
+        reference: &ModelFileReference,
+    ) -> Result<ResolvedRunInputFile, RunInputMediaError> {
+        let stored = self.stored_without_owner(&reference.artifact_id)?;
+        let exact = pdf_reference(&stored)?;
+        if &exact != reference {
+            return Err(RunInputMediaError::Unavailable);
+        }
+        Ok(ResolvedRunInputFile {
+            reference: exact,
+            bytes: stored.bytes,
+        })
+    }
+
     async fn resolve_image(
         &self,
         reference: &ModelImageReference,
@@ -113,6 +139,24 @@ impl RunInputMediaResolver for JournalRunInputMediaResolver {
             bytes: stored.bytes,
         })
     }
+}
+
+fn pdf_reference(stored: &DecodedStoredArtifact) -> Result<ModelFileReference, RunInputMediaError> {
+    let (size_bytes, sha256) =
+        crate::validate_pdf_bytes(&stored.artifact.file_name, &stored.bytes)?;
+    if stored.artifact.media_type != "application/pdf"
+        || stored.artifact.size_bytes != size_bytes
+        || stored.artifact.sha256 != sha256
+    {
+        return Err(RunInputMediaError::Unavailable);
+    }
+    Ok(ModelFileReference {
+        artifact_id: stored.artifact.artifact_id.clone(),
+        file_name: stored.artifact.file_name.clone(),
+        media_type: "application/pdf".into(),
+        size_bytes,
+        sha256,
+    })
 }
 
 fn reference_from(

@@ -64,7 +64,7 @@ sandbox:
 ```
 <!-- provider-guide-config:end -->
 
-Colossus appends `/responses` and `/models` to the API prefix. Keep `/v1` in `baseUrl`.
+Colossus appends `/responses`, `/models`, and (for PDFs) `/files` to the API prefix. Keep `/v1` in `baseUrl`.
 The shown exact `https://api.openai.com` sandbox grant applies under an isolating
 boundary; acknowledged full access needs no duplicate grant, and adding one does not
 narrow ambient authority. Set model limits
@@ -86,6 +86,31 @@ colossus -w . models doctor openai
 colossus -w . run \
   "Reply with exactly: connected"
 ```
+
+### 5. Attach a PDF
+
+For a model that supports PDF text and page images, enable `imageInputs: on` under
+its model profile's `capabilities`. Then attach a document with the CLI or Desktop's
+attachment picker:
+
+```bash
+colossus -w . run --attach report.pdf "Summarize this report"
+```
+
+Colossus uploads PDFs through the provider's Files API with `purpose=user_data` and
+sends the returned ID as a Responses `input_file`. PDF parsing runs at the provider,
+so Windows needs no local PDF reader. Each PDF is limited to 16 MiB; one provider
+context accepts four PDFs totaling at most 32 MiB. Research mode and Codex/ChatGPT
+subscription routes do not accept PDF attachments.
+
+Context preparation reserves a heuristic budget from PDF size. The provider calculates
+the actual cost of extracted text and page images and can reject a document that exceeds
+its context or page limits.
+
+Uploads are scoped to one generation and deleted afterward on a best-effort basis.
+Later turns upload retained attachments again. Cancellation, process termination, or
+a failed cleanup can leave a file at the provider; use its file-management controls
+to remove leftovers. Provider charges and its own PDF/page limits still apply.
 
 ## Expected result
 

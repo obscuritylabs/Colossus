@@ -257,7 +257,7 @@ model metadata Colossus needs to shape requests safely:
 | `reasoningEffort` | Optional exact effort: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra` |
 | `capabilities.toolCalls` | Off/Auto/On preference for tool definitions and history |
 | `capabilities.streaming` | Off/Auto/On preference for streamed transport |
-| `capabilities.imageInputs` | Off/Auto/On preference for verified images |
+| `capabilities.imageInputs` | Off/Auto/On preference for verified images and PDF page images |
 | `capabilities.serverCompaction` | Off/Auto/On preference for Responses compaction |
 | `capabilities.declared` | Optional boolean model-card declarations, separate from saved modes |
 

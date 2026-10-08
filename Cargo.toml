@@ -121,7 +121,7 @@ rappct = "=0.13.3"
 redb = "4.1.0"
 regex = "1.13.0"
 rmcp = { version = "=3.5.1", default-features = false }
-reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls", "stream", "multipart"] }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "macros"] }
 ratatui-image = { version = "=11.0.6", default-features = false, features = ["crossterm"] }
 image = { version = "0.25.9", default-features = false, features = ["jpeg", "png", "webp"] }

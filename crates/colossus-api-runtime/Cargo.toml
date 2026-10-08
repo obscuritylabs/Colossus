@@ -14,6 +14,7 @@ base64.workspace = true
 colossus-api.workspace = true
 colossus-agent.workspace = true
 colossus-contracts.workspace = true
+colossus-media.workspace = true
 colossus-policy.workspace = true
 colossus-ports.workspace = true
 colossus-projection.workspace = true

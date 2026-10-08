@@ -204,11 +204,33 @@ impl AgentService {
                 .checked_add(image.size_bytes)
                 .ok_or_else(|| AgentError::Configuration("image input size overflowed".into()))
         })?;
-        if image_count > 0 && !route.capabilities.image_inputs {
+        let file_count = prompt.files().count();
+        if (image_count > 0 || file_count > 0) && !route.capabilities.image_inputs {
             return Err(AgentError::Configuration(format!(
                 "model profile {} does not enable image inputs",
                 route.model_profile
             )));
+        }
+        if file_count > 0
+            && !matches!(
+                route.provider.as_str(),
+                "openai_responses" | "openai_compatible"
+            )
+        {
+            return Err(AgentError::Configuration(
+                "PDF inputs require a Responses or Chat Completions provider".into(),
+            ));
+        }
+        let file_bytes = prompt
+            .files()
+            .try_fold(0_u64, |total, file| total.checked_add(file.size_bytes));
+        if file_count > 4
+            || prompt.files().any(|file| file.size_bytes > 16 * 1_048_576)
+            || file_bytes.is_none_or(|total| total > 32 * 1_048_576)
+        {
+            return Err(AgentError::Configuration(
+                "PDF inputs exceed the 4-file, 16 MiB-per-file, or 32 MiB-combined bound".into(),
+            ));
         }
         if image_count > 0 && route.provider == "echo" {
             return Err(AgentError::Configuration(

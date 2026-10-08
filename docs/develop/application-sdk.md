@@ -494,7 +494,11 @@ artifact IDs, never client or server filesystem paths.
 `attachments.image_input` is advertised separately from the existing text-attachment
 capability. SDK `ContentPart::Artifact` calls remain unchanged and caller ordering is
 preserved, but servers reject image artifacts unless the selected model profile has
-explicitly enabled image inputs.
+explicitly enabled image inputs. `attachments.pdf_input` advertises PDF attachment
+handling through the same artifact API. PDF content preserves caller ordering and
+requires image inputs plus a Responses or Chat Completions route whose endpoint
+implements the Files API. Exact bytes are uploaded only inside the authorized
+provider adapter; remote file IDs never enter durable model history.
 
 Public v1alpha1 runs cannot select plugin skills. The removed `selected_skills` field
 numbers and names are reserved, and a streaming protobuf wire guard rejects those fields

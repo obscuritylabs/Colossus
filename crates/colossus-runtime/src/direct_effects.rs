@@ -1,6 +1,17 @@
 use super::*;
 
 impl Runtime {
+    /// Resolve an owner-authorized encrypted PDF artifact into durable file metadata.
+    pub fn run_input_file_reference(
+        &self,
+        owner_id: &str,
+        artifact_id: &str,
+    ) -> Result<colossus_contracts::ModelFileReference, RuntimeError> {
+        self.run_input_media
+            .file_reference(owner_id, artifact_id)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
     /// Validate exact local bytes with the shared bounded run-input image contract.
     pub fn validate_run_input_image(
         &self,

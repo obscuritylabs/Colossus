@@ -1,7 +1,13 @@
 //! Bounded validation and late resolution for encrypted run-input images.
 
+mod pdf;
 mod resolver;
 mod validation;
+
+pub use pdf::{
+    MAX_COMBINED_PDF_BYTES, MAX_PDF_BYTES, MAX_PDF_COUNT, validate_pdf_bytes,
+    validate_pdf_references,
+};
 
 pub use resolver::JournalRunInputMediaResolver;
 pub use validation::{

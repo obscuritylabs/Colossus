@@ -154,6 +154,42 @@ fn image_capability_echo_and_bounds_fail_at_the_pre_effect_route_gate() {
             .expect_err("Echo gate");
     assert!(error.to_string().contains("Echo provider"));
 
+    let mut pdf_request = request.clone();
+    pdf_request.messages[0].content = ModelContent::Parts(vec![ModelContentPart::File {
+        file: colossus_contracts::ModelFileReference {
+            artifact_id: "artifact-pdf".into(),
+            file_name: "report.pdf".into(),
+            media_type: "application/pdf".into(),
+            size_bytes: 1024,
+            sha256: "a".repeat(64),
+        },
+    }]);
+    for kind in [
+        ProviderKind::OpenAiResponses,
+        ProviderKind::OpenAiCompatible,
+    ] {
+        super::provider_gateway::validate_route_image_inputs(&route, kind, &pdf_request)
+            .expect("PDF route");
+    }
+    assert!(
+        super::provider_gateway::validate_route_image_inputs(
+            &route,
+            ProviderKind::OpenAiCodex,
+            &pdf_request
+        )
+        .is_err()
+    );
+    route.capabilities.image_inputs = false;
+    assert!(
+        super::provider_gateway::validate_route_image_inputs(
+            &route,
+            ProviderKind::OpenAiResponses,
+            &pdf_request
+        )
+        .is_err()
+    );
+    route.capabilities.image_inputs = true;
+
     let mut oversized = request;
     let ModelContent::Parts(parts) = &mut oversized.messages[0].content else {
         panic!("multipart image request");
