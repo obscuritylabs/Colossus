@@ -93,6 +93,14 @@ impl PluginStore {
         reject_managed_name(&candidate.source.name)?;
         self.with_write(|repository| {
             let mut grants = repository.workspace_grants()?;
+            // Reaccepting a renamed source replaces its prior path binding. Keep
+            // this retirement in the proposed map until publication succeeds.
+            grants.retain(|path, grant| {
+                path == &candidate.source.path
+                    || grant.source.name != candidate.source.name
+                    || grant.source.identity_version != candidate.source.identity_version
+                    || grant.source.identity_sha256 != candidate.source.identity_sha256
+            });
             if !grants.contains_key(&candidate.source.path) && grants.len() >= MAX_WORKSPACE_PLUGINS
             {
                 // Disabled registrations are discovery hints, not source permission.

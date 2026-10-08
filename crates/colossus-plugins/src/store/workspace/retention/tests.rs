@@ -3,6 +3,77 @@ use crate::tests::{actor, write_plugin};
 mod bounded_reads;
 
 #[test]
+fn reaccepting_case_renames_replaces_the_source_after_successful_publication() {
+    let temporary = tempfile::tempdir().expect("root");
+    let root = temporary.path().canonicalize().expect("root");
+    let parent = root.join(".agents/plugins");
+    write_plugin(&parent.join("Review"));
+    let first = capture_workspace_plugin(&root, Path::new(".agents/plugins/Review")).unwrap();
+    let store = PluginStore::new(root.join("store")).unwrap();
+    store
+        .accept_workspace_plugin(&first, &BTreeSet::new(), actor())
+        .unwrap();
+    let mut previous_path = parent.join("Review");
+    for (index, name) in ["review", "REVIEW", "Review"].iter().enumerate() {
+        // The intermediate spelling also exercises platforms where a direct
+        // case-only rename is not supported by the filesystem operation.
+        fs::rename(&previous_path, parent.join("rename-in-progress")).unwrap();
+        let selected = parent.join(name);
+        fs::rename(parent.join("rename-in-progress"), &selected).unwrap();
+        fs::write(
+            selected.join("skills/review/SKILL.md"),
+            format!("---\nname: review\ndescription: Renamed review\n---\nInstructions {index}\n"),
+        )
+        .unwrap();
+        let path = format!(".agents/plugins/{name}");
+        let candidate = capture_workspace_plugin(&root, Path::new(&path)).unwrap();
+        assert_eq!(
+            candidate.source.identity_sha256,
+            first.source.identity_sha256
+        );
+        let before = serde_json::to_value(store.workspace_plugin_grants().unwrap()).unwrap();
+        let blocked = store.root().join("content/sha256").join(
+            candidate
+                .artifact
+                .manifest_digest
+                .strip_prefix("sha256:")
+                .unwrap(),
+        );
+        fs::write(&blocked, "publication blocked").unwrap();
+        assert!(
+            store
+                .accept_workspace_plugin(&candidate, &BTreeSet::new(), actor())
+                .is_err()
+        );
+        assert_eq!(
+            serde_json::to_value(store.workspace_plugin_grants().unwrap()).unwrap(),
+            before
+        );
+        fs::remove_file(blocked).unwrap();
+        store
+            .accept_workspace_plugin(&candidate, &BTreeSet::new(), actor())
+            .unwrap();
+        let grants = store.workspace_plugin_grants().unwrap();
+        assert_eq!(grants.len(), 1);
+        assert!(grants[&path].enabled);
+        let registered = grants.keys().cloned().collect::<Vec<_>>();
+        let discovered = crate::discover_workspace_plugins(&root, &registered);
+        assert!(discovered.issues.is_empty());
+        assert_eq!(discovered.candidates.len(), 1);
+        assert_eq!(discovered.candidates[0].source.path, path);
+        store
+            .with_write(|repository| {
+                let cache = repository.workspace_cache()?.unwrap();
+                assert_eq!(cache.current.len(), 1);
+                assert!(cache.current.contains_key(&path));
+                Ok(())
+            })
+            .unwrap();
+        previous_path = selected;
+    }
+}
+
+#[test]
 fn source_churn_keeps_committed_grants_and_current_cache_mappings_bounded() {
     let temporary = tempfile::tempdir().expect("root");
     let root = temporary.path().canonicalize().expect("root");
