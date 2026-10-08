@@ -53,7 +53,17 @@ impl EventSourcedPluginRepository {
         grants: &BTreeMap<String, WorkspacePluginGrant>,
         actor: Actor,
     ) -> Result<(), StoreError> {
-        self.journal.append(NewEvent {
+        self.journal
+            .append(self.workspace_grants_event(grants, actor)?)?;
+        Ok(())
+    }
+
+    fn workspace_grants_event(
+        &self,
+        grants: &BTreeMap<String, WorkspacePluginGrant>,
+        actor: Actor,
+    ) -> Result<NewEvent, StoreError> {
+        Ok(NewEvent {
             event_version: 1,
             stream_id: SOURCES_STREAM.into(),
             expected_stream_version: self
@@ -69,8 +79,7 @@ impl EventSourcedPluginRepository {
                 ..ExecutionContext::default()
             },
             payload: serde_json::to_value(grants).map_err(adapter)?,
-        })?;
-        Ok(())
+        })
     }
 }
 
@@ -89,58 +98,73 @@ impl PluginStore {
         recoverable: &BTreeSet<String>,
         actor: Actor,
     ) -> Result<PluginInstallation, StoreError> {
+        self.with_write(|repository| {
+            self.accept_workspace_plugin_locked(repository, candidate, recoverable, actor)
+        })
+    }
+
+    fn accept_workspace_plugin_locked(
+        &self,
+        repository: &EventSourcedPluginRepository,
+        candidate: &WorkspacePluginCandidate,
+        recoverable: &BTreeSet<String>,
+        actor: Actor,
+    ) -> Result<PluginInstallation, StoreError> {
         candidate.revalidate()?;
         reject_managed_name(&candidate.source.name)?;
-        self.with_write(|repository| {
-            let mut grants = repository.workspace_grants()?;
-            // Reaccepting a renamed source replaces its prior path binding. Keep
-            // this retirement in the proposed map until publication succeeds.
-            grants.retain(|path, grant| {
-                path == &candidate.source.path
-                    || grant.source.identity_version != candidate.source.identity_version
-                    || grant.source.identity_sha256 != candidate.source.identity_sha256
-            });
-            if !grants.contains_key(&candidate.source.path) && grants.len() >= MAX_WORKSPACE_PLUGINS
-            {
-                // Disabled registrations are discovery hints, not source permission.
-                // Replacing the selected source for this name also releases its slot.
-                // Keep selected sources for other names, including missing directories,
-                // so capacity pressure cannot silently restore a global fallback.
-                let retired = grants
-                    .iter()
-                    .find(|(_, grant)| !grant.enabled || grant.source.name == candidate.source.name)
-                    .map(|(path, _)| path.clone());
-                if let Some(path) = retired {
-                    grants.remove(&path);
-                } else {
-                    return Err(adapter(
-                        "workspace source catalog holds 128 selected sources; disable a source before accepting another",
-                    ));
-                }
+        let mut grants = repository.workspace_grants()?;
+        // Reaccepting a renamed source replaces its prior path binding. Keep
+        // this retirement in the proposed map until publication succeeds.
+        grants.retain(|path, grant| {
+            path == &candidate.source.path
+                || grant.source.identity_version != candidate.source.identity_version
+                || grant.source.identity_sha256 != candidate.source.identity_sha256
+        });
+        if !grants.contains_key(&candidate.source.path) && grants.len() >= MAX_WORKSPACE_PLUGINS {
+            // Disabled registrations are discovery hints, not source permission.
+            // Replacing the selected source for this name also releases its slot.
+            // Keep selected sources for other names, including missing directories,
+            // so capacity pressure cannot silently restore a global fallback.
+            let retired = grants
+                .iter()
+                .find(|(_, grant)| !grant.enabled || grant.source.name == candidate.source.name)
+                .map(|(path, _)| path.clone());
+            if let Some(path) = retired {
+                grants.remove(&path);
+            } else {
+                return Err(adapter(
+                    "workspace source catalog holds 128 selected sources; disable a source before accepting another",
+                ));
             }
-            // Publication and its disabled receipt must succeed before source permission
-            // changes. A failed capture preserves the previous selected source.
-            let installation =
-                self.cache_workspace_plugin(repository, candidate, &grants, recoverable, actor.clone())?;
-            // One chosen local source per portable name. Acceptance is an explicit
-            // workspace selection; it does not alter the global active digest.
-            for grant in grants
-                .values_mut()
-                .filter(|grant| grant.source.name == candidate.source.name)
-            {
-                grant.enabled = false;
-            }
-            grants.insert(
-                candidate.source.path.clone(),
-                WorkspacePluginGrant {
-                    source: candidate.source.clone(),
-                    enabled: true,
-                },
-            );
-            candidate.revalidate()?;
-            repository.append_workspace_grants(&grants, actor)?;
-            Ok(installation)
-        })
+        }
+        // Publish immutable bytes before committing the receipt, cache selection,
+        // and source permission together. Failure preserves the selected source.
+        let (installation, mut events) = self.stage_workspace_snapshot(
+            repository,
+            candidate,
+            &grants,
+            recoverable,
+            actor.clone(),
+        )?;
+        // One chosen local source per portable name. Acceptance is an explicit
+        // workspace selection; it does not alter the global active digest.
+        for grant in grants
+            .values_mut()
+            .filter(|grant| grant.source.name == candidate.source.name)
+        {
+            grant.enabled = false;
+        }
+        grants.insert(
+            candidate.source.path.clone(),
+            WorkspacePluginGrant {
+                source: candidate.source.clone(),
+                enabled: true,
+            },
+        );
+        candidate.revalidate()?;
+        events.push(repository.workspace_grants_event(&grants, actor)?);
+        repository.journal.append_batch(events)?;
+        Ok(installation)
     }
 
     /// Revoke subsequent use of a source, preserving leased content and writable data.
@@ -176,21 +200,24 @@ impl PluginStore {
                     "workspace plugin source requires explicit acceptance",
                 ));
             }
-            let installation =
-                self.cache_workspace_plugin(repository, candidate, &grants, recoverable, actor)?;
+            let (installation, events) =
+                self.stage_workspace_snapshot(repository, candidate, &grants, recoverable, actor)?;
+            if !events.is_empty() {
+                repository.journal.append_batch(events)?;
+            }
             let lease = self.lease_digests(&BTreeSet::from([installation.digest.clone()]))?;
             Ok((installation, lease))
         })
     }
 
-    fn cache_workspace_plugin(
+    fn stage_workspace_snapshot(
         &self,
         repository: &EventSourcedPluginRepository,
         candidate: &WorkspacePluginCandidate,
         grants: &BTreeMap<String, WorkspacePluginGrant>,
         recoverable: &BTreeSet<String>,
         actor: Actor,
-    ) -> Result<PluginInstallation, StoreError> {
+    ) -> Result<(PluginInstallation, Vec<NewEvent>), StoreError> {
         let cache = self.prepare_workspace_cache(
             repository,
             candidate,
@@ -231,14 +258,21 @@ impl PluginStore {
             installation.installed_at = previous.installed_at.clone();
         }
         candidate.revalidate()?;
+        let mut events = Vec::new();
         if previous
             .as_ref()
             .is_none_or(|value| value.source != installation.source)
         {
-            repository.append_installation(&installation, actor.clone(), "plugin.installed.v1")?;
+            events.push(repository.installation_event(
+                &installation,
+                actor.clone(),
+                "plugin.installed.v1",
+            )?);
         }
-        repository.append_workspace_cache(&cache, actor)?;
-        Ok(installation)
+        if let Some(event) = repository.workspace_cache_event(&cache, actor)? {
+            events.push(event);
+        }
+        Ok((installation, events))
     }
 }
 

@@ -58,10 +58,21 @@ impl EventSourcedPluginRepository {
         cache: &WorkspaceCache,
         actor: Actor,
     ) -> Result<(), StoreError> {
-        if self.workspace_cache()?.as_ref() == Some(cache) {
-            return Ok(());
+        if let Some(event) = self.workspace_cache_event(cache, actor)? {
+            self.journal.append(event)?;
         }
-        self.journal.append(NewEvent {
+        Ok(())
+    }
+
+    pub(super) fn workspace_cache_event(
+        &self,
+        cache: &WorkspaceCache,
+        actor: Actor,
+    ) -> Result<Option<NewEvent>, StoreError> {
+        if self.workspace_cache()?.as_ref() == Some(cache) {
+            return Ok(None);
+        }
+        Ok(Some(NewEvent {
             event_version: 1,
             stream_id: CACHE_STREAM.into(),
             expected_stream_version: self
@@ -77,8 +88,7 @@ impl EventSourcedPluginRepository {
                 ..ExecutionContext::default()
             },
             payload: serde_json::to_value(cache).map_err(adapter)?,
-        })?;
-        Ok(())
+        }))
     }
 }
 

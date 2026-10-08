@@ -1,6 +1,7 @@
 use super::*;
 use crate::tests::{actor, write_plugin};
 mod bounded_reads;
+mod commit_failure;
 
 #[test]
 fn reaccepting_case_renames_replaces_the_source_after_successful_publication() {

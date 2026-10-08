@@ -154,6 +154,17 @@ impl EventSourcedPluginRepository {
         actor: Actor,
         event_type: &str,
     ) -> Result<(), StoreError> {
+        self.journal
+            .append(self.installation_event(installation, actor, event_type)?)?;
+        Ok(())
+    }
+
+    fn installation_event(
+        &self,
+        installation: &PluginInstallation,
+        actor: Actor,
+        event_type: &str,
+    ) -> Result<colossus_contracts::NewEvent, StoreError> {
         let stream_id =
             Self::installation_stream(&installation.manifest.name, &installation.digest)?;
         let expected_stream_version = self
@@ -161,7 +172,7 @@ impl EventSourcedPluginRepository {
             .read_stream_backwards(&stream_id, None, 1)?
             .first()
             .map_or(0, |event| event.stream_version);
-        self.journal.append(colossus_contracts::NewEvent {
+        Ok(colossus_contracts::NewEvent {
             event_version: 1,
             stream_id,
             expected_stream_version,
@@ -173,8 +184,7 @@ impl EventSourcedPluginRepository {
                 ..colossus_contracts::ExecutionContext::default()
             },
             payload: serde_json::to_value(installation).map_err(adapter)?,
-        })?;
-        Ok(())
+        })
     }
 
     fn append_active(
