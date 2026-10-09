@@ -179,6 +179,7 @@ dependencies = [
  "colossus-domain",
  "serde",
  "serde_json",
+ "url",
  "zeroize",
 ]
 

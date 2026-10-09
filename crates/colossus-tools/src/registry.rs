@@ -76,6 +76,19 @@ impl ToolRegistry for StaticToolRegistry {
                 message: format!("registered schema is invalid: {error}"),
             }
         })?;
+        // Schema diagnostics can contain the rejected literal. Browser arguments
+        // may contain credential-bearing URLs or mistaken protected-field input;
+        // none of those values belong in model observations, journals, or logs.
+        if call.name.starts_with("browser.") {
+            return if validator.is_valid(&call.arguments) {
+                Ok(spec.clone())
+            } else {
+                Err(ToolError::InvalidArguments {
+                    tool: call.name.clone(),
+                    message: "browser arguments violate the bounded typed browser schema".into(),
+                })
+            };
+        }
         let errors = validator
             .iter_errors(&call.arguments)
             .take(8)

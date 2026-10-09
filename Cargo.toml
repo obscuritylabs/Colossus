@@ -9,6 +9,7 @@ members = [
     "xtask",
     "crates/colossus-domain",
     "crates/colossus-contracts",
+    "crates/colossus-browser",
     "crates/colossus-credentials",
     "crates/colossus-api-proto",
     "crates/colossus-api",
@@ -74,6 +75,7 @@ repository = "https://github.com/obscuritylabs/Colossus"
 publish-sdks = false
 
 [workspace.dependencies]
+colossus-browser = { version = "=0.11.8", path = "crates/colossus-browser" }
 chrono = "0.4.44"
 openidconnect = { version = "4.0.1", default-features = false, features = ["reqwest", "rustls-tls"] }
 colossus-connector = { version = "=0.11.8", path = "crates/colossus-connector" }

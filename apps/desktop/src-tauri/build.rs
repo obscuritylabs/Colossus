@@ -23,6 +23,7 @@ const COMMANDS: &[&str] = &[
     "browser_context",
     "browser_command",
     "browser_viewport",
+    "browser_certificates",
     "command_review_context",
     "finish_command_review",
     "remembered_command_count",

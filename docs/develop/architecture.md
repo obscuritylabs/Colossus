@@ -71,7 +71,7 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 | --- | --- | --- |
 | Domain and contracts | `colossus-domain`, `colossus-contracts` | Dependency-free domain and stable typed contracts |
 | Ports | `colossus-ports` | Application-owned interfaces for providers, state, tools, policy-adjacent services, and adapters |
-| Application services | `colossus-agent`, `colossus-session`, `colossus-context`, `colossus-work`, `colossus-memory`, `colossus-workflow`, `colossus-research`, `colossus-telemetry` | Use cases and durable behavior |
+| Application services | `colossus-agent`, `colossus-session`, `colossus-context`, `colossus-work`, `colossus-memory`, `colossus-workflow`, `colossus-research`, `colossus-telemetry`, `colossus-browser` | Use cases and durable behavior |
 | Security and catalog | `colossus-access`, `colossus-policy`, `colossus-tools` | Capability metadata, decisions, permits, and strict tool schemas |
 | Infrastructure | `colossus-provider`, `colossus-codex-auth`, `colossus-credentials`, journal/projection crates, `colossus-sandbox`, `colossus-integrations`, `colossus-mcp`, `colossus-plugins`, `colossus-bundles`, `colossus-search` | External systems, authentication, plugin OCI/lifecycle, release bundles, and storage adapters |
 | Public API and SDK | `colossus-api-proto`, `colossus-api`, `colossus-api-runtime`, `colossus-grpc`, `colossus-sdk` | Version public resources, authenticate applications, host durable runs, and provide transport-neutral clients |
@@ -165,9 +165,11 @@ commands dispatch it without receiving secret values from the renderer.
   [ADR 0005](adr/0005-desktop-file-diffs.md).
 - Desktop's opt-in browser preview is a separate human browsing surface. Native
   session/tab state and engine integration stay in the Desktop browser manager and
-  private native adapter. Guests receive no application capability. Future browser
-  automation requires a runtime port with policy and audit; see
-  [ADR 0003](adr/0003-desktop-browser-boundary.md).
+  private native adapter. Guests receive no application capability. Browser automation
+  uses the shared runtime port, owned coordinator, and mandatory policy release;
+  native Chromium preview and shipping human browsing retain separate acceptance
+  gates. See [ADR 0003](adr/0003-desktop-browser-boundary.md) and
+  [ADR 0007](adr/0007-owned-chromium-browser.md).
 - Desktop's native Managed Local permission selector uses the narrow authenticated
   `colossus-worker-protocol` control client. The Desktop process does not link runtime,
   model, tool, policy, or worker-host implementation crates.

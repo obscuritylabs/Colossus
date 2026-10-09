@@ -7,6 +7,38 @@ test.beforeEach(async ({ page }) => {
   await page.getByRole("button", { name: "Open browser", exact: true }).click();
 });
 
+test("certificate setup hides the native viewport and reports native capability limits", async ({
+  page,
+}) => {
+  const address = page.getByRole("textbox", { name: "Web address" });
+  await address.fill("https://example.com/");
+  await address.press("Enter");
+  async function viewport() {
+    return page.evaluate(async () => {
+      // Development-only fixture module observes the production viewport hook.
+      const modulePath = "/src/dev/browser-fixture.ts";
+      const module = await import(modulePath);
+      return module.latestBrowserFixtureViewport();
+    });
+  }
+  await expect.poll(async () => (await viewport())?.rect !== null).toBe(true);
+  await page.getByRole("button", { name: "Certificates", exact: true }).click();
+  const panel = page.getByRole("dialog", { name: "Browser certificates" });
+  await expect(panel).toBeVisible();
+  await expect.poll(async () => (await viewport())?.rect).toBeNull();
+  await expect(
+    panel.getByRole("button", { name: "Import CA certificate" }),
+  ).toBeDisabled();
+  await expect(
+    panel.getByRole("button", { name: "Import PKCS#12 identity" }),
+  ).toBeDisabled();
+  await expect(panel).toContainText("outside browser profile isolation");
+  await panel
+    .getByRole("button", { name: "Close", exact: true })
+    .press("Escape");
+  await expect(panel).not.toBeVisible();
+});
+
 test("browser loading leaves the composer usable and exposes stop", async ({
   page,
 }) => {

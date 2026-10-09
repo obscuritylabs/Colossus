@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Colossus native browser fixture</title></head>
+<body>
+  <h1>Colossus native browser fixture</h1>
+  <button id="continue" type="button">Continue</button>
+  <output id="result">Waiting</output>
+  <script>
+    document.querySelector('#continue').addEventListener('click', () => {
+      document.querySelector('#result').textContent = 'Native click received';
+    });
+  </script>
+</body>
+</html>

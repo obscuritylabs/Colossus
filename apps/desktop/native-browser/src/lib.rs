@@ -4,11 +4,16 @@
 //! or host objects. Future agent control must enter through a separately authorized
 //! runtime adapter; possession of a guest handle is not an agent permit.
 
+#[cfg(feature = "cef-preview")]
+pub mod chromium;
 mod engine;
 mod navigation;
+#[cfg(feature = "cef-preview")]
+pub mod pki;
 #[cfg(any(target_os = "macos", test))]
 mod response;
 mod types;
+mod view;
 
 #[cfg(all(target_os = "macos", feature = "native-test-driver"))]
 pub mod acceptance;
@@ -21,6 +26,7 @@ mod windows;
 pub use engine::{control, harden, inspect, is_active, open_external, release, share_session};
 pub use navigation::{NavigationPolicy, parse_address};
 pub use types::{BrowserError, BrowserEvent, EventSink, NavigationAction, PageState};
+pub use view::BrowserView;
 
 #[cfg(all(windows, feature = "native-test-driver"))]
 pub use windows::probe_file_picker;

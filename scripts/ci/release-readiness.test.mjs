@@ -49,6 +49,10 @@ test("release readiness permits maintained SDK, build, and plugin Python sources
     "sdk/python/src/colossus_sdk/client.py",
     "deploy/documentation/build-config.py",
     "scripts/ci/normalize_python_sdist.py",
+    "native/browser/scripts/component.py",
+    "native/browser/scripts/test_component.py",
+    "native/browser/scripts/run_probe.py",
+    "native/browser/scripts/test_probe.py",
     "examples/sdk/integration/server.py",
     "examples/sdk/provider-failure/server.py",
     "bundled-plugins/colossus/skills/security-review/scripts/init_review.py",
@@ -63,6 +67,7 @@ for (const file of [
   "colossus/runtime.py",
   "bundled-plugins/colossus/skills/security-review/scripts/unapproved.py",
   "scripts/tests/unapproved.py",
+  "native/browser/scripts/unapproved.py",
 ]) {
   test("release readiness rejects unapproved source " + file, (t) => {
     const result = verifySources(t, [file]);

@@ -2,10 +2,14 @@
 
 #[cfg(feature = "browser-test-bridge")]
 pub(crate) mod acceptance;
+pub(crate) mod bootstrap;
+pub(crate) mod certificates;
 pub(crate) mod commands;
 pub(crate) mod dto;
+mod guest;
 mod inspection;
 mod manager;
+mod presentation;
 mod registry;
 pub(crate) mod viewport;
 

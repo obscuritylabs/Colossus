@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { browserErrorMessage, nativeBrowserApi } from "../../browser-api";
 import type {
   BrowserAction,
+  BrowserCertificateAction,
   BrowserApi,
   BrowserSnapshot,
   BrowserViewport,
@@ -125,6 +126,30 @@ export function useBrowser(
     (request: BrowserViewport) => api.current.viewport(request).catch(() => {}),
     [],
   );
+  const certificates = useCallback(
+    async (
+      action: BrowserCertificateAction,
+      appearance: {
+        colorScheme: "system" | "dark" | "light";
+        textSize: "compact" | "comfortable" | "large";
+      },
+    ) => {
+      const generation = snapshotRef.current.generation;
+      const capturedScope = currentScope.current;
+      const handler = api.current.certificates;
+      if (!handler)
+        throw new Error(
+          "Certificate setup is unavailable on this browser host.",
+        );
+      const status = await handler(generation, action, appearance);
+      if (capturedScope !== currentScope.current)
+        throw new Error("The selected workspace changed.");
+      const value = await api.current.context();
+      if (capturedScope === currentScope.current) setSnapshot(value);
+      return status;
+    },
+    [],
+  );
   return {
     snapshot,
     error: error || contextError,
@@ -132,6 +157,7 @@ export function useBrowser(
     busy,
     command,
     viewport,
+    certificates,
     fixture,
   };
 }

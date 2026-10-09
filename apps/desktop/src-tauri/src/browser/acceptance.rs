@@ -258,7 +258,10 @@ async fn sessions(app: &tauri::AppHandle, address: &str, generation: u64) -> any
     );
     println!("PASS workspace isolation and temporary cookie sharing");
     anyhow::ensure!(
-        state.browser.tab(sibling.label(), "acceptance-b").is_err(),
+        state
+            .browser
+            .legacy_tab(sibling.label(), "acceptance-b")
+            .is_err(),
         "foreign tab was accessible"
     );
     evaluate(

@@ -9,6 +9,8 @@ use thiserror::Error;
 mod builtin;
 pub use builtin::*;
 
+mod browser;
+
 mod process_limits;
 mod process_sessions;
 mod workflows;
@@ -22,3 +24,6 @@ pub use observation::*;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod browser_tests;

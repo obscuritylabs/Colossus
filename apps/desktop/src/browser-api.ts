@@ -10,13 +10,37 @@ export interface BrowserTab {
   error: string | null;
   notice: string | null;
   popupUrl: string | null;
+  sessionId?: string;
+  control?: "human" | "agent" | "paused" | "unavailable";
 }
+
+export interface BrowserEngine {
+  kind: "embedded_chromium" | "webview2" | "webkit" | "unavailable";
+  preview: boolean;
+  ready: boolean;
+  message: string | null;
+  agentControlAvailable: boolean;
+}
+
+export interface BrowserCertificateStatus {
+  scope: "operating_system_user" | "unsupported";
+  caImportAvailable: boolean;
+  pfxImportAvailable: boolean;
+  clientIdentitySelectionReady: boolean;
+  acceptancePending: boolean;
+  message: string;
+  fingerprintsSha256: string[];
+}
+
+export type BrowserCertificateAction =
+  "status" | "import_ca" | "import_client_identity";
 
 export interface BrowserSnapshot {
   available: boolean;
   generation: number;
   tabs: BrowserTab[];
   selectedTabId: string | null;
+  engine?: BrowserEngine;
 }
 
 export type BrowserAction =
@@ -47,6 +71,14 @@ export interface BrowserApi {
   context(): Promise<BrowserSnapshot>;
   command(generation: number, action: BrowserAction): Promise<BrowserSnapshot>;
   viewport(request: BrowserViewport): Promise<void>;
+  certificates?(
+    generation: number,
+    action: BrowserCertificateAction,
+    appearance: {
+      colorScheme: "system" | "dark" | "light";
+      textSize: "compact" | "comfortable" | "large";
+    },
+  ): Promise<BrowserCertificateStatus>;
 }
 
 export const nativeBrowserApi: BrowserApi = {
@@ -54,6 +86,10 @@ export const nativeBrowserApi: BrowserApi = {
   command: (generation, action) =>
     invoke("browser_command", { request: { generation, action } }),
   viewport: (request) => invoke("browser_viewport", { request }),
+  certificates: (generation, action, appearance) =>
+    invoke("browser_certificates", {
+      request: { generation, action, appearance },
+    }),
 };
 
 export function browserErrorMessage(error: unknown): string {

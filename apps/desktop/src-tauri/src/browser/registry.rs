@@ -1,16 +1,23 @@
-use super::dto::{BrowserSnapshotDto, BrowserTabDto};
-use colossus_native_browser::{BrowserEvent, NavigationPolicy};
-use std::{collections::HashMap, time::Instant};
-use tauri::Webview;
+use super::dto::{BrowserEngineDto, BrowserSnapshotDto, BrowserTabDto};
+use colossus_native_browser::{BrowserEvent, BrowserView, NavigationPolicy};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Instant,
+};
 
 pub(super) const MAX_TABS: usize = 8;
 
 pub(super) struct Tab {
     pub(super) scope: String,
-    pub(super) view: Webview,
+    pub(super) view: BrowserView,
     pub(super) policy: NavigationPolicy,
     pub(super) dto: BrowserTabDto,
     pub(super) heartbeat: Option<Instant>,
+    pub(super) presentation_epoch: Arc<AtomicU64>,
 }
 
 #[derive(Default)]
@@ -20,12 +27,15 @@ pub(super) struct Registry {
     pub(super) tabs: Vec<Tab>,
     pub(super) selected: HashMap<String, String>,
     pub(super) profiles: HashMap<String, tempfile::TempDir>,
+    pub(super) sessions: HashMap<String, String>,
 }
 
 impl Registry {
     pub(super) fn snapshot(&self) -> BrowserSnapshotDto {
+        let engine = BrowserEngineDto::current();
         BrowserSnapshotDto {
-            available: cfg!(windows) || cfg!(all(feature = "browser-preview", target_os = "macos")),
+            available: engine.ready,
+            engine,
             generation: self.generation,
             tabs: self
                 .tabs
@@ -64,7 +74,8 @@ impl Registry {
                 tab.dto.error = Some(
                     "This browser tab stopped responding. Close it and open a new tab.".into(),
                 );
-                let _ = tab.view.hide();
+                tab.presentation_epoch.fetch_add(1, Ordering::AcqRel);
+                tab.heartbeat = None;
             }
             BrowserEvent::Blocked => {
                 tab.dto.notice = Some("This page requested access that is unavailable in the embedded browser. You can open it in your system browser.".into());
@@ -82,6 +93,14 @@ impl Registry {
                     tab.dto.popup_url = Some(url);
                     tab.dto.notice = Some("This page wants to open another tab.".into());
                 }
+            }
+            BrowserEvent::TlsFailed => {
+                tab.dto.page.loading = false;
+                tab.dto.error = Some("The website's certificate could not be verified. Check its hostname, expiry, and native CA trust configuration. TLS verification cannot be bypassed.".into());
+            }
+            BrowserEvent::AuthenticationRequired => {
+                tab.dto.page.loading = false;
+                tab.dto.notice = Some("This website requires a client certificate. A native identity must be provisioned and reviewed for this exact HTTPS origin.".into());
             }
         }
     }

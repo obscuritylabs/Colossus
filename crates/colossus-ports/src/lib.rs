@@ -28,6 +28,9 @@ use thiserror::Error;
 mod control;
 pub use control::*;
 
+mod browser;
+pub use browser::*;
+
 mod context_error;
 pub use context_error::*;
 

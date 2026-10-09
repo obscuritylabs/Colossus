@@ -24,6 +24,8 @@ pub struct RuntimeOpenOptions {
     pub(super) expected_workspace_identity: Option<WorkspaceIdentityToken>,
     /// Native-supplied TLS identity held only in process memory.
     pub(super) client_identity: Option<colossus_network::ClientIdentity>,
+    /// Browser host selected only by trusted native composition; never deserialized.
+    pub(super) browser_host: Option<RuntimeBrowserHost>,
 }
 
 impl RuntimeOpenOptions {
@@ -37,6 +39,7 @@ impl RuntimeOpenOptions {
             model_network_tools: true,
             expected_workspace_identity: None,
             client_identity: None,
+            browser_host: None,
         }
         .canonicalized()
     }
@@ -103,6 +106,17 @@ impl RuntimeOpenOptions {
     #[must_use]
     pub fn with_client_identity(mut self, identity: colossus_network::ClientIdentity) -> Self {
         self.client_identity = Some(identity);
+        self
+    }
+
+    /// Supply a verified browser driver from trusted native bootstrap composition.
+    ///
+    /// Ordinary runtime construction has no browser capability. This does not attach
+    /// existing human browser tabs, import certificates, or grant agent authority;
+    /// every browser operation still enters the runtime effect gateway.
+    #[must_use]
+    pub fn with_browser_host(mut self, host: RuntimeBrowserHost) -> Self {
+        self.browser_host = Some(host);
         self
     }
 

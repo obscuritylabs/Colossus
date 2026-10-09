@@ -1342,6 +1342,7 @@ impl AppState {
     }
 
     pub(crate) async fn close_all(&self) {
+        self.browser.close_all().await;
         #[cfg(windows)]
         self.stop_all_outlook_companions().await;
         {

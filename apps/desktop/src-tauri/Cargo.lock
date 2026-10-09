@@ -1062,6 +1062,7 @@ dependencies = [
  "colossus-domain",
  "serde",
  "serde_json",
+ "url",
  "zeroize",
 ]
 
@@ -1266,12 +1267,18 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "objc2-web-kit",
+ "rustls-pki-types",
  "serde",
+ "serde_json",
+ "sha2",
  "tauri",
  "tokio",
  "url",
  "webview2-com",
  "windows 0.61.3",
+ "windows-sys 0.61.2",
+ "x509-parser",
+ "zeroize",
 ]
 
 [[package]]

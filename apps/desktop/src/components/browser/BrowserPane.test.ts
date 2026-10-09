@@ -6,6 +6,7 @@ import type { BrowserController } from "./useBrowser";
 
 function render(
   overrides: Partial<BrowserController["snapshot"]["tabs"][number]> = {},
+  snapshotOverrides: Partial<BrowserController["snapshot"]> = {},
 ) {
   const controller: BrowserController = {
     snapshot: {
@@ -26,6 +27,7 @@ function render(
           ...overrides,
         },
       ],
+      ...snapshotOverrides,
     },
     error: "",
     busy: false,
@@ -33,6 +35,15 @@ function render(
     fixture: true,
     command: vi.fn(async () => {}),
     viewport: vi.fn(async () => {}),
+    certificates: vi.fn(async () => ({
+      scope: "unsupported" as const,
+      caImportAvailable: false,
+      pfxImportAvailable: false,
+      clientIdentitySelectionReady: false,
+      acceptancePending: true,
+      message: "Unavailable",
+      fingerprintsSha256: [],
+    })),
   };
   return renderToStaticMarkup(
     createElement(BrowserPane, {
@@ -45,6 +56,28 @@ function render(
 }
 
 describe("browser controls", () => {
+  it("reports a missing Chromium component without claiming a working browser", () => {
+    const html = render(
+      {},
+      {
+        available: false,
+        engine: {
+          kind: "embedded_chromium",
+          preview: true,
+          ready: false,
+          message:
+            "The verified Chromium component is not included in this build.",
+          agentControlAvailable: false,
+        },
+      },
+    );
+    expect(html).toContain("Browser unavailable");
+    expect(html).toContain("Control unavailable");
+    expect(html).not.toContain("Human control");
+    expect(html).toContain("The verified Chromium component is not included");
+    expect(html).not.toContain("Chromium preview ·");
+    expect(html).not.toContain("Resume agent");
+  });
   it("keeps stop and close available while a page loads", () => {
     const html = render({ loading: true });
     expect(html).toContain('aria-label="Stop loading"');

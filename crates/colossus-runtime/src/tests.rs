@@ -1988,6 +1988,7 @@ fn built_in_registry_classifies_every_tool_once() {
             agent_search_route: true,
             interactive: true,
             mcp_configured: true,
+            browser_available: true,
         },
         false,
     )

@@ -17,6 +17,7 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
     let mut specs = core_builtin_specs();
     specs.extend(super::process_sessions::session_specs());
     specs.extend(super::workflows::workflow_specs());
+    specs.extend(super::browser::browser_specs());
     specs
 }
 

@@ -59,6 +59,10 @@ esac
 legacy_python_sources=$(git ls-files -- '*.py' ':(exclude)sdk/python/**' \
     ':(exclude)deploy/documentation/build-config.py' \
     ':(exclude)scripts/ci/normalize_python_sdist.py' \
+    ':(exclude)native/browser/scripts/component.py' \
+    ':(exclude)native/browser/scripts/test_component.py' \
+    ':(exclude)native/browser/scripts/run_probe.py' \
+    ':(exclude)native/browser/scripts/test_probe.py' \
     ':(exclude)bundled-plugins/colossus/skills/security-review/scripts/init_review.py' \
     ':(exclude)scripts/tests/test_security_review_workspace.py' \
     ':(exclude)examples/sdk/integration/server.py' \

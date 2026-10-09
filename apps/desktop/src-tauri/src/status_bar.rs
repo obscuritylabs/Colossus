@@ -231,6 +231,11 @@ fn status_bar_error() -> CommandErrorDto {
     )
 }
 
+// Keep the same fallible setup API used by the macOS and Windows composition.
+#[cfg_attr(
+    not(any(target_os = "macos", windows)),
+    allow(clippy::unnecessary_wraps)
+)]
 pub(crate) fn setup(app: &mut App) -> tauri::Result<()> {
     #[cfg(any(target_os = "macos", windows))]
     {

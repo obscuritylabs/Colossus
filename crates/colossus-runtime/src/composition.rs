@@ -146,6 +146,7 @@ pub struct Runtime {
     pub(super) filesystem_executor: Arc<dyn EffectExecutor>,
     pub(super) process_executor: Arc<dyn EffectExecutor>,
     pub(super) process_sessions: Arc<ProcessSessions>,
+    pub(super) browser: Option<Arc<crate::browser_tools::RuntimeBrowserTools>>,
     pub(super) http_executor: Arc<HttpExecutor>,
     pub(super) sandbox_executor_config: SandboxExecutorConfig,
     pub(super) sandbox_backend: String,
@@ -269,6 +270,7 @@ impl Runtime {
         let colossus_home_root = options.colossus_home_root.clone();
         let automatic_agent_instructions = options.automatic_agent_instructions;
         let model_network_tools = options.model_network_tools;
+        let browser_host = options.browser_host.clone();
         match (&colossus_home, &colossus_home_root) {
             (None, None) => {}
             (Some(home), Some(root)) if home == root.path() => {
@@ -508,6 +510,17 @@ impl Runtime {
             &tls_roots,
             Arc::clone(&provider_credentials),
         )?);
+        let browser = browser_host.as_ref().map(|host| {
+            Arc::new(crate::browser_tools::RuntimeBrowserTools::new(
+                host,
+                workspace_identity.clone(),
+                repository_id.clone(),
+                colossus_contracts::BrowserLimits::default(),
+            ))
+        });
+        let browser_capabilities = browser
+            .as_ref()
+            .map(|browser| browser.coordinator.capabilities());
         let AccessPolicyComposition {
             candidate_tool_specs,
             access,
@@ -525,6 +538,7 @@ impl Runtime {
             tls_roots: &tls_roots,
             model_network_tools,
             interactive: user_prompts.is_some(),
+            browser_capabilities: browser_capabilities.as_ref(),
         })?;
         let mut permit_key = [0_u8; 32];
         getrandom::fill(&mut permit_key).map_err(|_| {
@@ -917,6 +931,16 @@ impl Runtime {
                 .flatten()
                 .collect(),
         });
+        let gateway_tool_executor: Arc<dyn ToolExecutor> = if let Some(browser) = &browser {
+            Arc::new(crate::browser_tools::BrowserToolExecutor {
+                gateway: Arc::clone(&gateway),
+                registry: Arc::clone(&tool_registry),
+                browser: Arc::clone(browser),
+                inner: gateway_tool_executor,
+            })
+        } else {
+            gateway_tool_executor
+        };
         let trace_tool_executor: Arc<dyn ToolExecutor> = Arc::new(TraceToolExecutor {
             journal: Arc::clone(&journal),
             gateway: Arc::clone(&gateway),
@@ -952,6 +976,15 @@ impl Runtime {
             identity: workspace_identity.clone(),
             inner: scheduled_tool_executor,
         });
+        let run_lifecycle: Arc<dyn colossus_ports::AgentRunLifecycle> =
+            if let Some(browser) = &browser {
+                Arc::new(crate::browser_tools::RuntimeRunLifecycle {
+                    processes: Arc::clone(&process_sessions),
+                    browser: Arc::clone(browser),
+                })
+            } else {
+                Arc::clone(&process_sessions) as Arc<dyn colossus_ports::AgentRunLifecycle>
+            };
         let agent = Arc::new(
             AgentService::new(
                 Arc::clone(&journal),
@@ -962,9 +995,7 @@ impl Runtime {
             )
             .with_context_preparer(Arc::clone(&context) as Arc<dyn ContextPreparer>)
             .with_run_provenance(Arc::new(CatalogRunProvenance))
-            .with_run_lifecycle(
-                Arc::clone(&process_sessions) as Arc<dyn colossus_ports::AgentRunLifecycle>
-            ),
+            .with_run_lifecycle(run_lifecycle),
         );
         let workflow_repository: Arc<dyn WorkflowRepository> =
             Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
@@ -1046,6 +1077,7 @@ impl Runtime {
             filesystem_executor,
             process_executor,
             process_sessions,
+            browser,
             http_executor,
             sandbox_executor_config,
             sandbox_backend: config.sandbox.backend.clone(),

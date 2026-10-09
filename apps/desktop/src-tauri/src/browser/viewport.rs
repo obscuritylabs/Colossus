@@ -4,7 +4,10 @@ use super::{
     manager::error,
 };
 use crate::{dto::CommandErrorDto, state::AppState};
-use std::time::{Duration, Instant};
+use std::{
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
+};
 use tauri::{AppHandle, Manager as _};
 
 pub(crate) fn valid_rect(rect: BrowserRect, width: f64, height: f64) -> bool {
@@ -42,47 +45,74 @@ impl BrowserManager {
             .inner_size()
             .map_err(|_| error("The browser viewport is unavailable."))?
             .to_logical::<f64>(scale);
-        let mut state = self.lock()?;
-        let selected = state.selected.get(&scope).cloned();
-        for tab in &mut state.tabs {
-            let visible = active
-                && tab.scope == scope
-                && Some(&tab.dto.id) == request.tab_id.as_ref()
-                && request.tab_id == selected
-                && tab.dto.error.is_none();
-            if let Some(rect) = request
-                .rect
-                .filter(|r| visible && valid_rect(*r, size.width, size.height))
+        let operations = {
+            let mut state = self.lock()?;
+            if state.generation != request.generation
+                || state.scope.as_deref() != Some(scope.as_str())
             {
-                tab.view
-                    .set_bounds(tauri::Rect {
-                        position: tauri::LogicalPosition::new(rect.x, rect.y).into(),
-                        size: tauri::LogicalSize::new(rect.width, rect.height).into(),
-                    })
-                    .map_err(|_| error("The browser viewport could not be resized."))?;
-                tab.view
-                    .show()
-                    .map_err(|_| error("The browser tab could not be displayed."))?;
-                tab.heartbeat = Some(Instant::now());
-            } else {
-                let _ = tab.view.hide();
-                tab.heartbeat = None;
+                return Err(error(
+                    "The selected workspace changed. Reopen the browser pane.",
+                ));
+            }
+            let selected = state.selected.get(&scope).cloned();
+            state
+                .tabs
+                .iter_mut()
+                .map(|tab| {
+                    let visible = active
+                        && tab.scope == scope
+                        && Some(&tab.dto.id) == request.tab_id.as_ref()
+                        && request.tab_id == selected
+                        && tab.dto.error.is_none();
+                    let rect = request
+                        .rect
+                        .filter(|rect| visible && valid_rect(*rect, size.width, size.height));
+                    tab.heartbeat = rect.map(|_| Instant::now());
+                    (
+                        tab.view.clone(),
+                        tab.presentation_epoch.clone(),
+                        tab.presentation_epoch
+                            .fetch_add(1, Ordering::AcqRel)
+                            .wrapping_add(1),
+                        rect,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        // Drop registry locks before UI work: native event callbacks also need
+        // them. Each queued operation rechecks its independently revocable lease.
+        for (view, lease, epoch, rect) in operations {
+            match super::presentation::apply(&window, view, lease, epoch, rect).await {
+                Ok(()) | Err(colossus_native_browser::BrowserError::Closed) => {}
+                Err(_) => return Err(error("The browser viewport could not be updated.")),
             }
         }
         Ok(())
     }
 
     fn hide_expired(&self) {
-        if let Ok(mut state) = self.data.lock() {
-            for tab in &mut state.tabs {
-                if tab
-                    .heartbeat
-                    .is_some_and(|last| last.elapsed() > Duration::from_secs(2))
-                {
-                    let _ = tab.view.hide();
-                    tab.heartbeat = None;
-                }
-            }
+        let views = if let Ok(mut state) = self.data.lock() {
+            state
+                .tabs
+                .iter_mut()
+                .filter_map(|tab| {
+                    if tab
+                        .heartbeat
+                        .is_some_and(|last| last.elapsed() > Duration::from_secs(2))
+                    {
+                        tab.presentation_epoch.fetch_add(1, Ordering::AcqRel);
+                        tab.heartbeat = None;
+                        Some(tab.view.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        for view in views {
+            let _ = view.hide();
         }
     }
 }

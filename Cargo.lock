@@ -1159,6 +1159,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-browser"
+version = "0.11.8"
+dependencies = [
+ "async-trait",
+ "colossus-contracts",
+ "colossus-ports",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "colossus-bundled-plugins"
 version = "0.11.8"
 dependencies = [
@@ -1439,6 +1452,7 @@ dependencies = [
  "colossus-domain",
  "serde",
  "serde_json",
+ "url",
  "zeroize",
 ]
 
@@ -1934,6 +1948,7 @@ dependencies = [
  "colossus-access",
  "colossus-agent",
  "colossus-audit",
+ "colossus-browser",
  "colossus-bundled-plugins",
  "colossus-bundles",
  "colossus-context",

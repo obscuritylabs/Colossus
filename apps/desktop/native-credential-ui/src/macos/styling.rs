@@ -1,5 +1,6 @@
 //! `AppKit` presentation only; credential input and completion stay in the controller.
 
+use crate::purpose::Purpose;
 use crate::{ColorScheme, DialogAppearance, appearance::Palette};
 use objc2::rc::Retained;
 use objc2_app_kit::{
@@ -8,7 +9,7 @@ use objc2_app_kit::{
     NSAppearanceNameDarkAqua, NSButton, NSColor, NSControlSize, NSFont, NSSecureTextField,
     NSTextField, NSWindow, NSWorkspace,
 };
-use objc2_foundation::{MainThreadMarker, NSRect, ns_string};
+use objc2_foundation::{MainThreadMarker, NSRect, NSString, ns_string};
 
 #[derive(Clone, Copy)]
 enum LabelTone {
@@ -71,18 +72,24 @@ impl Style {
         ));
     }
 
-    pub(super) fn labels(&self, mtm: MainThreadMarker) -> [Retained<NSTextField>; 3] {
-        let heading = NSTextField::labelWithString(ns_string!("Save credential"), mtm);
+    pub(super) fn labels(
+        &self,
+        mtm: MainThreadMarker,
+        purpose: Purpose,
+    ) -> [Retained<NSTextField>; 3] {
+        let heading = NSTextField::labelWithString(&NSString::from_str(purpose.heading()), mtm);
         heading.setFrame(self.rect(28.0, 263.0, 504.0, 33.0));
         heading.setFont(Some(&NSFont::boldSystemFontOfSize(20.0 * self.scale)));
         heading.setTextColor(Some(&self.color(self.palette.strong, NSColor::labelColor)));
-        let description = NSTextField::wrappingLabelWithString(
-            ns_string!("Your token is saved in the encrypted credential vault."),
-            mtm,
-        );
-        description.setFrame(self.rect(28.0, 227.0, 504.0, 30.0));
+        let description =
+            NSTextField::wrappingLabelWithString(&NSString::from_str(purpose.description()), mtm);
+        description.setFrame(if purpose == Purpose::Token {
+            self.rect(28.0, 227.0, 504.0, 30.0)
+        } else {
+            self.rect(28.0, 223.0, 504.0, 40.0)
+        });
         self.label(&description, 14.0, LabelTone::Muted);
-        let label = NSTextField::labelWithString(ns_string!("Token"), mtm);
+        let label = NSTextField::labelWithString(&NSString::from_str(purpose.label()), mtm);
         label.setFrame(self.rect(28.0, 197.0, 504.0, 22.0));
         self.label(&label, 14.0, LabelTone::Normal);
         [heading, description, label]

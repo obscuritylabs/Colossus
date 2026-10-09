@@ -8,6 +8,7 @@ mod provider_retry;
 pub use provider_retry::*;
 
 mod agent;
+mod browser;
 mod command_approval;
 mod command_output;
 mod credentials;
@@ -42,6 +43,7 @@ mod workflow_control;
 mod workflow_logic;
 
 pub use agent::*;
+pub use browser::*;
 pub use command_approval::*;
 pub use command_output::*;
 pub use credentials::*;

@@ -12,6 +12,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import type { BrowserController } from "./useBrowser";
+import { BrowserCertificates } from "./BrowserCertificates";
 import { useDesktopPreferences } from "../../DesktopPreferencesProvider";
 import "./browser.css";
 
@@ -32,13 +33,40 @@ export function BrowserPane({
   const { snapshot, command, error, busy, fixture, viewport } = controller;
   const active = snapshot.tabs.find((tab) => tab.id === snapshot.selectedTabId);
   const [address, setAddress] = useState(active?.url ?? "");
+  const [showCertificates, setShowCertificates] = useState(false);
   const addressRef = useRef<HTMLInputElement>(null);
   const selectedTabRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const ready =
+    snapshot.available &&
+    snapshot.engine?.ready !== false &&
+    snapshot.engine?.kind !== "unavailable";
+  const engineLabel = !ready
+    ? "Browser unavailable"
+    : snapshot.engine?.kind === "embedded_chromium"
+      ? "Chromium preview"
+      : snapshot.engine?.kind === "webview2"
+        ? "WebView2"
+        : snapshot.engine?.kind === "webkit"
+          ? "WebKit"
+          : "Browser";
+  const controlLabel = !ready
+    ? "Control unavailable"
+    : active?.control === "agent"
+      ? "Agent control"
+      : active?.control === "paused"
+        ? "Paused"
+        : active?.control === "unavailable"
+          ? "Control unavailable"
+          : "Human control";
 
   useEffect(() => {
     setAddress(active?.url ?? "");
   }, [active?.id, active?.url]);
+
+  useEffect(() => {
+    if (!snapshot.available) setShowCertificates(false);
+  }, [snapshot.available]);
 
   useEffect(() => {
     selectedTabRef.current?.scrollIntoView({
@@ -179,7 +207,7 @@ export function BrowserPane({
           className="icon-button"
           type="button"
           aria-label="New browser tab"
-          disabled={busy}
+          disabled={busy || !snapshot.available}
           onClick={() => void command({ type: "new", url: browserNewTabUrl })}
         >
           <IconPlus size={17} />
@@ -213,7 +241,7 @@ export function BrowserPane({
         className="browser-address-bar"
         onSubmit={(event) => {
           event.preventDefault();
-          if (address.trim())
+          if (snapshot.available && address.trim())
             void command(
               active
                 ? { type: "navigate", tabId: active.id, url: address }
@@ -288,6 +316,11 @@ export function BrowserPane({
           {error}
         </div>
       ) : null}
+      {snapshot.engine?.message ? (
+        <div className="browser-notice" role="status">
+          {snapshot.engine.message}
+        </div>
+      ) : null}
       {active?.notice ? (
         <div className="browser-notice" role="status">
           <span>{active.notice}</span>
@@ -318,6 +351,12 @@ export function BrowserPane({
         </div>
       ) : null}
       <div className="browser-viewport" ref={viewportRef} aria-label="Web page">
+        {showCertificates ? (
+          <BrowserCertificates
+            controller={controller}
+            onClose={() => setShowCertificates(false)}
+          />
+        ) : null}
         {active?.error ? (
           <div className="browser-empty" role="alert">
             <IconGlobe size={32} />
@@ -352,7 +391,7 @@ export function BrowserPane({
       </div>
       <footer className="browser-footer">
         <span role="status">
-          {active?.loading ? (
+          {ready && active?.loading ? (
             <>
               <IconLoader2
                 size={13}
@@ -362,9 +401,19 @@ export function BrowserPane({
               Loading page…
             </>
           ) : (
-            "Temporary session · Separate from your conversation"
+            <>
+              {engineLabel} · {controlLabel} · Temporary session
+            </>
           )}
         </span>
+        <button
+          type="button"
+          disabled={!ready}
+          onClick={() => setShowCertificates((visible) => !visible)}
+          aria-expanded={showCertificates}
+        >
+          Certificates
+        </button>
         <button
           type="button"
           disabled={snapshot.tabs.length === 0 || busy}

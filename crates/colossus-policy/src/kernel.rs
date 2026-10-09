@@ -779,11 +779,11 @@ impl SafetyKernel {
         }
         if decision.outcome == DecisionOutcome::Allow
             && request.phase == EffectPhase::PreEffect
-            && request.action == "web.search"
+            && (request.action == "web.search" || request.action.starts_with("browser."))
             && !obligations.require_post_effect
         {
             return Err(GatewayError::Safety(
-                "web.search requires mandatory post-effect authorization".into(),
+                "browser and search effects require mandatory post-effect authorization".into(),
             ));
         }
         if decision.outcome == DecisionOutcome::Allow

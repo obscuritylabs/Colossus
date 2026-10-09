@@ -73,6 +73,7 @@ pub fn run_browser_acceptance() -> i32 {
     browser::acceptance::run()
 }
 
+use browser::certificates::browser_certificates;
 use browser::commands::{browser_command, browser_context, browser_viewport};
 use codex_auth::{codex_auth_login, codex_auth_logout, codex_auth_status};
 use command_review::{command_review_context, finish_command_review};
@@ -146,6 +147,9 @@ use workspace_git::commands::{
 // Composition-only registration list: native command implementations stay in modules.
 #[allow(clippy::too_many_lines)]
 pub fn run() {
+    // CEF helper dispatch and macOS application protocol installation must
+    // precede app_context, Tauri, AppKit, and any late-loaded plugin.
+    let _browser_cache = browser::bootstrap::initialize();
     #[cfg(feature = "dictation")]
     if let Some(code) = colossus_native_dictation::run_if_requested() {
         std::process::exit(code);
@@ -189,6 +193,7 @@ pub fn run() {
         .setup(|app| {
             status_bar::setup(app)?;
             browser::start_watchdog(app.handle().clone());
+            browser::bootstrap::start_pump(app.handle());
             #[cfg(windows)]
             outlook_companion::start_watchdog(app.handle().clone());
             terminal_commands::pane::start_watchdog(app.handle().clone());
@@ -232,6 +237,7 @@ pub fn run() {
             browser_context,
             browser_command,
             browser_viewport,
+            browser_certificates,
             command_review_context,
             finish_command_review,
             remembered_command_count,
@@ -376,7 +382,8 @@ pub fn run() {
         .expect("failed to build the Colossus desktop application");
     #[cfg(windows)]
     drop(launch_guard);
-    application.run(|app, event| {
+    let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
+    application.run(move |app, event| {
         #[cfg(target_os = "macos")]
         if matches!(
             event,
@@ -387,11 +394,29 @@ pub fn run() {
         ) {
             status_bar::show_main_window(app);
         }
-        if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+            use std::sync::atomic::Ordering;
             use tauri::Manager as _;
-            app.state::<dictation::DictationState>().cancel();
-
-            tauri::async_runtime::block_on(app.state::<state::AppState>().close_all());
+            if shutdown.load(Ordering::Acquire) < 2 {
+                api.prevent_exit();
+                if shutdown
+                    .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    app.state::<dictation::DictationState>().cancel();
+                    let app = app.clone();
+                    let shutdown = shutdown.clone();
+                    tauri::async_runtime::spawn(async move {
+                        // Keep Tauri's main thread alive to settle native close
+                        // callbacks. Blocking it here would deadlock CEF teardown.
+                        app.state::<state::AppState>().close_all().await;
+                        shutdown.store(2, Ordering::Release);
+                        app.exit(0);
+                    });
+                }
+            }
+        } else if matches!(event, tauri::RunEvent::Exit) {
+            browser::bootstrap::shutdown();
         }
     });
 }
