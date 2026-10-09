@@ -59,10 +59,12 @@ esac
 legacy_python_sources=$(git ls-files -- '*.py' ':(exclude)sdk/python/**' \
     ':(exclude)deploy/documentation/build-config.py' \
     ':(exclude)scripts/ci/normalize_python_sdist.py' \
+    ':(exclude)bundled-plugins/colossus/skills/security-review/scripts/init_review.py' \
+    ':(exclude)scripts/tests/test_security_review_workspace.py' \
     ':(exclude)examples/sdk/integration/server.py' \
     ':(exclude)examples/sdk/provider-failure/server.py')
 if [ -e pyproject.toml ] || [ -n "$legacy_python_sources" ]; then
-    printf 'the active Rust tree must not contain the retired root Python package or tracked Python source outside the maintained public Python SDK and SDK fixtures or approved build utilities\n' >&2
+    printf 'the active Rust tree must not contain the retired root Python package or tracked Python source outside the maintained public Python SDK and SDK fixtures or approved build/plugin utilities and their tests\n' >&2
     exit 1
 fi
 
