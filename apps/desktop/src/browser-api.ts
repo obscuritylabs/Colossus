@@ -100,5 +100,5 @@ export function browserErrorMessage(error: unknown): string {
     typeof error.message === "string"
   )
     return error.message;
-  return "The browser could not complete that action. Please try again.";
+  return "The browser action failed. Please try again.";
 }

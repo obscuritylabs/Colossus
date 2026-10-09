@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useAppearance } from "../../theme/AppearanceProvider";
 import { browserErrorMessage, nativeBrowserApi } from "../../browser-api";
 import type {
   BrowserAction,
@@ -20,6 +21,9 @@ export function useBrowser(
   visible: boolean,
   fixture = false,
 ) {
+  const appearance = useAppearance();
+  const appearanceRef = useRef(appearance);
+  appearanceRef.current = appearance;
   const [snapshot, setSnapshot] = useState<BrowserSnapshot>({
     ...empty,
     available: fixture,
@@ -54,23 +58,19 @@ export function useBrowser(
       } else api.current = nativeBrowserApi;
       async function refresh() {
         const started = sequence.current;
+        const current = () =>
+          !cancelled &&
+          currentScope.current === capturedScope &&
+          sequence.current === started;
         try {
           const value = await api.current.context();
-          if (
-            !cancelled &&
-            currentScope.current === capturedScope &&
-            sequence.current === started
-          ) {
+          if (current()) {
             setSnapshot(value);
             setLoading(false);
             setContextError("");
           }
         } catch (cause) {
-          if (
-            !cancelled &&
-            currentScope.current === capturedScope &&
-            sequence.current === started
-          ) {
+          if (current()) {
             setLoading(false);
             setContextError(browserErrorMessage(cause));
           }
@@ -95,6 +95,8 @@ export function useBrowser(
   const command = useCallback(async (action: BrowserAction) => {
     const operation = ++sequence.current;
     const capturedScope = currentScope.current;
+    const current = () =>
+      currentScope.current === capturedScope && operation === sequence.current;
     setBusy(true);
     setError("");
     try {
@@ -102,23 +104,11 @@ export function useBrowser(
         snapshotRef.current.generation,
         action,
       );
-      if (
-        currentScope.current === capturedScope &&
-        operation === sequence.current
-      )
-        setSnapshot(result);
+      if (current()) setSnapshot(result);
     } catch (cause) {
-      if (
-        currentScope.current === capturedScope &&
-        operation === sequence.current
-      )
-        setError(browserErrorMessage(cause));
+      if (current()) setError(browserErrorMessage(cause));
     } finally {
-      if (
-        currentScope.current === capturedScope &&
-        operation === sequence.current
-      )
-        setBusy(false);
+      if (current()) setBusy(false);
     }
   }, []);
 
@@ -126,30 +116,21 @@ export function useBrowser(
     (request: BrowserViewport) => api.current.viewport(request).catch(() => {}),
     [],
   );
-  const certificates = useCallback(
-    async (
-      action: BrowserCertificateAction,
-      appearance: {
-        colorScheme: "system" | "dark" | "light";
-        textSize: "compact" | "comfortable" | "large";
-      },
-    ) => {
-      const generation = snapshotRef.current.generation;
-      const capturedScope = currentScope.current;
-      const handler = api.current.certificates;
-      if (!handler)
-        throw new Error(
-          "Certificate setup is unavailable on this browser host.",
-        );
-      const status = await handler(generation, action, appearance);
-      if (capturedScope !== currentScope.current)
-        throw new Error("The selected workspace changed.");
-      const value = await api.current.context();
-      if (capturedScope === currentScope.current) setSnapshot(value);
-      return status;
-    },
-    [],
-  );
+  const certificates = useCallback(async (action: BrowserCertificateAction) => {
+    const generation = snapshotRef.current.generation;
+    const capturedScope = currentScope.current;
+    const handler = api.current.certificates;
+    if (!handler) throw new Error("Certificate setup is unavailable.");
+    const status = await handler(generation, action, {
+      colorScheme: appearanceRef.current.resolvedColorTheme,
+      textSize: appearanceRef.current.textSize,
+    });
+    if (capturedScope !== currentScope.current)
+      throw new Error("The selected workspace changed.");
+    const value = await api.current.context();
+    if (capturedScope === currentScope.current) setSnapshot(value);
+    return status;
+  }, []);
   return {
     snapshot,
     error: error || contextError,

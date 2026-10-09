@@ -1,11 +1,14 @@
+/** @jsxRuntime classic */
+/** @jsx element */
+// The classic JSX transform keeps this bounded browser surface compact.
+import { element } from "./browser-jsx";
 import { useEffect, useRef, useState } from "react";
-import { Button } from "@colossus/ui";
+import { Button } from "@colossus/ui/components/Controls";
 import type {
   BrowserCertificateAction,
   BrowserCertificateStatus,
 } from "../../browser-api";
 import { browserErrorMessage } from "../../browser-api";
-import { useAppearance } from "../../theme/AppearanceProvider";
 import type { BrowserController } from "./useBrowser";
 
 export function BrowserCertificates({
@@ -15,7 +18,6 @@ export function BrowserCertificates({
   controller: BrowserController;
   onClose: () => void;
 }) {
-  const preferences = useAppearance();
   const [status, setStatus] = useState<BrowserCertificateStatus | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -26,10 +28,7 @@ export function BrowserCertificates({
     setBusy(true);
     setError("");
     try {
-      const status = await controller.certificates(action, {
-        colorScheme: preferences.resolvedColorTheme,
-        textSize: preferences.textSize,
-      });
+      const status = await controller.certificates(action);
       if (sequence === operation.current) setStatus(status);
     } catch (cause) {
       if (sequence === operation.current) setError(browserErrorMessage(cause));
@@ -48,10 +47,10 @@ export function BrowserCertificates({
   }, []);
   return (
     <div
-      className="browser-certificates"
+      className="browser-pki"
       role="dialog"
       aria-modal="false"
-      aria-labelledby="browser-certificates-title"
+      aria-labelledby="browser-pki-title"
       data-browser-occluded
       onKeyDown={(event) => {
         if (event.key === "Escape") {
@@ -60,64 +59,55 @@ export function BrowserCertificates({
         }
       }}
     >
-      <div className="browser-certificate-heading">
-        <h3 id="browser-certificates-title">Browser certificates</h3>
+      <div className="browser-pki-bar">
+        <h3 id="browser-pki-title">Browser certificates</h3>
         <Button ref={closeRef} onClick={onClose}>
           Close
         </Button>
       </div>
-      <p>{status?.message ?? "Reading native certificate support…"}</p>
+      <p role={error ? "alert" : "status"}>
+        {error || status?.message || "Loading certificates…"}
+      </p>
       {status ? (
-        <dl>
-          <dt>Trust scope</dt>
-          <dd>
-            {status.scope === "operating_system_user"
-              ? "Operating-system user store"
-              : "Unavailable"}
-          </dd>
-          <dt>Client certificate selection</dt>
-          <dd>
-            {status.clientIdentitySelectionReady ? "Available" : "Unavailable"}
-          </dd>
-          {status.acceptancePending ? (
-            <>
-              <dt>Native acceptance</dt>
-              <dd>Pending</dd>
-            </>
-          ) : null}
-        </dl>
+        <p>
+          Trust scope:{" "}
+          {status.scope === "operating_system_user"
+            ? "Operating-system user store"
+            : "Unavailable"}
+          . Client selection:{" "}
+          {status.clientIdentitySelectionReady ? "Available" : "Unavailable"}.{" "}
+          {status.acceptancePending ? "Native acceptance pending." : ""}
+        </p>
       ) : null}
-      {error ? <p role="alert">{error}</p> : null}
       {status?.fingerprintsSha256.length ? (
         <div role="status">
-          <p>Imported certificate fingerprints (SHA-256)</p>
-          <ul>
-            {status.fingerprintsSha256.map((fingerprint) => (
-              <li key={fingerprint}>
-                <code>{fingerprint}</code>
-              </li>
-            ))}
-          </ul>
+          <p>Fingerprints (SHA-256)</p>
+          <pre>{status.fingerprintsSha256.join("\n")}</pre>
         </div>
       ) : null}
-      <div className="browser-certificate-actions">
-        <Button
-          disabled={busy || !status?.caImportAvailable}
-          onClick={() => void perform("import_ca")}
-        >
-          Import CA certificate
-        </Button>
-        <Button
-          disabled={busy || !status?.pfxImportAvailable}
-          onClick={() => void perform("import_client_identity")}
-        >
-          Import PKCS#12 identity
-        </Button>
+      <div className="browser-pki-bar">
+        {(
+          [
+            ["import_ca", "Import CA certificate", status?.caImportAvailable],
+            [
+              "import_client_identity",
+              "Import PKCS#12 identity",
+              status?.pfxImportAvailable,
+            ],
+          ] as const
+        ).map(([action, label, available]) => (
+          <Button
+            key={action}
+            disabled={busy || !available}
+            onClick={() => void perform(action)}
+          >
+            {label}
+          </Button>
+        ))}
       </div>
       <p>
-        Files and passphrases are selected in native dialogs. Imports can affect
-        other applications. Client certificate import does not grant an agent
-        access.
+        Native dialogs handle files and passphrases. Imports affect other apps
+        and do not authorize agents.
       </p>
     </div>
   );
