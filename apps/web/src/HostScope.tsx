@@ -4,6 +4,14 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@colossus/ui/components/ui/collapsible";
+import {
+  Sheet,
+  SheetTrigger,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from "@colossus/ui/components/ui/sheet";
 import { Button as FoundationButton } from "@colossus/ui/components/ui/button";
 import {
   SidebarHeader,
@@ -29,6 +37,7 @@ import {
   IconFolder,
   IconPencilPlus,
   IconLock,
+  IconInfoCircle,
 } from "@tabler/icons-react";
 import {
   projectPath,
@@ -572,10 +581,48 @@ export function HostOverview({
             {host.deployment_kind === "desktop" ? "Desktop" : "CLI"}
           </p>
         </div>
-        <span className="host-connection-status">
-          <span className={`dot ${connection.ready ? "live" : ""}`} />
-          {connection.label}
-        </span>
+        <div className="host-overview-actions">
+          <span className="host-connection-status">
+            <span className={`dot ${connection.ready ? "live" : ""}`} />
+            {connection.label}
+          </span>
+          <Sheet key={`${project}:${host.host_id}`}>
+            <SheetTrigger asChild>
+              <Button variant="secondary">
+                <IconInfoCircle size={17} aria-hidden="true" />
+                Host details
+              </Button>
+            </SheetTrigger>
+            <SheetContent className="host-details-sheet">
+              <SheetHeader>
+                <SheetTitle>Host details</SheetTitle>
+                <SheetDescription>{host.label}</SheetDescription>
+              </SheetHeader>
+              <dl className="configuration-list host-details-fields">
+                {[
+                  ["Operating system", platformName(host.platform)],
+                  [
+                    "Deployment",
+                    host.deployment_kind === "desktop" ? "Desktop" : "CLI",
+                  ],
+                  ["Connection", connection.label],
+                  ["Host identity", host.host_id],
+                  [
+                    "Last contact",
+                    host.last_seen_at
+                      ? new Date(host.last_seen_at * 1000).toLocaleString()
+                      : "Not reported",
+                  ],
+                ].map(([name, value]) => (
+                  <div key={name}>
+                    <dt>{name}</dt>
+                    <dd>{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </SheetContent>
+          </Sheet>
+        </div>
       </header>
       <div className="host-workspace-welcome">
         <IconFolder size={34} aria-hidden="true" />
@@ -604,19 +651,6 @@ export function HostOverview({
             ))}
         </div>
       </div>
-      <details className="host-diagnostics">
-        <summary>Host details</summary>
-        <dl>
-          <dt>Host identity</dt>
-          <dd className="mono">{host.host_id}</dd>
-          <dt>Last contact</dt>
-          <dd>
-            {host.last_seen_at
-              ? new Date(host.last_seen_at * 1000).toLocaleString()
-              : "Not reported"}
-          </dd>
-        </dl>
-      </details>
     </section>
   );
 }

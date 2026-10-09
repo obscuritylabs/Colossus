@@ -2505,3 +2505,45 @@ h2:focus-visible {
   color: var(--accent-text);
   text-decoration: underline;
 }
+
+.host-overview-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.host-details-sheet {
+  overflow-y: auto;
+}
+.host-details-sheet [data-slot="sheet-header"] {
+  padding-right: 52px;
+  border-bottom: 1px solid var(--border);
+}
+.host-details-sheet [data-slot="sheet-title"] {
+  margin: 0;
+  font-size: var(--font-size-heading);
+}
+.host-details-sheet [data-slot="sheet-description"] {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.host-details-fields {
+  margin: 0;
+  padding: 0 16px 16px;
+}
+.host-details-fields > div {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 5px;
+}
+.host-details-fields dd {
+  overflow-wrap: anywhere;
+}
+
+.workspace-connection-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-top: 16px;
+}

@@ -700,30 +700,6 @@ export function AgentWorkspace({
           { id: "policy", label: "Policy & configuration" },
         ]}
       />
-      {agent && tab === "overview" ? (
-        <details className="workspace-connection-details">
-          <summary>Connection details</summary>
-          <dl>
-            <dt>Enrollment alias</dt>
-            <dd>{agent.node.label}</dd>
-            <dt>Runtime identity</dt>
-            <dd className="mono">{agent.node.instance_id}</dd>
-            <dt>Agent identity</dt>
-            <dd className="mono">{agent.node.node_id}</dd>
-            <dt>Allowed roles</dt>
-            <dd>{agent.node.roles.join(", ")}</dd>
-          </dl>
-          {permissions.includes("administer") && onRevoke ? (
-            <Button
-              variant="danger"
-              disabled={busy || agent.node.revoked}
-              onClick={onRevoke}
-            >
-              Revoke workspace connection
-            </Button>
-          ) : null}
-        </details>
-      ) : null}
       {agent ? (
         tab === "threads" ? (
           <AgentConversations

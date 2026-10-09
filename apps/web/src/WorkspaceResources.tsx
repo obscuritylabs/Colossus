@@ -5,6 +5,7 @@ import {
   WorkspaceSurfaceHeader,
   type LibraryArtifact,
 } from "@colossus/ui";
+import { Button as LinkButton } from "@colossus/ui/components/ui/button";
 import { DataTable, type DataTableColumn } from "@colossus/ui/data-table";
 import { IconPlugConnected } from "@tabler/icons-react";
 import {
@@ -110,30 +111,37 @@ export function WorkspaceConnections({
                     : "Offline",
               ],
               ["Runtime identity", agent.node.instance_id],
+              ["Agent identity", agent.node.node_id],
               ["Workspace identity", agent.node.workspace_id ?? "Not reported"],
               ["Enrollment alias", agent.node.label],
               ["Allowed roles", agent.node.roles.join(", ")],
             ].map(([name, value]) => (
               <div key={name}>
                 <dt>{name}</dt>
-                <dd>{value}</dd>
+                <dd className={name?.endsWith("identity") ? "mono" : undefined}>
+                  {value}
+                </dd>
               </div>
             ))}
           </dl>
-          {agent.node.host_id ? (
-            <RouteLink href={hostHref(project, agent.node.host_id)}>
-              Open host
-            </RouteLink>
-          ) : null}
-          {canRevoke && onRevoke ? (
-            <Button
-              variant="danger"
-              disabled={busy || agent.node.revoked}
-              onClick={onRevoke}
-            >
-              Revoke workspace connection
-            </Button>
-          ) : null}
+          <footer className="workspace-connection-actions">
+            {agent.node.host_id ? (
+              <LinkButton asChild variant="outline">
+                <RouteLink href={hostHref(project, agent.node.host_id)}>
+                  Open host
+                </RouteLink>
+              </LinkButton>
+            ) : null}
+            {canRevoke && onRevoke ? (
+              <Button
+                variant="danger"
+                disabled={busy || agent.node.revoked}
+                onClick={onRevoke}
+              >
+                Revoke workspace connection
+              </Button>
+            ) : null}
+          </footer>
         </section>
       </div>
     </section>
