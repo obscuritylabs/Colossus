@@ -430,14 +430,14 @@ export function WorkSurface({
   }
 
   useEffect(() => {
-    changeSessionWorkspaceView(initialSessionWorkspaceView);
+    // Reflect host navigation without emitting another navigation event. Host
+    // callbacks can change during live refresh and must not reset this view.
+    setSessionWorkspaceView(initialSessionWorkspaceView);
     setSelectedPlanId(null);
     updateFollowingLatest(true);
-  }, [
-    changeSessionWorkspaceView,
-    initialSessionWorkspaceView,
-    selectedSessionId,
-  ]);
+  }, [initialSessionWorkspaceView, selectedSessionId]);
+
+  useEffect(() => setAsideDraft(null), [selectedSessionId]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
@@ -648,11 +648,12 @@ export function WorkSurface({
     for (const { element } of obscured) {
       element.setAttribute("inert", "");
     }
-    const focusTimer = window.setTimeout(
-      () => drawerCloseRef.current?.focus(),
-      180,
-    );
+    const focusTimer = window.setTimeout(() => {
+      if (!document.activeElement?.closest('[role="menu"]'))
+        drawerCloseRef.current?.focus();
+    }, 180);
     function onDrawerKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.defaultPrevented) return;
       if (event.key === "Escape") {
         event.preventDefault();
         if (activeDrawer === "aside") {
@@ -800,10 +801,13 @@ export function WorkSurface({
       onSelectArtifact(artifacts[0].id);
     }
     if (drawer === "aside" && run !== undefined) {
-      setAsideDraft({
-        sourceRunId: run.runId,
-        quote: "",
-      });
+      setAsideDraft(
+        (current) =>
+          current ?? {
+            sourceRunId: run.runId,
+            quote: "",
+          },
+      );
       void onLoadAsides(run.sessionId);
     }
     setActiveDrawer(drawer);
@@ -966,16 +970,17 @@ export function WorkSurface({
           },
         ]
       : []),
-    ...(browser.snapshot.available
-      ? [
-          {
-            id: "browser" as const,
-            label: "Browser",
-            description: "Websites and local previews",
-            icon: IconWorld,
-          },
-        ]
-      : []),
+    {
+      id: "browser",
+      label: "Browser",
+      description: browser.snapshot.available
+        ? "Websites and local previews"
+        : browser.loading
+          ? "Checking browser availability…"
+          : browser.error || "Browser preview is not enabled in this build",
+      icon: IconWorld,
+      disabled: !browser.snapshot.available,
+    },
     ...(shellScope
       ? [
           {

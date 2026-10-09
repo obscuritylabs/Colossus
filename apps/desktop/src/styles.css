@@ -6163,7 +6163,7 @@ textarea {
 }
 
 .aside-close-confirm strong {
-  font-size: 0.72rem;
+  font-size: var(--font-size-body-sm);
 }
 
 .aside-close-confirm p {
@@ -6203,7 +6203,7 @@ textarea {
 .aside-history h4 {
   margin: 0;
   color: var(--text);
-  font-size: 0.76rem;
+  font-size: var(--font-size-body-sm);
 }
 
 .aside-empty p {
@@ -6281,7 +6281,8 @@ textarea {
 .aside-composer {
   position: relative;
   z-index: 2;
-  align-self: end;
+  align-self: stretch;
+  width: 100%;
   max-width: 100%;
   min-width: 0;
   overflow: hidden;
@@ -6305,7 +6306,7 @@ textarea {
   background: var(--surface-control);
   color: var(--text);
   font: inherit;
-  font-size: 0.72rem;
+  font-size: var(--font-size-body-sm);
   line-height: 1.5;
 }
 

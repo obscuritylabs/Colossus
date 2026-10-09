@@ -24,6 +24,7 @@ export function useBrowser(
     available: fixture,
   });
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(!fixture);
   const [busy, setBusy] = useState(false);
   const api = useRef<BrowserApi>(nativeBrowserApi);
   const sequence = useRef(0);
@@ -33,11 +34,15 @@ export function useBrowser(
   snapshotRef.current = snapshot;
 
   useEffect(() => {
-    let cancelled = false;
-    let timer: number | undefined;
     setSnapshot({ ...empty, available: fixture });
+    setLoading(!fixture);
     setError("");
     setBusy(false);
+  }, [scope, fixture]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | undefined;
     const capturedScope = scope;
     async function load() {
       if (fixture && import.meta.env.DEV) {
@@ -52,10 +57,20 @@ export function useBrowser(
             !cancelled &&
             currentScope.current === capturedScope &&
             sequence.current === started
-          )
+          ) {
             setSnapshot(value);
-        } catch {
-          /* Browsing is optional in builds without the native preview. */
+            setLoading(false);
+            setError("");
+          }
+        } catch (cause) {
+          if (
+            !cancelled &&
+            currentScope.current === capturedScope &&
+            sequence.current === started
+          ) {
+            setLoading(false);
+            setError(browserErrorMessage(cause));
+          }
         }
         if (!cancelled && visible)
           timer = window.setTimeout(() => void refresh(), 750);
@@ -108,7 +123,7 @@ export function useBrowser(
     (request: BrowserViewport) => api.current.viewport(request).catch(() => {}),
     [],
   );
-  return { snapshot, error, busy, command, viewport, fixture };
+  return { snapshot, error, loading, busy, command, viewport, fixture };
 }
 
 export type BrowserController = ReturnType<typeof useBrowser>;

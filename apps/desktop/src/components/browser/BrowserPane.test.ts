@@ -29,6 +29,7 @@ function render(
     },
     error: "",
     busy: false,
+    loading: false,
     fixture: true,
     command: vi.fn(async () => {}),
     viewport: vi.fn(async () => {}),

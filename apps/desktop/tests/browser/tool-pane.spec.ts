@@ -397,6 +397,8 @@ test("Aside composer stays inside the pane while long content scrolls and the wi
     const composer = aside.locator(".aside-composer");
     const bounds = await aside.boundingBox();
     const input = await composer.boundingBox();
+    expect(Math.abs(input!.x - bounds!.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(input!.width - bounds!.width)).toBeLessThanOrEqual(1);
     expect(input!.y + input!.height).toBeLessThanOrEqual(
       bounds!.y + bounds!.height + 1,
     );
@@ -412,5 +414,38 @@ test("Aside composer stays inside the pane while long content scrolls and the wi
     await expect(
       aside.getByRole("button", { name: "Send Aside message" }),
     ).toBeInViewport();
+  }
+});
+
+test("Tools and pane menus switch from Aside to Thread details and fit the viewport", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1100, height: 700 });
+  await page.goto("/?fixture=operations-studio");
+  await page.getByRole("button", { name: "Open tools", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: /^Aside/ }).click();
+  const aside = page.getByRole("region", {
+    name: "Aside conversation",
+    exact: true,
+  });
+  await expect(aside).toBeVisible();
+  await aside
+    .getByRole("textbox", { name: "Aside message", exact: true })
+    .fill("Retain this Aside draft");
+  for (const triggerName of ["Open tools", "Switch pane tool"]) {
+    await page.getByRole("button", { name: triggerName, exact: true }).click();
+    const menu = page.getByRole("menu", { name: "Workspace tools" });
+    const bounds = await menu.boundingBox();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(701);
+    await page.getByRole("menuitemradio", { name: /^Thread details/ }).click();
+    await expect(
+      page.getByRole("heading", { name: "Thread details", exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Switch pane tool" }).click();
+    await page.getByRole("menuitemradio", { name: /^Aside/ }).click();
+    await expect(
+      aside.getByRole("textbox", { name: "Aside message", exact: true }),
+    ).toHaveValue("Retain this Aside draft");
   }
 });
