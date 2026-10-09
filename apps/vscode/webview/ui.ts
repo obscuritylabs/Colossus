@@ -57,7 +57,12 @@ window.addEventListener(
       event.data.preferences?.palette ??
       event.data.view?.preferences?.palette ??
       (event.data.type === "palette" ? event.data.palette : undefined);
-    if (palette === "editor" || palette === "colossus" || palette === "hacker")
+    if (
+      palette === "editor" ||
+      palette === "colossus" ||
+      palette === "black" ||
+      palette === "hacker"
+    )
       applyPalette(palette);
   },
 );

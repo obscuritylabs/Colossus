@@ -2,18 +2,20 @@ import { createContext, useEffect, useState } from "react";
 import { DropdownSelect } from "@colossus/ui";
 import { AppearanceSettings as SharedAppearanceSettings } from "@colossus/ui/appearance";
 import {
+  DARK_PALETTE_OPTIONS,
   DEFAULT_THEME_PALETTES,
   PALETTE_CSS_VARIABLES,
   parseThemePalettes,
   paletteCssVariables,
   validPaletteColor,
+  type DarkPalettePreference,
   type ThemePalettes,
 } from "@colossus/ui/lib/palette";
 import "@colossus/ui/styles/appearance.css";
 
 type Appearance = {
   colorTheme: "system" | "dark" | "light";
-  darkPalette: "colossus" | "neutral" | "hacker";
+  darkPalette: DarkPalettePreference;
   textSize: "compact" | "comfortable" | "large";
   sendShortcut: "enter" | "modEnter";
   palettes: ThemePalettes;
@@ -45,8 +47,8 @@ function readAppearance(): Appearance {
       colorTheme: ["system", "dark", "light"].includes(value.colorTheme ?? "")
         ? value.colorTheme!
         : defaults.colorTheme,
-      darkPalette: ["colossus", "neutral", "hacker"].includes(
-        value.darkPalette ?? "",
+      darkPalette: DARK_PALETTE_OPTIONS.includes(
+        value.darkPalette ?? defaults.darkPalette,
       )
         ? value.darkPalette!
         : defaults.darkPalette,

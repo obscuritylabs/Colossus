@@ -2,10 +2,14 @@ import { IconPalette, IconRefresh, IconTypography } from "@tabler/icons-react";
 import { useState, type CSSProperties } from "react";
 
 import { isDefaultPalette, palettePreviewVariables } from "../lib/palette";
-import type { PaletteColor, PaletteTheme, ThemePalettes } from "../lib/palette";
+import type {
+  DarkPalettePreference,
+  PaletteColor,
+  PaletteTheme,
+  ThemePalettes,
+} from "../lib/palette";
 import { DropdownSelect } from "./DropdownSelect";
 type ColorThemePreference = "system" | "dark" | "light";
-type DarkPalettePreference = "colossus" | "neutral" | "hacker";
 type TextSizePreference = "compact" | "comfortable" | "large";
 export interface AppearanceControls {
   colorTheme: ColorThemePreference;
@@ -131,8 +135,8 @@ export function AppearanceSettings({
             <span className="appearance-control-copy">
               <strong>Dark palette</strong>
               <small id="appearance-dark-palette-help">
-                Choose Colossus blue, neutral dark, or the TUI’s Hacker palette.
-                Your custom Colossus colors are kept.
+                Choose Colossus blue, neutral dark, Black, or the TUI’s Hacker
+                palette. Your custom Colossus colors are kept.
               </small>
             </span>
             <DropdownSelect
@@ -145,6 +149,7 @@ export function AppearanceSettings({
             >
               <option value="colossus">Colossus blue</option>
               <option value="neutral">Neutral dark (Dark+)</option>
+              <option value="black">Black (shadcn)</option>
               <option value="hacker">Hacker (TUI)</option>
             </DropdownSelect>
           </label>
@@ -174,8 +179,13 @@ export function AppearanceSettings({
         </div>
         {presetPreview ? (
           <p className="appearance-palette-notice">
-            {darkPalette === "hacker" ? "Hacker" : "Neutral dark"} uses preset
-            colors. Choose Colossus blue to edit your saved custom palette.
+            {darkPalette === "hacker"
+              ? "Hacker"
+              : darkPalette === "black"
+                ? "Black"
+                : "Neutral dark"}{" "}
+            uses preset colors. Choose Colossus blue to edit your saved custom
+            palette.
           </p>
         ) : null}
         <div className="appearance-palette-editor">

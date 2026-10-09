@@ -2,7 +2,7 @@
 
 `@colossus/ui` is a private source package consumed by Desktop, the VS Code
 webviews, and the web control plane from the same checkout. It owns theme tokens
-(Colossus blue, light, neutral dark, and Hacker), the brand mark, application and
+(Colossus blue, light, neutral dark, Black, and Hacker), the brand mark, application and
 settings frames, compact catalog inventories, shadcn foundations, data tables, composer sizing and
 keyboard behavior, and the accessible dropdown control. Each host compiles this
 source into its own renderer bundle; this package is not independently
@@ -24,8 +24,9 @@ No generated UI bundle needs committing. React is pinned to the same peer versio
 in all consumers so each renderer has one React instance.
 
 Neutral dark is the VS Code default. Desktop keeps Colossus blue by default and
-offers neutral dark and Hacker in Global → Appearance → Dark palette. Desktop keeps saved
-custom palette colors while neutral dark or Hacker is selected. Hacker translates
+offers neutral dark, Black, and Hacker in Global → Appearance → Dark palette. Desktop keeps saved
+custom palette colors while a preset palette is selected. Black uses shadcn’s near-black neutral surfaces
+with Colossus accents; it is available in all three apps. Hacker translates
 the TUI palette from `crates/colossus-presentation/src/palette.rs`: green prompts
 and success, pale-green messages, cyan tools, amber warnings, and red errors.
 The shared CSS adds near-black graphical surfaces and retains Colossus typography

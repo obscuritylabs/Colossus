@@ -302,7 +302,7 @@ test("settings use one editor panel, persist user preferences, and never read cr
     );
     userSettingsFailure = false;
     preferenceFailure = undefined;
-    for (const palette of ["colossus", "editor", "hacker"]) {
+    for (const palette of ["colossus", "editor", "black", "hacker"]) {
       await send({ type: "setPreference", name: "palette", value: palette });
       const saved = (
         messages.at(-1) as {

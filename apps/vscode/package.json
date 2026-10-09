@@ -178,11 +178,13 @@
           "enum": [
             "editor",
             "colossus",
+            "black",
             "hacker"
           ],
           "enumDescriptions": [
             "Neutral Dark+ surfaces in dark themes; Colossus light tokens in light themes.",
             "Colossus Desktop blue surfaces in dark themes.",
+            "Black shadcn surfaces with Colossus accents in dark themes.",
             "TUI Hacker colors on near-black surfaces in dark themes."
           ],
           "default": "editor",

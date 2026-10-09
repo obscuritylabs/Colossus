@@ -1,3 +1,11 @@
+export const DARK_PALETTE_OPTIONS = [
+  "colossus",
+  "neutral",
+  "black",
+  "hacker",
+] as const;
+export type DarkPalettePreference = (typeof DARK_PALETTE_OPTIONS)[number];
+
 export type PaletteTheme = "dark" | "light";
 export type PaletteColor = "accent" | "background" | "surface" | "icon";
 

@@ -189,8 +189,9 @@ function Settings() {
               <div>
                 <label htmlFor="palette">Surface palette</label>
                 <p>
-                  Dark palettes: neutral charcoal, Colossus blue, or the TUI’s
-                  green Hacker theme. Light and high contrast follow VS Code.
+                  Dark palettes: neutral charcoal, Colossus blue, Black, or the
+                  TUI’s green Hacker theme. Light and high contrast follow VS
+                  Code.
                 </p>
               </div>
               <DropdownSelect
@@ -206,6 +207,7 @@ function Settings() {
               >
                 <option value="editor">Editor (Dark+)</option>
                 <option value="colossus">Colossus blue</option>
+                <option value="black">Black (shadcn)</option>
                 <option value="hacker">Hacker (TUI)</option>
               </DropdownSelect>
             </div>

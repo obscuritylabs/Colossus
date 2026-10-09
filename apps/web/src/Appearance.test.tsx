@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import { AppearanceSettings } from "./Appearance";
+import { AppearanceSettings, useAppearance } from "./Appearance";
 import {
   DEFAULT_THEME_PALETTES,
   parseThemePalettes,
@@ -49,5 +49,69 @@ it("validates native color input before persisting browser preferences", async (
   } finally {
     await act(() => root.unmount());
     container.remove();
+  }
+});
+
+it("restores Black without overwriting saved custom colors", async () => {
+  const storage = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+    removeItem: (key: string) => storage.delete(key),
+  });
+  const palettes = parseThemePalettes(DEFAULT_THEME_PALETTES);
+  palettes.dark.background = "#101010";
+  const saved = {
+    colorTheme: "dark",
+    darkPalette: "black",
+    textSize: "large",
+    sendShortcut: "modEnter",
+    palettes,
+  };
+  localStorage.setItem("colossus.web.appearance.v1", JSON.stringify(saved));
+  function Preferences() {
+    const { appearance, setAppearance } = useAppearance();
+    return (
+      <>
+        <AppearanceSettings appearance={appearance} onChange={setAppearance} />
+        <button
+          data-testid="restore-colossus-palette"
+          onClick={() =>
+            setAppearance({ ...appearance, darkPalette: "colossus" })
+          }
+        >
+          Restore custom palette
+        </button>
+      </>
+    );
+  }
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(() => root.render(<Preferences />));
+    expect(document.documentElement.dataset.palette).toBe("black");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(document.documentElement.style.getPropertyValue("--main")).toBe("");
+    expect(
+      JSON.parse(localStorage.getItem("colossus.web.appearance.v1")!),
+    ).toEqual(saved);
+    expect(container.textContent).toContain("Black uses preset colors");
+    await act(() => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="restore-colossus-palette"]',
+        )!
+        .click();
+    });
+    expect(document.documentElement.style.getPropertyValue("--main")).toBe(
+      "#101010",
+    );
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    localStorage.removeItem("colossus.web.appearance.v1");
+    vi.unstubAllGlobals();
   }
 });

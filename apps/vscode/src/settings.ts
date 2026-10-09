@@ -4,7 +4,7 @@ export interface Preferences {
   sendShortcut: "enter" | "modEnter";
   defaultMode: WorkMode;
   showToolActivity: boolean;
-  palette: "editor" | "colossus" | "hacker";
+  palette: "editor" | "colossus" | "black" | "hacker";
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -83,6 +83,7 @@ export function parseSettingsAction(
     (input.name === "palette" &&
       (input.value === "editor" ||
         input.value === "colossus" ||
+        input.value === "black" ||
         input.value === "hacker"))
   )
     return input as SettingsAction;
@@ -139,6 +140,8 @@ export function readPreferences(get: (key: string) => unknown): Preferences {
     defaultMode: isWorkMode(mode) ? mode : "plan",
     showToolActivity: typeof activity === "boolean" ? activity : true,
     palette:
-      palette === "colossus" || palette === "hacker" ? palette : "editor",
+      palette === "colossus" || palette === "black" || palette === "hacker"
+        ? palette
+        : "editor",
   };
 }
