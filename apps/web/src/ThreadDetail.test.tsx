@@ -121,6 +121,23 @@ async function write(value: string) {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
+async function conversationMenuItem(label: string) {
+  const trigger = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Conversation actions"]',
+  );
+  if (!trigger) throw new Error("Missing conversation action menu");
+  await act(async () => {
+    trigger.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+  });
+  const item = [
+    ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+  ].find((item) => item.textContent?.trim() === label);
+  if (!item) throw new Error(`Missing menu action ${label}`);
+  return item;
+}
+
 describe("human cloud conversation authority", () => {
   it("exposes a real Back permalink while plain clicks preserve the host callback and modified clicks remain native", async () => {
     vi.stubGlobal(
@@ -432,7 +449,9 @@ describe("human cloud conversation authority", () => {
     );
     expect(button("Send message").disabled).toBe(true);
     expect(container.textContent).toContain("shared for viewing");
-    expect(button("Archive").disabled).toBe(false);
+    expect(
+      (await conversationMenuItem("Archive")).getAttribute("aria-disabled"),
+    ).not.toBe("true");
   });
   it("submits multi-turn input against the exact revision and preserves its idempotency identity after a retry", async () => {
     const attempts: Array<{
@@ -502,7 +521,8 @@ describe("human cloud conversation authority", () => {
         (item) => item.textContent,
       ),
     ).toEqual(["Earlier human request", "Saved assistant reply"]);
-    await act(async () => button("Archive").click());
+    const archive = await conversationMenuItem("Archive");
+    await act(async () => archive.click());
     const mutation = calls.find((item) => item.options.method === "PATCH")!;
     expect(JSON.parse(mutation.options.body as string)).toEqual({
       revision: 7,

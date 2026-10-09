@@ -2,6 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import { SidebarProvider } from "@colossus/ui/components/ui/sidebar";
 import { HostSidebar } from "./HostScope";
 import type { FleetNode, Host } from "./api";
 
@@ -65,27 +66,29 @@ it("shows simultaneous host workspaces, scopes each thread query, and rejects fo
   try {
     await act(() =>
       root.render(
-        <HostSidebar
-          project="p"
-          host={host}
-          nodes={[
-            node("a", "host-a", "Colossus"),
-            node("b", "host-a", "pointbreak"),
-            node("c", "host-b", "Other host workspace"),
-          ]}
-          agentId="a"
-          selected=""
-          identity="user"
-          canExecute={false}
-          onAgent={select}
-          onOpen={() => {}}
-          onNew={create}
-          onBack={() => {}}
-          hasMore={false}
-          onMore={() => {}}
-          moreBusy={false}
-          error=""
-        />,
+        <SidebarProvider>
+          <HostSidebar
+            project="p"
+            host={host}
+            nodes={[
+              node("a", "host-a", "Colossus"),
+              node("b", "host-a", "pointbreak"),
+              node("c", "host-b", "Other host workspace"),
+            ]}
+            agentId="a"
+            selected=""
+            identity="user"
+            canExecute={false}
+            onAgent={select}
+            onOpen={() => {}}
+            onNew={create}
+            onBack={() => {}}
+            hasMore={false}
+            onMore={() => {}}
+            moreBusy={false}
+            error=""
+          />
+        </SidebarProvider>,
       ),
     );
     expect(element.textContent).toContain("Colossus");

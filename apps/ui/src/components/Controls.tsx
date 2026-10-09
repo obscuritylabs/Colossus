@@ -1,5 +1,5 @@
 import type { ComponentProps } from "react";
-import { buttonVariants } from "./ui/button.js";
+import { Button as FoundationButton } from "./ui/button.js";
 import { Input } from "./ui/input.js";
 
 const variants = {
@@ -19,11 +19,11 @@ export function Button({
   variant?: keyof typeof variants;
 }) {
   return (
-    <button
+    <FoundationButton
       {...props}
       type={type}
-      data-slot="button"
-      className={buttonVariants({ variant: variants[variant], className })}
+      variant={variants[variant]}
+      className={className}
     />
   );
 }

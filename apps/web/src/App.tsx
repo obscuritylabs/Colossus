@@ -641,6 +641,7 @@ function AuthenticatedApp({
   return (
     <SendShortcutContext value={appearance.sendShortcut}>
       <ControlPlaneFrame
+        activeScopeKey={JSON.stringify(route)}
         current={surface}
         navigation={[
           {

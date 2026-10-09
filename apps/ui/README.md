@@ -95,6 +95,13 @@ can supply a `linkComponent` that validates navigation through their own authori
 Desktop uses its browser controller. VS Code keeps generated links inert. Shared
 styles respond to the same palette and text-size preferences as settings controls.
 
+`ControlPlaneFrame` uses owned shadcn sidebar, menu, sheet, tooltip, collapsible,
+and resizable foundations. Import `styles/control-plane.css` in the web host; its
+workbench styles stay out of Desktop and editor bundles. Shared controls retain
+native behavior and the existing palette and text-size tokens. Add future shadcn
+components to this package as they are adopted, with relative internal imports,
+exact Radix dependencies, and no persistence or transport in the foundation.
+
 `ControlPlaneFrame` supplies the web primary rail, an optional scoped sidebar, content
 header, and configurable classification banner. Navigation, authentication, projects,
 and settings remain web/server decisions. It exposes no transport or persistence.

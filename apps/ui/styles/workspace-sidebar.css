@@ -42,6 +42,9 @@
 .shared-workspace-search input::placeholder {
   color: var(--muted);
 }
+.shared-workspace-search input:focus-visible {
+  outline: none;
+}
 .shared-workspace-search kbd {
   flex: none;
   padding: 1px 4px;
@@ -73,7 +76,8 @@
   font-weight: 600;
   line-height: var(--line-height-body);
 }
-.shared-workspace-scope button[aria-pressed="true"] {
+.shared-workspace-scope
+  button:is([aria-pressed="true"], [aria-checked="true"]) {
   border-color: var(--accent-border);
   background: var(--surface-selected);
   color: var(--accent-text);

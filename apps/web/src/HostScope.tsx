@@ -1,5 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@colossus/ui/components/ui/collapsible";
+import { Button as FoundationButton } from "@colossus/ui/components/ui/button";
+import {
+  SidebarHeader,
+  SidebarContent,
+  SidebarMenu,
+  SidebarMenuItem,
+  SidebarMenuButton,
+  SidebarMenuSubButton,
+} from "@colossus/ui/components/ui/sidebar";
+import {
   Button,
   DropdownSelect,
   WorkspaceSidebarHeading,
@@ -226,31 +240,44 @@ function WorkspaceThreads({
     <div className="host-workspace-threads">
       <LoadState {...resource} retry={resource.refresh} />
       <nav aria-label={`${workspaceName(item)} conversations`}>
-        {threads.map((thread) => (
-          <RouteLink
-            key={thread.thread_id}
-            className={`host-thread-link ${selected === thread.thread_id ? "is-selected" : ""}`}
-            aria-current={selected === thread.thread_id ? "page" : undefined}
-            href={threadHref(project, thread.thread_id)}
-            onNavigate={() => onOpen(thread)}
-            title={thread.title}
-          >
-            <WorkspaceSidebarThreadContent
-              title={thread.title || "Untitled conversation"}
-              metadata={
-                <span>
-                  {thread.source === "runtime" ? "Shared" : "Conversation"} ·{" "}
-                  {new Date(thread.updated_at).toLocaleDateString()}
-                </span>
-              }
-              status={
-                !thread.can_continue ? (
-                  <IconLock size={13} aria-label="View only" />
-                ) : undefined
-              }
-            />
-          </RouteLink>
-        ))}
+        <SidebarMenu>
+          {threads.map((thread) => (
+            <SidebarMenuItem key={thread.thread_id}>
+              <SidebarMenuSubButton
+                asChild
+                isActive={selected === thread.thread_id}
+                className="host-thread-link"
+              >
+                <RouteLink
+                  className={`host-thread-link ${selected === thread.thread_id ? "is-selected" : ""}`}
+                  aria-current={
+                    selected === thread.thread_id ? "page" : undefined
+                  }
+                  href={threadHref(project, thread.thread_id)}
+                  onNavigate={() => onOpen(thread)}
+                  title={thread.title}
+                >
+                  <WorkspaceSidebarThreadContent
+                    title={thread.title || "Untitled conversation"}
+                    metadata={
+                      <span>
+                        {thread.source === "runtime"
+                          ? "Shared"
+                          : "Conversation"}{" "}
+                        · {new Date(thread.updated_at).toLocaleDateString()}
+                      </span>
+                    }
+                    status={
+                      !thread.can_continue ? (
+                        <IconLock size={13} aria-label="View only" />
+                      ) : undefined
+                    }
+                  />
+                </RouteLink>
+              </SidebarMenuSubButton>
+            </SidebarMenuItem>
+          ))}
+        </SidebarMenu>
       </nav>
       {!resource.loading && !resource.error && !threads.length ? (
         <p className="host-sidebar-empty">
@@ -357,42 +384,42 @@ export function HostSidebar({
       className="agent-sidebar host-sidebar"
       aria-label={`${host.label} workspaces`}
     >
-      <RouteLink
-        className="ui-button ui-button--tertiary scope-fleet-back"
-        href={globalHref("fleet", project)}
-        onNavigate={onBack}
-      >
-        <IconArrowLeft size={16} aria-hidden="true" /> Fleet
-      </RouteLink>
-      <div className="host-sidebar-identity">
-        <IconDeviceDesktop size={20} aria-hidden="true" />
-        <div>
-          <strong>{host.label}</strong>
-          <span>{platformName(host.platform)}</span>
+      <SidebarHeader className="host-sidebar-header">
+        <FoundationButton asChild variant="ghost" className="scope-fleet-back">
+          <RouteLink href={globalHref("fleet", project)} onNavigate={onBack}>
+            <IconArrowLeft size={16} aria-hidden="true" /> Fleet
+          </RouteLink>
+        </FoundationButton>
+        <div className="host-sidebar-identity">
+          <IconDeviceDesktop size={20} aria-hidden="true" />
+          <div>
+            <strong>{host.label}</strong>
+            <span>{platformName(host.platform)}</span>
+          </div>
         </div>
-      </div>
-      <WorkspaceSidebarHeading />
-      <WorkspaceSidebarSearch
-        value={query}
-        onChange={setQuery}
-        inputRef={searchRef}
-        shortcut={
-          navigator.platform.toLowerCase().includes("mac") ? "⌘K" : "Ctrl K"
-        }
-        maxLength={256}
-      />
-      <div className="host-sidebar-filter">
-        <span>On this host</span>
-        <DropdownSelect
-          aria-label="Conversation archive filter"
-          value={archived}
-          onChange={(event) => setArchived(event.target.value)}
-        >
-          <option value="false">Open</option>
-          <option value="true">Archived</option>
-        </DropdownSelect>
-      </div>
-      <div className="host-workspace-list">
+        <WorkspaceSidebarHeading />
+        <WorkspaceSidebarSearch
+          value={query}
+          onChange={setQuery}
+          inputRef={searchRef}
+          shortcut={
+            navigator.platform.toLowerCase().includes("mac") ? "⌘K" : "Ctrl K"
+          }
+          maxLength={256}
+        />
+        <div className="host-sidebar-filter">
+          <span>On this host</span>
+          <DropdownSelect
+            aria-label="Conversation archive filter"
+            value={archived}
+            onChange={(event) => setArchived(event.target.value)}
+          >
+            <option value="false">Open</option>
+            <option value="true">Archived</option>
+          </DropdownSelect>
+        </div>
+      </SidebarHeader>
+      <SidebarContent className="host-workspace-list">
         {items.map((item, index) => {
           const id = item.node.node_id,
             expanded =
@@ -400,7 +427,11 @@ export function HostSidebar({
               (folding[id] ?? (!compact && (index < 4 || id === agentId)));
           const state = workspaceState(item);
           return (
-            <section
+            <Collapsible
+              open={expanded}
+              onOpenChange={(next) =>
+                setFolding((current) => ({ ...current, [id]: next }))
+              }
               className={`host-workspace-section ${agentId === id ? "is-active" : ""}`}
               key={id}
               aria-label={`${workspaceName(item)} workspace`}
@@ -408,15 +439,20 @@ export function HostSidebar({
               <WorkspaceSidebarWorkspace
                 className="host-workspace-row"
                 identity={
-                  <RouteLink
+                  <SidebarMenuButton
+                    asChild
+                    isActive={agentId === id}
                     className="shared-workspace-row-identity"
-                    href={agentHref(project, id)}
-                    onNavigate={() => onAgent(id)}
-                    aria-current={agentId === id ? "page" : undefined}
                   >
-                    <IconFolder size={17} aria-hidden="true" />
-                    <strong>{workspaceName(item)}</strong>
-                  </RouteLink>
+                    <RouteLink
+                      href={agentHref(project, id)}
+                      onNavigate={() => onAgent(id)}
+                      aria-current={agentId === id ? "page" : undefined}
+                    >
+                      <IconFolder size={17} aria-hidden="true" />
+                      <strong>{workspaceName(item)}</strong>
+                    </RouteLink>
+                  </SidebarMenuButton>
                 }
                 state={
                   <span
@@ -431,43 +467,42 @@ export function HostSidebar({
                 }
                 actions={
                   <>
-                    <button
-                      className="scope-workspace-toggle"
-                      type="button"
-                      aria-label={`${expanded ? "Collapse" : "Expand"} ${workspaceName(item)} threads`}
-                      aria-expanded={expanded}
-                      onClick={() =>
-                        setFolding((current) => ({
-                          ...current,
-                          [id]: !expanded,
-                        }))
-                      }
-                    >
-                      <IconChevronDown size={15} aria-hidden="true" />
-                    </button>
-                    <button
+                    <CollapsibleTrigger asChild>
+                      <FoundationButton
+                        variant="ghost"
+                        size="icon"
+                        className="scope-workspace-toggle"
+                        aria-label={`${expanded ? "Collapse" : "Expand"} ${workspaceName(item)} threads`}
+                      >
+                        <IconChevronDown size={15} aria-hidden="true" />
+                      </FoundationButton>
+                    </CollapsibleTrigger>
+                    <FoundationButton
+                      variant="ghost"
+                      size="icon"
                       className="scope-new-thread"
-                      type="button"
                       aria-label={`New conversation in ${workspaceName(item)}`}
                       disabled={!canExecute || state !== "Ready"}
                       onClick={() => onNew(id)}
                     >
                       <IconPencilPlus size={16} aria-hidden="true" />
-                    </button>
+                    </FoundationButton>
                   </>
                 }
               />
-              <WorkspaceThreads
-                project={project}
-                item={item}
-                selected={selected}
-                search={search}
-                archived={archived}
-                expanded={expanded}
-                identity={identity}
-                onOpen={onOpen}
-              />
-            </section>
+              <CollapsibleContent>
+                <WorkspaceThreads
+                  project={project}
+                  item={item}
+                  selected={selected}
+                  search={search}
+                  archived={archived}
+                  expanded={expanded}
+                  identity={identity}
+                  onOpen={onOpen}
+                />
+              </CollapsibleContent>
+            </Collapsible>
           );
         })}
         {error ? (
@@ -480,7 +515,7 @@ export function HostSidebar({
             {moreBusy ? "Loading…" : "More workspaces"}
           </Button>
         ) : null}
-      </div>
+      </SidebarContent>
     </aside>
   );
 }

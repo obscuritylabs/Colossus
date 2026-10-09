@@ -5,6 +5,8 @@ import {
   IconWorld,
 } from "@tabler/icons-react";
 import type { ReactNode, Ref } from "react";
+import { Input } from "./ui/input.js";
+import { Button } from "./ui/button.js";
 
 /** Sidebar data, navigation, shortcuts, and workspace authority stay in the host. */
 export function WorkspaceSidebarHeading({
@@ -41,7 +43,7 @@ export function WorkspaceSidebarSearch({
   return (
     <div className={`shared-workspace-search ${className}`}>
       <IconSearch size={17} stroke={1.7} aria-hidden="true" />
-      <input
+      <Input
         ref={inputRef}
         type="search"
         aria-label="Search threads"
@@ -72,23 +74,23 @@ export function WorkspaceSidebarScope({
       role="group"
       aria-label="Thread search scope"
     >
-      <button
-        type="button"
+      <Button
+        variant="ghost"
         aria-pressed={value === "all"}
         onClick={() => onChange("all")}
       >
         <IconWorld size={13} stroke={1.8} aria-hidden="true" />
         All Workspaces
-      </button>
-      <button
-        type="button"
+      </Button>
+      <Button
+        variant="ghost"
         aria-pressed={value === "workspace"}
-        disabled={workspaceDisabled}
         onClick={() => onChange("workspace")}
+        disabled={workspaceDisabled}
       >
         <IconFolder size={13} stroke={1.8} aria-hidden="true" />
         This Workspace
-      </button>
+      </Button>
     </div>
   );
 }

@@ -3,6 +3,13 @@ import {
   ConversationEntry,
   ConversationTimeline,
 } from "@colossus/ui/conversation";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@colossus/ui/components/ui/dropdown-menu";
+import { IconDots } from "@tabler/icons-react";
 import { Badge } from "@colossus/ui/components/ui/badge";
 import { Button as LinkButton } from "@colossus/ui/components/ui/button";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -483,40 +490,50 @@ export function ThreadDetail({
           )}
         </div>
         <div className="thread-header-actions">
+          <Badge
+            className={`thread-presence ${target?.presence?.ready ? "is-online" : ""}`}
+          >
+            <span className={`dot ${target?.presence?.ready ? "live" : ""}`} />
+            {target?.presence?.ready ? "Agent online" : "Agent offline"}
+          </Badge>
           {permissions.includes("control") ? (
-            <>
-              <Button
-                variant="tertiary"
-                aria-label="Rename thread"
-                onClick={() => {
-                  setTitle(thread.title);
-                  setEditing(true);
-                }}
-                disabled={busy}
-              >
-                <IconEdit size={16} aria-hidden="true" />
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => void metadata({ archived: !thread.archived })}
-                disabled={busy}
-              >
-                {thread.archived ? (
-                  <IconArchiveOff size={16} aria-hidden="true" />
-                ) : (
-                  <IconArchive size={16} aria-hidden="true" />
-                )}
-                {thread.archived ? "Restore" : "Archive"}
-              </Button>
-            </>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <LinkButton
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Conversation actions"
+                  disabled={busy}
+                >
+                  <IconDots size={18} aria-hidden="true" />
+                </LinkButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  onSelect={() => {
+                    setTitle(thread.title);
+                    setEditing(true);
+                  }}
+                >
+                  <IconEdit size={16} aria-hidden="true" />
+                  Rename thread
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => void metadata({ archived: !thread.archived })}
+                >
+                  {thread.archived ? (
+                    <IconArchiveOff size={16} aria-hidden="true" />
+                  ) : (
+                    <IconArchive size={16} aria-hidden="true" />
+                  )}
+                  {thread.archived ? "Restore" : "Archive"}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           ) : null}
         </div>
       </div>
       <div className="detail-meta">
-        <span>
-          <span className={`dot ${target?.presence?.ready ? "live" : ""}`} />
-          {target?.presence?.ready ? "Agent online" : "Agent offline"}
-        </span>
         <span>
           {connected ? "Live updates connected" : "Reconnecting updates"}
         </span>

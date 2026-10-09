@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "@colossus/ui/styles/theme.css";
 import "@colossus/ui/styles/shadcn.css";
+import "@colossus/ui/styles/control-plane.css";
 import "@colossus/ui/styles/composer.css";
 import "@colossus/ui/styles/select.css";
 import "@colossus/ui/styles/settings.css";
