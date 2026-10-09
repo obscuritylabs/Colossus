@@ -2,12 +2,12 @@
 
 set -eu
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 
 expect_classification() {
     expected=$1
     shift
-    actual=$($script_dir/classify-changes.sh "$@")
+    actual=$("$script_dir"/classify-changes.sh "$@")
     if [ "$actual" != "$expected" ]; then
         printf 'unexpected classification for %s\nexpected:\n%s\nactual:\n%s\n' "$*" "$expected" "$actual" >&2
         exit 1
@@ -125,7 +125,9 @@ desktop_required=false' docs/deleted.md
 # Exercise each path independently so another changed file cannot hide a
 # missing selector. Classification is path-based for additions, edits and deletes.
 for shared_toolchain_path in \
-    mise.toml mise.lock mise.ci.toml .mise.toml .mise.lock .mise.ci.toml \
+    scripts/ci/mise-bootstrap.sh mise.toml mise.lock mise.ci.toml mise.fuzz.toml mise.fuzz.lock \
+    mise.devcontainer.toml mise.devcontainer.lock \
+    .mise.toml .mise.lock .mise.ci.toml .mise.fuzz.lock \
     .mise/config.toml .mise/tasks/docs/build mise-tasks/docs/build \
     .github/actions/setup/action.yml .github/actions/setup/install.sh \
     .devcontainer/Dockerfile .devcontainer/devcontainer.json \
@@ -150,14 +152,14 @@ dependency_required=false
 sdk_required=false
 desktop_required=false' unrelated/mise.toml
 
-if $script_dir/classify-changes.sh >/dev/null 2>&1; then
+if "$script_dir"/classify-changes.sh >/dev/null 2>&1; then
     printf 'empty change classification unexpectedly succeeded\n' >&2
     exit 1
 fi
 
-$script_dir/require-pr-results.sh success true success false skipped false skipped
-$script_dir/require-pr-results.sh success false skipped true success false skipped
-$script_dir/require-success.sh rust=success windows=success macos=success
+"$script_dir"/require-pr-results.sh success true success false skipped false skipped
+"$script_dir"/require-pr-results.sh success false skipped true success false skipped
+"$script_dir"/require-success.sh rust=success windows=success macos=success
 
 for invalid in \
     'failure true success false skipped false skipped' \
@@ -167,18 +169,18 @@ for invalid in \
 do
     # Intentional field splitting exercises the positional shell interface.
     # shellcheck disable=SC2086
-    if $script_dir/require-pr-results.sh $invalid >/dev/null 2>&1; then
+    if "$script_dir"/require-pr-results.sh $invalid >/dev/null 2>&1; then
         printf 'invalid PR result set unexpectedly succeeded: %s\n' "$invalid" >&2
         exit 1
     fi
 done
 
-if $script_dir/require-success.sh rust=success windows=cancelled >/dev/null 2>&1; then
+if "$script_dir"/require-success.sh rust=success windows=cancelled >/dev/null 2>&1; then
     printf 'cancelled result unexpectedly satisfied the aggregate gate\n' >&2
     exit 1
 fi
 
-if $script_dir/require-success.sh eligibility=skipped >/dev/null 2>&1; then
+if "$script_dir"/require-success.sh eligibility=skipped >/dev/null 2>&1; then
     printf 'skipped eligibility unexpectedly satisfied the pre-merge gate\n' >&2
     exit 1
 fi

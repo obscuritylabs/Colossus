@@ -1,14 +1,10 @@
 {
   "name": "Colossus",
   "build": {
-    "dockerfile": "Dockerfile"
+    "dockerfile": "Dockerfile",
+    "context": ".."
   },
   "features": {
-    "ghcr.io/devcontainers/features/rust:1": {
-      "version": "1.96.0",
-      "profile": "minimal",
-      "components": "rust-analyzer,rust-src,rustfmt,clippy"
-    },
     "ghcr.io/devcontainers/features/docker-in-docker:4": {
       "moby": true,
       "dockerDashComposeVersion": "v2"
@@ -29,5 +25,6 @@
         "golang.Go"
       ]
     }
-  }
+  },
+  "postCreateCommand": "mise trust && mise install --locked"
 }

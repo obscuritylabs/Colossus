@@ -204,6 +204,12 @@ three times to cover formatting, lint, unit, SDK, Desktop, documentation, and de
 Documentation deployment is separate: pull requests build documentation in PR
 validation, while `main` changes are deployed by the Documentation workflow.
 
+Premerge jobs provision selected tools from the same locked inventory as PR jobs.
+The shared setup verifies the mise executable for each supported runner. Fuzzing alone
+selects `mise.fuzz.toml` and its pinned nightly/source-build lock. Native libraries,
+container engines, signing and explicit Rust targets remain owned by each job; see
+[Toolchain inventory](toolchain-inventory.md).
+
 ## Request pre-merge acceptance
 
 Apply `ci:full` only after the PR is ready to merge:

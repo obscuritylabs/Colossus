@@ -1,0 +1,5 @@
+# Debian Bookworm's glibc is older than the Linux x64 cargo-audit archive needs.
+# Keep the default Ubuntu/Windows archive path; containers use locked source builds.
+[tools]
+"aqua:rustsec/rustsec/cargo-audit" = { version = "{{ vars.cargo_audit }}", os = ["windows"] }
+"cargo:cargo-audit" = { version = "{{ vars.cargo_audit }}", os = ["linux", "macos"], locked = true }

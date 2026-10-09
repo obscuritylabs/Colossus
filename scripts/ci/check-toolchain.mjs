@@ -13,6 +13,12 @@ function scalar(text, section, key) {
   return matches[0][1];
 }
 
+function lockEntries(source) {
+  return new Map(source.split(/^\[\[tools\./m).slice(1).map((block) => [
+    block.slice(0, block.indexOf(']]')).replaceAll('"', ''), block,
+  ]));
+}
+
 export function checkToolchain(root) {
   const read = (path) => readFileSync(resolve(root, path), 'utf8');
   const errors = [];
@@ -51,7 +57,7 @@ export function checkToolchain(root) {
       scan(path, new RegExp(`${tool}(?:@| --version )([\\d.]+)`, 'g'), tool);
     }
   }
-  for (const path of ['Dockerfile', '.devcontainer/Dockerfile']) {
+  for (const path of ['Dockerfile', '.devcontainer/Dockerfile', 'deploy/cloud/linux-desktop.Dockerfile']) {
     for (const match of read(path).matchAll(/^FROM (node|python|golang|rust):([\d.]+)/gm)) {
       const key = match[1] === 'golang' ? 'go' : match[1];
       // The root utility image deliberately uses the stable Rust minor series.
@@ -64,14 +70,25 @@ export function checkToolchain(root) {
       scan(path, new RegExp(`${tool} --version ([\\d.]+)`, 'g'), tool);
     }
   }
-  const features = JSON.parse(read('.devcontainer/devcontainer.json')).features;
-  const feature = Object.entries(features).find(([key]) => key.startsWith('ghcr.io/devcontainers/features/rust:'))?.[1];
-  equal('.devcontainer Rust feature', feature?.version, tools.rust);
-  equal('.devcontainer Rust profile', feature?.profile, scalar(rust, 'toolchain', 'profile'));
-  const components = rust.match(/^components\s*=\s*\[([^\]]+)\]/m)?.[1].match(/"([^"]+)"/g)?.map((v) => v.slice(1, -1));
+  const container = JSON.parse(read('.devcontainer/devcontainer.json'));
+  equal('devcontainer build context', container.build?.context, '..');
+  if (Object.keys(container.features).some((key) => key.startsWith('ghcr.io/devcontainers/features/rust:'))) {
+    errors.push('devcontainer Rust must consume rust-toolchain.toml through mise');
+  }
+  const components = rust.match(/^components\s*=\s*\[([^\]]+)\]/m)?.[1].match(/"([^"\n]+)"/g)?.map((v) => v.slice(1, -1));
   if (!components?.length) errors.push('missing required Rust components');
-  for (const component of components ?? []) {
-    if (!feature?.components?.split(',').includes(component)) errors.push(`devcontainer missing ${component}`);
+  const docker = read('.devcontainer/Dockerfile');
+  for (const required of ['mise.toml mise.lock rust-toolchain.toml', 'mise install --locked',
+    'mise.devcontainer.toml mise.devcontainer.lock', 'MISE_ENV=devcontainer',
+    'MISE_CONFIG_DIR=/opt/colossus-toolchain', 'ln -s mise.devcontainer.toml config.devcontainer.toml',
+    '/usr/local/rustup/settings.toml', 'rustup component add rust-analyzer rust-src', 'mise-bootstrap.sh', '--install /usr/local/bin/mise']) {
+    if (!docker.includes(required)) errors.push(`devcontainer missing ${required}`);
+  }
+  for (const image of docker.matchAll(/^FROM (.+)$/gm)) {
+    if (!image[1].includes('@sha256:')) errors.push('devcontainer images must retain immutable digests');
+  }
+  if (/^FROM (?:node|python|golang):/m.test(docker) || /cargo install|go install/.test(docker)) {
+    errors.push('devcontainer provisioning must consume the central inventory');
   }
 
   for (const declaration of [
@@ -84,12 +101,7 @@ export function checkToolchain(root) {
   for (const tool of ['node', 'python', 'go', 'rust']) {
     equal(`mise backend ${tool}`, scalar(config, 'tool_alias', tool), `core:${tool}`);
   }
-  const lock = read('mise.lock');
-  const locked = new Map();
-  for (const block of lock.split(/^\[\[tools\./m).slice(1)) {
-    const name = block.slice(0, block.indexOf(']]')).replaceAll('"', '');
-    locked.set(name, block);
-  }
+  const locked = lockEntries(read('mise.lock'));
   const backends = {
     node: 'core:node', python: 'core:python', go: 'core:go', rust: 'core:rust',
     'aqua:rhysd/actionlint': 'aqua:rhysd/actionlint',
@@ -111,22 +123,54 @@ export function checkToolchain(root) {
       equal('mise.lock Rust components', block.match(/^components = "([^"]+)"/m)?.[1], components?.join(','));
       continue; // rustup verifies compiler distributions; no mise archive URL.
     }
-    for (const platform of ['linux-x64', 'macos-arm64', 'windows-x64']) {
+    for (const platform of ['linux-x64', 'linux-arm64', 'macos-arm64', 'windows-x64']) {
       const entry = block.split(`"platforms.${platform}"]`)[1]?.split(/^\[/m)[0] ?? '';
       if (!/^checksum = "sha256:[a-f0-9]{64}"$/m.test(entry) || !/^url = "https:\/\/[^"\s]+"$/m.test(entry)) {
         errors.push(`mise.lock ${name}: missing verified ${platform} archive`);
       }
     }
   }
-  const pr = read('.github/workflows/pr.yml');
-  if (/uses: (?:actions\/setup-(?:node|python|go)|dtolnay\/rust-toolchain|taiki-e\/install-action)@|ACTIONLINT_VERSION/.test(pr)) {
-    errors.push('PR provisioning must consume the central inventory');
+  for (const name of ['pr', 'premerge']) {
+    const workflow = read(`.github/workflows/${name}.yml`);
+    if (/uses: (?:actions\/setup-(?:node|python|go)|dtolnay\/rust-toolchain|taiki-e\/install-action)@|ACTIONLINT_VERSION|cargo install cargo-fuzz/.test(workflow)) {
+      errors.push(`${name} provisioning must consume the central inventory`);
+    }
+  }
+  const fuzz = read('mise.fuzz.toml');
+  for (const declaration of ['rust = { version = "{{ vars.fuzz_rust }}", profile = "minimal" }',
+    '"cargo:cargo-fuzz" = { version = "{{ vars.cargo_fuzz }}", locked = true }']) {
+    if (!fuzz.includes(declaration)) errors.push('fuzz provisioning must consume the nightly and locked Cargo inventory');
+  }
+  const fuzzLock = lockEntries(read('mise.fuzz.lock'));
+  equal('mise.fuzz.lock Rust profile', fuzzLock.get('rust')?.match(/^profile = "([^"]+)"/m)?.[1], 'minimal');
+  for (const [name, key, backend] of [['rust', 'nightly', 'core:rust'], ['cargo:cargo-fuzz', 'cargo-fuzz', 'cargo:cargo-fuzz']]) {
+    const block = fuzzLock.get(name) ?? '';
+    equal(`mise.fuzz.lock ${name}`, block.match(/^version = "([^"\n]+)"/m)?.[1], tools[key]);
+    equal(`mise.fuzz.lock ${name} backend`, block.match(/^backend = "([^"\n]+)"/m)?.[1], backend);
+    if (name.startsWith('cargo:') && !/^locked = "true"$/m.test(block)) errors.push('cargo-fuzz source build must use Cargo.lock');
+  }
+  const containerConfig = read('mise.devcontainer.toml');
+  for (const declaration of [
+    '"aqua:rustsec/rustsec/cargo-audit" = { version = "{{ vars.cargo_audit }}", os = ["windows"] }',
+    '"cargo:cargo-audit" = { version = "{{ vars.cargo_audit }}", os = ["linux", "macos"], locked = true }',
+  ]) {
+    if (!containerConfig.includes(declaration)) errors.push('Bookworm audit must retain compatible locked source builds');
+  }
+  const containerLock = lockEntries(read('mise.devcontainer.lock')).get('cargo:cargo-audit') ?? '';
+  equal('mise.devcontainer.lock audit', containerLock.match(/^version = "([^"\n]+)"/m)?.[1], tools['cargo-audit']);
+  equal('mise.devcontainer.lock audit backend', containerLock.match(/^backend = "([^"\n]+)"/m)?.[1], 'cargo:cargo-audit');
+  if (!/^locked = "true"$/m.test(containerLock)) errors.push('Bookworm audit source build must use Cargo.lock');
+  const bootstrap = read('scripts/ci/mise-bootstrap.sh');
+  if (!/^version=\d{4}\.\d+\.\d+$/m.test(bootstrap)) errors.push('mise executable version must be pinned');
+  for (const platform of ['Linux:X64', 'Linux:ARM64', 'macOS:ARM64', 'Windows:X64']) {
+    if (!new RegExp(`^  ${escape(platform)}\\) platform=[a-z0-9-]+; sha256=[a-f0-9]{64} ;;$`, 'm').test(bootstrap)) errors.push(`mise bootstrap missing verified ${platform} executable`);
   }
   const setup = read('.github/actions/setup-toolchain/action.yml');
   if (!/uses: jdx\/mise-action@[a-f0-9]{40}\b/.test(setup) ||
-      !/^\s+version: \d{4}\.\d+\.\d+$/m.test(setup) ||
-      !/^\s+sha256: [a-f0-9]{64}$/m.test(setup) ||
-      !/install_args: --locked \$\{\{ inputs.tools }}/.test(setup)) {
+      !setup.includes('sh ./scripts/ci/mise-bootstrap.sh "$RUNNER_OS" "$RUNNER_ARCH"') ||
+      !setup.includes('version: ${{ steps.mise.outputs.version }}') ||
+      !setup.includes('sha256: ${{ steps.mise.outputs.sha256 }}') ||
+      !setup.includes('install_args: --locked ${{ inputs.tools }}')) {
     errors.push('mise bootstrap must pin action, executable, checksum and locked selective installation');
   }
   return errors;

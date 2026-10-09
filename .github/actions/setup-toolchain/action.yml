@@ -1,5 +1,5 @@
-name: Set up PR toolchain
-description: Install only selected tools from the locked inventory on Linux x64
+name: Set up toolchain
+description: Install selected tools from the locked inventory on supported runners
 inputs:
   tools:
     description: Space-separated inventory tool names (without versions)
@@ -7,14 +7,15 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Require the supported PR platform
+    - name: Select verified mise executable
+      id: mise
       shell: bash
-      run: test "$RUNNER_OS:$RUNNER_ARCH" = Linux:X64
+      run: sh ./scripts/ci/mise-bootstrap.sh "$RUNNER_OS" "$RUNNER_ARCH" >> "$GITHUB_OUTPUT"
     - name: Install verified mise and selected tools
       uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
       with:
-        version: 2026.9.12
-        sha256: e79ae57945034903aee8aa2ea66b4c7ca9cd4f4edd5a8a78a589cbae6d0f428a
+        version: ${{ steps.mise.outputs.version }}
+        sha256: ${{ steps.mise.outputs.sha256 }}
         install_args: --locked ${{ inputs.tools }}
         # Direct bin paths avoid shims auto-installing unselected tools.
         add_shims_to_path: false

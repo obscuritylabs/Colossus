@@ -7,6 +7,11 @@ version = "0.20.2"
 backend = "aqua:EmbarkStudios/cargo-deny"
 specifiers = ["0.20.2"]
 
+[tools."aqua:EmbarkStudios/cargo-deny"."platforms.linux-arm64"]
+checksum = "sha256:995c82be0defc7a025cae49a2aa2644ce8245c9a3318fc4103907c6a285e8c7d"
+url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471598345"
+
 [tools."aqua:EmbarkStudios/cargo-deny"."platforms.linux-x64"]
 checksum = "sha256:9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f"
 url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz"
@@ -26,6 +31,12 @@ url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets
 version = "1.7.12"
 backend = "aqua:rhysd/actionlint"
 specifiers = ["1.7.12"]
+
+[tools."aqua:rhysd/actionlint"."platforms.linux-arm64"]
+checksum = "sha256:325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6"
+url = "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/rhysd/actionlint/releases/assets/384924897"
+provenance = "github-attestations"
 
 [tools."aqua:rhysd/actionlint"."platforms.linux-x64"]
 checksum = "sha256:8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
@@ -49,6 +60,11 @@ provenance = "github-attestations"
 version = "0.22.2"
 backend = "aqua:rustsec/rustsec/cargo-audit"
 specifiers = ["0.22.2"]
+
+[tools."aqua:rustsec/rustsec/cargo-audit"."platforms.linux-arm64"]
+checksum = "sha256:c6603814ddaa45e51263dafd31c0ac98808f688d26f7395804f9670b0fd599dd"
+url = "https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-aarch64-unknown-linux-gnu-v0.22.2.tgz"
+url_api = "https://api.github.com/repos/rustsec/rustsec/releases/assets/439292355"
 
 [tools."aqua:rustsec/rustsec/cargo-audit"."platforms.linux-x64"]
 checksum = "sha256:ab28a1bdb54db4d5d8ad5981cf1f959410370b3d28250dbd35f6a44248620e39"
@@ -78,6 +94,10 @@ version = "1.25.0"
 backend = "core:go"
 specifiers = ["1.25.0"]
 
+[tools.go."platforms.linux-arm64"]
+checksum = "sha256:05de75d6994a2783699815ee553bd5a9327d8b79991de36e38b66862782f54ae"
+url = "https://dl.google.com/go/go1.25.0.linux-arm64.tar.gz"
+
 [tools.go."platforms.linux-x64"]
 checksum = "sha256:2852af0cb20a13139b3448992e69b868e50ed0f8a1e5940ee1de9e19a123b613"
 url = "https://dl.google.com/go/go1.25.0.linux-amd64.tar.gz"
@@ -95,6 +115,10 @@ version = "22.18.0"
 backend = "core:node"
 specifiers = ["22.18.0"]
 
+[tools.node."platforms.linux-arm64"]
+checksum = "sha256:d415eeea90a2fdb60c66dd386b258acbfc4d1fa4720a8df5dea7369fbdbcddee"
+url = "https://nodejs.org/dist/v22.18.0/node-v22.18.0-linux-arm64.tar.gz"
+
 [tools.node."platforms.linux-x64"]
 checksum = "sha256:a2e703725d8683be86bb5da967bf8272f4518bdaf10f21389e2b2c9eaeae8c8a"
 url = "https://nodejs.org/dist/v22.18.0/node-v22.18.0-linux-x64.tar.gz"
@@ -111,6 +135,11 @@ url = "https://nodejs.org/dist/v22.18.0/node-v22.18.0-win-x64.zip"
 version = "3.10.18"
 backend = "core:python"
 specifiers = ["3.10.18"]
+
+[tools.python."platforms.linux-arm64"]
+checksum = "sha256:d8653909f2446651aacf24b0ea2b05dbcb2a3f4c49284efc5a3ab750f7c6181e"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.10.18+20251007-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz"
+provenance = "github-attestations"
 
 [tools.python."platforms.linux-x64"]
 checksum = "sha256:7b1d02e28b0d36c4b0de044aaf8099cb0395ac3d6826c96ddd158241fcdc6f06"

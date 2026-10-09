@@ -47,17 +47,17 @@ for changed_path in "$@"; do
     esac
 
     case "$changed_path" in
-        .github/workflows/* | .github/rulesets/* | scripts/ci/* | crates/colossus-cli/tests/ci_contract.rs | crates/colossus-cli/tests/support/*)
-            sdk_required=true
-            desktop_required=true
-            ;;
         # Shared provisioning and task dispatch can affect every component. Keep
         # these paths covered before consumers move here: hosted PR selection
         # executes the classifier from the trusted base revision.
-        mise.toml | mise.lock | mise.*.toml | .mise.toml | .mise.lock | .mise.*.toml | .mise/* | mise-tasks/* | .github/actions/* | .devcontainer/* | rust-toolchain | rust-toolchain.toml)
+        scripts/ci/mise-bootstrap.sh | mise.toml | mise.lock | mise.*.toml | mise.*.lock | .mise.toml | .mise.lock | .mise.*.toml | .mise.*.lock | .mise/* | mise-tasks/* | .github/actions/* | .devcontainer/* | rust-toolchain | rust-toolchain.toml)
             rust_required=true
             docs_required=true
             dependency_required=true
+            sdk_required=true
+            desktop_required=true
+            ;;
+        .github/workflows/* | .github/rulesets/* | scripts/ci/* | crates/colossus-cli/tests/ci_contract.rs | crates/colossus-cli/tests/support/*)
             sdk_required=true
             desktop_required=true
             ;;

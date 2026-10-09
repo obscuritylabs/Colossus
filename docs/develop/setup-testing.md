@@ -21,13 +21,21 @@ test loop.
   start temporary servers; sandbox restrictions otherwise fail with
   `Operation not permitted`.
 
-The tracked development container is the supported ready-to-build Linux environment.
-It uses digest-pinned official Debian Bookworm base images and a locked Rust feature,
-selects Clang for native dependencies, pins the Rust, Node.js, Python, and Go versions
-used by CI, includes the Tauri system libraries, installs the pinned `actionlint`,
-`cargo-deny`, and `cargo-audit` tools used by the local PR gate, and provides an isolated
-Docker daemon for documentation builds. In Codespaces or VS Code, rebuild the container
-after changing `.devcontainer/`.
+The tracked development container is the supported ready-to-build Linux environment
+on x64 and ARM64. Its digest-pinned Debian Bookworm base supplies Clang, native build
+dependencies and Tauri libraries. It installs Rust, Node, Python, Go and check utilities
+from the same locked mise inventory as CI. Rust's required build components come from
+`rust-toolchain.toml`; `rust-analyzer` and `rust-src` are added for the editor. The locked
+Docker-in-Docker feature supplies an isolated daemon for documentation builds.
+
+In Codespaces or VS Code, rebuild after changing `.devcontainer/`, `mise.toml`,
+`mise.lock`, `mise.devcontainer.toml`, `mise.devcontainer.lock`, `rust-toolchain.toml`
+or `scripts/ci/mise-bootstrap.sh`. The image copies
+only the inventory and verified Rust bootstrap, then installs tools as `vscode` so the
+contributor can update them without root. Creation trusts the mounted repository and
+checks its locked tools. Plain Cargo and scripts work in the container. The
+`devcontainer` mise environment retains a locked cargo-audit source build for
+Bookworm compatibility; its version still comes from the shared inventory.
 
 Rust API contract builds use the exact cross-platform `protoc-bin-vendored` workspace
 dependency, so contributors and release runners do not need an ambient `protoc` binary.
@@ -40,8 +48,10 @@ The root `mise.toml` is an opt-in bootstrap for Node, Python, Go, actionlint,
 cargo-deny and cargo-audit. It reads Rust from `rust-toolchain.toml`; it does not
 install native system libraries, Docker, SDK-local generators or the fuzz nightly.
 See the [toolchain inventory](toolchain-inventory.md) for declarations and check owners.
-PR jobs consume this inventory; retained workflow and devcontainer pins are checked
-for drift. The PR setup action pins mise itself and its executable checksum.
+PR and premerge jobs consume selected tools from this inventory. The devcontainer
+installs the contributor set. Retained release pins are checked for drift.
+`scripts/ci/mise-bootstrap.sh` owns mise itself and the verified platform checksums;
+the shared setup action and container use it.
 
 With mise already installed, inspect the repository configuration before trusting it:
 
@@ -56,8 +66,8 @@ Plain Cargo and script commands remain supported without mise. A shell-level
 `rustup show active-toolchain` when diagnosing a mismatch. Initial installation needs
 network access. An offline setup must already contain the tools, package caches and
 native dependencies; the offline runtime does not imply offline tool installation.
-Use the mise release declared in `.github/actions/setup-toolchain/action.yml`.
-The checked-in lock covers Linux x64, macOS ARM64 and Windows x64; see the inventory
+Use the mise release declared in `scripts/ci/mise-bootstrap.sh`.
+The checked-in lock covers Linux x64/ARM64, macOS ARM64 and Windows x64; see the inventory
 for backend verification and the native macOS cargo-audit source build.
 
 `AGENTS.md` is the canonical agent guide and `CLAUDE.md` is a relative symlink to it.
