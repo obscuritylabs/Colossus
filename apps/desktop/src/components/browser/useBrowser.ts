@@ -24,6 +24,7 @@ export function useBrowser(
     available: fixture,
   });
   const [error, setError] = useState("");
+  const [contextError, setContextError] = useState("");
   const [loading, setLoading] = useState(!fixture);
   const [busy, setBusy] = useState(false);
   const api = useRef<BrowserApi>(nativeBrowserApi);
@@ -37,6 +38,7 @@ export function useBrowser(
     setSnapshot({ ...empty, available: fixture });
     setLoading(!fixture);
     setError("");
+    setContextError("");
     setBusy(false);
   }, [scope, fixture]);
 
@@ -60,7 +62,7 @@ export function useBrowser(
           ) {
             setSnapshot(value);
             setLoading(false);
-            setError("");
+            setContextError("");
           }
         } catch (cause) {
           if (
@@ -69,7 +71,7 @@ export function useBrowser(
             sequence.current === started
           ) {
             setLoading(false);
-            setError(browserErrorMessage(cause));
+            setContextError(browserErrorMessage(cause));
           }
         }
         if (!cancelled && visible)
@@ -123,7 +125,15 @@ export function useBrowser(
     (request: BrowserViewport) => api.current.viewport(request).catch(() => {}),
     [],
   );
-  return { snapshot, error, loading, busy, command, viewport, fixture };
+  return {
+    snapshot,
+    error: error || contextError,
+    loading,
+    busy,
+    command,
+    viewport,
+    fixture,
+  };
 }
 
 export type BrowserController = ReturnType<typeof useBrowser>;
