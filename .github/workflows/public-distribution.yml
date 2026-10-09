@@ -66,6 +66,24 @@ jobs:
               > "$root/update-check.json"
           grep -F '"status": "up_to_date"' "$root/update-check.json"
 
+      - name: Diagnose anonymous macOS metadata failures
+        if: failure() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -u
+          response="$RUNNER_TEMP/public-metadata-diagnostic"
+          curl --silent --show-error --noproxy '*' \
+            --proto '=https' --max-redirs 0 \
+            --connect-timeout 10 --max-time 30 --max-filesize 1048576 \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --user-agent 'colossus-bootstrap-installer/1' \
+            --dump-header "$response.headers" --output "$response.body" \
+            --write-out 'HTTP %{http_code}; remote address %{remote_ip}\n' \
+            "https://api.github.com/repos/obscuritylabs/Colossus/releases/tags/$RELEASE_TAG"
+          if [ -f "$response.headers" ]; then cat "$response.headers"; fi
+          if [ -f "$response.body" ]; then head -c 2000 "$response.body"; fi
+
   windows:
     name: Anonymous install (Windows)
     if: github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
