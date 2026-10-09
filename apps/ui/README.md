@@ -126,3 +126,21 @@ and its stylesheet from `@colossus/ui/styles/automations.css`. `AutomationSurfac
 the owned shadcn table, input, badge, and button foundations. Hosts provide released
 records, labels, icons, disabled states, and callbacks; they retain prompts, timing
 conversion, pagination, thread creation, execution, and capability decisions.
+
+Workflow and schedule screens, review dialogs, typed input controls, calendar timing,
+logic diagrams, and run-history presentation live under `src/automations`. Import
+individual screens through `@colossus/ui/automations/WorkflowsSurface` or
+`@colossus/ui/automations/SchedulesSurface`, and wrap them in `WorkflowHostProvider`.
+The host adapter owns authenticated operations, selection epochs, capability facts,
+model-profile discovery, and unknown-outcome classification. Shared forms retain a
+reviewed immutable request and its retry identity; they never retry a mutation
+implicitly. Desktop supplies its native bridge, and Web supplies project/node-scoped
+controller requests.
+
+Session headers, status presentation, seven session tabs, resource views, and topology
+presentation are shared too. Hosts supply released run/resource models and link
+navigation. A missing resource API stays explicitly unavailable; shared presentation
+does not infer private context from assistant prose. The Artifact Library renders
+released metadata supplied by its host. The appearance screen takes controlled values
+and callbacks; storage, system-theme observation, and permission choices remain local
+to each application. Palette parsing and contrast validation are shared foundations.

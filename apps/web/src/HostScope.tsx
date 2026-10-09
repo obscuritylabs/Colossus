@@ -15,6 +15,7 @@ import {
 } from "@colossus/ui/components/ui/sidebar";
 import {
   Button,
+  WorkspaceNavigation,
   DropdownSelect,
   WorkspaceSidebarHeading,
   WorkspaceSidebarSearch,
@@ -41,6 +42,7 @@ import { RouteLink } from "./navigation";
 import { agentHref, globalHref, threadHref } from "./routes";
 import { LoadState } from "./Home";
 import {
+  WORKSPACE_VIEW_ROUTES,
   hostConnection,
   platformName,
   workspaceName,
@@ -319,6 +321,8 @@ export function HostSidebar({
   onMore,
   moreBusy,
   error,
+  view,
+  onView,
 }: {
   project: string;
   host: Host;
@@ -335,6 +339,8 @@ export function HostSidebar({
   onMore: () => void;
   moreBusy: boolean;
   error: string;
+  view?: import("./routes").AgentView;
+  onView?: (view: import("./routes").AgentView) => void;
 }) {
   const [query, setQuery] = useState(""),
     [search, setSearch] = useState(""),
@@ -516,6 +522,29 @@ export function HostSidebar({
           </Button>
         ) : null}
       </SidebarContent>
+      {agentId && onView ? (
+        <WorkspaceNavigation
+          active={
+            (
+              Object.keys(
+                WORKSPACE_VIEW_ROUTES,
+              ) as (keyof typeof WORKSPACE_VIEW_ROUTES)[]
+            ).find((key) => WORKSPACE_VIEW_ROUTES[key] === view) ?? "work"
+          }
+          renderItem={(item, children) => (
+            <RouteLink
+              className="sidebar-nav-item"
+              href={agentHref(project, agentId, WORKSPACE_VIEW_ROUTES[item.id])}
+              onNavigate={() => onView(WORKSPACE_VIEW_ROUTES[item.id])}
+              aria-current={
+                view === WORKSPACE_VIEW_ROUTES[item.id] ? "page" : undefined
+              }
+            >
+              {children}
+            </RouteLink>
+          )}
+        />
+      ) : null}
     </aside>
   );
 }

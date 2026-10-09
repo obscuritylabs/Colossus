@@ -446,6 +446,19 @@ pub trait Backend: Send + Sync {
         None
     }
 
+    /// Independent cloud workflow resources; never falls back to primary authority.
+    fn connector_workflows(&self) -> Option<Arc<dyn crate::WorkflowClient>> {
+        None
+    }
+    /// Independent cloud plugin reads; never falls back to primary authority.
+    fn connector_plugins(&self) -> Option<Arc<dyn crate::PluginClient>> {
+        None
+    }
+    /// Capabilities of the independent cloud application connection.
+    fn connector_capabilities(&self) -> ServerCapabilities {
+        ServerCapabilities::default()
+    }
+
     /// Cached authenticated server capabilities.
     ///
     /// Custom and preview-era embedded backends default to no optional behaviors.

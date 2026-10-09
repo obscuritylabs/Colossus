@@ -31,6 +31,7 @@ test("shared UI cannot import a host, transport, or runtime authority", () => {
             "@radix-ui/react-dialog",
             "@radix-ui/react-tooltip",
             "react-resizable-panels",
+            "@xyflow/react",
             "@radix-ui/react-dropdown-menu",
             "@tanstack/react-table",
             "class-variance-authority",

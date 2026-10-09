@@ -2423,3 +2423,118 @@ h2:focus-visible {
     padding: 10px 12px 12px;
   }
 }
+
+.host-sidebar .space-destinations {
+  padding-inline: 12px;
+}
+.thread-detail .session-resource-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+}
+.thread-session-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+}
+.thread-session-view .session-resource-view {
+  overflow: visible;
+  padding: 0;
+}
+.appearance-send-shortcut {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  border-top: 1px solid var(--border);
+}
+.appearance-send-shortcut > span {
+  display: grid;
+  gap: 4px;
+  flex: 1;
+}
+.appearance-send-shortcut small {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+@media (max-width: 760px) {
+  .appearance-send-shortcut {
+    flex-wrap: wrap;
+  }
+}
+.management-fixture {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  height: 100dvh;
+}
+.management-fixture > aside {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  padding: 20px;
+  border-right: 1px solid var(--border);
+  background: var(--rail);
+}
+.management-fixture > section {
+  min-width: 0;
+  overflow: auto;
+}
+.fixture-banner {
+  padding: 8px 20px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: var(--font-size-caption);
+}
+@media (max-width: 760px) {
+  .management-fixture {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+  .management-fixture > aside {
+    display: flex;
+    flex-wrap: wrap;
+  }
+  .management-fixture .space-destinations {
+    display: flex;
+    flex-wrap: wrap;
+  }
+}
+.workspace-resource-page {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+.workspace-resource-body {
+  flex: 1;
+  min-height: 0;
+  padding: 24px;
+  overflow: auto;
+}
+.workspace-resource-body .configuration-group h3 {
+  font-size: var(--font-size-heading-sm);
+}
+.workspace-resource-body .control-card > header h3 {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.workspace-resource-body td small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+@media (max-width: 760px) {
+  .workspace-resource-body {
+    padding: 16px;
+  }
+}
+
+.thread-header-actions .back {
+  margin: 0;
+  min-height: var(--icon-control-size);
+  padding: 6px;
+}

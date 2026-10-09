@@ -17,6 +17,7 @@ mod metrics;
 mod observability;
 mod operational;
 mod profiling;
+mod resources;
 mod rows;
 mod store;
 

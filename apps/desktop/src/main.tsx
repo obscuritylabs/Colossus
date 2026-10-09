@@ -12,6 +12,8 @@ import {
 import "@colossus/ui/styles/theme.css";
 import "@colossus/ui/styles/shadcn.css";
 import "@colossus/ui/styles/conversation.css";
+import "@colossus/ui/styles/work-presentation.css";
+import "@colossus/ui/styles/session.css";
 import "@colossus/ui/styles/workspace-sidebar.css";
 import "@colossus/ui/styles/work-welcome.css";
 import "./styles.css";

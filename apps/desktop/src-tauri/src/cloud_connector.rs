@@ -325,6 +325,17 @@ async fn start(
     }
     let connector = RuntimeConnector::new(config.clone(), key, runs)
         .map_err(failure)?
+        .with_resources(colossus_connector::ConnectorResources {
+            workflows: lease.target.client.connector_workflows(),
+            plugins: lease.target.client.connector_plugins(),
+            capabilities: lease
+                .target
+                .client
+                .connector_capabilities()
+                .iter()
+                .map(str::to_owned)
+                .collect(),
+        })
         .with_enrollment_store((*store(state, &target)?).clone());
     if lease.target.consent == crate::state::TargetConsentContext::ManagedLocal {
         reconcile_managed_sharing(

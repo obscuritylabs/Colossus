@@ -36,9 +36,10 @@ pub(crate) fn router(state: Arc<State>) -> Router {
         .route("/api/projects/{project}/tasks/{task}",get(task))
         .route("/api/projects/{project}/tasks/{task}/commands/{command}",get(command))
         .route("/api/projects/{project}/tasks/{task}/events",get(events))
+        .route("/api/projects/{project}/tasks/{task}/updates",get(retained_updates))
         .route("/api/projects/{project}/tasks/{task}/cancel",post(cancel))
         .route("/api/projects/{project}/tasks/{task}/respond",post(respond))
-        .merge(crate::admin::router()).merge(crate::observability::router()).merge(crate::settings::router())
+        .merge(crate::resources::router()).merge(crate::admin::router()).merge(crate::observability::router()).merge(crate::settings::router())
         .fallback_service(spa::service(&state.config.web_root))
         .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(header::HeaderName::from_static("x-content-type-options"), header::HeaderValue::from_static("nosniff")))
         .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(header::HeaderName::from_static("referrer-policy"),header::HeaderValue::from_static("no-referrer")))
@@ -464,6 +465,42 @@ async fn respond(
 struct Cursor {
     #[serde(default)]
     after: u64,
+}
+// Bounded retained data for inventories; no new runtime read or subscription.
+async fn retained_updates(
+    Extract(state): Extract<Arc<State>>,
+    Path((project, task)): Path<(String, String)>,
+    headers: HeaderMap,
+    Query(page): Query<Cursor>,
+) -> Result<Json<serde_json::Value>> {
+    let caller = state.auth.caller(&headers, &project, false).await?;
+    let after = page.after;
+    let batch = state.repo.updates(&caller, &task, after, 32).await?;
+    let mut updates = Vec::new();
+    let mut bytes = 0;
+    let mut bounded = false;
+    for update in batch {
+        let size = serde_json::to_vec(&update)
+            .map_err(|_| CloudError::Storage)?
+            .len();
+        if bytes + size > colossus_cloud_protocol::MAX_PAYLOAD_BYTES - 1024 {
+            if updates.is_empty() {
+                return Err(CloudError::ResourceExhausted.into());
+            }
+            bounded = true;
+            break;
+        }
+        bytes += size;
+        updates.push(update);
+    }
+    let next_after = (bounded || updates.len() == 32).then(|| {
+        updates
+            .last()
+            .map_or(after, |update: &colossus_sdk::RunUpdate| update.sequence)
+    });
+    Ok(Json(
+        serde_json::json!({"updates":updates,"next_after":next_after}),
+    ))
 }
 async fn events(
     Extract(state): Extract<Arc<State>>,

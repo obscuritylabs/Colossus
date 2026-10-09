@@ -24,6 +24,7 @@ export default defineConfig({
     // Keep shared context providers and their direct component imports together.
     exclude: ["@colossus/ui"],
     include: [
+      "@xyflow/react",
       "react-markdown",
       "recharts",
       "react-resizable-panels",

@@ -732,3 +732,27 @@ round trip.
 The alpha package may make breaking corrections before a stable `v1` package exists.
 Once `v1` is published, reserve removed field numbers and names, add fields and RPCs
 compatibly, and support adjacent API versions during migrations.
+
+## Control Plane resource management
+
+The outbound connector can advertise `runtime.resources.v1` for a closed set of
+public workflow, schedule, independent workflow-run, and plugin-discovery operations.
+These requests use the dedicated cloud application's SDK clients. Managed Desktop
+adapters resolve that application's transport after a restart and never fall back to
+the primary Desktop grant. The controller intersects project Read, Execute, or Control
+permission with the runtime's independently enforced scopes and ownership.
+
+Management is online. The controller records a short-lived request under the exact
+connection lease; any HTTP replica can admit and read it, while only that lease's
+stream owner can claim dispatch. Claimed requests are never replayed after reconnect.
+A lost mutation response reports an unknown outcome. Allocation retries retain the
+SDK's original durable idempotency key; revision controls retain the reviewed ETag.
+Pending requests are limited independently from agent tasks and watches. PostgreSQL
+retains metadata audit digests while bounded maintenance removes expired request and
+response payloads.
+
+Enrollment alone does not grant automation management or release another application's
+schedules. The existing Managed Desktop cloud grant remains separate from Desktop's
+workflow grant. Plugin lifecycle, credential custody, local runtime configuration,
+and the private session map are not exposed through this transport. Applications must
+advertise and authorize a public resource contract before Web can manage those surfaces.

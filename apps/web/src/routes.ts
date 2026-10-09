@@ -1,7 +1,17 @@
 export type Surface = "home" | "fleet" | "projects" | "admin" | "settings";
 export type ProjectView =
   "overview" | "tasks" | "analytics" | "access" | "settings";
-export type AgentView = "overview" | "threads" | "analytics" | "policy";
+export type AgentView =
+  | "overview"
+  | "threads"
+  | "analytics"
+  | "policy"
+  | "workflows"
+  | "schedules"
+  | "capabilities"
+  | "plugins"
+  | "library"
+  | "connections";
 export type AdminView = "users" | "projects" | "settings";
 export type Route =
   | { kind: "global"; surface: Surface; project?: string; view?: AdminView }
@@ -25,7 +35,18 @@ const projectViews = new Set([
   "access",
   "settings",
 ]);
-const agentViews = new Set(["overview", "threads", "analytics", "policy"]);
+const agentViews = new Set([
+  "overview",
+  "threads",
+  "analytics",
+  "policy",
+  "workflows",
+  "schedules",
+  "capabilities",
+  "plugins",
+  "library",
+  "connections",
+]);
 const adminViews = new Set(["users", "projects", "settings"]);
 const invalid = (): Route => ({
   kind: "invalid",

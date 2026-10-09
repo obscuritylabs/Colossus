@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 mod fixtures;
 mod identity;
 mod normalized;
+mod resources;
 
 fn key(kind: EntityKind, id: &str) -> EntityKey {
     EntityKey {

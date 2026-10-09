@@ -2,29 +2,24 @@ import {
   IconActivity,
   IconAlertCircle,
   IconArchive,
-  IconBriefcase2,
-  IconCalendarTime,
   IconCheck,
   IconChevronDown,
   IconFolder,
   IconGitFork,
-  IconLibrary,
   IconLoader2,
   IconDots,
   IconPencil,
   IconPencilPlus,
   IconPin,
-  IconPlugConnected,
   IconPlus,
   IconPointFilled,
   IconRestore,
-  IconSettings,
   IconTerminal2,
-  IconTopologyStar3,
   IconX,
 } from "@tabler/icons-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
+  WorkspaceNavigation,
   WorkspaceSidebarGroupHeading,
   WorkspaceSidebarHeading,
   WorkspaceSidebarScope,
@@ -141,17 +136,6 @@ interface WorkSidebarProps {
   onDrawerOpen: () => void;
   onDrawerClose: () => void;
 }
-
-const DESTINATIONS = [
-  { id: "work", label: "Work", Icon: IconBriefcase2 },
-  { id: "fleet", label: "Capabilities", Icon: IconTopologyStar3 },
-  { id: "plugins", label: "Plugins", Icon: IconPlugConnected },
-  { id: "workflows", label: "Workflows", Icon: IconTopologyStar3 },
-  { id: "schedules", label: "Schedules", Icon: IconCalendarTime },
-  { id: "library", label: "Library", Icon: IconLibrary },
-  { id: "connections", label: "Connections", Icon: IconPlugConnected },
-  { id: "settings", label: "Settings", Icon: IconSettings },
-] as const;
 
 function statusIcon(tone: string) {
   if (tone === "success") {
@@ -312,7 +296,6 @@ export function WorkSidebar({
   // selected Workspace currently has no entries for a catalog. The destination's
   // empty state explains that absence without making the navigation itself
   // appear to change as sidecar capabilities come and go.
-  const visibleDestinations = DESTINATIONS;
 
   function toggleSpacePreview(spaceId: string) {
     const opening = !expandedSpaceIds.has(spaceId);
@@ -1372,28 +1355,11 @@ export function WorkSidebar({
         ) : null}
       </div>
 
-      <nav className="space-destinations" aria-label="Workspace destinations">
-        {visibleDestinations.map(({ id, label, Icon }) => (
-          <button
-            type="button"
-            className="sidebar-nav-item"
-            key={id}
-            aria-label={label}
-            aria-current={surface === id ? "page" : undefined}
-            onClick={() => onSelectSurface(id)}
-          >
-            <Icon size={17} stroke={1.7} aria-hidden="true" />
-            <span>{label}</span>
-            {id === "work" &&
-            selectedSpace !== undefined &&
-            selectedSpace.attentionCount > 0 ? (
-              <span className="space-attention-badge">
-                {Math.min(selectedSpace.attentionCount, 99)}
-              </span>
-            ) : null}
-          </button>
-        ))}
-      </nav>
+      <WorkspaceNavigation
+        active={surface}
+        onSelect={onSelectSurface}
+        workAttention={selectedSpace?.attentionCount ?? 0}
+      />
 
       <footer className="space-sidebar-footer">
         <span className="space-sidebar-runtime">

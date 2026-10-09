@@ -26,6 +26,7 @@ use tokio::sync::watch;
 use zeroize::Zeroizing;
 
 mod managed;
+mod resources;
 
 #[derive(Default)]
 struct TestKeys(Mutex<HashMap<String, Zeroizing<Vec<u8>>>>);
@@ -396,6 +397,13 @@ async fn acceptance(postgres: bool) {
             scopes::RUNS_CONTROL,
             scopes::PROMPTS_RESPOND,
             scopes::APPROVALS_RESPOND,
+            scopes::WORKFLOWS_READ,
+            scopes::WORKFLOWS_REGISTER,
+            scopes::SCHEDULES_READ,
+            scopes::SCHEDULES_CREATE,
+            scopes::SCHEDULES_CONTROL,
+            scopes::WORKFLOW_RUNS_READ,
+            scopes::WORKFLOW_RUNS_START,
         ]
         .into_iter()
         .map(|scope| ApiScope::new(scope).unwrap()),
@@ -403,14 +411,34 @@ async fn acceptance(postgres: bool) {
         ["user.ask".into(), "filesystem.write".into()],
     )
     .unwrap();
-    let runs = Arc::new(ContextBoundAgentRunClient::new(
-        api,
-        CallerContext::authenticated(principal, RequestId::new("cloud-request").unwrap()),
+    let resource_caller =
+        CallerContext::authenticated(principal, RequestId::new("cloud-request").unwrap());
+    let workflow_resources = Arc::new(colossus_sdk::ContextBoundWorkflowClient::new(
+        Arc::new(colossus_api_runtime::RuntimeWorkflowApi::new(
+            runtime.clone(),
+        )),
+        resource_caller.clone(),
     ));
+    let runs = Arc::new(ContextBoundAgentRunClient::new(api, resource_caller));
     let (disconnect, close) = watch::channel(false);
     let (status, mut online) = watch::channel(ConnectorStatus::Connecting);
     let connector = RuntimeConnector::new(connection.clone(), key, runs.clone())
         .unwrap()
+        .with_resources(colossus_connector::ConnectorResources {
+            workflows: Some(workflow_resources),
+            plugins: None,
+            capabilities: vec![
+                "workflows.read".into(),
+                "workflows.register".into(),
+                "schedules.read".into(),
+                "schedules.create".into(),
+                "schedules.control".into(),
+                "schedules.delete".into(),
+                "workflow_runs.read".into(),
+                "workflow_runs.start".into(),
+                "workflow_runs.history".into(),
+            ],
+        })
         .with_enrollment_store(enrollment.clone());
     let connected = tokio::spawn(connector.run(close, status));
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -420,6 +448,7 @@ async fn acceptance(postgres: bool) {
     })
     .await
     .unwrap();
+    resources::exercise(&client, &origin, &headers, &connection.node_id).await;
     let create = |id: &str| json!({"node_id":connection.node_id,"request":{"plugin_skill_ids":[],"input":[{"text":"Acceptance task"}],"session_id":null,"end_user_id":null,"role":"primary","mode":"execute","research_depth":null,"research_sources":[],"plan_action":null,"branch":null,"max_turns":8,"idempotency_key":id}});
     let allocated = post(
         &client,

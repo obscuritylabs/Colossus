@@ -122,6 +122,7 @@ export interface Interaction {
 }
 export interface Run {
   run_id: string;
+  session_id?: string;
   title: string;
   status: string;
   created_at: string;

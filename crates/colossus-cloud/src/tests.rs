@@ -6,6 +6,8 @@ use std::{collections::BTreeSet, sync::Arc};
 
 #[path = "tests/inventory.rs"]
 mod inventory;
+#[path = "tests/resources.rs"]
+mod resources;
 
 fn caller(project: &str, permissions: &[CloudPermission]) -> CloudCaller {
     CloudCaller::new(

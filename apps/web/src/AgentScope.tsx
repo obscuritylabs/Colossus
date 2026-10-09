@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   Button,
   DropdownSelect,
+  WorkspaceNavigation,
   WorkspaceSidebarHeading,
   WorkspaceSidebarSearch,
   WorkspaceSidebarScope,
@@ -34,7 +35,11 @@ import {
 } from "./api";
 import type { AgentPolicy } from "./control-api";
 import { useResource } from "./resources";
-import { workspaceName, workspaceState } from "./workspace-navigation";
+import {
+  WORKSPACE_VIEW_ROUTES,
+  workspaceName,
+  workspaceState,
+} from "./workspace-navigation";
 import { AnalyticsPanel, LoadState, Metrics } from "./Home";
 import { SectionTabs } from "./Projects";
 import { RunComposer, type RunRequest } from "./RunComposer";
@@ -52,6 +57,8 @@ export function AgentSidebar({
   onBack,
   tasks = [],
   newDisabled = false,
+  view,
+  onView,
 }: {
   project: string;
   nodes: FleetNode[];
@@ -64,6 +71,8 @@ export function AgentSidebar({
   onBack: () => void;
   tasks?: Task[];
   newDisabled?: boolean;
+  view?: AgentView;
+  onView?: (value: AgentView) => void;
 }) {
   const [query, setQuery] = useState(""),
     [search, setSearch] = useState(""),
@@ -452,6 +461,29 @@ export function AgentSidebar({
           </p>
         ) : null}
       </div>
+      {onView ? (
+        <WorkspaceNavigation
+          active={
+            (
+              Object.keys(
+                WORKSPACE_VIEW_ROUTES,
+              ) as (keyof typeof WORKSPACE_VIEW_ROUTES)[]
+            ).find((key) => WORKSPACE_VIEW_ROUTES[key] === view) ?? "work"
+          }
+          renderItem={(item, children) => (
+            <RouteLink
+              className="sidebar-nav-item"
+              href={agentHref(project, agentId, WORKSPACE_VIEW_ROUTES[item.id])}
+              onNavigate={() => onView(WORKSPACE_VIEW_ROUTES[item.id])}
+              aria-current={
+                view === WORKSPACE_VIEW_ROUTES[item.id] ? "page" : undefined
+              }
+            >
+              {children}
+            </RouteLink>
+          )}
+        />
+      ) : null}
     </div>
   );
 }
@@ -469,6 +501,7 @@ export function AgentWorkspace({
   onView,
   onOpen,
   onRevoke,
+  contextThread,
 }: {
   project: string;
   agent: FleetNode | undefined;
@@ -483,6 +516,7 @@ export function AgentWorkspace({
   onView?: (value: AgentView) => void;
   onOpen?: (thread: Thread) => void;
   onRevoke?: () => void;
+  contextThread?: string | null;
 }) {
   const [localTab, setTab] = useState(initialTab);
   const [draftSeed, setDraftSeed] = useState<
@@ -546,6 +580,39 @@ export function AgentWorkspace({
         </div>
       </section>
     );
+  if (agent && (tab === "workflows" || tab === "schedules"))
+    return (
+      <Suspense fallback={<p role="status">Loading {tab}…</p>}>
+        <WorkspaceAutomations
+          project={project}
+          agent={agent}
+          permissions={permissions}
+          view={tab}
+          busy={busy}
+          onCreateWithAgent={(prompt) => {
+            setDraftSeed({ key: crypto.randomUUID(), text: prompt });
+            onNew();
+          }}
+        />
+      </Suspense>
+    );
+  if (
+    agent &&
+    ["capabilities", "plugins", "library", "connections"].includes(tab)
+  )
+    return (
+      <Suspense fallback={<p role="status">Loading {tab}…</p>}>
+        <WorkspaceResources
+          project={project}
+          agent={agent}
+          view={tab as "capabilities" | "plugins" | "library" | "connections"}
+          contextThread={contextThread ?? null}
+          busy={busy}
+          onRevoke={onRevoke}
+          canRevoke={permissions.includes("administer")}
+        />
+      </Suspense>
+    );
   return (
     <section className="control-page agent-workspace">
       <header className="page-heading">
@@ -580,7 +647,9 @@ export function AgentWorkspace({
         }
         items={[
           { id: "overview", label: "Overview" },
-          { id: "threads", label: "Conversations" },
+          { id: "threads", label: "Work" },
+          { id: "workflows", label: "Workflows" },
+          { id: "schedules", label: "Schedules" },
           { id: "analytics", label: "Analytics" },
           { id: "policy", label: "Policy & configuration" },
         ]}
@@ -882,3 +951,15 @@ function findingLabel(code: string) {
     )[code] ?? code
   );
 }
+
+const WorkspaceAutomations = lazy(() =>
+  import("./WorkspaceAutomations").then((module) => ({
+    default: module.WorkspaceAutomations,
+  })),
+);
+
+const WorkspaceResources = lazy(() =>
+  import("./WorkspaceResources").then((module) => ({
+    default: module.WorkspaceResourceView,
+  })),
+);

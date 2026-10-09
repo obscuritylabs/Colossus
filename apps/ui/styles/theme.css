@@ -23,6 +23,7 @@
   --font-size-heading-sm: 0.9375rem;
   --font-size-heading: 1.125rem;
   --font-size-title: 1.5rem;
+  --font-size-work-title: clamp(1.08rem, 1.6vw, 1.35rem);
   --font-size-page-title: 1.875rem;
   --font-size-display: 2.75rem;
   --line-height-tight: 1.25;

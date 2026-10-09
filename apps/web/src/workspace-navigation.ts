@@ -57,3 +57,15 @@ export function hostConnection(
         : "Offline",
   };
 }
+
+/** Desktop destination IDs remain presentation keys; web URLs own their route names. */
+export const WORKSPACE_VIEW_ROUTES = {
+  work: "threads",
+  fleet: "capabilities",
+  plugins: "plugins",
+  workflows: "workflows",
+  schedules: "schedules",
+  library: "library",
+  connections: "connections",
+  settings: "policy",
+} as const;

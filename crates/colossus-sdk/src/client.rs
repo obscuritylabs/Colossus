@@ -82,6 +82,19 @@ impl Colossus {
         self.backend.connector_runs()
     }
 
+    /// Return workflow resources bound to the dedicated cloud application.
+    pub fn connector_workflows(&self) -> Option<Arc<dyn crate::WorkflowClient>> {
+        self.backend.connector_workflows()
+    }
+    /// Return plugin reads bound to the dedicated cloud application.
+    pub fn connector_plugins(&self) -> Option<Arc<dyn crate::PluginClient>> {
+        self.backend.connector_plugins()
+    }
+    /// Return capabilities authenticated using the dedicated cloud grant.
+    pub fn connector_capabilities(&self) -> ServerCapabilities {
+        self.backend.connector_capabilities()
+    }
+
     /// Return authenticated optional behaviors cached during connection setup.
     pub fn capabilities(&self) -> ServerCapabilities {
         self.backend.capabilities()

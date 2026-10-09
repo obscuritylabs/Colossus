@@ -3,6 +3,9 @@
 //! Each transaction commits domain records, released output, audit metadata and delivery
 //! outbox entries together. Versions and cursors are local to their entity or stream.
 
+mod resources;
+pub use resources::{RuntimeResourceRequest, validate_resource_request};
+
 use crate::{CloudError, CloudResult};
 use colossus_ports::StoreError;
 use serde::{Deserialize, Serialize};
@@ -411,11 +414,53 @@ pub struct CloudMaintenanceReport {
     pub expired_sessions: usize,
     /// Expired OIDC flows consumed and removed; unexpired maintenance metadata remains.
     pub expired_auth_flows: usize,
+    /// Expired online management payloads removed; audit digests remain retained.
+    pub expired_resource_requests: usize,
 }
 
 /// Object-safe asynchronous cloud persistence boundary.
 #[async_trait::async_trait]
 pub trait CloudStore: Send + Sync {
+    /// Advertise only an authenticated peer's additive resource-envelope support.
+    async fn resource_connect(&self, _lease: &ConnectionLease, _enabled: bool) -> CloudResult<()> {
+        Err(CloudError::Storage)
+    }
+    /// Admit one short-lived, independently authorized request for the exact connection.
+    async fn resource_submit(
+        &self,
+        _caller: &crate::CloudCaller,
+        _lease: &ConnectionLease,
+        _operation: colossus_cloud_protocol::ResourceOperation,
+        _now: u64,
+    ) -> CloudResult<String> {
+        Err(CloudError::Storage)
+    }
+    /// Atomically claim bounded requests once; never dispatch them under another generation.
+    async fn resource_take(
+        &self,
+        _lease: &ConnectionLease,
+        _now: u64,
+    ) -> CloudResult<Vec<RuntimeResourceRequest>> {
+        Err(CloudError::Storage)
+    }
+    /// Commit one exact released response beneath the live lease.
+    async fn resource_complete(
+        &self,
+        _lease: &ConnectionLease,
+        _id: &str,
+        _reply: colossus_cloud_protocol::ResourceReply,
+        _now: u64,
+    ) -> CloudResult<()> {
+        Err(CloudError::Storage)
+    }
+    /// Read a response only for its authenticated initiating user and project.
+    async fn resource_read(
+        &self,
+        _caller: &crate::CloudCaller,
+        _id: &str,
+    ) -> CloudResult<Option<colossus_cloud_protocol::ResourceReply>> {
+        Err(CloudError::Storage)
+    }
     /// Publish durable wakeup hints and prune only bounded expired operational metadata.
     async fn maintain(
         &self,
@@ -524,6 +569,8 @@ struct MemoryState {
     cursors: BTreeMap<(String, String, String), u64>,
     sessions: BTreeMap<String, AuthSession>,
     leases: BTreeMap<(String, String), ConnectionLease>,
+    resource_connections: BTreeMap<(String, String), ConnectionLease>,
+    resource_requests: BTreeMap<String, RuntimeResourceRequest>,
 }
 fn enrolled_live(state: &MemoryState, project: &str, node: &str) -> bool {
     let key = EntityKey {
@@ -540,6 +587,45 @@ fn enrolled_live(state: &MemoryState, project: &str, node: &str) -> bool {
 
 #[async_trait::async_trait]
 impl CloudStore for MemoryCloudStore {
+    async fn resource_connect(&self, lease: &ConnectionLease, enabled: bool) -> CloudResult<()> {
+        self.memory_resource_connect(lease, enabled).await
+    }
+    async fn resource_submit(
+        &self,
+        caller: &crate::CloudCaller,
+        lease: &ConnectionLease,
+        operation: colossus_cloud_protocol::ResourceOperation,
+        now: u64,
+    ) -> CloudResult<String> {
+        self.memory_resource_submit(caller, lease, operation, now)
+            .await
+    }
+    async fn resource_take(
+        &self,
+        lease: &ConnectionLease,
+        now: u64,
+    ) -> CloudResult<Vec<RuntimeResourceRequest>> {
+        self.verify_lease(lease, now).await?;
+        self.memory_resource_take(lease, now).await
+    }
+    async fn resource_complete(
+        &self,
+        lease: &ConnectionLease,
+        id: &str,
+        reply: colossus_cloud_protocol::ResourceReply,
+        now: u64,
+    ) -> CloudResult<()> {
+        self.verify_lease(lease, now).await?;
+        self.memory_resource_complete(lease, id, reply, now).await
+    }
+    async fn resource_read(
+        &self,
+        caller: &crate::CloudCaller,
+        id: &str,
+    ) -> CloudResult<Option<colossus_cloud_protocol::ResourceReply>> {
+        self.memory_resource_read(caller, id).await
+    }
+
     async fn user_accounts(&self, user_ids: &[String]) -> CloudResult<Vec<EntityRecord>> {
         if user_ids.len() > 100 {
             return Err(CloudError::InvalidArgument);

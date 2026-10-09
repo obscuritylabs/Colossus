@@ -268,6 +268,13 @@ impl SidecarLifecycle for NativeSidecarLifecycle {
                 }
             };
             let capabilities = running.transports().primary.capabilities();
+            let connector_capabilities = running
+                .transports()
+                .connector
+                .as_ref()
+                .map_or_else(ServerCapabilities::default, |transport| {
+                    transport.capabilities()
+                });
             let artifacts = running
                 .transports()
                 .primary
@@ -306,6 +313,7 @@ impl SidecarLifecycle for NativeSidecarLifecycle {
                 agent_runs,
                 artifacts,
                 capabilities,
+                connector_capabilities,
             }))
         }
     }
@@ -998,8 +1006,11 @@ struct ManagedSidecarBackend {
     agent_runs: Arc<SwitchingAgentRunClient>,
     artifacts: Option<Arc<SwitchingArtifactClient>>,
     capabilities: ServerCapabilities,
+    connector_capabilities: ServerCapabilities,
 }
 
+#[path = "native_sidecar_plugins.rs"]
+mod plugins;
 #[path = "native_sidecar_workflows.rs"]
 mod workflows;
 
@@ -1036,6 +1047,29 @@ impl Backend for ManagedSidecarBackend {
     fn capabilities(&self) -> ServerCapabilities {
         self.capabilities.clone()
     }
+    fn connector_capabilities(&self) -> ServerCapabilities {
+        self.connector_capabilities.clone()
+    }
+    fn connector_workflows(&self) -> Option<Arc<dyn crate::WorkflowClient>> {
+        (self.connector_capabilities.contains("workflows.read")
+            || self.connector_capabilities.contains("schedules.read")
+            || self.connector_capabilities.contains("workflow_runs.read"))
+        .then(|| {
+            Arc::new(workflows::ManagedWorkflowClient {
+                state: Arc::downgrade(&self.state),
+                connector: true,
+            }) as Arc<dyn crate::WorkflowClient>
+        })
+    }
+    fn connector_plugins(&self) -> Option<Arc<dyn crate::PluginClient>> {
+        self.connector_capabilities
+            .contains("plugins.read")
+            .then(|| {
+                Arc::new(plugins::ManagedPluginClient {
+                    state: Arc::downgrade(&self.state),
+                }) as Arc<dyn crate::PluginClient>
+            })
+    }
 
     fn artifacts(&self) -> Option<Arc<dyn ArtifactClient>> {
         self.artifacts
@@ -1050,6 +1084,7 @@ impl Backend for ManagedSidecarBackend {
         .then(|| {
             Arc::new(workflows::ManagedWorkflowClient {
                 state: Arc::downgrade(&self.state),
+                connector: false,
             }) as Arc<dyn crate::WorkflowClient>
         })
     }

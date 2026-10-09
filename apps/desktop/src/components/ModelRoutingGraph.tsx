@@ -28,7 +28,7 @@ import {
 } from "./ModelRoleRouting";
 import { modelRouteGroups } from "./model-routing-map";
 import "@xyflow/react/dist/style.css";
-import "./workflow-logic.css";
+import "@colossus/ui/styles/workflow-logic.css";
 
 type RouteNode = Node<
   {

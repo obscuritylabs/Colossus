@@ -58,9 +58,9 @@ pub use backend::{AgentRunClient, ArtifactClient, Backend, BackendKind};
 pub use client::Colossus;
 pub use colossus_api::{
     ApiError, ApiErrorCode, ApiErrorReason, ApiResult, ApiScope, FieldViolation, IdempotencyKey,
-    PLAN_CONTINUATION_CAPABILITY, PolicyApprovalMode, PolicyFinding, PolicyFindingSeverity,
-    PolicyModelLabel, PolicyProvenance, PolicySandboxBackend, PolicyTelemetry,
-    PolicyTelemetryProvenance, RuntimePolicyPosture, SESSION_ACTIVITY_CAPABILITY,
+    OutcomeCertainty as ApiOutcomeCertainty, PLAN_CONTINUATION_CAPABILITY, PolicyApprovalMode,
+    PolicyFinding, PolicyFindingSeverity, PolicyModelLabel, PolicyProvenance, PolicySandboxBackend,
+    PolicyTelemetry, PolicyTelemetryProvenance, RuntimePolicyPosture, SESSION_ACTIVITY_CAPABILITY,
     SetWorkspaceSharingRequest, WorkspaceSharingState, scopes,
 };
 #[cfg(all(feature = "sidecar", target_os = "macos"))]
