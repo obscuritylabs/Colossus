@@ -108,7 +108,7 @@ test("slash commands complete and change Desktop modes without becoming prompts"
   await prompt.fill("/help");
   await prompt.press("Enter");
   await expect(prompt).toHaveValue("/");
-  await expect(commands.getByRole("option")).toHaveCount(29);
+  await expect(commands.getByRole("option")).toHaveCount(33);
 
   await prompt.fill("/plan list");
   await prompt.press("Enter");

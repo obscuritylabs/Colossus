@@ -504,6 +504,7 @@ pub(crate) enum RunModeDto {
     Execute,
     Plan,
     Research,
+    Goal,
 }
 
 impl From<RunMode> for RunModeDto {
@@ -512,6 +513,7 @@ impl From<RunMode> for RunModeDto {
             RunMode::Execute => Self::Execute,
             RunMode::Plan => Self::Plan,
             RunMode::Research => Self::Research,
+            RunMode::Goal => Self::Goal,
         }
     }
 }
@@ -712,6 +714,8 @@ pub(crate) struct RunDto {
     pub(crate) terminal: Option<RunTerminalDto>,
     pub(crate) etag: String,
     pub(crate) archived: bool,
+    pub(crate) controllable: bool,
+    pub(crate) continuable: bool,
 }
 
 impl From<Run> for RunDto {
@@ -732,6 +736,8 @@ impl From<Run> for RunDto {
             terminal: value.terminal.map(Into::into),
             etag: value.etag,
             archived: value.archived,
+            controllable: true,
+            continuable: true,
         }
     }
 }
@@ -1216,6 +1222,8 @@ pub(crate) enum WatchEventDto {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GetRunDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) initial_prompt: Option<String>,
     pub(crate) run: RunDto,
     pub(crate) pending_interactions: Vec<InteractionDto>,
 }
@@ -1406,6 +1414,7 @@ pub(crate) enum RunModeInput {
     Execute,
     Plan,
     Research,
+    Goal,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -1515,6 +1524,7 @@ impl From<RunModeInput> for RunMode {
             RunModeInput::Execute => Self::Execute,
             RunModeInput::Plan => Self::Plan,
             RunModeInput::Research => Self::Research,
+            RunModeInput::Goal => Self::Goal,
         }
     }
 }
@@ -1535,6 +1545,8 @@ pub(crate) struct CreateRunInput {
     mode: RunModeInput,
     #[serde(default)]
     research_depth: Option<ResearchDepthInput>,
+    #[serde(default)]
+    goal_max_iterations: u32,
     #[serde(default)]
     research_sources: Vec<ResearchSourceInput>,
     #[serde(default)]
@@ -1600,6 +1612,27 @@ impl CreateRunInput {
                 "maxTurns must be at most 100.",
             ));
         }
+        if (matches!(self.mode, RunModeInput::Goal)
+            && !(1..=50).contains(&self.goal_max_iterations))
+            || (!matches!(self.mode, RunModeInput::Goal) && self.goal_max_iterations != 0)
+        {
+            return Err(CommandErrorDto::invalid(
+                "goalMaxIterations",
+                "Goal mode requires 1..=50 iterations; other modes require zero.",
+            ));
+        }
+        if matches!(self.mode, RunModeInput::Goal)
+            && (self.plan_action.is_some()
+                || self.branch.is_some()
+                || !self.artifact_ids.is_empty()
+                || self.research_depth.is_some()
+                || !self.research_sources.is_empty())
+        {
+            return Err(CommandErrorDto::invalid(
+                "mode",
+                "Standalone Goal mode accepts text without Plan actions, branching, attachments, or Research options.",
+            ));
+        }
         let idempotency_key =
             IdempotencyKey::new(self.idempotency_key).map_err(CommandErrorDto::from_api)?;
         if self.artifact_ids.len() > 16 {
@@ -1641,6 +1674,7 @@ impl CreateRunInput {
             end_user_id: None,
             role: self.role,
             mode: self.mode.into(),
+            goal_max_iterations: self.goal_max_iterations,
             research_depth: self.research_depth.map(|depth| match depth {
                 ResearchDepthInput::Quick => ResearchDepth::Quick,
                 ResearchDepthInput::Standard => ResearchDepth::Standard,
@@ -1973,6 +2007,50 @@ fn validate_optional_opaque(value: &str, field: &str) -> Result<(), CommandError
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn standalone_goal_input_is_plan_free_and_explicitly_bounded() {
+        let base = json!({"prompt": "Verify the outcome", "role": "primary", "mode": "goal",
+            "goalMaxIterations": 5, "maxTurns": 12, "idempotencyKey": "standalone-goal"});
+        let request = serde_json::from_value::<CreateRunInput>(base.clone())
+            .unwrap()
+            .into_sdk()
+            .unwrap();
+        assert_eq!(request.mode, RunMode::Goal);
+        assert_eq!(request.goal_max_iterations, 5);
+        assert!(request.plan_action.is_none());
+        assert!(request.session_id.is_none());
+        for budget in [0, 51, u32::MAX] {
+            let mut invalid = base.clone();
+            invalid["goalMaxIterations"] = json!(budget);
+            assert!(
+                serde_json::from_value::<CreateRunInput>(invalid)
+                    .unwrap()
+                    .into_sdk()
+                    .is_err()
+            );
+        }
+        for (field, value) in [
+            ("artifactIds", json!(["artifact:test"])),
+            ("researchDepth", json!("deep")),
+            ("researchSources", json!(["repo"])),
+            ("branch", json!({"sourceRunId": "run:test"})),
+            (
+                "planAction",
+                json!({"type": "revise", "sourceRunId": "run:test", "expectedRevision": 1}),
+            ),
+        ] {
+            let mut invalid = base.clone();
+            invalid[field] = value;
+            assert!(
+                serde_json::from_value::<CreateRunInput>(invalid)
+                    .unwrap()
+                    .into_sdk()
+                    .is_err(),
+                "{field}"
+            );
+        }
+    }
 
     #[test]
     fn create_input_is_bounded_and_preserves_plan_mode() {

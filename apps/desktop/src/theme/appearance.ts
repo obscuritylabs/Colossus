@@ -1,3 +1,4 @@
+import { DARK_PALETTE_OPTIONS } from "@colossus/ui/lib/palette";
 import {
   DEFAULT_THEME_PALETTES,
   PALETTE_CSS_VARIABLES,
@@ -9,7 +10,7 @@ import type { ThemePalettes } from "./palette";
 
 export const COLOR_THEME_OPTIONS = ["system", "dark", "light"] as const;
 export const TEXT_SIZE_OPTIONS = ["compact", "comfortable", "large"] as const;
-export const DARK_PALETTE_OPTIONS = ["colossus", "neutral", "hacker"] as const;
+export { DARK_PALETTE_OPTIONS } from "@colossus/ui/lib/palette";
 
 export type ColorThemePreference = (typeof COLOR_THEME_OPTIONS)[number];
 export type ResolvedColorTheme = Exclude<ColorThemePreference, "system">;

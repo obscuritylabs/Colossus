@@ -684,6 +684,23 @@ impl Backend for WindowsSidecarBackend {
             .as_ref()
             .map(|client| client.clone() as Arc<dyn AgentRunClient>)
     }
+    fn connector_workflows(&self) -> Option<Arc<dyn crate::WorkflowClient>> {
+        self.connector
+            .as_ref()
+            .and_then(|transport| transport.workflows())
+    }
+    fn connector_plugins(&self) -> Option<Arc<dyn crate::PluginClient>> {
+        self.connector
+            .as_ref()
+            .and_then(|transport| transport.plugins())
+    }
+    fn connector_capabilities(&self) -> ServerCapabilities {
+        self.connector
+            .as_ref()
+            .map_or_else(ServerCapabilities::default, |transport| {
+                transport.capabilities()
+            })
+    }
     fn capabilities(&self) -> ServerCapabilities {
         self.primary.capabilities()
     }

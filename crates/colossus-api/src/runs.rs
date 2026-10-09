@@ -127,6 +127,8 @@ pub enum RunMode {
     Plan,
     /// Run the dedicated durable evidence-and-citation research service.
     Research,
+    /// Bounded autonomous Goal execution without a Plan prerequisite.
+    Goal,
 }
 
 /// Requested research breadth for a public Research run.
@@ -244,7 +246,7 @@ pub struct RunResult {
     /// Released lifecycle state paired with `plan_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_status: Option<PlanStatus>,
-    /// Durable Goal created by a Plan handoff, when applicable.
+    /// Durable Goal created by standalone Goal mode or a Plan handoff, when applicable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal_id: Option<String>,
     /// Deprecated compatibility alias populated with the model profile.
@@ -357,7 +359,7 @@ pub struct RunCancellation {
     /// Released lifecycle state paired with `plan_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_status: Option<PlanStatus>,
-    /// Durable Goal created by a Plan handoff, when applicable.
+    /// Durable Goal created by standalone Goal mode or a Plan handoff, when applicable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal_id: Option<String>,
 }
@@ -854,6 +856,9 @@ pub struct CreateRunRequest {
     /// Requested execution mode.
     #[serde(default)]
     pub mode: RunMode,
+    /// Explicit Goal iteration ceiling; 1..=50 in Goal mode and zero otherwise.
+    #[serde(default, skip_serializing_if = "zero_goal_iterations")]
+    pub goal_max_iterations: u32,
     /// Research breadth; present only for Research runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub research_depth: Option<ResearchDepth>,
@@ -873,6 +878,10 @@ pub struct CreateRunRequest {
     pub max_turns: u32,
     /// Required key for atomic create replay.
     pub idempotency_key: IdempotencyKey,
+}
+
+fn zero_goal_iterations(value: &u32) -> bool {
+    *value == 0
 }
 
 /// Encrypted durable coordinator input captured when a run is accepted.
@@ -1073,7 +1082,7 @@ impl CreateRunRequest {
                     ));
                 }
             }
-            RunMode::Execute | RunMode::Plan => {
+            RunMode::Execute | RunMode::Plan | RunMode::Goal => {
                 if self.research_depth.is_some() || !self.research_sources.is_empty() {
                     return Err(ApiError::invalid(
                         ApiErrorReason::InvalidArgument,
@@ -1082,6 +1091,29 @@ impl CreateRunRequest {
                     ));
                 }
             }
+        }
+        if (self.mode == RunMode::Goal && !(1..=50).contains(&self.goal_max_iterations))
+            || (self.mode != RunMode::Goal && self.goal_max_iterations != 0)
+        {
+            return Err(ApiError::invalid(
+                ApiErrorReason::InvalidArgument,
+                "goal_max_iterations",
+                "Goal mode requires 1..=50 iterations; other modes require zero",
+            ));
+        }
+        if self.mode == RunMode::Goal
+            && (self.plan_action.is_some()
+                || self.branch.is_some()
+                || self
+                    .input
+                    .iter()
+                    .any(|part| !matches!(part, ContentPart::Text { .. })))
+        {
+            return Err(ApiError::invalid(
+                ApiErrorReason::InvalidArgument,
+                "mode",
+                "Standalone Goal mode accepts text in the selected conversation, without Plan actions or branching",
+            ));
         }
         if let Some(action) = &self.plan_action {
             token(

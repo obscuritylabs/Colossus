@@ -281,6 +281,11 @@ pub async fn run_cli(command: ConnectorCommand) -> Result<(), Box<dyn std::error
             let mut report = Report::saved(Some(&config));
             report.run_instance = Some(uuid::Uuid::now_v7().simple().to_string());
             let connector = RuntimeConnector::new(config, key, client.agent_runs())?
+                .with_resources(crate::ConnectorResources {
+                    workflows: client.workflows(),
+                    plugins: client.plugins(),
+                    capabilities: client.capabilities().iter().map(str::to_owned).collect(),
+                })
                 .with_enrollment_store(enrollment);
             control.heartbeat(&mut report, ConnectorStatus::Connecting)?;
             let (shutdown, receiver) = tokio::sync::watch::channel(false);

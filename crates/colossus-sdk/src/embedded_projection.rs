@@ -32,7 +32,9 @@ pub(super) fn create_request(value: CreateRunRequest) -> core::CreateRunRequest 
             RunMode::Execute => core::RunMode::Execute,
             RunMode::Plan => core::RunMode::Plan,
             RunMode::Research => core::RunMode::Research,
+            RunMode::Goal => core::RunMode::Goal,
         },
+        goal_max_iterations: value.goal_max_iterations,
         research_depth: value.research_depth.map(|depth| match depth {
             ResearchDepth::Quick => core::ResearchDepth::Quick,
             ResearchDepth::Standard => core::ResearchDepth::Standard,
@@ -413,6 +415,7 @@ fn run(value: core::Run) -> ApiResult<Run> {
             core::RunMode::Execute => RunMode::Execute,
             core::RunMode::Plan => RunMode::Plan,
             core::RunMode::Research => RunMode::Research,
+            core::RunMode::Goal => RunMode::Goal,
         },
         status: run_status(value.status),
         created_at: value.created_at,

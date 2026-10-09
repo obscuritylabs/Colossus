@@ -653,6 +653,7 @@ fn offline_self_test_request(idempotency_key: IdempotencyKey) -> CreateRunReques
         end_user_id: None,
         role: "primary".into(),
         mode: RunMode::Execute,
+        goal_max_iterations: 0,
         research_depth: None,
         research_sources: Vec::new(),
         plan_action: None,

@@ -307,3 +307,28 @@ it("defaults to an active project while preserving explicitly selected archived 
   await ready();
   expect(selector().textContent).toContain("Archived project");
 });
+
+it("preserves the authorized project through global settings navigation and reload", async () => {
+  account = {
+    ...me,
+    projects: [
+      { ...me.projects[0]!, id: "q", name: "Other project" },
+      ...me.projects,
+    ],
+  };
+  await act(() => root.render(<App />));
+  await contains("Retained exact-resource reply");
+  const settings = container.querySelector<HTMLAnchorElement>(
+    'a[href="/settings?project=p"]',
+  );
+  expect(settings).not.toBeNull();
+  await act(() => settings!.click());
+  await contains("Personal preferences");
+  expect(location.search).toBe("?project=p");
+  await act(() => root.unmount());
+  root = createRoot(container);
+  await act(() => root.render(<App />));
+  await contains("Personal preferences");
+  expect(container.querySelector('a[href="/fleet?project=p"]')).not.toBeNull();
+  expect(paths.some((path) => path.startsWith("/api/projects/q/"))).toBe(false);
+});

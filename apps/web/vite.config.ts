@@ -21,7 +21,13 @@ export default defineConfig({
     react(),
   ],
   optimizeDeps: {
+    // Keep shared context providers and their direct component imports together.
+    exclude: ["@colossus/ui"],
     include: [
+      "@xyflow/react",
+      "react-markdown",
+      "recharts",
+      "react-resizable-panels",
       "use-sync-external-store/shim",
       "use-sync-external-store/shim/with-selector",
     ],

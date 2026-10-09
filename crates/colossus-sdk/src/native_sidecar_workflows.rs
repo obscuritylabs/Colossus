@@ -8,6 +8,7 @@ use crate::{
 
 pub(super) struct ManagedWorkflowClient {
     pub(super) state: std::sync::Weak<ManagedSidecarState>,
+    pub(super) connector: bool,
 }
 impl ManagedWorkflowClient {
     async fn current(&self) -> ApiResult<Arc<dyn WorkflowClient>> {
@@ -15,12 +16,17 @@ impl ManagedWorkflowClient {
         if state.closing.load(Ordering::Acquire) {
             return Err(sidecar_closed_error());
         }
-        let current = state
-            .process
-            .lock()
-            .await
-            .as_ref()
-            .and_then(|running| running.transports().primary.workflows());
+        let current = state.process.lock().await.as_ref().and_then(|running| {
+            let transports = running.transports();
+            if self.connector {
+                transports
+                    .connector
+                    .as_ref()
+                    .and_then(|transport| transport.workflows())
+            } else {
+                transports.primary.workflows()
+            }
+        });
         current.ok_or_else(sidecar_closed_error)
     }
 }

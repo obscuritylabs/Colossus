@@ -44,9 +44,11 @@ export class DurableRunFailed extends Error {
   public readonly httpStatus: number | undefined;
   public readonly retryAfterMs: bigint | undefined;
 
-  public constructor(failure: NonNullable<RunUpdate["update"]> & {
-    readonly $case: "failure";
-  }) {
+  public constructor(
+    failure: NonNullable<RunUpdate["update"]> & {
+      readonly $case: "failure";
+    },
+  ) {
     const detail = failure.value.failure;
     super(detail?.message ?? "run failed without released failure detail");
     this.name = "DurableRunFailed";
@@ -63,6 +65,7 @@ export async function runPrompt(
   prompt: string,
   options: {
     readonly mode?: RunMode;
+    readonly goalMaxIterations?: number;
     readonly maxTurns?: number;
     readonly signal?: AbortSignal;
     readonly handleInteraction?: InteractionHandler;
@@ -76,6 +79,10 @@ export async function runPrompt(
           input: [{ content: { $case: "text", value: { text: prompt } } }],
           role: "primary",
           mode: options.mode ?? RunMode.RUN_MODE_EXECUTE,
+          goalMaxIterations:
+            options.mode === RunMode.RUN_MODE_GOAL
+              ? (options.goalMaxIterations ?? 5)
+              : 0,
           maxTurns: options.maxTurns ?? 12,
           idempotencyKey: `sdk-example-create-${randomUUID()}`,
           planAction: undefined,
@@ -214,7 +221,9 @@ export async function denyApproval(
 }
 
 function unary<Response>(
-  invoke: (callback: (error: ServiceError | null, response: Response) => void) => unknown,
+  invoke: (
+    callback: (error: ServiceError | null, response: Response) => void,
+  ) => unknown,
 ): Promise<Response> {
   return new Promise((resolve, reject) => {
     invoke((error, response) => {

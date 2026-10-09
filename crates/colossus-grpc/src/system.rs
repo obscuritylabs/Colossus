@@ -204,6 +204,13 @@ impl SystemService for SystemServiceAdapter {
             detail: String::new(),
         }))
         .chain(std::iter::once(Capability {
+            name: "goal.create".into(),
+            enabled: caller.principal().has_scope(scopes::RUNS_EXECUTE)
+                && caller.principal().allows_tool("goal.show")
+                && caller.principal().allows_tool("goal.update"),
+            detail: String::new(),
+        }))
+        .chain(std::iter::once(Capability {
             name: "agent_runs.delegation".into(),
             enabled: caller.principal().has_scope(scopes::RUNS_EXECUTE)
                 && caller.principal().allows_tool("agent.delegate"),
@@ -521,6 +528,7 @@ mod tests {
             .map(|capability| capability.name)
             .collect::<std::collections::BTreeSet<_>>();
         assert!(enabled.contains("agent_runs.delegation"));
+        assert!(!enabled.contains("goal.create"));
         assert!(enabled.contains("plans.continue"));
         assert!(enabled.contains(SESSION_ACTIVITY_CAPABILITY));
         assert!(enabled.contains("artifacts.read"));
@@ -546,8 +554,44 @@ mod tests {
             .map(|capability| capability.name)
             .collect::<std::collections::BTreeSet<_>>();
         assert!(disabled.contains("agent_runs.delegation"));
+        assert!(disabled.contains("goal.create"));
         assert!(disabled.contains(PLAN_CONTINUATION_CAPABILITY));
         assert!(disabled.contains(SESSION_ACTIVITY_CAPABILITY));
+    }
+
+    #[tokio::test]
+    async fn standalone_goal_capability_requires_run_scope_and_both_goal_tools() {
+        for (run_scope, tools, expected) in [
+            (true, vec!["goal.show", "goal.update"], true),
+            (true, vec!["goal.show"], false),
+            (true, vec!["goal.update"], false),
+            (false, vec!["goal.show", "goal.update"], false),
+        ] {
+            let scopes = if run_scope {
+                vec![scopes::RUNS_EXECUTE]
+            } else {
+                vec![]
+            };
+            let info = service()
+                .get_server_info(request_with(
+                    GetServerInfoRequest {},
+                    scopes,
+                    tools.into_iter().map(str::to_owned).collect(),
+                ))
+                .await
+                .unwrap()
+                .into_inner()
+                .server_info
+                .unwrap();
+            assert_eq!(
+                info.capabilities
+                    .iter()
+                    .find(|item| item.name == "goal.create")
+                    .unwrap()
+                    .enabled,
+                expected
+            );
+        }
     }
 
     #[tokio::test]

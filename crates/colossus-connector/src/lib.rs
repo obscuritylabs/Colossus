@@ -1,6 +1,8 @@
 //! Outbound, caller-bound runtime connector. Cloud traffic cannot access worker IPC.
 mod connection;
+mod resources;
 pub use connection::{ConnectionConfig, ConnectorStatus, RuntimeConnector};
+pub use resources::ConnectorResources;
 mod enrollment;
 pub use enrollment::EnrollmentStore;
 mod cli;
@@ -9,6 +11,7 @@ mod discovery;
 mod headless;
 mod history;
 mod inventory;
+pub use inventory::native_host_label;
 mod outbound;
 mod released;
 pub use cli::{

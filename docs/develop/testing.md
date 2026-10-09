@@ -208,11 +208,15 @@ for controls, composer preservation, responsive layout, and accessibility. Fixtu
 pages do not prove native isolation or site compatibility. The remaining release
 matrix is recorded in [ADR 0003](adr/0003-desktop-browser-boundary.md).
 
-For developer review, prepare debug sidecars, then from `apps/desktop` run:
+For developer review, the canonical launcher can prepare debug sidecars and enable
+Browser for the development build:
 
 ```sh
-npm run tauri -- dev --features browser-preview -- --locked
+./scripts/desktop-dev --browser-preview
 ```
+
+This flag can be combined with `--dev-credentials` for an already activated private
+development home. Direct Tauri launches still accept `--features browser-preview`.
 
 The feature is off in normal builds until the native release gates pass.
 

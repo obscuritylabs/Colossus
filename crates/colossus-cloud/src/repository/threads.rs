@@ -184,6 +184,7 @@ impl CloudRepository {
                 after: task_after.map(str::to_owned),
                 limit: 100,
                 node_id: None,
+                host_id: None,
                 query: None,
                 status: None,
                 archived: None,
@@ -206,6 +207,7 @@ impl CloudRepository {
                 after: message_after.map(str::to_owned),
                 limit: 100,
                 node_id: None,
+                host_id: None,
                 query: None,
                 status: None,
                 archived: None,
@@ -276,11 +278,13 @@ impl CloudRepository {
                 .cmp(&b.created_at)
                 .then_with(|| a.message_id.cmp(&b.message_id))
         });
+        let message_authors = self.message_authors(&thread, &tasks, &messages).await?;
 
         Ok(CloudThreadDetail {
             thread,
             tasks,
             messages,
+            message_authors,
             next_task_cursor,
             next_message_cursor,
         })
@@ -325,6 +329,7 @@ impl CloudRepository {
                 after,
                 limit: limit.min(100),
                 node_id: node,
+                host_id: None,
                 query,
                 status: None,
                 archived,
@@ -637,6 +642,7 @@ impl CloudRepository {
                     after: after.clone(),
                     limit: 100,
                     node_id: None,
+                    host_id: None,
                     query: None,
                     status: None,
                     archived: None,

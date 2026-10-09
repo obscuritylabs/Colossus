@@ -77,6 +77,7 @@ pub struct RuntimeConnector {
     key: Zeroizing<String>,
     runs: Arc<dyn AgentRunClient>,
     enrollment: Option<crate::EnrollmentStore>,
+    resources: crate::ConnectorResources,
 }
 impl RuntimeConnector {
     /// Bind native-held credentials and an SDK client carrying a dedicated cloud grant.
@@ -117,7 +118,13 @@ impl RuntimeConnector {
             key,
             runs,
             enrollment: None,
+            resources: crate::ConnectorResources::default(),
         })
+    }
+    /// Attach only the dedicated cloud application's authenticated public resources.
+    pub fn with_resources(mut self, resources: crate::ConnectorResources) -> Self {
+        self.resources = resources;
+        self
     }
     /// Retain the native enrollment authority for automatic, durable certificate renewal.
     pub fn with_enrollment_store(mut self, store: crate::EnrollmentStore) -> Self {
@@ -259,7 +266,12 @@ impl RuntimeConnector {
                 protocol_major: PROTOCOL_MAJOR,
                 node_id: self.config.node_id.clone(),
                 instance_id: self.config.instance_id.clone(),
-                capabilities: self.config.capabilities.clone(),
+                capabilities: {
+                    let mut capabilities = self.config.capabilities.clone();
+                    capabilities.retain(|c| c != colossus_cloud_protocol::RESOURCE_CAPABILITY);
+                    capabilities.push(colossus_cloud_protocol::RESOURCE_CAPABILITY.into());
+                    capabilities
+                },
                 project_id: self.config.project_id.clone(),
                 inventory_json: self
                     .config
@@ -292,6 +304,9 @@ impl RuntimeConnector {
         let mut heartbeat = tokio::time::interval(Duration::from_secs(5));
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let permits = Arc::new(Semaphore::new(MAX_ACTIVE_TASKS));
+        let resource_permits = Arc::new(Semaphore::new(
+            colossus_cloud_protocol::MAX_RESOURCE_REQUESTS,
+        ));
         let mut watched = HashSet::new();
         let mut discovery: Option<wire::ReleasedDiscoveryPage> = None;
         let mut acknowledged_discovery: Option<(String, String)> = None;
@@ -344,6 +359,19 @@ impl RuntimeConnector {
                                 }
                             }
                         }
+                        Some(control_frame::Body::ResourceRequest(request)) => {
+                            if request.request_id.len() != 32 || !request.request_id.bytes().all(|b| b.is_ascii_hexdigit()) || request.operation_json.len() > colossus_cloud_protocol::MAX_RESOURCE_REQUEST_BYTES {
+                                return Err(Status::invalid_argument("invalid resource request"));
+                            }
+                            let operation: colossus_cloud_protocol::ResourceOperation = decode(&request.operation_json).map_err(|_| Status::invalid_argument("invalid resource operation"))?;
+                            let permit = resource_permits.clone().try_acquire_owned().map_err(|_| Status::resource_exhausted("resource request bound"))?;
+                            let resources = self.resources.clone(); let sender = sender.clone();
+                            watchers.spawn(async move {
+                                let _permit = permit;
+                                let reply = resources.execute(operation).await;
+                                send(&sender, runtime_frame::Body::ResourceResponse(wire::ResourceResponse { request_id: request.request_id, reply_json: encode(&reply).map_err(|_| Status::resource_exhausted("resource response too large"))? })).await
+                            });
+                        },
                         Some(control_frame::Body::Acknowledgement(_))=>{},
                         Some(control_frame::Body::Discover(request))=>{
                             if let Some(page) = &discovery {

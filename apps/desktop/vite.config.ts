@@ -30,11 +30,15 @@ export default defineConfig({
   ],
   optimizeDeps: {
     include: [
+      "react-markdown",
+      "react-resizable-panels",
+      "recharts",
       "use-sync-external-store/shim",
       "use-sync-external-store/shim/with-selector",
     ],
     // Dependency pre-bundling bypasses the compatibility transform above.
     exclude: [
+      "@colossus/ui",
       "@xterm/xterm",
       "@xyflow/system",
       "d3-color",

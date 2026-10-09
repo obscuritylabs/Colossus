@@ -48,7 +48,7 @@ pub struct RuntimeInventory {
     pub policy: Option<colossus_sdk::RuntimePolicyPosture>,
     /// Installation identity persisted in the owner-private native Colossus home.
     pub host_id: String,
-    /// Operator-visible host label, never an automatically discovered hostname.
+    /// Bounded native computer name for display, independent of the opaque host identity.
     pub host_label: String,
     /// Bounded native platform identifier such as linux, windows, or macos.
     pub platform: String,

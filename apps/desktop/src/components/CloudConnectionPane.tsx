@@ -9,6 +9,7 @@ import {
 } from "@tabler/icons-react";
 import "./cloud-connection.css";
 import type { ControlPlaneProfiles } from "./ControlPlaneSettingsPane";
+import { cloudConnectionError } from "../cloud-connection-errors";
 interface CloudStatus {
   targetId: string;
   status:
@@ -67,9 +68,10 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
         .catch((error) => {
           if (alive && generation === operation.current)
             setError(
-              typeof error === "object" && error !== null && "message" in error
-                ? String(error.message)
-                : "Control Plane enrollment is unavailable.",
+              cloudConnectionError(
+                error,
+                "Control Plane enrollment is unavailable.",
+              ),
             );
         })
         .finally(() => {
@@ -101,9 +103,10 @@ export function CloudConnectionPane({ targetId }: { targetId: string }) {
     } catch (error) {
       if (operation.current === generation)
         setError(
-          typeof error === "object" && error !== null && "message" in error
-            ? String(error.message)
-            : "The Control Plane connection could not be changed.",
+          cloudConnectionError(
+            error,
+            "The Control Plane connection could not be changed.",
+          ),
         );
     } finally {
       busyRef.current = false;

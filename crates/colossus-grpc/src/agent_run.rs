@@ -753,6 +753,7 @@ fn create_request(
         Ok(RunMode::Execute) => CoreRunMode::Execute,
         Ok(RunMode::Plan) => CoreRunMode::Plan,
         Ok(RunMode::Research) => CoreRunMode::Research,
+        Ok(RunMode::Goal) => CoreRunMode::Goal,
         Ok(RunMode::Unspecified) | Err(_) => {
             return Err(invalid(
                 caller,
@@ -835,6 +836,7 @@ fn create_request(
         end_user_id: request.end_user_id,
         role: (!request.role.is_empty()).then_some(request.role),
         mode,
+        goal_max_iterations: request.goal_max_iterations,
         research_depth: match ResearchDepth::try_from(request.research_depth) {
             Ok(ResearchDepth::Quick) => Some(CoreResearchDepth::Quick),
             Ok(ResearchDepth::Standard) => Some(CoreResearchDepth::Standard),
@@ -1016,6 +1018,7 @@ fn proto_run(value: CoreRun) -> Result<Run, Status> {
         CoreRunMode::Execute => RunMode::Execute,
         CoreRunMode::Plan => RunMode::Plan,
         CoreRunMode::Research => RunMode::Research,
+        CoreRunMode::Goal => RunMode::Goal,
     };
     let status = proto_run_status(value.status);
     let terminal = match value.status {
@@ -1720,6 +1723,7 @@ mod tests {
                     plan_action: None,
                     branch: None,
                     research_depth: ResearchDepth::Unspecified as i32,
+                    goal_max_iterations: 0,
                     research_sources: Vec::new(),
                     max_turns: 0,
                     idempotency_key: "key-1".into(),
@@ -1746,6 +1750,7 @@ mod tests {
                 plan_action: None,
                 branch: None,
                 research_depth: ResearchDepth::Unspecified as i32,
+                goal_max_iterations: 0,
                 research_sources: Vec::new(),
                 max_turns: 1,
                 idempotency_key: "bounded-input".into(),

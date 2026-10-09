@@ -488,6 +488,7 @@ impl Runtime {
                         prepared,
                         end_user_id,
                         remote_trace_context,
+                        None,
                         observer,
                         control,
                     )

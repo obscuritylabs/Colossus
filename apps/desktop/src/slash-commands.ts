@@ -11,8 +11,8 @@ export type DesktopSlashAction =
   | { type: "new_work" }
   | { type: "open_work_navigation" }
   | { type: "set_mode"; mode: RunMode; resetPlanRevision: boolean }
-  | { type: "toggle_mode"; mode: "plan" | "research" }
-  | { type: "show_mode_status"; mode: "plan" | "research" }
+  | { type: "toggle_mode"; mode: "plan" | "research" | "goal" }
+  | { type: "show_mode_status"; mode: "plan" | "research" | "goal" }
   | { type: "show_approval_mode" }
   | { type: "set_approval_mode"; mode: ApprovalMode }
   | {
@@ -80,6 +80,18 @@ export const DESKTOP_SLASH_COMMANDS: readonly DesktopSlashCommandSuggestion[] =
     {
       command: "/execute",
       description: "Enter Execute mode",
+      group: "Mode",
+    },
+    { command: "/goal", description: "Toggle Goal mode", group: "Mode" },
+    { command: "/goal on", description: "Enter Goal mode", group: "Mode" },
+    {
+      command: "/goal off",
+      description: "Return to Execute mode",
+      group: "Mode",
+    },
+    {
+      command: "/goal status",
+      description: "Show the current Goal mode",
       group: "Mode",
     },
     {
@@ -190,6 +202,10 @@ const ACTIONS = new Map<string, DesktopSlashAction>([
   ["/plan show", { type: "select_session_view", view: "plans" }],
   ["/plans", { type: "select_session_view", view: "plans" }],
   ["/execute", { type: "set_mode", mode: "execute", resetPlanRevision: true }],
+  ["/goal", { type: "toggle_mode", mode: "goal" }],
+  ["/goal on", { type: "set_mode", mode: "goal", resetPlanRevision: true }],
+  ["/goal off", { type: "set_mode", mode: "execute", resetPlanRevision: true }],
+  ["/goal status", { type: "show_mode_status", mode: "goal" }],
   ["/research", { type: "toggle_mode", mode: "research" }],
   [
     "/research on",
@@ -259,6 +275,13 @@ export function parseDesktopSlashCommand(
       type: "invalid",
       message:
         "Usage: /research [on|off|status]. Submit a research question after switching modes.",
+    };
+  }
+  if (command.startsWith("/goal ")) {
+    return {
+      type: "invalid",
+      message:
+        "Usage: /goal [on|off|status]. Submit an objective after switching modes.",
     };
   }
   if (command.startsWith("/permissions ")) {

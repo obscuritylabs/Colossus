@@ -1,8 +1,19 @@
 import { WebLink } from "./WebLink";
 import {
+  WorkSurfaceHeader,
+  SessionWorkspaceTabs,
+  WORK_STATUS_PRESENTATIONS,
+  type SessionWorkspaceView,
   ConversationEntry,
   ConversationTimeline,
 } from "@colossus/ui/conversation";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@colossus/ui/components/ui/dropdown-menu";
+import { IconDots } from "@tabler/icons-react";
 import { Badge } from "@colossus/ui/components/ui/badge";
 import { Button as LinkButton } from "@colossus/ui/components/ui/button";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -39,6 +50,7 @@ import {
 import { Interactions } from "./Interactions";
 import { RunComposer, type RunRequest } from "./RunComposer";
 import { conversationProjection } from "./conversation";
+import { ThreadSessionViews } from "./ThreadSessionViews";
 import { ThreadRunActivity } from "./ThreadRunActivity";
 
 function mergeMessages(current: ThreadMessage[], incoming: ThreadMessage[]) {
@@ -94,6 +106,7 @@ export function ThreadDetail({
     [controlling, setControlling] = useState(false),
     [editing, setEditing] = useState(false),
     [title, setTitle] = useState(initial.title),
+    [view, setView] = useState<SessionWorkspaceView>("conversation"),
     [below, setBelow] = useState(false),
     [historyBusy, setHistoryBusy] = useState(false),
     [resolvedTarget, setResolvedTarget] = useState<FleetNode | null>(null);
@@ -136,6 +149,10 @@ export function ThreadDetail({
           setDetail((current) => ({
             ...value,
             messages: mergeMessages(current.messages, value.messages),
+            message_authors: {
+              ...current.message_authors,
+              ...value.message_authors,
+            },
             tasks: mergeTasks(current.tasks, value.tasks),
             next_message_cursor:
               (historyLoaded.current
@@ -259,6 +276,10 @@ export function ThreadDetail({
       setDetail((current) => ({
         ...current,
         messages: mergeMessages(current.messages, value.messages),
+        message_authors: {
+          ...current.message_authors,
+          ...value.message_authors,
+        },
         tasks: mergeTasks(current.tasks, value.tasks),
         next_message_cursor: value.next_message_cursor ?? null,
         next_task_cursor: value.next_task_cursor ?? null,
@@ -408,45 +429,42 @@ export function ThreadDetail({
     Boolean(thread.session_id) &&
     !thread.archived &&
     Boolean(target && !target.node.revoked);
+  const latestTask = running ?? tasks[0];
+  const currentStatus = latestTask
+    ? WORK_STATUS_PRESENTATIONS[taskStatus(latestTask)]
+    : undefined;
+  const startedAt =
+    latestTask?.snapshot?.run.created_at ?? latestTask?.created_at;
+  const startedDate = startedAt ? new Date(startedAt) : null;
+  const startedLabel =
+    startedDate && Number.isFinite(startedDate.getTime())
+      ? startedDate.toLocaleString([], {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        })
+      : null;
   return (
     <section className="detail thread-detail" aria-labelledby="thread-heading">
-      {backHref ? (
-        <LinkButton asChild variant="ghost" className="back">
-          <a
-            href={backHref}
-            onClick={(event) => {
-              if (
-                event.defaultPrevented ||
-                event.button !== 0 ||
-                event.metaKey ||
-                event.ctrlKey ||
-                event.shiftKey ||
-                event.altKey
-              )
-                return;
-              event.preventDefault();
-              onBack();
-            }}
-          >
-            <IconArrowLeft size={16} aria-hidden="true" />
-            {backLabel}
-          </a>
-        </LinkButton>
-      ) : (
-        <Button variant="tertiary" className="back" onClick={onBack}>
-          <IconArrowLeft size={16} aria-hidden="true" />
-          {backLabel}
-        </Button>
-      )}
-      <div className="detail-header">
-        <div>
-          <div className="eyebrow">
-            {target?.node.label ?? thread.node_id}
-            {target?.node.workspace_label
-              ? ` / ${target.node.workspace_label}`
-              : ""}
-          </div>
-          {editing ? (
+      <WorkSurfaceHeader
+        title={thread.title || "Untitled thread"}
+        titleId="thread-heading"
+        titleRef={heading}
+        statusLabel={
+          thread.archived
+            ? "Archived"
+            : (currentStatus?.label ?? "Conversation")
+        }
+        status={currentStatus}
+        startedLabel={startedLabel}
+        modeLabel={
+          latestTask
+            ? statusLabel(latestTask.request.mode) + " mode"
+            : undefined
+        }
+        editing={
+          editing ? (
             <form
               className="thread-rename"
               onSubmit={(event) => {
@@ -478,57 +496,90 @@ export function ThreadDetail({
                 <IconX size={16} aria-hidden="true" />
               </Button>
             </form>
-          ) : (
-            <h2 id="thread-heading" ref={heading} tabIndex={-1}>
-              {thread.title || "Untitled thread"}
-            </h2>
-          )}
-        </div>
-        <div className="thread-header-actions">
-          {permissions.includes("control") ? (
-            <>
-              <Button
-                variant="tertiary"
-                aria-label="Rename thread"
-                onClick={() => {
-                  setTitle(thread.title);
-                  setEditing(true);
-                }}
-                disabled={busy}
-              >
-                <IconEdit size={16} aria-hidden="true" />
+          ) : undefined
+        }
+        actions={
+          <div className="thread-header-actions">
+            {backHref ? (
+              <LinkButton asChild variant="ghost" className="back">
+                <a
+                  href={backHref}
+                  onClick={(event) => {
+                    if (
+                      event.defaultPrevented ||
+                      event.button !== 0 ||
+                      event.metaKey ||
+                      event.ctrlKey ||
+                      event.shiftKey ||
+                      event.altKey
+                    )
+                      return;
+                    event.preventDefault();
+                    onBack();
+                  }}
+                >
+                  <IconArrowLeft size={16} aria-hidden="true" />
+                  <span className="sr-only">{backLabel}</span>
+                </a>
+              </LinkButton>
+            ) : (
+              <Button variant="tertiary" className="back" onClick={onBack}>
+                <IconArrowLeft size={16} aria-hidden="true" />
+                <span className="sr-only">{backLabel}</span>
               </Button>
-              <Button
-                variant="secondary"
-                onClick={() => void metadata({ archived: !thread.archived })}
-                disabled={busy}
-              >
-                {thread.archived ? (
-                  <IconArchiveOff size={16} aria-hidden="true" />
-                ) : (
-                  <IconArchive size={16} aria-hidden="true" />
-                )}
-                {thread.archived ? "Restore" : "Archive"}
-              </Button>
-            </>
-          ) : null}
-        </div>
-      </div>
-      <div className="detail-meta">
-        <span>
-          <span className={`dot ${target?.presence?.ready ? "live" : ""}`} />
-          {target?.presence?.ready ? "Agent online" : "Agent offline"}
-        </span>
-        <span>
-          {connected ? "Live updates connected" : "Reconnecting updates"}
-        </span>
-        <span>
-          {thread.source === "runtime"
-            ? "Shared local session"
-            : "Control Plane conversation"}
-        </span>
-        {thread.archived ? <Badge className="status">Archived</Badge> : null}
-      </div>
+            )}{" "}
+            <Badge
+              className={`thread-presence ${target?.presence?.ready ? "is-online" : ""}`}
+            >
+              <span
+                className={`dot ${target?.presence?.ready ? "live" : ""}`}
+              />
+              {target?.presence?.ready ? "Agent online" : "Agent offline"}
+            </Badge>
+            {permissions.includes("control") ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <LinkButton
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Conversation actions"
+                    disabled={busy}
+                  >
+                    <IconDots size={18} aria-hidden="true" />
+                  </LinkButton>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      setTitle(thread.title);
+                      setEditing(true);
+                    }}
+                  >
+                    <IconEdit size={16} aria-hidden="true" />
+                    Rename thread
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() =>
+                      void metadata({ archived: !thread.archived })
+                    }
+                  >
+                    {thread.archived ? (
+                      <IconArchiveOff size={16} aria-hidden="true" />
+                    ) : (
+                      <IconArchive size={16} aria-hidden="true" />
+                    )}
+                    {thread.archived ? "Restore" : "Archive"}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : null}
+          </div>
+        }
+      />
+      <SessionWorkspaceTabs active={view} onChange={setView} />
+      <span className="sr-only" role="status">
+        {connected ? "Live updates connected" : "Reconnecting updates"}
+      </span>
       {error ? (
         <div className="alert" role="alert">
           {error}
@@ -550,10 +601,10 @@ export function ThreadDetail({
         </p>
       ) : null}
       {!target?.presence?.ready ? (
-        <p className="sync-notice">
+        <span className="sr-only">
           You’re viewing saved history. The conversation remains assigned to its
           original agent.
-        </p>
+        </span>
       ) : null}
       {detail.next_message_cursor || detail.next_task_cursor ? (
         <div className="thread-history-toolbar">
@@ -566,139 +617,159 @@ export function ThreadDetail({
           </span>
         </div>
       ) : null}
-      <div
-        className="thread-conversation"
-        ref={conversation}
-        tabIndex={0}
-        aria-label="Conversation history"
-        onScroll={() => {
-          const panel = conversation.current;
-          if (panel) {
-            follow.current =
-              panel.scrollHeight - panel.clientHeight - panel.scrollTop < 80;
-            if (follow.current) setBelow(false);
-          }
-        }}
-      >
-        <ConversationTimeline>
-          {!messages.length && !tasks.length ? (
-            <div className="output-empty">
-              <IconMessageCircle size={28} aria-hidden="true" />
-              <h3>Loading conversation</h3>
-              <p>Released messages and saved agent work will appear here.</p>
-            </div>
-          ) : null}
-          {projection.turns.map((turn, index) => {
-            const firstResponse = turn.messages.findIndex(
-                (message) => message.role !== "user",
-              ),
-              split = firstResponse < 0 ? turn.messages.length : firstResponse,
-              task = turn.task,
-              status = task ? taskStatus(task) : "";
-            const messageEntry = (message: (typeof turn.messages)[number]) => (
-              <ConversationEntry
-                key={message.message_id}
-                role={
-                  message.role === "user"
-                    ? "user"
-                    : message.role === "assistant"
-                      ? "assistant"
-                      : "system"
-                }
-                author={
-                  message.role === "user"
-                    ? "Human"
-                    : message.role === "assistant"
-                      ? "Colossus"
-                      : statusLabel(message.role)
-                }
-                createdAt={message.created_at}
-                content={message.text}
-                linkComponent={WebLink}
-                status={
-                  message.status ? (
-                    <Badge className={`status status-${message.status}`}>
-                      {statusLabel(message.status)}
-                    </Badge>
-                  ) : null
-                }
-              />
-            );
-            return (
-              <section
-                className="shared-conversation-turn"
-                key={turn.key}
-                data-task-id={
-                  task?.task_id ?? turn.messages[0]?.task_id ?? undefined
-                }
-                data-run-id={task?.run_id ?? undefined}
-                aria-label={`Conversation turn ${index + 1}`}
-              >
-                {turn.messages.slice(0, split).map(messageEntry)}
-                {task ? (
-                  <div className="conversation-run" data-task-id={task.task_id}>
-                    {!terminalStatuses.has(status) ||
-                    task.dispatch_error ||
-                    task.output_limited ? (
-                      <div className="run-progress" role="status">
-                        {!terminalStatuses.has(status) ? (
-                          <IconLoader2
-                            size={15}
-                            className={status === "queued" ? undefined : "spin"}
-                            aria-hidden="true"
-                          />
-                        ) : null}
-                        <strong>{statusLabel(status)}</strong>
-                        <span>
-                          {task.dispatch_error?.message ??
-                            (status === "queued"
-                              ? "Waiting for this agent and earlier turns"
-                              : status === "waiting"
-                                ? "The agent needs a response"
-                                : terminalStatuses.has(status)
-                                  ? "Viewing saved run details"
-                                  : "The agent is working")}
-                        </span>
-                      </div>
-                    ) : null}
-                    {task.output_limited ? (
-                      <p className="sync-notice">
-                        This run reached its released-output limit. Open the
-                        local session for complete output.
-                      </p>
-                    ) : null}
-                    {task.history_bounded ? (
-                      <p className="sync-notice">
-                        This run’s released history is bounded. Its canonical
-                        conversation context remains with the agent.
-                      </p>
-                    ) : null}
-                    <ThreadRunActivity
-                      task={task}
-                      updates={turn.updates}
-                      label={`Run activity for turn ${index + 1}`}
-                    />
-                    <Interactions
-                      interactions={task.snapshot?.pending_interactions ?? []}
-                      project={project}
-                      task={task.task_id}
-                      permissions={
-                        task.source_read_only || target?.node.revoked
-                          ? []
-                          : permissions
-                      }
-                      onUpdate={() => void refresh()}
-                      onError={setError}
-                    />
-                  </div>
-                ) : null}
-                {turn.messages.slice(split).map(messageEntry)}
-              </section>
-            );
-          })}
-        </ConversationTimeline>
-      </div>
-      {below ? (
+      {view === "conversation" ? (
+        <div
+          className="thread-conversation"
+          ref={conversation}
+          tabIndex={0}
+          aria-label="Conversation history"
+          onScroll={() => {
+            const panel = conversation.current;
+            if (panel) {
+              follow.current =
+                panel.scrollHeight - panel.clientHeight - panel.scrollTop < 80;
+              if (follow.current) setBelow(false);
+            }
+          }}
+        >
+          <ConversationTimeline>
+            {!messages.length && !tasks.length ? (
+              <div className="output-empty">
+                <IconMessageCircle size={28} aria-hidden="true" />
+                <h3>Loading conversation</h3>
+                <p>Released messages and saved agent work will appear here.</p>
+              </div>
+            ) : null}
+            {projection.turns.map((turn, index) => {
+              const firstResponse = turn.messages.findIndex(
+                  (message) => message.role !== "user",
+                ),
+                split =
+                  firstResponse < 0 ? turn.messages.length : firstResponse,
+                task = turn.task,
+                status = task ? taskStatus(task) : "";
+              const messageEntry = (
+                message: (typeof turn.messages)[number],
+              ) => (
+                <ConversationEntry
+                  key={message.message_id}
+                  role={
+                    message.role === "user"
+                      ? "user"
+                      : message.role === "assistant"
+                        ? "assistant"
+                        : "system"
+                  }
+                  author={
+                    message.role === "user"
+                      ? detail.message_authors?.[message.message_id]
+                          ?.display_name || "User"
+                      : message.role === "assistant"
+                        ? "Colossus"
+                        : statusLabel(message.role)
+                  }
+                  createdAt={message.created_at}
+                  content={message.text}
+                  linkComponent={WebLink}
+                  status={
+                    message.status ? (
+                      <Badge className={`status status-${message.status}`}>
+                        {statusLabel(message.status)}
+                      </Badge>
+                    ) : null
+                  }
+                />
+              );
+              return (
+                <section
+                  className="shared-conversation-turn"
+                  key={turn.key}
+                  data-task-id={
+                    task?.task_id ?? turn.messages[0]?.task_id ?? undefined
+                  }
+                  data-run-id={task?.run_id ?? undefined}
+                  aria-label={`Conversation turn ${index + 1}`}
+                >
+                  {turn.messages.slice(0, split).map(messageEntry)}
+                  {task ? (
+                    <div
+                      className="conversation-run"
+                      data-task-id={task.task_id}
+                    >
+                      {!terminalStatuses.has(status) ||
+                      task.dispatch_error ||
+                      task.output_limited ? (
+                        <div className="run-progress" role="status">
+                          {!terminalStatuses.has(status) ? (
+                            <IconLoader2
+                              size={15}
+                              className={
+                                status === "queued" ? undefined : "spin"
+                              }
+                              aria-hidden="true"
+                            />
+                          ) : null}
+                          <strong>{statusLabel(status)}</strong>
+                          <span>
+                            {task.dispatch_error?.message ??
+                              (status === "queued"
+                                ? "Waiting for this agent and earlier turns"
+                                : status === "waiting"
+                                  ? "The agent needs a response"
+                                  : terminalStatuses.has(status)
+                                    ? "Viewing saved run details"
+                                    : "The agent is working")}
+                          </span>
+                        </div>
+                      ) : null}
+                      {task.output_limited ? (
+                        <p className="sync-notice">
+                          This run reached its released-output limit. Open the
+                          local session for complete output.
+                        </p>
+                      ) : null}
+                      {task.history_bounded ? (
+                        <p className="sync-notice">
+                          This run’s released history is bounded. Its canonical
+                          conversation context remains with the agent.
+                        </p>
+                      ) : null}
+                      <ThreadRunActivity
+                        task={task}
+                        updates={turn.updates}
+                        label={`Run activity for turn ${index + 1}`}
+                      />
+                      <Interactions
+                        interactions={task.snapshot?.pending_interactions ?? []}
+                        project={project}
+                        task={task.task_id}
+                        permissions={
+                          task.source_read_only || target?.node.revoked
+                            ? []
+                            : permissions
+                        }
+                        onUpdate={() => void refresh()}
+                        onError={setError}
+                      />
+                    </div>
+                  ) : null}
+                  {turn.messages.slice(split).map(messageEntry)}
+                </section>
+              );
+            })}
+          </ConversationTimeline>
+        </div>
+      ) : (
+        <ThreadSessionViews
+          view={view}
+          tasks={tasks}
+          updates={events}
+          onChangeView={setView}
+          canContinuePlan={false}
+          onRevisePlan={() => {}}
+        />
+      )}
+      {view === "conversation" && below ? (
         <Button
           className="jump-latest"
           onClick={() => {

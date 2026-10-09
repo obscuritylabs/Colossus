@@ -47,3 +47,14 @@ export type {
   ControlPlaneNavigation,
   ClassificationBanner,
 } from "./components/ControlPlaneFrame.js";
+
+export {
+  WorkspaceNavigation,
+  WORKSPACE_DESTINATIONS,
+} from "./components/WorkspaceNavigation.js";
+export type { WorkspaceDestinationId } from "./components/WorkspaceNavigation.js";
+
+export { WorkspaceSurfaceHeader } from "./components/WorkspaceSurfaceHeader.js";
+
+export { ArtifactLibrary } from "./components/ArtifactLibrary.js";
+export type { LibraryArtifact } from "./components/ArtifactLibrary.js";

@@ -288,6 +288,7 @@ export interface ClientIdentityStatus {
 }
 
 export interface DesktopCapabilities {
+  goal?: boolean;
   research?: boolean;
   delegation: boolean;
   plugins: boolean;
@@ -771,7 +772,7 @@ export interface CommandError {
   violations: CommandViolation[];
 }
 
-export type RunMode = "execute" | "plan" | "research";
+export type RunMode = "execute" | "plan" | "research" | "goal";
 export type ResearchDepth = "quick" | "standard" | "deep";
 export type ResearchSourceKind = "repo" | "web" | "mcp";
 
@@ -858,6 +859,8 @@ export interface Run {
   terminal: RunTerminal | null;
   etag: string;
   archived: boolean;
+  controllable?: boolean;
+  continuable?: boolean;
 }
 
 export type ThreadDelegateStatus =
@@ -1176,6 +1179,7 @@ export type WatchEvent =
   | { type: "error"; error: CommandError };
 
 export interface RunDetails {
+  initialPrompt?: string;
   run: Run;
   pendingInteractions: Interaction[];
 }
@@ -1251,6 +1255,7 @@ export interface CreateRunRequest {
   sessionId?: string;
   role: string;
   mode: RunMode;
+  goalMaxIterations?: number;
   researchDepth?: ResearchDepth;
   researchSources?: ResearchSourceKind[];
   planAction?: PlanRunAction;

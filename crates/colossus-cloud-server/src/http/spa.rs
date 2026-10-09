@@ -111,9 +111,10 @@ fn frontend_path(parts: &[String]) -> bool {
             project,
             "agents",
             node,
-            "overview" | "threads" | "analytics" | "policy",
+            "overview" | "threads" | "analytics" | "policy" | "workflows" | "schedules"
+            | "capabilities" | "plugins" | "library" | "connections",
         ] => identifier(project) && identifier(node),
-        ["projects", project, "threads" | "tasks", resource] => {
+        ["projects", project, "threads" | "tasks" | "hosts", resource] => {
             identifier(project) && identifier(resource)
         }
         _ => false,

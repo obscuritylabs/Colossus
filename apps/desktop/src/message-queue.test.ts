@@ -37,6 +37,8 @@ describe("message queue", () => {
   it("retains captured per-message IDs and original display text through delivery and retry", () => {
     const queued = {
       ...message("selected"),
+      mode: "goal" as const,
+      goalMaxIterations: 7,
       prompt: "@colossus/coding work",
       executionPrompt: "work",
       pluginSkillIds: ["colossus/coding", "colossus/security-review"],

@@ -35,6 +35,8 @@ const (
 	RunMode_RUN_MODE_PLAN RunMode = 2
 	// RUN_MODE_RESEARCH runs the dedicated evidence-and-citation service.
 	RunMode_RUN_MODE_RESEARCH RunMode = 3
+	// RUN_MODE_GOAL runs bounded autonomous iterations without requiring a Plan.
+	RunMode_RUN_MODE_GOAL RunMode = 4
 )
 
 // Enum value maps for RunMode.
@@ -44,12 +46,14 @@ var (
 		1: "RUN_MODE_EXECUTE",
 		2: "RUN_MODE_PLAN",
 		3: "RUN_MODE_RESEARCH",
+		4: "RUN_MODE_GOAL",
 	}
 	RunMode_value = map[string]int32{
 		"RUN_MODE_UNSPECIFIED": 0,
 		"RUN_MODE_EXECUTE":     1,
 		"RUN_MODE_PLAN":        2,
 		"RUN_MODE_RESEARCH":    3,
+		"RUN_MODE_GOAL":        4,
 	}
 )
 
@@ -960,7 +964,7 @@ type RunResult struct {
 	PlanRevision *uint64 `protobuf:"varint,8,opt,name=plan_revision,json=planRevision,proto3,oneof" json:"plan_revision,omitempty"`
 	// plan_status is the released lifecycle paired with plan_id.
 	PlanStatus PlanStatus `protobuf:"varint,9,opt,name=plan_status,json=planStatus,proto3,enum=colossus.api.v1alpha1.PlanStatus" json:"plan_status,omitempty"`
-	// goal_id is the durable Goal created by a Plan handoff, when applicable.
+	// goal_id identifies a standalone Goal or a Goal created by a Plan handoff.
 	GoalId        *string `protobuf:"bytes,10,opt,name=goal_id,json=goalId,proto3,oneof" json:"goal_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1170,7 +1174,7 @@ type RunCancellation struct {
 	PlanRevision *uint64 `protobuf:"varint,4,opt,name=plan_revision,json=planRevision,proto3,oneof" json:"plan_revision,omitempty"`
 	// plan_status is the released lifecycle paired with plan_id.
 	PlanStatus PlanStatus `protobuf:"varint,5,opt,name=plan_status,json=planStatus,proto3,enum=colossus.api.v1alpha1.PlanStatus" json:"plan_status,omitempty"`
-	// goal_id is the durable Goal created by a Plan handoff, when applicable.
+	// goal_id identifies a standalone Goal or a Goal created by a Plan handoff.
 	GoalId        *string `protobuf:"bytes,6,opt,name=goal_id,json=goalId,proto3,oneof" json:"goal_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1519,8 +1523,10 @@ type CreateRunRequest struct {
 	ResearchSources []ResearchSourceKind `protobuf:"varint,12,rep,packed,name=research_sources,json=researchSources,proto3,enum=colossus.api.v1alpha1.ResearchSourceKind" json:"research_sources,omitempty"`
 	// plugin_skill_ids select available qualified plugin/skill identifiers for this run.
 	PluginSkillIds []string `protobuf:"bytes,13,rep,name=plugin_skill_ids,json=pluginSkillIds,proto3" json:"plugin_skill_ids,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// goal_max_iterations must be 1..50 for Goal mode and zero otherwise.
+	GoalMaxIterations uint32 `protobuf:"varint,14,opt,name=goal_max_iterations,json=goalMaxIterations,proto3" json:"goal_max_iterations,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *CreateRunRequest) Reset() {
@@ -1635,6 +1641,13 @@ func (x *CreateRunRequest) GetPluginSkillIds() []string {
 		return x.PluginSkillIds
 	}
 	return nil
+}
+
+func (x *CreateRunRequest) GetGoalMaxIterations() uint32 {
+	if x != nil {
+		return x.GoalMaxIterations
+	}
+	return 0
 }
 
 // RunBranch identifies a canonical prefix without accepting transcript text.
@@ -5819,7 +5832,7 @@ const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"\barchived\x18\x12 \x01(\bR\barchived\x12(\n" +
 	"\x10plugin_skill_ids\x18\x13 \x03(\tR\x0epluginSkillIdsB\n" +
 	"\n" +
-	"\bterminalJ\x04\b\x10\x10\x11R\x0fselected_skills\"\xa7\x05\n" +
+	"\bterminalJ\x04\b\x10\x10\x11R\x0fselected_skills\"\xd7\x05\n" +
 	"\x10CreateRunRequest\x128\n" +
 	"\x05input\x18\x01 \x03(\v2\".colossus.api.v1alpha1.ContentPartR\x05input\x12\"\n" +
 	"\n" +
@@ -5835,7 +5848,8 @@ const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	" \x01(\v2 .colossus.api.v1alpha1.RunBranchR\x06branch\x12K\n" +
 	"\x0eresearch_depth\x18\v \x01(\x0e2$.colossus.api.v1alpha1.ResearchDepthR\rresearchDepth\x12T\n" +
 	"\x10research_sources\x18\f \x03(\x0e2).colossus.api.v1alpha1.ResearchSourceKindR\x0fresearchSources\x12(\n" +
-	"\x10plugin_skill_ids\x18\r \x03(\tR\x0epluginSkillIdsB\r\n" +
+	"\x10plugin_skill_ids\x18\r \x03(\tR\x0epluginSkillIds\x12.\n" +
+	"\x13goal_max_iterations\x18\x0e \x01(\rR\x11goalMaxIterationsB\r\n" +
 	"\v_session_idB\x0e\n" +
 	"\f_end_user_idJ\x04\b\x05\x10\x06R\x0fselected_skills\"\xb1\x01\n" +
 	"\tRunBranch\x12\"\n" +
@@ -6145,12 +6159,13 @@ const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"\x1eGetRuntimePolicyPostureRequest\"B\n" +
 	"\x1fGetRuntimePolicyPostureResponse\x12\x1f\n" +
 	"\vpolicy_json\x18\x01 \x01(\fR\n" +
-	"policyJson*c\n" +
+	"policyJson*v\n" +
 	"\aRunMode\x12\x18\n" +
 	"\x14RUN_MODE_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10RUN_MODE_EXECUTE\x10\x01\x12\x11\n" +
 	"\rRUN_MODE_PLAN\x10\x02\x12\x15\n" +
-	"\x11RUN_MODE_RESEARCH\x10\x03*\x7f\n" +
+	"\x11RUN_MODE_RESEARCH\x10\x03\x12\x11\n" +
+	"\rRUN_MODE_GOAL\x10\x04*\x7f\n" +
 	"\rResearchDepth\x12\x1e\n" +
 	"\x1aRESEARCH_DEPTH_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14RESEARCH_DEPTH_QUICK\x10\x01\x12\x1b\n" +

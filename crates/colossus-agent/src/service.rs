@@ -725,6 +725,54 @@ impl AgentService {
         }
     }
 
+    /// Execute one public Goal iteration beneath its original caller and tool ceiling.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_public_goal_iteration_stream_controlled(
+        &self,
+        run_id: &str,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        session_id: &str,
+        goal_id: &str,
+        active_skills: &[String],
+        allowed_tools: &[String],
+        end_user_id: Option<&str>,
+        remote_trace_context: Option<&colossus_contracts::RemoteTraceContext>,
+        initiator: Actor,
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, AgentError> {
+        match Box::pin(self.run_with_lineage(
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            Some(session_id),
+            RunScope {
+                requested_run_id: Some(run_id),
+                goal_id: Some(goal_id),
+                active_skills,
+                allowed_tools: Some(allowed_tools),
+                end_user_id,
+                remote_trace_context,
+                ..RunScope::default()
+            },
+            initiator,
+            Some(observer),
+            Some(control),
+        ))
+        .await
+        {
+            Ok(result) => Ok(AgentRunOutcome::Completed { result }),
+            Err(AgentError::Cancelled { result }) => {
+                Ok(AgentRunOutcome::Cancelled { result: *result })
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Execute one durable child-agent job without exposing nested delegation.
     #[allow(clippy::too_many_arguments)]
     pub async fn run_subagent(

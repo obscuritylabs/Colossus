@@ -301,8 +301,20 @@ the same home share a host group. CLI deployments with separate homes remain sep
 host groups even when they run on the same computer. Grouping grants no additional
 access: every agent keeps its own application grant and project enrollment.
 
-Open a host, then an agent to see its **Threads**. Start a cloud conversation or open
-saved history. A thread stays assigned to its agent and workspace. Each submitted
+Fleet lists one entry per host with its reported computer name, operating system,
+workspace count and connection state. Open a host to see its workspaces together in
+the left sidebar. Expand a workspace to browse its threads or select it to inspect
+its connection, analytics and policy. Search remains scoped to the opened host;
+workspaces from other hosts do not appear in its sidebar.
+
+Creating a workspace invitation requires a project and role ceiling, without a
+separate agent name. The enrolled runtime supplies the computer and workspace names;
+names are display metadata and never replace stable host, workspace or agent IDs.
+Each workspace retains its own enrollment and local grant. Existing enrollment aliases
+remain available in connection details.
+
+Start a cloud conversation or open saved history. A thread stays assigned to its agent
+and workspace. Each submitted
 human message creates an ordered task/run; **Tasks** shows execution requests across
 the project's agents and opens their associated conversations. Queue acceptance is
 separate from the runtime's receipt. The first turn must establish its native session

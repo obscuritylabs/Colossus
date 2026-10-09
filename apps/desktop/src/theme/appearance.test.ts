@@ -251,7 +251,7 @@ describe("appearance preferences", () => {
   });
 });
 
-it.each(["neutral", "hacker"] as const)(
+it.each(["neutral", "black", "hacker"] as const)(
   "persists %s without changing legacy defaults or saved custom colors",
   (darkPalette) => {
     expect(

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   agentHref,
   globalHref,
+  hostHref,
   parseRoute,
   projectHref,
   safeReturnPath,
@@ -42,6 +43,11 @@ describe("Control Plane permalinks", () => {
       kind: "task",
       project: "project:a",
       task: "task:d",
+    });
+    expect(parseRoute(hostHref("project:a", "host:b"), origin)).toEqual({
+      kind: "host",
+      project: "project:a",
+      host: "host:b",
     });
   });
   it("rejects malformed, ambiguous, oversized, and cross-origin destinations", () => {

@@ -64,6 +64,13 @@ async fn spa_get_recognized_pages_returns_exact_shell() {
         "/projects/project-a/agents/node-a/threads",
         "/projects/project-a/agents/node-a/analytics",
         "/projects/project-a/agents/node-a/policy",
+        "/projects/project-a/agents/node-a/workflows",
+        "/projects/project-a/agents/node-a/schedules",
+        "/projects/project-a/agents/node-a/capabilities",
+        "/projects/project-a/agents/node-a/plugins",
+        "/projects/project-a/agents/node-a/library",
+        "/projects/project-a/agents/node-a/connections",
+        "/projects/project-a/hosts/host-a",
         "/projects/project-a/threads/thread-a",
         "/projects/project-a/tasks/task-a",
         "/projects/project%3Aa/agents/node%3Ab/threads?compose=1",
@@ -87,7 +94,17 @@ async fn spa_get_recognized_pages_returns_exact_shell() {
 #[tokio::test]
 async fn spa_head_preserves_shell_headers_without_body() {
     let (_directory, router) = fixture();
-    for path in ["/", "/projects/project-a/threads/thread-a"] {
+    for path in [
+        "/",
+        "/projects/project-a/threads/thread-a",
+        "/projects/project-a/hosts/host-a",
+        "/projects/project-a/agents/node-a/workflows",
+        "/projects/project-a/agents/node-a/schedules",
+        "/projects/project-a/agents/node-a/capabilities",
+        "/projects/project-a/agents/node-a/plugins",
+        "/projects/project-a/agents/node-a/library",
+        "/projects/project-a/agents/node-a/connections",
+    ] {
         let (get_status, get_headers, get_body) = response(&router, Method::GET, path).await;
         let (head_status, head_headers, head_body) = response(&router, Method::HEAD, path).await;
         assert_eq!(get_status, StatusCode::OK);

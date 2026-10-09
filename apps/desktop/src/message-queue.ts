@@ -23,6 +23,7 @@ export interface QueuedMessage {
   pluginSkillIds?: readonly string[];
   role: string;
   mode: RunMode;
+  goalMaxIterations?: number;
   researchDepth: ResearchDepth;
   researchSources: readonly ResearchSourceKind[];
   maxTurns: number;

@@ -2,6 +2,13 @@
 
 use super::*;
 
+pub(super) struct GoalRunAuthority<'a> {
+    max_turns: u16,
+    active_skills: &'a [String],
+    allowed_tools: &'a [String],
+    initiator: Actor,
+}
+
 impl Runtime {
     /// Resume the remaining iteration budget of one active durable Goal.
     pub async fn resume_goal_stream_controlled(
@@ -21,7 +28,7 @@ impl Runtime {
         let prepared = self.prepare_agent_instructions("", &mode)?;
         Ok(self
             .run_existing_goal_stream_controlled(
-                role, goal, prepared, None, None, observer, control,
+                role, goal, prepared, None, None, None, observer, control,
             )
             .await)
     }
@@ -34,6 +41,7 @@ impl Runtime {
         prepared: PreparedAgentInstructions,
         end_user_id: Option<&str>,
         remote_trace_context: Option<&colossus_contracts::RemoteTraceContext>,
+        authority: Option<&GoalRunAuthority<'_>>,
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> GoalRunOutcome {
@@ -78,7 +86,9 @@ impl Runtime {
                     started.elapsed().as_secs_f64(),
                 );
             }
-            let prompt = if iteration == 1 {
+            let prompt = if iteration == 1 && authority.is_some() {
+                current.objective.clone()
+            } else if iteration == 1 {
                 format!("Start Goal Mode for {}: {}", current.id, current.objective)
             } else {
                 format!(
@@ -110,20 +120,45 @@ impl Runtime {
             }
             let (events, receiver) = mpsc::channel(64);
             let mut buffered_observer = self.buffered_run_observer(events.clone());
-            let run = self.agent.run_goal_iteration_stream_controlled(
-                &run_id,
-                role,
-                &instructions,
-                &prompt,
-                self.agent_max_turns,
-                &current.session_id,
-                &current.id,
-                current.source_plan_id.as_deref(),
-                end_user_id,
-                remote_trace_context,
-                &mut buffered_observer,
-                control,
-            );
+            let run = async {
+                if let Some(authority) = authority {
+                    self.agent
+                        .run_public_goal_iteration_stream_controlled(
+                            &run_id,
+                            role,
+                            &instructions,
+                            &prompt,
+                            authority.max_turns,
+                            &current.session_id,
+                            &current.id,
+                            authority.active_skills,
+                            authority.allowed_tools,
+                            end_user_id,
+                            remote_trace_context,
+                            authority.initiator.clone(),
+                            &mut buffered_observer,
+                            control,
+                        )
+                        .await
+                } else {
+                    self.agent
+                        .run_goal_iteration_stream_controlled(
+                            &run_id,
+                            role,
+                            &instructions,
+                            &prompt,
+                            self.agent_max_turns,
+                            &current.session_id,
+                            &current.id,
+                            current.source_plan_id.as_deref(),
+                            end_user_id,
+                            remote_trace_context,
+                            &mut buffered_observer,
+                            control,
+                        )
+                        .await
+                }
+            };
             let run = scope_run_snapshots(prepared.snapshot.clone(), prepared.plugins.clone(), run);
             let outcome = self
                 .forward_run_with_subagent_scheduling(run, events, receiver, observer, control)
@@ -173,6 +208,76 @@ impl Runtime {
         GoalRunOutcome::Completed {
             result: goal_run_result(final_goal, iterations, started.elapsed().as_secs_f64()),
         }
+    }
+
+    /// Start a standalone durable Goal under one caller's role, tools, skills and budget.
+    /// The application adapter must first resolve an authorized session; no Goal id is accepted.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_public_goal_stream_controlled(
+        &self,
+        role: &str,
+        instructions: &str,
+        objective: &str,
+        session_id: &str,
+        max_iterations: u16,
+        max_turns: Option<u16>,
+        explicit_skills: &[String],
+        allowed_tools: &[String],
+        initiator: Actor,
+        end_user_id: Option<&str>,
+        remote_trace_context: Option<&colossus_contracts::RemoteTraceContext>,
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<GoalRunOutcome, RuntimeError> {
+        if !(1..=50).contains(&max_iterations) {
+            return Err(RuntimeError::Config(
+                "goal iterations must be in 1..=50".into(),
+            ));
+        }
+        let captured = self.capture_agent_instructions(instructions)?;
+        // Validate the immutable skill selection before creating durable Goal state.
+        let base = captured.clone().finalize("")?;
+        let composition = compose_plugins(
+            &base.plugins.records,
+            &base.base_text,
+            explicit_skills,
+            &[],
+            self.plugins_enabled,
+        )?;
+        let goal = WorkService::new(Arc::clone(&self.work), Arc::clone(&self.sessions))
+            .create_goal(
+                session_id,
+                objective,
+                max_iterations,
+                None,
+                initiator.clone(),
+            )?;
+        let prepared = captured.finalize(&goal_mode_instructions(&goal))?;
+        let active = composition
+            .active_skills
+            .iter()
+            .map(|skill| skill.id.clone())
+            .collect::<Vec<_>>();
+        let mut prepared = prepared;
+        prepared.text = prepared.complete_composed_base(&composition.instructions);
+        let authority = GoalRunAuthority {
+            max_turns: max_turns.unwrap_or(self.agent_max_turns),
+            active_skills: &active,
+            allowed_tools,
+            initiator,
+        };
+        Ok(self
+            .run_existing_goal_stream_controlled(
+                role,
+                goal,
+                prepared,
+                end_user_id,
+                remote_trace_context,
+                Some(&authority),
+                observer,
+                control,
+            )
+            .await)
     }
 
     /// Run bounded autonomous iterations using the normal agent, session, policy, and tools.

@@ -84,3 +84,33 @@ test("Hacker keeps messages, metadata, statuses and accent controls readable", (
   }
   assert.ok(contrast(tokens["--text-on-accent"], tokens["--blue"]) >= 4.5);
 });
+
+const black = css.match(
+  /\[data-colossus-theme="dark"\]\[data-palette="black"\]\s*\{([^}]+)\}/u,
+)?.[1];
+const blackTokens = Object.fromEntries(
+  [...black.matchAll(/(--[\w-]+):\s*(#[\da-f]{6});/gu)].map(
+    ([, key, value]) => [key, value],
+  ),
+);
+test("Black keeps conversation text, metadata and placeholders readable across its neutral surfaces", () => {
+  for (const background of [
+    "--main",
+    "--surface",
+    "--surface-raised",
+    "--surface-hover",
+    "--surface-selected-hover",
+  ]) {
+    for (const foreground of [
+      "--text",
+      "--text-strong",
+      "--muted",
+      "--faint",
+    ]) {
+      assert.ok(
+        contrast(blackTokens[foreground], blackTokens[background]) >= 4.5,
+        `${foreground} on ${background} must meet normal-text contrast`,
+      );
+    }
+  }
+});

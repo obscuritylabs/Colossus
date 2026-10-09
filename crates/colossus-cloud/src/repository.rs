@@ -14,6 +14,7 @@ mod delivery;
 mod enrollment;
 mod history;
 mod inventory;
+mod message_authors;
 mod nodes;
 mod projects;
 mod renewal;
@@ -210,6 +211,7 @@ fn query(prefix: &str, after: Option<&str>, limit: usize) -> CloudResult<EntityQ
         after: after.map(str::to_owned),
         limit,
         node_id: None,
+        host_id: None,
         query: None,
         status: None,
         archived: None,

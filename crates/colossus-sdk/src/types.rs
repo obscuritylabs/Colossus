@@ -53,6 +53,8 @@ pub enum RunMode {
     Plan,
     /// Run the dedicated durable evidence-and-citation service.
     Research,
+    /// Bounded autonomous Goal execution without a Plan prerequisite.
+    Goal,
 }
 
 /// Requested breadth for a durable Research run.
@@ -289,6 +291,12 @@ pub struct CreateRunRequest {
     pub role: String,
     /// Requested execution mode.
     pub mode: RunMode,
+    /// Explicit Goal iteration ceiling; 1..=50 in Goal mode and zero otherwise.
+    #[cfg_attr(
+        feature = "serialization",
+        serde(default, skip_serializing_if = "zero_goal_iterations")
+    )]
+    pub goal_max_iterations: u32,
     /// Research breadth; present only for Research runs.
     pub research_depth: Option<ResearchDepth>,
     /// Explicit Research evidence lanes.
@@ -1318,3 +1326,8 @@ pub enum RunUpdateKind {
 pub type RunUpdateStream = std::pin::Pin<
     Box<dyn futures::Stream<Item = Result<RunUpdate, colossus_api::ApiError>> + Send + 'static>,
 >;
+
+#[cfg(feature = "serialization")]
+fn zero_goal_iterations(value: &u32) -> bool {
+    *value == 0
+}

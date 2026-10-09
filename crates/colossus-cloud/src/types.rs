@@ -1,7 +1,7 @@
 use colossus_cloud_protocol::{CloudReply, Command};
 use colossus_sdk::{CreateRunRequest, GetRunResponse};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// One enrolled node bound to a project, local instance, and TLS client certificate.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -216,8 +216,20 @@ pub struct CloudThreadDetail {
     pub tasks: Vec<CloudTask>,
     /// Bounded ordered message page.
     pub messages: Vec<CloudMessage>,
+    /// Current display profiles for recorded account authors, keyed by message identity.
+    /// Runtime imports without an authenticated account binding are omitted.
+    pub message_authors: BTreeMap<String, CloudMessageAuthor>,
     /// Older tasks require an explicit next page.
     pub next_task_cursor: Option<String>,
     /// Older messages require an explicit next page.
     pub next_message_cursor: Option<String>,
+}
+
+/// Minimal account presentation released with an authorized conversation read.
+#[derive(Clone, Debug, Serialize)]
+pub struct CloudMessageAuthor {
+    /// Authenticated account identity; never a login or credential binding.
+    pub user_id: String,
+    /// Current account display name, including for retained disabled accounts.
+    pub display_name: String,
 }

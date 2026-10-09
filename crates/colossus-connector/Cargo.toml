@@ -23,6 +23,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+sysinfo.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tonic = { workspace = true, features = ["transport", "tls-ring"] }

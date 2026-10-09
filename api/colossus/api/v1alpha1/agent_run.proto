@@ -70,6 +70,9 @@ enum RunMode {
 
   // RUN_MODE_RESEARCH runs the dedicated evidence-and-citation service.
   RUN_MODE_RESEARCH = 3;
+
+  // RUN_MODE_GOAL runs bounded autonomous iterations without requiring a Plan.
+  RUN_MODE_GOAL = 4;
 }
 
 // ResearchDepth controls bounded investigation breadth.
@@ -188,7 +191,7 @@ message RunResult {
   // plan_status is the released lifecycle paired with plan_id.
   PlanStatus plan_status = 9;
 
-  // goal_id is the durable Goal created by a Plan handoff, when applicable.
+  // goal_id identifies a standalone Goal or a Goal created by a Plan handoff.
   optional string goal_id = 10;
 }
 
@@ -230,7 +233,7 @@ message RunCancellation {
   // plan_status is the released lifecycle paired with plan_id.
   PlanStatus plan_status = 5;
 
-  // goal_id is the durable Goal created by a Plan handoff, when applicable.
+  // goal_id identifies a standalone Goal or a Goal created by a Plan handoff.
   optional string goal_id = 6;
 }
 
@@ -342,6 +345,9 @@ message CreateRunRequest {
 
   // plugin_skill_ids select available qualified plugin/skill identifiers for this run.
   repeated string plugin_skill_ids = 13;
+
+  // goal_max_iterations must be 1..50 for Goal mode and zero otherwise.
+  uint32 goal_max_iterations = 14;
 }
 
 // RunBranch identifies a canonical prefix without accepting transcript text.

@@ -265,8 +265,8 @@ test("managed settings render compact switches instead of stretched native check
 });
 
 test("session map renders compact switches instead of stretched native checkboxes", () => {
-  const workspace = read("apps/desktop/src/components/SessionWorkspace.tsx");
-  const styles = read("apps/desktop/src/styles.css");
+  const workspace = read("apps/ui/src/session/SessionWorkspace.tsx");
+  const styles = read("apps/ui/styles/session.css");
   assert.equal(workspace.match(/role="switch"/gu)?.length, 2);
   assert.match(
     styles,
@@ -287,9 +287,9 @@ test("conversation activity markers stay centered on their timeline rail", () =>
 });
 
 test("session topology uses a lazy-loaded read-only React Flow surface", () => {
-  const workspace = read("apps/desktop/src/components/SessionWorkspace.tsx");
-  const graph = read("apps/desktop/src/components/SessionTopologyGraph.tsx");
-  const packageManifest = json("apps/desktop/package.json");
+  const workspace = read("apps/ui/src/session/SessionWorkspace.tsx");
+  const graph = read("apps/ui/src/session/SessionTopologyGraph.tsx");
+  const packageManifest = json("apps/ui/package.json");
   assert.equal(packageManifest.dependencies["@xyflow/react"], "12.11.3");
   assert.match(
     workspace,
