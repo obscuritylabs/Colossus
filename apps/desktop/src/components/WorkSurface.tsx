@@ -42,7 +42,7 @@ import {
   storeAsidePaneWidth,
 } from "../aside-pane-width";
 import { isNearConversationLatest } from "../conversation-follow";
-import { presentRunStatus, shortDateLabel } from "../presenters";
+import { presentRunStatus, runModeLabel, shortDateLabel } from "../presenters";
 import {
   canContinuePlanFromRun,
   selectPlanForAutomaticDetails,
@@ -1072,15 +1072,7 @@ export function WorkSurface({
         statusLabel={forkDraft ? "Fork draft" : (status?.label ?? "New work")}
         status={status ?? undefined}
         startedLabel={startedLabel}
-        modeLabel={
-          run
-            ? run.mode === "plan"
-              ? "Plan mode"
-              : run.mode === "research"
-                ? "Research mode"
-                : "Execute mode"
-            : undefined
-        }
+        modeLabel={run ? `${runModeLabel(run.mode)} mode` : undefined}
         breadcrumbTrailing={!composerVisible ? gitControl : null}
         actions={
           <>

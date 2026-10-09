@@ -163,6 +163,7 @@ fn create_request(key: &str, text: &str) -> CreateRunRequest {
         end_user_id: None,
         role: Some("assistant".into()),
         mode: RunMode::Execute,
+        goal_max_iterations: 0,
         research_depth: None,
         research_sources: Vec::new(),
         skill_ids: Vec::new(),
@@ -2437,4 +2438,34 @@ fn storage_mapping_never_exposes_adapter_or_uncertain_detail() {
     assert_eq!(uncertain.outcome, OutcomeCertainty::Unknown);
     assert!(!uncertain.retryable);
     assert!(!uncertain.message.contains("private provider response"));
+}
+
+#[test]
+fn standalone_goal_requests_are_explicit_and_bounded() {
+    let mut request = create_request("goal", "Objective without a plan");
+    request.mode = RunMode::Goal;
+    for budget in [0, 51, u32::MAX] {
+        request.goal_max_iterations = budget;
+        assert!(request.validate().is_err());
+    }
+    request.goal_max_iterations = 5;
+    assert!(request.validate().is_ok());
+    let mut continued = request.clone();
+    continued.plan_action = Some(PlanRunAction::Revise {
+        source_run_id: "run:source".into(),
+        expected_revision: 1,
+    });
+    assert!(continued.validate().is_err());
+    let mut branch = request.clone();
+    branch.branch = Some(RunBranch {
+        source_run_id: "run:source".into(),
+        source_message_count: 0,
+        context_mode: RunBranchContextMode::SourceRunConversation,
+    });
+    assert!(branch.validate().is_err());
+    request.mode = RunMode::Execute;
+    assert!(request.validate().is_err());
+    request.mode = RunMode::Goal;
+    request.research_depth = Some(ResearchDepth::Quick);
+    assert!(request.validate().is_err());
 }

@@ -1277,6 +1277,61 @@ impl RuntimeAgentRunApi {
             };
             return writer.append(kind).is_ok();
         }
+        if request.mode == RunMode::Goal {
+            if create_session
+                && self
+                    .runtime
+                    .create_application_session(&run.session_id, Some(&run.title), caller.actor())
+                    .is_err()
+            {
+                let _ = writer.append(invariant_failure());
+                return true;
+            }
+            let mut observer = PublicRunObserver {
+                writer: Arc::clone(&writer),
+                accepts_related_run_events: true,
+            };
+            let objective = request
+                .input
+                .iter()
+                .filter_map(|part| {
+                    if let ContentPart::Text { text } = part {
+                        Some(text.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let execution = self.runtime.run_public_goal_stream_controlled(
+                &run.role,
+                &self.instructions,
+                &objective,
+                &run.session_id,
+                request.goal_max_iterations as u16,
+                max_turns,
+                &request.skill_ids,
+                &allowed_tools,
+                caller.actor(),
+                request.end_user_id.as_deref(),
+                caller.remote_trace_context(),
+                &mut observer,
+                &control,
+            );
+            let kind = match self
+                .interactions
+                .scope(
+                    Arc::clone(&writer),
+                    self.runtime
+                        .with_plugin_skills(&request.skill_ids, execution),
+                )
+                .await
+            {
+                Ok(outcome) => public_standalone_goal(outcome),
+                Err(error) => runtime_failure(&error),
+            };
+            return !fail_terminal_append && writer.append(kind).is_ok();
+        }
         let selection = match self.plan_selection(&caller, &request) {
             Ok(selection) => selection,
             Err(error) => {
@@ -1560,6 +1615,10 @@ impl AgentRunApi for RuntimeAgentRunApi {
             });
         }
         Self::require_research_tools(caller, &request)?;
+        if request.mode == RunMode::Goal {
+            caller.require_tool("goal.show")?;
+            caller.require_tool("goal.update")?;
+        }
         self.plan_selection(caller, &request)?;
         self.branch_source_session(caller, &request)?;
         self.rendered_input(caller, &request).await?;
@@ -2433,6 +2492,83 @@ fn public_plan_execution(outcome: PlanExecutionOutcome) -> RunUpdateKind {
                 result: _,
                 run_id: _,
             } => plan_execution_failure(message, true, outcome_unknown),
+        },
+    }
+}
+
+fn public_standalone_goal(outcome: GoalRunOutcome) -> RunUpdateKind {
+    match outcome {
+        GoalRunOutcome::Completed { result } => {
+            let mut output = result.goal.summary.clone();
+            if output.trim().is_empty() {
+                output = result
+                    .iterations
+                    .last()
+                    .map_or_else(String::new, |iteration| iteration.output.clone());
+            }
+            if result.iteration_budget_exhausted {
+                output.push_str("\n\nThe Goal iteration limit was reached. The objective remains active; this invocation has stopped.");
+            }
+            if result.goal.status == colossus_contracts::GoalStatus::Blocked {
+                output.push_str(&format!("\n\nGoal blocked: {}", result.goal.blocked_reason));
+            }
+            RunUpdateKind::Result {
+                result: RunResult {
+                    output,
+                    plan_id: None,
+                    plan_revision: None,
+                    plan_status: None,
+                    goal_id: Some(result.goal.id),
+                    profile: "goal".into(),
+                    model_profile: "goal".into(),
+                    provider_profile: "goal".into(),
+                    model: "goal".into(),
+                    elapsed_seconds: result.elapsed_seconds,
+                },
+            }
+        }
+        GoalRunOutcome::Cancelled {
+            result,
+            cancellation,
+        } => RunUpdateKind::Cancellation {
+            cancellation: RunCancellation {
+                turn: cancellation
+                    .as_ref()
+                    .map_or(0, |value| u32::from(value.turn)),
+                message: "Goal execution was cancelled at a safe boundary".into(),
+                plan_id: None,
+                plan_revision: None,
+                plan_status: None,
+                goal_id: Some(result.goal.id),
+            },
+        },
+        GoalRunOutcome::Failed {
+            message,
+            outcome_unknown,
+            ..
+        } => RunUpdateKind::Failure {
+            status: if outcome_unknown {
+                RunStatus::OutcomeUnknown
+            } else {
+                RunStatus::Failed
+            },
+            failure: RunFailure {
+                code: if outcome_unknown {
+                    "goal.execution_outcome_unknown"
+                } else {
+                    "goal.execution_failed"
+                }
+                .into(),
+                message,
+                outcome: if outcome_unknown {
+                    OutcomeCertainty::Unknown
+                } else {
+                    OutcomeCertainty::Known
+                },
+                recoverable: false,
+                http_status: None,
+                retry_after_ms: None,
+            },
         },
     }
 }

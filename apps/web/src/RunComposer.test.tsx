@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import { RunComposer } from "./RunComposer";
+import { RunComposer, type RunRequest } from "./RunComposer";
 import type { FleetNode } from "./api";
 
 const node = (id: string): FleetNode => ({
@@ -55,7 +55,9 @@ async function fixture(target = node("one")) {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  const onSubmit = vi.fn(async () => true);
+  const onSubmit = vi.fn<(input: RunRequest) => Promise<boolean>>(
+    async () => true,
+  );
   const render = async (target: FleetNode) => {
     await act(async () =>
       root.render(
@@ -208,12 +210,95 @@ it("discards capability replies from an earlier runtime connection", async () =>
   const f = await fixture();
   try {
     await f.render(node("two"));
-    await act(() => resolve(reply(["research.create"])));
+    await act(() => resolve(reply(["research.create", "goal.create"])));
     expect(fetch.mock.calls[0]![1].signal.aborted).toBe(true);
     expect(
       f.container.querySelector<HTMLInputElement>('input[value="research"]')!
         .disabled,
     ).toBe(true);
+    expect(
+      f.container.querySelector<HTMLInputElement>('input[value="goal"]')!
+        .disabled,
+    ).toBe(true);
+  } finally {
+    await f.close();
+  }
+});
+
+it("starts Goal without a Plan and binds retries to the reviewed iteration budget", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => reply(["goal.create"])),
+  );
+  const f = await fixture();
+  f.onSubmit.mockResolvedValue(false);
+  try {
+    await act(() =>
+      f.container
+        .querySelector<HTMLInputElement>('input[value="goal"]')!
+        .click(),
+    );
+    const input = f.container.querySelector<HTMLTextAreaElement>("textarea")!;
+    await act(() => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!.call(input, "Verify the outcome");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const send = async () =>
+      act(async () => {
+        f.container
+          .querySelector("form")!
+          .dispatchEvent(
+            new Event("submit", { bubbles: true, cancelable: true }),
+          );
+      });
+    await send();
+    await send();
+    const first = f.onSubmit.mock.calls[0]![0];
+    expect(first).toMatchObject({
+      mode: "goal",
+      goal_max_iterations: 5,
+      plan_action: null,
+      research_depth: null,
+      research_sources: [],
+    });
+    expect(f.onSubmit.mock.calls[1]![0].idempotency_key).toBe(
+      first.idempotency_key,
+    );
+    const budget = f.container.querySelector<HTMLInputElement>(
+      'input[type="number"]',
+    )!;
+    const changeBudget = async (value: string) =>
+      act(() => {
+        Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value",
+        )!.set!.call(budget, value);
+        budget.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    await changeBudget("51");
+    await send();
+    expect(f.onSubmit).toHaveBeenCalledTimes(2);
+    await changeBudget("7");
+    await send();
+    expect(f.onSubmit.mock.calls[2]![0].goal_max_iterations).toBe(7);
+    expect(f.onSubmit.mock.calls[2]![0].idempotency_key).not.toBe(
+      first.idempotency_key,
+    );
+    const unavailable = node("two");
+    unavailable.presence!.capabilities = [];
+    await f.render(unavailable);
+    await send();
+    expect(f.onSubmit).toHaveBeenCalledTimes(3);
+    expect(
+      f.container.querySelector<HTMLInputElement>('input[value="goal"]')!
+        .checked,
+    ).toBe(true);
+    expect(f.container.textContent).toContain(
+      "Goal requires an available runtime",
+    );
   } finally {
     await f.close();
   }

@@ -12,7 +12,12 @@ import type {
   ResearchDepth,
   ResearchSourceKind,
 } from "@colossus/ui/session/types";
-import { useResearchCapability } from "./research-capability";
+import { useRunModeCapabilities } from "./research-capability";
+import {
+  GoalControls,
+  DEFAULT_GOAL_ITERATIONS,
+  validGoalIterations,
+} from "@colossus/ui/components/GoalControls";
 import "@colossus/ui/styles/research-controls.css";
 import {
   IconAdjustmentsHorizontal,
@@ -26,6 +31,7 @@ export interface RunRequest {
   end_user_id: null;
   role: string;
   mode: string;
+  goal_max_iterations?: number;
   research_depth: ResearchDepth | null;
   research_sources: ResearchSourceKind[];
   plan_action: null;
@@ -62,6 +68,9 @@ export function RunComposer({
   const [draft, setDraft] = useState(""),
     [mode, setMode] = useState("execute"),
     [role, setRole] = useState("primary"),
+    [goalMaxIterations, setGoalMaxIterations] = useState(
+      DEFAULT_GOAL_ITERATIONS,
+    ),
     [researchDepth, setResearchDepth] = useState<ResearchDepth>("standard"),
     [researchSources, setResearchSources] = useState<ResearchSourceKind[]>([
       "repo",
@@ -77,7 +86,11 @@ export function RunComposer({
   const target = nodes.find((item) => item.node.node_id === nodeId);
   const shortcut = useContext(SendShortcutContext);
   const posture = target?.node.policy;
-  const researchAvailable = useResearchCapability(target, disabled);
+  const capabilities = useRunModeCapabilities(target, disabled);
+  const researchAvailable = capabilities.research;
+  const goalBlocked =
+    mode === "goal" &&
+    (!capabilities.goal || !validGoalIterations(goalMaxIterations));
   const tools = posture?.allowed_tools ?? [];
   const availableSources = RESEARCH_SOURCE_OPTIONS.filter(
     (option) =>
@@ -109,12 +122,21 @@ export function RunComposer({
     if (roles.length && !roles.includes(role)) setRole(roles[0]!);
   }, [roles, role]);
   async function send() {
-    if (!draft.trim() || !nodeId || disabled || busy || researchBlocked) return;
+    if (
+      !draft.trim() ||
+      !nodeId ||
+      disabled ||
+      busy ||
+      researchBlocked ||
+      goalBlocked
+    )
+      return;
     const signature = JSON.stringify({
       draft,
       nodeId,
       mode,
       role,
+      goalMaxIterations: mode === "goal" ? goalMaxIterations : null,
       researchDepth: mode === "research" ? researchDepth : null,
       researchSources: mode === "research" ? sources : [],
     });
@@ -128,6 +150,7 @@ export function RunComposer({
         end_user_id: null,
         role,
         mode,
+        ...(mode === "goal" ? { goal_max_iterations: goalMaxIterations } : {}),
         research_depth: mode === "research" ? researchDepth : null,
         research_sources: mode === "research" ? sources : [],
         plan_action: null,
@@ -154,7 +177,7 @@ export function RunComposer({
           ? "This conversation is available to read."
           : "What would you like to work on?"
       }
-      disabled={disabled || !nodeId || researchBlocked}
+      disabled={disabled || !nodeId || researchBlocked || goalBlocked}
       busy={busy}
       shortcut={shortcut}
       context={
@@ -224,8 +247,16 @@ export function RunComposer({
             onChange={setMode}
             disabled={disabled || busy}
             options={[
-              { value: "execute", label: "Execute" },
               { value: "plan", label: "Plan" },
+              { value: "execute", label: "Execute" },
+              {
+                value: "goal",
+                label: "Goal",
+                disabled: !capabilities.goal,
+                title: capabilities.goal
+                  ? "Continue toward an objective within an explicit iteration limit"
+                  : "Connect a runtime with Goal support and authorized Goal tools.",
+              },
               {
                 value: "research",
                 label: "Research",
@@ -236,6 +267,25 @@ export function RunComposer({
               },
             ]}
           />
+          {mode === "goal" ? (
+            <details className="research-run-controls">
+              <summary>
+                <IconAdjustmentsHorizontal size={16} aria-hidden="true" />
+                Goal:{" "}
+                {Number.isFinite(goalMaxIterations)
+                  ? goalMaxIterations
+                  : "?"}{" "}
+                iterations
+              </summary>
+              <div className="run-controls-popover">
+                <GoalControls
+                  value={goalMaxIterations}
+                  disabled={disabled || busy}
+                  onChange={setGoalMaxIterations}
+                />
+              </div>
+            </details>
+          ) : null}
           {mode === "research" ? (
             <details className="research-run-controls">
               <summary>
@@ -280,11 +330,13 @@ export function RunComposer({
         </>
       }
       notice={
-        researchBlocked
-          ? "Research requires an available runtime and at least one authorized evidence source."
-          : target && !target.presence?.ready && !target.node.revoked
-            ? "This agent is offline. Accepted messages remain queued until it reconnects."
-            : undefined
+        goalBlocked
+          ? "Goal requires an available runtime and an iteration limit from 1 to 50."
+          : researchBlocked
+            ? "Research requires an available runtime and at least one authorized evidence source."
+            : target && !target.presence?.ready && !target.node.revoked
+              ? "This agent is offline. Accepted messages remain queued until it reconnects."
+              : undefined
       }
     />
   );

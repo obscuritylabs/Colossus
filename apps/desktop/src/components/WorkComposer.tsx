@@ -10,6 +10,11 @@ import {
   IconRouteAltLeft,
   IconShieldCheck,
 } from "@tabler/icons-react";
+import {
+  GoalControls,
+  DEFAULT_GOAL_ITERATIONS,
+  validGoalIterations,
+} from "@colossus/ui/components/GoalControls";
 import { ConversationComposerFrame } from "@colossus/ui/conversation";
 import {
   ResearchControls,
@@ -74,6 +79,9 @@ interface WorkComposerProps {
   researchDepth: ResearchDepth;
   researchSources: readonly ResearchSourceKind[];
   researchAvailable: boolean;
+  goalAvailable?: boolean;
+  goalMaxIterations?: number;
+  onGoalMaxIterationsChange?: (value: number) => void;
   approvalMode: ApprovalMode;
   approvalModeVisible: boolean;
   approvalModeAvailable: boolean;
@@ -136,6 +144,9 @@ export function WorkComposer({
   researchDepth,
   researchSources,
   researchAvailable,
+  goalAvailable = false,
+  goalMaxIterations = DEFAULT_GOAL_ITERATIONS,
+  onGoalMaxIterationsChange = () => {},
   approvalMode,
   approvalModeVisible,
   approvalModeAvailable,
@@ -190,6 +201,11 @@ export function WorkComposer({
     null,
   );
   const roleMissing = role.trim().length === 0;
+  const goalBlocked =
+    mode === "goal" &&
+    (!goalAvailable ||
+      !validGoalIterations(goalMaxIterations) ||
+      attachments.length > 0);
   const slashCommandDraft = prompt.trimStart().startsWith("/");
   const mentioningSkill = prompt.trimStart().startsWith("@");
   const slashCommandSuggestions = mentioningSkill
@@ -392,9 +408,11 @@ export function WorkComposer({
               />
               {mode === "research"
                 ? `Sources: ${researchSourceSummary || "None"}`
-                : roleMissing
-                  ? "Role required"
-                  : "Run controls"}
+                : mode === "goal"
+                  ? `Goal: ${Number.isFinite(goalMaxIterations) ? goalMaxIterations : "?"} iterations`
+                  : roleMissing
+                    ? "Role required"
+                    : "Run controls"}
             </summary>
             <div
               className={`run-controls-popover${mode === "research" ? " is-research" : ""}`}
@@ -411,6 +429,13 @@ export function WorkComposer({
                 </>
               ) : (
                 <>
+                  {mode === "goal" ? (
+                    <GoalControls
+                      value={goalMaxIterations}
+                      disabled={submitting}
+                      onChange={onGoalMaxIterationsChange}
+                    />
+                  ) : null}
                   <label>
                     <span>Role</span>
                     <input
@@ -784,21 +809,25 @@ export function WorkComposer({
               ? "Slash commands run locally in Desktop and are never sent to the model."
               : mode === "research" && researchSources.length === 0
                 ? "Select at least one evidence source before starting Research."
-                : activeWorkRunning
-                  ? activeWorkNeedsInput
-                    ? "Queued messages wait until the required response is resolved. Redirect stops this response and sends your guidance next."
-                    : "Enter adds to Next up. Redirect stops this response and sends your guidance next."
-                  : queueing
-                    ? queuePaused
-                      ? "Next up is paused. Resume when you are ready; your draft and queued messages are kept."
-                      : "New messages join Next up. Resolve or remove a failed item to continue in order."
-                    : mode === "plan"
-                      ? planRevision === null
-                        ? "Create a plan before making changes."
-                        : "Revise this plan without making changes."
-                      : mode === "research"
-                        ? "Research your sources and return a report with citations."
-                        : "Enter to send · Shift+Enter for a new line"}
+                : goalBlocked
+                  ? "Goal requires an available target, 1–50 iterations, and a text-only prompt."
+                  : activeWorkRunning
+                    ? activeWorkNeedsInput
+                      ? "Queued messages wait until the required response is resolved. Redirect stops this response and sends your guidance next."
+                      : "Enter adds to Next up. Redirect stops this response and sends your guidance next."
+                    : queueing
+                      ? queuePaused
+                        ? "Next up is paused. Resume when you are ready; your draft and queued messages are kept."
+                        : "New messages join Next up. Resolve or remove a failed item to continue in order."
+                      : mode === "plan"
+                        ? planRevision === null
+                          ? "Create a plan before making changes."
+                          : "Revise this plan without making changes."
+                        : mode === "research"
+                          ? "Research your sources and return a report with citations."
+                          : mode === "goal"
+                            ? "Continue toward this objective within the Goal iteration limit."
+                            : "Enter to send · Shift+Enter for a new line"}
           </span>
           {promptBytes >= promptByteLimit * 0.8 || promptOverLimit ? (
             <span
@@ -843,6 +872,14 @@ export function WorkComposer({
               { value: "plan", label: "Plan" },
               { value: "execute", label: "Execute" },
               {
+                value: "goal",
+                label: "Goal",
+                disabled: !goalAvailable,
+                title: goalAvailable
+                  ? "Continue toward an objective within an explicit iteration limit"
+                  : "Goal mode requires an updated target with Goal tool access",
+              },
+              {
                 value: "research",
                 label: "Research",
                 disabled: !researchAvailable,
@@ -863,7 +900,8 @@ export function WorkComposer({
                 !activeWorkRedirectable ||
                 prompt.trim().length === 0 ||
                 promptOverLimit ||
-                roleMissing
+                roleMissing ||
+                goalBlocked
               }
               onClick={onRedirect}
             >
@@ -890,6 +928,7 @@ export function WorkComposer({
                 promptOverLimit ||
                 (!slashCommandDraft &&
                   (roleMissing ||
+                    goalBlocked ||
                     (mode === "research" && researchSources.length === 0)))
               }
             >

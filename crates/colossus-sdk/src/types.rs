@@ -53,6 +53,8 @@ pub enum RunMode {
     Plan,
     /// Run the dedicated durable evidence-and-citation service.
     Research,
+    /// Bounded autonomous Goal execution without a Plan prerequisite.
+    Goal,
 }
 
 /// Requested breadth for a durable Research run.
@@ -289,6 +291,9 @@ pub struct CreateRunRequest {
     pub role: String,
     /// Requested execution mode.
     pub mode: RunMode,
+    /// Explicit Goal iteration ceiling; 1..=50 in Goal mode and zero otherwise.
+    #[cfg_attr(feature = "serialization", serde(default))]
+    pub goal_max_iterations: u32,
     /// Research breadth; present only for Research runs.
     pub research_depth: Option<ResearchDepth>,
     /// Explicit Research evidence lanes.

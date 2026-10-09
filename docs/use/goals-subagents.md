@@ -23,6 +23,23 @@ losing policy, context, recovery, or audit controls.
 
 ### 1. Start a bounded goal
 
+In Desktop, select **Goal** in the composer, enter your objective, and send it.
+No Plan is required. Open **Goal: 5 iterations** to change the iteration limit
+from 1 to 50 and the maximum turns per iteration. You can also switch modes with
+`/goal on`, `/goal off`, or `/goal`.
+
+The connected runtime must advertise Goal support and grant `goal.show` and
+`goal.update`. The web composer uses the same Goal controls when that support is
+available. Standalone Goals currently accept text prompts. Ordinary tool permissions,
+approval requests, questions, and **Stop response** continue to apply throughout the loop.
+
+Each submission creates a durable Goal in a new or selected conversation. The loop
+stops when the Goal is complete or blocked, when you stop it, or when its iteration
+limit is reached. Reaching the limit leaves the objective active and reports that
+the invocation stopped; it does not claim the objective was completed.
+
+From the CLI:
+
 ```bash
 colossus --config .colossus/config.yaml goals run \
   "Produce a verified repository health report" \
@@ -72,8 +89,8 @@ The long-running worker can also drain queued jobs.
 
 ## Expected result
 
-The goal reaches `complete` or a clearly recorded terminal condition within its
-iteration bound. The child job has its own durable status and bounded result while
+The goal reaches `complete` or `blocked`, or stops with its objective still active
+at the iteration bound. The child job has its own durable status and bounded result while
 remaining attached to the parent session.
 
 ## Verification

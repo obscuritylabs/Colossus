@@ -133,6 +133,10 @@ import {
   removeQueuedMessage,
   updateQueuedMessage,
 } from "./message-queue";
+import {
+  DEFAULT_GOAL_ITERATIONS,
+  validGoalIterations,
+} from "@colossus/ui/components/GoalControls";
 import type { QueuePlacement, QueuedMessage } from "./message-queue";
 import {
   REMOTE_PROVIDER_TIMEOUT_MS,
@@ -141,6 +145,7 @@ import {
 import { selectSessionParticipants } from "./participants";
 import {
   agentRoleLabel,
+  runModeLabel,
   safeDisplayLabel,
   selectReleasedArtifacts,
 } from "./presenters";
@@ -449,6 +454,7 @@ const INITIAL_DESKTOP: DesktopStatus = {
   clientIdentity: { configured: false, leafFingerprintSha256: null },
   capabilities: {
     research: true,
+    goal: FIXTURE_MODE,
     delegation: false,
     plugins: false,
     pluginSkillSelection: FIXTURE_MODE,
@@ -888,6 +894,7 @@ interface RunSubmission {
   attachments: readonly ArtifactReference[];
   role: string;
   mode: RunMode;
+  goalMaxIterations?: number;
   researchDepth: ResearchDepth;
   researchSources: readonly ResearchSourceKind[];
   maxTurns: number;
@@ -1129,6 +1136,9 @@ export default function App() {
   >(new Set());
   const [role, setRole] = useState("primary");
   const [mode, setMode] = useState<RunMode>("execute");
+  const [goalMaxIterations, setGoalMaxIterations] = useState(
+    DEFAULT_GOAL_ITERATIONS,
+  );
   const [researchDepth, setResearchDepth] = useState<ResearchDepth>("standard");
   const [researchSources, setResearchSources] = useState<ResearchSourceKind[]>([
     "repo",
@@ -2368,6 +2378,12 @@ export default function App() {
         ),
         role: submission.role,
         mode: submission.mode,
+        ...(submission.mode === "goal"
+          ? {
+              goalMaxIterations:
+                submission.goalMaxIterations ?? DEFAULT_GOAL_ITERATIONS,
+            }
+          : {}),
         ...(submission.mode === "research"
           ? {
               researchDepth: submission.researchDepth,
@@ -2553,7 +2569,11 @@ export default function App() {
       cleanPrompt.length === 0 ||
       cleanRole.length === 0 ||
       !isPromptWithinByteLimit(expandedPrompt) ||
-      (mode === "research" && researchSources.length === 0)
+      (mode === "research" && researchSources.length === 0) ||
+      (mode === "goal" &&
+        (!desktop.capabilities.goal ||
+          !validGoalIterations(goalMaxIterations) ||
+          attachments.length > 0))
     ) {
       return null;
     }
@@ -2590,6 +2610,7 @@ export default function App() {
       mode,
       researchDepth,
       researchSources: [...researchSources],
+      ...(mode === "goal" ? { goalMaxIterations } : {}),
       maxTurns,
       attachments: [...attachments],
       createdAt: new Date().toISOString(),
@@ -2653,14 +2674,15 @@ export default function App() {
           setSlashCommandError("Research is unavailable for this target.");
           return "preserve";
         }
+        if (action.mode === "goal" && !desktop.capabilities.goal) {
+          setSlashCommandError("Goal is unavailable for this target.");
+          return "preserve";
+        }
         if (action.resetPlanRevision) {
           setPlanRevision(null);
         }
         setMode(action.mode);
-        pushToast(
-          `${action.mode === "plan" ? "Plan" : action.mode === "research" ? "Research" : "Execute"} mode enabled.`,
-          "info",
-        );
+        pushToast(`${runModeLabel(action.mode)} mode enabled.`, "info");
         return "clear";
       case "toggle_mode": {
         const nextMode: RunMode =
@@ -2669,14 +2691,15 @@ export default function App() {
           setSlashCommandError("Research is unavailable for this target.");
           return "preserve";
         }
+        if (nextMode === "goal" && !desktop.capabilities.goal) {
+          setSlashCommandError("Goal is unavailable for this target.");
+          return "preserve";
+        }
         if (nextMode !== "plan") {
           setPlanRevision(null);
         }
         setMode(nextMode);
-        pushToast(
-          `${nextMode === "plan" ? "Plan" : nextMode === "research" ? "Research" : "Execute"} mode enabled.`,
-          "info",
-        );
+        pushToast(`${runModeLabel(nextMode)} mode enabled.`, "info");
         return "clear";
       }
       case "show_mode_status":
@@ -2687,9 +2710,9 @@ export default function App() {
                 ? "Plan mode is active. The next prompt creates a new durable draft."
                 : `Plan mode is revising revision ${planRevision.revision}.`
               : "Plan mode is off."
-            : mode === "research"
-              ? "Research mode is active."
-              : "Research mode is off.",
+            : mode === action.mode
+              ? `${runModeLabel(action.mode)} mode is active.`
+              : `${runModeLabel(action.mode)} mode is off.`,
           "info",
         );
         return "clear";
@@ -2865,6 +2888,21 @@ export default function App() {
       });
       return;
     }
+    if (
+      effectiveMode === "goal" &&
+      (!desktop.capabilities.goal ||
+        !validGoalIterations(goalMaxIterations) ||
+        attachments.length > 0 ||
+        activeForkDraft !== undefined)
+    ) {
+      setComposerError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "invalid_argument",
+        message:
+          "Goal mode requires a supported target, 1–50 iterations, and text in the selected conversation. Remove attachments or finish the Aside first.",
+      });
+      return;
+    }
     const fingerprint = operationFingerprint([
       cleanPrompt,
       ...pluginSelections,
@@ -2872,6 +2910,7 @@ export default function App() {
       sessionId ?? "",
       cleanRole,
       effectiveMode,
+      ...(effectiveMode === "goal" ? [goalMaxIterations] : []),
       ...(effectiveMode === "research"
         ? [researchDepth, ...researchSources]
         : []),
@@ -2899,6 +2938,7 @@ export default function App() {
         attachments: [...attachments],
         role: cleanRole,
         mode: effectiveMode,
+        ...(effectiveMode === "goal" ? { goalMaxIterations } : {}),
         researchDepth,
         researchSources,
         maxTurns,
@@ -2973,6 +3013,12 @@ export default function App() {
             attachments: message.attachments,
             role: message.role,
             mode: message.mode,
+            ...(message.mode === "goal"
+              ? {
+                  goalMaxIterations:
+                    message.goalMaxIterations ?? DEFAULT_GOAL_ITERATIONS,
+                }
+              : {}),
             researchDepth: message.researchDepth,
             researchSources: message.researchSources,
             maxTurns: message.maxTurns,
@@ -5423,6 +5469,9 @@ export default function App() {
       researchDepth={researchDepth}
       researchSources={researchSources}
       researchAvailable={desktop.capabilities.research === true}
+      goalAvailable={desktop.capabilities.goal === true}
+      goalMaxIterations={goalMaxIterations}
+      onGoalMaxIterationsChange={setGoalMaxIterations}
       approvalMode={desktop.approvalMode}
       approvalModeVisible={selectedTarget?.kind === "managed_local"}
       approvalModeAvailable={
@@ -5487,7 +5536,7 @@ export default function App() {
         }
       }}
       queuedMessages={activeQueuedMessages}
-      attachmentsAvailable={desktop.capabilities.attachments}
+      attachmentsAvailable={desktop.capabilities.attachments && mode !== "goal"}
       attachments={attachments}
       attachmentBusy={attachmentBusy}
       error={composerError}

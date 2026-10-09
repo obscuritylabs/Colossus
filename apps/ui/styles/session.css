@@ -1,3 +1,14 @@
+.session-resource-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid var(--icon-border);
+  border-radius: 8px;
+  background: var(--icon-surface);
+  color: var(--icon-text);
+}
+
 .session-topology,
 .session-resource-view {
   width: min(100%, 1040px);

@@ -103,7 +103,12 @@ only product-level Tauri commands:
 - `cancel_run`
 - `respond_interaction`
 
-Desktop’s composer exposes public Execute, Plan, and managed-local Research run modes.
+Desktop’s composer exposes public Execute, Plan, Goal, and managed-local Research run modes.
+Standalone Goal requests use `RunMode::Goal` with explicit `goal_max_iterations` in
+1..=50 and text input; other modes leave that field at zero. No Plan action is needed.
+The `goal.create` capability requires `runs.execute` and both Goal tools in the
+authenticated caller’s tool ceiling. Every iteration retains that caller’s role,
+tools, selected skills, initiator, and ordinary approval and cancellation boundaries.
 Research carries an explicit bounded depth and a unique non-empty set of repository,
 web, or MCP evidence lanes. It reuses the authenticated durable run, interaction,
 watch, queue, and cancellation contracts while delegating collection and cited

@@ -150,3 +150,8 @@ supply selected values, callbacks, and available lanes. Web obtains Research sup
 from the selected runtime’s authenticated capability response, fences it to that
 connection, and intersects evidence choices with the reported tool ceiling. Missing
 support never changes the user’s requested mode into Execute.
+
+`GoalControls` shares the bounded iteration input between Desktop and Web. Hosts
+offer standalone Goal mode only after authenticated `goal.create` discovery, capture
+its 1–50 iteration budget in the durable run request, and retain queue, permission,
+and cancellation decisions. A Plan is not required.

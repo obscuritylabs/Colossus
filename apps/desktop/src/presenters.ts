@@ -215,7 +215,9 @@ export function runModeLabel(mode: RunMode): string {
     ? "Plan"
     : mode === "research"
       ? "Research"
-      : "Execute";
+      : mode === "goal"
+        ? "Goal"
+        : "Execute";
 }
 
 export function agentRoleLabel(role: string): string {

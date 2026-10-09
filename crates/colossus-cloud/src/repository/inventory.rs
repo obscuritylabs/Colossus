@@ -354,6 +354,7 @@ impl CloudRepository {
                             end_user_id: None,
                             role: run.role.clone(),
                             mode: run.mode,
+                            goal_max_iterations: 0,
                             research_depth: None,
                             research_sources: vec![],
                             plan_action: None,

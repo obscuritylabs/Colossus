@@ -44,6 +44,18 @@ describe("Desktop slash commands", () => {
   });
 
   it("returns bounded prefix completions and rejects multiline command drafts", () => {
+    expect(parseDesktopSlashCommand("/goal on")).toMatchObject({
+      type: "action",
+      action: { type: "set_mode", mode: "goal", resetPlanRevision: true },
+    });
+    expect(parseDesktopSlashCommand("/goal")).toMatchObject({
+      type: "action",
+      action: { type: "toggle_mode", mode: "goal" },
+    });
+    expect(parseDesktopSlashCommand("/goal run 5")).toMatchObject({
+      type: "invalid",
+      message: expect.stringContaining("Usage: /goal"),
+    });
     expect(
       desktopSlashCommandSuggestions("/plan ").map(({ command }) => command),
     ).toEqual([

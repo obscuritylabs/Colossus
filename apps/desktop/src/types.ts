@@ -288,6 +288,7 @@ export interface ClientIdentityStatus {
 }
 
 export interface DesktopCapabilities {
+  goal?: boolean;
   research?: boolean;
   delegation: boolean;
   plugins: boolean;
@@ -771,7 +772,7 @@ export interface CommandError {
   violations: CommandViolation[];
 }
 
-export type RunMode = "execute" | "plan" | "research";
+export type RunMode = "execute" | "plan" | "research" | "goal";
 export type ResearchDepth = "quick" | "standard" | "deep";
 export type ResearchSourceKind = "repo" | "web" | "mcp";
 
@@ -1251,6 +1252,7 @@ export interface CreateRunRequest {
   sessionId?: string;
   role: string;
   mode: RunMode;
+  goalMaxIterations?: number;
   researchDepth?: ResearchDepth;
   researchSources?: ResearchSourceKind[];
   planAction?: PlanRunAction;

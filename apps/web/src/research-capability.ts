@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { projectPath, request, type FleetNode } from "./api";
 
 /** Capability facts stay in the host and belong to the exact authenticated connection. */
-export function useResearchCapability(
+export function useRunModeCapabilities(
   target: FleetNode | undefined,
   disabled: boolean,
 ) {
@@ -14,15 +14,29 @@ export function useResearchCapability(
       ])
     : "";
   const ready = Boolean(target?.presence?.ready && !target.node.revoked);
-  const advertised = Boolean(
+  const advertisedResearch = Boolean(
     target?.presence?.capabilities.includes("research.create"),
+  );
+  const advertisedGoal = Boolean(
+    target?.presence?.capabilities.includes("goal.create"),
   );
   const resources = Boolean(
     target?.presence?.capabilities.includes("runtime.resources.v1"),
   );
-  const [state, setState] = useState({ scope: "", enabled: false });
+  const [state, setState] = useState({
+    scope: "",
+    research: false,
+    goal: false,
+  });
   useEffect(() => {
-    if (!target || !ready || disabled || !resources || advertised) return;
+    if (
+      !target ||
+      !ready ||
+      disabled ||
+      !resources ||
+      (advertisedResearch && advertisedGoal)
+    )
+      return;
     const abort = new AbortController();
     void request<{ kind: string; value?: { capabilities?: unknown } }>(
       `${projectPath(target.node.project_id)}/nodes/${encodeURIComponent(target.node.node_id)}/resources`,
@@ -37,20 +51,26 @@ export function useResearchCapability(
         if (!abort.signal.aborted)
           setState({
             scope,
-            enabled:
+            research:
               reply.kind === "result" &&
               Array.isArray(capabilities) &&
               capabilities.includes("research.create"),
+            goal:
+              reply.kind === "result" &&
+              Array.isArray(capabilities) &&
+              capabilities.includes("goal.create"),
           });
       })
       .catch(() => {
-        if (!abort.signal.aborted) setState({ scope, enabled: false });
+        if (!abort.signal.aborted)
+          setState({ scope, research: false, goal: false });
       });
     return () => abort.abort();
-  }, [scope, ready, disabled, resources, advertised]);
-  return (
-    ready &&
-    !disabled &&
-    (advertised || (resources && state.scope === scope && state.enabled))
-  );
+  }, [scope, ready, disabled, resources, advertisedResearch, advertisedGoal]);
+  const current = ready && !disabled;
+  const resolved = resources && state.scope === scope;
+  return {
+    research: current && (advertisedResearch || (resolved && state.research)),
+    goal: current && (advertisedGoal || (resolved && state.goal)),
+  };
 }

@@ -111,6 +111,7 @@ fn request(index: usize) -> CreateRunRequest {
         end_user_id: None,
         role: "primary".into(),
         mode: RunMode::Execute,
+        goal_max_iterations: 0,
         research_depth: None,
         research_sources: vec![],
         plan_action: None,
