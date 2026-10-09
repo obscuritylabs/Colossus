@@ -11,6 +11,7 @@ import {
 } from "react";
 import type { CSSProperties, FormEvent, ReactNode } from "react";
 import { DesktopStartup } from "./components/DesktopStartup";
+import { refreshConversation } from "./conversation-refresh";
 import { syncSavedSettings } from "./managed-settings-updates";
 import { terminalRequestForScope } from "./components/tools/TerminalDock";
 
@@ -1979,6 +1980,92 @@ export default function App() {
   }, [acceptDesktopStatus, startup]);
 
   useEffect(() => {
+    if (FIXTURE_MODE || startup !== "ready") return;
+    let cancelled = false,
+      polling = false;
+    const refresh = async () => {
+      const route = targetRoutes.current?.capture();
+      if (
+        !route ||
+        cancelled ||
+        polling ||
+        connectingRef.current ||
+        submitInFlight.current ||
+        listRequest.current
+      )
+        return;
+      const selected = chatRef.current.views.get(
+        chatRef.current.activeRunId ?? "",
+      )?.run;
+      const sessionId = selected?.sessionId ?? null;
+      const current = () =>
+        !cancelled &&
+        targetRoutes.current?.isCurrent(route) === true &&
+        (chatRef.current.views.get(chatRef.current.activeRunId ?? "")?.run
+          .sessionId ?? null) === sessionId;
+      polling = true;
+      try {
+        await refreshConversation({
+          sessionId,
+          isCurrent: current,
+          list: (sessionId) =>
+            listRuns(route.targetId, {
+              pageToken: "",
+              ...(sessionId ? { sessionId } : {}),
+            }),
+          hydrate: (runId) => getRun(route.targetId, { runId }),
+          changed: (run) => {
+            const known = chatRef.current.views.get(run.runId);
+            return (
+              !known ||
+              Math.max(known.lastSequence, known.run.lastSequence) <
+                run.lastSequence ||
+              known.run.etag !== run.etag
+            );
+          },
+          onRecent: (page) => {
+            targetRoutes.current?.bindRuns(
+              page.runs.map((run) => run.runId),
+              route,
+            );
+            dispatch({
+              type: "append_recent",
+              runs: page.runs,
+              nextPageToken: page.nextPageToken,
+            });
+          },
+          onRun: (details) => {
+            targetRoutes.current?.bindRun(details.run.runId, route);
+            const cursor =
+              chatRef.current.views.get(details.run.runId)?.lastSequence ?? 0;
+            dispatch({ type: "hydrate_run", details });
+            const selected = chatRef.current.views.get(
+              chatRef.current.activeRunId ?? "",
+            )?.run;
+            if (
+              planRevision === null &&
+              selected?.sessionId === details.run.sessionId &&
+              details.run.createdAt > selected.createdAt
+            ) {
+              dispatch({ type: "select_run", runId: details.run.runId });
+            }
+            startWatch(details.run.runId, cursor, route);
+          },
+        });
+      } catch {
+        /* Foreground reads show errors; periodic observation retries on the next tick. */
+      } finally {
+        polling = false;
+      }
+    };
+    const timer = window.setInterval(() => void refresh(), 3_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [startup, startWatch, planRevision]);
+
+  useEffect(() => {
     const query = deferredWorkQuery.trim();
     if (query === "") {
       setSpaceSearchResults([]);
@@ -3478,7 +3565,11 @@ export default function App() {
       chatRef.current.activeRunId === null
         ? undefined
         : chatRef.current.views.get(chatRef.current.activeRunId);
-    if (activeView === undefined || !isCancelable(activeView.run.status)) {
+    if (
+      activeView === undefined ||
+      activeView.run.controllable === false ||
+      !isCancelable(activeView.run.status)
+    ) {
       return false;
     }
     const runId = activeView.run.runId;
@@ -5257,7 +5348,8 @@ export default function App() {
     connection.state === "connected" &&
     !connecting &&
     !submitting &&
-    !approvalModeChanging;
+    !approvalModeChanging &&
+    activeRun?.continuable !== false;
   const continuation =
     activeRun !== undefined && isTerminalStatus(activeRun.status);
   const promptBytes = utf8ByteLength(expandedPrompt);
@@ -5509,7 +5601,10 @@ export default function App() {
       }
       activeWorkNeedsInput={(activeView?.pendingInteractions.length ?? 0) > 0}
       activeWorkRedirectable={
-        activeRun !== undefined && isCancelable(activeRun.status) && !cancelling
+        activeRun !== undefined &&
+        activeRun.controllable !== false &&
+        isCancelable(activeRun.status) &&
+        !cancelling
       }
       stopping={cancelling || activeRun?.status === "cancelling"}
       queuePaused={

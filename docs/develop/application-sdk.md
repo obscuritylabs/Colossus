@@ -196,6 +196,14 @@ ID. `--allow-continuation` permits new recipient-owned runs; `--disable` revokes
 disclosure. Previously synchronized cloud history is retained under cloud project
 access and retention policy.
 
+Desktop's native conversation reader combines its primary application's owned runs
+with Control Plane-owned runs through the separately provisioned connector client.
+Discovered run IDs stay bound to their reader and selected runtime. The renderer sees
+released history and authority flags, never either credential. Cloud runs are read-only
+in Desktop; cancellation and interaction responses retain their original application
+ownership. Desktop can continue a shared local conversation under its own grant.
+Periodic reconciliation observes new turns without reopening a completed thread.
+
 ## Managed shell inspection
 
 `AgentRunService` also exposes `ListProcessSessions`, `ReadProcessSession`, and

@@ -1249,7 +1249,9 @@ export function RunTimeline({
           plan={plan}
           sessionId={view.run.sessionId}
           cancelled={view.run.terminal?.type === "cancellation"}
-          continuationAvailable={planContinuationAvailable}
+          continuationAvailable={
+            planContinuationAvailable && view.run.controllable !== false
+          }
           workflowAvailable={planWorkflowAvailable}
           onInspect={onInspectPlan}
           onOpenWorkflow={onOpenPlanWorkflow}

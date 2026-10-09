@@ -197,7 +197,27 @@ impl Colossus {
 
     /// Replay and tail run updates in order.
     pub async fn watch_run(&self, request: WatchRunRequest) -> ApiResult<RunUpdates> {
-        let client = self.backend.agent_runs();
+        self.watch_with_client(self.backend.agent_runs(), request)
+            .await
+    }
+
+    /// Observe connector-owned runs through the independently provisioned connector grant.
+    /// No primary-client fallback is permitted when that grant is unavailable.
+    pub async fn watch_connector_run(&self, request: WatchRunRequest) -> ApiResult<RunUpdates> {
+        let client = self.connector_runs().ok_or_else(|| {
+            crate::ApiError::failed_precondition(
+                crate::ApiErrorReason::InvalidArgument,
+                "The connector run client is unavailable.",
+            )
+        })?;
+        self.watch_with_client(client, request).await
+    }
+
+    async fn watch_with_client(
+        &self,
+        client: Arc<dyn crate::AgentRunClient>,
+        request: WatchRunRequest,
+    ) -> ApiResult<RunUpdates> {
         let initial_stream = match client.watch_run(request.clone()).await {
             Ok(stream) => Some(stream),
             #[cfg(feature = "daemon")]

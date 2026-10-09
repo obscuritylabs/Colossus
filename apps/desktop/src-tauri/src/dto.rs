@@ -714,6 +714,8 @@ pub(crate) struct RunDto {
     pub(crate) terminal: Option<RunTerminalDto>,
     pub(crate) etag: String,
     pub(crate) archived: bool,
+    pub(crate) controllable: bool,
+    pub(crate) continuable: bool,
 }
 
 impl From<Run> for RunDto {
@@ -734,6 +736,8 @@ impl From<Run> for RunDto {
             terminal: value.terminal.map(Into::into),
             etag: value.etag,
             archived: value.archived,
+            controllable: true,
+            continuable: true,
         }
     }
 }
@@ -1218,6 +1222,8 @@ pub(crate) enum WatchEventDto {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GetRunDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) initial_prompt: Option<String>,
     pub(crate) run: RunDto,
     pub(crate) pending_interactions: Vec<InteractionDto>,
 }

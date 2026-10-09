@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, TextInput } from "@colossus/ui";
 import {
   IconArrowUpRight,
@@ -15,10 +15,12 @@ import {
   type Host,
   type Permission,
 } from "./api";
+import { DataTable, type DataTableColumn } from "@colossus/ui/data-table";
 import { RouteLink } from "./navigation";
 import { agentHref, hostHref } from "./routes";
 import {
   hostConnection,
+  hostWorkspaces,
   platformName,
   workspaceName,
 } from "./workspace-navigation";
@@ -50,8 +52,7 @@ export function Fleet({
   onOpenAgent: (id: string) => void;
   onOpenHost: (id: string) => void;
 }) {
-  const [query, setQuery] = useState(""),
-    [enrolling, setEnrolling] = useState(false),
+  const [enrolling, setEnrolling] = useState(false),
     [roles, setRoles] = useState("primary"),
     [busy, setBusy] = useState(false),
     [copied, setCopied] = useState(false);
@@ -119,13 +120,110 @@ export function Fleet({
       if (alive.current && attempt.current === generation) setBusy(false);
     }
   }
-  const search = query.trim().toLowerCase();
-  const visible = hosts.filter(
-    (host) =>
-      host.project_id === project &&
-      `${host.label} ${platformName(host.platform)}`
-        .toLowerCase()
-        .includes(search),
+  const rows = useMemo(
+    () =>
+      hosts
+        .filter((host) => host.project_id === project)
+        .map((host) => ({
+          host,
+          workspaces: hostWorkspaces(nodes, project, host.host_id).filter(
+            (item) => !item.node.revoked,
+          ),
+          state: hostConnection(host, nodes),
+        })),
+    [hosts, nodes, project],
+  );
+  type Row = (typeof rows)[number];
+  const columns = useMemo<DataTableColumn<Row>[]>(
+    () => [
+      {
+        id: "host",
+        label: "Host name",
+        hideable: false,
+        rowHeader: true,
+        className: "fleet-table-host-cell",
+        value: (row) =>
+          `${row.host.label} ${platformName(row.host.platform)} ${row.workspaces.map(workspaceName).join(" ")}`,
+        cell: ({ host }) => (
+          <div className="catalog-identity">
+            <span className="resource-icon">
+              <IconDeviceDesktop size={18} aria-hidden="true" />
+            </span>
+            <div>
+              <RouteLink
+                className="catalog-name"
+                href={hostHref(project, host.host_id)}
+                onNavigate={() => onOpenHost(host.host_id)}
+              >
+                {host.label}
+              </RouteLink>
+              <small>
+                {host.deployment_kind === "desktop" ? "Desktop" : "CLI"}
+              </small>
+            </div>
+          </div>
+        ),
+      },
+      {
+        id: "os",
+        label: "Operating system",
+        value: (row) => platformName(row.host.platform),
+      },
+      {
+        id: "workspaces",
+        label: "Workspaces",
+        value: (row) => row.workspaces.length,
+        cell: (row) => (
+          <div className="fleet-table-workspaces">
+            <span>{row.state.total}</span>
+            <small>
+              {row.workspaces.map(workspaceName).join(" · ") ||
+                "None connected yet"}
+            </small>
+          </div>
+        ),
+      },
+      {
+        id: "connected",
+        label: "Connected",
+        value: (row) => row.state.ready,
+        cell: (row) => (
+          <span className="fleet-table-count">
+            {row.state.ready} of {row.state.total}
+          </span>
+        ),
+      },
+      {
+        id: "status",
+        label: "Status",
+        value: (row) => row.state.label,
+        cell: (row) => (
+          <span className="catalog-connection">
+            <span className={`dot ${row.state.ready ? "live" : ""}`} />
+            {row.state.label}
+          </span>
+        ),
+      },
+      {
+        id: "actions",
+        label: "Actions",
+        className: "fleet-table-actions-cell",
+        sortable: false,
+        hideable: false,
+        value: (row) => row.host.host_id,
+        cell: (row) => (
+          <RouteLink
+            className="ui-icon-button"
+            href={hostHref(project, row.host.host_id)}
+            onNavigate={() => onOpenHost(row.host.host_id)}
+            aria-label={`Open host ${row.host.label}`}
+          >
+            <IconArrowUpRight size={18} aria-hidden="true" />
+          </RouteLink>
+        ),
+      },
+    ],
+    [project, onOpenHost],
   );
   const unassigned = nodes.filter(
     (item) => item.node.project_id === project && !item.node.host_id,
@@ -146,74 +244,21 @@ export function Fleet({
           </Button>
         ) : null}
       </header>
-      <div className="fleet-toolbar">
-        <label>
-          <span className="sr-only">Search hosts</span>
-          <TextInput
-            type="search"
-            aria-label="Search hosts"
-            placeholder="Search hosts"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </label>
-        <span>
-          {hosts.length} host{hosts.length === 1 ? "" : "s"}
-        </span>
-      </div>
-      <ul className="fleet-host-list" aria-label="Fleet hosts">
-        {visible.map((host) => {
-          const state = hostConnection(host, nodes);
-          return (
-            <li key={host.host_id}>
-              <RouteLink
-                className="fleet-host-row"
-                href={hostHref(project, host.host_id)}
-                onNavigate={() => onOpenHost(host.host_id)}
-                aria-label={`Open host ${host.label}`}
-              >
-                <span className="fleet-host-icon">
-                  <IconDeviceDesktop size={24} aria-hidden="true" />
-                </span>
-                <span className="fleet-host-name">
-                  <strong>{host.label}</strong>
-                  <small>
-                    {platformName(host.platform)} ·{" "}
-                    {host.deployment_kind === "desktop" ? "Desktop" : "CLI"}
-                  </small>
-                </span>
-                <span className="fleet-host-workspaces">
-                  <strong>
-                    {state.total} workspace{state.total === 1 ? "" : "s"}
-                  </strong>
-                  <small>
-                    {state.ready} connected
-                    {hasMore ? " · loaded inventory" : ""}
-                  </small>
-                </span>
-                <span className="fleet-host-status">
-                  <span className={`dot ${state.ready ? "live" : ""}`} />
-                  {state.label}
-                </span>
-                <IconArrowUpRight size={18} aria-hidden="true" />
-              </RouteLink>
-            </li>
-          );
-        })}
-      </ul>
-      {!visible.length ? (
-        <div className="empty-state">
-          <IconDeviceDesktop size={28} aria-hidden="true" />
-          <h2>
-            {search ? "No matching hosts" : "Connect your first workspace"}
-          </h2>
-          <p>
-            {search
-              ? "Try another host name or operating system."
-              : "Its host will appear here when the workspace connects."}
-          </p>
-        </div>
-      ) : null}
+      <DataTable
+        key={project}
+        data={rows}
+        columns={columns}
+        getRowId={(row) => row.host.host_id}
+        label="Fleet hosts"
+        itemLabel="hosts"
+        search={{ columnId: "host", label: "Search hosts or workspaces" }}
+        initialSorting={[{ id: "host", desc: false }]}
+        empty={
+          rows.length
+            ? "No matching hosts. Try a host name, operating system, or workspace."
+            : "Connect your first workspace to see its host here."
+        }
+      />
       {hasMoreHosts ? (
         <Button variant="secondary" onClick={onMoreHosts}>
           More hosts

@@ -859,6 +859,8 @@ export interface Run {
   terminal: RunTerminal | null;
   etag: string;
   archived: boolean;
+  controllable?: boolean;
+  continuable?: boolean;
 }
 
 export type ThreadDelegateStatus =
@@ -1177,6 +1179,7 @@ export type WatchEvent =
   | { type: "error"; error: CommandError };
 
 export interface RunDetails {
+  initialPrompt?: string;
   run: Run;
   pendingInteractions: Interaction[];
 }

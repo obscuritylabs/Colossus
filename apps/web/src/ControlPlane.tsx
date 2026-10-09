@@ -252,7 +252,7 @@ export function AuthenticatedApp({
         return items;
       }
       try {
-        const [fleet, work, inventory] = await Promise.all([
+        const [fleet, work, inventory] = await Promise.allSettled([
           pages<FleetNode>("nodes", nodePages, (item) => item.node.node_id),
           pages<Task>("tasks", taskPages, (item) => item.task_id),
           pages<Host>("hosts", hostPages, (item) => item.host_id),
@@ -264,13 +264,26 @@ export function AuthenticatedApp({
           generation !== inventoryEpoch.current
         )
           return;
-        setNodes(fleet);
-        setTasks(work);
-        setHosts(inventory);
+        if (fleet.status === "fulfilled") setNodes(fleet.value);
+        if (work.status === "fulfilled") setTasks(work.value);
+        if (inventory.status === "fulfilled") setHosts(inventory.value);
         setLoadedProject(project);
         setLoading(false);
-        setError("");
-        setDeniedProject("");
+        const failures = [fleet, work, inventory].filter(
+          (result) => result.status === "rejected",
+        );
+        const denied = failures.find(
+          (result) =>
+            result.status === "rejected" &&
+            result.reason instanceof ApiFailure &&
+            [401, 403].includes(result.reason.status),
+        );
+        setDeniedProject(denied ? project : "");
+        setError(
+          failures.length
+            ? "Some project data could not be refreshed. Available hosts and workspaces are shown."
+            : "",
+        );
       } catch (e) {
         if (
           !signal?.aborted &&

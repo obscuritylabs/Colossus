@@ -1102,6 +1102,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "apple-native-keyring-store",
+ "async-trait",
  "base64 0.22.1",
  "colossus-codex-auth",
  "colossus-connector",

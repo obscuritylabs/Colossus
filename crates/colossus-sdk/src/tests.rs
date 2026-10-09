@@ -1398,3 +1398,41 @@ async fn embedded_rejects_a_backend_with_wrong_lifecycle_semantics() {
     assert!(matches!(error, SdkError::IdentityMismatch));
     assert!(backend.closed.load(Ordering::Acquire));
 }
+
+#[cfg(feature = "serialization")]
+#[test]
+fn legacy_run_requests_keep_exact_storage_shape_and_goal_budgets_remain_explicit() {
+    let legacy = serde_json::json!({
+        "input": [{"text": "A retained request"}], "plugin_skill_ids": [],
+        "session_id": null, "end_user_id": null, "role": "primary", "mode": "execute",
+        "research_depth": null, "research_sources": [], "plan_action": null, "branch": null,
+        "max_turns": 24, "idempotency_key": "legacy-storage-request"
+    });
+    let request: CreateRunRequest = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(request.goal_max_iterations, 0);
+    assert_eq!(serde_json::to_value(&request).unwrap(), legacy);
+    let goal = CreateRunRequest {
+        mode: RunMode::Goal,
+        goal_max_iterations: 5,
+        ..request
+    };
+    let encoded = serde_json::to_value(&goal).unwrap();
+    assert_eq!(encoded["goal_max_iterations"], 5);
+    assert_eq!(
+        serde_json::from_value::<CreateRunRequest>(encoded).unwrap(),
+        goal
+    );
+}
+
+#[tokio::test]
+async fn connector_watch_without_a_dedicated_client_never_uses_primary_authority() {
+    let client = Colossus::from_backend(TestBackend::new(BackendKind::Daemon));
+    let error = client
+        .watch_connector_run(WatchRunRequest {
+            run_id: "cloud-run".into(),
+            after_sequence: 0,
+        })
+        .await
+        .expect_err("no connector client");
+    assert_eq!(error.code, ApiErrorCode::FailedPrecondition);
+}

@@ -84,6 +84,7 @@ struct TargetLimits {
     watch_slots: Arc<Semaphore>,
     unary_slots: Arc<Semaphore>,
     run_list: RunList,
+    conversations: crate::conversation_runs::ConversationRuns,
 }
 
 impl TargetHandle {
@@ -110,6 +111,28 @@ impl TargetHandle {
         self.limits.run_list.list_runs(&self.client, request).await
     }
 
+    pub(crate) async fn list_conversations(
+        &self,
+        request: ListRunsRequest,
+    ) -> Result<crate::conversation_runs::ConversationPage, ApiError> {
+        self.limits
+            .conversations
+            .list(&self.client, &self.limits.run_list, request)
+            .await
+    }
+    pub(crate) fn conversation_reader(
+        &self,
+        run_id: &str,
+    ) -> Result<Arc<dyn colossus_sdk::AgentRunClient>, ApiError> {
+        self.limits.conversations.reader(&self.client, run_id)
+    }
+    pub(crate) fn is_cloud_conversation(&self, run_id: &str) -> bool {
+        self.limits.conversations.is_cloud(run_id)
+    }
+    pub(crate) fn can_continue_conversation(&self, session_id: &str) -> bool {
+        self.limits.conversations.can_continue(session_id)
+    }
+
     fn is_closed(&self) -> bool {
         self.client.agent_runs().is_closed()
     }
@@ -121,6 +144,7 @@ impl TargetLimits {
             watch_slots: Arc::new(Semaphore::new(MAX_NATIVE_WATCHES_PER_TARGET)),
             unary_slots: Arc::new(Semaphore::new(MAX_NATIVE_UNARY_CALLS_PER_TARGET)),
             run_list: RunList::default(),
+            conversations: crate::conversation_runs::ConversationRuns::default(),
         }
     }
 

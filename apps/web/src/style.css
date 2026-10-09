@@ -1953,80 +1953,23 @@ h2:focus-visible {
 }
 .fleet-heading h1 {
   margin: 0;
-  font-size: var(--font-size-page-title);
+  font-size: var(--font-size-heading);
 }
 .fleet-heading p {
   margin: 7px 0 0;
   color: var(--muted);
 }
-.fleet-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  color: var(--muted);
-  font-size: var(--font-size-body-sm);
-}
-.fleet-toolbar label {
-  flex: 1;
-  max-width: 420px;
-}
-.fleet-host-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-}
-.fleet-host-list:empty {
-  display: none;
-}
-.fleet-host-list li + li {
-  border-top: 1px solid var(--border);
-}
-.fleet-host-row {
+.fleet-table-workspaces {
   display: grid;
-  grid-template-columns:
-    42px minmax(150px, 1fr) minmax(120px, auto) minmax(95px, auto)
-    20px;
-  gap: 20px;
-  padding: 22px;
-  align-items: center;
-  text-decoration: none;
-  color: var(--text);
+  gap: 4px;
 }
-.fleet-host-row:hover {
-  background: var(--surface-hover);
-}
-.fleet-host-row:focus-visible {
-  outline: 2px solid var(--accent-text);
-  outline-offset: -3px;
-}
-.fleet-host-icon {
-  display: grid;
-  place-items: center;
+.fleet-table-workspaces small {
   color: var(--muted);
+  font-size: var(--font-size-caption);
 }
-.fleet-host-name,
-.fleet-host-workspaces {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
+.fleet-table-count {
+  font-variant-numeric: tabular-nums;
 }
-.fleet-host-name strong {
-  font-size: var(--font-size-heading);
-  overflow-wrap: anywhere;
-}
-.fleet-host-name small,
-.fleet-host-workspaces small {
-  font-size: var(--font-size-body-sm);
-  color: var(--muted);
-}
-.fleet-host-workspaces strong {
-  font-size: var(--font-size-body);
-  font-weight: 500;
-}
-.fleet-host-status,
 .host-connection-status {
   display: inline-flex;
   align-items: center;
@@ -2549,4 +2492,19 @@ h2:focus-visible {
   gap: 6px;
   color: var(--muted);
   font-size: var(--font-size-body-sm);
+}
+
+.fleet-table-host-cell {
+  width: 32%;
+}
+.fleet-table-actions-cell {
+  width: 64px;
+}
+.fleet-table-host-cell .catalog-name {
+  color: var(--text-strong);
+  text-decoration: none;
+}
+.fleet-table-host-cell .catalog-name:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
 }
