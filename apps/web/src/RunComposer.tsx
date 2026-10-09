@@ -4,7 +4,20 @@ import { ConversationComposer } from "@colossus/ui/conversation";
 import { type FleetNode } from "./api";
 import { workspaceName } from "./workspace-navigation";
 import { SendShortcutContext } from "./Appearance";
-import { IconShieldCheck } from "@tabler/icons-react";
+import {
+  ResearchControls,
+  RESEARCH_SOURCE_OPTIONS,
+} from "@colossus/ui/components/ResearchControls";
+import type {
+  ResearchDepth,
+  ResearchSourceKind,
+} from "@colossus/ui/session/types";
+import { useResearchCapability } from "./research-capability";
+import "@colossus/ui/styles/research-controls.css";
+import {
+  IconAdjustmentsHorizontal,
+  IconShieldCheck,
+} from "@tabler/icons-react";
 
 export interface RunRequest {
   plugin_skill_ids: string[];
@@ -13,8 +26,8 @@ export interface RunRequest {
   end_user_id: null;
   role: string;
   mode: string;
-  research_depth: null;
-  research_sources: string[];
+  research_depth: ResearchDepth | null;
+  research_sources: ResearchSourceKind[];
   plan_action: null;
   branch: null;
   max_turns: number;
@@ -48,7 +61,11 @@ export function RunComposer({
 }) {
   const [draft, setDraft] = useState(""),
     [mode, setMode] = useState("execute"),
-    [role, setRole] = useState("primary");
+    [role, setRole] = useState("primary"),
+    [researchDepth, setResearchDepth] = useState<ResearchDepth>("standard"),
+    [researchSources, setResearchSources] = useState<ResearchSourceKind[]>([
+      "repo",
+    ]);
   const input = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (draftSeed) {
@@ -60,6 +77,23 @@ export function RunComposer({
   const target = nodes.find((item) => item.node.node_id === nodeId);
   const shortcut = useContext(SendShortcutContext);
   const posture = target?.node.policy;
+  const researchAvailable = useResearchCapability(target, disabled);
+  const tools = posture?.allowed_tools ?? [];
+  const availableSources = RESEARCH_SOURCE_OPTIONS.filter(
+    (option) =>
+      tools.includes("*") ||
+      tools.includes(
+        { repo: "filesystem.search", web: "web.search", mcp: "mcp.call" }[
+          option.value
+        ],
+      ),
+  ).map((option) => option.value);
+  const sources = RESEARCH_SOURCE_OPTIONS.map((option) => option.value).filter(
+    (source) =>
+      researchSources.includes(source) && availableSources.includes(source),
+  );
+  const researchBlocked =
+    mode === "research" && (!researchAvailable || !sources.length);
   const modelLabel =
     posture?.models.length === 1
       ? posture.models[0]?.label
@@ -75,8 +109,15 @@ export function RunComposer({
     if (roles.length && !roles.includes(role)) setRole(roles[0]!);
   }, [roles, role]);
   async function send() {
-    if (!draft.trim() || !nodeId || disabled || busy) return;
-    const signature = JSON.stringify({ draft, nodeId, mode, role });
+    if (!draft.trim() || !nodeId || disabled || busy || researchBlocked) return;
+    const signature = JSON.stringify({
+      draft,
+      nodeId,
+      mode,
+      role,
+      researchDepth: mode === "research" ? researchDepth : null,
+      researchSources: mode === "research" ? sources : [],
+    });
     if (attempt.current?.signature !== signature)
       attempt.current = { signature, key: crypto.randomUUID() };
     if (
@@ -87,8 +128,8 @@ export function RunComposer({
         end_user_id: null,
         role,
         mode,
-        research_depth: null,
-        research_sources: [],
+        research_depth: mode === "research" ? researchDepth : null,
+        research_sources: mode === "research" ? sources : [],
         plan_action: null,
         branch: null,
         max_turns: 24,
@@ -113,7 +154,7 @@ export function RunComposer({
           ? "This conversation is available to read."
           : "What would you like to work on?"
       }
-      disabled={disabled || !nodeId}
+      disabled={disabled || !nodeId || researchBlocked}
       busy={busy}
       shortcut={shortcut}
       context={
@@ -185,8 +226,42 @@ export function RunComposer({
             options={[
               { value: "execute", label: "Execute" },
               { value: "plan", label: "Plan" },
+              {
+                value: "research",
+                label: "Research",
+                disabled: !researchAvailable,
+                title: researchAvailable
+                  ? "Run a bounded evidence-and-citation task"
+                  : "Connect a runtime that advertises Research support.",
+              },
             ]}
           />
+          {mode === "research" ? (
+            <details className="research-run-controls">
+              <summary>
+                <IconAdjustmentsHorizontal size={16} aria-hidden="true" />
+                Sources:{" "}
+                {sources
+                  .map(
+                    (source) =>
+                      RESEARCH_SOURCE_OPTIONS.find(
+                        (option) => option.value === source,
+                      )!.label,
+                  )
+                  .join(", ") || "None"}
+              </summary>
+              <div className="run-controls-popover is-research">
+                <ResearchControls
+                  researchDepth={researchDepth}
+                  researchSources={sources}
+                  availableSources={availableSources}
+                  submitting={busy || disabled}
+                  onResearchDepthChange={setResearchDepth}
+                  onResearchSourcesChange={setResearchSources}
+                />
+              </div>
+            </details>
+          ) : null}
           <DropdownSelect
             aria-label="Agent role"
             value={role}
@@ -205,9 +280,11 @@ export function RunComposer({
         </>
       }
       notice={
-        target && !target.presence?.ready && !target.node.revoked
-          ? "This agent is offline. Accepted messages remain queued until it reconnects."
-          : undefined
+        researchBlocked
+          ? "Research requires an available runtime and at least one authorized evidence source."
+          : target && !target.presence?.ready && !target.node.revoked
+            ? "This agent is offline. Accepted messages remain queued until it reconnects."
+            : undefined
       }
     />
   );

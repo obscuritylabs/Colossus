@@ -144,3 +144,9 @@ does not infer private context from assistant prose. The Artifact Library render
 released metadata supplied by its host. The appearance screen takes controlled values
 and callbacks; storage, system-theme observation, and permission choices remain local
 to each application. Palette parsing and contrast validation are shared foundations.
+
+`ResearchControls` shares Desktop’s depth and evidence-source presentation. Hosts
+supply selected values, callbacks, and available lanes. Web obtains Research support
+from the selected runtime’s authenticated capability response, fences it to that
+connection, and intersects evidence choices with the reported tool ceiling. Missing
+support never changes the user’s requested mode into Execute.

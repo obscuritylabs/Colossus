@@ -143,7 +143,7 @@ describe("WorkComposer capabilities", () => {
     expect(markup).toContain("MCP connections");
     expect(markup).toContain("Research settings");
     expect(markup).toContain('aria-label="Close research settings"');
-    expect(markup).toContain('name="research-depth"');
+    expect(markup).toContain('name="research-depth-');
     expect(markup).toContain("Search across your workspace");
     expect(markup).toContain("Search the public web");
     expect(markup).toContain(

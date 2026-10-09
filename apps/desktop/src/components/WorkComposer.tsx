@@ -1,21 +1,21 @@
 import {
   IconAdjustmentsHorizontal,
   IconAt,
-  IconCheck,
   IconCommand,
   IconCornerDownLeft,
   IconFileText,
-  IconFolder,
   IconPaperclip,
   IconPlaylistAdd,
   IconPlayerStopFilled,
-  IconPlugConnected,
   IconRouteAltLeft,
   IconShieldCheck,
-  IconWorld,
-  IconX,
 } from "@tabler/icons-react";
 import { ConversationComposerFrame } from "@colossus/ui/conversation";
+import {
+  ResearchControls,
+  RESEARCH_SOURCE_OPTIONS,
+} from "@colossus/ui/components/ResearchControls";
+import "@colossus/ui/styles/research-controls.css";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, ReactNode, RefObject } from "react";
 
@@ -52,33 +52,6 @@ const ComposerModelChip = lazy(() =>
     default: module.ComposerModelChip,
   })),
 );
-
-const RESEARCH_DEPTH_OPTIONS = [
-  { value: "quick", label: "Quick" },
-  { value: "standard", label: "Standard" },
-  { value: "deep", label: "Deep" },
-] as const;
-
-const RESEARCH_SOURCE_OPTIONS = [
-  {
-    value: "repo",
-    label: "This Workspace",
-    description: "Search across your workspace",
-    Icon: IconFolder,
-  },
-  {
-    value: "web",
-    label: "Web",
-    description: "Search the public web",
-    Icon: IconWorld,
-  },
-  {
-    value: "mcp",
-    label: "MCP connections",
-    description: "Search enabled MCP tools or research projections",
-    Icon: IconPlugConnected,
-  },
-] as const;
 
 interface WorkComposerProps {
   onOpenDictationSettings?: (() => void) | undefined;
@@ -428,88 +401,13 @@ export function WorkComposer({
             >
               {mode === "research" ? (
                 <>
-                  <header className="research-settings-header">
-                    <h3>Research settings</h3>
-                    <button
-                      className="research-settings-close"
-                      type="button"
-                      aria-label="Close research settings"
-                      onClick={(event) => {
-                        const controls = event.currentTarget.closest("details");
-                        controls?.removeAttribute("open");
-                        controls?.querySelector("summary")?.focus();
-                      }}
-                    >
-                      <IconX size={17} stroke={1.8} aria-hidden="true" />
-                    </button>
-                  </header>
-                  <fieldset className="research-depth-controls">
-                    <legend>Research depth</legend>
-                    <div className="research-depth-options">
-                      {RESEARCH_DEPTH_OPTIONS.map((option) => (
-                        <label
-                          className="research-depth-option"
-                          key={option.value}
-                        >
-                          <input
-                            type="radio"
-                            name="research-depth"
-                            value={option.value}
-                            checked={researchDepth === option.value}
-                            disabled={submitting}
-                            onChange={() => onResearchDepthChange(option.value)}
-                          />
-                          <span>{option.label}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </fieldset>
-                  <fieldset className="research-source-controls">
-                    <legend>Evidence sources</legend>
-                    <div className="research-source-options">
-                      {RESEARCH_SOURCE_OPTIONS.map((option) => {
-                        const selected = researchSources.includes(option.value);
-                        return (
-                          <label
-                            className={`research-source-option${selected ? " is-selected" : ""}`}
-                            key={option.value}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={selected}
-                              disabled={submitting}
-                              onChange={(event) => {
-                                const next = event.target.checked
-                                  ? [...researchSources, option.value]
-                                  : researchSources.filter(
-                                      (item) => item !== option.value,
-                                    );
-                                onResearchSourcesChange(next);
-                              }}
-                            />
-                            <span
-                              className="research-source-icon"
-                              aria-hidden="true"
-                            >
-                              <option.Icon size={19} stroke={1.7} />
-                            </span>
-                            <span className="research-source-copy">
-                              <strong>{option.label}</strong>
-                              <small>{option.description}</small>
-                            </span>
-                            <span
-                              className="research-source-checkbox"
-                              aria-hidden="true"
-                            >
-                              {selected ? (
-                                <IconCheck size={14} stroke={2.4} />
-                              ) : null}
-                            </span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </fieldset>
+                  <ResearchControls
+                    researchDepth={researchDepth}
+                    researchSources={researchSources}
+                    submitting={submitting}
+                    onResearchDepthChange={onResearchDepthChange}
+                    onResearchSourcesChange={onResearchSourcesChange}
+                  />
                 </>
               ) : (
                 <>

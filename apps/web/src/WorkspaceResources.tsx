@@ -187,7 +187,7 @@ export function WorkspacePlugins({
           throw new Error(
             context.error?.message ?? "Plugin discovery is unavailable.",
           );
-        if (!context.value?.capabilities.includes("plugins.read"))
+        if (!context.value?.capabilities.includes("plugins.discovery"))
           throw new Error(
             "The dedicated cloud application has no plugin discovery grant. Manage plugin installation and local access in Desktop.",
           );

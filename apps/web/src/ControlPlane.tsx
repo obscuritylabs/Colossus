@@ -547,7 +547,7 @@ export function AuthenticatedApp({
           {
             id: "home",
             label: "Home",
-            href: globalHref("home"),
+            href: globalHref("home", authorizedProject ? project : undefined),
             icon: <IconHome size={21} aria-hidden="true" />,
           },
           {
@@ -559,7 +559,10 @@ export function AuthenticatedApp({
           {
             id: "projects",
             label: "Projects",
-            href: globalHref("projects"),
+            href: globalHref(
+              "projects",
+              authorizedProject ? project : undefined,
+            ),
             icon: <IconFolder size={21} aria-hidden="true" />,
           },
           ...(me.user.is_admin
@@ -568,7 +571,10 @@ export function AuthenticatedApp({
                   id: "admin",
                   label: "Administration",
                   shortLabel: "Admin",
-                  href: globalHref("admin"),
+                  href: globalHref(
+                    "admin",
+                    authorizedProject ? project : undefined,
+                  ),
                   icon: <IconUsers size={21} aria-hidden="true" />,
                 },
               ]
@@ -576,16 +582,16 @@ export function AuthenticatedApp({
           {
             id: "settings",
             label: "Settings",
-            href: globalHref("settings"),
+            href: globalHref(
+              "settings",
+              authorizedProject ? project : undefined,
+            ),
             icon: <IconSettings size={21} aria-hidden="true" />,
           },
         ]}
         onNavigate={(id) =>
           navigation.go(
-            globalHref(
-              id as Surface,
-              id === "fleet" && authorizedProject ? project : undefined,
-            ),
+            globalHref(id as Surface, authorizedProject ? project : undefined),
           )
         }
         classification={settings?.classification}

@@ -1,0 +1,203 @@
+.run-controls-popover.is-research {
+  position: absolute;
+  z-index: 10;
+  right: 0;
+  bottom: calc(100% + 9px);
+  display: grid;
+  max-height: min(480px, 70dvh);
+  overflow: auto;
+  width: min(320px, calc(100vw - 24px));
+  gap: 13px;
+  padding: 14px;
+  border-color: var(--border-strong);
+  border-radius: 14px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+}
+
+.research-settings-header {
+  display: flex;
+  min-height: 25px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.research-settings-header h3 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--font-size-body-sm);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.research-settings-close {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.research-settings-close:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.research-settings-close:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.research-depth-controls,
+.research-source-controls {
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
+}
+
+.research-depth-controls legend,
+.research-source-controls legend {
+  padding: 0;
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+  font-weight: 600;
+}
+
+.research-depth-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--surface-inset);
+}
+
+.research-depth-option {
+  position: relative;
+  min-width: 0;
+}
+
+.research-depth-option input,
+.research-source-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.research-depth-option span {
+  display: grid;
+  min-height: 34px;
+  padding: 7px 8px;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--font-size-body-sm);
+  font-weight: 650;
+}
+
+.research-depth-option input:checked + span {
+  background: var(--surface-selected);
+  color: var(--accent-text);
+}
+
+.research-depth-option input:focus-visible + span {
+  outline: 2px solid var(--cyan);
+  outline-offset: 1px;
+}
+
+.research-depth-option input:disabled + span,
+.research-source-option:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: var(--disabled-opacity);
+}
+
+.research-source-options {
+  display: grid;
+  gap: 6px;
+}
+
+.research-source-option {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 54px;
+  grid-template-columns: 27px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.research-source-option:hover {
+  border-color: var(--accent-border);
+  background: var(--surface-raised);
+}
+
+.research-source-option:focus-within {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.research-source-option.is-selected {
+  border-color: var(--blue);
+  background: var(--surface-selected);
+  box-shadow: inset 0 0 0 1px var(--focus-ring);
+}
+
+.research-source-icon {
+  display: grid;
+  color: var(--icon-text);
+  place-items: center;
+}
+
+.research-source-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.research-source-copy strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--font-size-body-sm);
+  font-weight: 670;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-source-copy small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.research-source-checkbox {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text-on-accent);
+}
+
+.research-source-option.is-selected .research-source-checkbox {
+  border-color: var(--blue);
+  background: var(--blue);
+}

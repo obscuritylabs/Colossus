@@ -14,7 +14,9 @@ import type {
   WorkflowSchedule,
   ScheduleRunAttempt,
 } from "@colossus/ui/automations/types";
-import { WorkspaceNavigation } from "@colossus/ui";
+import { RunComposer } from "../RunComposer";
+import type { FleetNode } from "../api";
+import { WorkspaceSurfaceHeader, WorkspaceNavigation } from "@colossus/ui";
 import "@colossus/ui/styles/automations.css";
 import "@colossus/ui/styles/workflows.css";
 import "@colossus/ui/styles/workflow-logic.css";
@@ -74,8 +76,49 @@ const initial: WorkflowSchedule = {
   controllable: true,
   last_dispatch: null,
 };
+const researchNode: FleetNode = {
+  node: {
+    node_id: "fixture",
+    project_id: "fixture-only",
+    instance_id: "fixture",
+    label: "Disposable workspace",
+    roles: ["primary"],
+    certificate_sha256: "fixture",
+    revoked: false,
+    revision: 1,
+    policy: {
+      schema_version: 1,
+      provenance: "fixture",
+      fingerprint: "fixture",
+      configuration_revision: 1,
+      access_profile: "fixture",
+      sandbox_backend: "fixture",
+      sandbox_profile: "fixture",
+      boundary_acknowledged: true,
+      approval_mode: "risk_auto",
+      allowed_roles: ["primary"],
+      allowed_tools: ["filesystem.search", "web.search"],
+      capabilities: ["research.create"],
+      models: [],
+      findings: [],
+      telemetry: {
+        provenance: "fixture",
+        denied_requests: null,
+        approval_requests: null,
+        outcome_unknown_runs: null,
+      },
+    },
+  },
+  presence: {
+    ready: true,
+    connection_id: "fixture",
+    capabilities: ["research.create"],
+  },
+};
 export default function WorkspaceManagementFixture() {
-  const [view, setView] = useState<"workflows" | "schedules">("schedules");
+  const [view, setView] = useState<"work" | "workflows" | "schedules">(
+    "schedules",
+  );
   const [readonly, setReadonly] = useState(false);
   const [unknown, setUnknown] = useState(false);
   const [message, setMessage] = useState("");
@@ -252,7 +295,8 @@ export default function WorkspaceManagementFixture() {
         <WorkspaceNavigation
           active={view}
           onSelect={(id) => {
-            if (id === "workflows" || id === "schedules") setView(id);
+            if (id === "work" || id === "workflows" || id === "schedules")
+              setView(id);
           }}
         />
         <label>
@@ -270,6 +314,18 @@ export default function WorkspaceManagementFixture() {
             onChange={(event) => setUnknown(event.target.checked)}
           />
           Simulate lost response
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            aria-label="Large text"
+            onChange={(event) => {
+              document.documentElement.dataset.textSize = event.target.checked
+                ? "large"
+                : "comfortable";
+            }}
+          />
+          Large text
         </label>
         <button
           type="button"
@@ -292,7 +348,30 @@ export default function WorkspaceManagementFixture() {
           key={String(readonly) + String(unknown)}
           host={host}
         >
-          {view === "workflows" ? (
+          {view === "work" ? (
+            <>
+              <WorkspaceSurfaceHeader
+                eyebrow="Work / Development fixture"
+                title="New conversation"
+                description="Production composer with disposable transport."
+              />
+              <RunComposer
+                nodes={[researchNode]}
+                nodeId="fixture"
+                lockedRuntime
+                busy={false}
+                disabled={readonly}
+                label="Message the agent"
+                action="Send message"
+                onSubmit={async (request) => {
+                  setMessage(
+                    `Submitted ${request.mode} · ${request.research_depth ?? "default"} · ${request.research_sources.join(", ")}`,
+                  );
+                  return true;
+                }}
+              />
+            </>
+          ) : view === "workflows" ? (
             <WorkflowsSurface {...props} />
           ) : (
             <SchedulesSurface

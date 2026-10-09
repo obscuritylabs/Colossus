@@ -2538,3 +2538,15 @@ h2:focus-visible {
   min-height: var(--icon-control-size);
   padding: 6px;
 }
+
+.research-run-controls {
+  position: relative;
+}
+.research-run-controls > summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+}
