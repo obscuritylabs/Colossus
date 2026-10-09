@@ -28,6 +28,7 @@ function PollingHarness({ scope }: { scope: string | null }) {
   return (
     <output
       data-testid="shell-polling"
+      data-scope={scope ?? ""}
       data-loading={shells.loading}
       data-error={shells.error ?? ""}
     >

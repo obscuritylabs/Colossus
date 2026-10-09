@@ -35,6 +35,9 @@ test("compact terminal reserves native bounds and tool menus work with the keybo
     page.getByRole("menuitemradio", { name: /^Files/ }),
   ).toBeFocused();
   await page.keyboard.press("ArrowDown");
+  await expect(
+    page.getByRole("menuitemradio", { name: /^Browser/ }),
+  ).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(
     page.getByRole("menuitemradio", { name: /^Terminal/ }),
@@ -331,7 +334,8 @@ for (const entry of ["shortcut", "tools menu", "pane selector"] as const) {
           exact: true,
         })
         .click();
-      await fixture.getByRole("menuitemradio", { name: /^Terminal/ }).click();
+      // Owned Radix menus render in a portal outside the harness container.
+      await page.getByRole("menuitemradio", { name: /^Terminal/ }).click();
     }
     await expect(fixture).toHaveAttribute("data-generic-selections", "1");
     await expect(
