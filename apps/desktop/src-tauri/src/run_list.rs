@@ -35,6 +35,18 @@ impl RunList {
         .await
     }
 
+    pub(crate) async fn list_client(
+        &self,
+        client: &dyn colossus_sdk::AgentRunClient,
+        request: ListRunsRequest,
+    ) -> Result<ListRunsResponse, ApiError> {
+        self.execute(
+            || client.list_runs(request.clone()),
+            &ADMISSION_RETRY_DELAYS,
+        )
+        .await
+    }
+
     async fn execute<T, Operation, FutureResult>(
         &self,
         mut operation: Operation,

@@ -2825,6 +2825,7 @@ fn desktop_capabilities(
     workspace_available: bool,
 ) -> DesktopCapabilitiesDto {
     DesktopCapabilitiesDto {
+        goal: advertised.contains("goal.create"),
         research: selected_managed && advertised.contains("research.create"),
         delegation: advertised.contains("agent_runs.delegation"),
         plugins: advertised.contains("plugins.discovery"),

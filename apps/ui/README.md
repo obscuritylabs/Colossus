@@ -2,7 +2,7 @@
 
 `@colossus/ui` is a private source package consumed by Desktop, the VS Code
 webviews, and the web control plane from the same checkout. It owns theme tokens
-(Colossus blue, light, neutral dark, and Hacker), the brand mark, application and
+(Colossus blue, light, neutral dark, Black, and Hacker), the brand mark, application and
 settings frames, compact catalog inventories, shadcn foundations, data tables, composer sizing and
 keyboard behavior, and the accessible dropdown control. Each host compiles this
 source into its own renderer bundle; this package is not independently
@@ -24,8 +24,9 @@ No generated UI bundle needs committing. React is pinned to the same peer versio
 in all consumers so each renderer has one React instance.
 
 Neutral dark is the VS Code default. Desktop keeps Colossus blue by default and
-offers neutral dark and Hacker in Global → Appearance → Dark palette. Desktop keeps saved
-custom palette colors while neutral dark or Hacker is selected. Hacker translates
+offers neutral dark, Black, and Hacker in Global → Appearance → Dark palette. Desktop keeps saved
+custom palette colors while a preset palette is selected. Black uses shadcn’s near-black neutral surfaces
+with Colossus accents; it is available in all three apps. Hacker translates
 the TUI palette from `crates/colossus-presentation/src/palette.rs`: green prompts
 and success, pale-green messages, cyan tools, amber warnings, and red errors.
 The shared CSS adds near-black graphical surfaces and retains Colossus typography
@@ -95,6 +96,13 @@ can supply a `linkComponent` that validates navigation through their own authori
 Desktop uses its browser controller. VS Code keeps generated links inert. Shared
 styles respond to the same palette and text-size preferences as settings controls.
 
+`ControlPlaneFrame` uses owned shadcn sidebar, menu, sheet, tooltip, collapsible,
+and resizable foundations. Import `styles/control-plane.css` in the web host; its
+workbench styles stay out of Desktop and editor bundles. Shared controls retain
+native behavior and the existing palette and text-size tokens. Add future shadcn
+components to this package as they are adopted, with relative internal imports,
+exact Radix dependencies, and no persistence or transport in the foundation.
+
 `ControlPlaneFrame` supplies the web primary rail, an optional scoped sidebar, content
 header, and configurable classification banner. Navigation, authentication, projects,
 and settings remain web/server decisions. It exposes no transport or persistence.
@@ -119,3 +127,32 @@ and its stylesheet from `@colossus/ui/styles/automations.css`. `AutomationSurfac
 the owned shadcn table, input, badge, and button foundations. Hosts provide released
 records, labels, icons, disabled states, and callbacks; they retain prompts, timing
 conversion, pagination, thread creation, execution, and capability decisions.
+
+Workflow and schedule screens, review dialogs, typed input controls, calendar timing,
+logic diagrams, and run-history presentation live under `src/automations`. Import
+individual screens through `@colossus/ui/automations/WorkflowsSurface` or
+`@colossus/ui/automations/SchedulesSurface`, and wrap them in `WorkflowHostProvider`.
+The host adapter owns authenticated operations, selection epochs, capability facts,
+model-profile discovery, and unknown-outcome classification. Shared forms retain a
+reviewed immutable request and its retry identity; they never retry a mutation
+implicitly. Desktop supplies its native bridge, and Web supplies project/node-scoped
+controller requests.
+
+Session headers, status presentation, seven session tabs, resource views, and topology
+presentation are shared too. Hosts supply released run/resource models and link
+navigation. A missing resource API stays explicitly unavailable; shared presentation
+does not infer private context from assistant prose. The Artifact Library renders
+released metadata supplied by its host. The appearance screen takes controlled values
+and callbacks; storage, system-theme observation, and permission choices remain local
+to each application. Palette parsing and contrast validation are shared foundations.
+
+`ResearchControls` shares Desktop’s depth and evidence-source presentation. Hosts
+supply selected values, callbacks, and available lanes. Web obtains Research support
+from the selected runtime’s authenticated capability response, fences it to that
+connection, and intersects evidence choices with the reported tool ceiling. Missing
+support never changes the user’s requested mode into Execute.
+
+`GoalControls` shares the bounded iteration input between Desktop and Web. Hosts
+offer standalone Goal mode only after authenticated `goal.create` discovery, capture
+its 1–50 iteration budget in the durable run request, and retain queue, permission,
+and cancellation decisions. A Plan is not required.

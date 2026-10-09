@@ -24,3 +24,14 @@ export type {
   MarkdownLink,
   MarkdownContentProps,
 } from "./components/MarkdownContent.js";
+
+export {
+  WorkSurfaceHeader,
+  SessionWorkspaceTabs,
+  SESSION_WORKSPACE_VIEWS,
+  WORK_STATUS_PRESENTATIONS,
+} from "./components/WorkPresentation.js";
+export type {
+  SessionWorkspaceView,
+  WorkStatusPresentation,
+} from "./components/WorkPresentation.js";

@@ -244,7 +244,8 @@ impl Runtime {
             .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
-    /// Fetch one exact policy-allowed URL into quarantine and post-effect authorization.
+    /// Fetch a policy-allowed URL with the configured, permit-checked redirect limit.
+    /// The final bounded body remains quarantined until post-effect authorization.
     pub async fn http_get(&self, url: &str) -> Result<ReleasedEffectResult, RuntimeError> {
         let mut request = effect_request(
             Actor {

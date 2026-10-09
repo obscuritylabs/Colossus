@@ -1,3 +1,4 @@
+import { WORK_STATUS_PRESENTATIONS } from "@colossus/ui/conversation";
 import type { RunView } from "./state";
 import type {
   ArtifactReference,
@@ -85,53 +86,9 @@ export interface PresentedArtifact {
 
 type RunViewSource = RunView | Iterable<RunView> | null | undefined;
 
-const STATUS_PRESENTATIONS: Readonly<Record<RunStatus, StatusPresentation>> = {
-  queued: {
-    label: "Queued",
-    copy: "Waiting to start",
-    tone: "neutral",
-  },
-  running: {
-    label: "In progress",
-    copy: "Work is in progress",
-    tone: "progress",
-  },
-  waiting: {
-    label: "Needs input",
-    copy: "Waiting for your input",
-    tone: "attention",
-  },
-  cancelling: {
-    label: "Stopping",
-    copy: "Stopping safely",
-    tone: "attention",
-  },
-  completed: {
-    label: "Completed",
-    copy: "Work completed",
-    tone: "success",
-  },
-  failed: {
-    label: "Failed",
-    copy: "Work failed",
-    tone: "danger",
-  },
-  cancelled: {
-    label: "Cancelled",
-    copy: "Work cancelled",
-    tone: "neutral",
-  },
-  interrupted: {
-    label: "Interrupted",
-    copy: "Work was interrupted",
-    tone: "attention",
-  },
-  outcome_unknown: {
-    label: "Outcome unknown",
-    copy: "Verify the external outcome before retrying",
-    tone: "danger",
-  },
-};
+const STATUS_PRESENTATIONS = WORK_STATUS_PRESENTATIONS as Readonly<
+  Record<RunStatus, StatusPresentation>
+>;
 
 const TOOL_STATE_PRESENTATIONS: Readonly<
   Record<ToolActivityState, StatusPresentation>
@@ -258,7 +215,9 @@ export function runModeLabel(mode: RunMode): string {
     ? "Plan"
     : mode === "research"
       ? "Research"
-      : "Execute";
+      : mode === "goal"
+        ? "Goal"
+        : "Execute";
 }
 
 export function agentRoleLabel(role: string): string {

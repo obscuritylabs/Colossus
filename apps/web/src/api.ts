@@ -80,6 +80,7 @@ export interface ThreadDetailResponse {
   thread: Thread;
   tasks: Task[];
   messages: ThreadMessage[];
+  message_authors?: Record<string, { user_id: string; display_name: string }>;
   next_task_cursor?: string | null;
   next_message_cursor?: string | null;
 }
@@ -122,6 +123,7 @@ export interface Interaction {
 }
 export interface Run {
   run_id: string;
+  session_id?: string;
   title: string;
   status: string;
   created_at: string;

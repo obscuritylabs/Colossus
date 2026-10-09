@@ -9,6 +9,7 @@ pub mod config;
 mod connection;
 mod http;
 mod observability;
+mod resources;
 /// Composed HTTP/OIDC and mutual-TLS server lifecycle.
 pub mod server;
 mod settings;

@@ -6,6 +6,17 @@ import type { RunView } from "../state";
 import type { Run } from "../types";
 import type { ArtifactViewItem } from "./ArtifactWorkspace";
 import { WorkSurface } from "./WorkSurface";
+import type { ToolOption } from "./tools/ToolSwitcher";
+
+// Portal interaction belongs to browser acceptance. Capture the host's released
+// tool options here without relying on hidden menu markup in server rendering.
+const toolSwitcher = vi.hoisted(() =>
+  vi.fn((_props: { options: ToolOption[] }) => null),
+);
+vi.mock("./tools/ToolSwitcher", () => ({ ToolSwitcher: toolSwitcher }));
+const offeredTools = () =>
+  (toolSwitcher.mock.calls.at(-1)?.[0] as unknown as { options: ToolOption[] })
+    .options;
 
 function renderSurface(
   artifacts: readonly ArtifactViewItem[],
@@ -142,13 +153,10 @@ function renderSurface(
 
 describe("WorkSurface side panels", () => {
   it("offers Active shells only when the runtime advertises process sessions", () => {
-    expect(renderSurface([])).not.toContain("Active shells");
-    expect(
-      renderSurface([], undefined, false, false, "execute", false),
-    ).not.toContain("Active shells");
-    expect(
-      renderSurface([], undefined, false, false, "execute", true),
-    ).toContain("Active shells");
+    renderSurface([], undefined, false, false, "execute", false);
+    expect(offeredTools().some((tool) => tool.id === "shells")).toBe(false);
+    renderSurface([], undefined, false, false, "execute", true);
+    expect(offeredTools().some((tool) => tool.id === "shells")).toBe(true);
   });
   it("offers released Research citations in the resizable side panel", () => {
     const markup = renderSurface([], undefined, false, true, "research");
@@ -179,9 +187,9 @@ describe("WorkSurface side panels", () => {
     expect(markup.match(/aria-controls="work-side-drawer"/g)).toHaveLength(1);
     expect(markup).toContain('aria-expanded="false"');
     expect(markup).toContain("Open files panel");
-    expect(markup).toContain("Outputs produced in this conversation");
-    expect(markup).toContain('<span class="tool-count"');
-    expect(markup).toContain(">0</span>");
+    expect(offeredTools()).toContainEqual(
+      expect.objectContaining({ id: "artifacts", count: 0 }),
+    );
     expect(markup).toContain('<div class="work-layout">');
     expect(markup).not.toContain("is-work-drawer-open");
   });
@@ -198,8 +206,9 @@ describe("WorkSurface side panels", () => {
       },
     ]);
 
-    expect(markup).toContain("Outputs produced in this conversation");
-    expect(markup).toContain(">1</span>");
+    expect(offeredTools()).toContainEqual(
+      expect.objectContaining({ id: "artifacts", count: 1 }),
+    );
     expect(markup).not.toContain("is-work-drawer-open");
   });
 
@@ -207,7 +216,7 @@ describe("WorkSurface side panels", () => {
     const markup = renderSurface([], { files: false, artifacts: false });
 
     expect(markup).not.toContain("Open files panel");
-    expect(markup).not.toContain("Outputs produced in this conversation");
+    expect(offeredTools().some((tool) => tool.id === "artifacts")).toBe(false);
     expect(markup).not.toContain('id="work-side-drawer"');
   });
 

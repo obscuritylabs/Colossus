@@ -114,7 +114,7 @@ impl CloudPostgresStore {
             if legacy.present{return Err(TransactionError::Store(StoreError::Adapter("cloud storage requires a distinct schema from runtime journals".into())));}
             conn.batch_execute("CREATE TABLE IF NOT EXISTS cloud_schema_migrations(version BIGINT PRIMARY KEY,checksum TEXT NOT NULL,applied_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp())").await?;
             #[derive(diesel::QueryableByName)]struct Applied{#[diesel(sql_type=Text)]checksum:String}
-            for (version,sql) in [(1_i64,include_str!("../migrations/00000000000001_cloud_relational/up.sql"))] {
+            for (version,sql) in [(1_i64,include_str!("../migrations/00000000000001_cloud_relational/up.sql")),(2_i64,include_str!("../migrations/00000000000002_runtime_resources/up.sql"))] {
             let checksum=entities::digest(&serde_json::Value::String(sql.into())).map_err(TransactionError::Store)?;
             match sql_query("SELECT checksum FROM cloud_schema_migrations WHERE version=$1").bind::<BigInt,_>(version).get_result::<Applied>(conn).await{
                 Ok(applied) if applied.checksum==checksum=>{},
@@ -153,6 +153,42 @@ impl TransactionError {
 
 #[async_trait::async_trait]
 impl CloudStore for CloudPostgresStore {
+    async fn resource_connect(&self, lease: &ConnectionLease, enabled: bool) -> CloudResult<()> {
+        self.connect_resources(lease, enabled).await
+    }
+    async fn resource_submit(
+        &self,
+        caller: &colossus_cloud::CloudCaller,
+        lease: &ConnectionLease,
+        operation: colossus_cloud_protocol::ResourceOperation,
+        now: u64,
+    ) -> CloudResult<String> {
+        self.submit_resource(caller, lease, operation, now).await
+    }
+    async fn resource_take(
+        &self,
+        lease: &ConnectionLease,
+        now: u64,
+    ) -> CloudResult<Vec<RuntimeResourceRequest>> {
+        self.take_resources(lease, now).await
+    }
+    async fn resource_complete(
+        &self,
+        lease: &ConnectionLease,
+        id: &str,
+        reply: colossus_cloud_protocol::ResourceReply,
+        now: u64,
+    ) -> CloudResult<()> {
+        self.complete_resource(lease, id, reply, now).await
+    }
+    async fn resource_read(
+        &self,
+        caller: &colossus_cloud::CloudCaller,
+        id: &str,
+    ) -> CloudResult<Option<colossus_cloud_protocol::ResourceReply>> {
+        self.read_resource(caller, id).await
+    }
+
     async fn user_accounts(&self, user_ids: &[String]) -> CloudResult<Vec<EntityRecord>> {
         let mut conn = self.pool.get().await.map_err(|_| CloudError::Storage)?;
         entities::accounts(&mut conn, user_ids).await

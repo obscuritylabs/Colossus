@@ -73,6 +73,7 @@ pub(super) struct InstructionSnapshot {
 /// Goal creation assigns its durable identifier after the run has started. Keeping these
 /// layers in a pre-finalization value lets Goal Mode add that immutable identifier without
 /// re-reading either AGENTS.md file or creating a second snapshot identity.
+#[derive(Clone)]
 pub(super) struct CapturedAgentInstructions {
     sources: Vec<InstructionSourceSnapshot>,
     plugins: Option<Arc<PluginRunCatalog>>,

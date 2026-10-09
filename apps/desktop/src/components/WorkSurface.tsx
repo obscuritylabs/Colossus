@@ -2,7 +2,6 @@ import { AgentInboxesView } from "./AgentInboxesView";
 import { type AgentInboxProps } from "@colossus/ui/agent-inbox";
 import {
   IconArrowDown,
-  IconClock,
   IconFiles,
   IconArrowsMaximize,
   IconArrowsMinimize,
@@ -34,6 +33,7 @@ import { ActiveShells } from "./tools/ActiveShells";
 import { useShellSessions, shellIsActive } from "../shellSessions";
 
 import { WorkWelcome } from "@colossus/ui";
+import { WorkSurfaceHeader } from "@colossus/ui/conversation";
 import {
   MAX_ASIDE_PANE_WIDTH,
   MIN_ASIDE_PANE_WIDTH,
@@ -44,7 +44,7 @@ import {
   storeAsidePaneWidth,
 } from "../aside-pane-width";
 import { isNearConversationLatest } from "../conversation-follow";
-import { presentRunStatus, shortDateLabel } from "../presenters";
+import { presentRunStatus, runModeLabel, shortDateLabel } from "../presenters";
 import {
   canContinuePlanFromRun,
   selectPlanForAutomaticDetails,
@@ -434,14 +434,14 @@ export function WorkSurface({
   }
 
   useEffect(() => {
-    changeSessionWorkspaceView(initialSessionWorkspaceView);
+    // Reflect host navigation without emitting another navigation event. Host
+    // callbacks can change during live refresh and must not reset this view.
+    setSessionWorkspaceView(initialSessionWorkspaceView);
     setSelectedPlanId(null);
     updateFollowingLatest(true);
-  }, [
-    changeSessionWorkspaceView,
-    initialSessionWorkspaceView,
-    selectedSessionId,
-  ]);
+  }, [initialSessionWorkspaceView, selectedSessionId]);
+
+  useEffect(() => setAsideDraft(null), [selectedSessionId]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
@@ -652,11 +652,12 @@ export function WorkSurface({
     for (const { element } of obscured) {
       element.setAttribute("inert", "");
     }
-    const focusTimer = window.setTimeout(
-      () => drawerCloseRef.current?.focus(),
-      180,
-    );
+    const focusTimer = window.setTimeout(() => {
+      if (!document.activeElement?.closest('[role="menu"]'))
+        drawerCloseRef.current?.focus();
+    }, 180);
     function onDrawerKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.defaultPrevented) return;
       if (event.key === "Escape") {
         event.preventDefault();
         if (activeDrawer === "aside") {
@@ -804,10 +805,13 @@ export function WorkSurface({
       onSelectArtifact(artifacts[0].id);
     }
     if (drawer === "aside" && run !== undefined) {
-      setAsideDraft({
-        sourceRunId: run.runId,
-        quote: "",
-      });
+      setAsideDraft(
+        (current) =>
+          current ?? {
+            sourceRunId: run.runId,
+            quote: "",
+          },
+      );
       void onLoadAsides(run.sessionId);
     }
     setActiveDrawer(drawer);
@@ -970,16 +974,17 @@ export function WorkSurface({
           },
         ]
       : []),
-    ...(browser.snapshot.available
-      ? [
-          {
-            id: "browser" as const,
-            label: "Browser",
-            description: "Websites and local previews",
-            icon: IconWorld,
-          },
-        ]
-      : []),
+    {
+      id: "browser",
+      label: "Browser",
+      description: browser.snapshot.available
+        ? "Websites and local previews"
+        : browser.loading
+          ? "Checking browser availability…"
+          : browser.error || "Browser preview is not enabled in this build",
+      icon: IconWorld,
+      disabled: !browser.snapshot.available,
+    },
     ...(shellScope
       ? [
           {
@@ -1071,136 +1076,117 @@ export function WorkSurface({
       id="primary-workspace"
       tabIndex={-1}
     >
-      <header className="surface-header work-surface-header">
-        <div className="surface-title-copy">
-          <p className="surface-breadcrumb">
-            <span>Work</span>
-            <span aria-hidden="true">/</span>
-            <span>
-              {forkDraft ? "Fork draft" : (status?.label ?? "New work")}
+      <WorkSurfaceHeader
+        title={title}
+        statusLabel={forkDraft ? "Fork draft" : (status?.label ?? "New work")}
+        status={status ?? undefined}
+        startedLabel={startedLabel}
+        modeLabel={run ? `${runModeLabel(run.mode)} mode` : undefined}
+        breadcrumbTrailing={!composerVisible ? gitControl : null}
+        actions={
+          <>
+            <button
+              ref={workNavigationTriggerRef}
+              className="button secondary compact work-navigation-button"
+              type="button"
+              aria-label="Open work navigation"
+              aria-controls="work-navigation"
+              aria-expanded={workNavigationOpen}
+              onClick={onOpenWorkNavigation}
+            >
+              <IconMenu2 size={16} stroke={1.8} aria-hidden="true" />
+              <span className="compact-action-copy">Work</span>
+            </button>
+            <span
+              className={`connection-badge connection-${connection.state}`}
+              title={connection.message}
+            >
+              <IconPlugConnected size={15} stroke={1.8} aria-hidden="true" />
+              {connection.state === "connected"
+                ? "Agent online"
+                : "Disconnected"}
             </span>
-            {!composerVisible ? gitControl : null}
-          </p>
-          <h2>{title}</h2>
-          {run !== undefined ? (
-            <p className="surface-run-meta">
-              <span className={`tone-${status?.tone ?? "neutral"}`}>
-                {status?.copy}
-              </span>
-              {startedLabel !== null ? (
-                <span>
-                  <IconClock size={12} stroke={1.7} aria-hidden="true" />
-                  Started {startedLabel}
-                </span>
-              ) : null}
-              <span>
-                {run.mode === "plan"
-                  ? "Plan mode"
-                  : run.mode === "research"
-                    ? "Research mode"
-                    : "Execute mode"}
-              </span>
-            </p>
-          ) : null}
-        </div>
-        <div className="surface-header-actions">
-          <button
-            ref={workNavigationTriggerRef}
-            className="button secondary compact work-navigation-button"
-            type="button"
-            aria-label="Open work navigation"
-            aria-controls="work-navigation"
-            aria-expanded={workNavigationOpen}
-            onClick={onOpenWorkNavigation}
-          >
-            <IconMenu2 size={16} stroke={1.8} aria-hidden="true" />
-            <span className="compact-action-copy">Work</span>
-          </button>
-          <span
-            className={`connection-badge connection-${connection.state}`}
-            title={connection.message}
-          >
-            <IconPlugConnected size={15} stroke={1.8} aria-hidden="true" />
-            {connection.state === "connected" ? "Agent online" : "Disconnected"}
-          </span>
-          <div className="work-tool-shortcuts" aria-label="Quick tools">
-            {filesAvailable ? (
-              <button
-                ref={filesTriggerRef}
-                type="button"
-                className="icon-button"
-                title="Files"
-                aria-label={
-                  activeDrawer === "files"
-                    ? "Close files panel"
-                    : "Open files panel"
-                }
-                aria-controls="work-side-drawer"
-                aria-expanded={activeDrawer === "files"}
-                onClick={() => toggleDrawer("files")}
-              >
-                <IconFiles size={18} aria-hidden="true" />
-              </button>
-            ) : null}
-            {browser.snapshot.available ? (
-              <button
-                ref={browserTriggerRef}
-                type="button"
-                className="icon-button"
-                title="Browser"
-                aria-label="Open browser"
-                aria-controls="work-side-drawer"
-                aria-expanded={activeDrawer === "browser"}
-                onClick={() => toggleDrawer("browser")}
-              >
-                <IconWorld size={18} aria-hidden="true" />
-              </button>
-            ) : null}
-            {browserScope &&
-            !shells.error &&
-            !shells.loading &&
-            shells.sessions.some((session) => shellIsActive(session.status)) ? (
-              <button
-                type="button"
-                className="icon-button"
-                title="Active shells"
-                aria-label={`Open active shells (${shells.sessions.filter((session) => shellIsActive(session.status)).length})`}
-                aria-expanded={activeDrawer === "shells"}
-                aria-controls="work-side-drawer"
-                onClick={() => toggleDrawer("shells")}
-              >
-                <IconTerminal2 size={16} aria-hidden="true" />
-                <span className="tool-count">
-                  {
-                    shells.sessions.filter((session) =>
-                      shellIsActive(session.status),
-                    ).length
+            <div className="work-tool-shortcuts" aria-label="Quick tools">
+              {filesAvailable ? (
+                <button
+                  ref={filesTriggerRef}
+                  type="button"
+                  className="icon-button"
+                  title="Files"
+                  aria-label={
+                    activeDrawer === "files"
+                      ? "Close files panel"
+                      : "Open files panel"
                   }
-                </span>
-              </button>
-            ) : null}
-            {terminalSupported ? (
-              <button
-                type="button"
-                className="icon-button"
-                title="Terminal"
-                aria-label="Open terminal"
-                aria-controls="work-side-drawer"
-                aria-expanded={activeDrawer === "terminal"}
-                onClick={() => toggleDrawer("terminal")}
-              >
-                <IconTerminal2 size={18} aria-hidden="true" />
-              </button>
-            ) : null}
-            <ToolSwitcher
-              options={toolOptions}
-              active={activeDrawer}
-              onSelect={(tool) => toggleDrawer(tool, true)}
-              triggerRef={toolsTriggerRef}
-            />
-          </div>
-        </div>
-      </header>
+                  aria-controls="work-side-drawer"
+                  aria-expanded={activeDrawer === "files"}
+                  onClick={() => toggleDrawer("files")}
+                >
+                  <IconFiles size={18} aria-hidden="true" />
+                </button>
+              ) : null}
+              {browser.snapshot.available ? (
+                <button
+                  ref={browserTriggerRef}
+                  type="button"
+                  className="icon-button"
+                  title="Browser"
+                  aria-label="Open browser"
+                  aria-controls="work-side-drawer"
+                  aria-expanded={activeDrawer === "browser"}
+                  onClick={() => toggleDrawer("browser")}
+                >
+                  <IconWorld size={18} aria-hidden="true" />
+                </button>
+              ) : null}
+              {browserScope &&
+              !shells.error &&
+              !shells.loading &&
+              shells.sessions.some((session) =>
+                shellIsActive(session.status),
+              ) ? (
+                <button
+                  type="button"
+                  className="icon-button"
+                  title="Active shells"
+                  aria-label={`Open active shells (${shells.sessions.filter((session) => shellIsActive(session.status)).length})`}
+                  aria-expanded={activeDrawer === "shells"}
+                  aria-controls="work-side-drawer"
+                  onClick={() => toggleDrawer("shells")}
+                >
+                  <IconTerminal2 size={16} aria-hidden="true" />
+                  <span className="tool-count">
+                    {
+                      shells.sessions.filter((session) =>
+                        shellIsActive(session.status),
+                      ).length
+                    }
+                  </span>
+                </button>
+              ) : null}
+              {terminalSupported ? (
+                <button
+                  type="button"
+                  className="icon-button"
+                  title="Terminal"
+                  aria-label="Open terminal"
+                  aria-controls="work-side-drawer"
+                  aria-expanded={activeDrawer === "terminal"}
+                  onClick={() => toggleDrawer("terminal")}
+                >
+                  <IconTerminal2 size={18} aria-hidden="true" />
+                </button>
+              ) : null}
+              <ToolSwitcher
+                options={toolOptions}
+                active={activeDrawer}
+                onSelect={(tool) => toggleDrawer(tool, true)}
+                triggerRef={toolsTriggerRef}
+              />
+            </div>
+          </>
+        }
+      />
 
       {view === undefined ? null : (
         <SessionWorkspaceTabs

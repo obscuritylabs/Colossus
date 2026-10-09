@@ -709,12 +709,17 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       views.set(
         run.runId,
         current === undefined
-          ? newView(run, retainedInteractions)
+          ? {
+              ...newView(run, retainedInteractions),
+              localPrompt: action.details.initialPrompt ?? null,
+            }
           : {
               ...current,
               run: compactRun(run),
               ...snapshotOutput(run, current),
               pendingInteractions: retainedInteractions,
+              localPrompt:
+                current.localPrompt ?? action.details.initialPrompt ?? null,
             },
       );
       return {

@@ -1012,6 +1012,44 @@ surprise: true
 }
 
 #[test]
+fn network_redirect_limit_defaults_and_rejects_unbounded_configuration() {
+    let minimal = "schemaVersion: 3\nstorage:\n  path: state.redb\n";
+    assert_eq!(
+        RuntimeConfig::from_yaml(minimal)
+            .expect("default")
+            .network
+            .max_redirects,
+        10
+    );
+    assert_eq!(
+        RuntimeConfig::from_yaml(&format!("{minimal}network: {{}}\n"))
+            .expect("sparse")
+            .network
+            .max_redirects,
+        10
+    );
+    for limit in [0, 1, 10, 20] {
+        let config =
+            RuntimeConfig::from_yaml(&format!("{minimal}network:\n  maxRedirects: {limit}\n"))
+                .expect("bounded limit");
+        assert_eq!(config.network.max_redirects, limit);
+        assert!(
+            config
+                .to_resolved_yaml()
+                .expect("expanded config")
+                .contains(&format!("maxRedirects: {limit}"))
+        );
+    }
+    for limit in ["21", "-1", "1000000000000000000000", "null", "1.5"] {
+        assert!(
+            RuntimeConfig::from_yaml(&format!("{minimal}network:\n  maxRedirects: {limit}\n"))
+                .is_err(),
+            "accepted {limit}"
+        );
+    }
+}
+
+#[test]
 fn sparse_schema_v3_materializes_recursive_defaults_and_show_expands_them() {
     let yaml = r#"
 schemaVersion: 3

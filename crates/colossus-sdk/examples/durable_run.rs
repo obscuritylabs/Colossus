@@ -79,6 +79,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             end_user_id: None,
             role: "primary".to_owned(),
             mode: options.mode,
+            goal_max_iterations: 0,
             research_depth: None,
             research_sources: Vec::new(),
             plan_action: None,

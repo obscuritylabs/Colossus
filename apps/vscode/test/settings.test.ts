@@ -66,6 +66,7 @@ test("every editable preference is registered in the extension manifest with mat
   assert.deepEqual(properties["colossus.appearance.palette"].enum, [
     "editor",
     "colossus",
+    "black",
     "hacker",
   ]);
   assert.deepEqual(properties["colossus.composer.defaultMode"].enum, [
@@ -150,7 +151,7 @@ test("invalid editor settings cannot change run mode or preference defaults", ()
 });
 
 test("all contributed palettes round-trip through host preference validation", () => {
-  for (const palette of ["editor", "colossus", "hacker"] as const) {
+  for (const palette of ["editor", "colossus", "black", "hacker"] as const) {
     const result = readPreferences((key) =>
       key === "appearance.palette" ? palette : undefined,
     );

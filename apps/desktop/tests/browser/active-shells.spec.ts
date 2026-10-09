@@ -176,6 +176,11 @@ test("unsupported runtimes do not poll and removing support cancels polling", as
       }
     ).shellPolling.setScope(null),
   );
+  // React commits the new scope asynchronously; await it before advancing time.
+  await expect(page.getByTestId("shell-polling")).toHaveAttribute(
+    "data-scope",
+    "",
+  );
   await page.clock.runFor(100);
   const stoppedCount = await count();
   await page.clock.runFor(10000);

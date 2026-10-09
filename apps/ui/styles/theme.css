@@ -23,6 +23,7 @@
   --font-size-heading-sm: 0.9375rem;
   --font-size-heading: 1.125rem;
   --font-size-title: 1.5rem;
+  --font-size-work-title: clamp(1.08rem, 1.6vw, 1.35rem);
   --font-size-page-title: 1.875rem;
   --font-size-display: 2.75rem;
   --line-height-tight: 1.25;
@@ -184,13 +185,6 @@
   font-size: 18px;
 }
 
-@media (prefers-contrast: more) {
-  :root {
-    --border: var(--border-strong);
-    --faint: var(--muted);
-  }
-}
-
 /* Neutral dark surfaces for editors and web hosts. Keep Colossus accents. */
 :root[data-theme="dark"][data-palette="neutral"],
 [data-colossus-theme="dark"][data-palette="neutral"] {
@@ -222,6 +216,39 @@
   --code-text: #d4d4d4;
   --code-muted: #969696;
   --code-line-number: #969696;
+}
+
+/* Black uses shadcn neutral surfaces with Colossus action/status accents. */
+:root[data-theme="dark"][data-palette="black"],
+[data-colossus-theme="dark"][data-palette="black"] {
+  --canvas: #0a0a0a;
+  --rail: #0a0a0a;
+  --sidebar: #171717;
+  --main: #0a0a0a;
+  --surface: #171717;
+  --surface-raised: #202020;
+  --surface-muted: #171717;
+  --surface-hover: #262626;
+  --surface-inset: #0a0a0a;
+  --surface-panel: #171717;
+  --surface-header: #171717;
+  --surface-control: #0a0a0a;
+  --surface-editor: #0a0a0a;
+  --surface-selected: #262626;
+  --surface-selected-hover: #303030;
+  --surface-overlay: rgb(0 0 0 / 76%);
+  --text: #e5e5e5;
+  --text-strong: #fafafa;
+  --muted: #a3a3a3;
+  --faint: #a3a3a3;
+  --border: #292929;
+  --border-strong: #525252;
+  --scroll-thumb: #525252;
+  --code-surface: #0a0a0a;
+  --code-header: #171717;
+  --code-text: #e5e5e5;
+  --code-muted: #a3a3a3;
+  --code-line-number: #a3a3a3;
 }
 
 /* TUI Hacker semantic colors; graphical surfaces add near-black depth. */
@@ -283,6 +310,13 @@
   --code-add-text: #70de92;
   --code-delete-surface: rgb(255 95 95 / 10%);
   --code-delete-text: #ffabab;
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --border: var(--border-strong);
+    --faint: var(--muted);
+  }
 }
 
 @media (forced-colors: active) {

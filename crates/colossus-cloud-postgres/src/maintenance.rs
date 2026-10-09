@@ -35,7 +35,8 @@ impl CloudPostgresStore {
             for flow in &flows{let key=EntityKey{kind:EntityKind::AuthFlow,project_id:flow.project_id.clone(),parent_id:(!flow.parent_id.is_empty()).then(||flow.parent_id.clone()),id:flow.id.clone()};if !flow.deleted{entities::delete(conn,&key,flow.revision as u64).await?;}
                 sql_query("DELETE FROM oidc_flows WHERE project_id=$1 AND parent_id=$2 AND id=$3").bind::<Text,_>(&flow.project_id).bind::<Text,_>(&flow.parent_id).bind::<Text,_>(&flow.id).execute(conn).await?;
             }
-            let report=CloudMaintenanceReport{published_outbox:published,removed_outbox:removed,expired_sessions:sessions,expired_auth_flows:flows.len()};
+            let resources=sql_query("WITH expired AS(SELECT request_id FROM runtime_resource_requests WHERE expires_at<$1-60 ORDER BY expires_at,request_id LIMIT $2 FOR UPDATE SKIP LOCKED) DELETE FROM runtime_resource_requests WHERE request_id IN(SELECT request_id FROM expired)").bind::<BigInt,_>(now).bind::<BigInt,_>(policy.batch_limit as i64).execute(conn).await?;
+            let report=CloudMaintenanceReport{expired_resource_requests:resources,published_outbox:published,removed_outbox:removed,expired_sessions:sessions,expired_auth_flows:flows.len()};
             if published+removed+sessions+flows.len()>0 {
                 let key=EntityKey{kind:EntityKind::AuthFlow,project_id:"__maintenance".into(),parent_id:None,id:"operational".into()};
                 let revision=match entities::read(conn,&key).await{Ok(record)=>record.revision,Err(CloudError::NotFound)=>0,Err(_)=>return Err(TransactionError::Store(StoreError::Adapter("maintenance audit unavailable".into())))};

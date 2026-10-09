@@ -15,6 +15,12 @@
 /* Inline aliases keep all palettes and text-size preferences live, including portals. */
 @theme inline {
   --color-*: initial;
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--text);
+  --color-sidebar-accent: var(--surface-selected);
+  --color-sidebar-accent-foreground: var(--accent-text);
+  --color-sidebar-border: var(--border);
+  --color-sidebar-ring: var(--cyan);
   --color-background: var(--surface);
   --color-foreground: var(--text);
   --color-primary: var(--blue);
@@ -45,4 +51,3 @@
   --radius-md: var(--radius);
   --radius-lg: var(--radius-lg);
 }
-@import "./control-plane.css";

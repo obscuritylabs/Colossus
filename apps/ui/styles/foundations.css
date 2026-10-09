@@ -1,0 +1,273 @@
+/* Semantic adaptations of the owned shadcn foundations. */
+[data-slot="sidebar-menu-button"],
+[data-slot="sidebar-menu-sub-button"] {
+  font-family: var(--font-sans);
+  line-height: var(--line-height-body);
+}
+[data-slot="sidebar-menu-button"] {
+  min-height: var(--control-height-compact);
+  color: var(--text);
+}
+[data-slot="sidebar-menu-button"]:focus-visible,
+[data-slot="sidebar-menu-sub-button"]:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+[data-slot="sidebar-menu-sub-button"] {
+  height: auto;
+  min-height: var(--control-height-compact);
+}
+[data-slot="sidebar-menu-button"][data-active="true"],
+[data-slot="sidebar-menu-sub-button"][data-active="true"] {
+  background: var(--surface-selected);
+  color: var(--text-strong);
+}
+[data-slot="sidebar-menu"],
+[data-slot="sidebar-menu-sub"] {
+  list-style: none;
+}
+[data-slot="sidebar-menu"] {
+  padding: 0;
+  margin: 0;
+}
+[data-slot="sidebar-menu-sub"] {
+  margin: 0;
+}
+[data-slot="sheet-content"] {
+  border-color: var(--border);
+  font: 400 var(--font-size-body)/var(--line-height-body) var(--font-sans);
+}
+[data-slot="sheet-overlay"] {
+  background: var(--surface-overlay);
+}
+[data-slot="sheet-title"] {
+  color: var(--text-strong);
+  font-size: var(--font-size-heading);
+}
+[data-slot="sheet-description"] {
+  color: var(--muted);
+}
+[data-slot="tooltip-content"] {
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: var(--font-size-caption);
+}
+[data-slot="tabs-list"] {
+  min-height: var(--control-height-compact);
+}
+[data-slot="tabs-trigger"] {
+  min-height: var(--control-height-compact);
+  font-size: var(--font-size-body-sm);
+}
+[data-slot="tabs-trigger"][data-state="active"] {
+  color: var(--text-strong);
+}
+[data-slot="tabs-list"][data-variant="line"]
+  [data-slot="tabs-trigger"][data-state="active"]::after {
+  background: var(--blue);
+}
+[data-slot="toggle-group-item"] {
+  min-height: var(--control-height-compact);
+  font-size: var(--font-size-body-sm);
+}
+.shared-workspace-scope[data-slot="toggle-group"] {
+  width: 100%;
+  gap: 2px;
+  border: 1px solid var(--border);
+  padding: 2px;
+  border-radius: var(--radius-sm);
+}
+.shared-workspace-scope [data-slot="toggle-group-item"] {
+  flex: 1;
+  border: 0;
+  border-radius: var(--radius-sm);
+  min-height: var(--icon-control-size);
+}
+.shared-workspace-scope [data-slot="toggle-group-item"]:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 0;
+}
+[data-slot="resizable-handle"] {
+  flex: none;
+  border-color: var(--border);
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="sidebar"],
+  [data-slot="sheet-content"],
+  [data-slot="tabs-trigger"] {
+    transition: none;
+    animation: none;
+  }
+}
+.ui-sidebar-provider {
+  display: flex;
+  width: 100%;
+  min-height: 0;
+}
+.ui-sidebar {
+  display: flex;
+  flex-direction: column;
+  width: var(--sidebar-width);
+  background: var(--sidebar);
+  color: var(--text);
+}
+.ui-sidebar[data-collapsible="offcanvas"] {
+  display: none;
+}
+.ui-sidebar[data-collapsible="icon"] {
+  width: 3rem;
+}
+.ui-sidebar-inset {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  background: var(--main);
+}
+.ui-sidebar-header,
+.ui-sidebar-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+.ui-sidebar-content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+}
+.ui-sidebar-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.ui-sidebar-menu-item {
+  position: relative;
+  min-width: 0;
+}
+.ui-sidebar-menu-button,
+.ui-sidebar-menu-sub-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: 500 var(--font-size-body-sm)/var(--line-height-body) var(--font-sans);
+  text-decoration: none;
+  cursor: pointer;
+}
+.ui-sidebar-menu-button:hover,
+.ui-sidebar-menu-sub-button:hover {
+  background: var(--surface-hover);
+}
+.ui-sidebar-menu-button:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: default;
+}
+.ui-sheet-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: var(--surface-overlay);
+}
+.ui-sheet-content {
+  position: fixed;
+  z-index: 51;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  outline: none;
+}
+.ui-sheet-content[data-side="left"] {
+  inset: 0 auto 0 0;
+  width: min(90vw, 24rem);
+  border-right: 1px solid var(--border);
+}
+.ui-sheet-content[data-side="right"] {
+  inset: 0 0 0 auto;
+  width: min(90vw, 24rem);
+  border-left: 1px solid var(--border);
+}
+.ui-sheet-content[data-side="top"] {
+  inset: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+}
+.ui-sheet-content[data-side="bottom"] {
+  inset: auto 0 0;
+  border-top: 1px solid var(--border);
+}
+.ui-sheet-close-button {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+}
+.ui-sheet-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px;
+}
+.ui-sheet-footer {
+  margin-top: auto;
+  padding: 16px;
+  display: flex;
+  gap: 8px;
+}
+.ui-tooltip-content {
+  z-index: 60;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: var(--font-size-caption);
+  max-width: 22rem;
+}
+.ui-tooltip-arrow {
+  fill: var(--surface-raised);
+}
+.ui-resizable-panel-group {
+  display: flex;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+.ui-resizable-panel-group[aria-orientation="vertical"] {
+  flex-direction: column;
+}
+.ui-resizable-handle {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1px;
+  background: var(--border);
+}
+.ui-resizable-handle[aria-orientation="horizontal"] {
+  height: 1px;
+  width: 100%;
+}
+.ui-resizable-handle:focus-visible {
+  outline: 2px solid var(--cyan);
+}
+.ui-resizable-grip {
+  width: 4px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: var(--border-strong);
+}

@@ -12,7 +12,7 @@ pub struct RuntimeConfig {
     pub access: AccessConfig,
     /// Canonical journal and key settings.
     pub storage: StorageConfig,
-    /// Shared outbound-network trust settings.
+    /// Shared outbound-network trust and brokered HTTP redirect settings.
     #[serde(default)]
     pub network: NetworkConfig,
     /// Optional durable external audit evidence export.
@@ -65,16 +65,29 @@ pub struct RuntimeConfig {
     pub sandbox: SandboxConfig,
 }
 
-/// Shared trust settings for Colossus-owned outbound network clients.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+/// Shared trust settings and brokered HTTP redirect bounds.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct NetworkConfig {
+    /// Redirects followed by bodyless brokered HTTP GET/HEAD requests (0 disables them).
+    pub max_redirects: usize,
     /// Optional PEM CA bundle added to the built-in public trust roots.
     pub ca_bundle_path: Option<PathBuf>,
     /// PEM client certificate chain, paired with `clientKeyPath` for outbound mTLS.
     pub client_certificate_path: Option<PathBuf>,
     /// PEM private key for the outbound client certificate.
     pub client_key_path: Option<PathBuf>,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            max_redirects: colossus_sandbox::DEFAULT_HTTP_MAX_REDIRECTS,
+            ca_bundle_path: None,
+            client_certificate_path: None,
+            client_key_path: None,
+        }
+    }
 }
 
 /// Durable audit evidence export configuration.
@@ -1084,6 +1097,12 @@ impl RuntimeConfig {
                     "provider profile {name} requires positive timeoutMs and generationTimeoutMs at least timeoutMs"
                 )));
             }
+        }
+        if config.network.max_redirects > colossus_sandbox::MAX_HTTP_REDIRECTS {
+            return Err(RuntimeError::Config(format!(
+                "network.maxRedirects must be at most {} (0 disables redirects)",
+                colossus_sandbox::MAX_HTTP_REDIRECTS
+            )));
         }
         if config
             .network

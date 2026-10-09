@@ -1448,6 +1448,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "sysinfo",
  "tempfile",
  "tokio",
  "tokio-stream",
@@ -2060,10 +2061,12 @@ dependencies = [
  "nix 0.31.3",
  "nono",
  "rappct",
+ "rcgen",
  "regex",
  "reqwest 0.12.28",
  "rmcp",
  "rustix 1.1.4",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2072,6 +2075,7 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "tokio",
+ "tokio-rustls",
  "uuid",
 ]
 

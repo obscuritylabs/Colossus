@@ -115,6 +115,17 @@ fn verify_row(project: &str, row: &AuditRow) -> Result<(), StoreError> {
             row.content_digest,
             row.previous_hash
         ]))?,
+        "runtime_resource_requests" => entities::digest(&serde_json::json!([
+            "runtime_resource_requests",
+            project,
+            row.parent_id,
+            row.id,
+            row.revision,
+            row.actor,
+            row.operation,
+            row.content_digest,
+            row.previous_hash
+        ]))?,
         "sync_cursors" => entities::digest(&serde_json::json!([
             "sync_cursors",
             project,

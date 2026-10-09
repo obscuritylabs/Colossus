@@ -303,16 +303,27 @@ pub(crate) async fn get_run(
     let request = request.into_sdk()?;
     let target = target(&state, &target_id).await?;
     let _unary_slot = unary_slot(&target.target)?;
-    let mut response = target
+    let cloud = target.target.is_cloud_conversation(&request.run_id);
+    let reader = target
         .target
-        .client
+        .conversation_reader(&request.run_id)
+        .map_err(CommandErrorDto::from_api)?;
+    let mut response = reader
         .get_run(request)
         .await
         .map_err(CommandErrorDto::from_api)?;
+    let initial_prompt = if cloud {
+        crate::conversation_runs::initial_prompt(reader.as_ref(), &response.run).await
+    } else {
+        None
+    };
     state
         .bind_runs(&target, vec![response.run.run_id.clone()])
         .await;
     for interaction in &mut response.pending_interactions {
+        if cloud {
+            interaction.respondable_by_caller = false;
+        }
         if let Some(resolved) = crate::remembered_approvals::apply_saved(
             &state,
             &target.target,
@@ -327,9 +338,10 @@ pub(crate) async fn get_run(
     response
         .pending_interactions
         .retain(|interaction| interaction.status == colossus_sdk::InteractionStatus::Pending);
-    let run: RunDto = response.run.into();
+    let run = conversation_dto(&target.target, response.run);
     index_released_runs(&target_id, std::slice::from_ref(&run));
     Ok(GetRunDto {
+        initial_prompt,
         run,
         pending_interactions: response
             .pending_interactions
@@ -350,7 +362,7 @@ pub(crate) async fn list_runs(
     let _unary_slot = unary_slot(&target.target)?;
     let response = target
         .target
-        .list_runs(request)
+        .list_conversations(request)
         .await
         .map_err(CommandErrorDto::from_api)?;
     state
@@ -363,15 +375,13 @@ pub(crate) async fn list_runs(
     let runs = response
         .runs
         .into_iter()
-        .map(Into::into)
+        .map(|run| conversation_dto(&target.target, run))
         .filter(|run: &RunDto| !aside_sessions.contains(&run.session_id))
         .collect::<Vec<_>>();
     index_released_runs(&target_id, &runs);
     Ok(ListRunsDto {
         runs,
-        next_page_token: response
-            .page
-            .map_or_else(String::new, |page| page.next_page_token),
+        next_page_token: response.next_page_token.unwrap_or_default(),
     })
 }
 
@@ -384,9 +394,11 @@ pub(crate) async fn list_session_activity(
     let request = request.into_sdk()?;
     let target = target(&state, &target_id).await?;
     let _unary_slot = unary_slot(&target.target)?;
-    let response = target
+    let reader = target
         .target
-        .client
+        .conversation_reader(&request.source_run_id)
+        .map_err(CommandErrorDto::from_api)?;
+    let response = reader
         .list_session_activity(request)
         .await
         .map_err(CommandErrorDto::from_api)?;
@@ -538,6 +550,26 @@ fn register_or_advance_aside(
     Ok(true)
 }
 
+fn require_desktop_control(target: &TargetHandle, run_id: &str) -> Result<(), CommandErrorDto> {
+    if target.is_cloud_conversation(run_id) {
+        return Err(CommandErrorDto::local_sanitized(
+            "permission_denied",
+            "Control Plane runs are read-only in Desktop. Use the Control Plane to stop or answer this run.",
+            false,
+        ));
+    }
+    Ok(())
+}
+
+fn conversation_dto(target: &TargetHandle, run: colossus_sdk::Run) -> RunDto {
+    let cloud = target.is_cloud_conversation(&run.run_id);
+    let continuable = !cloud || target.can_continue_conversation(&run.session_id);
+    let mut dto: RunDto = run.into();
+    dto.controllable = !cloud;
+    dto.continuable = continuable;
+    dto
+}
+
 fn index_released_runs(target_id: &str, runs: &[RunDto]) {
     let Ok(store) = SettingsStore::open_application() else {
         return;
@@ -564,12 +596,13 @@ pub(crate) async fn watch_run(
     })?;
     let epoch = target.epoch();
     let mut selection = state.subscribe_selection();
-    let mut updates = target
-        .target
-        .client
-        .watch_run(request)
-        .await
-        .map_err(CommandErrorDto::from_api)?;
+    let cloud = target.target.is_cloud_conversation(&run_id);
+    let mut updates = if cloud {
+        target.target.client.watch_connector_run(request).await
+    } else {
+        target.target.client.watch_run(request).await
+    }
+    .map_err(CommandErrorDto::from_api)?;
     drop(target);
 
     loop {
@@ -593,7 +626,10 @@ pub(crate) async fn watch_run(
                 }
                 match item {
                     Some(Ok(mut update)) => {
-                        if let colossus_sdk::RunUpdateKind::Interaction(interaction) = &mut update.update
+                        if cloud && let colossus_sdk::RunUpdateKind::Interaction(interaction) = &mut update.update {
+                            interaction.respondable_by_caller = false;
+                        }
+                        if !cloud && let colossus_sdk::RunUpdateKind::Interaction(interaction) = &mut update.update
                             && let Ok(selected) = crate::commands::target(&state, &target_id).await
                             && selected.epoch() == epoch
                             && let Some(resolved) = crate::remembered_approvals::apply_saved(
@@ -636,6 +672,7 @@ pub(crate) async fn cancel_run(
     let run_id = request.run_id.clone();
     let target = target(&state, &target_id).await?;
     require_run_binding(&state, &target, &run_id).await?;
+    require_desktop_control(&target.target, &request.run_id)?;
     let _unary_slot = unary_slot(&target.target)?;
     let response = target
         .target
@@ -657,6 +694,7 @@ pub(crate) async fn archive_thread(
 ) -> Result<ThreadLifecycleDto, CommandErrorDto> {
     let request = request.into_archive_sdk()?;
     let target = target(&state, &target_id).await?;
+    require_desktop_control(&target.target, &request.run_id)?;
     let _unary_slot = unary_slot(&target.target)?;
     let lifecycle = target
         .target
@@ -680,6 +718,7 @@ pub(crate) async fn restore_thread(
 ) -> Result<ThreadLifecycleDto, CommandErrorDto> {
     let request = request.into_restore_sdk()?;
     let target = target(&state, &target_id).await?;
+    require_desktop_control(&target.target, &request.run_id)?;
     let _unary_slot = unary_slot(&target.target)?;
     let lifecycle = target
         .target
@@ -733,6 +772,7 @@ pub(crate) async fn respond_interaction(
     let mut request = request.into_sdk()?;
     let target = target(&state, &target_id).await?;
     require_run_binding(&state, &target, &request.run_id).await?;
+    require_desktop_control(&target.target, &request.run_id)?;
     let _unary_slot = unary_slot(&target.target)?;
     let target_epoch = target.epoch();
     let handle = target.target.clone();

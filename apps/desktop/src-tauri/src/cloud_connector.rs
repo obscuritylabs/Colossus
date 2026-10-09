@@ -280,10 +280,39 @@ fn spawn_connector(
         }
     })
 }
+async fn refresh_inventory(
+    state: &AppState,
+    target: &str,
+    mut config: ConnectionConfig,
+) -> Result<ConnectionConfig, CommandErrorDto> {
+    if let Some(inventory) = config.inventory.as_mut() {
+        // Refresh presentation only. Existing host/workspace identities and sharing
+        // authority stay bound to this enrollment.
+        inventory.host_label = colossus_connector::native_host_label();
+        let inventory = inventory.clone();
+        config = store(state, target)?
+            .set_inventory(inventory)
+            .await
+            .map_err(failure)?;
+    } else {
+        let inventory = colossus_connector::native_inventory(
+            format!("workspace:{}", config.instance_id),
+            "Desktop workspace".into(),
+            colossus_connector::DeploymentKind::Desktop,
+        )
+        .map_err(failure)?;
+        config = store(state, target)?
+            .set_inventory(inventory)
+            .await
+            .map_err(failure)?;
+    }
+    Ok(config)
+}
+
 async fn start(
     state: &AppState,
     target: String,
-    mut config: ConnectionConfig,
+    config: ConnectionConfig,
     key: Zeroizing<String>,
     runs: Arc<dyn AgentRunClient>,
 ) -> Result<CloudStatus, CommandErrorDto> {
@@ -302,20 +331,20 @@ async fn start(
     {
         return Err(failure("The enrolled local runtime identity has changed."));
     }
-    if config.inventory.is_none() {
-        let inventory = colossus_connector::native_inventory(
-            format!("workspace:{}", config.instance_id),
-            "Desktop workspace".into(),
-            colossus_connector::DeploymentKind::Desktop,
-        )
-        .map_err(failure)?;
-        config = store(state, &target)?
-            .set_inventory(inventory)
-            .await
-            .map_err(failure)?;
-    }
+    let config = refresh_inventory(state, &target, config).await?;
     let connector = RuntimeConnector::new(config.clone(), key, runs)
         .map_err(failure)?
+        .with_resources(colossus_connector::ConnectorResources {
+            workflows: lease.target.client.connector_workflows(),
+            plugins: lease.target.client.connector_plugins(),
+            capabilities: lease
+                .target
+                .client
+                .connector_capabilities()
+                .iter()
+                .map(str::to_owned)
+                .collect(),
+        })
         .with_enrollment_store((*store(state, &target)?).clone());
     if lease.target.consent == crate::state::TargetConsentContext::ManagedLocal {
         reconcile_managed_sharing(
@@ -400,7 +429,7 @@ pub(crate) async fn cloud_enroll(
         .to_string();
     let url = url::Url::parse(&request.enrollment_url)
         .map_err(|_| failure("Enter a valid enrollment URL."))?;
-    confirm(&app,format!("Connect the selected runtime ({instance}) to {}? Project members with execution permission can submit tasks under this runtime's dedicated local cloud grant. Approvals remain exact runtime interactions. Work in Managed Local stops when Desktop closes.",url.origin().ascii_serialization())).await?;
+    confirm(&app,format!("Connect the selected runtime ({instance}) to {}? This shares the computer name, operating system and workspace name with the Control Plane. Project members with execution permission can submit tasks under this runtime's dedicated local cloud grant. Approvals remain exact runtime interactions. Work in Managed Local stops when Desktop closes.",url.origin().ascii_serialization())).await?;
     let store = store(&state, &request.target_id)?;
     let config = store
         .enroll(

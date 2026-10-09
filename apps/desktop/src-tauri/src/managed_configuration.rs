@@ -1036,6 +1036,14 @@ fn validate_overrides(overrides: &[FieldOverrideSetting]) -> Result<(), CommandE
         {
             return Err(configuration_error());
         }
+        if field.field_id == "network.maxRedirects"
+            && field.value.as_u64().is_none_or(|value| value > 20)
+        {
+            return Err(CommandErrorDto::invalid(
+                "network.maxRedirects",
+                "Enter a whole number from 0 to 20 for maximum redirects.",
+            ));
+        }
     }
     Ok(())
 }
@@ -1065,6 +1073,25 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
 
+    #[test]
+    fn redirect_overrides_accept_zero_and_reject_invalid_limits() {
+        for value in [json!(0), json!(1), json!(10), json!(20)] {
+            validate_overrides(&[FieldOverrideSetting {
+                field_id: "network.maxRedirects".into(),
+                value,
+            }])
+            .expect("bounded redirect limit");
+        }
+        for value in [json!(21), json!(-1), json!(1.5), json!("10"), Value::Null] {
+            assert!(
+                validate_overrides(&[FieldOverrideSetting {
+                    field_id: "network.maxRedirects".into(),
+                    value,
+                }])
+                .is_err(),
+            );
+        }
+    }
     fn provider(base_url: &str) -> ProviderSetting {
         ProviderSetting {
             credential_required: false,

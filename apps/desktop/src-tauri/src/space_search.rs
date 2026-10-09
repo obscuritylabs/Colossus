@@ -280,6 +280,7 @@ fn record_from_run(space_id: &str, run: &RunDto) -> Option<ThreadSummaryRecord> 
             RunModeDto::Execute => "execute",
             RunModeDto::Plan => "plan",
             RunModeDto::Research => "research",
+            RunModeDto::Goal => "goal",
         }
         .into(),
         status: match run.status {

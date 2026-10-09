@@ -133,6 +133,10 @@ impl RuntimeConnection for Connection {
             Some(inventory)
         };
         let discovery_enabled = inventory.is_some();
+        let resource_enabled = hello
+            .capabilities
+            .iter()
+            .any(|cap| cap == colossus_cloud_protocol::RESOURCE_CAPABILITY);
         let connection_id = format!("{}-{}", self.0.replica_id, uuid::Uuid::now_v7().simple());
         let key = format!("{}:{}", node.project_id, node.node_id);
         let lease = self
@@ -184,6 +188,14 @@ impl RuntimeConnection for Connection {
                     },
                 );
             }
+            if resource_enabled {
+                self.0
+                    .repo
+                    .storage()
+                    .resource_connect(&lease, true)
+                    .await
+                    .map_err(status)?;
+            }
             let (sender, receiver) = mpsc::channel(MAX_QUEUED_FRAMES);
             sender
                 .send(Ok(wire::ControlFrame {
@@ -221,6 +233,7 @@ impl RuntimeConnection for Connection {
                     generation: connection_id.clone(),
                     lease: lease.clone(),
                     discovery_enabled,
+                    resource_enabled,
                 },
                 inbound,
                 &sender,
@@ -257,6 +270,7 @@ struct ConnectionScope {
     generation: String,
     lease: colossus_cloud::storage::ConnectionLease,
     discovery_enabled: bool,
+    resource_enabled: bool,
 }
 async fn serve_connection(
     state: Arc<State>,
@@ -270,6 +284,7 @@ async fn serve_connection(
         generation,
         mut lease,
         discovery_enabled,
+        resource_enabled,
     } = scope;
     let mut interval = tokio::time::interval(Duration::from_millis(500));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -310,6 +325,10 @@ async fn serve_connection(
                         let current=presence.get_mut(&key).filter(|current|current.connection_id==generation).ok_or_else(||Status::aborted("connection superseded"))?;
                         current.ready=heartbeat.ready;current.heartbeat=Some(last_heartbeat);}
                         if last_presence.elapsed()>Duration::from_secs(10){repo.heartbeat_node(&node,heartbeat.ready,crate::http::now()).await.map_err(status)?;last_presence=Instant::now();}
+                    },
+                    Some(runtime_frame::Body::ResourceResponse(response)) => {
+                        let reply = decode(&response.reply_json).map_err(|_| Status::invalid_argument("invalid resource response"))?;
+                        state.repo.storage().resource_complete(&lease,&response.request_id,reply,crate::http::now()).await.map_err(status)?;
                     },
                     Some(runtime_frame::Body::Receipt(receipt))=>{
                         let reply=decode(&receipt.reply_json).map_err(|_|Status::invalid_argument("invalid receipt"))?;
@@ -379,6 +398,25 @@ async fn serve_connection(
                 }),
             )
             .await?;
+        }
+        if resource_enabled {
+            for request in state
+                .repo
+                .storage()
+                .resource_take(&lease, crate::http::now())
+                .await
+                .map_err(status)?
+            {
+                send(
+                    sender,
+                    control_frame::Body::ResourceRequest(wire::ResourceRequest {
+                        request_id: request.request_id,
+                        operation_json: encode(&request.operation)
+                            .map_err(|_| Status::invalid_argument("invalid resource operation"))?,
+                    }),
+                )
+                .await?;
+            }
         }
         let commands = repo
             .commands(&node, command_cursor.as_deref(), 100)

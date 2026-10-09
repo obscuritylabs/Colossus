@@ -11,11 +11,13 @@ repository=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
 desktop="$repository/apps/desktop"
 development_custody=false
 dictation=false
+browser_preview=false
 for argument in "$@"; do
     case "$argument" in
         --dev-credentials) [ "$development_custody" = false ] || fail "duplicate --dev-credentials"; development_custody=true ;;
+        --browser-preview) [ "$browser_preview" = false ] || fail "duplicate --browser-preview"; browser_preview=true ;;
         --dictation) [ "$dictation" = false ] || fail "duplicate --dictation"; dictation=true ;;
-        *) fail "usage: scripts/desktop-dev [--dev-credentials] [--dictation]" ;;
+        *) fail "usage: scripts/desktop-dev [--dev-credentials] [--dictation] [--browser-preview]" ;;
     esac
 done
 if [ "$development_custody" = true ]; then
@@ -48,6 +50,10 @@ fi
 cd "$desktop"
 node "$script_dir/development-launch.mjs" -- npm ci --ignore-scripts
 
+set -- dev
+if [ "$browser_preview" = true ]; then set -- "$@" --features browser-preview; fi
+set -- "$@" -- --locked
+
 if [ "$development_custody" = true ]; then
     cd "$repository"
     node "$script_dir/development-launch.mjs" -- cargo xtask desktop prepare --profile debug
@@ -55,7 +61,12 @@ if [ "$development_custody" = true ]; then
     cli="$desktop/src-tauri/binaries/colossus-$target"
     [ -x "$cli" ] || fail "prepared development CLI is unavailable"
     cd "$desktop"
-    exec node "$script_dir/development-launch.mjs" --authority-home "$COLOSSUS_HOME" --workspace "$repository" --cli "$cli" -- npm run tauri -- dev -- --locked
+    exec node "$script_dir/development-launch.mjs" --authority-home "$COLOSSUS_HOME" --workspace "$repository" --cli "$cli" -- npm run tauri -- "$@"
+fi
+
+if [ "$browser_preview" = true ]; then
+    node "$script_dir/development-launch.mjs" -- npm run prepare:sidecars:dev
+    exec node "$script_dir/development-launch.mjs" -- npm run tauri -- "$@"
 fi
 
 if [ "$dictation" = true ]; then command=tauri:dev:dictation; else command=tauri:dev; fi

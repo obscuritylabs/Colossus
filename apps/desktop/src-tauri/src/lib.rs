@@ -25,6 +25,7 @@ use workflow_commands::{
 };
 mod configuration_import;
 mod connection;
+mod conversation_runs;
 mod desktop_commands;
 mod desktop_credentials;
 mod desktop_dto;

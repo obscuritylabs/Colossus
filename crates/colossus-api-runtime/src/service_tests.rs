@@ -47,6 +47,7 @@ mod plan_interaction;
 mod process_sessions;
 mod schedule_approval;
 mod sharing;
+mod standalone_goal;
 
 struct RuntimeFixture {
     runtime: Arc<Runtime>,
@@ -532,6 +533,7 @@ async fn caller_owned_text_artifacts_are_rendered_as_bounded_run_input(runtime: 
                 end_user_id: None,
                 role: Some("primary".into()),
                 mode: RunMode::Execute,
+                goal_max_iterations: 0,
                 research_depth: None,
                 research_sources: Vec::new(),
                 skill_ids: Vec::new(),
@@ -614,6 +616,7 @@ async fn caller_owned_images_preserve_public_part_order_and_owner_boundaries(
         end_user_id: None,
         role: Some("primary".into()),
         mode: RunMode::Execute,
+        goal_max_iterations: 0,
         research_depth: None,
         research_sources: Vec::new(),
         skill_ids: Vec::new(),
@@ -665,6 +668,7 @@ fn request(idempotency_key: &str, prompt: &str) -> CreateRunRequest {
         end_user_id: None,
         role: Some("primary".into()),
         mode: RunMode::Execute,
+        goal_max_iterations: 0,
         research_depth: None,
         research_sources: Vec::new(),
         skill_ids: Vec::new(),

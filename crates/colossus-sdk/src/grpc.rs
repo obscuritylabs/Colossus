@@ -1421,6 +1421,7 @@ fn proto_create_request(value: CreateRunRequest) -> ApiResult<proto::CreateRunRe
         idempotency_key: value.idempotency_key.as_str().into(),
         plan_action,
         branch,
+        goal_max_iterations: value.goal_max_iterations,
         research_depth: value.research_depth.map_or(
             proto::ResearchDepth::Unspecified as i32,
             |depth| match depth {
@@ -1615,8 +1616,8 @@ fn validate_plan_lineage(
     let has_complete_metadata = plan_revision.is_some() && plan_status.is_some();
     if plan_revision.is_some() != plan_status.is_some()
         || plan_revision == Some(0)
-        || (plan_id.is_none() && (has_complete_metadata || goal_id.is_some()))
-        || (goal_id.is_some() && !has_complete_metadata)
+        || (plan_id.is_none() && has_complete_metadata)
+        || (goal_id.is_some() && plan_id.is_some() && !has_complete_metadata)
     {
         return Err(protocol_error());
     }
@@ -1918,6 +1919,7 @@ fn proto_run_mode(value: RunMode) -> proto::RunMode {
         RunMode::Execute => proto::RunMode::Execute,
         RunMode::Plan => proto::RunMode::Plan,
         RunMode::Research => proto::RunMode::Research,
+        RunMode::Goal => proto::RunMode::Goal,
     }
 }
 
@@ -1926,6 +1928,7 @@ fn run_mode_from_proto(value: i32) -> ApiResult<RunMode> {
         Ok(proto::RunMode::Execute) => Ok(RunMode::Execute),
         Ok(proto::RunMode::Plan) => Ok(RunMode::Plan),
         Ok(proto::RunMode::Research) => Ok(RunMode::Research),
+        Ok(proto::RunMode::Goal) => Ok(RunMode::Goal),
         Ok(proto::RunMode::Unspecified) | Err(_) => Err(protocol_error()),
     }
 }
@@ -2635,10 +2638,34 @@ mod tests {
         }
         async fn create_run(
             &self,
-            _caller: &CallerContext,
-            _request: CoreCreateRunRequest,
+            caller: &CallerContext,
+            request: CoreCreateRunRequest,
         ) -> ApiResult<CoreCreateRunResponse> {
-            unreachable!("test calls only get_run")
+            caller.require_scope(colossus_api::scopes::RUNS_EXECUTE)?;
+            caller.require_tool("goal.show")?;
+            caller.require_tool("goal.update")?;
+            request.validate()?;
+            assert_eq!(request.mode, colossus_api::RunMode::Goal);
+            assert_eq!(request.goal_max_iterations, 5);
+            assert!(request.plan_action.is_none());
+            assert_eq!(request.max_turns, 12);
+            let mut run = core_run("goal-transport-run".into());
+            run.mode = request.mode;
+            run.status = colossus_api::RunStatus::Completed;
+            run.finished_at = Some("2026-01-01T00:00:02Z".into());
+            run.result = Some(colossus_api::RunResult {
+                output: "Verified.".into(),
+                plan_id: None,
+                plan_revision: None,
+                plan_status: None,
+                goal_id: Some("goal:transport".into()),
+                profile: "fixture".into(),
+                model_profile: "fixture".into(),
+                provider_profile: "fixture".into(),
+                model: "fixture".into(),
+                elapsed_seconds: 1.0,
+            });
+            Ok(CoreCreateRunResponse { run })
         }
 
         async fn get_run(
@@ -2889,6 +2916,39 @@ mod tests {
         .expect_err("profile mismatch");
 
         assert_eq!(error.reason, ApiErrorReason::InternalInvariant);
+    }
+
+    #[test]
+    fn standalone_goal_lineage_is_plan_free_without_accepting_partial_plan_metadata() {
+        assert!(validate_plan_lineage(None, None, None, Some("goal:test")).is_ok());
+        assert!(
+            validate_plan_lineage(None, Some(1), Some(PlanStatus::Executed), Some("goal:test"))
+                .is_err()
+        );
+        assert!(validate_plan_lineage(Some("plan:test"), None, None, Some("goal:test")).is_err());
+        assert!(
+            validate_plan_lineage(Some("plan:test"), Some(1), None, Some("goal:test")).is_err()
+        );
+        assert!(
+            validate_plan_lineage(
+                Some("plan:test"),
+                Some(1),
+                Some(PlanStatus::Executed),
+                Some("goal:test")
+            )
+            .is_ok()
+        );
+        let cancellation = cancellation_from_proto(proto::RunCancellation {
+            turn: 1,
+            message: "Stopped".into(),
+            plan_id: None,
+            plan_revision: None,
+            plan_status: proto::PlanStatus::Unspecified as i32,
+            goal_id: Some("goal:test".into()),
+        })
+        .unwrap();
+        assert!(cancellation.plan_id.is_none());
+        assert_eq!(cancellation.goal_id.as_deref(), Some("goal:test"));
     }
 
     #[test]
@@ -3182,6 +3242,71 @@ mod tests {
             .await
             .expect("authenticated get");
         assert_eq!(response.run.run_id, "run-1");
+        // A separate fixture grant proves the new request and result across live TLS,
+        // without widening the read-only credential used by the remaining assertions.
+        let goal_grant = ApplicationGrant::new(
+            "app:rust-sdk-goal-test",
+            ApplicationKind::Enrolled,
+            [
+                ApiScope::new(colossus_api::scopes::RUNS_EXECUTE).unwrap(),
+                ApiScope::new(RUNS_READ).unwrap(),
+            ],
+            ["assistant".into()],
+            ["goal.show".into(), "goal.update".into()],
+        )
+        .unwrap();
+        let goal_credential = authenticator.issue_pending(&goal_grant).unwrap();
+        authenticator
+            .activate(goal_credential.credential_id())
+            .unwrap();
+        let goal_backend = GrpcBackend::connect(
+            GrpcConnectOptions::new(
+                BackendKind::Daemon,
+                server_instance_id,
+                ApiMajor::new(1).unwrap(),
+                endpoint.clone(),
+                fingerprint,
+                certificate_pem.clone(),
+                Arc::new(StaticCredential::new(
+                    goal_credential.expose_token().as_bytes(),
+                )),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(goal_backend.capabilities().contains("goal.create"));
+        assert!(!backend.capabilities().contains("goal.create"));
+        let goal = goal_backend
+            .agent_runs()
+            .create_run(CreateRunRequest {
+                input: vec![InputContentPart::Text("Verify the outcome.".into())],
+                plugin_skill_ids: Vec::new(),
+                session_id: None,
+                end_user_id: None,
+                role: "assistant".into(),
+                mode: RunMode::Goal,
+                goal_max_iterations: 5,
+                research_depth: None,
+                research_sources: Vec::new(),
+                plan_action: None,
+                branch: None,
+                max_turns: 12,
+                idempotency_key: crate::IdempotencyKey::new("sdk-goal-transport").unwrap(),
+            })
+            .await
+            .unwrap()
+            .run;
+        assert_eq!(goal.mode, RunMode::Goal);
+        let Some(RunTerminal::Result(result)) = goal.terminal else {
+            panic!("Goal result");
+        };
+        assert_eq!(result.goal_id.as_deref(), Some("goal:transport"));
+        assert!(result.plan_id.is_none());
+        goal_backend.close().await.unwrap();
+        authenticator
+            .revoke(goal_credential.credential_id())
+            .unwrap();
         assert!(backend.capabilities().contains("process_sessions.v1"));
         let shells = backend
             .agent_runs()

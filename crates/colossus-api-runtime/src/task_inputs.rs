@@ -324,6 +324,7 @@ impl RuntimeCommunicationApi {
                 plan_action: None,
                 branch: None,
                 max_turns: request.max_turns,
+                goal_max_iterations: 0,
                 idempotency_key: IdempotencyKey::new(format!(
                     "peer-{}",
                     digest(request.message_id.as_bytes())

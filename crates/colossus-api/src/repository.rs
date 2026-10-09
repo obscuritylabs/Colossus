@@ -56,6 +56,9 @@ struct CreateFingerprint<'request> {
     end_user_id: &'request Option<String>,
     role: &'request Option<String>,
     mode: crate::RunMode,
+    // Omit zero so pre-Goal requests keep their durable retry fingerprint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    goal_max_iterations: Option<u32>,
     research_depth: &'request Option<crate::ResearchDepth>,
     research_sources: &'request [crate::ResearchSourceKind],
     skill_ids: Vec<&'request str>,
@@ -340,6 +343,8 @@ impl EventSourcedRunRepository {
             end_user_id: &request.end_user_id,
             role: &request.role,
             mode: request.mode,
+            goal_max_iterations: (request.goal_max_iterations != 0)
+                .then_some(request.goal_max_iterations),
             research_depth: &request.research_depth,
             research_sources: &request.research_sources,
             skill_ids,

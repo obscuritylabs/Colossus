@@ -37,6 +37,7 @@ async function installNativeSettingsMock(
       syncCalls: 0,
       applyCalls: 0,
       failApply: false,
+      workspaceRequests: [] as any[],
     };
     const host = window as unknown as Record<string, any>;
     host.settingsUpdateMock = mock;
@@ -46,14 +47,22 @@ async function installNativeSettingsMock(
       workspace.statusMessage = "Settings applied";
       workspace.configuration.acceptedGlobalRevision =
         snapshot.globalConfiguration.revision;
-      for (const field of snapshot.globalConfiguration.defaults.revisions.at(-1)
-        .value.fieldOverrides) {
+      for (const descriptor of snapshot.fieldDescriptors) {
+        const local = workspace.configuration.fieldOverrides.find(
+          (field: any) => field.fieldId === descriptor.id,
+        );
+        const global = snapshot.globalConfiguration.defaults.revisions
+          .at(-1)
+          .value.fieldOverrides.find(
+            (field: any) => field.fieldId === descriptor.id,
+          );
         const effective = workspace.effectiveValues.find(
-          (value: any) => value.fieldId === field.fieldId,
+          (value: any) => value.fieldId === descriptor.id,
         );
         if (effective) {
-          effective.value = field.value;
-          effective.source = "global";
+          effective.value =
+            local?.value ?? global?.value ?? descriptor.defaultValue;
+          effective.source = local ? "space" : global ? "global" : "built_in";
         }
       }
     };
@@ -62,6 +71,12 @@ async function installNativeSettingsMock(
         if (command === "list_setup_packages") return [];
         if (command === "get_managed_configuration")
           return structuredClone(snapshot);
+        if (command === "save_space_configuration") {
+          mock.workspaceRequests.push(structuredClone(args.request));
+          workspace.configuration.fieldOverrides = args.request.fieldOverrides;
+          apply();
+          return structuredClone(snapshot);
+        }
         if (command === "save_global_defaults") {
           snapshot.globalConfiguration.revision++;
           const revision = snapshot.globalConfiguration.revision;
@@ -161,6 +176,68 @@ test("saved global edits apply automatically to idle workspaces", async ({
   expect(
     await page.evaluate(() => (window as any).settingsUpdateMock.applyCalls),
   ).toBe(0);
+});
+
+test("redirect limits persist globally, allow a zero workspace override, and inherit again", async ({
+  page,
+}) => {
+  await installNativeSettingsMock(page, "idle");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Settings sections" })
+    .getByRole("button", { name: "Defaults", exact: true })
+    .click();
+  const redirects = page.getByRole("spinbutton", { name: "Maximum redirects" });
+  await expect(redirects).toHaveValue("10");
+  await expect(redirects).toHaveAttribute("min", "0");
+  await expect(redirects).toHaveAttribute("max", "20");
+  await redirects.fill("4");
+  await page
+    .getByRole("button", { name: "Save global changes", exact: true })
+    .click();
+  expect(
+    await page.evaluate(
+      () =>
+        (
+          window as any
+        ).settingsUpdateMock.snapshot.globalConfiguration.defaults.revisions.at(
+          -1,
+        ).value.fieldOverrides,
+    ),
+  ).toContainEqual({ fieldId: "network.maxRedirects", value: 4 });
+
+  await page.getByRole("button", { name: "Workspace", exact: true }).click();
+  await expect(redirects).toHaveValue("4");
+  await redirects.fill("0");
+  await page
+    .getByRole("button", { name: "Apply Workspace changes", exact: true })
+    .click();
+  await expect(redirects).toHaveValue("0");
+  expect(
+    await page.evaluate(
+      () =>
+        (window as any).settingsUpdateMock.workspaceRequests.at(-1)
+          .fieldOverrides,
+    ),
+  ).toContainEqual({ fieldId: "network.maxRedirects", value: 0 });
+
+  const row = page.locator(".managed-field-row").filter({ has: redirects });
+  await row.getByRole("button", { name: "Inherit", exact: true }).click();
+  await expect(redirects).toHaveValue("4");
+  await page
+    .getByRole("button", { name: "Apply Workspace changes", exact: true })
+    .click();
+  await expect(redirects).toHaveValue("4");
+  expect(
+    await page.evaluate(
+      () =>
+        (window as any).settingsUpdateMock.workspaceRequests.at(-1)
+          .fieldOverrides,
+    ),
+  ).not.toContainEqual(
+    expect.objectContaining({ fieldId: "network.maxRedirects" }),
+  );
 });
 
 test("waiting updates stay visible and a background apply preserves unsaved edits", async ({

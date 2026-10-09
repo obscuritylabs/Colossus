@@ -154,3 +154,21 @@ test("browser uses two compact rows and keeps pane actions visible with many tab
     page.getByRole("heading", { name: "Browse beside your work" }),
   ).toBeVisible();
 });
+
+test("a rejected address remains visible through browser context refresh", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/?fixture=operations-studio");
+  await page.getByRole("button", { name: "Open browser", exact: true }).click();
+  const address = page.getByRole("textbox", { name: "Web address" });
+  await address.fill("file:///blocked-preview");
+  await address.press("Enter");
+  const error = page
+    .getByRole("alert")
+    .filter({ hasText: "Enter an HTTP or HTTPS address" });
+  await expect(error).toBeVisible();
+  // Two periodic context reads must not erase the rejected action's message.
+  await page.waitForTimeout(1600);
+  await expect(error).toBeVisible();
+});

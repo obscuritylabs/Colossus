@@ -110,13 +110,7 @@ export function ProviderModelPicker({
       {state === "loading" ? (
         <div className="provider-catalog-loading" role="status">
           <IconLoader2 className="spin-icon" size={20} aria-hidden="true" />
-          <div>
-            <strong>Loading models from your provider…</strong>
-            <p className="provider-catalog-note">
-              If a Colossus window is waiting for your input, complete or cancel
-              it to continue.
-            </p>
-          </div>
+          <strong>Loading models from your provider…</strong>
         </div>
       ) : null}
       {state === "error" ? (

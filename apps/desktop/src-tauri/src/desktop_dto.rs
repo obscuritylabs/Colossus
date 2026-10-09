@@ -359,6 +359,7 @@ impl ClientIdentityStatusDto {
 #[serde(rename_all = "camelCase")]
 #[allow(clippy::struct_excessive_bools)] // Wire-compatible feature flags are independently optional.
 pub(crate) struct DesktopCapabilitiesDto {
+    pub(crate) goal: bool,
     pub(crate) research: bool,
     pub(crate) delegation: bool,
     pub(crate) plugins: bool,

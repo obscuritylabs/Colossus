@@ -12,6 +12,7 @@ import {
 } from "react";
 import type { CSSProperties, FormEvent, ReactNode } from "react";
 import { DesktopStartup } from "./components/DesktopStartup";
+import { refreshConversation } from "./conversation-refresh";
 import { syncSavedSettings } from "./managed-settings-updates";
 import { terminalRequestForScope } from "./components/tools/TerminalDock";
 
@@ -134,6 +135,10 @@ import {
   removeQueuedMessage,
   updateQueuedMessage,
 } from "./message-queue";
+import {
+  DEFAULT_GOAL_ITERATIONS,
+  validGoalIterations,
+} from "@colossus/ui/components/GoalControls";
 import type { QueuePlacement, QueuedMessage } from "./message-queue";
 import {
   REMOTE_PROVIDER_TIMEOUT_MS,
@@ -142,6 +147,7 @@ import {
 import { selectSessionParticipants } from "./participants";
 import {
   agentRoleLabel,
+  runModeLabel,
   safeDisplayLabel,
   selectReleasedArtifacts,
 } from "./presenters";
@@ -450,6 +456,7 @@ const INITIAL_DESKTOP: DesktopStatus = {
   clientIdentity: { configured: false, leafFingerprintSha256: null },
   capabilities: {
     research: true,
+    goal: FIXTURE_MODE,
     delegation: false,
     plugins: false,
     pluginSkillSelection: FIXTURE_MODE,
@@ -890,6 +897,7 @@ interface RunSubmission {
   attachments: readonly ArtifactReference[];
   role: string;
   mode: RunMode;
+  goalMaxIterations?: number;
   researchDepth: ResearchDepth;
   researchSources: readonly ResearchSourceKind[];
   maxTurns: number;
@@ -1131,6 +1139,9 @@ export default function App() {
   >(new Set());
   const [role, setRole] = useState("primary");
   const [mode, setMode] = useState<RunMode>("execute");
+  const [goalMaxIterations, setGoalMaxIterations] = useState(
+    DEFAULT_GOAL_ITERATIONS,
+  );
   const [researchDepth, setResearchDepth] = useState<ResearchDepth>("standard");
   const [researchSources, setResearchSources] = useState<ResearchSourceKind[]>([
     "repo",
@@ -1971,6 +1982,92 @@ export default function App() {
   }, [acceptDesktopStatus, startup]);
 
   useEffect(() => {
+    if (FIXTURE_MODE || startup !== "ready") return;
+    let cancelled = false,
+      polling = false;
+    const refresh = async () => {
+      const route = targetRoutes.current?.capture();
+      if (
+        !route ||
+        cancelled ||
+        polling ||
+        connectingRef.current ||
+        submitInFlight.current ||
+        listRequest.current
+      )
+        return;
+      const selected = chatRef.current.views.get(
+        chatRef.current.activeRunId ?? "",
+      )?.run;
+      const sessionId = selected?.sessionId ?? null;
+      const current = () =>
+        !cancelled &&
+        targetRoutes.current?.isCurrent(route) === true &&
+        (chatRef.current.views.get(chatRef.current.activeRunId ?? "")?.run
+          .sessionId ?? null) === sessionId;
+      polling = true;
+      try {
+        await refreshConversation({
+          sessionId,
+          isCurrent: current,
+          list: (sessionId) =>
+            listRuns(route.targetId, {
+              pageToken: "",
+              ...(sessionId ? { sessionId } : {}),
+            }),
+          hydrate: (runId) => getRun(route.targetId, { runId }),
+          changed: (run) => {
+            const known = chatRef.current.views.get(run.runId);
+            return (
+              !known ||
+              Math.max(known.lastSequence, known.run.lastSequence) <
+                run.lastSequence ||
+              known.run.etag !== run.etag
+            );
+          },
+          onRecent: (page) => {
+            targetRoutes.current?.bindRuns(
+              page.runs.map((run) => run.runId),
+              route,
+            );
+            dispatch({
+              type: "append_recent",
+              runs: page.runs,
+              nextPageToken: page.nextPageToken,
+            });
+          },
+          onRun: (details) => {
+            targetRoutes.current?.bindRun(details.run.runId, route);
+            const cursor =
+              chatRef.current.views.get(details.run.runId)?.lastSequence ?? 0;
+            dispatch({ type: "hydrate_run", details });
+            const selected = chatRef.current.views.get(
+              chatRef.current.activeRunId ?? "",
+            )?.run;
+            if (
+              planRevision === null &&
+              selected?.sessionId === details.run.sessionId &&
+              details.run.createdAt > selected.createdAt
+            ) {
+              dispatch({ type: "select_run", runId: details.run.runId });
+            }
+            startWatch(details.run.runId, cursor, route);
+          },
+        });
+      } catch {
+        /* Foreground reads show errors; periodic observation retries on the next tick. */
+      } finally {
+        polling = false;
+      }
+    };
+    const timer = window.setInterval(() => void refresh(), 3_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [startup, startWatch, planRevision]);
+
+  useEffect(() => {
     const query = deferredWorkQuery.trim();
     if (query === "") {
       setSpaceSearchResults([]);
@@ -2370,6 +2467,12 @@ export default function App() {
         ),
         role: submission.role,
         mode: submission.mode,
+        ...(submission.mode === "goal"
+          ? {
+              goalMaxIterations:
+                submission.goalMaxIterations ?? DEFAULT_GOAL_ITERATIONS,
+            }
+          : {}),
         ...(submission.mode === "research"
           ? {
               researchDepth: submission.researchDepth,
@@ -2555,7 +2658,11 @@ export default function App() {
       cleanPrompt.length === 0 ||
       cleanRole.length === 0 ||
       !isPromptWithinByteLimit(expandedPrompt) ||
-      (mode === "research" && researchSources.length === 0)
+      (mode === "research" && researchSources.length === 0) ||
+      (mode === "goal" &&
+        (!desktop.capabilities.goal ||
+          !validGoalIterations(goalMaxIterations) ||
+          attachments.length > 0))
     ) {
       return null;
     }
@@ -2592,6 +2699,7 @@ export default function App() {
       mode,
       researchDepth,
       researchSources: [...researchSources],
+      ...(mode === "goal" ? { goalMaxIterations } : {}),
       maxTurns,
       attachments: [...attachments],
       createdAt: new Date().toISOString(),
@@ -2655,14 +2763,15 @@ export default function App() {
           setSlashCommandError("Research is unavailable for this target.");
           return "preserve";
         }
+        if (action.mode === "goal" && !desktop.capabilities.goal) {
+          setSlashCommandError("Goal is unavailable for this target.");
+          return "preserve";
+        }
         if (action.resetPlanRevision) {
           setPlanRevision(null);
         }
         setMode(action.mode);
-        pushToast(
-          `${action.mode === "plan" ? "Plan" : action.mode === "research" ? "Research" : "Execute"} mode enabled.`,
-          "info",
-        );
+        pushToast(`${runModeLabel(action.mode)} mode enabled.`, "info");
         return "clear";
       case "toggle_mode": {
         const nextMode: RunMode =
@@ -2671,14 +2780,15 @@ export default function App() {
           setSlashCommandError("Research is unavailable for this target.");
           return "preserve";
         }
+        if (nextMode === "goal" && !desktop.capabilities.goal) {
+          setSlashCommandError("Goal is unavailable for this target.");
+          return "preserve";
+        }
         if (nextMode !== "plan") {
           setPlanRevision(null);
         }
         setMode(nextMode);
-        pushToast(
-          `${nextMode === "plan" ? "Plan" : nextMode === "research" ? "Research" : "Execute"} mode enabled.`,
-          "info",
-        );
+        pushToast(`${runModeLabel(nextMode)} mode enabled.`, "info");
         return "clear";
       }
       case "show_mode_status":
@@ -2689,9 +2799,9 @@ export default function App() {
                 ? "Plan mode is active. The next prompt creates a new durable draft."
                 : `Plan mode is revising revision ${planRevision.revision}.`
               : "Plan mode is off."
-            : mode === "research"
-              ? "Research mode is active."
-              : "Research mode is off.",
+            : mode === action.mode
+              ? `${runModeLabel(action.mode)} mode is active.`
+              : `${runModeLabel(action.mode)} mode is off.`,
           "info",
         );
         return "clear";
@@ -2867,6 +2977,21 @@ export default function App() {
       });
       return;
     }
+    if (
+      effectiveMode === "goal" &&
+      (!desktop.capabilities.goal ||
+        !validGoalIterations(goalMaxIterations) ||
+        attachments.length > 0 ||
+        activeForkDraft !== undefined)
+    ) {
+      setComposerError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "invalid_argument",
+        message:
+          "Goal mode requires a supported target, 1–50 iterations, and text in the selected conversation. Remove attachments or finish the Aside first.",
+      });
+      return;
+    }
     const fingerprint = operationFingerprint([
       cleanPrompt,
       ...pluginSelections,
@@ -2874,6 +2999,7 @@ export default function App() {
       sessionId ?? "",
       cleanRole,
       effectiveMode,
+      ...(effectiveMode === "goal" ? [goalMaxIterations] : []),
       ...(effectiveMode === "research"
         ? [researchDepth, ...researchSources]
         : []),
@@ -2901,6 +3027,7 @@ export default function App() {
         attachments: [...attachments],
         role: cleanRole,
         mode: effectiveMode,
+        ...(effectiveMode === "goal" ? { goalMaxIterations } : {}),
         researchDepth,
         researchSources,
         maxTurns,
@@ -2975,6 +3102,12 @@ export default function App() {
             attachments: message.attachments,
             role: message.role,
             mode: message.mode,
+            ...(message.mode === "goal"
+              ? {
+                  goalMaxIterations:
+                    message.goalMaxIterations ?? DEFAULT_GOAL_ITERATIONS,
+                }
+              : {}),
             researchDepth: message.researchDepth,
             researchSources: message.researchSources,
             maxTurns: message.maxTurns,
@@ -3434,7 +3567,11 @@ export default function App() {
       chatRef.current.activeRunId === null
         ? undefined
         : chatRef.current.views.get(chatRef.current.activeRunId);
-    if (activeView === undefined || !isCancelable(activeView.run.status)) {
+    if (
+      activeView === undefined ||
+      activeView.run.controllable === false ||
+      !isCancelable(activeView.run.status)
+    ) {
       return false;
     }
     const runId = activeView.run.runId;
@@ -5213,7 +5350,8 @@ export default function App() {
     connection.state === "connected" &&
     !connecting &&
     !submitting &&
-    !approvalModeChanging;
+    !approvalModeChanging &&
+    activeRun?.continuable !== false;
   const continuation =
     activeRun !== undefined && isTerminalStatus(activeRun.status);
   const promptBytes = utf8ByteLength(expandedPrompt);
@@ -5425,6 +5563,9 @@ export default function App() {
       researchDepth={researchDepth}
       researchSources={researchSources}
       researchAvailable={desktop.capabilities.research === true}
+      goalAvailable={desktop.capabilities.goal === true}
+      goalMaxIterations={goalMaxIterations}
+      onGoalMaxIterationsChange={setGoalMaxIterations}
       approvalMode={desktop.approvalMode}
       approvalModeVisible={selectedTarget?.kind === "managed_local"}
       approvalModeAvailable={
@@ -5462,7 +5603,10 @@ export default function App() {
       }
       activeWorkNeedsInput={(activeView?.pendingInteractions.length ?? 0) > 0}
       activeWorkRedirectable={
-        activeRun !== undefined && isCancelable(activeRun.status) && !cancelling
+        activeRun !== undefined &&
+        activeRun.controllable !== false &&
+        isCancelable(activeRun.status) &&
+        !cancelling
       }
       stopping={cancelling || activeRun?.status === "cancelling"}
       queuePaused={
@@ -5489,7 +5633,7 @@ export default function App() {
         }
       }}
       queuedMessages={activeQueuedMessages}
-      attachmentsAvailable={desktop.capabilities.attachments}
+      attachmentsAvailable={desktop.capabilities.attachments && mode !== "goal"}
       attachments={attachments}
       attachmentBusy={attachmentBusy}
       error={composerError}

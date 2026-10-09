@@ -140,7 +140,12 @@ only product-level Tauri commands:
 - `cancel_run`
 - `respond_interaction`
 
-Desktop’s composer exposes public Execute, Plan, and managed-local Research run modes.
+Desktop’s composer exposes public Execute, Plan, Goal, and managed-local Research run modes.
+Standalone Goal requests use `RunMode::Goal` with explicit `goal_max_iterations` in
+1..=50 and text input; other modes leave that field at zero. No Plan action is needed.
+The `goal.create` capability requires `runs.execute` and both Goal tools in the
+authenticated caller’s tool ceiling. Every iteration retains that caller’s role,
+tools, selected skills, initiator, and ordinary approval and cancellation boundaries.
 Research carries an explicit bounded depth and a unique non-empty set of repository,
 web, or MCP evidence lanes. It reuses the authenticated durable run, interaction,
 watch, queue, and cancellation contracts while delegating collection and cited
@@ -227,6 +232,14 @@ with its protected local connection configuration and the exact recipient applic
 ID. `--allow-continuation` permits new recipient-owned runs; `--disable` revokes future
 disclosure. Previously synchronized cloud history is retained under cloud project
 access and retention policy.
+
+Desktop's native conversation reader combines its primary application's owned runs
+with Control Plane-owned runs through the separately provisioned connector client.
+Discovered run IDs stay bound to their reader and selected runtime. The renderer sees
+released history and authority flags, never either credential. Cloud runs are read-only
+in Desktop; cancellation and interaction responses retain their original application
+ownership. Desktop can continue a shared local conversation under its own grant.
+Periodic reconciliation observes new turns without reopening a completed thread.
 
 ## Managed shell inspection
 
@@ -770,3 +783,27 @@ round trip.
 The alpha package may make breaking corrections before a stable `v1` package exists.
 Once `v1` is published, reserve removed field numbers and names, add fields and RPCs
 compatibly, and support adjacent API versions during migrations.
+
+## Control Plane resource management
+
+The outbound connector can advertise `runtime.resources.v1` for a closed set of
+public workflow, schedule, independent workflow-run, and plugin-discovery operations.
+These requests use the dedicated cloud application's SDK clients. Managed Desktop
+adapters resolve that application's transport after a restart and never fall back to
+the primary Desktop grant. The controller intersects project Read, Execute, or Control
+permission with the runtime's independently enforced scopes and ownership.
+
+Management is online. The controller records a short-lived request under the exact
+connection lease; any HTTP replica can admit and read it, while only that lease's
+stream owner can claim dispatch. Claimed requests are never replayed after reconnect.
+A lost mutation response reports an unknown outcome. Allocation retries retain the
+SDK's original durable idempotency key; revision controls retain the reviewed ETag.
+Pending requests are limited independently from agent tasks and watches. PostgreSQL
+retains metadata audit digests while bounded maintenance removes expired request and
+response payloads.
+
+Enrollment alone does not grant automation management or release another application's
+schedules. The existing Managed Desktop cloud grant remains separate from Desktop's
+workflow grant. Plugin lifecycle, credential custody, local runtime configuration,
+and the private session map are not exposed through this transport. Applications must
+advertise and authorize a public resource contract before Web can manage those surfaces.

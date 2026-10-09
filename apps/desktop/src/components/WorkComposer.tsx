@@ -1,21 +1,26 @@
 import {
   IconAdjustmentsHorizontal,
   IconAt,
-  IconCheck,
   IconCommand,
   IconCornerDownLeft,
   IconFileText,
-  IconFolder,
   IconPaperclip,
   IconPlaylistAdd,
   IconPlayerStopFilled,
-  IconPlugConnected,
   IconRouteAltLeft,
   IconShieldCheck,
-  IconWorld,
-  IconX,
 } from "@tabler/icons-react";
+import {
+  GoalControls,
+  DEFAULT_GOAL_ITERATIONS,
+  validGoalIterations,
+} from "@colossus/ui/components/GoalControls";
 import { ConversationComposerFrame } from "@colossus/ui/conversation";
+import {
+  ResearchControls,
+  RESEARCH_SOURCE_OPTIONS,
+} from "@colossus/ui/components/ResearchControls";
+import "@colossus/ui/styles/research-controls.css";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, ReactNode, RefObject } from "react";
 
@@ -53,33 +58,6 @@ const ComposerModelChip = lazy(() =>
   })),
 );
 
-const RESEARCH_DEPTH_OPTIONS = [
-  { value: "quick", label: "Quick" },
-  { value: "standard", label: "Standard" },
-  { value: "deep", label: "Deep" },
-] as const;
-
-const RESEARCH_SOURCE_OPTIONS = [
-  {
-    value: "repo",
-    label: "This Workspace",
-    description: "Search across your workspace",
-    Icon: IconFolder,
-  },
-  {
-    value: "web",
-    label: "Web",
-    description: "Search the public web",
-    Icon: IconWorld,
-  },
-  {
-    value: "mcp",
-    label: "MCP connections",
-    description: "Search enabled MCP tools or research projections",
-    Icon: IconPlugConnected,
-  },
-] as const;
-
 interface WorkComposerProps {
   onOpenDictationSettings?: (() => void) | undefined;
   dictation?:
@@ -101,6 +79,9 @@ interface WorkComposerProps {
   researchDepth: ResearchDepth;
   researchSources: readonly ResearchSourceKind[];
   researchAvailable: boolean;
+  goalAvailable?: boolean;
+  goalMaxIterations?: number;
+  onGoalMaxIterationsChange?: (value: number) => void;
   approvalMode: ApprovalMode;
   approvalModeVisible: boolean;
   approvalModeAvailable: boolean;
@@ -163,6 +144,9 @@ export function WorkComposer({
   researchDepth,
   researchSources,
   researchAvailable,
+  goalAvailable = false,
+  goalMaxIterations = DEFAULT_GOAL_ITERATIONS,
+  onGoalMaxIterationsChange = () => {},
   approvalMode,
   approvalModeVisible,
   approvalModeAvailable,
@@ -217,6 +201,11 @@ export function WorkComposer({
     null,
   );
   const roleMissing = role.trim().length === 0;
+  const goalBlocked =
+    mode === "goal" &&
+    (!goalAvailable ||
+      !validGoalIterations(goalMaxIterations) ||
+      attachments.length > 0);
   const slashCommandDraft = prompt.trimStart().startsWith("/");
   const mentioningSkill = prompt.trimStart().startsWith("@");
   const slashCommandSuggestions = mentioningSkill
@@ -419,100 +408,34 @@ export function WorkComposer({
               />
               {mode === "research"
                 ? `Sources: ${researchSourceSummary || "None"}`
-                : roleMissing
-                  ? "Role required"
-                  : "Run controls"}
+                : mode === "goal"
+                  ? `Goal: ${Number.isFinite(goalMaxIterations) ? goalMaxIterations : "?"} iterations`
+                  : roleMissing
+                    ? "Role required"
+                    : "Run controls"}
             </summary>
             <div
               className={`run-controls-popover${mode === "research" ? " is-research" : ""}`}
             >
               {mode === "research" ? (
                 <>
-                  <header className="research-settings-header">
-                    <h3>Research settings</h3>
-                    <button
-                      className="research-settings-close"
-                      type="button"
-                      aria-label="Close research settings"
-                      onClick={(event) => {
-                        const controls = event.currentTarget.closest("details");
-                        controls?.removeAttribute("open");
-                        controls?.querySelector("summary")?.focus();
-                      }}
-                    >
-                      <IconX size={17} stroke={1.8} aria-hidden="true" />
-                    </button>
-                  </header>
-                  <fieldset className="research-depth-controls">
-                    <legend>Research depth</legend>
-                    <div className="research-depth-options">
-                      {RESEARCH_DEPTH_OPTIONS.map((option) => (
-                        <label
-                          className="research-depth-option"
-                          key={option.value}
-                        >
-                          <input
-                            type="radio"
-                            name="research-depth"
-                            value={option.value}
-                            checked={researchDepth === option.value}
-                            disabled={submitting}
-                            onChange={() => onResearchDepthChange(option.value)}
-                          />
-                          <span>{option.label}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </fieldset>
-                  <fieldset className="research-source-controls">
-                    <legend>Evidence sources</legend>
-                    <div className="research-source-options">
-                      {RESEARCH_SOURCE_OPTIONS.map((option) => {
-                        const selected = researchSources.includes(option.value);
-                        return (
-                          <label
-                            className={`research-source-option${selected ? " is-selected" : ""}`}
-                            key={option.value}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={selected}
-                              disabled={submitting}
-                              onChange={(event) => {
-                                const next = event.target.checked
-                                  ? [...researchSources, option.value]
-                                  : researchSources.filter(
-                                      (item) => item !== option.value,
-                                    );
-                                onResearchSourcesChange(next);
-                              }}
-                            />
-                            <span
-                              className="research-source-icon"
-                              aria-hidden="true"
-                            >
-                              <option.Icon size={19} stroke={1.7} />
-                            </span>
-                            <span className="research-source-copy">
-                              <strong>{option.label}</strong>
-                              <small>{option.description}</small>
-                            </span>
-                            <span
-                              className="research-source-checkbox"
-                              aria-hidden="true"
-                            >
-                              {selected ? (
-                                <IconCheck size={14} stroke={2.4} />
-                              ) : null}
-                            </span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </fieldset>
+                  <ResearchControls
+                    researchDepth={researchDepth}
+                    researchSources={researchSources}
+                    submitting={submitting}
+                    onResearchDepthChange={onResearchDepthChange}
+                    onResearchSourcesChange={onResearchSourcesChange}
+                  />
                 </>
               ) : (
                 <>
+                  {mode === "goal" ? (
+                    <GoalControls
+                      value={goalMaxIterations}
+                      disabled={submitting}
+                      onChange={onGoalMaxIterationsChange}
+                    />
+                  ) : null}
                   <label>
                     <span>Role</span>
                     <input
@@ -886,21 +809,25 @@ export function WorkComposer({
               ? "Slash commands run locally in Desktop and are never sent to the model."
               : mode === "research" && researchSources.length === 0
                 ? "Select at least one evidence source before starting Research."
-                : activeWorkRunning
-                  ? activeWorkNeedsInput
-                    ? "Queued messages wait until the required response is resolved. Redirect stops this response and sends your guidance next."
-                    : "Enter adds to Next up. Redirect stops this response and sends your guidance next."
-                  : queueing
-                    ? queuePaused
-                      ? "Next up is paused. Resume when you are ready; your draft and queued messages are kept."
-                      : "New messages join Next up. Resolve or remove a failed item to continue in order."
-                    : mode === "plan"
-                      ? planRevision === null
-                        ? "Create a plan before making changes."
-                        : "Revise this plan without making changes."
-                      : mode === "research"
-                        ? "Research your sources and return a report with citations."
-                        : "Enter to send · Shift+Enter for a new line"}
+                : goalBlocked
+                  ? "Goal requires an available target, 1–50 iterations, and a text-only prompt."
+                  : activeWorkRunning
+                    ? activeWorkNeedsInput
+                      ? "Queued messages wait until the required response is resolved. Redirect stops this response and sends your guidance next."
+                      : "Enter adds to Next up. Redirect stops this response and sends your guidance next."
+                    : queueing
+                      ? queuePaused
+                        ? "Next up is paused. Resume when you are ready; your draft and queued messages are kept."
+                        : "New messages join Next up. Resolve or remove a failed item to continue in order."
+                      : mode === "plan"
+                        ? planRevision === null
+                          ? "Create a plan before making changes."
+                          : "Revise this plan without making changes."
+                        : mode === "research"
+                          ? "Research your sources and return a report with citations."
+                          : mode === "goal"
+                            ? "Continue toward this objective within the Goal iteration limit."
+                            : "Enter to send · Shift+Enter for a new line"}
           </span>
           {promptBytes >= promptByteLimit * 0.8 || promptOverLimit ? (
             <span
@@ -945,6 +872,14 @@ export function WorkComposer({
               { value: "plan", label: "Plan" },
               { value: "execute", label: "Execute" },
               {
+                value: "goal",
+                label: "Goal",
+                disabled: !goalAvailable,
+                title: goalAvailable
+                  ? "Continue toward an objective within an explicit iteration limit"
+                  : "Goal mode requires an updated target with Goal tool access",
+              },
+              {
                 value: "research",
                 label: "Research",
                 disabled: !researchAvailable,
@@ -965,7 +900,8 @@ export function WorkComposer({
                 !activeWorkRedirectable ||
                 prompt.trim().length === 0 ||
                 promptOverLimit ||
-                roleMissing
+                roleMissing ||
+                goalBlocked
               }
               onClick={onRedirect}
             >
@@ -992,6 +928,7 @@ export function WorkComposer({
                 promptOverLimit ||
                 (!slashCommandDraft &&
                   (roleMissing ||
+                    goalBlocked ||
                     (mode === "research" && researchSources.length === 0)))
               }
             >

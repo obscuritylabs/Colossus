@@ -305,13 +305,36 @@ pub(crate) async fn delete_global_mcp_server(
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn upsert_global_provider(
+    app: AppHandle,
     state: State<'_, AppState>,
     request: UpsertGlobalProviderInput,
 ) -> Result<ManagedSettingsSnapshotDto, CommandErrorDto> {
     let _guard = connect_guard(&state)?;
     let store = settings_store()?;
     let mut settings = store.load()?;
+    let confirm_credential = request.provider.credential_id.as_deref().is_some_and(|id| {
+        !crate::provider_catalog::saved_catalog_credential_matches(
+            &settings,
+            request.provider.kind,
+            &request.provider.base_url,
+            id,
+        )
+    });
+    let origin = format!(
+        "{}: {}",
+        request.provider.profile, request.provider.base_url
+    );
     apply_provider_upsert(&mut settings, request)?;
+    // Saving a new credential destination establishes authority; catalog reads cannot.
+    if confirm_credential
+        && !crate::desktop_commands::confirm_provider_origins(&app, &[origin]).await?
+    {
+        return Err(CommandErrorDto::local_sanitized(
+            "provider_origin_confirmation",
+            "The model provider credential destination was not approved.",
+            false,
+        ));
+    }
     store.save(&settings)?;
     snapshot(state.inner(), &settings).await
 }
@@ -1603,6 +1626,20 @@ fn effective_yaml(
 #[allow(clippy::too_many_lines)]
 fn field_descriptors() -> Vec<FieldDescriptorDto> {
     vec![
+        descriptor(
+            "network.maxRedirects",
+            "Network",
+            "Maximum redirects",
+            "Limit redirects followed by web fetch requests. Set 0 to disable following redirects.",
+            "both",
+            "low",
+            "number",
+            false,
+            json!(10),
+            Some(0),
+            Some(20),
+            vec![],
+        ),
         advanced_descriptor(
             "access.tools.include",
             "Access",

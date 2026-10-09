@@ -76,6 +76,45 @@ function renderRevisionComposer(): string {
 }
 
 describe("WorkComposer capabilities", () => {
+  it("offers a standalone Goal without Plan continuation and shares explicit iteration controls", () => {
+    const markup = renderComposer(false, {
+      mode: "goal",
+      goalAvailable: true,
+      goalMaxIterations: 7,
+      prompt: "Verify the outcome",
+    });
+    expect(markup).toContain('value="goal"');
+    expect(markup).toContain("Goal: 7 iterations");
+    expect(markup).toContain("Goal iterations");
+    expect(markup).toContain('min="1" max="50"');
+    expect(markup).not.toContain("Revising Plan");
+    const send = markup.indexOf('aria-label="Send prompt"');
+    expect(markup.slice(send, markup.indexOf(">", send))).not.toContain(
+      "disabled",
+    );
+  });
+
+  it("blocks unavailable or invalid Goal submissions without changing the selected mode", () => {
+    for (const overrides of [
+      { goalAvailable: false },
+      { goalMaxIterations: 0 },
+      { goalMaxIterations: 51 },
+    ]) {
+      const markup = renderComposer(false, {
+        mode: "goal",
+        goalAvailable: true,
+        prompt: "Verify the outcome",
+        ...overrides,
+      });
+      const send = markup.indexOf('aria-label="Send prompt"');
+      expect(markup.slice(send, markup.indexOf(">", send))).toContain(
+        "disabled",
+      );
+      expect(markup).toContain('value="goal"');
+      expect(markup).toContain("Goal requires an available target");
+    }
+  });
+
   it("keeps normal prompts uncluttered and shows the byte limit near capacity", () => {
     const normal = renderComposer(true, { mode: "execute" });
     expect(normal).toContain("Enter to send · Shift+Enter for a new line");
@@ -143,7 +182,7 @@ describe("WorkComposer capabilities", () => {
     expect(markup).toContain("MCP connections");
     expect(markup).toContain("Research settings");
     expect(markup).toContain('aria-label="Close research settings"');
-    expect(markup).toContain('name="research-depth"');
+    expect(markup).toContain('name="research-depth-');
     expect(markup).toContain("Search across your workspace");
     expect(markup).toContain("Search the public web");
     expect(markup).toContain(

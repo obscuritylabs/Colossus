@@ -1,3 +1,6 @@
+import { ArtifactLibrary } from "@colossus/ui";
+import "@colossus/ui/styles/library.css";
+import { WorkspaceSurfaceHeader as SurfaceHeader } from "@colossus/ui";
 import {
   IconArchive,
   IconArrowUpRight,
@@ -86,26 +89,6 @@ interface OperationsSurfaceProps {
   onRemoveCaBundle: () => void;
   onImportClientIdentity: () => void;
   onRemoveClientIdentity: () => void;
-}
-
-function SurfaceHeader({
-  eyebrow,
-  title,
-  description,
-}: {
-  eyebrow: string;
-  title: string;
-  description: string;
-}) {
-  return (
-    <header className="surface-header overview-header">
-      <div className="surface-title-copy">
-        <p className="surface-breadcrumb">{eyebrow}</p>
-        <h2>{title}</h2>
-        <span>{description}</span>
-      </div>
-    </header>
-  );
 }
 
 function FleetView({
@@ -328,58 +311,7 @@ function FleetView({
 }
 
 function LibraryView({ artifacts }: Pick<OperationsSurfaceProps, "artifacts">) {
-  return (
-    <>
-      <SurfaceHeader
-        eyebrow="Library / Released artifacts"
-        title="Artifact library"
-        description="Safe metadata for files and outputs released through run messages."
-      />
-      <div className="overview-scroll" tabIndex={0}>
-        <section className="overview-section">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">Available in this session</p>
-              <h3>{artifacts.length} released artifacts</h3>
-            </div>
-          </div>
-          <div className="artifact-library-list">
-            {artifacts.map((artifact) => (
-              <article key={artifact.key}>
-                <span className="library-file-icon" aria-hidden="true">
-                  <IconFileText size={20} stroke={1.6} />
-                </span>
-                <div>
-                  <strong>{artifact.fileName}</strong>
-                  <span>
-                    {artifact.typeLabel} · {artifact.sizeLabel} ·{" "}
-                    {artifact.purposeLabel}
-                  </span>
-                </div>
-                <span
-                  className={`status-chip tone-${artifact.canOpen ? "success" : "attention"}`}
-                >
-                  {artifact.stateLabel}
-                </span>
-              </article>
-            ))}
-            {artifacts.length === 0 ? (
-              <div className="honest-empty compact-empty">
-                <IconArchive size={25} stroke={1.4} aria-hidden="true" />
-                <div>
-                  <strong>No released artifacts yet</strong>
-                  <p>
-                    Run outputs will appear after they cross the public release
-                    boundary.
-                  </p>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </section>
-      </div>
-    </>
-  );
+  return <ArtifactLibrary artifacts={artifacts} />;
 }
 
 function ConnectionsView({

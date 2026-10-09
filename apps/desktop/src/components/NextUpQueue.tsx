@@ -9,6 +9,8 @@ import { useState } from "react";
 import type { KeyboardEvent } from "react";
 
 import type { QueuedMessage } from "../message-queue";
+import { runModeLabel } from "../presenters";
+import { DEFAULT_GOAL_ITERATIONS } from "@colossus/ui/components/GoalControls";
 
 interface NextUpQueueProps {
   messages: readonly QueuedMessage[];
@@ -152,11 +154,10 @@ export function NextUpQueue({
                   <div className="next-up-copy">
                     <p>{message.prompt}</p>
                     <span>
-                      {message.mode === "plan"
-                        ? "Plan"
-                        : message.mode === "research"
-                          ? "Research"
-                          : "Execute"}
+                      {runModeLabel(message.mode)}
+                      {message.mode === "goal"
+                        ? ` · ${message.goalMaxIterations ?? DEFAULT_GOAL_ITERATIONS} iterations`
+                        : ""}
                       {message.attachments.length === 0
                         ? ""
                         : ` · ${message.attachments.length} attachment${message.attachments.length === 1 ? "" : "s"}`}

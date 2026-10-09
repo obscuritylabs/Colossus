@@ -1,7 +1,11 @@
+@import "./foundations.css";
+/* shadcn workbench: permanent web rail and independently collapsible scope pane. */
 .control-plane-frame {
-  min-height: 100dvh;
+  height: 100dvh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   background: var(--main);
   color: var(--text);
   font-family: var(--font-sans);
@@ -11,60 +15,65 @@
   display: flex;
   flex: 1;
   min-height: 0;
+  width: 100%;
+  overflow: hidden;
 }
 .control-primary-rail {
-  width: 78px;
+  width: 72px;
   flex: none;
   display: flex;
   flex-direction: column;
   align-items: center;
+  padding: 16px 7px 12px;
+  gap: 24px;
   background: var(--rail);
   border-right: 1px solid var(--border);
-  position: sticky;
-  top: 0;
-  height: 100dvh;
-  padding: 16px 6px 10px;
-  gap: 20px;
 }
 .control-brand img {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   display: block;
 }
 .control-primary-rail nav {
-  display: grid;
-  gap: 8px;
   width: 100%;
 }
-.control-primary-rail nav :is(button, a) {
+.control-primary-rail [data-slot="sidebar-menu"] {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  gap: 6px;
+}
+.control-primary-rail .control-rail-link {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 5px;
-  min-height: 60px;
-  padding: 10px 2px;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  background: transparent;
+  height: auto;
+  min-height: 56px;
+  padding: 8px 2px;
+  border: 0;
+  border-radius: var(--radius-sm);
   color: var(--muted);
-  font: inherit;
   font-size: var(--font-size-caption);
-  overflow-wrap: anywhere;
-  cursor: pointer;
+  text-align: center;
   text-decoration: none;
 }
-.control-primary-rail nav :is(button, a):hover {
+.control-primary-rail .control-rail-link > svg {
+  width: 20px;
+  height: 20px;
+}
+.control-primary-rail .control-rail-link:hover {
   background: var(--surface-hover);
   color: var(--text);
 }
-.control-primary-rail nav :is(button, a).is-active {
-  color: var(--accent-text);
+.control-primary-rail .control-rail-link[data-active="true"] {
   background: var(--surface-selected);
-  border-color: var(--accent-border);
+  color: var(--accent-text);
 }
-.control-primary-rail nav :is(button, a):focus-visible {
-  outline: 2px solid var(--cyan);
-  outline-offset: 2px;
+.control-primary-rail .control-rail-link span {
+  overflow: visible;
+  white-space: normal;
 }
 .control-rail-footer {
   margin-top: auto;
@@ -73,46 +82,125 @@
   align-items: center;
   gap: 12px;
 }
-.control-scope-sidebar {
-  width: 280px;
-  flex: none;
-  background: var(--sidebar);
-  border-right: 1px solid var(--border);
+.control-workbench {
+  flex: 1;
+  min-height: 0;
   min-width: 0;
+}
+.control-scope-panel,
+.control-content-panel {
+  height: 100%;
+  min-height: 0;
+}
+.control-scope-sidebar {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  background: var(--sidebar);
+  color: var(--text);
+  overflow: hidden;
 }
 .control-frame-main {
-  flex: 1;
+  height: 100%;
+  min-height: 0;
   min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
   background: var(--main);
+  outline: none;
 }
 .control-header {
-  min-height: 56px;
-  padding: 10px 24px;
+  flex: none;
+  min-height: 48px;
+  padding: 7px 20px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-header);
-  position: sticky;
-  top: 0;
-  z-index: 5;
-}
-.control-header > strong {
-  font-size: var(--font-size-body-sm);
-  color: var(--muted);
-  font-weight: 550;
-  white-space: nowrap;
+  background: var(--main);
 }
 .control-header > div {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
 }
-.control-frame-main > main {
-  outline: none;
-  min-width: 0;
+.control-header-context > strong {
+  font-size: var(--font-size-body-sm);
+  color: var(--muted);
+  font-weight: 500;
+}
+.control-header [data-slot="sidebar-trigger"] {
+  color: var(--muted);
+  min-height: var(--icon-control-size);
+  width: var(--icon-control-size);
+  padding: 4px;
+}
+.control-header [data-slot="sidebar-trigger"] svg {
+  width: 18px;
+  height: 18px;
+}
+.control-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.control-sidebar-resize {
+  width: 1px;
+  background: var(--border);
+}
+.control-sidebar-resize:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 0;
+}
+.control-mobile-sidebar {
+  width: min(90vw, 23rem);
+  max-width: none;
+  padding: 0;
+  gap: 0;
+  background: var(--sidebar);
+  color: var(--text);
+  border-right: 1px solid var(--border);
+}
+.control-mobile-sidebar .control-scope-sidebar {
+  padding-top: 36px;
+}
+@media (max-width: 760px) {
+  .control-primary-rail {
+    width: 56px;
+    padding: 12px 4px;
+    gap: 16px;
+  }
+  .control-primary-rail .control-rail-link {
+    min-height: 52px;
+  }
+  .control-header {
+    min-height: 48px;
+    padding: 8px 10px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .control-header-context > strong {
+    display: none;
+  }
+  .control-header > div:last-child {
+    flex: 1;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+  .control-header .header-project {
+    min-width: 0;
+  }
+  .control-header .header-project .app-select {
+    width: clamp(100px, 35vw, 210px);
+  }
+  .control-header .connection-indicator {
+    font-size: var(--font-size-caption);
+    white-space: nowrap;
+  }
 }
 .control-classification {
   min-height: 27px;
@@ -141,106 +229,4 @@
   background: var(--red-soft);
   color: var(--red-text);
   border-color: var(--red-border);
-}
-@media (max-width: 1100px) {
-  .control-scope-sidebar {
-    width: 245px;
-  }
-  .control-header {
-    padding-inline: 16px;
-  }
-}
-@media (max-width: 760px) {
-  .control-primary-rail {
-    width: 62px;
-    padding-inline: 4px;
-  }
-  .control-primary-rail nav :is(button, a) {
-    min-height: 56px;
-  }
-  .control-frame-layout {
-    display: grid;
-    grid-template-columns: 62px minmax(0, 1fr);
-  }
-  .control-primary-rail {
-    grid-column: 1;
-    grid-row: 1/3;
-  }
-  .control-scope-sidebar {
-    grid-column: 2;
-    grid-row: 1;
-    width: 100%;
-    border-bottom: 1px solid var(--border);
-    border-right: none;
-    max-height: 300px;
-    overflow: auto;
-  }
-  .control-frame-main {
-    grid-column: 2;
-    grid-row: 2;
-  }
-  .control-plane-frame:not(.has-scope-sidebar) .control-frame-main {
-    grid-row: 1/3;
-  }
-  .control-header {
-    position: static;
-    flex-wrap: wrap;
-    padding: 10px 12px;
-    gap: 8px;
-  }
-  .control-header > div {
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .control-header > strong {
-    display: none;
-  }
-}
-/* Keep classification markings around the viewport while content panes scroll. */
-.control-plane-frame {
-  height: 100dvh;
-  overflow: hidden;
-}
-.control-frame-layout {
-  overflow: hidden;
-}
-.control-primary-rail {
-  height: 100%;
-}
-.control-frame-main {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-.control-header {
-  flex: none;
-}
-.control-frame-main > main {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-}
-.control-scope-sidebar {
-  overflow: auto;
-  min-height: 0;
-}
-.control-classification {
-  flex: none;
-}
-@media (max-width: 760px) {
-  .control-frame-layout {
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-  .control-plane-frame:not(.has-scope-sidebar) .control-frame-layout {
-    grid-template-rows: minmax(0, 1fr);
-  }
-  .control-plane-frame:not(.has-scope-sidebar) .control-frame-main {
-    grid-row: 1;
-  }
-  .control-plane-frame:not(.has-scope-sidebar) .control-primary-rail {
-    grid-row: 1;
-  }
-  .control-primary-rail {
-    min-height: 0;
-  }
 }

@@ -46,7 +46,10 @@ rappct = { workspace = true, features = ["net"] }
 [dev-dependencies]
 colossus-ports.workspace = true
 colossus-testkit.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
 tempfile.workspace = true
+tokio-rustls.workspace = true
 
 [lints]
 workspace = true

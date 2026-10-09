@@ -326,8 +326,9 @@ must be listed exactly. An exact declaration authorizes the destination, but doe
 weaken the transport: non-loopback plaintext HTTP still requires acknowledged ambient
 authority. The wildcard does not authorize raw sockets, non-HTTP protocols, credentials,
 actions, or a sandbox bypass. Network effects retain DNS pinning, TLS authority checks
-for HTTPS, disabled ambient proxies and redirects, bounded connections, and
-private-address rejection for wildcard destinations.
+for HTTPS, disabled ambient proxies, bounded connections, and private-address rejection
+for wildcard destinations. Brokered fetch redirects obey the same destination checks
+and the configured [`network.maxRedirects`](network.md#brokered-http-redirects) limit.
 
 These destinations constrain Colossus-owned HTTP adapters under configured and external
 boundaries. Acknowledged `danger_full_access` instead binds each requested canonical
