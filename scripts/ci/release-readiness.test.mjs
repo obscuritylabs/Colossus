@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 
 function verifySources(t, files) {
@@ -39,7 +39,7 @@ function verifySources(t, files) {
   return spawnSync("sh", ["release/verify-release-readiness.sh"], {
     cwd: root,
     encoding: "utf8",
-    env: { ...process.env, PATH: bin + ":" + process.env.PATH },
+    env: { ...process.env, PATH: bin + delimiter + process.env.PATH },
     timeout: 10_000,
   });
 }
