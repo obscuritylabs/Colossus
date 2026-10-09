@@ -541,6 +541,69 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
 }
 
 #[test]
+fn premerge_provisions_selected_inventory_tools_before_their_consumers() {
+    let workflow = workflow("premerge.yml");
+    for (name, expected) in [
+        ("linux-rust-integration", vec!["rust node"]),
+        ("macos-native", vec!["rust"]),
+        ("credential-vault", vec!["rust"]),
+        ("macos-desktop-acceptance", vec!["rust node"]),
+        ("macos-desktop-bundle", vec!["rust node"]),
+        ("windows-runtime", vec!["node", "rust"]),
+        ("windows-desktop", vec!["node", "rust"]),
+        ("fuzz", vec!["rust cargo:cargo-fuzz"]),
+        (
+            "supply-chain",
+            vec!["rust aqua:EmbarkStudios/cargo-deny aqua:rustsec/rustsec/cargo-audit"],
+        ),
+        ("chroma", vec!["rust"]),
+        ("storage", vec!["rust"]),
+        ("live-security", vec!["rust"]),
+    ] {
+        let steps = field(job(jobs(&workflow), name), "steps")
+            .as_array()
+            .expect("job steps");
+        let selected = steps
+            .iter()
+            .filter(|step| {
+                step.get("uses").and_then(serde_json::Value::as_str)
+                    == Some("./.github/actions/setup-toolchain")
+            })
+            .map(|step| step["with"]["tools"].as_str().expect("selected tools"))
+            .collect::<Vec<_>>();
+        assert_eq!(selected, expected, "{name} inventory selection");
+        for (index, step) in steps.iter().enumerate() {
+            if step.get("uses").and_then(serde_json::Value::as_str)
+                == Some("./.github/actions/setup-toolchain")
+            {
+                assert!(
+                    steps[..index].iter().any(|prior| prior
+                        .get("uses")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|uses| uses.starts_with("actions/checkout@"))),
+                    "{name} checks out before local setup"
+                );
+            }
+        }
+    }
+    let windows = field(job(jobs(&workflow), "windows-runtime"), "steps")
+        .as_array()
+        .expect("Windows steps");
+    let renderer = windows
+        .iter()
+        .position(|step| step["id"].as_str() == Some("renderer_contracts"))
+        .expect("renderer contracts");
+    let rust = windows
+        .iter()
+        .position(|step| step["with"]["tools"].as_str() == Some("rust"))
+        .expect("Rust setup");
+    assert!(
+        renderer < rust,
+        "renderer checks remain independent of Rust installation"
+    );
+}
+
+#[test]
 fn rust_codegen_uses_an_exact_vendored_protoc_on_every_runner() {
     let workspace =
         fs::read_to_string(repository_root().join("Cargo.toml")).expect("read workspace manifest");
@@ -710,8 +773,8 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "--method DELETE",
         ".ci-trusted/scripts/ci/require-success.sh",
         "release/install-apparmor.sh",
-        "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0",
-        "components: clippy,rustfmt",
+        "uses: ./.github/actions/setup-toolchain",
+        "tools: rust node",
         "CARGO_INCREMENTAL: \"0\"",
         "CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target",
         "cargo xtask check desktop",
@@ -1302,16 +1365,20 @@ fn devcontainer_pins_the_supported_cross_language_toolchains() {
     );
 
     let features = mapping(field(config, "features"), "dev container features");
-    let rust = mapping(
-        field(features, "ghcr.io/devcontainers/features/rust:1"),
-        "Rust dev container feature",
-    );
-    assert_eq!(field(rust, "version").as_str(), Some("1.96.0"));
     assert!(features.contains_key("ghcr.io/devcontainers/features/docker-in-docker:4"));
     assert_eq!(
         features.len(),
-        2,
-        "language runtimes must not pull unpinned global tool suites through features"
+        1,
+        "mise owns language provisioning; features supply Docker only"
+    );
+    assert_eq!(
+        field(mapping(field(config, "build"), "build inputs"), "context").as_str(),
+        Some(".."),
+        "container builds must read the repository inventory"
+    );
+    assert_eq!(
+        field(config, "postCreateCommand").as_str(),
+        Some("mise trust && mise install --locked")
     );
 
     let environment = mapping(field(config, "containerEnv"), "dev container environment");
@@ -1359,7 +1426,7 @@ fn devcontainer_pins_the_supported_cross_language_toolchains() {
         .lines()
         .filter(|line| line.starts_with("FROM "))
         .collect::<Vec<_>>();
-    assert_eq!(base_images.len(), 5);
+    assert!(!base_images.is_empty());
     for image in base_images {
         assert!(
             image.contains("@sha256:"),
@@ -1367,14 +1434,12 @@ fn devcontainer_pins_the_supported_cross_language_toolchains() {
         );
     }
     for required in [
-        "node:22.18.0-bookworm-slim",
-        "python:3.10.18-slim-bookworm",
-        "golang:1.25.0-bookworm",
-        "rust:1.96.0-bookworm",
         "mcr.microsoft.com/devcontainers/base:2-bookworm",
-        "github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
-        "cargo-deny --version 0.20.2 --locked",
-        "cargo-audit --version 0.22.2 --locked",
+        "mise.toml mise.lock rust-toolchain.toml",
+        "mise install --locked",
+        "rustup component add rust-analyzer rust-src",
+        "mise-bootstrap.sh",
+        "--install /usr/local/bin/mise",
         "clang",
         "libsecret-1-dev",
         "libwebkit2gtk-4.1-dev",
@@ -1645,14 +1710,18 @@ fn windows_native_acceptance_cannot_be_masked_by_a_later_command() {
 fn bounded_fuzzing_uses_the_pinned_nightly_and_limits() {
     let workflow = workflow("premerge.yml");
     let fuzz = job(jobs(&workflow), "fuzz");
-    let install = named_step(fuzz, "Install pinned nightly Rust");
     assert_eq!(
-        field(
-            mapping(field(install, "with"), "nightly inputs"),
-            "toolchain"
-        )
-        .as_str(),
-        Some("nightly-2026-07-10")
+        field(mapping(field(fuzz, "env"), "fuzz environment"), "MISE_ENV").as_str(),
+        Some("fuzz")
+    );
+    let install = named_step(fuzz, "Install selected fuzz toolchain");
+    assert_eq!(
+        field(install, "uses").as_str(),
+        Some("./.github/actions/setup-toolchain")
+    );
+    assert_eq!(
+        field(mapping(field(install, "with"), "fuzz inputs"), "tools").as_str(),
+        Some("rust cargo:cargo-fuzz")
     );
     let run = field(
         named_step(fuzz, "Run bounded security parser fuzzing"),
@@ -1661,7 +1730,8 @@ fn bounded_fuzzing_uses_the_pinned_nightly_and_limits() {
     .as_str()
     .expect("fuzz command");
     for required in [
-        "cargo +nightly-2026-07-10 fuzz run",
+        "nightly=$(mise current rust)",
+        "cargo +\"$nightly\" fuzz run",
         "-runs=5000",
         "-max_len=65536",
         "-timeout=10",

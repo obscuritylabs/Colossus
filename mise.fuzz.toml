@@ -1,0 +1,4 @@
+# Only the bounded fuzz job selects this environment; stable Rust stays unchanged.
+[tools]
+rust = { version = "{{ vars.fuzz_rust }}", profile = "minimal" }
+"cargo:cargo-fuzz" = { version = "{{ vars.cargo_fuzz }}", locked = true }
