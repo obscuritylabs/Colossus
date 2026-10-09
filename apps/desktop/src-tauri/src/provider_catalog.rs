@@ -5,9 +5,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
 use crate::{
-    desktop_commands::{
-        confirm_provider_origins, connect_guard, credential_parent, settings_store,
-    },
+    desktop_commands::{connect_guard, credential_parent, settings_store},
     desktop_dto::{
         ApplyManagedModelConfigurationInput, ConfigureManagedRuntimeInput, CredentialActionInput,
         ManagedModelInput, ManagedProviderInput,
@@ -60,21 +58,6 @@ pub(crate) async fn discover_managed_provider_models(
     let store = settings_store()?;
     let mut settings = store.load()?;
     validate_request(&settings, &request)?;
-    let origins = if request.provider_kind == ProviderKindSetting::Codex {
-        vec![
-            "https://chatgpt.com".into(),
-            "https://auth.openai.com".into(),
-        ]
-    } else {
-        vec![request.base_url.clone()]
-    };
-    if !confirm_provider_origins(&app, &origins).await? {
-        return Err(CommandErrorDto::local_sanitized(
-            "provider_origin_confirmation",
-            "Provider model discovery was cancelled.",
-            false,
-        ));
-    }
     let credential_id = match request.credential_action {
         CredentialActionInput::None => None,
         CredentialActionInput::Reuse => Some(reusable_credential(&settings, &request)?),

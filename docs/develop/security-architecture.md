@@ -254,15 +254,26 @@ exact private HTTPS origins and exact loopback HTTP origins remain possible. Und
 declared authority, even an exact origin cannot authorize non-loopback plaintext HTTP.
 Provider, search, integration, brokered HTTP,
 semantic memory, native/Windows process proxy, and OCI proxy paths share this matcher,
-pin DNS results, validate TLS authority, reject ambient proxies and redirects, bound
+pin DNS results, validate TLS authority, reject ambient proxies, bound
 connections, and quarantine responses. Process proxy results record a bounded list of
 allowed observed origins.
+
+Bodyless brokered HTTP GET/HEAD effects may follow 301, 302, 303, 307, and 308 redirects
+within `network.maxRedirects` (default 10, maximum 20, zero disables following). Each hop
+is checked against the original permit's HTTP transport and destination obligations,
+then receives fresh DNS pinning and normal TLS verification. HTTPS-to-HTTP downgrades,
+cycles, malformed or ambiguous locations, and URLs over 8192 bytes fail closed. The
+gateway deadline covers the entire chain and only the bounded final body proceeds to
+post-effect release. Redirect URL query secrets are excluded from transport errors.
+Mutating or body-bearing requests, WORM audit exports, and other in-process adapter
+families retain redirect rejection; shared clients never enable reqwest's automatic
+redirect handling. Fetch does not carry cookies or perform browser/form authentication.
 
 Under ambient authority, the destination classifier no longer rejects a requested
 non-public HTTP(S) origin and no configured destination entry is required. URL
 canonicalization, HTTP(S)-only transport, credential-in-URL rejection, safe headers,
-DNS pinning, disabled ambient proxies and redirects, response bounds, quarantine,
-post-effect policy, and durable evidence remain mandatory. HTTPS still receives normal
+DNS pinning, disabled ambient proxies, the same redirect restrictions, response bounds,
+quarantine, post-effect policy, and durable evidence remain mandatory. HTTPS still receives normal
 certificate and hostname validation. Ambient authority also accepts canonical
 non-loopback plaintext HTTP, which has no TLS confidentiality or server authentication
 and can expose request content and credentials in transit. Provider routes,

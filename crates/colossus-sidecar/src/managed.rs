@@ -1702,6 +1702,42 @@ mod tests {
     }
 
     #[test]
+    fn managed_redirect_limit_reaches_canonical_runtime_with_its_bounds() {
+        let instance = tempfile::tempdir().expect("instance");
+        let mut managed = test_managed_runtime();
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+            .expect("default config");
+        assert_eq!(config.network.max_redirects, 10);
+
+        for limit in [0, 1, 10, 20] {
+            managed.field_overrides = vec![ManagedFieldOverride {
+                field_id: "network.maxRedirects".into(),
+                value: serde_json::json!(limit),
+            }];
+            managed.validate().expect("valid managed override");
+            let config =
+                managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+                    .expect("overridden redirect limit");
+            assert_eq!(config.network.max_redirects, limit);
+        }
+
+        for value in [
+            serde_json::json!(21),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("10"),
+            serde_json::Value::Null,
+        ] {
+            managed.field_overrides[0].value = value;
+            assert_eq!(
+                managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+                    .expect_err("invalid redirect limit"),
+                FailureCode::InvalidConfiguration,
+            );
+        }
+    }
+
+    #[test]
     fn managed_field_overrides_reach_runtime_without_crossing_locked_boundaries() {
         let instance = tempfile::tempdir().expect("instance");
         let mut managed = test_managed_runtime();

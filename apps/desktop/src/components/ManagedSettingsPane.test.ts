@@ -26,6 +26,7 @@ import {
   buildManagedSettingsFixture,
   ExtensionCatalog,
   FieldGrid,
+  inheritedFieldValues,
   inheritedPluginValues,
   managedModel,
   managedModelConsumers,
@@ -866,6 +867,48 @@ describe("ManagedSettingsPane", () => {
         semantic.id,
       ),
     ).toBe(true);
+  });
+
+  it("previews redirect inheritance from the accepted global revision and preserves a zero draft", () => {
+    const snapshot = buildManagedSettingsFixture(desktop());
+    const workspace = snapshot.spaces[0]!;
+    workspace.configuration.acceptedGlobalRevision = 3;
+    workspace.configuration.fieldOverrides = [
+      { fieldId: "network.maxRedirects", value: 0 },
+    ];
+    workspace.effectiveValues = [
+      { fieldId: "network.maxRedirects", value: 0, source: "space" },
+    ];
+    const current = snapshot.globalConfiguration.defaults.revisions[0]!.value;
+    current.fieldOverrides = [{ fieldId: "network.maxRedirects", value: 6 }];
+    snapshot.globalConfiguration.defaults.revisions.push({
+      revision: 3,
+      value: {
+        ...current,
+        fieldOverrides: [{ fieldId: "network.maxRedirects", value: 2 }],
+      },
+    });
+    const inherited = inheritedFieldValues(snapshot, workspace);
+    expect(inherited.get("network.maxRedirects")).toEqual({
+      value: 2,
+      source: "global",
+    });
+    const descriptor = snapshot.fieldDescriptors.find(
+      ({ id }) => id === "network.maxRedirects",
+    )!;
+    const render = (values: Record<string, unknown>) =>
+      renderToStaticMarkup(
+        createElement(FieldGrid, {
+          descriptors: [descriptor],
+          values,
+          effective: inherited,
+          scope: "space",
+          onChange: vi.fn(),
+          onInherit: vi.fn(),
+        }),
+      );
+    expect(render({ "network.maxRedirects": 0 })).toContain('value="0"');
+    expect(render({})).toContain('value="2"');
   });
 
   it("previews inherited plugins from the accepted revision rather than the saved override or latest global revision", () => {

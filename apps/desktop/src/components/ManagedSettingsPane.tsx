@@ -527,6 +527,16 @@ const EMPTY_TELEMETRY_DRAFT: TelemetryEditorDraft = {
 };
 
 const FIELD_DESCRIPTORS: ManagedFieldDescriptor[] = [
+  field(
+    "network.maxRedirects",
+    "Network",
+    "Maximum redirects",
+    "Limit redirects followed by web fetch requests. Set 0 to disable following redirects.",
+    10,
+    false,
+    0,
+    20,
+  ),
   advancedField(
     "access.tools.include",
     "Access",
@@ -1296,7 +1306,7 @@ function defaultOverrides(
   );
 }
 
-export function inheritedPluginValues(
+export function inheritedFieldValues(
   snapshot: ManagedSettingsSnapshot,
   space: ManagedSpaceConfigurationSnapshot,
 ) {
@@ -1304,9 +1314,21 @@ export function inheritedPluginValues(
     ({ revision }) => revision === space.configuration.acceptedGlobalRevision,
   );
   return new Map(
-    (accepted?.value.fieldOverrides ?? [])
-      .filter(({ fieldId }) => fieldId.startsWith("plugins."))
-      .map(({ fieldId, value }) => [fieldId, { value, source: "global" }]),
+    (accepted?.value.fieldOverrides ?? []).map(({ fieldId, value }) => [
+      fieldId,
+      { value, source: "global" },
+    ]),
+  );
+}
+
+export function inheritedPluginValues(
+  snapshot: ManagedSettingsSnapshot,
+  space: ManagedSpaceConfigurationSnapshot,
+) {
+  return new Map(
+    [...inheritedFieldValues(snapshot, space)].filter(([fieldId]) =>
+      fieldId.startsWith("plugins."),
+    ),
   );
 }
 
@@ -1942,9 +1964,9 @@ export function ManagedSettingsPane({
   const descriptors = snapshot.fieldDescriptors.length
     ? snapshot.fieldDescriptors
     : FIELD_DESCRIPTORS;
-  const effective = new Map(
-    selectedSpace?.effectiveValues.map((value) => [value.fieldId, value]) ?? [],
-  );
+  const effective = selectedSpace
+    ? inheritedFieldValues(snapshot, selectedSpace)
+    : new Map();
 
   function beginAction() {
     if (actionInFlight.current || connecting) return false;

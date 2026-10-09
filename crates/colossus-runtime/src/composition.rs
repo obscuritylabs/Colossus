@@ -706,7 +706,12 @@ impl Runtime {
                 workspace_identity.clone(),
                 Arc::clone(&mcp_executor),
             ));
-        let http_executor = Arc::new(HttpExecutor::new().with_tls_roots(tls_roots.clone()));
+        let http_executor = Arc::new(
+            HttpExecutor::new()
+                .with_tls_roots(tls_roots.clone())
+                .with_max_redirects(config.network.max_redirects)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
         let mut known_capabilities = access
             .actions
             .iter()

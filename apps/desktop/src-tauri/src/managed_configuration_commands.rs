@@ -1603,6 +1603,20 @@ fn effective_yaml(
 #[allow(clippy::too_many_lines)]
 fn field_descriptors() -> Vec<FieldDescriptorDto> {
     vec![
+        descriptor(
+            "network.maxRedirects",
+            "Network",
+            "Maximum redirects",
+            "Limit redirects followed by web fetch requests. Set 0 to disable following redirects.",
+            "both",
+            "low",
+            "number",
+            false,
+            json!(10),
+            Some(0),
+            Some(20),
+            vec![],
+        ),
         advanced_descriptor(
             "access.tools.include",
             "Access",

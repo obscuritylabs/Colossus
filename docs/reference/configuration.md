@@ -70,6 +70,7 @@ storage:
   keys:
     kind: none
 network:
+  maxRedirects: 10
   caBundlePath: null
   clientCertificatePath: null
   clientKeyPath: null
@@ -219,7 +220,7 @@ process launch. YAML contains names and identities, never the values.
 | `schemaVersion` | Yes | Strict configuration schema identity | This page |
 | `access` | No | Tool selection and built-in action overrides; defaults to `allow_all` | [Access](configuration/access.md) |
 | `storage` | Yes | Journal adapter, key provider, and anchor | [Storage](configuration/storage.md) |
-| `network` | No | Runtime-wide additional CA certificate bundle | [Network trust](configuration/network.md) |
+| `network` | No | Brokered HTTP redirect limit, shared CA trust, and mTLS identity | [Network configuration](configuration/network.md) |
 | `policy` | No | Built-in or OPA action decisions; defaults to built-in | [Policy and audit](configuration/policy-audit.md) |
 | `workflows` | No | Repository and user workflow roots | [Plugins and workflows](configuration/extensions.md) |
 | `providers` | No | Named provider connections; defaults to `echo` | [Providers and models](configuration/providers-models.md) |

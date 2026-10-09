@@ -1,11 +1,45 @@
 ---
-title: Network TLS configuration
-description: Configure additional certificate authorities and a PEM client identity for Colossus-owned outbound TLS.
+title: Network configuration
+description: Configure brokered HTTP redirects, additional certificate authorities, and a PEM client identity for outbound TLS.
 audience: operator
 type: reference
 ---
 
-# Network TLS configuration
+# Network configuration
+
+## Brokered HTTP redirects
+
+`network.maxRedirects` sets the default redirect limit for `web.fetch`, `docs.fetch`,
+and `network.http`:
+
+```yaml
+network:
+  maxRedirects: 10
+```
+
+In Desktop, set **Maximum redirects** under **Settings → Global → Defaults**.
+Override it for a workspace under **Settings → Workspace → Runtime**, or choose
+**Inherit** to use the global value. Saved settings apply when the runtime is idle.
+
+The default is `10`. Values from `0` through `20` are accepted; `0` disables
+redirect following. Restart the runtime after editing YAML directly.
+
+Bodyless GET and HEAD effects follow HTTP 301, 302, 303, 307, and 308 responses.
+Relative `Location` values resolve against the current URL. Every destination must
+match the original permit's network authority and pass fresh DNS pinning and TLS
+validation before a request is sent. Under isolation, grant every required origin in
+`sandbox.networkDestinations`, including the service provider and identity provider
+when following a SAML redirect chain. HTTPS-to-HTTP downgrades, loops, invalid or
+missing locations, and chains exceeding the limit fail. The effect timeout covers the
+whole chain; the output bound applies to the final response body.
+
+Fetch returns the final response body after quarantine and post-effect authorization.
+It does not retain cookies, execute JavaScript, submit forms, or complete interactive
+SAML login. Redirect query parameters are preserved, but errors do not expose redirect
+URLs. Requests with bodies, mutating HTTP methods, WORM audit writes, and other adapter
+families such as providers or MCP do not gain redirect following from this setting.
+
+## Shared TLS settings
 
 `network` adds certificate authorities and, optionally, one PEM client certificate
 and key to Colossus-owned outbound TLS clients. Neither setting authorizes a
@@ -142,10 +176,11 @@ public roots:
 | PostgreSQL | `webpki_roots` TLS policy; mTLS identity also applies with `custom_ca` |
 | OPA | Shared pinned trust when remote OPA omits `ca_pem_path` |
 
-Destination matching, DNS pinning, redirect rejection, bounded bodies, timeouts, permit
-checks, quarantine, and audit remain active. Trusting a CA does not weaken those
-controls. Desktop's update client keeps CA trust but does not offer the imported
-identity because signed package downloads may redirect across HTTPS origins.
+Destination matching, DNS pinning, bounded bodies, timeouts, permit checks, quarantine,
+and audit remain active. Brokered HTTP fetch checks every permitted redirect hop;
+other clients retain their adapter-specific redirect restrictions. Trusting a CA does
+not weaken those controls. Desktop's update client keeps CA trust but does not offer the
+imported identity because signed package downloads may redirect across HTTPS origins.
 Sandboxed or stdio MCP child processes, the optional browser preview, and external
 Colossus daemons use their own TLS stacks and settings.
 
