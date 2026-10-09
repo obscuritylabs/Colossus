@@ -25,6 +25,20 @@ pub(super) fn adapter_error(error: impl std::fmt::Display) -> StoreError {
     StoreError::Adapter(error.to_string())
 }
 
+/// Malformed durable data is an integrity failure, not a transient adapter failure.
+pub(super) fn decode_journal_json<'de, T: Deserialize<'de>>(
+    bytes: &'de [u8],
+) -> Result<T, StoreError> {
+    serde_json::from_slice(bytes).map_err(|error| {
+        StoreError::Verification(format!(
+            "invalid stored journal JSON at line {}, column {} ({:?})",
+            error.line(),
+            error.column(),
+            error.classify()
+        ))
+    })
+}
+
 pub(super) fn utc_now() -> Result<String, StoreError> {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)

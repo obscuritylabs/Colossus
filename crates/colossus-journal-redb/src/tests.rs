@@ -40,6 +40,10 @@ use std::{
 };
 use tempfile::tempdir;
 
+mod integrity;
+mod keys;
+mod projections;
+
 fn event(stream: &str, version: u64, value: u64) -> NewEvent {
     NewEvent {
         event_version: 1,

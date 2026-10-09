@@ -1,4 +1,7 @@
 use super::*;
+use std::io::{Read, Write};
+
+const MAX_SECURE_ANCHOR_BYTES: usize = 8192;
 
 /// Keyless provider selecting hash-chained plaintext journal payloads.
 #[derive(Default)]
@@ -55,10 +58,14 @@ impl StaticKeyProvider {
     /// Add a new key and atomically make it active while retaining historical keys.
     pub fn rotate(&self, key_id: impl Into<String>, key: [u8; 32]) -> Result<(), StoreError> {
         let key_id = key_id.into();
-        self.keys
-            .lock()
-            .map_err(adapter_error)?
-            .insert(key_id.clone(), key);
+        let mut keys = self.keys.lock().map_err(adapter_error)?;
+        if keys.get(&key_id).is_some_and(|existing| *existing != key) {
+            return Err(StoreError::Adapter(
+                "a historical key identity cannot be assigned different key material".into(),
+            ));
+        }
+        keys.insert(key_id.clone(), key);
+        drop(keys);
         *self.active_id.lock().map_err(adapter_error)? = key_id;
         Ok(())
     }
@@ -150,23 +157,37 @@ impl KeyProvider for EnvironmentKeyProvider {
     }
 
     fn store_anchor(&self, anchor: &SecureAnchor) -> Result<(), StoreError> {
-        if let Some(parent) = self.anchor_path.parent() {
-            fs::create_dir_all(parent).map_err(adapter_error)?;
-        }
-        let temporary = self.anchor_path.with_extension("tmp");
+        let parent = self
+            .anchor_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent).map_err(adapter_error)?;
+        let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(adapter_error)?;
         let body = serde_json::to_vec(anchor).map_err(adapter_error)?;
-        fs::write(&temporary, body).map_err(adapter_error)?;
-        fs::rename(temporary, &self.anchor_path).map_err(adapter_error)
+        temporary.write_all(&body).map_err(adapter_error)?;
+        temporary.as_file().sync_all().map_err(adapter_error)?;
+        temporary
+            .persist(&self.anchor_path)
+            .map_err(adapter_error)?;
+        #[cfg(unix)]
+        File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(adapter_error)?;
+        Ok(())
     }
 
     fn load_anchor(&self) -> Result<Option<SecureAnchor>, StoreError> {
-        if !self.anchor_path.exists() {
-            return Ok(None);
-        }
-        let value: Value =
-            serde_json::from_slice(&fs::read(&self.anchor_path).map_err(adapter_error)?)
-                .map_err(adapter_error)?;
-        decode_anchor(&value).map(Some)
+        let file = match File::open(&self.anchor_path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(adapter_error(error)),
+        };
+        let mut body = Vec::new();
+        file.take((MAX_SECURE_ANCHOR_BYTES + 1) as u64)
+            .read_to_end(&mut body)
+            .map_err(adapter_error)?;
+        decode_secure_anchor(&body).map(Some)
     }
 }
 
@@ -288,8 +309,7 @@ impl KeyProvider for PlatformKeyProvider {
             Err(keyring::Error::NoEntry) => return Ok(None),
             Err(error) => return Err(adapter_error(error)),
         };
-        let value: Value = serde_json::from_slice(&body).map_err(adapter_error)?;
-        decode_anchor(&value).map(Some)
+        decode_secure_anchor(&body).map(Some)
     }
 }
 
@@ -302,19 +322,24 @@ fn decode_anchor(value: &Value) -> Result<SecureAnchor, StoreError> {
         .get("hash")
         .and_then(Value::as_str)
         .ok_or_else(|| StoreError::Verification("secure anchor has no hash".into()))?;
-    let format_version = value
-        .get("format_version")
-        .and_then(Value::as_u64)
-        .map_or(Ok(1_u16), |version| {
-            u16::try_from(version).map_err(adapter_error)
-        })?;
+    let format_version = value.get("format_version").map_or(Ok(1_u16), |version| {
+        version
+            .as_u64()
+            .and_then(|version| u16::try_from(version).ok())
+            .ok_or_else(|| {
+                StoreError::Verification("secure anchor format version is invalid".into())
+            })
+    })?;
     let verification_profile = value
         .get("verification_profile")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
     let status = value
         .get("status")
-        .map(|status| serde_json::from_value(status.clone()).map_err(adapter_error))
+        .map(|status| {
+            serde_json::from_value(status.clone())
+                .map_err(|_| StoreError::Verification("secure anchor status is invalid".into()))
+        })
         .transpose()?
         .unwrap_or_default();
     Ok(SecureAnchor {
@@ -329,7 +354,7 @@ fn decode_anchor(value: &Value) -> Result<SecureAnchor, StoreError> {
 /// Decode the canonical current or legacy protected anchor without changing its
 /// sequence, hash, verification profile or status during explicit custody rewrap.
 pub fn decode_secure_anchor(bytes: &[u8]) -> Result<SecureAnchor, StoreError> {
-    if bytes.len() > 8192 {
+    if bytes.len() > MAX_SECURE_ANCHOR_BYTES {
         return Err(StoreError::Verification(
             "secure anchor exceeds bound".into(),
         ));

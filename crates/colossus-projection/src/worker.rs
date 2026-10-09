@@ -1,6 +1,9 @@
 use super::*;
 use std::{collections::BTreeMap, sync::Mutex};
 
+mod overlay;
+use overlay::ProjectionOverlay;
+
 /// Pure event-to-projection reducer.
 pub trait ProjectionHandler: Send + Sync {
     /// Stable name containing a schema version.
@@ -17,6 +20,9 @@ pub trait ProjectionHandler: Send + Sync {
     }
 
     /// Produce record mutations for one journal event.
+    ///
+    /// The read-only store includes earlier mutations and checkpoint advances in
+    /// the current bounded round. The worker commits the round after reduction.
     fn project(
         &self,
         store: &dyn ProjectionStore,
@@ -81,12 +87,13 @@ impl ProjectionWorker {
         limit_per_projection: usize,
     ) -> Result<ProjectionRunReport, StoreError> {
         let mut applied = 0_u64;
-        let mut passive_batches = Vec::new();
-        let mut passive_applied = 0_u64;
+        let mut pending = ProjectionOverlay::new(self.store.as_ref());
         let mut pages = BTreeMap::new();
         for handler in &self.handlers {
             let position = self.store.position(handler.name())?;
-            let from_sequence = position.saturating_add(1);
+            let Some(from_sequence) = position.checked_add(1) else {
+                continue;
+            };
             let page = match pages.get(&from_sequence) {
                 Some(page) => Arc::clone(page),
                 None => {
@@ -103,66 +110,28 @@ impl ProjectionWorker {
                 continue;
             };
             let through_sequence = last_event.global_sequence;
-            if page.iter().all(|(_, event)| !handler.applies_to(event)) {
-                passive_batches.push(ProjectionBatch {
-                    projection: handler.name().into(),
-                    expected_position: position,
-                    through_sequence,
-                    mutations: Vec::new(),
-                });
-                passive_applied =
-                    passive_applied.saturating_add(through_sequence.saturating_sub(position));
-                continue;
-            }
-            if !passive_batches.is_empty() {
-                self.store.apply_all(&passive_batches)?;
-                applied = applied.saturating_add(passive_applied);
-                passive_batches.clear();
-                passive_applied = 0;
-            }
-
-            let mut projected_position = position;
-            let mut passive_through = None;
             for (_, event) in page.iter() {
-                if !handler.applies_to(event) {
-                    passive_through = Some(event.global_sequence);
-                    continue;
-                }
-                if let Some(through_sequence) = passive_through.take() {
-                    self.apply_passive_span(
-                        handler.name(),
-                        &mut projected_position,
-                        through_sequence,
-                        &mut applied,
-                    )?;
-                }
-                let payload = if handler.requires_payload() {
-                    self.journal.decrypt_payload(event)?
+                let mutations = if handler.applies_to(event) {
+                    let payload = if handler.requires_payload() {
+                        self.journal.decrypt_payload(event)?
+                    } else {
+                        Value::Null
+                    };
+                    handler.project(&pending, event, &payload)?
                 } else {
-                    Value::Null
+                    Vec::new()
                 };
-                let mutations = handler.project(self.store.as_ref(), event, &payload)?;
-                self.store.apply(ProjectionBatch {
-                    projection: handler.name().into(),
-                    expected_position: projected_position,
-                    through_sequence: event.global_sequence,
-                    mutations,
-                })?;
-                projected_position = event.global_sequence;
-                applied = applied.saturating_add(1);
+                pending.stage(handler.name(), position, event.global_sequence, mutations);
             }
-            if let Some(through_sequence) = passive_through {
-                self.apply_passive_span(
-                    handler.name(),
-                    &mut projected_position,
-                    through_sequence,
-                    &mut applied,
-                )?;
-            }
+            applied = applied.saturating_add(through_sequence.saturating_sub(position));
         }
-        if !passive_batches.is_empty() {
-            self.store.apply_all(&passive_batches)?;
-            applied = applied.saturating_add(passive_applied);
+        let batches = self
+            .handlers
+            .iter()
+            .filter_map(|handler| pending.take_batch(handler.name()))
+            .collect::<Vec<_>>();
+        if !batches.is_empty() {
+            self.store.apply_all(&batches)?;
         }
         Ok(ProjectionRunReport {
             applied,
@@ -209,24 +178,6 @@ impl ProjectionWorker {
                 Ok((item, event))
             })
             .collect()
-    }
-
-    fn apply_passive_span(
-        &self,
-        projection: &str,
-        projected_position: &mut u64,
-        through_sequence: u64,
-        applied: &mut u64,
-    ) -> Result<(), StoreError> {
-        self.store.apply(ProjectionBatch {
-            projection: projection.into(),
-            expected_position: *projected_position,
-            through_sequence,
-            mutations: Vec::new(),
-        })?;
-        *applied = applied.saturating_add(through_sequence.saturating_sub(*projected_position));
-        *projected_position = through_sequence;
-        Ok(())
     }
 
     /// Replay bounded batches until every projection is current.
