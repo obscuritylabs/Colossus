@@ -110,6 +110,7 @@ pub trait AgentCommunicationApi: Send + Sync {
         request: ListAgentMessagesRequest,
     ) -> ApiResult<AgentMessagePage>;
     /// Replay and tail durable accepted/input/undelivered updates with independent budgets.
+    /// Closed attempts do not end the stream: requeue can create another generation.
     async fn watch_messages(
         &self,
         caller: &CallerContext,

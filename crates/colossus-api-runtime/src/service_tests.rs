@@ -1563,6 +1563,10 @@ fn runtime_service_conformance() {
         .build()
         .expect("test runtime")
         .block_on(async {
+            communication::watch_survives_requeue_after_all_attempts_close(Arc::clone(
+                &fixture.runtime,
+            ))
+            .await;
             communication::owner_scopes_replay_and_frozen_task_queries(Arc::clone(
                 &fixture.runtime,
             ))

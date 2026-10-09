@@ -232,25 +232,8 @@ impl AgentCommunicationApi for RuntimeCommunicationApi {
                 if had_updates {
                     continue;
                 }
-                match service.list_participants(&caller.actor(), &request.root_run_id) {
-                    Ok(participants)
-                        if participants.iter().all(|participant| !participant.open) =>
-                    {
-                        match service.updates(&caller.actor(), &request.root_run_id, cursor) {
-                            Ok(updates) if updates.is_empty() => break,
-                            Ok(_) => continue,
-                            Err(error) => {
-                                let _ = sender.send(Err(map_error(error, &caller))).await;
-                                break;
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        let _ = sender.send(Err(map_error(error, &caller))).await;
-                        break;
-                    }
-                    _ => {}
-                }
+                // A child requeue can reopen an all-closed collaboration. Keep tailing
+                // until the subscriber disconnects or the durable feed fails.
                 tokio::select! { _ = sender.closed() => break, result = changed.changed() => if result.is_err() { break; } }
             }
         });
