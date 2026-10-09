@@ -843,7 +843,7 @@ fn core_builtin_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "web.fetch".into(),
-            description: "Fetch one exact policy-permitted HTTP(S) URL into bounded quarantine."
+            description: "Fetch a policy-permitted HTTP(S) URL into bounded quarantine, following configured redirects only to permitted destinations."
                 .into(),
             input_schema: fetch_schema(),
             effect_action: Some("network.http".into()),
@@ -852,7 +852,7 @@ fn core_builtin_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "docs.fetch".into(),
-            description: "Fetch one exact policy-permitted documentation URL into bounded quarantine."
+            description: "Fetch a policy-permitted documentation URL into bounded quarantine, following configured redirects only to permitted destinations."
                 .into(),
             input_schema: fetch_schema(),
             effect_action: Some("network.http".into()),
@@ -861,7 +861,7 @@ fn core_builtin_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "network.http".into(),
-            description: "Fetch one exact policy-permitted HTTP(S) URL with GET.".into(),
+            description: "Fetch a policy-permitted HTTP(S) URL with GET, following configured redirects only to permitted destinations.".into(),
             input_schema: fetch_schema(),
             effect_action: Some("network.http".into()),
             capability: Some("network.http".into()),
