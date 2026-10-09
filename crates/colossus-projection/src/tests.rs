@@ -18,6 +18,8 @@ use std::sync::{
 };
 use std::time::Duration;
 
+mod batching;
+
 #[derive(Default)]
 struct RecordingProjectionStore {
     inner: InMemoryProjectionStore,
@@ -200,7 +202,7 @@ fn worker(
 }
 
 #[test]
-fn passive_projection_checkpoints_are_grouped() {
+fn active_and_passive_projection_checkpoints_commit_together() {
     let journal = Arc::new(InMemoryEventJournal::default());
     journal
         .append(event(
@@ -220,7 +222,7 @@ fn passive_projection_checkpoints_are_grouped() {
 
     assert_eq!(report.applied, 6);
     assert!(report.projections.iter().all(|status| status.position == 1));
-    assert_eq!(store.direct_applies.load(Ordering::Relaxed), 1);
+    assert_eq!(store.direct_applies.load(Ordering::Relaxed), 0);
     let grouped = store.grouped_applies.lock().expect("grouped applies");
     assert_eq!(grouped.len(), 1);
     assert_eq!(
@@ -229,6 +231,7 @@ fn passive_projection_checkpoints_are_grouped() {
             .map(|batch| batch.projection.as_str())
             .collect::<Vec<_>>(),
         vec![
+            "sessions-v1",
             "work-v1",
             "memory-v1",
             "workflows-v1",
@@ -290,7 +293,7 @@ impl ProjectionHandler for SelectiveProjection {
 }
 
 #[test]
-fn mixed_projection_pages_coalesce_passive_spans() {
+fn mixed_projection_pages_commit_one_bounded_checkpoint() {
     let journal = Arc::new(InMemoryEventJournal::default());
     for (index, event_type) in [
         "ignored.v1",
@@ -319,7 +322,11 @@ fn mixed_projection_pages_coalesce_passive_spans() {
     let report = worker.run_once(8).expect("projection run");
 
     assert_eq!(report.applied, 5);
-    assert_eq!(store.direct_applies.load(Ordering::Relaxed), 3);
+    assert_eq!(store.direct_applies.load(Ordering::Relaxed), 0);
+    let grouped = store.grouped_applies.lock().expect("grouped applies");
+    assert_eq!(grouped.len(), 1);
+    assert_eq!(grouped[0][0].expected_position, 0);
+    assert_eq!(grouped[0][0].through_sequence, 5);
     assert_eq!(report.projections[0].position, 5);
 }
 
