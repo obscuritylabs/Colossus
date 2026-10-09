@@ -270,6 +270,8 @@ pub(crate) struct AppState {
     pub(crate) cloud_operation: Mutex<()>,
     pub(crate) credential_vault:
         StdMutex<Option<Arc<crate::desktop_credentials::DesktopCredentials>>>,
+    /// Fresh catalog keys can be retried only against their native enrollment endpoint.
+    pub(crate) catalog_credentials: StdMutex<Vec<crate::desktop_settings::ProviderSetting>>,
     pub(crate) mcp_health_history:
         StdMutex<std::collections::VecDeque<crate::mcp_health::RecentMcpHealth>>,
     pub(crate) plugin_operations: StdMutex<HashMap<String, (String, watch::Sender<bool>)>>,
@@ -440,6 +442,7 @@ impl Default for AppState {
             configuration_updates: Mutex::new(HashMap::new()),
             targets: RwLock::new(HashMap::new()),
             credential_vault: StdMutex::new(None),
+            catalog_credentials: StdMutex::new(Vec::new()),
             mcp_health_history: StdMutex::new(std::collections::VecDeque::new()),
             selected_target_id: RwLock::new(None),
             plugin_operations: StdMutex::new(HashMap::new()),

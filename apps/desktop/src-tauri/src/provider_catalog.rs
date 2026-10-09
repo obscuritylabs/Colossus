@@ -60,9 +60,15 @@ pub(crate) async fn discover_managed_provider_models(
     validate_request(&settings, &request)?;
     let credential_id = match request.credential_action {
         CredentialActionInput::None => None,
-        CredentialActionInput::Reuse => Some(reusable_credential(&settings, &request)?),
-        CredentialActionInput::Replace => Some(
-            enroll_credential(
+        CredentialActionInput::Reuse => {
+            let enrolled = state
+                .catalog_credentials
+                .lock()
+                .map_err(|_| catalog_binding_error())?;
+            Some(reusable_credential(&settings, &request, &enrolled)?)
+        }
+        CredentialActionInput::Replace => {
+            let id = enroll_credential(
                 credential_parent(&app)?,
                 &state,
                 &store,
@@ -71,8 +77,10 @@ pub(crate) async fn discover_managed_provider_models(
                 CredentialKindSetting::ApiKey,
                 appearance,
             )
-            .await?,
-        ),
+            .await?;
+            remember_catalog_credential(&state, &settings, &request, &id)?;
+            Some(id)
+        }
     };
     // Native prompts can remain open while a selected folder is replaced externally.
     validate_request(&settings, &request)?;
@@ -180,9 +188,20 @@ pub(crate) fn validate_setup_endpoint(
 fn reusable_credential(
     settings: &DesktopSettings,
     request: &DiscoverManagedProviderModelsInput,
+    enrolled: &[ProviderSetting],
 ) -> Result<String, CommandErrorDto> {
     if let Some(id) = request.credential_id.as_deref() {
         validate_provider_credential(settings, id)?;
+        if !saved_catalog_credential_matches(settings, request.provider_kind, &request.base_url, id)
+            && !enrolled.iter().any(|provider| {
+                catalog_credential_matches(provider, request.provider_kind, &request.base_url, id)
+            })
+        {
+            return Err(CommandErrorDto::invalid(
+                "credentialId",
+                "This credential is not bound to this provider endpoint. Configure the provider or enter a new credential.",
+            ));
+        }
         return Ok(id.to_owned());
     }
     request.provider_profile.as_deref().map_or_else(
@@ -192,6 +211,85 @@ fn reusable_credential(
         .filter(|provider| provider.kind == request.provider_kind && provider.base_url == request.base_url)
         .and_then(|provider| provider.credential_id.clone())
         .ok_or_else(|| CommandErrorDto::invalid("credentialAction", "This provider has no saved credential. Enter a credential or choose no credential."))
+}
+
+pub(crate) fn saved_catalog_credential_matches(
+    settings: &DesktopSettings,
+    kind: ProviderKindSetting,
+    base_url: &str,
+    id: &str,
+) -> bool {
+    settings
+        .providers
+        .iter()
+        .chain(
+            settings
+                .global_configuration
+                .providers
+                .iter()
+                .filter(|entry| !entry.archived)
+                .filter_map(|entry| {
+                    entry
+                        .revisions
+                        .iter()
+                        .find(|revision| revision.revision == entry.current_revision)
+                        .map(|revision| &revision.value)
+                }),
+        )
+        .any(|provider| catalog_credential_matches(provider, kind, base_url, id))
+}
+
+fn catalog_credential_matches(
+    provider: &ProviderSetting,
+    kind: ProviderKindSetting,
+    base_url: &str,
+    id: &str,
+) -> bool {
+    provider.kind == kind
+        && provider.base_url == base_url
+        && provider.credential_id.as_deref() == Some(id)
+}
+
+fn remember_catalog_credential(
+    state: &AppState,
+    settings: &DesktopSettings,
+    request: &DiscoverManagedProviderModelsInput,
+    id: &str,
+) -> Result<(), CommandErrorDto> {
+    let mut enrolled = state
+        .catalog_credentials
+        .lock()
+        .map_err(|_| catalog_binding_error())?;
+    enrolled.retain(|provider| {
+        provider.credential_id.as_deref().is_some_and(|id| {
+            settings
+                .global_configuration
+                .credentials
+                .iter()
+                .any(|credential| credential.id == id)
+        })
+    });
+    // This retry metadata is native-only and bounded, like the saved credential catalog.
+    if enrolled.len() >= 256 {
+        enrolled.remove(0);
+    }
+    enrolled.push(ProviderSetting {
+        credential_required: false,
+        profile: "setup-provider".into(),
+        kind: request.provider_kind,
+        base_url: request.base_url.clone(),
+        credential_id: Some(id.into()),
+        timeout_ms: Some(30_000),
+    });
+    Ok(())
+}
+
+fn catalog_binding_error() -> CommandErrorDto {
+    CommandErrorDto::local_sanitized(
+        "provider_catalog_binding_unavailable",
+        "The native provider credential binding is unavailable. Restart Desktop and retry.",
+        false,
+    )
 }
 
 pub(crate) fn validate_provider_credential(
@@ -510,12 +608,133 @@ mod tests {
             }))
             .expect("catalog input");
         assert_eq!(
-            reusable_credential(&settings, &request).expect("stored credential"),
+            reusable_credential(&settings, &request, &[]).expect("stored credential"),
             "secondary-key"
         );
         assert!(validate_provider_credential(&settings, "secondary-key").is_ok());
         request.base_url = "https://other.example.test/v1".into();
-        assert!(reusable_credential(&settings, &request).is_err());
+        assert!(reusable_credential(&settings, &request, &[]).is_err());
+        request.credential_id = Some("secondary-key".into());
+        assert!(reusable_credential(&settings, &request, &[]).is_err());
+        request.base_url = settings.providers[0].base_url.clone();
+        assert_eq!(
+            reusable_credential(&settings, &request, &[]).unwrap(),
+            "secondary-key"
+        );
+        request.provider_kind = ProviderKindSetting::Responses;
+        assert!(reusable_credential(&settings, &request, &[]).is_err());
+    }
+
+    #[test]
+    fn catalog_cannot_send_an_unbound_saved_credential_to_a_renderer_chosen_endpoint() {
+        let mut settings = DesktopSettings::default();
+        settings.global_configuration.credentials.push(
+            crate::managed_configuration::CredentialMetadataSetting {
+                id: "stored-key".into(),
+                label: "Shared key".into(),
+                kind: CredentialKindSetting::ApiKey,
+                backend: crate::managed_configuration::CredentialBackendSetting::Desktop,
+                created_at_ms: 0,
+            },
+        );
+        let request: DiscoverManagedProviderModelsInput =
+            serde_json::from_value(serde_json::json!({
+                "workspaceId": uuid::Uuid::now_v7().to_string(),
+                "providerKind": "openai_compatible", "baseUrl": "https://attacker.example.test/v1",
+                "credentialAction": "reuse", "credentialId": "stored-key"
+            }))
+            .unwrap();
+        assert!(validate_provider_credential(&settings, "stored-key").is_ok());
+        assert!(reusable_credential(&settings, &request, &[]).is_err());
+    }
+
+    #[test]
+    fn freshly_enrolled_catalog_key_can_retry_only_its_native_bound_endpoint() {
+        let mut settings = DesktopSettings::default();
+        settings.global_configuration.credentials.push(
+            crate::managed_configuration::CredentialMetadataSetting {
+                id: "fresh-key".into(),
+                label: "Provider setup".into(),
+                kind: CredentialKindSetting::ApiKey,
+                backend: crate::managed_configuration::CredentialBackendSetting::Desktop,
+                created_at_ms: 0,
+            },
+        );
+        let state = AppState::default();
+        let mut request: DiscoverManagedProviderModelsInput =
+            serde_json::from_value(serde_json::json!({
+                "workspaceId": uuid::Uuid::now_v7().to_string(),
+                "providerKind": "openai_compatible", "baseUrl": "https://models.example.test/v1",
+                "credentialAction": "replace"
+            }))
+            .unwrap();
+        remember_catalog_credential(&state, &settings, &request, "fresh-key").unwrap();
+        request.credential_action = CredentialActionInput::Reuse;
+        request.credential_id = Some("fresh-key".into());
+        let enrolled = state.catalog_credentials.lock().unwrap();
+        assert_eq!(
+            reusable_credential(&settings, &request, &enrolled).unwrap(),
+            "fresh-key"
+        );
+        for endpoint in [
+            "https://attacker.example.test/v1",
+            "https://models.example.test/other",
+            "https://models.example.test:8443/v1",
+        ] {
+            request.base_url = endpoint.into();
+            assert!(reusable_credential(&settings, &request, &enrolled).is_err());
+        }
+        request.base_url = "https://models.example.test/v1".into();
+        request.provider_kind = ProviderKindSetting::Responses;
+        assert!(reusable_credential(&settings, &request, &enrolled).is_err());
+    }
+
+    #[test]
+    fn saved_catalog_bindings_use_only_the_current_unarchived_connection() {
+        use crate::managed_configuration::{CatalogEntrySetting, CatalogRevisionSetting};
+        let provider = ProviderSetting {
+            credential_required: false,
+            profile: "catalog".into(),
+            kind: ProviderKindSetting::Compatible,
+            base_url: "https://models.example.test/v1".into(),
+            credential_id: Some("saved-key".into()),
+            timeout_ms: None,
+        };
+        let mut settings = DesktopSettings::default();
+        settings
+            .global_configuration
+            .providers
+            .push(CatalogEntrySetting {
+                id: "catalog-provider".into(),
+                label: "Catalog provider".into(),
+                current_revision: 2,
+                archived: false,
+                revisions: vec![
+                    CatalogRevisionSetting {
+                        revision: 1,
+                        value: ProviderSetting {
+                            base_url: "https://old.example.test/v1".into(),
+                            ..provider.clone()
+                        },
+                    },
+                    CatalogRevisionSetting {
+                        revision: 2,
+                        value: provider,
+                    },
+                ],
+            });
+        let matches = |settings: &DesktopSettings, endpoint| {
+            saved_catalog_credential_matches(
+                settings,
+                ProviderKindSetting::Compatible,
+                endpoint,
+                "saved-key",
+            )
+        };
+        assert!(matches(&settings, "https://models.example.test/v1"));
+        assert!(!matches(&settings, "https://old.example.test/v1"));
+        settings.global_configuration.providers[0].archived = true;
+        assert!(!matches(&settings, "https://models.example.test/v1"));
     }
 
     #[test]

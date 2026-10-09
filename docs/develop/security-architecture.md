@@ -730,6 +730,14 @@ bounded redacted error. Child provider deltas, hidden reasoning, and private tra
 are never copied into the parent interface event stream.
 See [Public API and application SDKs](application-sdk.md) for the complete topology.
 
+Desktop model catalog reads do not ask for provider-origin confirmation. Reusing a
+key requires an exact native-owned provider-kind, endpoint, and credential binding
+from a saved connection or from this process's fresh native enrollment. Changing
+the destination of a saved key requires native confirmation when saving the provider,
+before the new binding is persisted. Unsaved enrollment bindings remain bounded and
+native-only; they allow catalog retries without another key-entry prompt. Unbound
+credential handles cannot authorize catalog network requests.
+
 Desktop setup files are untrusted, bounded ZIP inputs, selected through a native
 picker and read into memory without filesystem extraction. The importer rejects
 traversal, duplicate/case-colliding names, links, unknown fields, unreferenced files,
