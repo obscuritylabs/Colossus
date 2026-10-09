@@ -857,7 +857,7 @@ pub struct CreateRunRequest {
     #[serde(default)]
     pub mode: RunMode,
     /// Explicit Goal iteration ceiling; 1..=50 in Goal mode and zero otherwise.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "zero_goal_iterations")]
     pub goal_max_iterations: u32,
     /// Research breadth; present only for Research runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -878,6 +878,10 @@ pub struct CreateRunRequest {
     pub max_turns: u32,
     /// Required key for atomic create replay.
     pub idempotency_key: IdempotencyKey,
+}
+
+fn zero_goal_iterations(value: &u32) -> bool {
+    *value == 0
 }
 
 /// Encrypted durable coordinator input captured when a run is accepted.

@@ -2450,6 +2450,18 @@ fn standalone_goal_requests_are_explicit_and_bounded() {
     }
     request.goal_max_iterations = 5;
     assert!(request.validate().is_ok());
+    let mut changed_budget = request.clone();
+    changed_budget.goal_max_iterations = 7;
+    assert_create_idempotency_conflict(request.clone(), changed_budget);
+    let legacy = create_request("legacy-goal-field", "An ordinary request");
+    let serialized = serde_json::to_value(&legacy).unwrap();
+    assert!(serialized.get("goal_max_iterations").is_none());
+    assert_eq!(
+        serde_json::from_value::<CreateRunRequest>(serialized)
+            .unwrap()
+            .goal_max_iterations,
+        0
+    );
     let mut continued = request.clone();
     continued.plan_action = Some(PlanRunAction::Revise {
         source_run_id: "run:source".into(),
