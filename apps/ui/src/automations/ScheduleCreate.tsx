@@ -303,8 +303,8 @@ export function ScheduleCreate({
                 Check stored schedule
               </Button>
             )}
-            <button
-              className={uncertain ? "button secondary" : "button primary"}
+            <Button
+              variant={uncertain ? "secondary" : "primary"}
               disabled={busy}
               onClick={() => void submit()}
             >
@@ -313,7 +313,7 @@ export function ScheduleCreate({
                 : uncertain
                   ? "Retry same reviewed request"
                   : "Create schedule"}
-            </button>
+            </Button>
           </footer>
         </>
       ) : (

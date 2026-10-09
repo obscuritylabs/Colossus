@@ -137,9 +137,7 @@ export function WorkflowRunCreate({
               onChange={setInputs}
             />
             <div className="workflow-actions">
-              <Button className="button secondary" onClick={onClose}>
-                Cancel
-              </Button>
+              <Button onClick={onClose}>Cancel</Button>
               <Button variant="primary" onClick={prepare}>
                 Review run
               </Button>

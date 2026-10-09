@@ -19,6 +19,8 @@ import { LoadState } from "./Home";
 import { RouteLink } from "./navigation";
 import { hostHref } from "./routes";
 import { workspaceName } from "./workspace-navigation";
+import { releasedArtifacts } from "./released-artifacts";
+export { releasedArtifacts } from "./released-artifacts";
 import "@colossus/ui/styles/library.css";
 
 export function WorkspaceCapabilities({ agent }: { agent: FleetNode }) {
@@ -277,42 +279,6 @@ export function WorkspacePlugins({
       </div>
     </section>
   );
-}
-export function releasedArtifacts(updates: Update[]): LibraryArtifact[] {
-  const items = new Map<string, LibraryArtifact>();
-  for (const update of updates) {
-    const message = update.update.message as
-      | {
-          content?: {
-            artifact?: {
-              artifact_id?: string;
-              file_name?: string;
-              media_type?: string;
-              byte_length?: number;
-              purpose?: string;
-              state?: string;
-            };
-          }[];
-        }
-      | undefined;
-    for (const part of message?.content ?? []) {
-      const artifact = part.artifact;
-      if (!artifact?.artifact_id || !artifact.file_name) continue;
-      items.set(artifact.artifact_id, {
-        key: artifact.artifact_id,
-        fileName: artifact.file_name,
-        typeLabel: artifact.media_type ?? "File",
-        sizeLabel:
-          typeof artifact.byte_length === "number"
-            ? `${artifact.byte_length.toLocaleString()} bytes`
-            : "Size not reported",
-        purposeLabel: artifact.purpose ?? "Released output",
-        stateLabel: artifact.state ?? "Released metadata",
-        canOpen: false,
-      });
-    }
-  }
-  return [...items.values()];
 }
 export function WorkspaceLibrary({
   project,

@@ -3,6 +3,7 @@ import {
   Button,
   DropdownSelect,
   WorkspaceNavigation,
+  WorkspaceSurfaceHeader,
   WorkspaceSidebarHeading,
   WorkspaceSidebarSearch,
   WorkspaceSidebarScope,
@@ -612,6 +613,51 @@ export function AgentWorkspace({
           canRevoke={permissions.includes("administer")}
         />
       </Suspense>
+    );
+  if (agent && (tab === "policy" || tab === "threads"))
+    return (
+      <section className="workspace-resource-page">
+        <WorkspaceSurfaceHeader
+          eyebrow={
+            tab === "policy"
+              ? "Settings / This Workspace"
+              : "Work / This Workspace"
+          }
+          title={tab === "policy" ? "Runtime settings" : "Work"}
+          description={
+            tab === "policy"
+              ? "Reported runtime configuration. Local settings and credentials are managed in Desktop."
+              : "Conversations assigned to this Workspace."
+          }
+          actions={
+            tab === "threads" ? (
+              <Button
+                variant="primary"
+                disabled={
+                  busy || !permissions.includes("execute") || agent.node.revoked
+                }
+                onClick={onNew}
+              >
+                <IconPlus size={16} aria-hidden="true" />
+                New conversation
+              </Button>
+            ) : undefined
+          }
+        />
+        <div className="workspace-resource-body">
+          {tab === "policy" ? (
+            <AgentPolicyPanel
+              path={`${projectPath(project)}/nodes/${encodeURIComponent(agent.node.node_id)}/policy`}
+            />
+          ) : (
+            <AgentConversations
+              project={project}
+              node={agent.node.node_id}
+              onOpen={onOpen}
+            />
+          )}
+        </div>
+      </section>
     );
   return (
     <section className="control-page agent-workspace">

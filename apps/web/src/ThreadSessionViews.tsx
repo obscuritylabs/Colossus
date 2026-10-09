@@ -27,6 +27,9 @@ import {
   type Update,
 } from "./api";
 import { WebLink } from "./WebLink";
+import { Button } from "@colossus/ui";
+import { releasedArtifacts } from "./released-artifacts";
+import type { ArtifactViewItem } from "@colossus/ui/session/types";
 import "@colossus/ui/styles/session.css";
 import "@colossus/ui/styles/workflows.css";
 
@@ -120,13 +123,27 @@ export function ThreadSessionViews({
     [tasks, updates],
   );
   const [plan, setPlan] = useState<SessionPlanReference | null>(null);
+  const [artifact, setArtifact] = useState<ArtifactViewItem | null>(null);
+  const artifacts = useMemo(
+    () =>
+      releasedArtifacts(updates).map((item) => ({
+        id: item.key,
+        fileName: item.fileName,
+        mediaType: item.typeLabel,
+        sizeLabel: item.sizeLabel,
+        stateLabel: item.stateLabel,
+        createdLabel: "Not reported",
+      })),
+    [updates],
+  );
   const common = {
     sessionMap: null,
     loading: false,
     error: LOCAL_RESOURCES,
     onSelectResource: () => {},
-    onSelectArtifact: () => {},
-    artifacts: [],
+    onSelectArtifact: (id: string) =>
+      setArtifact(artifacts.find((item) => item.id === id) ?? null),
+    artifacts,
     views,
   };
   return (
@@ -151,7 +168,11 @@ export function ThreadSessionViews({
         ) : view === "snapshots" ? (
           <SessionSnapshotsView {...common} />
         ) : view === "resources" ? (
-          <SessionResourcesView {...common} onChangeView={onChangeView} />
+          <SessionResourcesView
+            {...common}
+            artifactCoverage="Artifact metadata from loaded retained messages. Local files and earlier history may be available in Desktop."
+            onChangeView={onChangeView}
+          />
         ) : view === "topology" ? (
           <SessionTopology
             {...common}
@@ -195,6 +216,33 @@ export function ThreadSessionViews({
             ))}
           </section>
         )}
+        {artifact ? (
+          <WorkflowDialog
+            title={artifact.fileName}
+            busy={false}
+            onClose={() => setArtifact(null)}
+          >
+            <dl className="configuration-list">
+              <div>
+                <dt>Media type</dt>
+                <dd>{artifact.mediaType}</dd>
+              </div>
+              <div>
+                <dt>Size</dt>
+                <dd>{artifact.sizeLabel}</dd>
+              </div>
+              <div>
+                <dt>State</dt>
+                <dd>{artifact.stateLabel}</dd>
+              </div>
+            </dl>
+            <p>
+              Released metadata is available here. Open local file contents in
+              Desktop.
+            </p>
+            <Button onClick={() => setArtifact(null)}>Close artifact</Button>
+          </WorkflowDialog>
+        ) : null}
         {plan ? (
           <WorkflowDialog
             title={plan.sourceRunTitle}
@@ -202,9 +250,7 @@ export function ThreadSessionViews({
             onClose={() => setPlan(null)}
           >
             <MarkdownContent content={plan.output} linkComponent={WebLink} />
-            <button type="button" onClick={() => setPlan(null)}>
-              Close plan
-            </button>
+            <Button onClick={() => setPlan(null)}>Close plan</Button>
           </WorkflowDialog>
         ) : null}
       </div>

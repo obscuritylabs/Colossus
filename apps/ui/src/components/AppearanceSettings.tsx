@@ -222,11 +222,11 @@ export function AppearanceSettings({
                   disabled={presetPreview}
                   aria-label={`${editedTheme === "dark" ? "Dark" : "Light"} ${label.toLowerCase()} color`}
                   value={palette[slot]}
-                  onChange={(event) => {
+                  onInput={(event) => {
                     const accepted = setPaletteColor(
                       editedTheme,
                       slot,
-                      event.target.value,
+                      event.currentTarget.value,
                     );
                     setPaletteError(
                       accepted

@@ -333,7 +333,8 @@ export function ScheduleDetail({
             )}
             {schedule.controllable && context.schedules_delete && (
               <Button
-                className="button secondary schedule-delete-action"
+                variant="danger"
+                className="schedule-delete-action"
                 disabled={busy || starting}
                 onClick={onDelete}
               >

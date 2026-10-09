@@ -110,11 +110,7 @@ export function WorkflowLogicDialog({
       error={error}
       onClose={onClose}
       className="workflow-logic-dialog"
-      headerActions={
-        <Button className="button secondary" onClick={onClose}>
-          Close graph
-        </Button>
-      }
+      headerActions={<Button onClick={onClose}>Close graph</Button>}
     >
       <div className="workflow-logic-heading">
         <div>

@@ -140,9 +140,7 @@ export function ScheduledRunDetail({
           )}
         </>
       )}
-      <Button className="button secondary" onClick={() => void load()}>
-        Refresh run state
-      </Button>
+      <Button onClick={() => void load()}>Refresh run state</Button>
     </section>
   );
 }

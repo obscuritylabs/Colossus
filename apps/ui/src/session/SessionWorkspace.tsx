@@ -744,6 +744,7 @@ function SessionRecordGroup({
 export function SessionResourcesView({
   views,
   artifacts,
+  artifactCoverage,
   sessionMap,
   loading,
   error,
@@ -753,6 +754,7 @@ export function SessionResourcesView({
 }: {
   views: readonly RunView[];
   artifacts: readonly ArtifactViewItem[];
+  artifactCoverage?: string;
   sessionMap: SessionMap | null;
   loading: boolean;
   error: string;
@@ -798,7 +800,7 @@ export function SessionResourcesView({
             <strong>Context snapshots</strong>
             <small>Immutable compacted context</small>
           </span>
-          <b>{sessionMap?.contextSnapshots.length ?? 0}</b>
+          <b>{sessionMap?.contextSnapshots.length ?? "—"}</b>
           <IconChevronRight size={15} stroke={1.6} aria-hidden="true" />
         </button>
         <div className="session-artifact-group">
@@ -811,7 +813,11 @@ export function SessionResourcesView({
             <b>{artifacts.length}</b>
           </header>
           {artifacts.length === 0 ? (
-            <p>No artifacts have been released.</p>
+            <p>
+              {artifactCoverage
+                ? "No artifact metadata in the loaded messages."
+                : "No artifacts have been released."}
+            </p>
           ) : (
             <ol>
               {artifacts.map((artifact) => (
@@ -836,6 +842,9 @@ export function SessionResourcesView({
             </ol>
           )}
         </div>
+        {artifactCoverage ? (
+          <p className="field-help">{artifactCoverage}</p>
+        ) : null}
         {loading && sessionMap === null ? (
           <div className="session-resource-unavailable">
             <IconMessageCircle size={18} stroke={1.6} aria-hidden="true" />

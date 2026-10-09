@@ -550,8 +550,9 @@ export function SchedulesSurface({
             <Button disabled={busy} onClick={() => setControl(null)}>
               Cancel
             </Button>
-            <button
-              className={`button primary ${deleting ? "schedule-delete-action" : ""}`}
+            <Button
+              variant={deleting ? "danger" : "primary"}
+              className={deleting ? "schedule-delete-action" : undefined}
               disabled={busy}
               onClick={() => void applyControl()}
             >
@@ -562,7 +563,7 @@ export function SchedulesSurface({
                   : control.record.enabled
                     ? "Pause future ticks"
                     : "Enable schedule"}
-            </button>
+            </Button>
           </footer>
         </WorkflowDialog>
       )}

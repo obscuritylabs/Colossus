@@ -53,7 +53,7 @@ export function WorkflowDialog({
   return createPortal(
     <dialog
       ref={ref}
-      className={`settings-dialog workflow-dialog ${className}`}
+      className={`workflow-dialog ${className}`}
       aria-labelledby={titleId}
       onCancel={(event) => {
         event.preventDefault();

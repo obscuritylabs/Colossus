@@ -27,6 +27,7 @@ use zeroize::Zeroizing;
 
 mod managed;
 mod resources;
+mod retained;
 
 #[derive(Default)]
 struct TestKeys(Mutex<HashMap<String, Zeroizing<Vec<u8>>>>);
@@ -514,6 +515,7 @@ async fn acceptance(postgres: bool) {
         std::fs::read_to_string(workspace.join("approved.txt")).unwrap(),
         "cloud-approved"
     );
+    retained::exercise(&client, &origin, &headers, id).await;
     let mut events = client
         .get(format!(
             "{origin}/api/projects/project-a/tasks/{id}/events?after=0"

@@ -201,6 +201,11 @@
   padding: 0;
   overflow: auto;
 }
+.workflow-dialog[open] {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
 .workflow-dialog header {
   padding: 18px 22px;
   border-bottom: 1px solid var(--border);
@@ -209,6 +214,8 @@
   margin: 0;
 }
 .workflow-dialog-content {
+  min-height: 0;
+  overflow: auto;
   padding: 20px 22px;
 }
 .workflow-dialog-content > .workflow-dialog-content {
@@ -252,6 +259,9 @@
   width: auto;
 }
 .workflow-dialog footer {
+  position: sticky;
+  bottom: 0;
+  background: var(--surface-raised);
   margin-top: 24px;
   border-top: 1px solid var(--border);
   padding-top: 16px;
