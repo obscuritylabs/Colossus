@@ -1037,7 +1037,7 @@ fn validate_overrides(overrides: &[FieldOverrideSetting]) -> Result<(), CommandE
             return Err(configuration_error());
         }
         if field.field_id == "network.maxRedirects"
-            && !field.value.as_u64().is_some_and(|value| value <= 20)
+            && field.value.as_u64().is_none_or(|value| value > 20)
         {
             return Err(CommandErrorDto::invalid(
                 "network.maxRedirects",
