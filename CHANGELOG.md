@@ -8,8 +8,12 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.11.8] - 2026-10-09
+
 ### Added
 
+- Offline speech input in Desktop and TUI, and a VS Code extension using the shared
+  Desktop UI and themes.
 - Colossus Control Plane with independent PostgreSQL persistence, users, named OIDC
   and optional local sign-in, explicit project roles/hierarchy, and administration.
 - Fleet agents, workspace/thread navigation, retained realtime conversations, shared
@@ -34,6 +38,8 @@ include breaking changes while the public API is still settling.
 
 ### Changed
 
+- Aligned workspace, bundled plugin, and SDK candidate metadata to `0.11.8`.
+  SDK registry publishing remains disabled for this release.
 - Workflows and Schedules use shared UI typography and theme tokens, with a compact
   Providers-style schedule inventory and front-end development rules in `AGENTS.md`.
 
@@ -43,6 +49,50 @@ include breaking changes while the public API is still settling.
   review category, retaining exact response binding and owner isolation.
 - Offline development credential rewrap on Windows fingerprints journals through
   their retained exclusive lease, preserving source bytes and writer exclusion.
+
+<!-- colossus:release-notes base=v0.11.7 -->
+
+### Merged changes
+
+#### Added
+
+- **vscode:** add Colossus extension with shared desktop UI and themes ([#263](https://github.com/obscuritylabs/Colossus/pull/263))
+- **dictation:** add offline speech input to Desktop and TUI ([#264](https://github.com/obscuritylabs/Colossus/pull/264))
+- **desktop:** add workflow schedules, agent tasks, and run output ([#262](https://github.com/obscuritylabs/Colossus/pull/262))
+- **control-plane:** add runtime operations and shared workspaces ([#265](https://github.com/obscuritylabs/Colossus/pull/265))
+- **research:** inherit enabled MCP tools and add VSIX controls ([#273](https://github.com/obscuritylabs/Colossus/pull/273))
+- **mcp:** support 2026 Streamable HTTP with protocol selection ([#274](https://github.com/obscuritylabs/Colossus/pull/274))
+- **ui:** streamline automations and fix dock sizing ([#276](https://github.com/obscuritylabs/Colossus/pull/276))
+- **release:** generate changelog and release notes ([#277](https://github.com/obscuritylabs/Colossus/pull/277))
+- **plugins:** deepen security review with bounded delegation and checkpoints ([#284](https://github.com/obscuritylabs/Colossus/pull/284))
+- **plugins:** improve coding skill and remove offline-dev ([#283](https://github.com/obscuritylabs/Colossus/pull/283))
+- **plugins:** load workspace sources and simplify adding plugins ([#281](https://github.com/obscuritylabs/Colossus/pull/281))
+
+#### Fixed
+
+- **tui:** shade the composer and use a single status row ([#260](https://github.com/obscuritylabs/Colossus/pull/260))
+- **ci:** include schedule skill in Unix release smoke check ([#266](https://github.com/obscuritylabs/Colossus/pull/266))
+- **release:** allow maintained documentation build helper ([#269](https://github.com/obscuritylabs/Colossus/pull/269))
+- **desktop:** serialize run listings per target ([#270](https://github.com/obscuritylabs/Colossus/pull/270))
+- **desktop:** surface context limits and provider rejection causes ([#272](https://github.com/obscuritylabs/Colossus/pull/272))
+- **presentation:** identify MCP servers in tool calls ([#275](https://github.com/obscuritylabs/Colossus/pull/275))
+- **release:** generate SDK bindings and fix acceptance races ([#271](https://github.com/obscuritylabs/Colossus/pull/271))
+- **cli:** fingerprint journals through retained offline leases ([#279](https://github.com/obscuritylabs/Colossus/pull/279))
+- **ci:** restore main macOS bundle cache for releases ([#282](https://github.com/obscuritylabs/Colossus/pull/282))
+
+#### Changed
+
+- **cloud:** normalize PostgreSQL storage with typed rows ([#280](https://github.com/obscuritylabs/Colossus/pull/280))
+
+#### Maintenance
+
+- **packaging:** pin published v0.11.7 archives ([#259](https://github.com/obscuritylabs/Colossus/pull/259))
+
+**Source:** [b4399d2](https://github.com/obscuritylabs/Colossus/commit/b4399d213f10a86bbb3d05919d5ac2294da811af)
+
+**Full changelog:** [v0.11.7...v0.11.8](https://github.com/obscuritylabs/Colossus/compare/v0.11.7...v0.11.8)
+
+<!-- /colossus:release-notes -->
 
 ## [0.11.7] - 2026-10-03
 

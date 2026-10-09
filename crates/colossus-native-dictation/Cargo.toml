@@ -16,7 +16,7 @@ name = "dictation-probe"
 required-features = ["probe"]
 
 [dependencies]
-colossus-home = { version = "=0.11.7", path = "../colossus-home" }
+colossus-home = { version = "=0.11.8", path = "../colossus-home" }
 cpal = { version = "=0.18.2", optional = true }
 hound = { version = "=3.5.1", optional = true }
 regex = "1.13.0"
