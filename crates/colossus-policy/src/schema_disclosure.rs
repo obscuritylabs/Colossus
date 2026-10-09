@@ -43,7 +43,10 @@ fn schema_paths(request: &EffectRequest) -> Vec<String> {
             .and_then(Value::as_str)
             == Some("call_tool")
     {
-        return vec!["/operation/input_schema".into()];
+        return vec![
+            "/operation/input_schema".into(),
+            "/operation/output_schema".into(),
+        ];
     }
     if matches!(
         request.action.as_str(),

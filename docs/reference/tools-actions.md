@@ -20,6 +20,7 @@ and output bounds.
 | Patch | `patch.preview`, `patch.apply`, `patch.reverse` | Preview read; apply/reverse write; declared roots or ambient host paths |
 | Trace export | `trace.export` | Bounded metadata-only write; workspace-confined under isolation and host-wide under ambient authority |
 | Repository context | `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary` | Workspace-confined under isolation; absolute and traversing host paths accepted under ambient authority |
+| Sessions | `session.set_title` | Updates the current session's canonical title through the effect gateway; no session ID is accepted from the model |
 | Tasks | `task.create`, `task.update`, `task.list` | Canonical session work |
 | Decisions | `decision.create`, `decision.update`, `decision.list`, `decision.archive`, `decision.supersede` | Binding canonical decisions |
 | Plans | `plan.create`, `plan.update`, `plan.show`, `plan.approve_request` | Session-scoped, revision-aware lifecycle; the update target is bound by the runtime |
@@ -29,8 +30,26 @@ and output bounds.
 | Context | `context.show`, `context.compact`, `context.snapshots`, `context.restore` | Encrypted immutable snapshots |
 | Plugins | `plugin.list`, `plugin.inspect`, `plugin.skill.read`, `plugin.resource.list`, `plugin.resource.read` | Bounded metadata, selected Agent Skill instructions, and contained resources from the run snapshot |
 | Search and fetch | `web.search`, `web.fetch`, `docs.fetch`, `network.http` | Search needs an explicit route; generic fetch needs host activation plus declared or ambient HTTP(S) authority; quarantined output |
-| MCP | `mcp.servers`, `mcp.search`, `mcp.tools`, `mcp.call` | Configured stdio or Streamable HTTP servers and exact tool allowlists |
+| MCP | `mcp.servers`, `mcp.search`, `mcp.tools`, `mcp.call` | Configured stdio or Streamable HTTP servers and exact-name or star-pattern tool allowlists |
 | Integrations | Connected operation names | Configured, trusted, and selected only |
+| Workflows | `workflow.definition.list`, `workflow.definition.get`, `workflow.schedule.list`, `workflow.schedule.get`, `workflow.schedule.create`, `workflow.task.schedule`, `workflow.schedule.set_enabled`, `workflow.schedule.delete` | Registered hash-pinned definitions; caller-owned calendar/interval workflow schedules and plain-language tasks; persistent mutations use policy, review, one-use permits, and quarantined results |
+
+Schedule create and enabled-state control are Administration actions. Both require
+approval under Allow all and Development defaults, including initially paused creation
+and disable. Reads remain Read actions. Exact overrides and external policy retain
+their authority. Risk auto does not automatically approve persistent schedule controls.
+The strict tools accept no owner, application, Workspace, session, or run provenance;
+the host binds these from active authenticated run and delegation evidence. Application
+scopes remain an independent requirement. Schedule fields are immutable except enabled
+state, and controls require the canonical revision returned by an authorized read.
+Agent schedule input snapshots are limited to 48 KiB so the complete immutable inputs
+fit in the approval review.
+`workflow.definition.read` is the Read action shared by registered-definition listing
+and inspection.
+`workflow.definition.register` is an Administration action for validated definition
+registration; Desktop operators use the separately scoped authenticated import API.
+`workflow.run.read` and `workflow.run.start` describe independent workflow-run
+inspection and allocation; their authenticated API scopes are distinct from chat runs.
 
 Every tool schema denies unknown fields. Tool availability does not imply permission.
 The access profile and exact overrides decide visibility and the built-in decision;
@@ -52,7 +71,7 @@ expected revision, so the model cannot redirect the write.
 
 The remaining Plan Mode allowlist is:
 
-- `echo`, `tool.search`, and interactive `user.ask`;
+- `echo`, `tool.search`, `session.set_title`, and interactive `user.ask`;
 - `filesystem.list`, `filesystem.read`, `filesystem.search`, `git.status`, `git.diff`,
   `git.show`, `repo.map`, `repo.symbol_search`, `repo.references`,
   `repo.file_summary`, and `patch.preview`;
@@ -76,11 +95,90 @@ Published CLI and Desktop builds include a pinned `rg` for command searches. Whe
 `shell.run` has execute authority for that exact file, `rg` resolves to the managed
 copy before an ambient executable. Its presence does not change the approval and
 sandbox rules for `shell.run`. For ordinary workspace search, `filesystem.search`
-remains available without process execution, including in Plan Mode.
+remains available without process execution, including in Plan Mode. It accepts
+regular expressions by default, an optional file glob, and a result limit.
+Workspace searches and `repo.map` honor repository ignore rules. Use
+`filesystem.search` for arbitrary code or text matches; `repo.symbol_search` only
+matches literal substrings in structural declarations. Source and debug Desktop
+builds do not stage the release ripgrep binary, so use `filesystem.search` there unless an
+executable has been explicitly configured.
+
+For direct command searches in a published build, pass `argv` so the tool
+resolver selects the managed executable without relying on a shell `PATH`.
+The isolated Windows shell has a restricted `PATH`, so `command: "rg ..."` can
+fail even when the exact bundled executable is granted:
+
+```json
+{"argv":["rg","-n","load_plugin|discover_plugins","crates/colossus-plugins"],"justification":"Find the plugin loader implementation."}
+```
+
+The equivalent `filesystem.search` call works without process execution:
+
+```json
+{"pattern":"load_plugin|discover_plugins","path":"crates/colossus-plugins","glob":"**/*.rs","max_matches":50}
+```
 
 The model-visible tool description includes the host operating system before the
 agent's first command. It is a hint for native execution; a configured OCI container
 may use a different OS, and command syntax still depends on the selected shell.
+
+`timeout_ms` is an execution deadline, including supervised cleanup. Its model-visible
+maximum follows the selected workspace's `sandbox.timeoutMs`, which defaults to fifteen
+minutes. Omission uses the policy ceiling; an explicit request may narrow it. The
+`max_output_bytes` argument is bounded by both the sandbox and the tool's 1 MiB ceiling.
+A stricter request-time policy remains authoritative. See
+[Sandbox resource limits](configuration/sandbox.md#resource-limits).
+
+### Managed shell sessions
+
+Set `yield_time_ms` to return a tracked process handle after a short wait. The default
+wait is 10 seconds when `lifetime` is supplied; each wait is limited to 30 seconds.
+Commands without either field retain synchronous behavior.
+
+```json
+{"command":"cargo test","justification":"Verify the requested changes.","yield_time_ms":1000,"lifetime":"run"}
+```
+
+Use `lifetime: "workspace"` explicitly for a development server or other process that
+must continue across later conversation turns. Keep the server in the foreground
+inside its managed session. Shell `&` or `nohup` does not create a managed lifetime.
+Wait until the response reports `running` before ending the initiating turn; a launch
+still awaiting authorization or startup is cancelled when that run ends.
+
+```json
+{"command":"npm run dev -- --host 127.0.0.1","justification":"Serve the requested local preview.","yield_time_ms":1000,"lifetime":"workspace"}
+```
+
+| Tool | Behavior |
+| --- | --- |
+| `shell.wait` | Takes `session_id`, an optional exclusive `after_sequence`, and `yield_time_ms` from 0 to 30000. Returns on output, status change, or the wait bound. |
+| `shell.read` | Reads current state and new released output immediately. |
+| `shell.list` | Lists up to 100 sessions belonging to this application, conversation, and agent lineage; use `after` to continue. |
+| `shell.stop` | Idempotently requests stop. `stopping` is not proof of termination; read or wait for a terminal state. |
+
+Reads and waits accept `max_output_bytes` from 16384 to 65536. Responses contain
+`session`, ordered `chunks`, `next_sequence`, and `gap`; pass `next_sequence` as the
+next `after_sequence`. Status distinguishes `starting`, `running`, `stopping`,
+`exited`, `stopped`, `timed_out`, `failed`, `interrupted`, and `outcome_unknown`.
+Only a confirmed exit code can establish command success. Output may be truncated by
+the policy ceiling or the 64 KiB/256-chunk retained log window. Restart discards the
+in-memory logs and reports a gap.
+
+Run-owned sessions are stopped when their run finishes, fails, or is cancelled.
+Workspace sessions survive turns after reaching `running`, until they exit, are
+stopped, reach the original execution deadline, or their runtime shuts down. Neither
+background lifetime nor waiting raises `sandbox.timeoutMs`. Increase that explicit
+workspace ceiling for servers that need more than the default fifteen minutes.
+Managed sessions reserve concurrency through cleanup. `sandbox.maxConcurrency` limits
+each actor/run independently and defaults to one. A separate workspace capacity of
+32 active sessions bounds total resource use across runs and applications.
+
+Desktop's **Active shells** tool shows the selected runtime's released logs, status,
+origin, and deadline, with search, follow, copy, and Stop. Active shells retain their
+Managed Local runtime when switching workspaces. Quitting Desktop stops Managed Local
+shells; disconnecting from an External target leaves that runtime in charge. This is
+a log viewer, with no interactive stdin or PTY authority. Network and listener
+permissions remain those of the selected sandbox; background lifetime adds none.
 
 `shell.run` accepts exactly one invocation form:
 
@@ -149,11 +247,11 @@ from the active run snapshot and workspace overlay.
 | --- | --- |
 | Provider | `provider.echo`, `provider.openai.responses`, `provider.openai.codex`, `provider.openai.chat`, `provider.models`, `provider.call` |
 | Read | `filesystem.read`, `filesystem.list`, `filesystem.metadata`, `filesystem.search`, `git.status`, `git.diff`, `git.show`, `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary`, `context.show`, `context.snapshots`, `patch.preview`, `task.list`, `decision.list`, `plan.show`, `goal.show`, `subagent.read`, `subagent.list`, `memory.read`, `memory.list`, `memory.search`, `memory.index.status`, `plugin.list`, `plugin.inspect`, `plugin.skill.read`, `plugin.resource.list`, `plugin.resource.read`, `plugin.validate`, `plugin.verify`, `bundle.verify`, `bundle.key.inspect`, `mcp.tools` |
-| Local state | `context.compact`, `context.restore`, `presentation.preferences.update`, `presentation.history.append`, `task.create`, `task.update`, `decision.create`, `decision.update`, `decision.archive`, `decision.supersede`, `plan.create`, `plan.update`, `plan.discard`, `goal.create`, `goal.update`, `goal.iteration.record`, `subagent.create`, `subagent.start`, `subagent.complete`, `subagent.fail`, `subagent.cancel`, `subagent.interrupt`, `subagent.requeue`, `memory.create`, `memory.update`, `memory.archive`, `memory.supersede`, `memory.index.sync`, `memory.index.rebuild`, `workflow.webhook.ingest`, `workflow.subscription.dispatch` |
+| Local state | `session.set_title`, `context.compact`, `context.restore`, `presentation.preferences.update`, `presentation.history.append`, `task.create`, `task.update`, `decision.create`, `decision.update`, `decision.archive`, `decision.supersede`, `plan.create`, `plan.update`, `plan.discard`, `goal.create`, `goal.update`, `goal.iteration.record`, `subagent.create`, `subagent.start`, `subagent.complete`, `subagent.fail`, `subagent.cancel`, `subagent.interrupt`, `subagent.requeue`, `memory.create`, `memory.update`, `memory.archive`, `memory.supersede`, `memory.index.sync`, `memory.index.rebuild`, `workflow.webhook.ingest`, `workflow.subscription.dispatch` |
 | Workspace mutation | `filesystem.write`, `patch.apply`, `patch.reverse`, `trace.export`, `audit.export.write` |
 | Execution | `process.spawn`, `shell.run`, `plugin.registry.credential_helper`, `workflow.execute`, `workflow.start`, `agent.run`, `plan.execute` |
 | External network | `network.http`, `web.search`, `embedding.openai.create`, `memory.index.chroma.search`, `memory.index.chroma.status`, `memory.index.chroma.upsert`, `memory.index.chroma.remove`, `memory.index.chroma.reset`, `research.run`, `integration.openapi.import`, `integration.connect`, `integration.disconnect`, `integration.invoke`, `mcp.invoke`, `mcp.call` |
-| Administration | `plan.approve_request`, `audit.export.worm.write`, `plugin.install`, `plugin.enable`, `plugin.disable`, `plugin.update`, `plugin.uninstall`, `plugin.gc`, `plugin.package`, `plugin.pull`, `plugin.push`, `plugin.export`, `bundle.build`, `bundle.install` |
+| Administration | `plan.approve_request`, `audit.export.worm.write`, `plugin.install`, `plugin.enable`, `plugin.disable`, `plugin.workspace.accept`, `plugin.workspace.disable`, `plugin.update`, `plugin.uninstall`, `plugin.gc`, `plugin.package`, `plugin.pull`, `plugin.push`, `plugin.export`, `bundle.build`, `bundle.install` |
 
 ## Effect action classes
 
@@ -189,3 +287,34 @@ metadata HTTP(S) origins.
 - A missing terminal event after start becomes `outcome_unknown`.
 - Unknown external effects are not silently retried.
 - Credentials remain references and raw values are hard-redacted.
+
+## Plain-language task scheduling
+
+`workflow.task.schedule` is the agent-facing calendar-task tool. Its strict arguments
+are `schedule_id`, `task`, `calendar`, `starts_at`, `misfire_policy`, `enabled`, and
+`idempotency_key`. `task` contains a name, instructions, explicit tool ceiling, and
+optional configured model/effort preferences. `calendar` contains an IANA timezone,
+`HH:mm` local time, and ISO weekdays; an empty weekday list means daily. `starts_at`
+must be the exact first UTC occurrence matching those calendar fields. Serialized
+task content must fit the 48 KiB inline approval review bound.
+
+The trusted runtime derives the internal definition and empty workflow inputs. The
+tool rejects workflow identifiers, hashes, elapsed cadence, origin, session, and
+run fields. Its effect action and policy capability are `workflow.schedule.create`;
+it does not introduce a separate approval exemption. Application runs require
+`schedules:read`, `schedules:create`, `workflows:read`, and `workflows:register` plus an
+explicit tool grant. Task tool names do not grant their own action permissions.
+
+Use `workflow.schedule.list` to check for an existing request and
+`workflow.schedule.get` to confirm the stored task. Retry identities are scoped to
+the application owner and exact canonical request. Retain them across uncertain
+responses. The bundled `colossus/schedule-task` skill documents this flow.
+
+`workflow.schedule.delete` accepts only `schedule_id` and the freshly inspected
+64-character `etag`. It uses the `workflow.schedule.delete` effect action and normal
+approval obligations; application callers need `schedules:read`, `schedules:control`,
+and an explicit tool grant. It rejects foreign and unknown-owner legacy records.
+Deletion appends a durable tombstone, stops future ticks, and removes the schedule
+from the active catalog. Already allocated runs and their ownership remain intact.
+The same reviewed deletion can be reconciled without another append, but deleted
+IDs cannot be allocated again. Lost mutation responses are never retried automatically.

@@ -32,6 +32,26 @@ fn decode_plugin(value: proto::AgentPlugin) -> ApiResult<PluginInventoryEntry> {
 }
 
 #[test]
+fn workspace_provenance_stays_distinct_from_signature_and_global_activation() {
+    let mut local = example(String::new());
+    local.workspace_local = true;
+    local.workspace_active = true;
+    let decoded = decode_plugin(local.clone()).expect("local provenance");
+    assert_eq!(decoded.origin, PluginOrigin::Workspace);
+    assert_eq!(decoded.status, PluginStatus::Enabled);
+    assert!(!decoded.trust.trusted);
+    for forbidden in ["bundled", "globally_active", "trusted"] {
+        let mut forged = local.clone();
+        match forbidden {
+            "bundled" => forged.bundled = true,
+            "globally_active" => forged.globally_active = true,
+            _ => forged.trust.as_mut().expect("trust").trusted = true,
+        }
+        assert!(decode_plugin(forged).is_err());
+    }
+}
+
+#[test]
 fn discovery_preserves_valid_icons_and_accepts_older_servers_without_them() {
     let icon = png_url(&DynamicImage::new_rgba8(16, 16));
     for icon in [String::new(), icon] {

@@ -15,7 +15,8 @@ Start a new configuration with `colossus provider setup`, or choose a provider f
 Desktop's setup dropdown and load its models. Both interfaces use the same preset
 catalog. `colossus provider presets` lists service URLs and environment-variable
 hints, while `colossus provider discover --preset ID` loads model cards before a
-model is configured. See [guided setup](../../get-started/connect-model.md#guided-setup).
+model is configured. See [Connect a model](../../get-started/connect-model.md) for
+guided setup.
 
 ## Choose your provider path
 

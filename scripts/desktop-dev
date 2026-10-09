@@ -9,6 +9,19 @@ fail() {
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 repository=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
 desktop="$repository/apps/desktop"
+development_custody=false
+dictation=false
+for argument in "$@"; do
+    case "$argument" in
+        --dev-credentials) [ "$development_custody" = false ] || fail "duplicate --dev-credentials"; development_custody=true ;;
+        --dictation) [ "$dictation" = false ] || fail "duplicate --dictation"; dictation=true ;;
+        *) fail "usage: scripts/desktop-dev [--dev-credentials] [--dictation]" ;;
+    esac
+done
+if [ "$development_custody" = true ]; then
+    [ -n "${COLOSSUS_HOME:-}" ] || fail "--dev-credentials requires an explicit private COLOSSUS_HOME outside the workspace"
+    case "$COLOSSUS_HOME" in /*) ;; *) fail "COLOSSUS_HOME must be absolute" ;; esac
+fi
 
 command -v npm >/dev/null 2>&1 || fail "npm is not installed or not on PATH"
 command -v cargo >/dev/null 2>&1 || fail "cargo is not installed or not on PATH"
@@ -33,6 +46,17 @@ try {
 fi
 
 cd "$desktop"
-npm ci --ignore-scripts
+node "$script_dir/development-launch.mjs" -- npm ci --ignore-scripts
 
-exec npm run tauri:dev
+if [ "$development_custody" = true ]; then
+    cd "$repository"
+    node "$script_dir/development-launch.mjs" -- cargo xtask desktop prepare --profile debug
+    target=$(rustc -vV | sed -n 's/^host: //p')
+    cli="$desktop/src-tauri/binaries/colossus-$target"
+    [ -x "$cli" ] || fail "prepared development CLI is unavailable"
+    cd "$desktop"
+    exec node "$script_dir/development-launch.mjs" --authority-home "$COLOSSUS_HOME" --workspace "$repository" --cli "$cli" -- npm run tauri -- dev -- --locked
+fi
+
+if [ "$dictation" = true ]; then command=tauri:dev:dictation; else command=tauri:dev; fi
+exec node "$script_dir/development-launch.mjs" -- npm run "$command"

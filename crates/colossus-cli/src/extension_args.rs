@@ -8,12 +8,29 @@ pub(super) struct PluginsCommand {
 
 #[derive(Subcommand)]
 pub(super) enum PluginsAction {
-    /// List globally installed plugin digests and active state.
+    /// Use a workspace directory, or verify, install and activate a signed OCI source.
+    Add {
+        /// Workspace-relative directory or oci://HOST/REPOSITORY:TAG.
+        source: String,
+        #[arg(long)]
+        registry: Option<String>,
+        #[arg(long, default_value = "default")]
+        trust_profile: String,
+    },
+    /// Accept a discovered workspace source after reviewing its exact snapshot.
+    WorkspaceAccept {
+        path: PathBuf,
+        #[arg(long)]
+        digest: Option<String>,
+    },
+    /// Disable subsequent use of a workspace source.
+    WorkspaceDisable { path: PathBuf },
+    /// List installed packages and workspace sources with their available state.
     List {
         #[arg(long, default_value_t = 100)]
         limit: usize,
     },
-    /// Show every installed digest for one plugin name.
+    /// Show available and unavailable sources for one plugin name.
     Show { name: String },
     /// Validate an unpacked portable Agent Plugin directory.
     Validate { directory: PathBuf },
@@ -26,15 +43,18 @@ pub(super) enum PluginsAction {
         #[arg(long, default_value = "default")]
         trust_profile: String,
     },
-    /// Install exactly one source as disabled.
+    /// Install exactly one source as disabled. Use `oci://HOST/REPOSITORY:TAG` for a configured registry.
     Install {
-        #[arg(long, conflicts_with_all = ["reference", "layout", "archive"], required_unless_present_any = ["reference", "layout", "archive"])]
+        /// OCI registry reference, for example `oci://ghcr.io/obscuritylabs/plugin:v1`.
+        #[arg(conflicts_with_all = ["directory", "reference", "layout", "archive"])]
+        source: Option<String>,
+        #[arg(long, conflicts_with_all = ["source", "reference", "layout", "archive"])]
         directory: Option<PathBuf>,
-        #[arg(long, conflicts_with_all = ["directory", "layout", "archive"])]
+        #[arg(long, conflicts_with_all = ["source", "directory", "layout", "archive"])]
         reference: Option<String>,
-        #[arg(long, conflicts_with_all = ["directory", "reference", "archive"])]
+        #[arg(long, conflicts_with_all = ["source", "directory", "reference", "archive"])]
         layout: Option<PathBuf>,
-        #[arg(long, conflicts_with_all = ["directory", "reference", "layout"])]
+        #[arg(long, conflicts_with_all = ["source", "directory", "reference", "layout"])]
         archive: Option<PathBuf>,
         /// Required when an OCI layout contains multiple plugin manifests.
         #[arg(long)]

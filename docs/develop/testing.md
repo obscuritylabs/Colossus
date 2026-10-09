@@ -37,6 +37,7 @@ protects a current boundary; it does not mean every future assertion is permanen
 | `colossus-api` | Keep server composition and public API lifecycle tests. |
 | `colossus-audit` | Keep journal export, retry, recovery, and live WORM acceptance tests. |
 | `colossus-cli` | Keep command-level smoke suites because they exercise public parsing and embedded/worker boundaries; remove a suite only when its command or contract is removed. |
+| `colossus-cloud`, `colossus-cloud-protocol`, `colossus-cloud-server`, `colossus-connector` | Keep project/placement/receipt/cursor/renewal invariants and the signed OIDC-to-runtime transport acceptance; run the operator-owned PostgreSQL variant described in [cloud development](cloud-control-plane.md). |
 | `colossus-codex-auth` | Keep OAuth/device-flow parsing, storage, and redaction tests. |
 | `colossus-context` | Keep compaction budgets, snapshots, and deterministic fallback unit tests. |
 | `colossus-contracts` | Keep serialization, validation, and stable contract-shape tests. |
@@ -149,6 +150,29 @@ hard links. Native setup acceptance also tears down its actual sidecar-created h
 through the Windows uninstall helper. These tests never target the operator's default
 Desktop home.
 
+### Desktop setup package acceptance
+
+After preparing the Desktop sidecar, run
+`cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib native_setup_package_ -- --ignored`.
+This operator-owned check proves both provider-only packages and the documented
+provider/model example pass the real sidecar's YAML inspector without provider
+requests. Ordinary `setup_package::tests` cover offline ZIP bounds, credential
+placeholders, metadata migration, export, CA handling, and activation conflicts.
+From `apps/desktop`, `npx playwright test tests/browser/setup-package.spec.ts`
+checks the import review, explicit trust/replacement choices, deferred credentials,
+Markdown isolation, and imported provider selection. Native file pickers and vault
+entry dialogs still require on-screen acceptance.
+
+### Windows single-instance acceptance
+
+The operator-owned Windows Desktop acceptance tier runs
+`cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib desktop_instance::native_tests::native_single_instance_restores_original_window -- --ignored --exact`.
+It requires WebView2 and an interactive desktop. It uses a temporary browser profile
+and a unique application identifier, starts a real second process, and verifies that
+the process exits successfully while the original hidden or minimized window is
+restored. It never opens the installed application's settings or credential vault.
+The ordinary Windows unit suite covers startup serialization and tray click routing.
+
 ### Desktop embedded browser preview
 
 From `apps/desktop`, run `npm run test:browser-native` to build and exercise the
@@ -159,8 +183,12 @@ after the process exits. It never uses saved Desktop credentials or workspaces.
 
 The harness checks real engine history, temporary cookie sharing/isolation, foreign
 workspace rejection, guest IPC/app-origin denial, native permission denial, suppressed
-script dialogs, popups, downloads, and clear/close behavior. Its fixture evaluation is
-compiled only with `browser-test-bridge`; no generic evaluation IPC command exists.
+script dialogs, popups, downloads, and clear/close behavior. Fixture evaluation is
+behind `browser-test-bridge` and the native adapter's `native-test-driver` feature;
+no generic evaluation IPC command exists. macOS probes call WebKit directly because
+the hardened guest replaces Wry's navigation delegate and its initial script queue
+is never drained. The harness also rejects script exceptions and verifies that a
+later probe still completes.
 The macOS and Windows pre-merge lanes own this acceptance tier.
 
 Set `COLOSSUS_BROWSER_INTERACTIVE_ACCEPTANCE=1` in an interactive desktop session
@@ -244,9 +272,15 @@ From `apps/desktop`, `npm run test:approval-runtime` builds a feature-gated acce
 example and the real sidecar. It drives the production review component through the
 production native approval adapter, authenticated worker, and separate approval broker.
 Allow, deny, and cancellation use fresh private homes with a credential-free local
-provider. The test substitutes only the human OS-dialog decision; pending-interaction
+provider. The test supplies only the human decision in the isolated review document; pending-interaction
 refetch, authorization, policy, permits, and process execution remain real. No test bridge
-is linked into production. The macOS and Windows pre-merge lanes run this tier with no
+is linked into production. Both foreground and managed commands cover Allow once,
+remembered exact-command approval, denial, and cancellation. The same tier runs real
+stdout/stderr at 1,024- and 4,096-byte limits, successful and nonzero exits, and a Windows
+loopback server on a dynamically assigned port. The server must survive a later turn,
+reappear after UI reconnect, expose its released logs, and stop from Active shells with
+its listener closed. A disposable occupied port separately proves visible startup
+failure without touching existing listeners. The macOS and Windows pre-merge lanes run this tier with no
 scenario retries. Screenshots are in `apps/desktop/output/playwright`, with browser traces
 retained on failure. Mocked browser tests separately cover keyboard operation, compact
 layouts, accessibility, redaction, full details, and stale review state.
@@ -276,9 +310,19 @@ external-binary staging must never overwrite the freshly compiled CLI or sidecar
 with a previously staged binary. Relative target paths resolve from the repository.
 
 Native on-screen smoke testing must additionally verify that the isolated command review
-window opens, external navigation is blocked, closing it invalidates review, and final
-OS confirmation identifies the target, reason, and review binding without presenting a
-truncated command as complete. Browser acceptance does not substitute for this check.
+window opens, external navigation is blocked, closing it invalidates review, and its
+Allow once / Always allow / Deny buttons are the final decision without another OS dialog.
+Verify the full command and working directory remain readable. Browser acceptance does
+not substitute for this check. Native remembered-command tests cover exact matching,
+workspace identity, redacted-command rejection, persistence across reopen, and clearing.
+
+On Windows, the operator-driven
+`cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib command_review::native_tests::native_review_buttons_and_close -- --ignored --exact --nocapture`
+opens three isolated WebView2 review windows. Follow each window's fixture instruction:
+Allow once, Always allow, then close the window. The test uses the shipped custom
+protocol, verifies blocked external navigation and native decision delivery, and never
+executes a command or touches user settings. Build the renderer first and set
+`TAURI_CONFIG` to `{"build":{"devUrl":null}}` for bundled assets.
 
 ### Desktop plugin runtime acceptance
 
@@ -309,6 +353,13 @@ The driver is a feature-gated Cargo example, not a production binary or command;
 production renderer checks reject development bridge markers.
 
 ### Embedded plugin and selection acceptance
+
+The bundled security-review scratch initializer has stdlib-only Python checks:
+`python3 -B -m unittest discover -s scripts/tests -p test_security_review_workspace.py`.
+They verify ignored local storage, temporary fallback, private POSIX modes, safe path
+handling, and preservation of existing notes without changing source or Git configuration.
+`cargo test -p colossus-bundled-plugins --lib` verifies the embedded plugin matches the
+portable directory artifact, including the skill's references and helper.
 
 `cargo test -p colossus-cli --test plugins_tui_smoke` exercises a real PTY against
 both embedded and authenticated-worker hosts with private offline homes. It covers

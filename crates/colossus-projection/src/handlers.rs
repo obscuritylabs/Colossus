@@ -71,6 +71,12 @@ impl ProjectionHandler for SessionProjection {
                 current.insert("last_run_id".into(), Value::Null);
                 current.insert("last_user_preview".into(), Value::Null);
             }
+            "session.title.set.v1" => {
+                current.insert(
+                    "title".into(),
+                    payload.get("title").cloned().unwrap_or(Value::Null),
+                );
+            }
             "session.message.appended.v1" => {
                 let message_count = current
                     .get("message_count")

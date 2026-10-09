@@ -1,0 +1,142 @@
+import type {
+  BackgroundNotificationContent,
+  BackgroundNotificationKind,
+  StatusBarPin,
+} from "./api";
+import { safeDisplayLabel } from "./presenters";
+import type { Run, RunDetails } from "./types";
+
+const MAX_STATUS_BAR_PINS = 10;
+
+export function selectStatusBarPins(
+  sessionIds: readonly string[],
+  runs: readonly Run[],
+  resolveTitle: (sessionId: string, fallback: string) => string,
+): StatusBarPin[] {
+  const latestBySession = new Map<string, Run>();
+  for (const run of runs) {
+    if (run.archived) {
+      continue;
+    }
+    const previous = latestBySession.get(run.sessionId);
+    if (
+      previous === undefined ||
+      Date.parse(run.updatedAt) > Date.parse(previous.updatedAt)
+    ) {
+      latestBySession.set(run.sessionId, run);
+    }
+  }
+  return sessionIds
+    .flatMap((sessionId) => {
+      const run = latestBySession.get(sessionId);
+      if (run === undefined) {
+        return [];
+      }
+      return [
+        {
+          runId: run.runId,
+          title: safeDisplayLabel(
+            resolveTitle(sessionId, run.title),
+            "Untitled work",
+            72,
+          ),
+        },
+      ];
+    })
+    .slice(0, MAX_STATUS_BAR_PINS);
+}
+
+/** Use released response text, never prompts, reasoning, or tool payloads. */
+export async function backgroundNotificationContent(
+  run: Run,
+  threadTitle: string,
+  viewOutput: string,
+  loadRun: () => Promise<RunDetails>,
+): Promise<BackgroundNotificationContent> {
+  let output =
+    run.terminal?.type === "failure"
+      ? run.terminal.failure.message
+      : run.terminal?.type === "result"
+        ? run.terminal.result.output || viewOutput
+        : viewOutput;
+  // Recent-run summaries deliberately omit response bodies. An evicted or unopened
+  // thread still needs its own result, rather than the currently selected thread's.
+  if (!output.trim() && run.status === "completed") {
+    try {
+      const details = await loadRun();
+      if (
+        details.run.runId === run.runId &&
+        details.run.terminal?.type === "result"
+      ) {
+        output = details.run.terminal.result.output;
+      }
+    } catch {
+      // A missing preview must not suppress the completion notification.
+    }
+  }
+  const preview = output
+    .slice(0, 8192)
+    .replace(/^\s*```[^\n]*$/gm, "")
+    .replace(/!?\[([^\]]+)\]\([^\n)]*\)/g, "$1")
+    .replace(/^\s{0,3}(?:#{1,6} |[-*+] |>[ ]?)/gm, "")
+    .replace(/[*`]/g, "");
+  return {
+    threadTitle: safeDisplayLabel(
+      threadTitle,
+      safeDisplayLabel(run.title, "Untitled work", 96),
+      96,
+    ),
+    outputPreview: safeDisplayLabel(preview, "", 240),
+  };
+}
+
+export interface BackgroundRunState {
+  status: Run["status"];
+  pendingInteractionCount: number;
+}
+
+export function backgroundRunNotifications(
+  previous: ReadonlyMap<string, BackgroundRunState>,
+  runs: readonly Run[],
+): { kind: BackgroundNotificationKind; runId: string }[] {
+  const notifications: {
+    kind: BackgroundNotificationKind;
+    runId: string;
+  }[] = [];
+  for (const run of runs) {
+    const before = previous.get(run.runId);
+    if (before === undefined || run.archived) {
+      continue;
+    }
+    const wasWaiting =
+      before.status === "waiting" || before.pendingInteractionCount > 0;
+    const isWaiting =
+      run.status === "waiting" || run.pendingInteractionCount > 0;
+    if (!wasWaiting && isWaiting) {
+      notifications.push({ kind: "needs_attention", runId: run.runId });
+    } else if (before.status !== "completed" && run.status === "completed") {
+      notifications.push({ kind: "work_completed", runId: run.runId });
+    } else if (
+      before.status !== "failed" &&
+      before.status !== "outcome_unknown" &&
+      (run.status === "failed" || run.status === "outcome_unknown")
+    ) {
+      notifications.push({ kind: "work_failed", runId: run.runId });
+    }
+  }
+  return notifications;
+}
+
+export function backgroundRunSnapshot(
+  runs: readonly Run[],
+): ReadonlyMap<string, BackgroundRunState> {
+  return new Map(
+    runs.map((run) => [
+      run.runId,
+      {
+        status: run.status,
+        pendingInteractionCount: run.pendingInteractionCount,
+      },
+    ]),
+  );
+}

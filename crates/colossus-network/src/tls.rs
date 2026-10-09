@@ -1,3 +1,4 @@
+use crate::ClientIdentity;
 use reqwest::{Certificate, ClientBuilder};
 use rustls::{
     RootCertStore,
@@ -25,6 +26,7 @@ const MAX_CA_CERTIFICATES: usize = 256;
 pub struct AdditionalRootCertificates {
     reqwest: Arc<[Certificate]>,
     rustls: Arc<[CertificateDer<'static>]>,
+    client_identity: Option<ClientIdentity>,
 }
 
 impl AdditionalRootCertificates {
@@ -69,6 +71,7 @@ impl AdditionalRootCertificates {
         Ok(Self {
             reqwest: reqwest.into(),
             rustls: rustls.into(),
+            client_identity: None,
         })
     }
 
@@ -77,7 +80,27 @@ impl AdditionalRootCertificates {
         for certificate in self.reqwest.iter() {
             builder = builder.add_root_certificate(certificate.clone());
         }
-        builder
+        self.configure_client_identity(builder)
+    }
+
+    /// Attach one optional client identity to every reqwest client using these roots.
+    #[must_use]
+    pub fn with_client_identity(mut self, identity: ClientIdentity) -> Self {
+        self.client_identity = Some(identity);
+        self
+    }
+
+    /// Return the configured client identity for trusted non-HTTP TLS adapters.
+    pub fn client_identity(&self) -> Option<&ClientIdentity> {
+        self.client_identity.as_ref()
+    }
+
+    /// Add only the client identity, preserving adapter-specific trust policy.
+    pub fn configure_client_identity(&self, builder: ClientBuilder) -> ClientBuilder {
+        match &self.client_identity {
+            Some(identity) => identity.configure_reqwest(builder),
+            None => builder,
+        }
     }
 
     /// Add these roots to an existing rustls root store.

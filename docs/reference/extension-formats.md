@@ -15,6 +15,30 @@ while loading a plugin.
 
 ## Discovery
 
+Workspace discovery examines `.agents/plugin.json` or immediate
+`.agents/plugins/NAME/plugin.json` sources, plus directories explicitly registered
+inside the workspace. Mixing the direct and collection layouts stops automatic
+discovery and reports a conflict; previously accepted sources remain registered and
+usable. The v1 specification defines directory loading; these discovery paths are a
+Colossus convention.
+Presence alone does not grant instruction or execution authority.
+
+Automatic discovery is bounded to 128 sources, 128 collection entries, and 256 MiB of
+cumulative validated source bytes, in deterministic path order. Failed captures do not
+spend that shared budget. Metadata rejects oversized trees before payload reads;
+manifest validation precedes other payloads. A separate 384 MiB inspection budget
+counts reads from successful and failed sources. A shared 20,000-entry inspection
+limit counts files and directories across all sources, including rejected captures;
+it limits metadata, archive, and extraction work even for empty files. Linked ancestry, linked files,
+special files, and out-of-workspace paths are rejected. Accepted source grants bind the
+workspace partition, relative directory path, platform directory identity, and manifest
+name. Each run uses a deterministic OCI snapshot of captured bytes. Recovery uses the
+exact cached digest and original workspace store; it never rereads mutable source bytes.
+
+Workspace origin is unsigned even after acceptance. Installed origin records signature
+evidence; bundled origin belongs to the executable. Accepted local sources can replace
+an installed name for this workspace only; `colossus` remains reserved.
+
 | Component | Exact location | Failure boundary |
 | --- | --- | --- |
 | Manifest | `plugin.json` | Invalid manifest rejects the plugin |
@@ -32,6 +56,18 @@ the standard `name`, `description`, `license`, `compatibility`, `metadata`, and 
 MCP server IDs are `PLUGIN_NAME/SERVER_NAME`. Stdio and `streamable-http` are supported;
 valid `sse` entries are independently diagnosed as unsupported. Portable manifests do not
 carry credentials or OAuth. Those are workspace-owned overlays.
+
+## Plugin paths and writable data
+
+`${PLUGIN_ROOT}` and `${PLUGIN_DATA}` expand once, exactly, in MCP arguments,
+environment values, and `cwd`. Reserved variables are assigned after manifest and
+client overlays. The plugin root is immutable; writable data remains separate and
+survives updates and disablement.
+
+Installed packages use `$COLOSSUS_HOME/plugins/data/PLUGIN_NAME`. Workspace
+sources use the corresponding data directory in their private workspace partition,
+so they cannot inherit the installed package's data. Installed-package uninstall
+preserves data unless `--purge-data` is explicit.
 
 ## OCI profile
 

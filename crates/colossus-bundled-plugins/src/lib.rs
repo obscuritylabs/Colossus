@@ -56,8 +56,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 "colossus/coding",
-                "colossus/offline-dev",
                 "colossus/plugin-authoring",
+                "colossus/schedule-task",
                 "colossus/security-review"
             ]
         );

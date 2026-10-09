@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 impl AgentService {
     #[allow(clippy::too_many_arguments)]
@@ -37,7 +38,7 @@ impl AgentService {
         prompt: &ModelContent,
         max_turns: u16,
         requested_session_id: Option<&str>,
-        scope: RunScope<'_>,
+        mut scope: RunScope<'_>,
         initiator: Actor,
         released_observer: Option<&mut dyn RunEventObserver>,
         control: Option<&RunControl>,
@@ -77,19 +78,39 @@ impl AgentService {
         if let Some(subagent_id) = scope.subagent_id {
             span.record("colossus.subagent.id", subagent_id);
         }
-        self.run_with_lineage_inner(
-            role,
-            instructions,
-            prompt,
-            max_turns,
-            requested_session_id,
-            scope,
-            initiator,
-            released_observer,
-            control,
-        )
-        .instrument(span)
-        .await
+        let owned_run_id = scope
+            .requested_run_id
+            .map(str::to_owned)
+            .unwrap_or_else(|| Uuid::now_v7().to_string());
+        scope.requested_run_id = Some(&owned_run_id);
+        let owns_run = AtomicBool::new(false);
+        let guard = RunOwnershipGuard {
+            owns_run: &owns_run,
+            lifecycle: self.lifecycle.as_deref(),
+            run_id: &owned_run_id,
+        };
+        let result = self
+            .run_with_lineage_inner(
+                role,
+                instructions,
+                prompt,
+                max_turns,
+                requested_session_id,
+                scope,
+                initiator,
+                released_observer,
+                control,
+                &owns_run,
+            )
+            .instrument(span)
+            .await;
+        if owns_run.load(Ordering::Acquire)
+            && let Some(lifecycle) = &self.lifecycle
+        {
+            lifecycle.finish_run(&owned_run_id).await;
+        }
+        drop(guard);
+        result
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -104,6 +125,7 @@ impl AgentService {
         initiator: Actor,
         mut released_observer: Option<&mut dyn RunEventObserver>,
         control: Option<&RunControl>,
+        owns_run: &AtomicBool,
     ) -> Result<AgentRunResult, AgentError> {
         let mut agent_observation = colossus_observability::AgentObservation::start(role);
         if role.is_empty() || initiator.id.is_empty() || !(1..=MAX_TURNS).contains(&max_turns) {
@@ -139,9 +161,10 @@ impl AgentService {
         }
         let mut written_plan = None::<PlanRecord>;
         let mut plan_write_recovery_attempted = false;
-        let session_id = match requested_session_id {
+        let (session_id, needs_initial_title) = match requested_session_id {
             Some(id) => {
-                if self.sessions.get_session(id)?.is_none() {
+                let existing = self.sessions.get_session(id)?;
+                if existing.is_none() {
                     if !scope.create_requested_session {
                         return Err(StoreError::NotFound(format!("session {id}")).into());
                     }
@@ -151,7 +174,11 @@ impl AgentService {
                         initiator.clone(),
                     )?;
                 }
-                id.to_owned()
+                let needs_title = existing.is_none()
+                    || existing.is_some_and(|session| {
+                        session.message_count == 0 && session.title.is_none()
+                    });
+                (id.to_owned(), needs_title)
             }
             None => {
                 let id = Uuid::now_v7().to_string();
@@ -160,7 +187,7 @@ impl AgentService {
                     Some(&session_title(&prompt.plain_text())),
                     initiator.clone(),
                 )?;
-                id
+                (id, true)
             }
         };
         tracing::Span::current().record("gen_ai.conversation.id", &session_id);
@@ -168,7 +195,9 @@ impl AgentService {
             plan_observation.record_correlation(&run_id, &session_id);
         }
         let stream_id = format!("run:{run_id}");
-        let route = self.provider.route(role)?;
+        let route = self
+            .provider
+            .route_with_options(role, &scope.agent_options)?;
         let image_count = prompt.images().count();
         let image_bytes = prompt.images().try_fold(0_u64, |total, image| {
             total
@@ -225,6 +254,10 @@ impl AgentService {
             }),
             ..ExecutionContext::default()
         };
+        if let Some(lifecycle) = &self.lifecycle {
+            lifecycle.begin_run(&context, &initiator, control.cloned().unwrap_or_default())?;
+            owns_run.store(true, Ordering::Release);
+        }
         if let Some(pending) = self.sessions.pending_tool_turn(&session_id)? {
             return Err(AgentError::SessionIntegrity {
                 session_id: session_id.clone(),
@@ -287,6 +320,17 @@ impl AgentService {
         if !route.capabilities.tool_calls {
             definitions.clear();
         }
+        let instructions = if needs_initial_title
+            && definitions
+                .iter()
+                .any(|definition| definition.name == "session.set_title")
+        {
+            format!(
+                "{instructions}\n\n[Colossus session title]\nSet this new session's title once with session.set_title. Choose a short, specific title describing the user's initial request. Do this near the start of the run. Keep that title on later turns, including if the conversation changes direction, unless the user explicitly asks to rename the session."
+            )
+        } else {
+            instructions.to_owned()
+        };
         let initial_offered_tools = definitions
             .iter()
             .map(|definition| definition.name.as_str())
@@ -382,18 +426,75 @@ impl AgentService {
                 )
                 .await?;
             }
+            let mut continuation_plan =
+                if scope.agent_options == colossus_contracts::WorkflowAgentOptions::default() {
+                    self.provider.continuation_plan(
+                        role,
+                        &ModelRequest {
+                            instructions: instructions.clone(),
+                            messages: messages.clone(),
+                            tools: turn_definitions.clone(),
+                            max_output_tokens: None,
+                        },
+                        &context,
+                    )?
+                } else {
+                    None
+                };
             let prepared = if let Some(preparer) = &self.context_preparer {
                 let prepared = preparer
                     .prepare(ContextPreparationRequest {
+                        continuation: continuation_plan
+                            .as_ref()
+                            .and_then(|plan| plan.selected.clone()),
                         session_id: session_id.clone(),
-                        instructions: instructions.into(),
+                        instructions: instructions.clone(),
                         messages: messages.clone(),
                         tools: turn_definitions.clone(),
                         route: route.clone(),
                         context: context.clone(),
                         force: false,
                     })
-                    .await?;
+                    .await;
+                let prepared = match prepared {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        if let ContextError::BudgetExceeded(budget) = &error {
+                            self.append(
+                                &stream_id,
+                                &mut stream_version,
+                                "error.v1",
+                                system_actor(),
+                                &context,
+                                json!({
+                                    "code": budget.code(),
+                                    "message": budget.to_string(),
+                                    "required": budget.required,
+                                    "limit": budget.limit,
+                                    "resource": budget.resource.to_string(),
+                                    "scope": budget.scope.to_string(),
+                                    "recoverable": false,
+                                }),
+                            )?;
+                            emit_run_event(
+                                &mut released_observer,
+                                &run_id,
+                                &session_id,
+                                RunEvent::Error {
+                                    code: budget.code().into(),
+                                    message: budget.to_string(),
+                                    recoverable: false,
+                                    http_status: None,
+                                    retry_after_ms: None,
+                                    turn: Some(turn),
+                                    elapsed_seconds: started.elapsed().as_secs_f64(),
+                                },
+                            )
+                            .await?;
+                        }
+                        return Err(error.into());
+                    }
+                };
                 self.append(
                     &stream_id,
                     &mut stream_version,
@@ -418,8 +519,17 @@ impl AgentService {
                         "message_count": prepared.messages.len(),
                     }),
                 )?;
+                if let Some(plan) = &mut continuation_plan {
+                    plan.context_binding_hash = prepared.context_binding_hash;
+                    if prepared.continuation_id.is_none() {
+                        plan.selected = None;
+                    }
+                }
                 prepared.messages
             } else {
+                if let Some(plan) = &mut continuation_plan {
+                    plan.selected = None;
+                }
                 messages.clone()
             };
             if control.is_some_and(RunControl::is_cancelled) {
@@ -438,7 +548,7 @@ impl AgentService {
                     .await;
             }
             let request = ModelRequest {
-                instructions: instructions.into(),
+                instructions: instructions.clone(),
                 messages: prepared,
                 tools: turn_definitions.clone(),
                 max_output_tokens: None,
@@ -540,6 +650,8 @@ impl AgentService {
                         request,
                         context.clone(),
                         ProviderTurnOptions {
+                            agent_options: scope.agent_options.clone(),
+                            continuation: continuation_plan,
                             include_response_diagnostics: scope
                                 .include_provider_response_diagnostics,
                         },
@@ -675,6 +787,7 @@ impl AgentService {
                     continue;
                 }
                 Err(error) => {
+                    self.provider.discard_continuation(&context)?;
                     let http_status = provider_error_http_status(&error);
                     let retry_after_ms = provider_error_retry_after_ms(&error);
                     let message = error.to_string();
@@ -747,7 +860,9 @@ impl AgentService {
                         arguments: arguments.clone(),
                     }),
                     ProviderEvent::FinalOutput { text } => final_output = Some(text.clone()),
-                    ProviderEvent::ReasoningSummary { .. } | ProviderEvent::Usage { .. } => {}
+                    ProviderEvent::ReasoningSummary { .. }
+                    | ProviderEvent::Usage { .. }
+                    | ProviderEvent::Retry { .. } => {}
                 }
             }
             if calls.is_empty() {
@@ -838,6 +953,7 @@ impl AgentService {
                             id: route.model_profile.clone(),
                         },
                     )?;
+                    self.provider.settle_continuation(&context)?;
                     let elapsed_seconds = started.elapsed().as_secs_f64();
                     self.append(
                         &stream_id,
@@ -1192,6 +1308,12 @@ impl AgentService {
                                     }),
                                 )
                             })?;
+                            post_commit_events.push(RunEvent::ToolCompleted {
+                                turn,
+                                result: result.clone(),
+                                duration_seconds: tool_started.elapsed().as_secs_f64(),
+                                elapsed_seconds: started.elapsed().as_secs_f64(),
+                            });
                             tool_results.push(result);
                             for pending in calls.iter().skip(call_index.saturating_add(1)) {
                                 let skipped = unexecuted_tool_result(pending, &call.call_id, code);
@@ -1245,6 +1367,12 @@ impl AgentService {
                         let message = error.to_string();
                         let code = tool_error_code(&error);
                         let result = terminal_tool_error_result(&call, &error);
+                        post_commit_events.push(RunEvent::ToolCompleted {
+                            turn,
+                            result: result.clone(),
+                            duration_seconds: tool_started.elapsed().as_secs_f64(),
+                            elapsed_seconds: started.elapsed().as_secs_f64(),
+                        });
                         tool_results.push(result);
                         for pending in calls.iter().skip(call_index.saturating_add(1)) {
                             let skipped = unexecuted_tool_result(pending, &call.call_id, code);
@@ -1450,6 +1578,11 @@ impl AgentService {
                 appends,
                 system_actor(),
             )?;
+            if terminal.is_none() {
+                self.provider.settle_continuation(&context)?;
+            } else {
+                self.provider.discard_continuation(&context)?;
+            }
             messages = next_messages;
 
             for event in post_commit_events {
@@ -1576,6 +1709,7 @@ impl AgentService {
         started: &Instant,
     ) -> Result<AgentRunResult, AgentError> {
         let elapsed_seconds = started.elapsed().as_secs_f64();
+        self.provider.discard_continuation(context)?;
         emit_run_event(
             observer,
             run_id,
@@ -1661,4 +1795,19 @@ async fn emit_run_event(
             .await?;
     }
     Ok(())
+}
+
+struct RunOwnershipGuard<'a> {
+    owns_run: &'a AtomicBool,
+    lifecycle: Option<&'a dyn colossus_ports::AgentRunLifecycle>,
+    run_id: &'a str,
+}
+impl Drop for RunOwnershipGuard<'_> {
+    fn drop(&mut self) {
+        if self.owns_run.load(Ordering::Acquire)
+            && let Some(lifecycle) = self.lifecycle
+        {
+            lifecycle.cancel_run(self.run_id);
+        }
+    }
 }

@@ -75,9 +75,20 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 | Security and catalog | `colossus-access`, `colossus-policy`, `colossus-tools` | Capability metadata, decisions, permits, and strict tool schemas |
 | Infrastructure | `colossus-provider`, `colossus-codex-auth`, `colossus-credentials`, journal/projection crates, `colossus-sandbox`, `colossus-integrations`, `colossus-mcp`, `colossus-plugins`, `colossus-bundles`, `colossus-search` | External systems, authentication, plugin OCI/lifecycle, release bundles, and storage adapters |
 | Public API and SDK | `colossus-api-proto`, `colossus-api`, `colossus-api-runtime`, `colossus-grpc`, `colossus-sdk` | Version public resources, authenticate applications, host durable runs, and provide transport-neutral clients |
+| Control Plane application | `colossus-cloud`, `colossus-cloud-protocol`, `colossus-cloud-server`, `colossus-connector` | Project authority, durable fixed-node placement, OIDC browser access, and native outbound connections through the public SDK |
 | Composition and interfaces | `colossus-runtime`, `colossus-worker-protocol`, `colossus-worker`, `colossus-cli`, `colossus-tui`, `colossus-presentation` | Narrow private transport contracts, wire services, host application contracts, and released-data rendering |
 
 ## Boundary rules
+
+The [cloud control plane](cloud-control-plane.md) is a separate application composition.
+Its Diesel/diesel-async PostgreSQL schema and database-backed user and project authority are independent
+of runtime journals and policy. `colossus-cloud-postgres` owns pooled relational storage,
+transactional outbox/audit records, shared browser sessions and fenced connection leases.
+Host/agent/workspace grouping and thread history do not grant local execution authority.
+Each connector uses a dedicated native application grant; it cannot borrow the Desktop
+primary or approval-broker credential. Cloud roles intersect that grant and never
+expand local tool, policy, or sandbox authority. The closed remote operation set does
+not expose private worker RPC, arbitrary network forwarding, or renderer credentials.
 
 Manual Desktop credentials and platform-backed MCP OAuth share the
 `colossus-credentials` adapter. `HostSecret` (64 KiB) and `VaultRecord` (1 MiB) are
@@ -171,6 +182,12 @@ commands dispatch it without receiving secret values from the renderer.
   Provider adapters normalize bounded, optional model-card metadata. Missing limits
   or capabilities remain distinguishable from provider-declared values, and model
   selection never grants tools or changes policy based on remote descriptions.
+- Desktop setup packages are native interface imports: `setup_package` bounds and
+  reviews an offline ZIP manifest, assets, and provider/model YAML. The verified
+  sidecar's existing inspection API validates runtime semantics; no runtime crate
+  is linked into Desktop. Saved setup metadata is separate from active workspace
+  configuration. Credentials, trust changes, and model activation reuse existing
+  native services and persist through the version-7 Desktop settings envelope.
 - Disposable Desktop setup diagnostics bind their protected journal identity to the
   canonical runtime directory and its filesystem identity. Versioned migration moves
   setup to a new namespace without resetting or bypassing workspace journal anchors.
@@ -192,7 +209,7 @@ commands dispatch it without receiving secret values from the renderer.
   caller-bound embedded SDK backend; they never depend on agent internals.
 - Crate roots expose a focused API or composition surface; nontrivial logic belongs in
   named modules.
-- Canonical writes append journal events. Read models and indexes are replaceable.
+- Runtime canonical writes append journal events. Runtime read models and indexes are replaceable. Cloud domain state uses independent relational transactions with audit, outbox, and source cursors.
 - Event-sourced repositories discover aggregate streams through bounded pages of the
   journal-maintained stream identifier index. Listing integrations, plugin installations, sessions,
   work, research, memory, or workflows must not rescan the global event history.

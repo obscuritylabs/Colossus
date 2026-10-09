@@ -26,6 +26,12 @@ pub(super) struct Composer {
     pending_pastes: Vec<PendingPaste>,
     pub(super) completion_index: Option<usize>,
     pub(super) completion_hidden: bool,
+    preferred_column: Option<usize>,
+}
+
+pub(super) enum ComposerVerticalDirection {
+    Previous,
+    Next,
 }
 
 impl Composer {
@@ -94,11 +100,52 @@ impl Composer {
     pub(super) fn move_left(&mut self) {
         self.cursor = previous_boundary(&self.draft, self.cursor);
         self.completion_index = None;
+        self.preferred_column = None;
     }
 
     pub(super) fn move_right(&mut self) {
         self.cursor = next_boundary(&self.draft, self.cursor);
         self.completion_index = None;
+        self.preferred_column = None;
+    }
+
+    pub(super) fn move_to(&mut self, cursor: usize) {
+        self.cursor = cursor;
+        self.completion_index = None;
+        self.preferred_column = None;
+    }
+
+    pub(super) fn move_vertical(
+        &mut self,
+        direction: ComposerVerticalDirection,
+        width: usize,
+    ) -> bool {
+        let layout = composer_layout(&self.draft, "", self.cursor, width);
+        let target_row = match direction {
+            ComposerVerticalDirection::Previous => layout.cursor_row.checked_sub(1),
+            ComposerVerticalDirection::Next => Some(layout.cursor_row + 1),
+        };
+        let Some(target_row) = target_row else {
+            return false;
+        };
+        let column = self.preferred_column.unwrap_or(layout.cursor_column);
+        let mut stops = layout
+            .cursor_stops
+            .iter()
+            .filter(|stop| stop.row == target_row);
+        let Some(mut selected) = stops.next() else {
+            return false;
+        };
+        for stop in stops {
+            if stop.column > column {
+                break;
+            }
+            selected = stop;
+        }
+        self.cursor = selected.byte;
+        self.preferred_column = Some(column);
+        self.completion_index = None;
+        true
     }
 
     pub(super) fn take(&mut self) -> String {
@@ -109,6 +156,7 @@ impl Composer {
         self.history_draft = None;
         self.completion_index = None;
         self.completion_hidden = false;
+        self.preferred_column = None;
         Self::expand_pending_pastes(&draft, pending_pastes)
     }
 
@@ -127,6 +175,7 @@ impl Composer {
         self.history_draft = None;
         self.completion_index = None;
         self.completion_hidden = true;
+        self.preferred_column = None;
     }
 
     pub(super) fn reset_navigation(&mut self) {
@@ -134,6 +183,7 @@ impl Composer {
         self.history_draft = None;
         self.completion_index = None;
         self.completion_hidden = false;
+        self.preferred_column = None;
     }
 
     fn cursor_is_on_first_line(&self) -> bool {
@@ -147,6 +197,7 @@ impl Composer {
         self.history_index = Some(index);
         self.completion_index = None;
         self.completion_hidden = true;
+        self.preferred_column = None;
     }
 
     fn save_history_draft(&mut self) {
@@ -165,6 +216,7 @@ impl Composer {
         self.history_index = None;
         self.completion_index = None;
         self.completion_hidden = false;
+        self.preferred_column = None;
     }
 
     fn next_large_paste_placeholder(&self, char_count: usize) -> String {
@@ -295,9 +347,8 @@ pub(super) enum Overlay {
     },
     SessionBrowser(SessionBrowserState),
     ThemePicker(ThemePickerState),
-    HistorySearch {
-        query: String,
-    },
+    HistorySearch(HistorySearchState),
+    SettingsPicker(SettingsPickerState),
     PlanExecutionChoice {
         plan: PlanRecord,
         selected: Option<usize>,
@@ -341,6 +392,7 @@ pub struct TuiState {
     /// Process-local canonical selected plan; cleared on session switches and restart.
     pub selected_plan: Option<PlanRecord>,
     pub(super) composer: Composer,
+    pub(super) dictation: crate::dictation::DictationState,
     pub(super) history: Vec<String>,
     pub(super) completions: Vec<String>,
     pub(super) sticky_skills: Vec<String>,
@@ -357,11 +409,13 @@ pub struct TuiState {
     pub(super) control: Option<RunControl>,
     pub(super) overlay: Option<Overlay>,
     pub(super) pending_plan_command: Option<PlanCommand>,
+    pub(super) pending_setting_command: Option<&'static str>,
     pub(super) pending_plan_execution: Option<InteractivePlanExecutionRequest>,
     pub(super) open_plan_execution_after_approval: bool,
     pub(super) pending_sandbox_boundary_acknowledgement: Option<SandboxBoundaryMode>,
     pub(super) sandbox_boundary_acknowledgement_in_progress: bool,
     pub(super) activity: Option<String>,
+    pub(super) provider_retry: Option<colossus_contracts::ProviderRetry>,
     pub(super) started_at: Option<Instant>,
     pub(super) scroll_from_bottom: usize,
     pub(super) new_items: usize,
@@ -431,6 +485,7 @@ impl TuiState {
             mode: InteractiveMode::Execute,
             selected_plan: None,
             composer: Composer::default(),
+            dictation: crate::dictation::DictationState::default(),
             history: snapshot.history,
             completions: with_mode_completions(snapshot.completions),
             sticky_skills: Vec::new(),
@@ -447,12 +502,14 @@ impl TuiState {
             control: None,
             overlay: None,
             pending_plan_command: None,
+            pending_setting_command: None,
             pending_plan_execution: None,
             open_plan_execution_after_approval: false,
             pending_sandbox_boundary_acknowledgement: snapshot
                 .pending_sandbox_boundary_acknowledgement,
             sandbox_boundary_acknowledgement_in_progress: false,
             activity: None,
+            provider_retry: None,
             started_at: None,
             scroll_from_bottom: 0,
             new_items: 0,
@@ -533,7 +590,12 @@ impl TuiState {
     pub(super) fn transient_inline_screen_active(&self) -> bool {
         matches!(
             self.overlay,
-            Some(Overlay::SessionBrowser(_) | Overlay::ThemePicker(_))
+            Some(
+                Overlay::SessionBrowser(_)
+                    | Overlay::ThemePicker(_)
+                    | Overlay::HistorySearch(_)
+                    | Overlay::SettingsPicker(_)
+            )
         ) || self.docked_decision_active()
             || self.structured_completion_context().is_some()
     }
@@ -768,7 +830,10 @@ impl TuiState {
             .iter()
             .map(String::as_str)
             .filter(|candidate| {
-                candidate.starts_with(context.prefix) && *candidate != context.prefix
+                candidate.starts_with(context.prefix)
+                    && *candidate != context.prefix
+                    && (context.kind != CompletionKind::Command
+                        || setting_completion_visible(candidate, context.prefix))
             })
             .collect()
     }
@@ -910,6 +975,7 @@ impl TuiState {
         }
         if let Some(control) = &self.control {
             control.cancel();
+            self.provider_retry = None;
             self.activity = Some("cancelling after the current effect settles".into());
             return true;
         }
@@ -931,6 +997,7 @@ impl TuiState {
             if let Some(control) = &self.control {
                 control.cancel();
             }
+            self.provider_retry = None;
             self.activity = Some("cancelling after the current effect settles".into());
             return;
         }

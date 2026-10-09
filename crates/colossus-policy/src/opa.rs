@@ -62,13 +62,15 @@ impl OpaPolicy {
         }
         if !local
             && ((config.ca_pem.is_none() && config.tls_roots.is_empty())
-                || config.identity_pem.is_none())
+                || (config.identity_pem.is_none() && config.tls_roots.client_identity().is_none()))
         {
             return Err(PolicyError::InvalidDecision(
                 "remote OPA requires pinned CA trust and mTLS identity".into(),
             ));
         }
-        let mut builder = Client::builder().timeout(config.timeout);
+        let mut builder = Client::builder()
+            .timeout(config.timeout)
+            .redirect(reqwest::redirect::Policy::none());
         if let Some(ca_pem) = config.ca_pem {
             let certificates = Certificate::from_pem_bundle(&ca_pem)
                 .map_err(|error| PolicyError::InvalidDecision(error.to_string()))?;
@@ -88,6 +90,7 @@ impl OpaPolicy {
         } else {
             builder = config.tls_roots.configure_reqwest(builder);
         }
+        builder = config.tls_roots.configure_client_identity(builder);
         if let Some(identity_pem) = config.identity_pem {
             let identity = Identity::from_pem(&identity_pem)
                 .map_err(|error| PolicyError::InvalidDecision(error.to_string()))?;

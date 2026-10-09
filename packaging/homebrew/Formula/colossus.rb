@@ -5,11 +5,11 @@ class Colossus < Formula
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/obscuritylabs/Colossus/releases/download/v0.11.0/colossus-0.11.0-aarch64-apple-darwin.tar.gz"
-      sha256 "c5140fa28173641838069e4ec331ef3848c8f3a4f3149b174e09380719e75b9a"
+      url "https://github.com/obscuritylabs/Colossus/releases/download/v0.11.7/colossus-0.11.7-aarch64-apple-darwin.tar.gz"
+      sha256 "c33f8fae21d8dba9531a939c2468c9d696ffa64a92c5ee2665c47dce503b31d5"
     else
-      url "https://github.com/obscuritylabs/Colossus/releases/download/v0.11.0/colossus-0.11.0-x86_64-apple-darwin.tar.gz"
-      sha256 "c274017f83a11b47123e80471417548029123b245ae04b0ae4386b78c2b07478"
+      url "https://github.com/obscuritylabs/Colossus/releases/download/v0.11.7/colossus-0.11.7-x86_64-apple-darwin.tar.gz"
+      sha256 "ad36dd071552501a565d6abfd3d38a2b40ec9c0d9be667b71c1811a55e650b05"
     end
   end
 

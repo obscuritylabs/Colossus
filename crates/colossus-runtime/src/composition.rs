@@ -4,20 +4,37 @@ use super::*;
 /// execute sequentially. Its deadline must contain those inner deadlines; otherwise
 /// the generic sandbox timeout can interrupt a valid research run while an inner
 /// external effect is still active and force an `outcome_unknown` terminal state.
-pub(super) fn research_run_timeout_ms(
-    provider_timeout_ms: u64,
-    sandbox_timeout_ms: u64,
-    max_sources: usize,
-    max_workers: usize,
-) -> u64 {
-    let model_calls = u64::try_from(max_sources)
-        .unwrap_or(u64::MAX)
+pub(super) fn research_run_timeout_ms(provider_timeout_ms: u64, config: &RuntimeConfig) -> u64 {
+    let max_sources = u64::try_from(config.research.max_sources).unwrap_or(u64::MAX);
+    let max_workers = u64::try_from(config.research.max_workers).unwrap_or(u64::MAX);
+    // Include configured plugin overlays even before their components are installed:
+    // later run snapshots may expose them without rebuilding the outer effect policy.
+    let max_mcp_servers = u64::try_from(
+        config
+            .mcp
+            .servers
+            .len()
+            .saturating_add(config.plugins.mcp_servers.len()),
+    )
+    .unwrap_or(u64::MAX);
+    let mcp_pages = u64::try_from(MAX_MCP_PAGES).unwrap_or(u64::MAX);
+    let mcp_collection_calls = if max_mcp_servers == 0 {
+        0
+    } else {
+        // Initial inherited discovery visits every server. Every selected or
+        // projected call then rediscovers its complete schema before invocation.
+        max_mcp_servers
+            .saturating_mul(mcp_pages)
+            .saturating_add(max_sources.saturating_mul(mcp_pages.saturating_add(1)))
+    };
+    let model_calls = max_sources
+        .saturating_add(max_workers) // MCP tool selection per lane
         .saturating_add(2); // planning plus synthesis
-    let collection_calls = u64::try_from(max_workers).unwrap_or(u64::MAX);
+    let collection_calls = max_workers.saturating_mul(mcp_collection_calls.max(1));
     provider_timeout_ms
         .saturating_mul(model_calls)
-        .saturating_add(sandbox_timeout_ms.saturating_mul(collection_calls))
-        .saturating_add(sandbox_timeout_ms) // bounded orchestration overhead
+        .saturating_add(config.sandbox.timeout_ms.saturating_mul(collection_calls))
+        .saturating_add(config.sandbox.timeout_ms) // bounded orchestration overhead
 }
 
 struct StartupObservation {
@@ -98,6 +115,7 @@ pub struct Runtime {
     pub(super) plugin_configuration: Arc<PluginsConfig>,
     pub(super) plugin_catalog: Arc<PluginCatalogSource>,
     pub(super) plugin_credentials: Arc<dyn CredentialResolver>,
+    pub(super) tls_roots: AdditionalRootCertificates,
     pub(super) plugin_executor: Arc<dyn EffectExecutor>,
     pub(super) integrations: Arc<dyn IntegrationRepository>,
     pub(super) bundle_executor: Arc<dyn EffectExecutor>,
@@ -127,6 +145,7 @@ pub struct Runtime {
     pub(super) access: AccessResolution,
     pub(super) filesystem_executor: Arc<dyn EffectExecutor>,
     pub(super) process_executor: Arc<dyn EffectExecutor>,
+    pub(super) process_sessions: Arc<ProcessSessions>,
     pub(super) http_executor: Arc<HttpExecutor>,
     pub(super) sandbox_executor_config: SandboxExecutorConfig,
     pub(super) sandbox_backend: String,
@@ -141,7 +160,7 @@ pub struct Runtime {
     pub(super) workflows: Arc<WorkflowService>,
     // Declared last so every runtime service is dropped before workspace ownership
     // is released to another effect-capable runtime.
-    pub(super) _workspace_lease: workspace_lease::WorkspaceOwnershipLease,
+    pub(super) _workspace_lease: Arc<workspace_lease::WorkspaceOwnershipLease>,
 }
 
 impl Runtime {
@@ -223,6 +242,7 @@ impl Runtime {
         codex_auth: Option<CodexAuthStore>,
     ) -> Result<Self, RuntimeError> {
         validate_storage_config(&config.storage)?;
+        validate_builtin_plugin_trust_identity(&config.plugins)?;
         let storage_adapter = match config.storage.adapter {
             StorageAdapter::Redb => "redb",
             StorageAdapter::Ephemeral => "ephemeral",
@@ -269,7 +289,13 @@ impl Runtime {
                 workspace.display()
             )));
         }
-        let tls_roots = config
+        let development_protection =
+            crate::development_credentials::runtime_development_protection(
+                config,
+                colossus_home_root.as_ref(),
+                &workspace,
+            )?;
+        let mut tls_roots = config
             .network
             .ca_bundle_path
             .as_ref()
@@ -283,6 +309,29 @@ impl Runtime {
                 RuntimeError::Config(format!("network.caBundlePath is invalid: {error}"))
             })?
             .unwrap_or_default();
+        let client_identity = match (
+            config.network.client_certificate_path.as_ref(),
+            config.network.client_key_path.as_ref(),
+        ) {
+            (Some(certificate), Some(key)) => Some(
+                colossus_network::ClientIdentity::from_pem_paths(
+                    workspace_absolute_path(&workspace, certificate),
+                    workspace_absolute_path(&workspace, key),
+                )
+                .map_err(|error| {
+                    RuntimeError::Config(format!("network client identity is invalid: {error}"))
+                })?,
+            ),
+            (None, None) => options.client_identity.clone(),
+            _ => {
+                return Err(RuntimeError::Config(
+                    "network client identity requires certificate and key paths".into(),
+                ));
+            }
+        };
+        if let Some(identity) = client_identity {
+            tls_roots = tls_roots.with_client_identity(identity);
+        }
         let workspace_lease = observe_startup_phase(
             "colossus.runtime.workspace.acquire",
             "workspace_acquire",
@@ -293,6 +342,7 @@ impl Runtime {
                 )
             },
         )?;
+        let workspace_lease = Arc::new(workspace_lease);
         let workspace_identity = workspace_lease.identity();
         workspace_identity.revalidate()?;
         let development_sandbox = derive_development_sandbox(config, &workspace)?;
@@ -300,7 +350,12 @@ impl Runtime {
         let repository_id = repository_identity(&workspace);
         let storage =
             observe_startup_phase("colossus.runtime.storage.open", "storage_open", || {
-                compose_storage(config, &storage_path, &tls_roots)
+                compose_storage(
+                    config,
+                    &storage_path,
+                    &tls_roots,
+                    colossus_home_root.as_ref(),
+                )
             })?;
         let StorageComposition {
             keys,
@@ -315,6 +370,8 @@ impl Runtime {
             config.observability.logs.journal_payloads,
         ));
         let instruction_snapshots = Arc::new(InstructionSnapshotStore::new(Arc::clone(&journal)));
+        let work: Arc<dyn WorkRepository> =
+            Arc::new(EventSourcedWorkRepository::new(Arc::clone(&journal)));
         let projections = Arc::new(ProjectionWorker::new(
             Arc::clone(&journal),
             Arc::clone(&projection_store),
@@ -361,43 +418,35 @@ impl Runtime {
                 return Err(error.into());
             }
         }
-        let (active_plugins, _startup_plugin_lease) = if config.plugins.enabled {
-            plugin_store.as_ref().map_or_else(
-                || Ok((Vec::new(), None)),
-                |store| {
-                    store
-                        .available_snapshot_with_lease(
-                            &plugin_configuration.include,
-                            &plugin_configuration.exclude,
-                        )
-                        .map(|(plugins, lease)| (plugins, Some(lease)))
-                },
-            )?
-        } else {
-            (Vec::new(), None)
-        };
-        let plugins = Arc::new(active_plugins);
+        let workspace_plugins = Arc::new(crate::workspace_plugins::WorkspacePlugins::new(
+            &workspace,
+            colossus_home.as_deref(),
+            Arc::clone(&work),
+            Arc::clone(&instruction_snapshots),
+        )?);
         let plugin_catalog = Arc::new(PluginCatalogSource {
             store: plugin_store.clone(),
+            workspace_plugins: Arc::clone(&workspace_plugins),
             configuration: Arc::new(plugin_configuration.clone()),
             standalone_mcp: config.mcp.clone(),
             sandbox: config.sandbox.clone(),
             workspace: workspace.clone(),
             mcp_template: std::sync::OnceLock::new(),
         });
+        let (active_plugins, _startup_plugin_leases) = plugin_catalog.snapshot()?;
+        let plugins = Arc::new(active_plugins);
         let active_plugin_extensions = compile_active_plugin_extensions(
             &plugins,
             &config.plugins,
             &config.mcp,
             &config.sandbox,
             plugin_store.as_deref(),
+            workspace_plugins.store.as_deref(),
         )?;
         let security_posture =
             security_posture::build_security_posture(config, &active_plugin_extensions.mcp);
         let sessions: Arc<dyn SessionRepository> =
             Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
-        let work: Arc<dyn WorkRepository> =
-            Arc::new(EventSourcedWorkRepository::new(Arc::clone(&journal)));
         let presentation: Arc<dyn PresentationRepository> = Arc::new(
             EventSourcedPresentationRepository::new(Arc::clone(&journal)),
         );
@@ -435,15 +484,25 @@ impl Runtime {
             )?;
         }
         let run_input_media = Arc::new(JournalRunInputMediaResolver::new(Arc::clone(&journal)));
-        let providers = Arc::new(provider_registry(
-            &config.providers,
-            &config.models,
-            Arc::clone(&provider_credentials),
-            codex_auth,
-            &tls_roots,
-            configured_resource_authority(&config.sandbox),
-            Some(Arc::clone(&run_input_media) as Arc<dyn RunInputMediaResolver>),
-        )?);
+        let context_repository: Arc<dyn ContextRepository> =
+            Arc::new(EventSourcedContextRepository::new(Arc::clone(&journal)));
+        let continuations: Arc<dyn colossus_ports::ProviderContinuationRepository> =
+            Arc::new(colossus_context::EventSourcedProviderContinuations::new(
+                Arc::clone(&journal),
+                !matches!(config.storage.keys, KeyConfig::None),
+            ));
+        let providers = Arc::new(
+            provider_registry(
+                &config.providers,
+                &config.models,
+                Arc::clone(&provider_credentials),
+                codex_auth,
+                &tls_roots,
+                configured_resource_authority(&config.sandbox),
+                Some(Arc::clone(&run_input_media) as Arc<dyn RunInputMediaResolver>),
+            )?
+            .with_continuations(Arc::clone(&continuations))?,
+        );
         let searches = Arc::new(search_registry(
             config,
             &tls_roots,
@@ -494,15 +553,16 @@ impl Runtime {
         };
         let raw_filesystem_executor = Arc::new(
             FilesystemExecutor::new()
-                .with_workspace_search_exclusions(colossus_home.iter().cloned().collect()),
+                .with_workspace_search_exclusions(colossus_home.iter().cloned().collect())
+                .with_protected_filesystem(development_protection.clone()),
         );
         let filesystem_executor: Arc<dyn EffectExecutor> = Arc::new(
             WorkspaceBoundEffectExecutor::new(workspace_identity.clone(), raw_filesystem_executor),
         );
-        let raw_process_executor = Arc::new(SandboxProcessExecutor::new(
-            sandbox_executor_config.clone(),
-            sandbox_job_key,
-        ));
+        let raw_process_executor = Arc::new(
+            SandboxProcessExecutor::new(sandbox_executor_config.clone(), sandbox_job_key)
+                .with_protected_filesystem(development_protection),
+        );
         let process_executor: Arc<dyn EffectExecutor> =
             Arc::new(WorkspaceBoundEffectExecutor::new(
                 workspace_identity.clone(),
@@ -716,6 +776,7 @@ impl Runtime {
         let work_executor = Arc::new(WorkEffectExecutor {
             service: Arc::clone(&work_service),
             repository: Arc::clone(&work),
+            sessions: Arc::clone(&sessions),
             instruction_snapshots: Arc::clone(&instruction_snapshots),
         });
         let presentation_executor = Arc::new(PresentationEffectExecutor {
@@ -750,12 +811,19 @@ impl Runtime {
         let model_provider: Arc<dyn ModelProvider> = Arc::new(GatewayModelProvider {
             gateway: Arc::clone(&gateway),
             providers: Arc::clone(&providers),
+            sessions: Arc::clone(&sessions),
+            snapshots: Arc::clone(&context_repository),
+            continuations,
+            pending: StdMutex::default(),
         });
         let risk_evaluator: Arc<dyn RiskEvaluator> = Arc::new(GatewayRiskEvaluator {
             provider: Arc::clone(&model_provider),
         });
         let weak_risk_evaluator: Weak<dyn RiskEvaluator> = Arc::downgrade(&risk_evaluator);
         gateway.bind_risk_evaluator(weak_risk_evaluator)?;
+        let research_model = Arc::new(GatewayResearchModel {
+            provider: Arc::clone(&model_provider),
+        });
         let research_collector: Arc<dyn ResearchCollector> = Arc::new(GatewayResearchCollector {
             gateway: Arc::clone(&gateway),
             filesystem: Arc::clone(&filesystem_executor),
@@ -763,15 +831,13 @@ impl Runtime {
             search: Arc::clone(&search_provider),
             plugins: Arc::clone(&plugin_catalog),
             identity: workspace_identity.clone(),
-        });
-        let research_model: Arc<dyn ResearchModel> = Arc::new(GatewayResearchModel {
-            provider: Arc::clone(&model_provider),
+            model: Arc::clone(&research_model),
         });
         let research_service = Arc::new(ResearchService::new_with_model(
             Arc::clone(&research),
             Arc::clone(&sessions),
             research_collector,
-            Some(research_model),
+            Some(research_model as Arc<dyn ResearchModel>),
             ResearchLimits {
                 max_sources: config.research.max_sources,
                 max_workers: config.research.max_workers,
@@ -790,8 +856,6 @@ impl Runtime {
         let research_executor = Arc::new(ResearchEffectExecutor {
             service: research_service,
         });
-        let context_repository: Arc<dyn ContextRepository> =
-            Arc::new(EventSourcedContextRepository::new(Arc::clone(&journal)));
         let context = Arc::new(
             ContextService::new(
                 config.context.clone(),
@@ -806,10 +870,19 @@ impl Runtime {
             service: Arc::clone(&context),
             tool_definitions: colossus_tools::model_definitions(tool_registry.as_ref()),
         });
+        let process_sessions = Arc::new(ProcessSessions::open(
+            Arc::clone(&journal),
+            Arc::clone(&gateway),
+            raw_process_executor,
+            Arc::clone(&workspace_lease),
+        )?);
+        let workflow_tools = Arc::new(std::sync::OnceLock::new());
         let gateway_tool_executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
+            workflows: Some(Arc::clone(&workflow_tools)),
             gateway: Arc::clone(&gateway),
             filesystem: Arc::clone(&filesystem_executor),
             process: Some(Arc::clone(&process_executor)),
+            process_sessions: Some(Arc::clone(&process_sessions)),
             http: Arc::clone(&http_executor),
             work: Some(Arc::clone(&work_executor)),
             memory: Some(Arc::clone(&memory_executor)),
@@ -883,7 +956,10 @@ impl Runtime {
                 Arc::clone(&sessions),
             )
             .with_context_preparer(Arc::clone(&context) as Arc<dyn ContextPreparer>)
-            .with_run_provenance(Arc::new(CatalogRunProvenance)),
+            .with_run_provenance(Arc::new(CatalogRunProvenance))
+            .with_run_lifecycle(
+                Arc::clone(&process_sessions) as Arc<dyn colossus_ports::AgentRunLifecycle>
+            ),
         );
         let workflow_repository: Arc<dyn WorkflowRepository> =
             Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
@@ -897,6 +973,9 @@ impl Runtime {
             Arc::clone(&workflow_repository),
             effects,
         ));
+        workflow_tools
+            .set(Arc::downgrade(&workflows))
+            .map_err(|_| RuntimeError::Config("workflow tools were already bound".into()))?;
         if !journal.is_recovery_mode() {
             observe_startup_phase(
                 "colossus.runtime.workflows.recover",
@@ -931,6 +1010,7 @@ impl Runtime {
             plugin_configuration: Arc::new(plugin_configuration),
             plugin_catalog,
             plugin_credentials: provider_credentials,
+            tls_roots,
             plugin_executor,
             integrations,
             bundle_executor,
@@ -960,6 +1040,7 @@ impl Runtime {
             access,
             filesystem_executor,
             process_executor,
+            process_sessions,
             http_executor,
             sandbox_executor_config,
             sandbox_backend: config.sandbox.backend.clone(),

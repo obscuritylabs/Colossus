@@ -32,8 +32,9 @@ On Windows PowerShell:
 irm https://github.com/obscuritylabs/Colossus/releases/latest/download/colossus-install.ps1 | iex
 ```
 
-If you prefer to inspect the installer first, need an exact version, or use Nix, start
-with the [installation guide](docs/get-started/install.md).
+For Homebrew, Nix, or offline installation, see the
+[CLI installation guide](docs/get-started/install.md). To inspect the installer or pin a
+version, see [installation options](docs/get-started/install-options.md).
 
 Then initialize Colossus in a repository and run the built-in offline provider:
 
@@ -106,8 +107,8 @@ colossus update
 
 - [Get started](docs/get-started/index.md): installation, first run, and model setup
 - [Use Colossus](docs/use/index.md): sessions, plans, goals, memory, and research
-- [Automate and extend](docs/extend/index.md): workflows, Agent Plugins, integrations,
-  standalone MCP, OCI registries, and supply-chain trust
+- [Extend Colossus](docs/extend/index.md): workflows, Agent Plugins, integrations,
+  MCP, editor setup, and terminal themes
 - [Administer and secure](docs/admin/index.md): configuration, access, sandboxing,
   storage, audit, and troubleshooting
 - [Reference](docs/reference/index.md): CLI, TUI, schemas, formats, and limits

@@ -1,0 +1,116 @@
+.provider-advanced-options {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+.provider-advanced-options > summary {
+  cursor: pointer;
+  padding: 14px 16px;
+  font-weight: 650;
+}
+.provider-advanced-options > summary span {
+  margin-left: 10px;
+  font-size: var(--font-size-body-sm);
+  color: var(--muted);
+  font-weight: 400;
+}
+.provider-presentation-fields {
+  display: grid;
+  gap: 10px;
+  padding: 0 16px 16px;
+}
+.provider-presentation-fields > p,
+.provider-presentation-fields small {
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+}
+.provider-description-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.provider-description-heading label {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.provider-presentation-fields textarea {
+  width: 100%;
+  min-height: 150px;
+  resize: vertical;
+}
+.provider-description-preview {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 12px;
+  min-height: 150px;
+  max-height: 320px;
+  overflow: auto;
+}
+.provider-artwork-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 8px;
+}
+.provider-artwork {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid var(--border);
+  padding: 12px;
+  border-radius: 8px;
+}
+.provider-artwork > div {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+.provider-artwork-preview {
+  display: grid;
+  place-items: center;
+  padding: 10px;
+  background: var(--surface-muted);
+  border-radius: 8px;
+}
+.provider-artwork.is-darkIcon .provider-artwork-preview {
+  background: #132334;
+}
+.provider-artwork-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.provider-artwork-actions label {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+.provider-icon-input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  width: 100%;
+  cursor: pointer;
+}
+.provider-artwork-actions label:focus-within {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+.provider-presentation-fields .provider-presentation-error {
+  color: var(--red);
+}
+.provider-instructions {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 900px) {
+  .provider-artwork-grid {
+    grid-template-columns: 1fr;
+  }
+  .provider-advanced-options > summary span {
+    display: block;
+    margin: 5px 0 0 15px;
+  }
+}

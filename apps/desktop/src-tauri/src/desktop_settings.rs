@@ -26,7 +26,7 @@ use std::fs::File;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
-const SETTINGS_SCHEMA_VERSION: u16 = 6;
+const SETTINGS_SCHEMA_VERSION: u16 = 8;
 const SETTINGS_FILE: &str = "settings.json";
 const THREAD_SEARCH_FILE: &str = "thread-search.redb";
 const MANAGED_DIRECTORY: &str = "managed-local";
@@ -157,6 +157,10 @@ pub(crate) struct WorkspaceProfile {
     pub(crate) access_profile: AccessProfileSetting,
     pub(crate) execution_boundary: ExecutionBoundarySetting,
     pub(crate) terminal_enabled: bool,
+    /// Explicit per-Workspace consent to attach a trusted Outlook plugin to the
+    /// logged-in Windows session. This is never inherited by a new Workspace.
+    #[serde(default)]
+    pub(crate) outlook_companion_enabled: bool,
     /// Sparse inherited configuration and pinned global catalog revisions. The legacy
     /// concrete fields above remain the selected-runtime compatibility projection.
     #[serde(default)]
@@ -170,6 +174,9 @@ pub(crate) struct ProviderSetting {
     pub(crate) kind: ProviderKindSetting,
     pub(crate) base_url: String,
     pub(crate) credential_id: Option<String>,
+    /// A saved connection may await a key without becoming an anonymous connection.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) credential_required: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) timeout_ms: Option<u64>,
 }
@@ -192,17 +199,12 @@ pub(crate) fn managed_provider_setting_is_valid(provider: &ProviderSetting) -> b
             .as_deref()
             .is_none_or(valid_opaque_id)
         && (provider.kind != ProviderKindSetting::Codex
-            || (provider.base_url == CODEX_BASE_URL && provider.credential_id.is_none()))
+            || (provider.base_url == CODEX_BASE_URL
+                && provider.credential_id.is_none()
+                && !provider.credential_required))
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ModelCapabilitiesSetting {
-    pub(crate) tool_calls: bool,
-    pub(crate) streaming: bool,
-    #[serde(default)]
-    pub(crate) image_inputs: bool,
-}
+pub(crate) type ModelCapabilitiesSetting = colossus_contracts::ModelFeatureSettings;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -267,6 +269,14 @@ pub(crate) struct CaBundleSetting {
     pub(crate) fingerprints_sha256: Vec<String>,
 }
 
+/// Secret-free reference to one client identity stored in the native credential vault.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ClientIdentitySetting {
+    pub(crate) identity_id: String,
+    pub(crate) leaf_fingerprint_sha256: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct AsideSetting {
@@ -297,6 +307,8 @@ pub(crate) struct DesktopSettings {
     /// Versioned reusable definitions and defaults shared by Desktop Workspaces.
     #[serde(default)]
     pub(crate) global_configuration: GlobalConfigurationSetting,
+    #[serde(default)]
+    pub(crate) setup_packages: Vec<crate::setup_package::SavedSetupPackage>,
     /// Bounded linkage metadata for Workspace-scoped side conversations. No prompt,
     /// message, tool output, or selected text is persisted here.
     #[serde(default)]
@@ -314,6 +326,8 @@ pub(crate) struct DesktopSettings {
     pub(crate) pending_provider_cleanup_ids: Vec<String>,
     #[serde(default)]
     pub(crate) additional_ca_bundle: Option<CaBundleSetting>,
+    #[serde(default)]
+    pub(crate) client_identity: Option<ClientIdentitySetting>,
     pub(crate) access_profile: AccessProfileSetting,
     pub(crate) execution_boundary: ExecutionBoundarySetting,
     pub(crate) terminal_enabled: bool,
@@ -367,6 +381,7 @@ impl Default for DesktopSettings {
             spaces: Vec::new(),
             selected_space_id: None,
             global_configuration: GlobalConfigurationSetting::default(),
+            setup_packages: Vec::new(),
             asides: Vec::new(),
             workspace: None,
             providers: Vec::new(),
@@ -374,9 +389,10 @@ impl Default for DesktopSettings {
             model_roles: BTreeMap::new(),
             pending_provider_cleanup_ids: Vec::new(),
             additional_ca_bundle: None,
+            client_identity: None,
             access_profile: AccessProfileSetting::AllowAll,
             execution_boundary: ExecutionBoundarySetting::FullAccess,
-            terminal_enabled: false,
+            terminal_enabled: true,
             local_terminal_consent_version: 0,
             selected_target_id: None,
             external_targets: Vec::new(),
@@ -388,6 +404,10 @@ impl Default for DesktopSettings {
 impl DesktopSettings {
     pub(crate) fn local_terminal_enabled(&self) -> bool {
         self.terminal_enabled && self.has_local_terminal_consent()
+    }
+
+    pub(crate) fn terminal_consent_pending(&self) -> bool {
+        self.terminal_enabled && !self.has_local_terminal_consent()
     }
 
     pub(crate) fn has_local_terminal_consent(&self) -> bool {
@@ -561,6 +581,7 @@ impl DesktopSettings {
             ));
         }
         let id = workspace.id.clone();
+        let defaults = self.global_configuration.defaults.current();
         self.spaces.push(WorkspaceProfile {
             id: id.clone(),
             display_name: workspace.display_name.clone(),
@@ -570,9 +591,16 @@ impl DesktopSettings {
             providers: self.providers.clone(),
             models: self.models.clone(),
             model_roles: self.model_roles.clone(),
-            access_profile: self.access_profile,
-            execution_boundary: self.execution_boundary,
-            terminal_enabled: self.terminal_enabled,
+            access_profile: defaults
+                .and_then(|d| d.access_profile)
+                .unwrap_or(self.access_profile),
+            execution_boundary: defaults
+                .and_then(|d| d.execution_boundary)
+                .unwrap_or(self.execution_boundary),
+            terminal_enabled: defaults
+                .and_then(|d| d.terminal_enabled)
+                .unwrap_or(self.terminal_enabled),
+            outlook_companion_enabled: false,
             configuration: SpaceConfigurationSetting {
                 accepted_global_revision: self.global_configuration.revision,
                 ..SpaceConfigurationSetting::default()
@@ -661,6 +689,7 @@ impl DesktopSettings {
             access_profile: self.access_profile,
             execution_boundary: self.execution_boundary,
             terminal_enabled: self.terminal_enabled,
+            outlook_companion_enabled: false,
             configuration: SpaceConfigurationSetting {
                 accepted_global_revision: self.global_configuration.revision,
                 ..SpaceConfigurationSetting::default()
@@ -707,6 +736,8 @@ pub(crate) fn decode_settings(bytes: &[u8]) -> Result<(DesktopSettings, bool), C
         2 | 3 => migrate_legacy_settings(bytes, version)?,
         4 => migrate_v4_settings(bytes)?,
         5 => migrate_v5_settings(bytes)?,
+        6 => migrate_v6_settings(bytes)?,
+        7 => migrate_v7_settings(bytes)?,
         SETTINGS_SCHEMA_VERSION => serde_json::from_slice(bytes).map_err(|_| storage_error())?,
         _ => return Err(storage_error()),
     };
@@ -861,6 +892,7 @@ impl SettingsStore {
                     .collect::<Vec<_>>();
         migrated_settings |= settings.archive_stale_same_path_spaces();
         settings.project_selected_space();
+        migrated_settings |= crate::setup_package::migrate_catalog(&mut settings);
         let legacy_workspace_requires_reselection =
             settings.workspace.as_ref().is_some_and(|workspace| {
                 workspace
@@ -1006,7 +1038,14 @@ impl SettingsStore {
         source_path: &Path,
     ) -> Result<CaBundleSetting, CommandErrorDto> {
         let bytes = read_ca_bundle_source(source_path)?;
-        let roots = colossus_network::AdditionalRootCertificates::from_pem_bundle(&bytes)
+        self.stage_ca_bundle_bytes(&bytes)
+    }
+
+    pub(crate) fn stage_ca_bundle_bytes(
+        &self,
+        bytes: &[u8],
+    ) -> Result<CaBundleSetting, CommandErrorDto> {
+        let roots = colossus_network::AdditionalRootCertificates::from_pem_bundle(bytes)
             .map_err(|_| ca_bundle_error("The selected file is not a valid PEM CA bundle."))?;
         let bundle = CaBundleSetting {
             bundle_id: Uuid::now_v7().to_string(),
@@ -1016,7 +1055,7 @@ impl SettingsStore {
         let directory = self.root.join(TRUST_DIRECTORY);
         ensure_private_directory(&directory)?;
         let destination = ca_bundle_storage_path(&directory, &bundle)?;
-        write_private_file(&destination, &bytes)?;
+        write_private_file(&destination, bytes)?;
         self.ca_bundle_path(&bundle)?;
         Ok(bundle)
     }
@@ -1175,6 +1214,7 @@ fn migrate_v1_settings(
         spaces: Vec::new(),
         selected_space_id: None,
         global_configuration: GlobalConfigurationSetting::default(),
+        setup_packages: Vec::new(),
         asides: Vec::new(),
         workspace: legacy.workspace,
         providers: Vec::new(),
@@ -1182,6 +1222,7 @@ fn migrate_v1_settings(
         model_roles: BTreeMap::new(),
         pending_provider_cleanup_ids: pending,
         additional_ca_bundle: None,
+        client_identity: None,
         access_profile,
         execution_boundary: legacy_execution_boundary(access_profile),
         terminal_enabled: legacy.terminal_enabled,
@@ -1192,6 +1233,21 @@ fn migrate_v1_settings(
         external_targets: legacy.external_targets,
         legacy_connection_migrated: legacy.legacy_connection_migrated,
     })
+}
+
+fn migrate_v7_settings(bytes: &[u8]) -> Result<DesktopSettings, CommandErrorDto> {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| storage_error())?;
+    value["schemaVersion"] = serde_json::json!(SETTINGS_SCHEMA_VERSION);
+    serde_json::from_value(value).map_err(|_| storage_error())
+}
+
+fn migrate_v6_settings(bytes: &[u8]) -> Result<DesktopSettings, CommandErrorDto> {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| storage_error())?;
+    value["schemaVersion"] = serde_json::json!(SETTINGS_SCHEMA_VERSION);
+    value["setupPackages"] = serde_json::json!([]);
+    serde_json::from_value(value).map_err(|_| storage_error())
 }
 
 fn migrate_v4_settings(bytes: &[u8]) -> Result<DesktopSettings, CommandErrorDto> {
@@ -1300,6 +1356,7 @@ const fn legacy_execution_boundary(profile: AccessProfileSetting) -> ExecutionBo
 }
 
 fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> {
+    crate::setup_package::validate_saved(&settings.setup_packages)?;
     if settings.schema_version != SETTINGS_SCHEMA_VERSION
         || settings.local_terminal_consent_version > LOCAL_TERMINAL_CONSENT_VERSION
         || !Uuid::parse_str(&settings.managed_instance_id).is_ok_and(|value| !value.is_nil())
@@ -1311,6 +1368,14 @@ fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> 
             .additional_ca_bundle
             .as_ref()
             .is_some_and(|bundle| validate_ca_bundle_setting(bundle).is_err())
+        || settings.client_identity.as_ref().is_some_and(|identity| {
+            !Uuid::parse_str(&identity.identity_id).is_ok_and(|value| !value.is_nil())
+                || identity.leaf_fingerprint_sha256.len() != 64
+                || !identity
+                    .leaf_fingerprint_sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+        })
     {
         return Err(storage_error());
     }
@@ -1797,7 +1862,7 @@ fn ca_bundle_storage_path(
     Ok(directory.join(format!("{}.pem", bundle.bundle_id)))
 }
 
-fn read_ca_bundle_source(path: &Path) -> Result<Vec<u8>, CommandErrorDto> {
+pub(crate) fn read_ca_bundle_source(path: &Path) -> Result<Vec<u8>, CommandErrorDto> {
     if !path.is_absolute() {
         return Err(ca_bundle_error(
             "Choose a regular PEM file from the native file picker.",
@@ -1865,6 +1930,68 @@ fn read_ca_bundle_source(path: &Path) -> Result<Vec<u8>, CommandErrorDto> {
     Err(ca_bundle_error(
         "CA bundle import is unavailable on this platform.",
     ))
+}
+
+/// Read a selected PEM key through a bound file handle into zeroizing storage.
+/// The source is capped before parsing and never copied into an unprotected Vec.
+pub(crate) fn read_client_key_source(
+    path: &Path,
+) -> Result<zeroize::Zeroizing<Vec<u8>>, CommandErrorDto> {
+    const MAX_KEY_BYTES: u64 = 64 * 1024;
+    let invalid = || {
+        CommandErrorDto::local_sanitized(
+            "client_identity_invalid",
+            "The selected PEM private key could not be read safely.",
+            false,
+        )
+    };
+    if !path.is_absolute() {
+        return Err(invalid());
+    }
+    #[cfg(unix)]
+    {
+        let before = fs::symlink_metadata(path).map_err(|_| invalid())?;
+        if !before.file_type().is_file() || before.len() > MAX_KEY_BYTES {
+            return Err(invalid());
+        }
+        let mut source = rustix::fs::open(
+            path,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map(File::from)
+        .map_err(|_| invalid())?;
+        let opened = source.metadata().map_err(|_| invalid())?;
+        if opened.dev() != before.dev() || opened.ino() != before.ino() {
+            return Err(invalid());
+        }
+        let mut bytes = zeroize::Zeroizing::new(Vec::new());
+        std::io::Read::by_ref(&mut source)
+            .take(MAX_KEY_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| invalid())?;
+        if bytes.len() as u64 > MAX_KEY_BYTES {
+            return Err(invalid());
+        }
+        return Ok(bytes);
+    }
+    #[cfg(windows)]
+    {
+        let binding = colossus_windows_native::BoundPath::open_file(path).map_err(|_| invalid())?;
+        let mut source = binding.try_clone_file().map_err(|_| invalid())?;
+        let mut bytes = zeroize::Zeroizing::new(Vec::new());
+        std::io::Read::by_ref(&mut source)
+            .take(MAX_KEY_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| invalid())?;
+        binding.revalidate().map_err(|_| invalid())?;
+        if bytes.len() as u64 > MAX_KEY_BYTES {
+            return Err(invalid());
+        }
+        return Ok(bytes);
+    }
+    #[allow(unreachable_code)]
+    Err(invalid())
 }
 
 fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), CommandErrorDto> {
@@ -2063,6 +2190,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn client_key_source_is_bounded_before_import() {
+        let source = tempfile::NamedTempFile::new().expect("selected key");
+        fs::write(source.path(), b"private-test-key").unwrap();
+        assert_eq!(
+            read_client_key_source(source.path()).unwrap().as_slice(),
+            b"private-test-key"
+        );
+        fs::write(source.path(), vec![b'x'; 64 * 1024 + 1]).unwrap();
+        assert!(read_client_key_source(source.path()).is_err());
+    }
+
+    #[test]
     fn aside_settings_persist_only_bounded_linkage_metadata() {
         let value = serde_json::to_value(AsideSetting {
             space_id: "space-1".into(),
@@ -2146,17 +2285,24 @@ mod tests {
 
     #[test]
     fn legacy_tui_consent_cannot_silently_enable_local_shell_authority() {
-        let mut settings = DesktopSettings {
-            terminal_enabled: true,
-            ..DesktopSettings::default()
-        };
+        let mut settings = DesktopSettings::default();
+        assert!(
+            settings.terminal_enabled,
+            "new workspaces default to terminal access"
+        );
         assert!(
             !settings.local_terminal_enabled(),
             "a settings record without the versioned native warning is not shell consent"
         );
+        assert!(settings.terminal_consent_pending());
 
         settings.local_terminal_consent_version = LOCAL_TERMINAL_CONSENT_VERSION;
         assert!(settings.local_terminal_enabled());
+        assert!(!settings.terminal_consent_pending());
+
+        settings.terminal_enabled = false;
+        assert!(!settings.terminal_consent_pending());
+        settings.terminal_enabled = true;
 
         settings.local_terminal_consent_version = LOCAL_TERMINAL_CONSENT_VERSION + 1;
         assert!(
@@ -2183,6 +2329,7 @@ mod tests {
     ) -> DesktopSettings {
         DesktopSettings {
             providers: vec![ProviderSetting {
+                credential_required: false,
                 profile: "primary-provider".into(),
                 kind,
                 base_url: base_url.into(),
@@ -2196,9 +2343,10 @@ mod tests {
                 context_window_tokens: 128_000,
                 max_output_tokens: 16_000,
                 capabilities: ModelCapabilitiesSetting {
-                    tool_calls: true,
-                    streaming: true,
-                    image_inputs: false,
+                    tool_calls: true.into(),
+                    streaming: true.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
                 reasoning_effort: None,
             }],
@@ -2267,6 +2415,7 @@ mod tests {
             access_profile: settings.access_profile,
             execution_boundary: settings.execution_boundary,
             terminal_enabled: settings.terminal_enabled,
+            outlook_companion_enabled: false,
             configuration: SpaceConfigurationSetting::default(),
         });
         let mut encoded = serde_json::to_value(settings).expect("settings");
@@ -3472,3 +3621,5 @@ mod tests {
         assert_eq!(store.load().expect("load bounded target set"), settings);
     }
 }
+
+mod command_allowances;

@@ -1335,6 +1335,87 @@ The reviewed patch is ready and waiting for your approval.`,
  * calls. The renderer uses this development-only fixture to compare the two
  * activity presentations against identical canonical data.
  */
+export function buildWorkflowScheduleFixture(): ChatState {
+  const state = buildOperationsStudioFixture();
+  const current = state.views.get(SELECTED_RUN_ID);
+  if (!current) throw new Error("Schedule fixture requires a run.");
+  const view: RunView = {
+    ...current,
+    run: { ...current.run, status: "completed", pendingInteractionCount: 0 },
+    pendingInteractions: [],
+    output:
+      "The approved workflow schedule is stored. Each occurrence starts an independent workflow run while this Workspace's worker is running.",
+    updates: [
+      ...current.updates.filter(
+        (item) =>
+          item.update.type === "message" && item.update.message.role === "user",
+      ),
+      update(99, "2026-10-03T08:30:00Z", {
+        type: "tool_activity",
+        activity: {
+          callId: "fixture-schedule-create",
+          toolName: "workflow.schedule.create",
+          state: "completed",
+          summary: "Stored the approved hourly Workspace health schedule.",
+          input: '{"schedule_id":"hourly-health"}',
+          preview: JSON.stringify({
+            record: {
+              schedule_id: "hourly-health",
+              enabled: true,
+              cadence_seconds: 3600,
+              last_run_id: "workflow-run-health-01",
+            },
+          }),
+        },
+      }),
+    ],
+  };
+  return {
+    ...state,
+    views: new Map([[SELECTED_RUN_ID, view]]),
+    recentRuns: state.recentRuns.map((run) =>
+      run.runId === SELECTED_RUN_ID ? view.run : run,
+    ),
+  };
+}
+
+export function buildProviderRetryFixture(): ChatState {
+  const state = buildOperationsStudioFixture();
+  const current = state.views.get(SELECTED_RUN_ID);
+  if (current === undefined) throw new Error("Retry fixture requires a run.");
+  const retryAt = new Date(Date.now() + 4_000).toISOString();
+  const view: RunView = {
+    ...current,
+    run: { ...current.run, status: "running", pendingInteractionCount: 0 },
+    pendingInteractions: [],
+    output: "",
+    usage: null,
+    updates: [
+      ...current.updates.filter(
+        (item) =>
+          item.update.type === "message" && item.update.message.role === "user",
+      ),
+      update(99, new Date().toISOString(), {
+        type: "provider_retry",
+        retry: {
+          attempt: 2,
+          max_retries: 5,
+          http_status: 503,
+          state: "backoff",
+          retry_at: retryAt,
+        },
+      }),
+    ],
+  };
+  return {
+    ...state,
+    views: new Map([[SELECTED_RUN_ID, view]]),
+    recentRuns: state.recentRuns.map((run) =>
+      run.runId === SELECTED_RUN_ID ? view.run : run,
+    ),
+  };
+}
+
 export function buildActivityComparisonFixture(): ChatState {
   const state = buildOperationsStudioFixture();
   const current = state.views.get(SELECTED_RUN_ID);

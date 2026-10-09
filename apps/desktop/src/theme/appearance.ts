@@ -1,14 +1,27 @@
+import {
+  DEFAULT_THEME_PALETTES,
+  PALETTE_CSS_VARIABLES,
+  isDefaultPalette,
+  paletteCssVariables,
+  parseThemePalettes,
+} from "./palette";
+import type { ThemePalettes } from "./palette";
+
 export const COLOR_THEME_OPTIONS = ["system", "dark", "light"] as const;
 export const TEXT_SIZE_OPTIONS = ["compact", "comfortable", "large"] as const;
+export const DARK_PALETTE_OPTIONS = ["colossus", "neutral", "hacker"] as const;
 
 export type ColorThemePreference = (typeof COLOR_THEME_OPTIONS)[number];
 export type ResolvedColorTheme = Exclude<ColorThemePreference, "system">;
 export type TextSizePreference = (typeof TEXT_SIZE_OPTIONS)[number];
+export type DarkPalettePreference = (typeof DARK_PALETTE_OPTIONS)[number];
 
 export interface AppearancePreference {
   colorTheme: ColorThemePreference;
+  darkPalette: DarkPalettePreference;
   textSize: TextSizePreference;
   showSecurityWarnings: boolean;
+  palettes: ThemePalettes;
 }
 
 export interface AppearanceStorage {
@@ -39,6 +52,7 @@ export interface AppearanceStorageEventTarget {
 
 export interface AppearanceRoot {
   setAttribute(name: string, value: string): void;
+  style: Pick<CSSStyleDeclaration, "setProperty" | "removeProperty">;
 }
 
 export interface NativeDialogAppearance {
@@ -65,8 +79,10 @@ export const APPEARANCE_STORAGE_KEY = "colossus.desktop.appearance.v1";
 
 export const DEFAULT_APPEARANCE: AppearancePreference = {
   colorTheme: "system",
+  darkPalette: "colossus",
   textSize: "comfortable",
   showSecurityWarnings: false,
+  palettes: DEFAULT_THEME_PALETTES,
 };
 
 function includes<const T extends readonly string[]>(
@@ -88,10 +104,14 @@ export function parseAppearancePreference(
       colorTheme: includes(COLOR_THEME_OPTIONS, value.colorTheme)
         ? value.colorTheme
         : DEFAULT_APPEARANCE.colorTheme,
+      darkPalette: includes(DARK_PALETTE_OPTIONS, value.darkPalette)
+        ? value.darkPalette
+        : DEFAULT_APPEARANCE.darkPalette,
       textSize: includes(TEXT_SIZE_OPTIONS, value.textSize)
         ? value.textSize
         : DEFAULT_APPEARANCE.textSize,
       showSecurityWarnings: value.showSecurityWarnings === true,
+      palettes: parseThemePalettes(value.palettes),
     };
   } catch {
     return DEFAULT_APPEARANCE;
@@ -183,7 +203,22 @@ export function applyAppearance(
 ) {
   const resolved = resolveColorTheme(preference.colorTheme, systemPrefersDark);
   root.setAttribute("data-theme", resolved);
+  root.setAttribute("data-palette", preference.darkPalette);
   root.setAttribute("data-theme-preference", preference.colorTheme);
   root.setAttribute("data-text-size", preference.textSize);
+  for (const name of PALETTE_CSS_VARIABLES) {
+    root.style.removeProperty(name);
+  }
+  const palette = preference.palettes[resolved];
+  if (
+    !(resolved === "dark" && preference.darkPalette !== "colossus") &&
+    !isDefaultPalette(resolved, palette)
+  ) {
+    for (const [name, value] of Object.entries(
+      paletteCssVariables(resolved, palette),
+    )) {
+      root.style.setProperty(name, value);
+    }
+  }
   return resolved;
 }

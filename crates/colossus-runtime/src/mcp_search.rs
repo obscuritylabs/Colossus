@@ -173,7 +173,7 @@ async fn search_mcp_catalog(
     Ok(output)
 }
 
-fn search_terms(query: &str) -> Vec<String> {
+pub(super) fn search_terms(query: &str) -> Vec<String> {
     query
         .split(|ch: char| !ch.is_alphanumeric())
         .filter(|word| word.len() > 1)
@@ -181,7 +181,7 @@ fn search_terms(query: &str) -> Vec<String> {
         .collect()
 }
 
-fn mcp_search_score(tool: &McpToolSummary, terms: &[String]) -> u32 {
+pub(super) fn mcp_search_score(tool: &McpToolSummary, terms: &[String]) -> u32 {
     let name = tool.name.to_ascii_lowercase();
     let title = tool.title.as_deref().unwrap_or("").to_ascii_lowercase();
     let description = tool
@@ -261,6 +261,7 @@ mod tests {
             description: Some(description.into()),
             annotations: None,
             input_schema: json!({"type": "object"}),
+            output_schema: None,
             schema_sha256: "hash".into(),
         }
     }
@@ -279,6 +280,7 @@ mod tests {
             headers: BTreeMap::new(),
             credential_headers: BTreeMap::new(),
             allow_stateless: false,
+            protocol_version: Default::default(),
             oauth: None,
             allowed_tools: vec!["*".into()],
             research_tools: Vec::new(),
@@ -353,6 +355,7 @@ mod tests {
             description: Some("Search Splunk events with SPL".into()),
             annotations: None,
             input_schema: json!({"type": "object"}),
+            output_schema: None,
             schema_sha256: "hash".into(),
         };
         assert!(

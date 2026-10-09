@@ -12,7 +12,8 @@ use colossus_network::AdditionalRootCertificates;
 use colossus_policy::{
     EffectExecutor, ExecutionError, ExecutionPermit, MIN_OCI_EFFECT_TIMEOUT_MS,
     MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS, MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS, NetworkDestinationMatch,
-    http_transport_authority_match, network_destination_match, non_public_network_address,
+    QuarantinedEffectObserver, StreamingEffectExecutor, http_transport_authority_match,
+    network_destination_match, non_public_network_address,
 };
 use command_group::CommandGroup as _;
 use futures::{StreamExt as _, stream::FuturesUnordered};
@@ -68,6 +69,10 @@ mod filesystem;
 pub use filesystem::FilesystemExecutor;
 use filesystem::*;
 
+mod protected_filesystem;
+pub use protected_filesystem::ProtectedFilesystem;
+use protected_filesystem::ProtectedFilesystemSnapshot;
+
 mod process;
 pub use process::SandboxProcessExecutor;
 use process::*;
@@ -81,6 +86,12 @@ use oci::*;
 
 mod stdin_completion;
 use stdin_completion::*;
+
+mod process_stream;
+pub use process_stream::ProcessControl;
+
+mod helper_stream;
+use helper_stream::*;
 
 mod supervisor;
 use supervisor::*;

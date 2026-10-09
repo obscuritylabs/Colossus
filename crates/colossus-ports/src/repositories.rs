@@ -19,6 +19,9 @@ pub trait SessionRepository: Send + Sync {
         actor: Actor,
     ) -> Result<SessionSummary, StoreError>;
 
+    /// Set the current session title with an audited canonical event.
+    fn set_title(&self, id: &str, title: &str, actor: Actor) -> Result<SessionSummary, StoreError>;
+
     /// Reconstruct one session summary from canonical events.
     fn get_session(&self, id: &str) -> Result<Option<SessionSummary>, StoreError>;
 
@@ -138,6 +141,11 @@ pub trait ContextRepository: Send + Sync {
     /// Return the explicitly active snapshot, if any.
     fn active(&self, session_id: &str) -> Result<Option<ContextSnapshot>, StoreError>;
 
+    /// Latest activation version, including explicit restores of the same snapshot.
+    fn activation_epoch(&self, _session_id: &str) -> Result<u64, StoreError> {
+        Ok(0)
+    }
+
     /// Activate an existing snapshot without mutating or deleting later snapshots.
     fn activate(
         &self,
@@ -169,6 +177,8 @@ pub trait PresentationRepository: Send + Sync {
 /// Complete input for one context-preparation pass.
 #[derive(Clone, Debug)]
 pub struct ContextPreparationRequest {
+    /// Safe opaque-state budget and canonical watermark, when available.
+    pub continuation: Option<colossus_contracts::ProviderContinuationView>,
     /// Canonical session whose history is being prepared.
     pub session_id: String,
     /// System instructions included in the model budget.
@@ -336,7 +346,26 @@ pub trait WorkRepository: Send + Sync {
         status: Option<SubagentStatus>,
         limit: usize,
     ) -> Result<Vec<SubagentJob>, StoreError>;
+
+    /// Page all child jobs in ascending ID order with their creation snapshot references.
+    /// The cursor is exclusive; zero limit returns an empty page. Recovery adapters must
+    /// use bounded indexed discovery and canonical creation/tail reads.
+    fn subagent_recovery_page(
+        &self,
+        _after_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SubagentRecoveryEntry>, StoreError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        Err(StoreError::Adapter(
+            "paginated subagent recovery is unsupported by this work repository".into(),
+        ))
+    }
 }
+/// One current child job and its immutable private instruction snapshot reference.
+pub type SubagentRecoveryEntry = (SubagentJob, Option<String>);
+
 /// Canonical event-sourced memory lifecycle repository.
 pub trait MemoryRepository: Send + Sync {
     /// Create a new active canonical record.

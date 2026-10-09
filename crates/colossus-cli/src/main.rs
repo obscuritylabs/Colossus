@@ -70,8 +70,16 @@ mod codex_commands;
 mod commands;
 mod configuration;
 mod desktop_tui_auth;
+mod dev_credentials;
+mod dev_credentials_apply;
+mod dev_credentials_args;
+mod dev_credentials_lease;
+mod dev_credentials_plan;
+mod dev_credentials_sources;
+mod dictation;
 mod entrypoint;
 mod extension_args;
+mod herdr;
 mod line_plan;
 mod line_runner;
 mod mcp_auth;
@@ -87,6 +95,7 @@ mod terminal_io;
 mod update_commands;
 mod webhooks;
 mod work_args;
+mod worker_codex_auth;
 mod worker_dispatch;
 mod worker_shell;
 mod workflow_args;
@@ -99,8 +108,10 @@ use codex_commands::*;
 use commands::*;
 use configuration::*;
 use desktop_tui_auth::*;
+use dev_credentials_args::*;
 use entrypoint::*;
 use extension_args::*;
+use herdr::{AgentState, HerdrReporter};
 use line_plan::*;
 use line_runner::*;
 use mcp_auth::*;
@@ -145,6 +156,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         colossus_sandbox::run_native_protection_probe()?;
         return Ok(());
     }
+    #[cfg(feature = "dictation")]
+    if let Some(code) = colossus_native_dictation::run_if_requested() {
+        std::process::exit(code);
+    }
     runtime_main()
 }
 
@@ -157,6 +172,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     if sandbox_protection_probe_requested(std::env::args_os()) {
         colossus_sandbox::run_native_protection_probe()?;
         return Ok(());
+    }
+    #[cfg(feature = "dictation")]
+    if let Some(code) = colossus_native_dictation::run_if_requested() {
+        std::process::exit(code);
     }
     // MSVC executables reserve a smaller main-thread stack than the other supported
     // platforms. Debug runtime composition can exceed that reserve before a command is

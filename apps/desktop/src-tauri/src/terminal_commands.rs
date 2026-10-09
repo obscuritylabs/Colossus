@@ -1,3 +1,5 @@
+pub(crate) mod pane;
+
 use std::sync::Arc;
 
 use tauri::{
@@ -48,7 +50,7 @@ pub(crate) async fn show_terminal_window(
             }
         }
         TerminalKind::Shell => {
-            shell_terminal_workspace()?;
+            shell_terminal_workspace(&state).await?;
         }
     }
 
@@ -69,6 +71,8 @@ pub(crate) async fn show_terminal_window(
         .ok_or_else(|| CommandErrorDto::busy("A local terminal launch is already pending."))?;
 
     let window = WebviewWindowBuilder::new(&app, TERMINAL_WEBVIEW, terminal_protocol::window_url())
+        // Keep WebView2's local protocol origin consistent with the IPC CSP.
+        .use_https_scheme(false)
         .on_navigation(terminal_navigation_allowed)
         .on_page_load(move |window, payload| match payload.event() {
             PageLoadEvent::Started => window
@@ -104,16 +108,22 @@ fn terminal_navigation_allowed(url: &tauri::Url) -> bool {
 }
 
 fn terminal_navigation_allowed_for_profile(url: &tauri::Url, debug: bool) -> bool {
-    let local_surface =
-        url.query() == Some("surface=terminal") && matches!(url.path(), "/" | "/index.html");
+    let local_surface = url.query() == Some("surface=terminal")
+        && matches!(url.path(), "/" | "/index.html")
+        && url.fragment().is_none()
+        && url.username().is_empty()
+        && url.password().is_none();
     if !local_surface {
         return false;
     }
     let released = !debug
-        && url.scheme() == terminal_protocol::SCHEME
-        && url.host_str() == Some("localhost")
-        && url.port().is_none();
-    let bundled_debug = debug && url.scheme() == "tauri" && url.host_str() == Some("localhost");
+        && url.port().is_none()
+        && ((url.scheme() == terminal_protocol::SCHEME && url.host_str() == Some("localhost"))
+            || (url.scheme() == "http" && url.host_str() == Some("colossus-terminal.localhost")));
+    let bundled_debug = debug
+        && url.port().is_none()
+        && ((url.scheme() == "tauri" && url.host_str() == Some("localhost"))
+            || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost")));
     let development = debug
         && url.scheme() == "http"
         && url.host_str() == Some("127.0.0.1")
@@ -149,7 +159,7 @@ pub(crate) async fn terminal_context(
     };
     let managed_ready = selected_managed && state.selected_managed_space_ready().await;
     let tui_workspace = managed_ready.then_some(workspace).flatten();
-    let shell_workspace = shell_terminal_workspace().ok();
+    let shell_workspace = shell_terminal_workspace(&state).await.ok();
     let terminal_enabled = state.terminal_enabled();
     let shell_enabled = terminal_enabled && shell_workspace.is_some();
     let tui_enabled = terminal_enabled && tui_workspace.is_some();
@@ -201,7 +211,7 @@ pub(crate) async fn open_terminal(
                     TerminalError::InvalidWorkspace,
                 ));
             }
-            let workspace = shell_terminal_workspace()?;
+            let workspace = shell_terminal_workspace(&state).await?;
             if workspace.id != request.workspace_id {
                 return Err(CommandErrorDto::from_terminal(
                     TerminalError::InvalidWorkspace,
@@ -223,9 +233,9 @@ pub(crate) async fn open_terminal(
     .map_err(CommandErrorDto::from_terminal)?;
     let kind_still_available = match kind {
         TerminalKind::ColossusTui => state.selected_managed_space_ready().await,
-        TerminalKind::Shell => {
-            shell_terminal_workspace().is_ok_and(|workspace| workspace.id == request.workspace_id)
-        }
+        TerminalKind::Shell => shell_terminal_workspace(&state)
+            .await
+            .is_ok_and(|workspace| workspace.id == request.workspace_id),
     };
     if !state.terminal_enabled()
         || state.terminal_document_authority().is_none()
@@ -336,16 +346,26 @@ fn require_terminal_document(state: &AppState) -> Result<(u64, u64), CommandErro
         .ok_or_else(|| CommandErrorDto::from_terminal(TerminalError::NotReady))
 }
 
-fn shell_terminal_workspace() -> Result<TerminalWorkspace, CommandErrorDto> {
-    if !cfg!(target_os = "macos") {
+async fn shell_terminal_workspace(state: &AppState) -> Result<TerminalWorkspace, CommandErrorDto> {
+    if !cfg!(any(target_os = "macos", target_os = "windows")) {
         return Err(CommandErrorDto::from_terminal(
             TerminalError::ProgramUnavailable,
         ));
     }
+    // Prefer the selected runtime's native workspace snapshot. Reading a different
+    // settings store here can otherwise give Shell and TUI different workspace IDs.
+    let (_, workspace, selected_managed) = state.terminal_workspace_context().await;
+    if selected_managed && let Some(mut workspace) = workspace {
+        // A normal shell never receives worker authority or TUI configuration.
+        workspace.worker_authentication = None;
+        workspace.config = None;
+        return Ok(workspace);
+    }
     let store = SettingsStore::open_application()?;
     let colossus_home = store.home_root()?.to_owned();
     let settings = store.load()?;
-    if settings.selected_target_id != settings.selected_space_id
+    if state.selected_target_id().await != settings.selected_target_id
+        || settings.selected_target_id != settings.selected_space_id
         || settings.selected_space_id.is_none()
     {
         return Err(CommandErrorDto::from_terminal(
@@ -378,32 +398,69 @@ mod tests {
 
     #[test]
     fn terminal_navigation_is_local_and_exact() {
-        assert!(terminal_navigation_allowed_for_profile(
-            &tauri::Url::parse("tauri://localhost/index.html?surface=terminal").expect("URL"),
-            true,
-        ));
-        assert!(terminal_navigation_allowed_for_profile(
-            &tauri::Url::parse("colossus-terminal://localhost/index.html?surface=terminal")
-                .expect("URL"),
-            false,
-        ));
-        assert!(!terminal_navigation_allowed_for_profile(
-            &tauri::Url::parse("tauri://localhost/index.html?surface=terminal").expect("URL"),
-            false,
-        ));
+        for origin in [
+            "colossus-terminal://localhost",
+            "http://colossus-terminal.localhost",
+        ] {
+            for path in ["/", "/index.html"] {
+                let url =
+                    tauri::Url::parse(&format!("{origin}{path}?surface=terminal")).expect("URL");
+                assert!(
+                    terminal_navigation_allowed_for_profile(&url, false),
+                    "rejected {url}"
+                );
+                assert!(
+                    !terminal_navigation_allowed_for_profile(&url, true),
+                    "accepted {url} in debug"
+                );
+            }
+        }
+        for origin in [
+            "tauri://localhost",
+            "http://tauri.localhost",
+            "http://127.0.0.1:1420",
+        ] {
+            let url =
+                tauri::Url::parse(&format!("{origin}/index.html?surface=terminal")).expect("URL");
+            assert!(
+                terminal_navigation_allowed_for_profile(&url, true),
+                "rejected {url}"
+            );
+            assert!(
+                !terminal_navigation_allowed_for_profile(&url, false),
+                "accepted {url} in release"
+            );
+        }
         for value in [
             "https://example.com/?surface=terminal",
             "tauri://localhost/index.html?surface=main",
             "tauri://localhost/other.html?surface=terminal",
             "data:text/html,terminal",
+            "http://colossus-terminal.localhost/index.html?surface=main",
+            "http://colossus-terminal.localhost/other.html?surface=terminal",
+            "http://colossus-terminal.localhost:1420/index.html?surface=terminal",
+            "https://colossus-terminal.localhost/index.html?surface=terminal",
+            "http://colossus-terminal.localhost.example.com/index.html?surface=terminal",
+            "http://colossus-approval.localhost/index.html?surface=terminal",
+            "http://user@colossus-terminal.localhost/index.html?surface=terminal",
+            "colossus-terminal://user@localhost/index.html?surface=terminal",
+            "http://colossus-terminal.localhost/index.html?surface=terminal#spoof",
+            "tauri://localhost:1420/index.html?surface=terminal",
+            "http://tauri.localhost/index.html?surface=terminal#spoof",
+            "http://127.0.0.1:1421/index.html?surface=terminal",
         ] {
-            assert!(
-                !terminal_navigation_allowed_for_profile(
-                    &tauri::Url::parse(value).expect("URL"),
-                    false,
-                ),
-                "accepted {value}"
-            );
+            for debug in [false, true] {
+                assert!(
+                    !terminal_navigation_allowed_for_profile(
+                        &tauri::Url::parse(value).expect("URL"),
+                        debug
+                    ),
+                    "accepted {value} (debug={debug})"
+                );
+            }
         }
     }
 }
+
+#[cfg(all(test, windows))]
+mod native_tests;

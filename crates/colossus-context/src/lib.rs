@@ -10,8 +10,9 @@ use colossus_contracts::{
     ModelToolDefinition, NewEvent, PreparedContext, ProviderEvent,
 };
 use colossus_ports::{
-    ContextError, ContextPreparationRequest, ContextPreparer, ContextRepository, EventJournal,
-    MemoryRetriever, ModelProvider, SessionRepository, StoreError, WorkRepository,
+    ContextBudgetExceeded, ContextBudgetScope, ContextError, ContextPreparationRequest,
+    ContextPreparer, ContextRepository, EventJournal, MemoryRetriever, ModelProvider,
+    SessionRepository, StoreError, WorkRepository,
 };
 use colossus_tools::project_model_tool_observations;
 use serde_json::{Value, json};
@@ -37,6 +38,10 @@ pub use config::*;
 
 mod repository;
 pub use repository::*;
+mod continuation;
+pub use continuation::*;
+#[cfg(test)]
+mod continuation_tests;
 
 mod service;
 pub use service::*;

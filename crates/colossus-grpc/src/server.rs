@@ -1,12 +1,14 @@
 use crate::{
     AgentRunServiceAdapter, ArtifactServiceAdapter, AuthenticationInterceptor,
-    CredentialAuthenticator, ExtensionServiceAdapter, MAX_ACTIVE_WATCH_STREAMS,
-    SystemServiceAdapter, TlsIdentity, request_guard::RequestCardinalityLayer,
+    AutomationServiceAdapter, CredentialAuthenticator, ExtensionServiceAdapter,
+    MAX_ACTIVE_WATCH_STREAMS, SystemServiceAdapter, TlsIdentity,
+    request_guard::RequestCardinalityLayer,
 };
-use colossus_api::{AgentRunApi, ArtifactApi, ExtensionApi};
+use colossus_api::{AgentRunApi, ArtifactApi, ExtensionApi, WorkflowApi};
 use colossus_api_proto::v1alpha1::{
     agent_run_service_server::AgentRunServiceServer,
     artifact_service_server::ArtifactServiceServer,
+    automation_service_server::AutomationServiceServer,
     extension_service_server::ExtensionServiceServer, system_service_server::SystemServiceServer,
 };
 use futures::{StreamExt as _, task::AtomicWaker};
@@ -59,7 +61,9 @@ const MAX_CONCURRENT_TLS_HANDSHAKES: usize = 32;
 const MAX_PENDING_ACCEPT_RESET_STREAMS: usize = 128;
 const MAX_LOCAL_ERROR_RESET_STREAMS: usize = 128;
 pub(crate) const MAX_CONNECTION_AGE: Duration = Duration::from_secs(15 * 60);
-pub(crate) const MAX_REQUEST_SETUP_DURATION: Duration = Duration::from_secs(30);
+// A quiet process read may wait 30 seconds; reserve five seconds for decoding,
+// authentication, policy admission, and response delivery around that wait.
+pub(crate) const MAX_REQUEST_SETUP_DURATION: Duration = Duration::from_secs(35);
 const MAX_CONNECTION_AGE_GRACE: Duration = Duration::from_secs(15);
 
 struct LimitedConnection {
@@ -260,6 +264,7 @@ pub struct BoundPublicGrpcServer {
     agent_runs: Arc<dyn AgentRunApi>,
     artifacts: Arc<dyn ArtifactApi>,
     extensions: Option<Arc<dyn ExtensionApi>>,
+    workflows: Option<Arc<dyn WorkflowApi>>,
 }
 
 impl BoundPublicGrpcServer {
@@ -280,6 +285,11 @@ impl BoundPublicGrpcServer {
         if !local_addr.ip().is_loopback() || local_addr.port() == 0 {
             return Err(PublicGrpcServerError::NonLoopbackBind);
         }
+        let system = if agent_runs.supports_runtime_policy_posture() {
+            system.with_policy_posture()
+        } else {
+            system
+        };
         Ok(Self {
             listener,
             local_addr,
@@ -289,6 +299,7 @@ impl BoundPublicGrpcServer {
             agent_runs,
             artifacts,
             extensions: None,
+            workflows: None,
         })
     }
 
@@ -297,6 +308,14 @@ impl BoundPublicGrpcServer {
     pub fn with_extensions(mut self, extensions: Arc<dyn ExtensionApi>) -> Self {
         self.extensions = Some(extensions);
         self.system = self.system.with_plugin_discovery();
+        self
+    }
+
+    /// Host authenticated canonical workflow resources on this runtime.
+    #[must_use]
+    pub fn with_workflows(mut self, workflows: Arc<dyn WorkflowApi>) -> Self {
+        self.workflows = Some(workflows);
+        self.system = self.system.with_workflows();
         self
     }
 
@@ -342,9 +361,12 @@ impl BoundPublicGrpcServer {
             .max_decoding_message_size(MAX_REQUEST_MESSAGE_BYTES)
             .max_encoding_message_size(MAX_RESPONSE_MESSAGE_BYTES);
         let system = InterceptedService::new(system, authentication.clone());
-        let agent_runs = AgentRunServiceServer::new(AgentRunServiceAdapter::new(self.agent_runs))
-            .max_decoding_message_size(MAX_REQUEST_MESSAGE_BYTES)
-            .max_encoding_message_size(MAX_RESPONSE_MESSAGE_BYTES);
+        let watch_slots = Arc::new(Semaphore::new(MAX_ACTIVE_WATCH_STREAMS));
+        let agent_runs = AgentRunServiceServer::new(
+            AgentRunServiceAdapter::new(self.agent_runs).with_watch_slots(watch_slots.clone()),
+        )
+        .max_decoding_message_size(MAX_REQUEST_MESSAGE_BYTES)
+        .max_encoding_message_size(MAX_RESPONSE_MESSAGE_BYTES);
         let agent_runs = InterceptedService::new(agent_runs, authentication.clone());
         let artifacts = ArtifactServiceServer::new(ArtifactServiceAdapter::new(self.artifacts))
             .max_decoding_message_size(MAX_REQUEST_MESSAGE_BYTES)
@@ -353,7 +375,14 @@ impl BoundPublicGrpcServer {
         let extensions = ExtensionServiceServer::new(ExtensionServiceAdapter::new(self.extensions))
             .max_decoding_message_size(16 * 1024)
             .max_encoding_message_size(MAX_RESPONSE_MESSAGE_BYTES);
-        let extensions = InterceptedService::new(extensions, authentication);
+        let extensions = InterceptedService::new(extensions, authentication.clone());
+        let workflows = AutomationServiceServer::new(AutomationServiceAdapter::new(
+            self.workflows,
+            watch_slots,
+        ))
+        .max_decoding_message_size(256 * 1024)
+        .max_encoding_message_size(2 * 1024 * 1024);
+        let workflows = InterceptedService::new(workflows, authentication);
         let tls = self
             .tls_identity
             .into_rustls_server_config()
@@ -417,6 +446,7 @@ impl BoundPublicGrpcServer {
             .add_service(agent_runs)
             .add_service(artifacts)
             .add_service(extensions)
+            .add_service(workflows)
             .serve_with_incoming_shutdown(incoming, graceful);
         tokio::pin!(server);
         tokio::pin!(shutdown);

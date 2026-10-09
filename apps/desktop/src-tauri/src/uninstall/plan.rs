@@ -1,7 +1,7 @@
 //! Bound and inspect only the dedicated default Desktop home. Never scan the OS store.
 
 use super::{CleanupError, PROVIDER_SERVICE, RUNTIME_SERVICE};
-use colossus_windows_native::BoundPath;
+use colossus_windows_native::{BoundPath, FileIdentity};
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 use std::{
@@ -19,6 +19,14 @@ pub(super) struct CleanupPlan {
     pub keys: BTreeSet<(String, String)>,
     pub vaults: Vec<(PathBuf, String)>,
     files: super::files::CleanupFiles,
+    removal: super::removal::CleanupRemoval,
+    writers: super::writers::CleanupWriters,
+    empty_cli_directories: Vec<EmptyCliDirectory>,
+}
+
+struct EmptyCliDirectory {
+    path: PathBuf,
+    identity: FileIdentity,
 }
 
 impl CleanupPlan {
@@ -27,6 +35,9 @@ impl CleanupPlan {
             keys: BTreeSet::new(),
             vaults: Vec::new(),
             files: super::files::CleanupFiles::default(),
+            removal: super::removal::CleanupRemoval::default(),
+            writers: super::writers::CleanupWriters::default(),
+            empty_cli_directories: Vec::new(),
         };
         let mut directories = vec![(home.to_owned(), 0)];
         let mut entries = 0;
@@ -36,6 +47,14 @@ impl CleanupPlan {
             }
             let binding = BoundPath::open_directory(&directory)
                 .map_err(|error| CleanupError::from_native(&error))?;
+            if super::ownership::plugin_store(
+                directory
+                    .strip_prefix(home)
+                    .map_err(|_| CleanupError::UnsafeData)?,
+            ) {
+                plan.writers.acquire(&directory)?;
+            }
+            plan.removal.record(home, &directory, &binding, true)?;
             for entry in fs::read_dir(&directory).map_err(|error| CleanupError::from_io(&error))? {
                 entries += 1;
                 if entries > MAX_ENTRIES {
@@ -53,13 +72,23 @@ impl CleanupPlan {
                     return Err(CleanupError::UnsafeData);
                 }
                 if metadata.is_dir() {
-                    BoundPath::open_directory(&path)
+                    let child = BoundPath::open_directory(&path)
                         .map_err(|error| CleanupError::from_native(&error))?;
+                    if super::ownership::empty_cli_surface(relative) {
+                        child
+                            .validate_private_owner_dacl()
+                            .map_err(|_| CleanupError::UnsafeData)?;
+                        plan.empty_cli_directories.push(EmptyCliDirectory {
+                            path: path.clone(),
+                            identity: child.identity(),
+                        });
+                    }
                     directories.push((path, depth + 1));
                 } else {
                     let file = BoundPath::open_file(&path)
                         .map_err(|error| CleanupError::from_native(&error))?;
                     plan.files.push(&path, relative, &file)?;
+                    plan.removal.record(home, &path, &file, false)?;
                     plan.inspect_file(home, &path)?;
                 }
             }
@@ -167,8 +196,27 @@ impl CleanupPlan {
         Ok(())
     }
 
+    pub fn remove_data(&self) -> Result<(), CleanupError> {
+        self.removal.remove(&self.writers)
+    }
+
     pub fn check_idle(&self) -> Result<(), super::CleanupError> {
-        self.files.check_idle()
+        // Recheck emptiness before deleting keys and again before removing files.
+        // CLI data created since inspection is not Desktop-owned state.
+        for directory in &self.empty_cli_directories {
+            let binding = BoundPath::open_directory(&directory.path)
+                .map_err(|error| CleanupError::from_native(&error))?;
+            if binding.identity() != directory.identity
+                || fs::read_dir(&directory.path)
+                    .map_err(|error| CleanupError::from_io(&error))?
+                    .next()
+                    .is_some()
+            {
+                return Err(CleanupError::UnsafeData);
+            }
+            binding.revalidate().map_err(|_| CleanupError::UnsafeData)?;
+        }
+        self.files.check_idle(&self.writers)
     }
 }
 

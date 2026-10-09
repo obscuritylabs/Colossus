@@ -40,6 +40,7 @@ impl ProviderResolvedImages {
 pub(super) struct ProviderProjection<'a> {
     tool_names: &'a ProviderToolNames,
     images: &'a ProviderResolvedImages,
+    continuation: Option<&'a colossus_contracts::ProviderContinuation>,
 }
 
 impl<'a> ProviderProjection<'a> {
@@ -47,7 +48,18 @@ impl<'a> ProviderProjection<'a> {
         tool_names: &'a ProviderToolNames,
         images: &'a ProviderResolvedImages,
     ) -> Self {
-        Self { tool_names, images }
+        Self {
+            tool_names,
+            images,
+            continuation: None,
+        }
+    }
+    pub(super) fn with_continuation(
+        mut self,
+        state: Option<&'a colossus_contracts::ProviderContinuation>,
+    ) -> Self {
+        self.continuation = state;
+        self
     }
 }
 
@@ -255,7 +267,20 @@ pub(super) fn responses_payload_with_images(
     streaming: bool,
     projection: ProviderProjection<'_>,
 ) -> Result<Value, ProviderError> {
-    validate_request_transcript(request)?;
+    if let Some(state) = projection.continuation {
+        let mut paired = request.clone();
+        if !state.assistant.tool_calls.is_empty() {
+            let at = paired
+                .messages
+                .iter()
+                .position(|m| m.role == ModelMessageRole::Tool)
+                .unwrap_or(0);
+            paired.messages.insert(at, state.assistant.clone());
+        }
+        validate_request_transcript(&paired)?;
+    } else {
+        validate_request_transcript(request)?;
+    }
     if !matches!(
         provider_kind,
         ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex
@@ -264,7 +289,9 @@ pub(super) fn responses_payload_with_images(
             "Responses payload requires a Responses provider kind".into(),
         ));
     }
-    let mut input = Vec::new();
+    let mut input = projection
+        .continuation
+        .map_or_else(Vec::new, |state| state.hidden_reasoning.clone());
     for message in &request.messages {
         input.extend(responses_messages_with_images(
             message,
@@ -603,6 +630,13 @@ pub(super) fn normalize_responses(
     let object = data
         .as_object()
         .ok_or_else(|| ProviderError::Malformed("Responses payload is not an object".into()))?;
+    if matches!(
+        object.get("status").and_then(Value::as_str),
+        Some("failed" | "incomplete")
+    ) || object.get("error").is_some_and(|error| !error.is_null())
+    {
+        return Err(terminal_provider_error(&data));
+    }
     let output = object
         .get("output")
         .and_then(Value::as_array)
@@ -696,12 +730,24 @@ pub(super) fn normalize_chat(
     let object = data
         .as_object()
         .ok_or_else(|| ProviderError::Malformed("chat payload is not an object".into()))?;
-    let message = object
+    if object.get("error").is_some_and(|error| !error.is_null()) {
+        return Err(terminal_provider_error(&data));
+    }
+    let choice = object
         .get("choices")
         .and_then(Value::as_array)
         .and_then(|choices| choices.first())
         .and_then(Value::as_object)
-        .and_then(|choice| choice.get("message"))
+        .ok_or_else(|| ProviderError::Malformed(response_shape(object, "choices")))?;
+    if let Some(error) = choice
+        .get("finish_reason")
+        .and_then(Value::as_str)
+        .and_then(chat_finish_error)
+    {
+        return Err(error);
+    }
+    let message = choice
+        .get("message")
         .and_then(Value::as_object)
         .ok_or_else(|| ProviderError::Malformed(response_shape(object, "choices")))?;
     let mut events = reasoning_summary_events(message);

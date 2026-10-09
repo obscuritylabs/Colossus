@@ -22,7 +22,8 @@ const TOKEN_PREFIX: &str = "cls_v1";
 const TOKEN_SECRET_BYTES: usize = 32;
 const MAX_AUTHORIZATION_BYTES: usize = 768;
 const CREDENTIAL_DOMAIN: &[u8] = b"colossus-public-api-credential-v1\0";
-pub(crate) const MAX_CREDENTIAL_BATCH_SIZE: usize = 2;
+// Primary, native approval broker, and independently authorized cloud connector.
+pub(crate) const MAX_CREDENTIAL_BATCH_SIZE: usize = 3;
 /// Maximum authenticated protobuf decodes in progress across all applications.
 pub const MAX_CONCURRENT_AUTHENTICATED_DECODES: usize = 8;
 /// Maximum authenticated protobuf decodes in progress for one application.
@@ -686,7 +687,7 @@ mod tests {
         let authenticator = CredentialAuthenticator::new([19_u8; 32], repository);
         assert!(
             authenticator
-                .issue_pending_batch(&[grant(), grant(), grant()])
+                .issue_pending_batch(&[grant(), grant(), grant(), grant()])
                 .is_err(),
             "credential batches are bounded before allocation or random generation"
         );
@@ -720,6 +721,7 @@ mod tests {
         let oversized_ids = vec![
             credential_ids[0].clone(),
             credential_ids[1].clone(),
+            Uuid::now_v7().to_string(),
             Uuid::now_v7().to_string(),
         ];
         assert!(authenticator.activate_batch(&oversized_ids).is_err());

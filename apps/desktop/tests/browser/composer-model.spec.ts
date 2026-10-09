@@ -20,13 +20,13 @@ test("model settings opens the workspace route and preserves an unsent draft", a
   ).toBeVisible();
   await model.click();
   await expect(
-    page.getByRole("heading", { name: "Providers and models", exact: true }),
+    page.getByRole("heading", { name: "Models", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Workspace", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");
   await expect(
-    page.getByRole("button", { name: "Providers", exact: true }),
+    page.getByRole("button", { name: "Models", exact: true }),
   ).toHaveAttribute("aria-current", "page");
   await page.getByRole("button", { name: "Back to work", exact: true }).click();
   await expect(
@@ -34,7 +34,7 @@ test("model settings opens the workspace route and preserves an unsent draft", a
   ).toHaveValue(draft);
   await model.press("Enter");
   await expect(
-    page.getByRole("heading", { name: "Providers and models", exact: true }),
+    page.getByRole("heading", { name: "Models", exact: true }),
   ).toBeVisible();
 });
 
@@ -44,7 +44,7 @@ test("composer retains visible, accessible controls at narrow widths in both the
   // The wide fixture starts with thread details open. Close that panel before
   // narrowing the viewport, where it deliberately becomes a modal overlay.
   await page
-    .getByRole("button", { name: "Close thread details", exact: true })
+    .getByRole("button", { name: "Close tool pane", exact: true })
     .click();
   for (const theme of ["light", "dark"]) {
     await page.evaluate(
@@ -77,7 +77,7 @@ test("composer retains visible, accessible controls at narrow widths in both the
       ).toBeInViewport();
       await expect(
         composer.getByRole("button", {
-          name: "Add message to Next up",
+          name: "Stop response",
           exact: true,
         }),
       ).toBeInViewport();
@@ -120,7 +120,7 @@ test("new messages use a compact header, writing area, and footer", async ({
   page,
 }) => {
   await page
-    .getByRole("button", { name: "Close thread details", exact: true })
+    .getByRole("button", { name: "Close tool pane", exact: true })
     .click();
   await page.setViewportSize({ width: 880, height: 950 });
   await page.getByRole("button", { name: "Open work navigation" }).click();

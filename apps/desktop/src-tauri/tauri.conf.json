@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.obscuritylabs.colossus.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run prepare:dictation && npm run dev",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run prepare:dictation && npm run build",
     "frontendDist": "../dist",
     "removeUnusedCommands": true
   },
@@ -42,7 +42,13 @@
     "externalBin": ["binaries/colossus-sidecar", "binaries/colossus"],
     "macOS": {
       "hardenedRuntime": true,
-      "minimumSystemVersion": "13.0"
+      "minimumSystemVersion": "13.0",
+      "entitlements": "dictation.entitlements.plist"
+    },
+    "resources": {
+      "dictation-assets/ggml-tiny.en.bin": "dictation/ggml-tiny.en.bin",
+      "dictation-assets/models.json": "dictation/models.json",
+      "dictation-assets/LICENSE-MIT": "dictation/LICENSE-MIT"
     }
   },
   "plugins": {

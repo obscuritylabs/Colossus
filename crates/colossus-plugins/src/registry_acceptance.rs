@@ -8,6 +8,8 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 struct RegistryState {
     blobs: BTreeMap<String, Vec<u8>>,
     manifest: Vec<u8>,
+    referrers_tag: Option<Vec<u8>>,
+    referrer_manifests: BTreeMap<String, Vec<u8>>,
     uploads: BTreeMap<String, Vec<u8>>,
     requests: Vec<(String, String, Option<String>)>,
     deny: bool,
@@ -143,6 +145,9 @@ fn respond(state: &mut RegistryState, head: &str, body: Vec<u8>) -> (u16, String
         );
     }
     if path.contains("/referrers/") {
+        if state.referrers_tag.is_some() {
+            return (404, String::new(), Vec::new());
+        }
         return (
             200,
             "Content-Type: application/json\r\n".into(),
@@ -153,6 +158,23 @@ fn respond(state: &mut RegistryState, head: &str, body: Vec<u8>) -> (u16, String
         if method == "PUT" {
             state.manifest = body;
             return (201, String::new(), Vec::new());
+        }
+        let selector = path.rsplit('/').next().expect("manifest selector");
+        if selector.starts_with("sha256-")
+            && let Some(index) = &state.referrers_tag
+        {
+            return (
+                200,
+                format!("Content-Type: {OCI_IMAGE_INDEX_MEDIA_TYPE}\r\n"),
+                index.clone(),
+            );
+        }
+        if let Some(manifest) = state.referrer_manifests.get(selector) {
+            return (
+                200,
+                format!("Content-Type: {OCI_IMAGE_MANIFEST_MEDIA_TYPE}\r\n"),
+                manifest.clone(),
+            );
         }
         return (
             200,
@@ -232,6 +254,73 @@ fn respond(state: &mut RegistryState, head: &str, body: Vec<u8>) -> (u16, String
         ),
         None => (404, String::new(), Vec::new()),
     }
+}
+
+#[tokio::test]
+async fn pull_uses_referrers_tag_when_registry_lacks_referrers_api() {
+    let directory = tempfile::tempdir().expect("temporary");
+    let artifact = layout(directory.path());
+    let registry = RegistryFixture::start().await;
+    registry
+        .client()
+        .push(&directory.path().join("layout"), &registry.reference(":v1"))
+        .await
+        .expect("push plugin");
+    let bundle = br#"{"fixture":"signature material"}"#.to_vec();
+    let config = b"{}".to_vec();
+    let manifest = serde_json::to_vec(&json!({
+        "schemaVersion": 2,
+        "mediaType": OCI_IMAGE_MANIFEST_MEDIA_TYPE,
+        "artifactType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+        "config": {"mediaType": "application/vnd.oci.empty.v1+json", "digest": sha256_digest(&config), "size": config.len()},
+        "layers": [{"mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json", "digest": sha256_digest(&bundle), "size": bundle.len()}],
+        "subject": {"mediaType": OCI_IMAGE_MANIFEST_MEDIA_TYPE, "digest": artifact.manifest_digest, "size": artifact.manifest.len()}
+    }))
+    .expect("referrer manifest");
+    let digest = sha256_digest(&manifest);
+    let index = serde_json::to_vec(&json!({
+        "schemaVersion": 2,
+        "mediaType": OCI_IMAGE_INDEX_MEDIA_TYPE,
+        "manifests": [{"mediaType": OCI_IMAGE_MANIFEST_MEDIA_TYPE, "digest": digest, "size": manifest.len()}]
+    }))
+    .expect("referrers tag");
+    {
+        let mut state = registry.state.lock().expect("fixture state");
+        state.blobs.insert(sha256_digest(&bundle), bundle.clone());
+        state.blobs.insert(sha256_digest(&config), config);
+        state.referrer_manifests.insert(digest, manifest);
+        state.referrers_tag = Some(index);
+    }
+    let destination = directory.path().join("pulled");
+    registry
+        .client()
+        .pull(&registry.reference(":v1"), &destination)
+        .await
+        .expect("pull fallback referrer");
+    assert_eq!(
+        sigstore_bundles_for_subject(&destination, &artifact.manifest_digest)
+            .expect("retained signature material"),
+        vec![bundle]
+    );
+    let state = registry.state.lock().expect("fixture state");
+    assert!(
+        state
+            .requests
+            .iter()
+            .any(|(_, path, _)| path.ends_with(&format!(
+                "/manifests/sha256-{}",
+                &artifact.manifest_digest[7..]
+            )))
+    );
+    assert!(
+        state
+            .requests
+            .iter()
+            .any(|(_, path, _)| path.ends_with(&format!(
+                "/manifests/{}",
+                sha256_digest(state.referrer_manifests.values().next().expect("referrer"))
+            )))
+    );
 }
 
 fn layout(path: &Path) -> BuiltPluginArtifact {

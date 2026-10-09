@@ -1,0 +1,202 @@
+.shared-chart-container {
+  width: 100%;
+  height: 280px;
+  min-width: 0;
+  min-height: 240px;
+  color: var(--text);
+  font: var(--font-size-caption)/var(--line-height-body) var(--font-sans);
+}
+.shared-chart-container .recharts-cartesian-axis-tick text {
+  fill: var(--muted);
+  font-size: var(--font-size-caption);
+  font-family: var(--font-sans);
+}
+.shared-chart-container .recharts-surface:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+.shared-chart-container .recharts-layer:focus {
+  outline: none;
+}
+.shared-chart-tooltip {
+  min-width: 180px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: var(--font-size-body-sm);
+  font-family: var(--font-sans);
+}
+.shared-chart-tooltip > strong {
+  display: block;
+  color: var(--text-strong);
+  font-size: var(--font-size-caption);
+  margin-bottom: 8px;
+}
+.shared-chart-tooltip > div {
+  display: grid;
+  gap: 7px;
+}
+.shared-chart-tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.shared-chart-tooltip-row > span:nth-child(2) {
+  color: var(--muted);
+  flex: 1;
+}
+.shared-chart-tooltip-row > strong {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-strong);
+}
+.shared-chart-indicator {
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  border-top: 2px solid;
+  flex: none;
+}
+.shared-chart-indicator.is-dashed {
+  border-top-style: dashed;
+}
+.shared-chart-legend {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 12px 0 2px;
+  font-size: var(--font-size-caption);
+  color: var(--muted);
+}
+.shared-chart-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.shared-chart-footer {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  font-size: var(--font-size-caption);
+  color: var(--muted);
+}
+.shared-chart-data {
+  min-width: 0;
+}
+.shared-chart-data > summary {
+  cursor: pointer;
+  color: var(--muted);
+  text-underline-offset: 3px;
+}
+.shared-chart-data > summary:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 3px;
+}
+.shared-chart-data[open] {
+  width: 100%;
+}
+.shared-chart-table {
+  overflow: auto;
+  margin-top: 12px;
+}
+.shared-chart-table table {
+  width: 100%;
+  font-size: var(--font-size-body-sm);
+}
+.shared-chart-table caption {
+  text-align: left;
+  padding: 8px 0;
+  color: var(--muted);
+}
+.shared-chart-table th,
+.shared-chart-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.shared-chart-empty {
+  padding: 30px 0;
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+}
+.activity-range-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-body-sm);
+  color: var(--muted);
+}
+.activity-range-selector .app-select {
+  width: 145px;
+}
+.activity-line-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.activity-line-heading p {
+  font-size: var(--font-size-body-sm);
+  color: var(--muted);
+  margin: 6px 0 0;
+}
+.activity-line-summary {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding: 6px 0 18px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.activity-line-summary > div {
+  display: grid;
+  gap: 3px;
+}
+.activity-line-summary span {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+.activity-line-summary strong {
+  color: var(--text-strong);
+  font-size: var(--font-size-heading);
+  font-variant-numeric: tabular-nums;
+  font-weight: 550;
+}
+.analytics-range-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 12px 0;
+}
+@media (max-width: 760px) {
+  .shared-chart-container {
+    height: 250px;
+    min-height: 230px;
+  }
+  .shared-chart-legend {
+    gap: 12px;
+  }
+  .shared-chart-footer {
+    margin-top: 14px;
+  }
+  .activity-line-summary {
+    gap: 20px;
+  }
+  .activity-range-selector .app-select {
+    width: 130px;
+  }
+}
+.activity-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}

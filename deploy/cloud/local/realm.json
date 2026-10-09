@@ -1,0 +1,45 @@
+{
+  "realm": "colossus",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "accessTokenLifespan": 1800,
+  "clients": [
+    {
+      "clientId": "colossus-cloud",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://127.0.0.1:5180/auth/callback",
+        "http://127.0.0.1:8090/auth/callback"
+      ],
+      "webOrigins": [
+        "http://127.0.0.1:5180",
+        "http://127.0.0.1:8090"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    }
+  ],
+  "users": [
+    {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "username": "alice",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Local",
+      "email": "alice@local.test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "local-only-password",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

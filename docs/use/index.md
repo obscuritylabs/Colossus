@@ -1,50 +1,151 @@
 ---
 title: Use Colossus
-description: Choose the right Colossus surface for interactive runs, durable work, memory, and research.
+description: Choose how to work with Colossus, keep tasks moving, and find information.
 audience: user
 type: concept
+icon: lucide/compass
 ---
 
 # Use Colossus
 
-Colossus supports quick one-shot requests and long-running, restart-safe work. Both use
-the same model routing, tools, authorization, hash-chained journal, and recovery
-semantics.
+Start a task in the terminal or an editor, return to it later, and bring in the
+information it needs. These guides show the user-facing workflows; each keeps the
+same Colossus model routing, tools, approvals, and session history.
 
-## Connect a model provider
+## Connect a model
 
-Model-backed workflows need one explicit provider route. Start with
-[Connect a model provider](providers/index.md), then choose the focused guide for your
-access method:
+<div class="grid cards" markdown>
 
-| Access method | Setup guide |
-| --- | --- |
-| ChatGPT/Codex subscription | [Codex or ChatGPT subscription](providers/codex-chatgpt.md) |
-| OpenAI public API key | [OpenAI API](providers/openai-api.md) |
-| OpenRouter API key | [OpenRouter](providers/openrouter.md) |
-| Loopback model server | [Local models](providers/local-models.md) |
-| Hosted gateway or another compatible API | [Other OpenAI-compatible endpoints](providers/openai-compatible.md) |
+-   :lucide-plug:{ .lg .middle } **Choose a provider**
 
-## Choose a working style
+    ---
 
-| Need | Start here |
-| --- | --- |
-| Run one prompt or produce JSON for automation | [Agent runs](agent-runs.md) |
-| Work interactively with approvals and live output | [Terminal UI](terminal-ui.md) |
-| Resume a conversation or manage model context | [Sessions and context](sessions-context.md) |
-| Capture commitments and approve execution | [Tasks, decisions, and plans](tasks-decisions-plans.md) |
-| Iterate on an objective or delegate bounded work | [Goals and subagents](goals-subagents.md) |
-| Preserve reusable non-secret context | [Memories](memories.md) |
-| Produce a durable report from repository, web, or MCP evidence | [Deep research](deep-research.md) |
-| Query an operator-configured provider-neutral search route | [Web search](web-search.md) |
+    Connect a subscription, API key, local model, or compatible endpoint.
 
-## What stays durable
+    [Compare provider options :lucide-arrow-right:](providers/index.md)
 
-Session messages, tasks, decisions, plans, goals, child jobs, memories, research runs,
-workflow runs, and audit evidence are canonical journal records. The keyless default
-stores payloads as plaintext; configured platform or environment keys add authenticated
-encryption. Terminal layout, search indexes, and projections can be rebuilt; they are
-not the source of truth.
+-   :lucide-cpu:{ .lg .middle } **Local models**
 
-When an external effect starts but its terminal outcome is not recorded, Colossus marks
-it unknown instead of assuming success or retrying silently.
+    ---
+
+    Work with a model server you run yourself.
+
+    [Connect a local model :lucide-arrow-right:](providers/local-models.md)
+
+</div>
+
+## Choose where to work
+
+<div class="grid cards" markdown>
+
+-   :lucide-terminal:{ .lg .middle } **Terminal UI**
+
+    ---
+
+    Talk through a task, watch tools run, and answer approvals in the terminal.
+
+    [Work in the terminal :lucide-arrow-right:](terminal-ui.md)
+
+-   :lucide-play:{ .lg .middle } **Agent runs**
+
+    ---
+
+    Run one prompt from the shell or capture JSON for a script.
+
+    [Run an agent task :lucide-arrow-right:](agent-runs.md)
+
+-   :lucide-code:{ .lg .middle } **ACP in editors**
+
+    ---
+
+    Use Colossus as a local agent in an ACP-compatible editor.
+
+    [Connect an editor :lucide-arrow-right:](../extend/acp.md)
+
+</div>
+
+## Keep work moving
+
+<div class="grid cards" markdown>
+
+-   :lucide-messages-square:{ .lg .middle } **Sessions**
+
+    ---
+
+    Find a conversation and continue it from the CLI or terminal UI.
+
+    [Resume a session :lucide-arrow-right:](sessions.md)
+
+-   :lucide-layers:{ .lg .middle } **Context**
+
+    ---
+
+    Read the model input budget and manage long-session snapshots.
+
+    [Understand context :lucide-arrow-right:](sessions-context.md)
+
+-   :lucide-list-checks:{ .lg .middle } **Planning**
+
+    ---
+
+    Review a durable plan, then run it once or through a bounded goal loop.
+
+    [Plan a task :lucide-arrow-right:](planning.md)
+
+-   :lucide-rotate-cw:{ .lg .middle } **Goals and subagents**
+
+    ---
+
+    Iterate on a longer objective or delegate bounded work.
+
+    [Explore goals :lucide-arrow-right:](goals-subagents.md)
+
+</div>
+
+## Find and keep information
+
+<div class="grid cards" markdown>
+
+-   :lucide-search:{ .lg .middle } **Search**
+
+    ---
+
+    Run a web search, understand its results, and see how agent and research routes use it.
+
+    [Explore search :lucide-arrow-right:](web-search.md)
+
+-   :lucide-book-open:{ .lg .middle } **Deep research**
+
+    ---
+
+    Produce a durable cited report from repository, web, or MCP evidence.
+
+    [Investigate a question :lucide-arrow-right:](deep-research.md)
+
+-   :lucide-brain:{ .lg .middle } **Memories**
+
+    ---
+
+    Save reusable context for later work.
+
+    [Explore memories :lucide-arrow-right:](memories.md)
+
+-   :lucide-scale:{ .lg .middle } **Decisions**
+
+    ---
+
+    Record a binding workspace choice that future work should respect.
+
+    [Record a decision :lucide-arrow-right:](decisions.md)
+
+-   :lucide-wrench:{ .lg .middle } **Tools**
+
+    ---
+
+    See the catalog of actions the agent can take in this workspace.
+
+    [Explore tools :lucide-arrow-right:](tools.md)
+
+</div>
+
+For skills, plugins, MCP servers, and workflows, see [Extend Colossus](../extend/index.md).

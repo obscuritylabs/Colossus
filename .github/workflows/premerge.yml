@@ -64,6 +64,66 @@ jobs:
             --jq '[.check_runs[] | select(.name == "Colossus PR gate" and .conclusion == "success")] | length > 0' \
             | grep -Fx true
 
+  linux-rust-integration:
+    name: Complete Linux Rust and AppArmor acceptance
+    if: needs.eligibility.result == 'success'
+    needs: eligibility
+    runs-on: ubuntu-latest-m
+    timeout-minutes: 60
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Install Node.js 22.18
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+          components: clippy,rustfmt
+      - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Configure read-only R2 compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        env:
+          R2_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+          R2_REGION: ${{ secrets.SCCACHE_REGION }}
+          R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+        run: ./scripts/ci/configure-sccache-r2.sh read
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: . -> target
+          key: premerge-linux-rust-integration
+          cache-targets: false
+      - name: Prepare exact-path AppArmor profile for workspace tests
+        run: |
+          install_dir="/colossus-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          staged_binary="$install_dir/colossus"
+          sudo install -d -o root -g root -m 0755 "$install_dir"
+          sudo install -o root -g root -m 0755 /bin/true "$staged_binary"
+          sudo release/install-apparmor.sh "$staged_binary"
+          cargo build --locked -p colossus-cli --bin colossus
+          sudo install -o root -g root -m 0755 \
+            target/debug/colossus "$staged_binary"
+          printf 'COLOSSUS_NATIVE_TEST_BINARY=%s\n' "$staged_binary" >> "$GITHUB_ENV"
+      - name: Run complete Rust validation
+        run: cargo xtask check rust
+
   macos-native:
     name: Representative macOS native sandbox
     if: needs.eligibility.result == 'success'
@@ -72,6 +132,7 @@ jobs:
     timeout-minutes: 45
     env:
       SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
       COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
       CARGO_INCREMENTAL: "0"
     steps:
@@ -89,6 +150,16 @@ jobs:
       - name: Activate shared compiler cache
         if: steps.sccache.outcome == 'success'
         run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Configure read-only R2 compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        env:
+          R2_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+          R2_REGION: ${{ secrets.SCCACHE_REGION }}
+          R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+        run: ./scripts/ci/configure-sccache-r2.sh read
       - name: Cache native sandbox target
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -106,8 +177,33 @@ jobs:
         run: >-
           cargo test --locked -p colossus-sidecar
           --test native_lifecycle -- --ignored --nocapture
+      - name: Exercise cloud connection through the native Managed Local grant
+        env:
+          COLOSSUS_ACCEPTANCE_SIDECAR: ${{ github.workspace }}/apps/desktop/src-tauri/binaries/colossus-sidecar-aarch64-apple-darwin
+        run: cargo test --locked -p colossus-cloud-server --lib managed_sidecar_cloud_run_isolated_and_application_exit_disconnects -- --ignored
       - name: Run native isolation and escape acceptance
         run: cargo test --locked -p colossus-cli --test native_sandbox -- --nocapture
+
+  linux-desktop:
+    name: Linux Desktop package and native credential entry
+    if: needs.eligibility.result == 'success'
+    needs: eligibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build sealed Linux Desktop package and test native entry
+        run: docker build -f deploy/cloud/linux-desktop.Dockerfile --target artifacts --output type=local,dest=dist/desktop-linux .
+      - name: Verify Linux package checksums
+        working-directory: dist/desktop-linux
+        run: sha256sum --check ./*.sha256
+      - name: Retain Linux Desktop package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-desktop-preview
+          path: dist/desktop-linux
+          retention-days: 7
 
   credential-vault:
     name: Credential vault (${{ matrix.os }})
@@ -143,19 +239,17 @@ jobs:
             cargo test --locked -p colossus-credentials --lib platform_master_key_survives_vault_reopen -- --ignored
           '
 
-  macos-desktop:
-    name: Representative macOS desktop bundle
+  macos-desktop-acceptance:
+    name: Representative macOS Desktop acceptance
     if: needs.eligibility.result == 'success'
     needs: eligibility
     runs-on: macos-14
-    # Native/browser acceptance precedes a clean optimized CLI, sidecar, and app build.
     timeout-minutes: 75
     env:
-      SCCACHE_GHA_ENABLED: "true"
       COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
       COLOSSUS_DESKTOP_RELEASE_CHANNEL: "validation_only"
       CARGO_INCREMENTAL: "0"
-      # Use one release target for the bundled CLI, sidecar, and Tauri app.
+      # Keep Desktop native tests isolated from the root native sandbox target.
       CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target
     steps:
       - name: Check out repository
@@ -171,19 +265,14 @@ jobs:
         with:
           toolchain: 1.96.0
           components: clippy,rustfmt
-      - name: Enable shared compiler cache
-        id: sccache
-        continue-on-error: true
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
-      - name: Activate shared compiler cache
-        if: steps.sccache.outcome == 'success'
-        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
-      - name: Cache standalone desktop target
+      - name: Restore main Desktop acceptance build cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          workspaces: apps/desktop/src-tauri -> apps/desktop/src-tauri/target
-          key: premerge-macos-desktop-arm
-          cache-targets: false
+          workspaces: apps/desktop/src-tauri -> target
+          shared-key: macos-desktop-acceptance
+          key: recipe-v1
+          cache-targets: true
+          save-if: false
       - name: Validate desktop renderer
         run: cargo xtask check desktop
       - name: Install the pinned Chromium browser
@@ -198,6 +287,10 @@ jobs:
         run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
       - name: Test the desktop native bridge
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+      - name: Test the shared dictation engine and local CLI adapter
+        run: |
+          cargo test --locked -p colossus-native-dictation --features download --lib
+          cargo clippy --locked -p colossus-cli --features dictation --all-targets -- -D warnings
       - name: Exercise credential persistence through the managed sidecar and MCP
         env:
           COLOSSUS_ACCEPTANCE_SIDECAR: ${{ github.workspace }}/apps/desktop/src-tauri/binaries/colossus-sidecar-aarch64-apple-darwin
@@ -232,11 +325,41 @@ jobs:
             output/playwright
           if-no-files-found: ignore
           retention-days: 7
-      - name: Remove standalone debug artifacts before release packaging
-        run: |
-          expected="$GITHUB_WORKSPACE/apps/desktop/src-tauri/target"
-          test "$CARGO_TARGET_DIR" = "$expected"
-          rm -rf "$expected/debug"
+  macos-desktop-bundle:
+    name: Representative macOS Desktop bundle
+    if: needs.eligibility.result == 'success'
+    needs: eligibility
+    runs-on: macos-14
+    timeout-minutes: 75
+    env:
+      COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
+      COLOSSUS_DESKTOP_RELEASE_CHANNEL: "validation_only"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Node.js 22.18
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Install locked Desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci --ignore-scripts
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+      - name: Restore main Desktop bundle build cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+          shared-key: macos-desktop-bundle
+          key: recipe-v1
+          cache-targets: true
+          save-if: false
       - name: Build the pruned Tauri application
         working-directory: apps/desktop
         run: npm run tauri:build
@@ -247,17 +370,17 @@ jobs:
         run: npm run tauri:bundle:macos
 
   windows-runtime:
-    name: Representative Windows runtime, sandbox, and Desktop
+    name: Representative Windows runtime and sandbox
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: windows-latest-l
-    timeout-minutes: 75
+    runs-on: windows-2025
+    timeout-minutes: 40
     env:
       CARGO_INCREMENTAL: "0"
-      CARGO_TARGET_DIR: ${{ github.workspace }}\apps\desktop\src-tauri\target
       COLOSSUS_DESKTOP_RELEASE_CHANNEL: "development"
       COLOSSUS_DESKTOP_TEAM_ID: "UNSIGNED"
       SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -298,6 +421,16 @@ jobs:
         if: steps.sccache.outcome == 'success'
         shell: bash
         run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Configure read-only R2 compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        env:
+          R2_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+          R2_REGION: ${{ secrets.SCCACHE_REGION }}
+          R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+        run: ./scripts/ci/configure-sccache-r2.sh read
       - name: Cache Windows runtime target
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -315,6 +448,8 @@ jobs:
           cargo test --locked -p colossus-sdk --lib --features sidecar native_sidecar::tests::ordinary_windows_instance_path_matches_its_bound_canonical_identity -- --exact --nocapture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p colossus-sdk --lib --features sidecar sidecar_agent_runs::tests -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p colossus-runtime --lib plugin -- --nocapture
       - name: Run Windows Colossus-home acceptance
         id: windows_home
         continue-on-error: true
@@ -329,6 +464,93 @@ jobs:
         run: >-
           cargo test --locked -p colossus-cli --test worker_smoke
           --test windows_sandbox --test mcp_smoke --test release_install_smoke -- --nocapture
+      - name: Require every Windows runtime acceptance check
+        shell: bash
+        env:
+          CONTRACT_OUTCOME: ${{ steps.renderer_contracts.outcome }}
+          CODEX_AUTH_OUTCOME: ${{ steps.windows_codex_auth.outcome }}
+          HOME_OUTCOME: ${{ steps.windows_home.outcome }}
+          NATIVE_OUTCOME: ${{ steps.windows_native.outcome }}
+          SDK_PATH_OUTCOME: ${{ steps.windows_sdk_path.outcome }}
+          RENDERER_TEST_OUTCOME: ${{ steps.renderer_tests.outcome }}
+          TYPECHECK_OUTCOME: ${{ steps.renderer_typecheck.outcome }}
+          WORKER_OUTCOME: ${{ steps.worker_acceptance.outcome }}
+        run: |
+          set -eu
+          failed=
+          for result in \
+            "renderer-typecheck=$TYPECHECK_OUTCOME" \
+            "renderer-tests=$RENDERER_TEST_OUTCOME" \
+            "renderer-contracts=$CONTRACT_OUTCOME" \
+            "windows-native=$NATIVE_OUTCOME" \
+            "windows-sdk-path=$SDK_PATH_OUTCOME" \
+            "windows-home=$HOME_OUTCOME" \
+            "windows-codex-auth=$CODEX_AUTH_OUTCOME" \
+            "worker-and-sandbox=$WORKER_OUTCOME"
+          do
+            if test "${result#*=}" != success; then
+              failed="$failed ${result%%=*}"
+            fi
+          done
+          if test -n "$failed"; then
+            printf 'Windows runtime acceptance checks failed:%s\n' "$failed" >&2
+            exit 1
+          fi
+
+  windows-desktop:
+    name: Representative Windows Desktop acceptance
+    if: needs.eligibility.result == 'success'
+    needs: eligibility
+    runs-on: windows-latest-l
+    timeout-minutes: 75
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}\apps\desktop\src-tauri\target
+      COLOSSUS_DESKTOP_RELEASE_CHANNEL: "development"
+      COLOSSUS_DESKTOP_TEAM_ID: "UNSIGNED"
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Node.js 22.18
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Install locked Desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci --ignore-scripts
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+          components: clippy
+      - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Configure read-only R2 compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        env:
+          R2_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+          R2_REGION: ${{ secrets.SCCACHE_REGION }}
+          R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+        run: ./scripts/ci/configure-sccache-r2.sh read
+      - name: Cache standalone desktop target
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: apps/desktop/src-tauri -> apps/desktop/src-tauri/target
+          key: premerge-windows-desktop-x64
+          cache-targets: false
       - name: Prepare Windows Managed Local executables
         id: desktop_prepare
         continue-on-error: true
@@ -344,12 +566,31 @@ jobs:
         id: native_tests
         if: steps.desktop_prepare.outcome == 'success'
         continue-on-error: true
-        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+        run: |
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p colossus-native-dictation --features download --lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked -p colossus-cli --features dictation --all-targets -- -D warnings
       - name: Exercise Windows credential persistence through the managed sidecar and MCP
         if: steps.desktop_prepare.outcome == 'success'
         env:
           COLOSSUS_ACCEPTANCE_SIDECAR: ${{ github.workspace }}/apps/desktop/src-tauri/binaries/colossus-sidecar-x86_64-pc-windows-msvc.exe
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib managed_runtime::credential_acceptance::native_vault_restarts_reach_managed_sidecar_mcp -- --ignored --exact
+      - name: Exercise Windows cloud transport and native Managed Local lifetime
+        id: cloud_native
+        if: steps.desktop_prepare.outcome == 'success'
+        continue-on-error: true
+        env:
+          COLOSSUS_ACCEPTANCE_SIDECAR: ${{ github.workspace }}/apps/desktop/src-tauri/binaries/colossus-sidecar-x86_64-pc-windows-msvc.exe
+        run: |
+          cargo test --locked -p colossus-cloud-server --lib oidc_to_runtime_prompt_approval_cancel_rotate_and_recover
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p colossus-cloud-server --lib managed_sidecar_cloud_run_isolated_and_application_exit_disconnects -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p colossus-sidecar --test windows_lifecycle -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p colossus-cli --bin colossus public_api_admin::tests
       - name: Exercise Windows setup reset and uninstall credential cleanup
         if: steps.desktop_prepare.outcome == 'success'
         run: |
@@ -358,6 +599,13 @@ jobs:
       - name: Test Windows native secure credential entry controls
         if: steps.desktop_prepare.outcome == 'success'
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --lib
+      - name: Build bundled terminal renderer for WebView2 acceptance
+        if: steps.desktop_prepare.outcome == 'success'
+        working-directory: apps/desktop
+        run: npm run build
+      - name: Exercise the bundled Windows terminal document and IPC
+        if: steps.desktop_prepare.outcome == 'success'
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --features tauri/custom-protocol --lib native_terminal_ -- --ignored --nocapture --test-threads=1
       - name: Lint Windows native credential controls
         if: steps.desktop_prepare.outcome == 'success'
         run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --all-targets --all-features -- -D warnings
@@ -401,48 +649,34 @@ jobs:
             output/playwright
           if-no-files-found: ignore
           retention-days: 7
-      - name: Require every Windows acceptance check
+      - name: Require every Windows Desktop acceptance check
         # The following aggregation remains authoritative even when an individual
         # acceptance command used continue-on-error to collect other failures.
         shell: bash
         env:
           CLIPPY_OUTCOME: ${{ steps.native_clippy.outcome }}
-          CONTRACT_OUTCOME: ${{ steps.renderer_contracts.outcome }}
-          CODEX_AUTH_OUTCOME: ${{ steps.windows_codex_auth.outcome }}
-          HOME_OUTCOME: ${{ steps.windows_home.outcome }}
-          NATIVE_OUTCOME: ${{ steps.windows_native.outcome }}
-          SDK_PATH_OUTCOME: ${{ steps.windows_sdk_path.outcome }}
           PREPARE_OUTCOME: ${{ steps.desktop_prepare.outcome }}
           NATIVE_TEST_OUTCOME: ${{ steps.native_tests.outcome }}
-          RENDERER_TEST_OUTCOME: ${{ steps.renderer_tests.outcome }}
-          TYPECHECK_OUTCOME: ${{ steps.renderer_typecheck.outcome }}
-          WORKER_OUTCOME: ${{ steps.worker_acceptance.outcome }}
           PLUGIN_RUNTIME_OUTCOME: ${{ steps.plugin_runtime.outcome }}
           APPROVAL_RUNTIME_OUTCOME: ${{ steps.approval_runtime.outcome }}
+          CLOUD_NATIVE_OUTCOME: ${{ steps.cloud_native.outcome }}
         run: |
           set -eu
           failed=
           for result in \
-            "renderer-typecheck=$TYPECHECK_OUTCOME" \
-            "renderer-tests=$RENDERER_TEST_OUTCOME" \
-            "renderer-contracts=$CONTRACT_OUTCOME" \
-            "windows-native=$NATIVE_OUTCOME" \
-            "windows-sdk-path=$SDK_PATH_OUTCOME" \
-            "windows-home=$HOME_OUTCOME" \
-            "windows-codex-auth=$CODEX_AUTH_OUTCOME" \
-            "worker-and-sandbox=$WORKER_OUTCOME" \
             "desktop-prepare=$PREPARE_OUTCOME" \
             "desktop-clippy=$CLIPPY_OUTCOME" \
             "desktop-tests=$NATIVE_TEST_OUTCOME" \
             "desktop-plugin-runtime=$PLUGIN_RUNTIME_OUTCOME" \
-            "desktop-approval-runtime=$APPROVAL_RUNTIME_OUTCOME"
+            "desktop-approval-runtime=$APPROVAL_RUNTIME_OUTCOME" \
+            "desktop-cloud-native=$CLOUD_NATIVE_OUTCOME"
           do
             if test "${result#*=}" != success; then
               failed="$failed ${result%%=*}"
             fi
           done
           if test -n "$failed"; then
-            printf 'Windows acceptance checks failed:%s\n' "$failed" >&2
+            printf 'Windows Desktop acceptance checks failed:%s\n' "$failed" >&2
             exit 1
           fi
 
@@ -454,6 +688,7 @@ jobs:
     timeout-minutes: 15
     env:
       SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -468,6 +703,16 @@ jobs:
       - name: Activate shared compiler cache
         if: steps.sccache.outcome == 'success'
         run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Configure read-only R2 compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        env:
+          R2_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+          R2_REGION: ${{ secrets.SCCACHE_REGION }}
+          R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+        run: ./scripts/ci/configure-sccache-r2.sh read
       - name: Cache fuzz target
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -727,7 +972,7 @@ jobs:
   gate:
     name: Colossus pre-merge gate
     if: always()
-    needs: [eligibility, macos-native, macos-desktop, windows-runtime, credential-vault, fuzz, supply-chain, chroma, storage, live-security]
+    needs: [eligibility, linux-rust-integration, linux-desktop, macos-native, macos-desktop-acceptance, macos-desktop-bundle, windows-runtime, windows-desktop, credential-vault, fuzz, supply-chain, chroma, storage, live-security]
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
@@ -740,9 +985,13 @@ jobs:
         env:
           RESULTS: >-
             eligibility=${{ needs.eligibility.result }}
+            linux-rust-integration=${{ needs['linux-rust-integration'].result }}
+            linux-desktop=${{ needs['linux-desktop'].result }}
             macos=${{ needs['macos-native'].result }}
-            macos-desktop=${{ needs['macos-desktop'].result }}
-            windows=${{ needs['windows-runtime'].result }}
+            macos-desktop-acceptance=${{ needs['macos-desktop-acceptance'].result }}
+            macos-desktop-bundle=${{ needs['macos-desktop-bundle'].result }}
+            windows-runtime=${{ needs['windows-runtime'].result }}
+            windows-desktop=${{ needs['windows-desktop'].result }}
             credential-vault=${{ needs['credential-vault'].result }}
             fuzz=${{ needs.fuzz.result }}
             supply-chain=${{ needs['supply-chain'].result }}

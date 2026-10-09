@@ -41,7 +41,7 @@ test("only exact terminal RunUpdate variants stop a watch", () => {
       updateCase,
     );
   }
-  for (const updateCase of ["state", "notice", "message"] as const) {
+  for (const updateCase of ["state", "notice", "message", "providerRetry"] as const) {
     assert.equal(
       isTerminalRunUpdate({ update: { $case: updateCase } }),
       false,

@@ -11,28 +11,52 @@ const SIDECAR_FILE_STEM: &str = "colossus-sidecar";
 const CLI_FILE_STEM: &str = "colossus";
 
 const COMMANDS: &[&str] = &[
+    "dictation_status",
+    "get_dictation_settings",
+    "download_dictation_model",
+    "cancel_dictation_download",
+    "save_dictation_settings",
+    "choose_dictation_model",
+    "start_dictation",
+    "poll_dictation",
+    "control_dictation",
     "browser_context",
     "browser_command",
     "browser_viewport",
     "command_review_context",
     "finish_command_review",
+    "remembered_command_count",
+    "clear_remembered_commands",
     "get_plugin_inventory",
     "resolve_plugin_selection",
     "read_plugin_preview",
     "manage_plugin",
     "cancel_plugin_operation",
+    "outlook_companion_status",
+    "configure_outlook_companion",
     "desktop_release_channel",
     "desktop_release_metadata",
     "check_desktop_update",
     "install_desktop_update",
     "export_diagnostics",
+    "open_setup_link",
+    "list_setup_packages",
+    "inspect_setup_package",
+    "cancel_setup_package_review",
+    "apply_setup_package",
+    "configure_setup_credential",
+    "use_setup_model",
+    "remove_setup_package",
+    "export_setup_package",
     "initialize_desktop",
     "desktop_status",
     "codex_auth_status",
     "codex_auth_login",
     "codex_auth_logout",
     "import_ca_bundle",
+    "import_client_identity",
     "remove_ca_bundle",
+    "remove_client_identity",
     "add_external_target",
     "remove_external_target",
     "choose_workspace",
@@ -85,11 +109,36 @@ const COMMANDS: &[&str] = &[
     "set_terminal_enabled",
     "connect_colossus",
     "connection_status",
+    "cloud_enroll",
+    "cloud_connect",
+    "cloud_status",
+    "control_plane_profiles",
+    "save_control_plane_profiles",
+    "cloud_set_workspace_sharing",
+    "cloud_disconnect",
+    "cloud_forget",
+    "cloud_revoke",
     "create_run",
     "choose_run_attachment",
     "read_artifact_content",
     "get_run",
     "list_runs",
+    "list_shell_sessions",
+    "workflow_context",
+    "list_registered_workflows",
+    "get_registered_workflow",
+    "validate_workflow_definition",
+    "register_workflow_definition",
+    "list_workflow_schedules",
+    "get_workflow_schedule",
+    "create_workflow_schedule",
+    "set_workflow_schedule_enabled",
+    "delete_workflow_schedule",
+    "get_scheduled_workflow_run",
+    "list_workflow_runs",
+    "start_workflow_run",
+    "read_shell_session",
+    "stop_shell_session",
     "list_session_activity",
     "list_asides",
     "watch_run",
@@ -105,12 +154,16 @@ const COMMANDS: &[&str] = &[
     "search_workspace_files",
     "read_workspace_file",
     "show_terminal_window",
+    "mount_terminal_pane",
+    "terminal_pane_viewport",
     "terminal_context",
     "open_terminal",
     "write_terminal",
     "resize_terminal",
     "signal_terminal",
     "close_terminal",
+    "sync_status_bar_pins",
+    "notify_background",
 ];
 
 fn main() {
@@ -173,6 +226,18 @@ fn export_release_trust_configuration() {
             ),
             _ => panic!("{CHANNEL_VARIABLE} must be stable, developer_preview, or validation_only"),
         }
+    } else if target_os == "linux" {
+        assert!(
+            team_id == "UNSIGNED",
+            "Linux packaging requires {TEAM_VARIABLE}=UNSIGNED"
+        );
+        assert!(
+            matches!(
+                release_channel.as_str(),
+                "developer_preview" | "validation_only"
+            ),
+            "Linux packages require an explicit developer_preview or validation_only channel"
+        );
     } else {
         let canonical_team = team_id.len() == 10
             && team_id
@@ -191,7 +256,9 @@ fn export_release_trust_configuration() {
         }
     }
     let signing_status = match (target_os.as_str(), release_channel.as_str()) {
-        ("windows", "validation_only") => "unsigned",
+        ("windows", "validation_only") | ("linux", "developer_preview" | "validation_only") => {
+            "unsigned"
+        }
         ("windows", "stable" | "developer_preview") | ("macos", "stable") => "verified",
         ("macos", "developer_preview" | "validation_only") => "ad_hoc",
         _ => "unsupported",

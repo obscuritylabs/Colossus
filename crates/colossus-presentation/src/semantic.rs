@@ -100,7 +100,9 @@ impl SemanticRenderer {
             return Ok(None);
         }
         let rendered = match event {
-            ProviderEvent::ModelDelta { .. } | ProviderEvent::FinalOutput { .. } => None,
+            ProviderEvent::ModelDelta { .. }
+            | ProviderEvent::FinalOutput { .. }
+            | ProviderEvent::Retry { .. } => None,
             ProviderEvent::ReasoningSummary { summary } if self.preferences.show_reasoning => {
                 if self.preferences.transcript_density == TranscriptDensity::Comfortable {
                     Some(self.render_document(PresentationDocument::from_block(
@@ -162,7 +164,10 @@ impl SemanticRenderer {
                 if self.preferences.transcript_density == TranscriptDensity::Comfortable {
                     self.render_document(PresentationDocument::from_block(
                         PresentationBlock::Card {
-                            title: format!("Cancelled {}", call.name),
+                            title: format!(
+                                "Cancelled {}",
+                                tool_display_name(&call.name, &call.arguments)
+                            ),
                             tone: PresentationTone::Warning,
                             body: vec![PresentationBlock::KeyValue(vec![
                                 ("Turn".into(), turn.to_string()),
@@ -178,7 +183,7 @@ impl SemanticRenderer {
                     format!(
                         "{} cancelled {} turn={} elapsed={elapsed_seconds:.2}s",
                         self.label("tool"),
-                        call.name,
+                        tool_display_name(&call.name, &call.arguments),
                         turn
                     )
                 },
@@ -325,7 +330,10 @@ impl SemanticRenderer {
                 call,
                 elapsed_seconds,
             } => Some(PresentationDocument::from_block(PresentationBlock::Card {
-                title: format!("Cancelled {}", call.name),
+                title: format!(
+                    "Cancelled {}",
+                    tool_display_name(&call.name, &call.arguments)
+                ),
                 tone: PresentationTone::Warning,
                 body: vec![PresentationBlock::KeyValue(vec![
                     ("Turn".into(), turn.to_string()),
@@ -421,6 +429,7 @@ impl SemanticRenderer {
         call: &ToolCall,
         elapsed_seconds: f64,
     ) -> Result<Option<String>, PresentationError> {
+        let display_name = tool_display_name(&call.name, &call.arguments);
         if call.name == "user.ask" {
             return Ok(Some(match self.preferences.events_mode {
                 EventDisplayMode::Verbose => format!(
@@ -437,13 +446,13 @@ impl SemanticRenderer {
             return Ok(Some(format!(
                 "{} using {} elapsed={elapsed_seconds:.2}s",
                 self.label("activity"),
-                call.name
+                display_name
             )));
         }
         let family = ToolFamily::from_name(&call.name);
         // Model input precedes preparation and credential projection. Command
         // details may be displayed only through the frozen approval context.
-        let detail = if call.name == "shell.run" {
+        let detail = if matches!(call.name.as_str(), "shell.run" | "mcp.call") {
             None
         } else {
             summarize_value(&call.arguments, family.keys())
@@ -453,14 +462,14 @@ impl SemanticRenderer {
                 format!(
                     "{} start {} elapsed={elapsed_seconds:.2}s",
                     self.label(family.label()),
-                    call.name,
+                    display_name,
                 ),
                 detail,
             ),
             EventDisplayMode::Verbose => format!(
                 "{} start name={} call_id={} turn={} elapsed={elapsed_seconds:.2}s arguments={}",
                 self.label(family.label()),
-                call.name,
+                display_name,
                 call.call_id,
                 turn,
                 if call.name == "shell.run" {
@@ -483,6 +492,8 @@ impl SemanticRenderer {
         call: Option<&ToolCall>,
     ) -> Result<Option<String>, PresentationError> {
         let parsed = display_tool_output(Some(&result.name), &result.output);
+        let display_name =
+            tool_display_name(&result.name, call.map_or(&parsed, |call| &call.arguments));
         let family = ToolFamily::from_name(&result.name);
         let recoverable = parsed
             .pointer("/error/recoverable")
@@ -527,7 +538,7 @@ impl SemanticRenderer {
             EventDisplayMode::Verbose => format!(
                 "{} complete name={} call_id={} turn={} status={} exit={} duration={duration_seconds:.2}s elapsed={elapsed_seconds:.2}s output={}",
                 self.label(family.label()),
-                result.name,
+                display_name,
                 result.call_id,
                 turn,
                 status,
@@ -538,7 +549,7 @@ impl SemanticRenderer {
                 format!(
                     "{} complete {} status={} exit={} duration={duration_seconds:.2}s",
                     self.label(family.label()),
-                    result.name,
+                    display_name,
                     status,
                     result.exit_code,
                 ),
@@ -795,6 +806,8 @@ fn tool_result_document_with_mode(
     events_mode: EventDisplayMode,
 ) -> PresentationDocument {
     let parsed = display_tool_output(Some(&result.name), &result.output);
+    let display_name =
+        tool_display_name(&result.name, call.map_or(&parsed, |call| &call.arguments));
     let lifecycle_status = parsed.get("status").and_then(Value::as_str);
     let pending =
         result.name == "agent.result" && matches!(lifecycle_status, Some("queued" | "running"));
@@ -845,7 +858,7 @@ fn tool_result_document_with_mode(
             } else {
                 "Completed"
             },
-            result.name,
+            display_name,
             context,
         ),
         tone: if failed {
@@ -1077,8 +1090,35 @@ fn tool_output_block(name: &str, output: &Value, arguments: Option<&Value>) -> P
     json_block(output)
 }
 
+/// Label an MCP call with its configured server and exact tool name when available.
+///
+/// Callers must supply released arguments or output. Only top-level identity fields
+/// contribute to the label; nested tool payloads cannot identify the called server.
+pub fn tool_display_name(name: &str, arguments: &Value) -> String {
+    if name != "mcp.call" {
+        return name.into();
+    }
+    let identity = |key| {
+        arguments.get(key).and_then(Value::as_str).map(|value| {
+            let clean = terminal::sanitize_terminal_text(value)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            bounded_text(&clean, 72)
+        })
+    };
+    let Some(server) = identity("server").filter(|value| !value.is_empty()) else {
+        return name.into();
+    };
+    let tool = identity("tool")
+        .filter(|value| !value.is_empty())
+        .map(|value| format!(" · {value}"))
+        .unwrap_or_default();
+    format!("{name} · {server}{tool}")
+}
+
 fn tool_call_context(call: &ToolCall, family: ToolFamily) -> Option<String> {
-    if call.name == "shell.run" {
+    if matches!(call.name.as_str(), "shell.run" | "mcp.call") {
         return None;
     }
     if matches!(family, ToolFamily::Shell)

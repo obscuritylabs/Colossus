@@ -1,4 +1,7 @@
-use crate::diagnostics::{McpDiagnosticCapture, request_failure};
+use crate::{
+    McpOperation,
+    diagnostics::{McpDiagnosticCapture, request_failure},
+};
 use colossus_contracts::{McpDiagnosticCode, McpDiagnosticStage};
 use colossus_network::{AdditionalRootCertificates, PinnedHttpClientError, pinned_reqwest_client};
 use colossus_policy::{
@@ -9,7 +12,10 @@ use futures::{StreamExt as _, stream::BoxStream};
 use http::{HeaderName, HeaderValue, header::WWW_AUTHENTICATE};
 use reqwest::{Method, Response, StatusCode, Url};
 use rmcp::{
-    model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
+    model::{
+        ClientJsonRpcMessage, ClientRequest, ErrorData, GetMeta, ProtocolVersion,
+        ServerJsonRpcMessage,
+    },
     transport::{
         common::http_header::{
             EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
@@ -21,7 +27,14 @@ use rmcp::{
     },
 };
 use sse_stream::{Error as SseError, Sse, SseStream};
-use std::{borrow::Cow, collections::HashMap, sync::Arc};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 use thiserror::Error;
 
 #[derive(Clone)]
@@ -29,6 +42,8 @@ pub(super) struct HardenedStreamableHttpClient {
     endpoint: Arc<str>,
     client: reqwest::Client,
     max_response_bytes: usize,
+    received_bytes: Arc<AtomicUsize>,
+    call_headers: Result<HashMap<HeaderName, HeaderValue>, String>,
     diagnostics: McpDiagnosticCapture,
 }
 
@@ -37,6 +52,9 @@ impl HardenedStreamableHttpClient {
         endpoint: &str,
         permit: &ExecutionPermit,
         tls_roots: &AdditionalRootCertificates,
+        operation: &McpOperation,
+        timeout_ms: u64,
+        max_output_bytes: u64,
     ) -> Result<Self, ExecutionError> {
         let diagnostics = McpDiagnosticCapture::current();
         diagnostics.stage(McpDiagnosticStage::ClientSetup);
@@ -55,7 +73,7 @@ impl HardenedStreamableHttpClient {
         let client = pinned_reqwest_client(
             &url,
             tls_roots,
-            permit.obligations().timeout_ms,
+            timeout_ms.min(permit.obligations().timeout_ms),
             allow_non_public,
         )
         .await
@@ -70,13 +88,24 @@ impl HardenedStreamableHttpClient {
             adapter_failure(error)
         })?;
         let max_response_bytes =
-            usize::try_from(permit.obligations().max_output_bytes).map_err(adapter_failure)?;
+            usize::try_from(max_output_bytes.min(permit.obligations().max_output_bytes))
+                .map_err(adapter_failure)?;
         Ok(Self {
             endpoint: endpoint.into(),
             client,
             max_response_bytes,
+            received_bytes: Arc::new(AtomicUsize::new(0)),
+            call_headers: Ok(HashMap::new()),
             diagnostics,
-        })
+        }
+        .with_call_headers(operation))
+    }
+
+    pub(super) fn with_call_headers(mut self, operation: &McpOperation) -> Self {
+        // Legacy protocols do not interpret x-mcp-header. Retain any validation
+        // failure until a modern call actually needs the parameter headers.
+        self.call_headers = crate::param_headers::call_headers(operation);
+        self
     }
 
     #[cfg(test)]
@@ -89,6 +118,8 @@ impl HardenedStreamableHttpClient {
             endpoint: endpoint.into(),
             client,
             max_response_bytes,
+            received_bytes: Arc::new(AtomicUsize::new(0)),
+            call_headers: Ok(HashMap::new()),
             diagnostics: McpDiagnosticCapture::current(),
         }
     }
@@ -141,6 +172,8 @@ pub(super) enum McpHttpClientError {
     ResponseTooLarge,
     #[error("MCP transport attempted an unconfigured endpoint")]
     EndpointMismatch,
+    #[error("MCP parameter header annotations are invalid")]
+    InvalidParameterHeaders,
 }
 
 impl StreamableHttpClient for HardenedStreamableHttpClient {
@@ -149,7 +182,7 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
     async fn get_stream(
         &self,
         uri: Arc<str>,
-        session_id: Arc<str>,
+        session_id: Option<Arc<str>>,
         last_event_id: Option<String>,
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
@@ -159,8 +192,10 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
             .header(
                 reqwest::header::ACCEPT,
                 [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "),
-            )
-            .header(HEADER_SESSION_ID, session_id.as_ref());
+            );
+        if let Some(session_id) = session_id {
+            request = request.header(HEADER_SESSION_ID, session_id.as_ref());
+        }
         if let Some(last_event_id) = last_event_id {
             if last_event_id.is_empty() || last_event_id.len() > 8 * 1024 {
                 return Err(StreamableHttpError::Client(McpHttpClientError::Request));
@@ -181,6 +216,7 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
         Ok(bounded_sse_stream(
             response,
             self.max_response_bytes,
+            self.received_bytes.clone(),
             self.diagnostics.clone(),
         ))
     }
@@ -210,9 +246,28 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
         message: ClientJsonRpcMessage,
         session_id: Option<Arc<str>>,
         auth_header: Option<String>,
-        custom_headers: HashMap<HeaderName, HeaderValue>,
+        mut custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        if let ClientJsonRpcMessage::Request(request) = &message
+            && matches!(request.request, ClientRequest::CallToolRequest(_))
+            && request
+                .request
+                .get_meta()
+                .protocol_version()
+                .is_some_and(|version| version >= ProtocolVersion::STANDARD_HEADERS)
+        {
+            let headers = self.call_headers.as_ref().map_err(|_| {
+                StreamableHttpError::Client(McpHttpClientError::InvalidParameterHeaders)
+            })?;
+            custom_headers.extend(headers.clone());
+        }
         let session_was_attached = session_id.is_some();
+        let one_way = matches!(
+            message,
+            ClientJsonRpcMessage::Notification(_)
+                | ClientJsonRpcMessage::Response(_)
+                | ClientJsonRpcMessage::Error(_)
+        );
         let mut request = self
             .request(Method::POST, &uri, auth_header, custom_headers)?
             .header(
@@ -243,7 +298,11 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
         }
         let status = response.status();
         if matches!(status, StatusCode::ACCEPTED | StatusCode::NO_CONTENT) {
-            return Ok(StreamableHttpPostResponse::Accepted);
+            return if one_way {
+                Ok(StreamableHttpPostResponse::Accepted)
+            } else {
+                Err(self.status_error(status))
+            };
         }
         if status == StatusCode::NOT_FOUND && session_was_attached {
             self.diagnostics
@@ -251,14 +310,31 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
             return Err(StreamableHttpError::SessionExpired);
         }
         if !status.is_success() {
+            // Classify a bounded discovery rejection in the lifecycle layer.
+            // Authentication and expired sessions retain their dedicated paths.
+            if !session_was_attached
+                && status.is_client_error()
+                && let ClientJsonRpcMessage::Request(request) = &message
+                && matches!(request.request, ClientRequest::DiscoverRequest(_))
+            {
+                let bytes = bounded_body(
+                    response,
+                    self.max_response_bytes,
+                    &self.received_bytes,
+                    &self.diagnostics,
+                )
+                .await?;
+                let error = match serde_json::from_slice::<ServerJsonRpcMessage>(&bytes) {
+                    Ok(ServerJsonRpcMessage::Error(error)) => error.error,
+                    _ => ErrorData::invalid_request("MCP discovery is unavailable", None),
+                };
+                return Ok(StreamableHttpPostResponse::Json(
+                    ServerJsonRpcMessage::error(error, Some(request.id.clone())),
+                    None,
+                ));
+            }
             return Err(self.status_error(status));
         }
-        let one_way = matches!(
-            message,
-            ClientJsonRpcMessage::Notification(_)
-                | ClientJsonRpcMessage::Response(_)
-                | ClientJsonRpcMessage::Error(_)
-        );
         let declared_length = response.content_length();
         if one_way && declared_length == Some(0) {
             return Ok(StreamableHttpPostResponse::Accepted);
@@ -277,25 +353,42 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
         match content_type.as_deref() {
             Some(value) if content_type_matches(value, EVENT_STREAM_MIME_TYPE) => {
                 Ok(StreamableHttpPostResponse::Sse(
-                    bounded_sse_stream(response, self.max_response_bytes, self.diagnostics.clone()),
+                    bounded_sse_stream(
+                        response,
+                        self.max_response_bytes,
+                        self.received_bytes.clone(),
+                        self.diagnostics.clone(),
+                    ),
                     session_id,
                 ))
             }
             Some(value) if content_type_matches(value, JSON_MIME_TYPE) => {
-                let bytes =
-                    bounded_body(response, self.max_response_bytes, &self.diagnostics).await?;
+                let bytes = bounded_body(
+                    response,
+                    self.max_response_bytes,
+                    &self.received_bytes,
+                    &self.diagnostics,
+                )
+                .await?;
                 if one_way && is_empty_body(&bytes) {
                     return Ok(StreamableHttpPostResponse::Accepted);
                 }
-                let message = serde_json::from_slice::<ServerJsonRpcMessage>(&bytes)?;
+                let mut value = serde_json::from_slice(&bytes)?;
+                crate::wire::filter_unsupported_task_tools(&mut value);
+                let message = serde_json::from_value::<ServerJsonRpcMessage>(value)?;
                 Ok(StreamableHttpPostResponse::Json(message, session_id))
             }
             // Chunked and close-delimited responses expose no size hint, so the
             // bounded body is the only way to tell an empty one-way acknowledgement
             // apart from a genuinely malformed payload.
             _ if one_way && declared_length.is_none() => {
-                let bytes =
-                    bounded_body(response, self.max_response_bytes, &self.diagnostics).await?;
+                let bytes = bounded_body(
+                    response,
+                    self.max_response_bytes,
+                    &self.received_bytes,
+                    &self.diagnostics,
+                )
+                .await?;
                 if is_empty_body(&bytes) {
                     Ok(StreamableHttpPostResponse::Accepted)
                 } else {
@@ -304,6 +397,39 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
             }
             _ => Err(StreamableHttpError::UnexpectedContentType(content_type)),
         }
+    }
+
+    async fn post_message_with_max_sse_event_size(
+        &self,
+        uri: Arc<str>,
+        message: ClientJsonRpcMessage,
+        session_id: Option<Arc<str>>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        max_sse_event_size: usize,
+    ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        let mut bounded = self.clone();
+        // Bounding the entire raw response also bounds every unparsed SSE event.
+        bounded.max_response_bytes = self.max_response_bytes.min(max_sse_event_size);
+        bounded
+            .post_message(uri, message, session_id, auth_header, custom_headers)
+            .await
+    }
+
+    async fn get_stream_with_max_sse_event_size(
+        &self,
+        uri: Arc<str>,
+        session_id: Option<Arc<str>>,
+        last_event_id: Option<String>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        max_sse_event_size: usize,
+    ) -> Result<BoxStream<'static, Result<Sse, SseError>>, StreamableHttpError<Self::Error>> {
+        let mut bounded = self.clone();
+        bounded.max_response_bytes = self.max_response_bytes.min(max_sse_event_size);
+        bounded
+            .get_stream(uri, session_id, last_event_id, auth_header, custom_headers)
+            .await
     }
 }
 
@@ -353,6 +479,7 @@ fn unexpected_status(status: StatusCode) -> StreamableHttpError<McpHttpClientErr
 async fn bounded_body(
     response: Response,
     limit: usize,
+    received: &AtomicUsize,
     diagnostics: &McpDiagnosticCapture,
 ) -> Result<Vec<u8>, StreamableHttpError<McpHttpClientError>> {
     let mut bytes = Vec::new();
@@ -362,7 +489,11 @@ async fn bounded_body(
             diagnostics.fail(request_failure(&error), None);
             StreamableHttpError::Client(McpHttpClientError::Request)
         })?;
-        if bytes.len().saturating_add(chunk.len()) > limit {
+        if received
+            .fetch_add(chunk.len(), Ordering::Relaxed)
+            .saturating_add(chunk.len())
+            > limit
+        {
             diagnostics.fail(McpDiagnosticCode::ResponseTooLarge, None);
             return Err(StreamableHttpError::Client(
                 McpHttpClientError::ResponseTooLarge,
@@ -376,6 +507,7 @@ async fn bounded_body(
 fn bounded_sse_stream(
     response: Response,
     limit: usize,
+    received: Arc<AtomicUsize>,
     diagnostics: McpDiagnosticCapture,
 ) -> BoxStream<'static, Result<Sse, SseError>> {
     let bounded = response
@@ -385,7 +517,12 @@ fn bounded_sse_stream(
                 None
             } else {
                 Some(match item {
-                    Ok(chunk) if state.0.saturating_add(chunk.len()) <= limit => {
+                    Ok(chunk)
+                        if received
+                            .fetch_add(chunk.len(), Ordering::Relaxed)
+                            .saturating_add(chunk.len())
+                            <= limit =>
+                    {
                         state.0 += chunk.len();
                         Ok(chunk)
                     }
@@ -403,7 +540,19 @@ fn bounded_sse_stream(
             };
             std::future::ready(result)
         });
-    SseStream::from_bytes_stream(bounded).boxed()
+    SseStream::from_bytes_stream(bounded)
+        .map(|event| {
+            event.map(|mut event| {
+                if let Some(data) = &event.data
+                    && let Ok(mut value) = serde_json::from_str(data)
+                {
+                    crate::wire::filter_unsupported_task_tools(&mut value);
+                    event.data = Some(value.to_string());
+                }
+                event
+            })
+        })
+        .boxed()
 }
 
 fn adapter_failure(error: impl std::fmt::Display) -> ExecutionError {

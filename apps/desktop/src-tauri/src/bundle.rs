@@ -28,11 +28,11 @@ const EXPECTED_RELEASE_TEAM_ID: &str = env!("COLOSSUS_DESKTOP_TEAM_ID");
 const EXPECTED_RELEASE_CHANNEL: &str = env!("COLOSSUS_DESKTOP_RELEASE_CHANNEL");
 #[cfg(all(not(debug_assertions), target_os = "macos"))]
 const DESKTOP_CODE_IDENTIFIER: &str = "com.obscuritylabs.colossus.desktop";
-#[cfg(not(debug_assertions))]
+#[cfg(all(not(debug_assertions), any(target_os = "macos", windows)))]
 const SIDECAR_CODE_IDENTIFIER: &str = "com.obscuritylabs.colossus.desktop.sidecar";
-#[cfg(not(debug_assertions))]
+#[cfg(all(not(debug_assertions), any(target_os = "macos", windows)))]
 const CLI_CODE_IDENTIFIER: &str = "com.obscuritylabs.colossus.desktop.cli";
-#[cfg(not(debug_assertions))]
+#[cfg(all(not(debug_assertions), any(target_os = "macos", windows)))]
 const RIPGREP_CODE_IDENTIFIER: &str = "com.obscuritylabs.colossus.desktop.ripgrep";
 
 #[derive(Debug, Deserialize)]
@@ -344,9 +344,14 @@ fn release_app_root() -> Option<PathBuf> {
         .and_then(|executable| executable.parent().map(Path::to_owned))
 }
 
+#[cfg(all(not(debug_assertions), target_os = "linux"))]
+fn release_app_root() -> Option<PathBuf> {
+    release_directory()
+}
+
 #[cfg(all(
     not(debug_assertions),
-    not(any(target_os = "macos", target_os = "windows"))
+    not(any(target_os = "macos", target_os = "windows", target_os = "linux"))
 ))]
 fn release_app_root() -> Option<PathBuf> {
     None
@@ -474,8 +479,24 @@ fn verify_outer_app_signature(app_root: &Path) -> Result<(), CommandErrorDto> {
     }
 }
 
+#[cfg(all(target_os = "linux", not(debug_assertions)))]
+fn verify_outer_app_signature(app_root: &Path) -> Result<(), CommandErrorDto> {
+    use std::os::unix::fs::MetadataExt as _;
+    // Linux preview distribution trust comes from the reviewed artifact and its
+    // checksum. The running ELF binds the manifest; it does not claim OS signing.
+    let metadata = std::fs::symlink_metadata(app_root).map_err(|_| integrity_error())?;
+    if EXPECTED_RELEASE_TEAM_ID != "UNSIGNED"
+        || expected_release_channel()? != ReleaseChannel::DeveloperPreview
+        || !metadata.is_dir()
+        || metadata.mode() & 0o022 != 0
+    {
+        return Err(integrity_error());
+    }
+    Ok(())
+}
+
 #[cfg(all(
-    not(any(target_os = "macos", target_os = "windows")),
+    not(any(target_os = "macos", target_os = "windows", target_os = "linux")),
     not(debug_assertions)
 ))]
 fn verify_outer_app_signature(_app_root: &Path) -> Result<(), CommandErrorDto> {
@@ -554,7 +575,7 @@ fn verify_release_code_identity(
 }
 
 #[cfg(all(
-    not(any(target_os = "macos", target_os = "windows")),
+    not(any(target_os = "macos", target_os = "windows", target_os = "linux")),
     not(debug_assertions)
 ))]
 fn verify_release_code_identity(

@@ -1,3 +1,6 @@
+#[cfg(test)]
+use crate::run_failures::released_runtime_failure;
+use crate::run_failures::runtime_failure;
 use crate::{
     admission::{
         AdmissionLimitReached, ListAdmission, ReserveRun, RunAdmissionConfig, RunAdmissionState,
@@ -46,6 +49,8 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
+mod posture;
+mod sharing;
 
 const WATCH_PAGE_SIZE: usize = 16;
 const WATCH_CHANNEL_SIZE: usize = 8;
@@ -137,6 +142,9 @@ pub struct RuntimeAgentRunApi {
     execution: Arc<Mutex<ExecutionRegistry>>,
     watches: Arc<WatchAdmission>,
     lists: Arc<ListAdmission>,
+    shell_queries: Arc<ListAdmission>,
+    shell_reads: Arc<ListAdmission>,
+    shell_controls: Arc<ListAdmission>,
     active_changed: Arc<tokio::sync::Notify>,
     recovery: Arc<Mutex<()>>,
     pending_recoveries: Arc<Mutex<BTreeMap<String, CallerContext>>>,
@@ -215,6 +223,9 @@ impl RuntimeAgentRunApi {
     ) -> Self {
         let watches = WatchAdmission::new(&admission);
         let lists = ListAdmission::new(&admission);
+        let shell_queries = ListAdmission::new(&admission);
+        let shell_reads = ListAdmission::new(&admission);
+        let shell_controls = ListAdmission::new(&admission);
         Self {
             artifacts: Arc::new(EventSourcedArtifactApi::new(runtime.journal())),
             runtime,
@@ -227,6 +238,9 @@ impl RuntimeAgentRunApi {
             })),
             watches,
             lists,
+            shell_queries,
+            shell_reads,
+            shell_controls,
             active_changed: Arc::new(tokio::sync::Notify::new()),
             recovery: Arc::new(Mutex::new(())),
             pending_recoveries: Arc::new(Mutex::new(BTreeMap::new())),
@@ -286,7 +300,7 @@ impl RuntimeAgentRunApi {
                 && event.actor.actor_type == ActorType::Application
                 && event.actor.id == caller.principal().application_id()
         });
-        if !owned {
+        if !owned && !self.shared_session_continuable(caller, session_id)? {
             return Err(ApiError::not_found(
                 ApiErrorReason::RunNotFound,
                 "the requested session was not found",
@@ -1384,6 +1398,7 @@ impl RuntimeAgentRunApi {
 
     /// Cooperatively stop active public runs and unblock their interactions.
     pub fn request_shutdown(&self) {
+        self.runtime.stop_process_sessions();
         let active = lock(&self.execution)
             .active
             .iter()
@@ -1399,6 +1414,7 @@ impl RuntimeAgentRunApi {
     pub async fn shutdown_and_wait(&self, timeout: std::time::Duration) -> bool {
         self.request_shutdown();
         tokio::time::timeout(timeout, async {
+            self.runtime.drain_process_sessions().await;
             loop {
                 let notified = self.active_changed.notified();
                 if lock(&self.execution).active.is_empty() {
@@ -1414,6 +1430,121 @@ impl RuntimeAgentRunApi {
 
 #[async_trait]
 impl AgentRunApi for RuntimeAgentRunApi {
+    fn supports_runtime_policy_posture(&self) -> bool {
+        true
+    }
+    async fn get_runtime_policy_posture(
+        &self,
+        caller: &CallerContext,
+    ) -> ApiResult<colossus_api::RuntimePolicyPosture> {
+        caller.require_scope(scopes::RUNS_READ)?;
+        let _permit = self
+            .lists
+            .acquire(caller.principal().application_id())
+            .map_err(|AdmissionLimitReached| capacity_error(caller))?;
+        self.released_policy_posture(caller)
+    }
+    async fn set_workspace_sharing(
+        &self,
+        caller: &CallerContext,
+        request: colossus_api::SetWorkspaceSharingRequest,
+    ) -> ApiResult<colossus_api::WorkspaceSharingState> {
+        self.persist_workspace_sharing(caller, request)
+    }
+
+    async fn list_visible_runs(
+        &self,
+        caller: &CallerContext,
+        request: ListRunsRequest,
+    ) -> ApiResult<colossus_api::ListVisibleRunsResponse> {
+        let _permit = self
+            .lists
+            .acquire(caller.principal().application_id())
+            .map_err(|AdmissionLimitReached| capacity_error(caller))?;
+        self.discover_visible_runs(caller, request)
+    }
+    async fn list_process_sessions(
+        &self,
+        caller: &CallerContext,
+        request: colossus_api::ListProcessSessionsRequest,
+    ) -> ApiResult<colossus_api::ProcessSessionPage> {
+        caller.require_scope(scopes::RUNS_READ)?;
+        if request
+            .after
+            .as_ref()
+            .is_some_and(|id| Uuid::parse_str(id).is_err())
+        {
+            return Err(ApiError::invalid(
+                ApiErrorReason::InvalidArgument,
+                "request",
+                "Use a valid session UUID, wait_ms from 0 through 30000, and max_output_bytes from 16384 through 65536.",
+            ));
+        }
+        let _permit = self
+            .shell_queries
+            .acquire(caller.principal().application_id())
+            .map_err(|AdmissionLimitReached| capacity_error(caller))?;
+        self.runtime
+            .list_process_sessions(caller.actor(), request.after)
+            .await
+            .map_err(|_| process_session_error())
+    }
+    async fn read_process_session(
+        &self,
+        caller: &CallerContext,
+        request: colossus_api::ReadProcessSessionRequest,
+    ) -> ApiResult<colossus_api::ProcessSessionSnapshot> {
+        caller.require_scope(scopes::RUNS_READ)?;
+        if Uuid::parse_str(&request.session_id).is_err()
+            || request.wait_ms > 30000
+            || !(16384..=65536).contains(&request.max_output_bytes)
+        {
+            return Err(ApiError::invalid(
+                ApiErrorReason::InvalidArgument,
+                "request",
+                "Use a valid session UUID, wait_ms from 0 through 30000, and max_output_bytes from 16384 through 65536.",
+            ));
+        }
+        let _permit = self
+            .shell_reads
+            .acquire(caller.principal().application_id())
+            .map_err(|AdmissionLimitReached| capacity_error(caller))?;
+        self.runtime
+            .read_process_session(
+                caller.actor(),
+                request.session_id,
+                request.after_sequence,
+                request.wait_ms,
+                request.max_output_bytes as usize,
+            )
+            .await
+            .map_err(|_| process_session_error())
+    }
+    async fn stop_process_session(
+        &self,
+        caller: &CallerContext,
+        request: colossus_api::StopProcessSessionRequest,
+    ) -> ApiResult<colossus_api::ProcessSessionSnapshot> {
+        caller.require_scope(scopes::RUNS_CONTROL)?;
+        // Stop returns a snapshot containing retained released logs.
+        caller.require_scope(scopes::RUNS_READ)?;
+        if Uuid::parse_str(&request.session_id).is_err() {
+            return Err(ApiError::invalid(
+                ApiErrorReason::InvalidArgument,
+                "request",
+                "Use a valid session UUID, wait_ms from 0 through 30000, and max_output_bytes from 16384 through 65536.",
+            ));
+        }
+        let _permit = self
+            .shell_controls
+            .acquire(caller.principal().application_id())
+            .map_err(|AdmissionLimitReached| capacity_error(caller))?;
+        self.runtime
+            .stop_process_session(caller.actor(), request.session_id)
+            .await
+            .map_err(|_| process_session_error())
+    }
+
     async fn create_run(
         &self,
         caller: &CallerContext,
@@ -1452,9 +1583,10 @@ impl AgentRunApi for RuntimeAgentRunApi {
     }
 
     async fn get_run(&self, caller: &CallerContext, request: GetRunRequest) -> ApiResult<Run> {
+        let source = self.visible_run_caller(caller, &request.run_id)?;
         let run = self
             .repository
-            .get_run(caller, &request.run_id)?
+            .get_run(&source, &request.run_id)?
             .ok_or_else(|| {
                 ApiError::not_found(
                     ApiErrorReason::RunNotFound,
@@ -1462,7 +1594,11 @@ impl AgentRunApi for RuntimeAgentRunApi {
                 )
                 .with_correlation_id(caller.request_id().clone())
             })?;
-        self.recover_orphan(caller, run)
+        if source.principal().application_id() == caller.principal().application_id() {
+            self.recover_orphan(caller, run)
+        } else {
+            Ok(run)
+        }
     }
 
     async fn list_runs(
@@ -1486,10 +1622,14 @@ impl AgentRunApi for RuntimeAgentRunApi {
         request
             .validate()
             .map_err(|error| error.with_correlation_id(caller.request_id().clone()))?;
+        let source_caller = self.visible_run_caller(caller, &request.source_run_id)?;
         let source = self
             .repository
-            .get_run(caller, &request.source_run_id)?
+            .get_run(&source_caller, &request.source_run_id)?
             .ok_or_else(|| missing_run(caller))?;
+        if !self.session_history_visible(caller, &source.session_id)? {
+            return Err(missing_run(caller));
+        }
         self.runtime
             .drain_projections_bounded(256, 16)
             .map_err(|error| activity_runtime_error(caller, error))?;
@@ -1578,9 +1718,10 @@ impl AgentRunApi for RuntimeAgentRunApi {
         caller: &CallerContext,
         request: WatchRunRequest,
     ) -> ApiResult<RunUpdateStream> {
+        let source = self.visible_run_caller(caller, &request.run_id)?;
         let run = self
             .repository
-            .get_run(caller, &request.run_id)?
+            .get_run(&source, &request.run_id)?
             .ok_or_else(|| {
                 ApiError::not_found(
                     ApiErrorReason::RunNotFound,
@@ -1588,7 +1729,12 @@ impl AgentRunApi for RuntimeAgentRunApi {
                 )
                 .with_correlation_id(caller.request_id().clone())
             })?;
-        let run = self.recover_orphan(caller, run)?;
+        let shared = source.principal().application_id() != caller.principal().application_id();
+        let run = if shared {
+            run
+        } else {
+            self.recover_orphan(caller, run)?
+        };
         let watch_permit = self
             .watches
             .acquire(caller.principal().application_id())
@@ -1596,13 +1742,27 @@ impl AgentRunApi for RuntimeAgentRunApi {
         let mut notifications = self.feeds.subscribe(&run.id, run.last_sequence);
         let repository = Arc::clone(&self.repository);
         let feeds = Arc::clone(&self.feeds);
-        let caller = caller.clone();
+        let recipient = caller.clone();
+        let caller = source;
+        let api = self.clone();
         let run_id = run.id;
         let mut cursor = request.after_sequence;
         let (sender, receiver) = mpsc::channel(WATCH_CHANNEL_SIZE);
         tokio::spawn(async move {
             let _watch_permit = watch_permit;
             loop {
+                if shared
+                    && !api
+                        .workspace_share_allowed(
+                            &recipient,
+                            caller.principal().application_id(),
+                            false,
+                        )
+                        .unwrap_or(false)
+                {
+                    let _ = sender.send(Err(missing_run(&recipient))).await;
+                    return;
+                }
                 match repository.updates_after(&caller, &run_id, cursor, WATCH_PAGE_SIZE) {
                     Ok(updates) => {
                         let had_updates = !updates.is_empty();
@@ -1647,6 +1807,7 @@ impl AgentRunApi for RuntimeAgentRunApi {
                             return;
                         }
                     }
+                    () = tokio::time::sleep(std::time::Duration::from_secs(5)), if shared => {}
                 }
             }
         });
@@ -1761,6 +1922,7 @@ impl RunEventObserver for PublicRunObserver {
 fn public_event(event: RunEvent) -> RunUpdateKind {
     match event {
         RunEvent::Provider { event } => match event {
+            ProviderEvent::Retry { retry } => RunUpdateKind::ProviderRetry { retry },
             ProviderEvent::ModelDelta { text } => RunUpdateKind::OutputDelta { text },
             ProviderEvent::ReasoningSummary { summary } => {
                 RunUpdateKind::ReasoningSummary { summary }
@@ -1941,7 +2103,7 @@ fn released_tool_input(call: &ToolCall) -> Option<String> {
 }
 
 fn released_tool_preview(result: &ToolResult) -> Option<String> {
-    if result.name == "shell.run" && result.exit_code == 0 {
+    if result.name == "shell.run" {
         return released_command_output(&result.output);
     }
     (result.exit_code == 0)
@@ -2064,6 +2226,24 @@ fn bounded_preview_field(value: &str, maximum_bytes: usize) -> String {
 fn released_run_error_notice(code: &str, recoverable: bool) -> &'static str {
     if recoverable {
         "the run encountered a recoverable error and will continue"
+    } else if let Some(reason) = [
+        colossus_contracts::ProviderFailureReason::ContextLimitExceeded,
+        colossus_contracts::ProviderFailureReason::RequestTooLarge,
+        colossus_contracts::ProviderFailureReason::OutputLimitExceeded,
+        colossus_contracts::ProviderFailureReason::RateLimited,
+        colossus_contracts::ProviderFailureReason::QuotaExceeded,
+        colossus_contracts::ProviderFailureReason::ContentFiltered,
+        colossus_contracts::ProviderFailureReason::Unavailable,
+        colossus_contracts::ProviderFailureReason::Other,
+    ]
+    .into_iter()
+    .find(|reason| reason.code() == code)
+    {
+        reason.message()
+    } else if code == "context.token_limit_exceeded" {
+        "the model request exceeds its token budget; shorten the message, reduce tool arguments or output, or start a new session"
+    } else if code == "context.request_too_large" {
+        "the model request exceeds its byte budget; reduce the message, tool arguments, attachments, or instructions"
     } else if code == "tool.denied" {
         "the requested tool was denied before execution; review policy, tool access, and approval settings"
     } else {
@@ -2600,192 +2780,17 @@ fn recovery_invariant(caller: &CallerContext) -> ApiError {
     )
 }
 
-fn runtime_failure(error: &RuntimeError) -> RunUpdateKind {
-    let failure = released_runtime_failure(error);
-    let status = if failure.outcome == OutcomeCertainty::Unknown {
-        RunStatus::OutcomeUnknown
-    } else {
-        RunStatus::Failed
-    };
-    RunUpdateKind::Failure { status, failure }
-}
-
-fn released_runtime_failure(error: &RuntimeError) -> RunFailure {
-    match error {
-        RuntimeError::Agent(colossus_agent::AgentError::Provider(error))
-        | RuntimeError::Context(colossus_ports::ContextError::Provider(error)) => {
-            released_provider_failure(error)
-        }
-        RuntimeError::Agent(colossus_agent::AgentError::Tool(
-            colossus_ports::ToolError::OutcomeUnknown(_),
-        ))
-        | RuntimeError::Store(StoreError::OutcomeUnknown(_))
-        | RuntimeError::SearchPort(colossus_ports::SearchError::OutcomeUnknown(_)) => {
-            generic_failure(
-                "runtime.outcome_unknown",
-                "an external effect has no trustworthy terminal outcome",
-                OutcomeCertainty::Unknown,
-            )
-        }
-        RuntimeError::Agent(colossus_agent::AgentError::Tool(
-            colossus_ports::ToolError::Denied(_),
-        )) => generic_failure(
-            "tool.denied",
-            "the requested tool was denied before execution; review policy, tool access, and approval settings",
-            OutcomeCertainty::Known,
-        ),
-        RuntimeError::Gateway(error) => released_gateway_failure(error),
-        RuntimeError::Agent(colossus_agent::AgentError::MaxTurns { .. }) => generic_failure(
-            "agent.max_turns",
-            "the model reached the configured turn limit before producing a final response",
-            OutcomeCertainty::Known,
-        ),
-        RuntimeError::Agent(colossus_agent::AgentError::EmptyTurn) => generic_failure(
-            "provider.empty_turn",
-            "the provider returned no visible response or tool call",
-            OutcomeCertainty::Known,
-        ),
-        RuntimeError::Agent(colossus_agent::AgentError::ToolArgumentRecoveryExhausted {
-            ..
-        }) => generic_failure(
-            "provider.invalid_tool_arguments",
-            "the provider repeatedly returned invalid tool arguments",
-            OutcomeCertainty::Known,
-        ),
-        _ if error.outcome_unknown() => generic_failure(
-            "runtime.outcome_unknown",
-            "an external effect has no trustworthy terminal outcome",
-            OutcomeCertainty::Unknown,
-        ),
-        _ => generic_failure(
-            "runtime.failed",
-            "the run failed with a known outcome",
-            OutcomeCertainty::Known,
-        ),
-    }
-}
-
-fn released_provider_failure(error: &ModelProviderError) -> RunFailure {
-    match error {
-        ModelProviderError::Recoverable {
-            code,
-            http_status,
-            retry_after_ms,
-            ..
-        } => RunFailure {
-            code: code.clone(),
-            message: released_recoverable_provider_message(code, *http_status).into(),
-            outcome: OutcomeCertainty::Known,
-            recoverable: true,
-            http_status: *http_status,
-            retry_after_ms: *retry_after_ms,
-        },
-        ModelProviderError::HttpStatus { status, .. } => RunFailure {
-            code: "provider.http_status".into(),
-            message: format!("provider endpoint returned HTTP {status}"),
-            outcome: OutcomeCertainty::Known,
-            recoverable: false,
-            http_status: Some(*status),
-            retry_after_ms: None,
-        },
-        ModelProviderError::ResponseDiagnostic { diagnostic } => RunFailure {
-            code: "provider.http_status".into(),
-            message: format!("provider endpoint returned HTTP {}", diagnostic.status),
-            outcome: OutcomeCertainty::Known,
-            recoverable: false,
-            http_status: Some(diagnostic.status),
-            retry_after_ms: None,
-        },
-        ModelProviderError::Configuration(_) => generic_failure(
-            "provider.configuration",
-            "the configured provider request is invalid",
-            OutcomeCertainty::Known,
-        ),
-        ModelProviderError::Failed(_) => generic_failure(
-            "provider.failed",
-            "the provider request failed with a known outcome",
-            OutcomeCertainty::Known,
-        ),
-        ModelProviderError::OutcomeUnknown(_) => generic_failure(
-            "provider.outcome_unknown",
-            "provider transport failed after execution began; the outcome is unknown",
-            OutcomeCertainty::Unknown,
-        ),
-    }
-}
-
-fn released_recoverable_provider_message(code: &str, http_status: Option<u16>) -> &'static str {
-    match code {
-        "provider.temporarily_unavailable" => {
-            "provider endpoint returned HTTP 503; retry after the endpoint reports ready"
-        }
-        "provider.invalid_tool_arguments" => "the provider returned invalid tool arguments",
-        _ if http_status.is_some() => "the provider returned a recoverable HTTP response",
-        _ => "the provider request failed with a recoverable error",
-    }
-}
-
-fn released_gateway_failure(error: &colossus_policy::GatewayError) -> RunFailure {
-    match error {
-        colossus_policy::GatewayError::RecoverableExecution {
-            code,
-            message,
-            http_status,
-            retry_after_ms,
-        } => RunFailure {
-            code: code.clone(),
-            message: message.clone(),
-            outcome: OutcomeCertainty::Known,
-            recoverable: true,
-            http_status: *http_status,
-            retry_after_ms: *retry_after_ms,
-        },
-        colossus_policy::GatewayError::HttpStatus { status, message } => RunFailure {
-            code: "effect.http_status".into(),
-            message: message.clone(),
-            outcome: OutcomeCertainty::Known,
-            recoverable: false,
-            http_status: Some(*status),
-            retry_after_ms: None,
-        },
-        colossus_policy::GatewayError::OutcomeUnknown(_) => generic_failure(
-            "effect.outcome_unknown",
-            "an external effect has no trustworthy terminal outcome",
-            OutcomeCertainty::Unknown,
-        ),
-        colossus_policy::GatewayError::Denied(_) => generic_failure(
-            "effect.denied",
-            "policy denied the requested effect",
-            OutcomeCertainty::Known,
-        ),
-        colossus_policy::GatewayError::Approval(_) => generic_failure(
-            "effect.approval_required",
-            "the requested effect was not approved",
-            OutcomeCertainty::Known,
-        ),
-        _ => generic_failure(
-            "runtime.failed",
-            "the run failed with a known outcome",
-            OutcomeCertainty::Known,
-        ),
-    }
-}
-
-fn generic_failure(code: &str, message: &str, outcome: OutcomeCertainty) -> RunFailure {
-    RunFailure {
-        code: code.into(),
-        message: message.into(),
-        outcome,
-        recoverable: false,
-        http_status: None,
-        retry_after_ms: None,
-    }
-}
-
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn process_session_error() -> ApiError {
+    ApiError::failed_precondition(
+        ApiErrorReason::InvalidRunTransition,
+        "The shell session request is invalid, unavailable, or not authorized.",
+    )
 }
 
 #[cfg(test)]
@@ -3055,7 +3060,7 @@ mod tests {
             parsed["job"]["final_output"]
                 .as_str()
                 .expect("output")
-                .ends_with(TOOL_ACTIVITY_PREVIEW_TRUNCATION)
+                .ends_with("\n\u{2026} preview truncated")
         );
     }
 
@@ -3118,7 +3123,7 @@ mod tests {
             parsed["stdout"]
                 .as_str()
                 .unwrap()
-                .ends_with(TOOL_ACTIVITY_PREVIEW_TRUNCATION)
+                .ends_with("\n\u{2026} preview truncated")
         );
         assert_eq!(released_command_output(&preview), Some(preview.clone()));
         assert!(preview.is_char_boundary(preview.len()));
@@ -3136,6 +3141,11 @@ mod tests {
             exit_code: 0,
         };
         let preview = released_tool_preview(&result).unwrap();
+        let failed = ToolResult {
+            exit_code: 1,
+            ..result.clone()
+        };
+        assert_eq!(released_tool_preview(&failed), Some(preview.clone()));
         assert!(preview.contains("SAFE_OUTPUT"));
         assert!(!preview.contains("PRIVATE"));
         assert_eq!(
@@ -3164,6 +3174,48 @@ mod tests {
             "{\"invocation\":\"PRIVATE\"}",
         ] {
             assert_eq!(released_command_output(malformed), None);
+        }
+    }
+
+    #[test]
+    fn failed_shell_live_and_historical_previews_withhold_private_error_details() {
+        for category in [
+            "tool.denied",
+            "tool.outcome_unknown",
+            "invalid_arguments",
+            "validation_error",
+            "PRIVATE_CODE",
+        ] {
+            let output = serde_json::json!({"error": {"code": category, "message": "PRIVATE_POLICY_REASON_AND_COMMAND", "recoverable": false}}).to_string();
+            let update = public_event(RunEvent::ToolCompleted {
+                turn: 1,
+                result: ToolResult {
+                    call_id: "call".into(),
+                    name: "shell.run".into(),
+                    output: output.clone(),
+                    exit_code: 1,
+                },
+                duration_seconds: 0.1,
+                elapsed_seconds: 0.2,
+            });
+            let RunUpdateKind::ToolActivity { activity } = update else {
+                panic!("tool activity expected")
+            };
+            let preview = activity.preview.unwrap();
+            assert!(!preview.contains("PRIVATE"));
+            assert!(preview.contains("message"));
+            for historical_output in [output, preview] {
+                let projected: ProjectedSessionActivity = serde_json::from_value(serde_json::json!({
+                    "activity_id": "activity", "session_id": "session", "run_id": "run", "turn": 1,
+                    "lane": "tools", "kind": "tool", "title": "shell.run", "summary": "Failed shell.run",
+                    "actor": "tool", "status": "failed", "started_at": "2026-10-01T00:00:00Z",
+                    "completed_at": null, "duration_ms": null, "input": null,
+                    "result": {"format": "text", "value": historical_output},
+                    "attributes": {}, "source_event_types": [], "first_sequence": 1, "last_sequence": 2
+                })).unwrap();
+                let value = public_activity(&projected).unwrap().result.unwrap().value;
+                assert!(!value.contains("PRIVATE"));
+            }
         }
     }
 
@@ -3364,5 +3416,24 @@ mod tests {
         assert!(!update.recoverable);
         assert!(!update.message.contains("localhost"));
         assert!(!update.message.contains("chat/completions"));
+    }
+
+    #[test]
+    fn provider_recovery_is_public_progress_without_conversation_output() {
+        let retry = colossus_contracts::ProviderRetry {
+            attempt: 2,
+            max_retries: 5,
+            http_status: 503,
+            state: colossus_contracts::ProviderRetryState::Backoff,
+            retry_at: Some("2026-10-03T00:00:04Z".into()),
+        };
+        let update = public_event(RunEvent::Provider {
+            event: ProviderEvent::Retry {
+                retry: retry.clone(),
+            },
+        });
+        assert!(
+            matches!(update, RunUpdateKind::ProviderRetry { retry: actual } if actual == retry)
+        );
     }
 }

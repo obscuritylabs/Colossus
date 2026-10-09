@@ -12,6 +12,9 @@ pub(super) const OCI_PROXY_PORT: u16 = 18_080;
 pub(super) const MAX_JOB_BYTES: usize = 1024 * 1024;
 pub(super) const MAX_PROXY_HEADER_BYTES: usize = 16 * 1024;
 pub(super) const MAX_OBSERVED_ORIGINS: usize = 64;
+// Serialized canonical HTTP(S) origin. This exceeds valid DNS/IP origins while
+// bounding the completion evidence for wildcard proxy destinations.
+pub(super) const MAX_OBSERVED_ORIGIN_JSON_BYTES: usize = 384;
 pub(super) const OBSERVED_ORIGIN_PREFIX: &str = "colossus-observed-origin:";
 pub(super) const MAX_TLS_RECORD_BYTES: usize = 18 * 1024;
 pub(super) const MAX_TLS_CLIENT_HELLO_BYTES: usize = 64 * 1024;
@@ -52,12 +55,21 @@ pub enum ProcessStdinCompletion {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         abort_error_ids: Vec<i64>,
     },
+    /// Validate the legacy MCP initialize reply before sending the authorized
+    /// request. Follow tools/list cursors on this same bounded child process.
+    McpExchange {
+        /// Exact tools/list or tools/call JSON-RPC request, using response ID 2.
+        request: Value,
+    },
 }
 
 /// Strict process request carried inside an effect request.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessSpec {
+    /// Managed invocation lifetime, included in the authorized request hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifetime: Option<colossus_contracts::ProcessLifetime>,
     /// Absolute working directory.
     pub cwd: PathBuf,
     /// Literal argv entries; no shell parsing occurs.

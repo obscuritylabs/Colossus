@@ -1,0 +1,64 @@
+.shared-work-welcome {
+  width: 100%;
+  max-width: 650px;
+  margin: clamp(16px, 7vh, 70px) auto 0;
+  padding-inline: 16px;
+  text-align: center;
+}
+.shared-work-welcome > img {
+  width: 56px;
+  height: 56px;
+  max-width: 56px;
+  max-height: 56px;
+  margin-bottom: 14px;
+  object-fit: contain;
+}
+.shared-work-welcome-eyebrow {
+  margin: 0 0 8px;
+  color: var(--blue-strong);
+  font-size: var(--font-size-caption);
+  font-weight: 750;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.shared-work-welcome h3 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--font-size-heading);
+  letter-spacing: -0.018em;
+  line-height: var(--line-height-tight);
+}
+.shared-work-welcome-description {
+  margin: 8px 0 12px;
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+.shared-work-starters {
+  display: grid;
+  gap: 7px;
+  margin-top: 18px;
+  text-align: left;
+}
+.shared-work-starters .ui-button {
+  justify-content: flex-start;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--font-size-body-sm);
+  text-align: left;
+  white-space: normal;
+}
+.shared-work-starters .ui-button svg {
+  flex-shrink: 0;
+  color: var(--blue-strong);
+}
+.shared-work-starters .ui-button:hover:not(:disabled),
+.shared-work-starters .ui-button:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--surface-hover);
+  color: var(--text-strong);
+}

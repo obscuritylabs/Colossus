@@ -48,6 +48,9 @@ run(
     "--output=test-results/approval-runtime",
     "tests/browser/approval-diagnostics.spec.ts",
     "tests/browser/approval-runtime.spec.ts",
+    "tests/browser/process-runtime.spec.ts",
+    "tests/browser/workflow-runtime.spec.ts",
+    "tests/browser/workflow-features-runtime.spec.ts",
   ],
   desktop,
   {

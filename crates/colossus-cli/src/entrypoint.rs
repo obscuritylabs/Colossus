@@ -69,6 +69,28 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         Err(error) => error.exit(),
     };
     set_output_mode(cli.output);
+    if let Command::DevelopmentCredentials(command) = &cli.command {
+        if cli.worker_required
+            || cli.desktop_worker_auth
+            || cli.approval_mode.is_some()
+            || cli.config.is_some()
+        {
+            return Err("development credential operations are offline and do not accept runtime/authentication flags".into());
+        }
+        return dev_credentials::run(command, &cli.workspace)
+            .map_err(|error| Box::new(error) as Box<dyn Error>);
+    }
+    if let Command::Cloud(command) = cli.command {
+        return colossus_connector::run_cli(command).await;
+    }
+    // Metadata validation precedes home/runtime/worker acquisition. The selected
+    // account remains native-only and no credential is loaded until a provider permit.
+    let worker_codex_auth = match &cli.command {
+        Command::Worker(worker) => {
+            worker_codex_auth::select(worker.codex_auth_path.as_deref(), &cli.workspace)?
+        }
+        _ => None,
+    };
     let home = ColossusHome::resolve_and_ensure()?;
     if let Command::Update(update) = &cli.command {
         match update.command.as_ref() {
@@ -220,35 +242,45 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 ApprovalMode::FullAccess => WorkerApprovalMode::FullAccess,
             };
             let server =
-                WorkerServer::open_with_mode_at_workspace(&config, mode, runtime_options.clone())
-                    .map_err(worker_open_error)?
-                    .with_observability_diagnostics(move || {
-                        serde_json::to_value(observability_diagnostics.force_flush())
-                            .unwrap_or_else(|_| {
-                                serde_json::json!({
-                                    "ready": false,
-                                    "checks": [{
-                                        "name": "host",
-                                        "status": "fail",
-                                        "detail": "The exporter diagnostic failed safely."
-                                    }]
-                                })
+                WorkerServer::open_with_mode_at_workspace_and_provider_credentials_and_codex_auth(
+                    &config,
+                    mode,
+                    worker_codex_auth::runtime_options(worker, runtime_options.clone()),
+                    Arc::new(colossus_runtime::EnvironmentCredentialResolver),
+                    worker_codex_auth,
+                )
+                .map_err(worker_open_error)?
+                .with_observability_diagnostics(move || {
+                    serde_json::to_value(observability_diagnostics.force_flush()).unwrap_or_else(
+                        |_| {
+                            serde_json::json!({
+                                "ready": false,
+                                "checks": [{
+                                    "name": "host",
+                                    "status": "fail",
+                                    "detail": "The exporter diagnostic failed safely."
+                                }]
                             })
-                    });
-            let (server, public_environment) =
-                if let Some(directory) = worker.public_api_dir.as_deref() {
-                    let environment = PublicApiEnvironment::open(directory, &OsCredentialStore)?;
-                    let credentials = environment.credential_manager(&server);
-                    let options = environment.host_options(&credentials)?;
-                    let server = server.enable_public_api(options).await?;
-                    eprintln!(
-                        "public API discovery published in {}",
-                        environment.directory().display()
-                    );
-                    (server, Some(environment))
-                } else {
-                    (server, None)
-                };
+                        },
+                    )
+                });
+            let (server, public_environment) = if let Some(directory) =
+                worker.public_api_dir.as_deref()
+            {
+                let store =
+                    credential_store(directory, worker.public_api_vault_key_variable.as_deref())?;
+                let environment = PublicApiEnvironment::open(directory, store.as_ref())?;
+                let credentials = environment.credential_manager(&server);
+                let options = environment.host_options(&credentials)?;
+                let server = server.enable_public_api(options).await?;
+                eprintln!(
+                    "public API discovery published in {}",
+                    environment.directory().display()
+                );
+                (server, Some(environment))
+            } else {
+                (server, None)
+            };
             eprintln!("worker listening on {}", server.endpoint());
             let result = server.serve().await;
             drop(public_environment);
@@ -290,7 +322,9 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 .public_api_dir
                 .as_deref()
                 .ok_or(PublicApiAdminError::InvalidDirectory)?;
-            let environment = PublicApiEnvironment::open(directory, &OsCredentialStore)?;
+            let store =
+                credential_store(directory, worker.public_api_vault_key_variable.as_deref())?;
+            let environment = PublicApiEnvironment::open(directory, store.as_ref())?;
             if let Some(application_id) = worker.enroll_application.as_deref() {
                 let destination_service = worker
                     .credential_keyring_service
@@ -313,7 +347,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 let metadata = enroll_application(
                     &environment,
                     &server,
-                    &OsCredentialStore,
+                    store.as_ref(),
                     EnrollmentRequest {
                         application_id,
                         scopes: &worker.scope,
@@ -337,6 +371,17 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         .as_ref()
         .map(|workspace| inherited_desktop_worker_client(&config, workspace))
         .transpose()?;
+    let screen_mode = cli.screen_mode();
+    let herdr = matches!(cli.command, Command::Tui { .. })
+        .then(|| {
+            HerdrReporter::from_env(
+                &cli,
+                &runtime_options.workspace,
+                &config_path,
+                interactive_tui,
+            )
+        })
+        .flatten();
     if !matches!(cli.command, Command::Acp)
         && dispatch_to_worker_if_active(
             &config,
@@ -345,10 +390,10 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             &cli.command,
             WorkerDispatchOptions {
                 approval_mode: cli.approval_mode,
-                no_alt_screen: cli.no_alt_screen,
-                alt_screen: cli.alt_screen,
+                screen_mode,
                 worker_required: cli.worker_required,
                 inherited_worker,
+                herdr: herdr.clone(),
                 config_resolution: config_resolution.clone(),
             },
         )
@@ -406,6 +451,8 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             Arc::clone(&runtime), &acp_workspace,
             acp_approvals.as_ref().ok_or("ACP approval bridge is unavailable")?.clone(),
         ).await?,
+        Command::Cloud(_) => unreachable!("handled before runtime construction"),
+        Command::DevelopmentCredentials(_) => unreachable!("handled before runtime construction"),
         Command::Update(_) => unreachable!("handled before runtime construction"),
         Command::Config(ConfigCommand {
             command: ConfigAction::Effective,
@@ -1211,23 +1258,21 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             run_tui(
                 host,
                 TuiOptions {
+                        dictation: crate::dictation::local_port(),
                     bootstrap: BootstrapRequest {
                         session_id: session,
                         resume_latest: resume,
                     },
-                    screen_mode: if cli.alt_screen {
-                        ScreenMode::Alternate
-                    } else {
-                        ScreenMode::Inline
-                    },
+                    screen_mode,
                     background_notice: Some(default_update_notice_provider()),
+                    lifecycle: herdr.clone().map(|reporter| reporter as Arc<dyn colossus_tui::InteractiveLifecycleObserver>),
                 },
             )
             .await?;
         }
         Command::Tui { session, resume } => {
             let themes = ThemeLibrary::load_for_config(&config_path)?;
-            line_runner(&runtime, session, resume, configured_approval, &themes).await?
+            line_runner(&runtime, session, resume, configured_approval, &themes, herdr.as_deref()).await?
         }
         Command::Worker(WorkerCommand {
             once,

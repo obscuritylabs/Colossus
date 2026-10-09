@@ -66,23 +66,30 @@ fn model_card(id: &str, model: &Map<String, Value>) -> ProviderModelInfo {
             MAX_LABEL_BYTES,
         ),
         description: bounded_text(model.get("description"), MAX_DESCRIPTION_BYTES),
-        context_window_tokens: positive_tokens(
-            model
-                .get("context_window")
-                .or_else(|| model.get("context_length"))
-                .or_else(|| top_provider.and_then(|provider| provider.get("context_length"))),
-        ),
-        max_output_tokens: positive_tokens(
-            model
-                .get("max_output_tokens")
-                .or_else(|| model.get("max_completion_tokens"))
-                .or_else(|| {
-                    top_provider.and_then(|provider| provider.get("max_completion_tokens"))
-                }),
-        ),
-        tool_calls: declared_boolean(model, "tool_calls", "supports_tool_calls")
-            .or_else(|| string_list_contains(model.get("supported_parameters"), "tools")),
-        image_inputs: declared_boolean(model, "image_inputs", "supports_image_inputs").or_else(
+        context_window_tokens: declared_tokens(
+            model,
+            &[
+                "context_window_tokens",
+                "context_window",
+                "context_length",
+                "max_model_len",
+            ],
+        )
+        .or_else(|| {
+            positive_tokens(top_provider.and_then(|provider| provider.get("context_length")))
+        }),
+        max_output_tokens: declared_tokens(model, &["max_output_tokens", "max_completion_tokens"])
+            .or_else(|| {
+                positive_tokens(
+                    top_provider.and_then(|provider| provider.get("max_completion_tokens")),
+                )
+            }),
+        tool_calls: declared_boolean(
+            model,
+            &["tool_calls", "supports_tool_calls", "tooling_support"],
+        )
+        .or_else(|| string_list_contains(model.get("supported_parameters"), "tools")),
+        image_inputs: declared_boolean(model, &["image_inputs", "supports_image_inputs"]).or_else(
             || {
                 string_list_contains(
                     model.get("input_modalities").or_else(|| {
@@ -94,7 +101,11 @@ fn model_card(id: &str, model: &Map<String, Value>) -> ProviderModelInfo {
                 )
             },
         ),
-        streaming: declared_boolean(model, "streaming", "supports_streaming"),
+        streaming: declared_boolean(model, &["streaming", "supports_streaming"]),
+        server_compaction: declared_boolean(
+            model,
+            &["server_compaction", "supports_server_compaction"],
+        ),
         supported_reasoning_efforts: reasoning_efforts(model),
     }
 }
@@ -105,11 +116,24 @@ fn positive_tokens(value: Option<&Value>) -> Option<u64> {
         .filter(|value| (1..=MAX_ADVERTISED_TOKENS).contains(value))
 }
 
-fn declared_boolean(model: &Map<String, Value>, field: &str, alias: &str) -> Option<bool> {
-    model
-        .get(field)
-        .or_else(|| model.get(alias))
-        .and_then(Value::as_bool)
+fn declared_tokens(model: &Map<String, Value>, fields: &[&str]) -> Option<u64> {
+    fields
+        .iter()
+        .find_map(|field| positive_tokens(model.get(*field)))
+}
+
+fn declared_boolean(model: &Map<String, Value>, fields: &[&str]) -> Option<bool> {
+    // Explicit top-level declarations precede nested capabilities and parameter lists.
+    // Preserve false and do not coerce strings, numbers, or arbitrary capability keys.
+    let capabilities = model.get("capabilities").and_then(Value::as_object);
+    fields
+        .iter()
+        .find_map(|field| model.get(*field).and_then(Value::as_bool))
+        .or_else(|| {
+            fields
+                .iter()
+                .find_map(|field| capabilities?.get(*field).and_then(Value::as_bool))
+        })
 }
 
 fn string_list_contains(value: Option<&Value>, expected: &str) -> Option<bool> {

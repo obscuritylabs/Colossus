@@ -34,6 +34,7 @@ for (const entry of [
       state.settingsRequests = [];
       state.__TAURI_INTERNALS__ = {
         invoke: (command: string, args: unknown) => {
+          if (command === "list_setup_packages") return Promise.resolve([]);
           state.settingsRequests.push({ command, args });
           return new Promise((_resolve, reject) => {
             state.rejectSettingsSave = () =>
@@ -118,6 +119,8 @@ test("model discovery holds settings busy until native completion even after cha
     state.settingsRequests = [];
     state.__TAURI_INTERNALS__ = {
       invoke: (command: string, args: unknown) => {
+        // The Providers tab loads saved imports independently of discovery.
+        if (command === "list_setup_packages") return Promise.resolve([]);
         state.settingsRequests.push({ command, args });
         return new Promise((resolve) => {
           state.finishSettingsCatalog = () =>
@@ -217,14 +220,16 @@ test("catalog failure preserves the model editor and a retry imports only advert
     };
     state.failSettingsCatalog = true;
     state.__TAURI_INTERNALS__ = {
-      invoke: async () =>
-        state.failSettingsCatalog
-          ? {
-              models: [],
-              credentialId: null,
-              errorMessage: "Catalog authentication failed.",
-            }
-          : { models: [{ id: "catalog/plain-model" }], credentialId: null },
+      invoke: async (command: string) =>
+        command === "list_setup_packages"
+          ? []
+          : state.failSettingsCatalog
+            ? {
+                models: [],
+                credentialId: null,
+                errorMessage: "Catalog authentication failed.",
+              }
+            : { models: [{ id: "catalog/plain-model" }], credentialId: null },
     };
   });
   await editor
@@ -235,6 +240,21 @@ test("catalog failure preserves the model editor and a retry imports only advert
   );
   await expect(identifier).toHaveValue(originalModel);
   await expect(identifier).toBeEnabled();
+  await editor
+    .getByRole("slider", { name: "Tool calls", exact: true })
+    .press("Home");
+  await editor
+    .getByRole("slider", { name: "Streaming", exact: true })
+    .press("Home");
+  await editor
+    .getByRole("slider", { name: "Streaming", exact: true })
+    .press("ArrowRight");
+  await editor
+    .getByRole("slider", { name: "Image inputs", exact: true })
+    .press("End");
+  await editor
+    .getByRole("slider", { name: "Server compaction", exact: true })
+    .press("Home");
   await expect(
     editor.getByRole("button", { name: "Save changes", exact: true }),
   ).toBeEnabled();
@@ -261,9 +281,15 @@ test("catalog failure preserves the model editor and a retry imports only advert
     }),
   ).toHaveValue("4096");
   await expect(
-    editor.getByRole("switch", { name: /Tool calls/ }),
-  ).not.toBeChecked();
+    editor.getByRole("slider", { name: "Tool calls", exact: true }),
+  ).toHaveAttribute("aria-valuetext", "Off");
   await expect(
-    editor.getByRole("switch", { name: /Streaming/ }),
-  ).not.toBeChecked();
+    editor.getByRole("slider", { name: "Streaming", exact: true }),
+  ).toHaveAttribute("aria-valuetext", "Auto");
+  await expect(
+    editor.getByRole("slider", { name: "Image inputs", exact: true }),
+  ).toHaveAttribute("aria-valuetext", "On");
+  await expect(
+    editor.getByRole("slider", { name: "Server compaction", exact: true }),
+  ).toHaveAttribute("aria-valuetext", "Off");
 });

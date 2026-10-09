@@ -1,20 +1,22 @@
 ---
-title: Network trust configuration
-description: Configure additional TLS certificate authorities and understand which Colossus clients inherit them.
+title: Network TLS configuration
+description: Configure additional certificate authorities and a PEM client identity for Colossus-owned outbound TLS.
 audience: operator
 type: reference
 ---
 
-# Network trust configuration
+# Network TLS configuration
 
-`network` adds certificate authorities to Colossus-owned outbound TLS clients. It does
-not authorize a destination, supply a credential, or disable hostname verification.
+`network` adds certificate authorities and, optionally, one PEM client certificate
+and key to Colossus-owned outbound TLS clients. Neither setting authorizes a
+destination or disables hostname verification.
 
 Keep these controls separate:
 
 | Control | Question it answers | Configuration |
 | --- | --- | --- |
 | TLS trust | Which certificate authorities may authenticate the server? | `network.caBundlePath` or an adapter-specific CA field |
+| Client identity | Which certificate may Colossus present when a server requests mTLS? | `network.clientCertificatePath` with `network.clientKeyPath`, or Desktop's native import |
 | Destination authorization | May this effect contact the origin? | [`sandbox.networkDestinations`](sandbox.md#network-destinations) |
 | Authentication | How does Colossus authenticate to the service? | Provider, MCP, integration, audit, policy, or storage credential fields |
 | Local API identity | Is this the enrolled Colossus daemon? | Separately provisioned certificate pin; unaffected by this bundle |
@@ -39,6 +41,7 @@ audit export remains HTTPS-only, create-only, and hash-bound.
 | Remote OPA needs pinned trust | Use `policy.ca_pem_path`, or the shared bundle when it contains only the intended OPA trust roots | OPA uses an exclusive pinned trust policy |
 | PostgreSQL has its own exclusive CA | Use `storage.postgres.tls.kind: custom_ca` | PostgreSQL ignores the shared runtime bundle |
 | A sandboxed or stdio MCP child needs a private CA | Configure that program's own trust store | Child processes do not inherit the in-process bundle |
+| A service requests a PEM client certificate | Configure both client identity paths or import both files in Desktop | All Colossus-owned TLS clients may present the same identity when requested |
 
 Use no additional bundle unless an endpoint actually requires one. Every added root
 expands the set of certificates that Colossus-owned clients can trust.
@@ -47,7 +50,7 @@ expands the set of certificates that Colossus-owned clients can trust.
 
 ### `network.caBundlePath`
 
-The only `network` field is an optional path to a PEM certificate bundle:
+The CA setting is an optional path to a PEM certificate bundle:
 
 ```yaml
 network:
@@ -77,6 +80,32 @@ network:
 The bundle should contain certificate blocks only. Never include private keys, client
 identities, bearer credentials, or endpoint URLs. Colossus does not read ambient
 `SSL_CERT_FILE`, proxy, or similar environment settings as a substitute for this field.
+
+### `network.clientCertificatePath` and `network.clientKeyPath`
+
+Configure both paths together to present one PEM client identity to outbound TLS
+services that request it:
+
+```yaml
+network:
+  caBundlePath: /etc/colossus/company-ca.pem
+  clientCertificatePath: /etc/colossus/client-chain.pem
+  clientKeyPath: /etc/colossus/client-key.pem
+```
+
+The certificate file contains the leaf certificate first, followed by up to 15
+intermediate certificates. The key file contains one unencrypted RSA, EC, or PKCS#8
+private key matching the leaf. Each file is limited to 64 KiB. The runtime loads
+and validates them at startup; changed files require a restart. Keep the key in an
+owner-private location outside the workspace and do not commit it. Desktop imports
+the files through native pickers, encrypts the pair in its credential vault, and
+passes it through private sidecar bootstrap IPC without putting the key in YAML or
+renderer state. Desktop shows only the public leaf SHA-256 fingerprint.
+
+This is a global identity: any destination already authorized by the effect policy
+can request the same client certificate during TLS negotiation. Select an identity
+intended for all such destinations. The identity does not create network access or
+change certificate authority or hostname checks.
 
 ## Startup validation
 
@@ -110,12 +139,15 @@ public roots:
 | Remote MCP | Streamable HTTP requests and OAuth metadata/token calls |
 | Agent Plugins | Exact-origin OCI registry, token-service, and permitted blob-redirect requests, each with its own optional CA root |
 | Semantic memory | Chroma and OpenAI-compatible embedding endpoints |
-| PostgreSQL | `webpki_roots` TLS policy |
+| PostgreSQL | `webpki_roots` TLS policy; mTLS identity also applies with `custom_ca` |
 | OPA | Shared pinned trust when remote OPA omits `ca_pem_path` |
 
 Destination matching, DNS pinning, redirect rejection, bounded bodies, timeouts, permit
 checks, quarantine, and audit remain active. Trusting a CA does not weaken those
-controls.
+controls. Desktop's update client keeps CA trust but does not offer the imported
+identity because signed package downloads may redirect across HTTPS origins.
+Sandboxed or stdio MCP child processes, the optional browser preview, and external
+Colossus daemons use their own TLS stacks and settings.
 
 ## Adapter-specific precedence
 
@@ -130,8 +162,9 @@ Remote OPA requires pinned CA trust and an mTLS identity:
   roots and `network.caBundlePath` are not used for OPA.
 - When `policy.ca_pem_path` is omitted, a nonempty `network.caBundlePath` supplies the
   exclusive pinned roots for remote OPA.
-- The client identity remains in `policy.identity_pem_path`; a CA bundle never supplies
-  the client certificate or private key.
+- `policy.identity_pem_path` overrides the shared client identity for OPA. When it
+  is omitted, remote OPA uses the shared identity; a CA bundle alone never supplies
+  a client certificate or key.
 
 See [Policy and audit configuration](policy-audit.md) for the complete OPA shape.
 

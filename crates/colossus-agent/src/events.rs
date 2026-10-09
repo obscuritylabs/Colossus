@@ -19,7 +19,7 @@ pub(super) struct RunProviderObserver<'local, 'downstream> {
 #[async_trait]
 impl ProviderEventObserver for RunProviderObserver<'_, '_> {
     async fn observe(&mut self, event: ProviderEvent) -> Result<(), ModelProviderError> {
-        if self.first_chunk_seconds.is_none() {
+        if self.first_chunk_seconds.is_none() && !matches!(event, ProviderEvent::Retry { .. }) {
             *self.first_chunk_seconds = Some(self.model_started.elapsed().as_secs_f64());
         }
         if matches!(event, ProviderEvent::ModelDelta { .. }) {
@@ -115,6 +115,11 @@ pub(super) fn recovery_prompt(
 
 pub(super) fn provider_error_code(error: &ModelProviderError) -> &'static str {
     match error {
+        ModelProviderError::Rejected(failure)
+        | ModelProviderError::ResponseDiagnostic {
+            failure: Some(failure),
+            ..
+        } => failure.reason.code(),
         ModelProviderError::Configuration(_) => "provider.configuration",
         ModelProviderError::Recoverable { .. } => "provider.recoverable",
         ModelProviderError::HttpStatus { .. } | ModelProviderError::ResponseDiagnostic { .. } => {
@@ -129,7 +134,8 @@ pub(super) const fn provider_error_http_status(error: &ModelProviderError) -> Op
     match error {
         ModelProviderError::Recoverable { http_status, .. } => *http_status,
         ModelProviderError::HttpStatus { status, .. } => Some(*status),
-        ModelProviderError::ResponseDiagnostic { diagnostic } => Some(diagnostic.status),
+        ModelProviderError::Rejected(failure) => failure.http_status,
+        ModelProviderError::ResponseDiagnostic { diagnostic, .. } => Some(diagnostic.status),
         ModelProviderError::Configuration(_)
         | ModelProviderError::Failed(_)
         | ModelProviderError::OutcomeUnknown(_) => None,
@@ -140,6 +146,7 @@ pub(super) const fn provider_error_retry_after_ms(error: &ModelProviderError) ->
     match error {
         ModelProviderError::Recoverable { retry_after_ms, .. } => *retry_after_ms,
         ModelProviderError::Configuration(_)
+        | ModelProviderError::Rejected(_)
         | ModelProviderError::HttpStatus { .. }
         | ModelProviderError::ResponseDiagnostic { .. }
         | ModelProviderError::Failed(_)
@@ -166,6 +173,7 @@ pub(super) fn plan_mode_tool(name: &str, target: &PlanDraftTarget) -> bool {
         || matches!(
             name,
             "echo"
+                | "session.set_title"
                 | "filesystem.list"
                 | "filesystem.read"
                 | "filesystem.search"
@@ -231,6 +239,7 @@ pub(super) fn session_title(prompt: &str) -> String {
 
 pub(super) fn provider_event_payload(event: &ProviderEvent) -> (&'static str, Value) {
     match event {
+        ProviderEvent::Retry { retry } => ("provider.retry.v1", json!({"retry": retry})),
         ProviderEvent::ModelDelta { text } => ("model.delta.v1", json!({"text": text})),
         ProviderEvent::ReasoningSummary { summary } => {
             ("reasoning.summary.v1", json!({"summary": summary}))

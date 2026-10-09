@@ -1,4 +1,5 @@
 use super::*;
+use colossus_contracts::ToolNamePattern;
 
 /// Maximum MCP pages accepted from one configured server discovery.
 pub const MAX_MCP_PAGES: usize = 32;
@@ -117,13 +118,17 @@ pub struct McpServerConfig {
     /// Permit explicitly configured remote servers to omit MCP session identifiers.
     #[serde(default)]
     pub allow_stateless: bool,
+    /// Remote protocol lifecycle; automatic discovery preserves legacy compatibility.
+    #[serde(default)]
+    pub protocol_version: McpProtocolVersion,
     /// Optional OAuth 2.1 authorization-code flow.
     #[serde(default)]
     pub oauth: Option<McpOAuthConfig>,
-    /// Exact tools that may be discovered or invoked, or the sole wildcard `*`.
+    /// Exact tool names or star patterns that may be discovered or invoked; `*` must stand alone.
     #[serde(default)]
     pub allowed_tools: Vec<String>,
-    /// Configured research calls made for each research query.
+    /// Optional calls overriding inherited allowed tools for each research query.
+    /// An empty list lets the research worker select calls from the live allowed catalog.
     #[serde(default)]
     pub research_tools: Vec<McpResearchToolConfig>,
     /// Optional server-specific timeout bounded by sandbox policy.
@@ -172,6 +177,9 @@ pub struct McpServerSummary {
     /// Whether this remote server may operate without MCP session identifiers.
     #[serde(default)]
     pub allow_stateless: bool,
+    /// Selected remote protocol lifecycle.
+    #[serde(default)]
+    pub protocol_version: McpProtocolVersion,
     /// Exact tool allowlist.
     pub allowed_tools: Vec<String>,
     /// Tool names configured for research collection.
@@ -198,6 +206,9 @@ pub struct McpToolSummary {
     pub annotations: Option<McpToolAnnotations>,
     /// Valid JSON object schema for arguments.
     pub input_schema: Value,
+    /// Optional server-declared schema for successful structured results.
+    #[serde(default)]
+    pub output_schema: Option<Value>,
     /// SHA-256 of the canonical schema sent with an invocation request.
     pub schema_sha256: String,
 }
@@ -304,6 +315,9 @@ pub enum McpOperation {
         arguments: Value,
         /// Exact discovered input schema, bound into policy and permit hashing.
         input_schema: Box<Value>,
+        /// Exact discovered output schema, bound into the invocation permit.
+        #[serde(default)]
+        output_schema: Option<Box<Value>>,
         /// SHA-256 of the exact discovered input schema.
         schema_sha256: String,
     },
@@ -343,6 +357,8 @@ pub(super) struct McpEffectInput {
     pub(super) credential_headers: BTreeMap<String, McpCredentialHeaderConfig>,
     #[serde(default)]
     pub(super) allow_stateless: bool,
+    #[serde(default)]
+    pub(super) protocol_version: McpProtocolVersion,
     pub(super) oauth: Option<McpOAuthConfig>,
     pub(super) timeout_ms: Option<u64>,
     pub(super) max_output_bytes: Option<u64>,
@@ -353,6 +369,7 @@ pub(super) struct McpEffectInput {
 pub(super) enum ToolAllowlist {
     All,
     Explicit(BTreeSet<String>),
+    Patterns(Vec<ToolNamePattern>),
 }
 
 impl ToolAllowlist {
@@ -372,20 +389,32 @@ impl ToolAllowlist {
         }
         let mut explicit = BTreeSet::new();
         for tool in tools {
-            validate_name(tool, "tool")?;
+            ToolNamePattern::parse(tool).map_err(|error| {
+                McpError::Invalid(format!("server {server} allowedTools: {error}"))
+            })?;
             if !explicit.insert(tool.clone()) {
                 return Err(McpError::Invalid(format!(
                     "server {server} contains duplicate allowed tool {tool}"
                 )));
             }
         }
-        Ok(Self::Explicit(explicit))
+        if explicit.iter().any(|tool| tool.contains('*')) {
+            let patterns = explicit
+                .iter()
+                .map(|tool| ToolNamePattern::parse(tool))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| McpError::Invalid(error.to_string()))?;
+            Ok(Self::Patterns(patterns))
+        } else {
+            Ok(Self::Explicit(explicit))
+        }
     }
 
     pub(super) fn allows(&self, tool: &str) -> bool {
         match self {
             Self::All => true,
             Self::Explicit(tools) => tools.contains(tool),
+            Self::Patterns(patterns) => patterns.iter().any(|pattern| pattern.matches(tool)),
         }
     }
 
@@ -393,6 +422,10 @@ impl ToolAllowlist {
         match self {
             Self::All => vec![MCP_TOOL_WILDCARD.into()],
             Self::Explicit(tools) => tools.iter().cloned().collect(),
+            Self::Patterns(patterns) => patterns
+                .iter()
+                .map(|pattern| pattern.as_str().into())
+                .collect(),
         }
     }
 }
@@ -410,6 +443,7 @@ pub(super) struct ConfiguredServer {
     pub(super) headers: BTreeMap<String, String>,
     pub(super) credential_headers: BTreeMap<String, McpCredentialHeaderConfig>,
     pub(super) allow_stateless: bool,
+    pub(super) protocol_version: McpProtocolVersion,
     pub(super) oauth: Option<McpOAuthConfig>,
     pub(super) allowed_tools: ToolAllowlist,
     pub(super) research_tools: Vec<McpResearchToolConfig>,
@@ -580,6 +614,7 @@ fn validate_stdio_server(
         || !server.headers.is_empty()
         || !server.credential_headers.is_empty()
         || server.allow_stateless
+        || server.protocol_version != McpProtocolVersion::Auto
         || server.oauth.is_some()
     {
         return Err(McpError::Invalid(format!(
@@ -640,6 +675,8 @@ fn validate_stdio_server(
     }
     for (child_name, reference) in &server.environment {
         if !valid_environment_name(child_name)
+            || child_name.eq_ignore_ascii_case("PLUGIN_ROOT")
+            || child_name.eq_ignore_ascii_case("PLUGIN_DATA")
             || (!ambient_resources && !allowed_environment.contains(child_name))
             || !valid_credential_reference(reference)
         {
@@ -650,12 +687,29 @@ fn validate_stdio_server(
     }
     for (child_name, value) in &server.literal_environment {
         if !valid_environment_name(child_name)
-            || matches!(child_name.as_str(), "PLUGIN_ROOT" | "PLUGIN_DATA")
             || value.len() > 64 * 1024
             || value.contains('\0')
+            || ((child_name.eq_ignore_ascii_case("PLUGIN_ROOT")
+                || child_name.eq_ignore_ascii_case("PLUGIN_DATA"))
+                && (server.effect_action_prefix.is_none() || server.provenance.is_none()))
+            || ((child_name.eq_ignore_ascii_case("PLUGIN_ROOT")
+                || child_name.eq_ignore_ascii_case("PLUGIN_DATA"))
+                && !matches!(child_name.as_str(), "PLUGIN_ROOT" | "PLUGIN_DATA"))
         {
             return Err(McpError::Invalid(format!(
                 "server {name} contains an invalid literal plugin environment entry"
+            )));
+        }
+    }
+    if server.effect_action_prefix.is_some() {
+        let root = server.literal_environment.get("PLUGIN_ROOT");
+        let data = server.literal_environment.get("PLUGIN_DATA");
+        if !root.is_some_and(|value| Path::new(value).is_absolute())
+            || !data.is_some_and(|value| Path::new(value).is_absolute())
+            || !root.is_some_and(|value| server.command.starts_with(value))
+        {
+            return Err(McpError::Invalid(format!(
+                "server {name} requires runtime-bound PLUGIN_ROOT and PLUGIN_DATA"
             )));
         }
     }

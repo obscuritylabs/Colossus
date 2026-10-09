@@ -1,6 +1,15 @@
 use super::*;
 use std::collections::BTreeSet;
 
+#[path = "terminal_command_tests.rs"]
+mod terminal_commands;
+
+#[path = "dev_credentials_tests.rs"]
+mod development_credentials;
+
+#[path = "worker_codex_auth_tests.rs"]
+mod worker_codex_auth;
+
 struct PrivateTempDir {
     #[cfg(windows)]
     path: PathBuf,
@@ -754,6 +763,80 @@ fn config_init_from_requires_development_mode() {
 }
 
 #[test]
+fn plugin_install_accepts_one_oci_reference_without_registry_flags() {
+    assert!(matches!(
+        Cli::try_parse_from([
+            "colossus",
+            "plugin",
+            "install",
+            "oci://ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:v1",
+        ])
+        .expect("singular plugin alias")
+        .command,
+        Command::Plugins(_)
+    ));
+    let parsed = Cli::try_parse_from([
+        "colossus", "plugins", "install",
+        "oci://ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:0.1.0-alpha.3.ci.3.1-windows-amd64",
+    ]).expect("OCI install syntax");
+    let Command::Plugins(PluginsCommand { command: action }) = parsed.command else {
+        panic!("plugin install command");
+    };
+    let request = action.request().expect("typed request");
+    assert!(matches!(request,
+        colossus_contracts::PluginManagementRequest::Install {
+            source: colossus_contracts::PluginInstallSource::Reference { registry, reference },
+            trust_profile,
+        } if registry.is_empty()
+            && reference == "ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:0.1.0-alpha.3.ci.3.1-windows-amd64"
+            && trust_profile == "default"
+    ));
+    let invalid = Cli::try_parse_from([
+        "colossus",
+        "plugins",
+        "install",
+        "https://ghcr.io/example/plugin:v1",
+    ])
+    .expect("a positional string is parsed before request validation");
+    let Command::Plugins(PluginsCommand { command: action }) = invalid.command else {
+        panic!("plugin install command");
+    };
+    assert!(action.request().is_err());
+}
+
+#[test]
+fn plugin_add_translates_local_and_oci_sources_to_shared_orchestration() {
+    use colossus_contracts::{PluginInstallSource as Source, PluginManagementRequest as Request};
+    for (input, expected) in [
+        (
+            ".agents/plugins/review",
+            Source::Directory {
+                path: ".agents/plugins/review".into(),
+            },
+        ),
+        (
+            "oci://registry.example/team/review:v1",
+            Source::Reference {
+                registry: String::new(),
+                reference: "registry.example/team/review:v1".into(),
+            },
+        ),
+    ] {
+        let cli = Cli::try_parse_from(["colossus", "plugins", "add", input]).expect("syntax");
+        let Command::Plugins(command) = cli.command else {
+            panic!("plugins command");
+        };
+        assert_eq!(
+            command.command.request().expect("request"),
+            Request::Add {
+                source: expected,
+                trust_profile: "default".into()
+            }
+        );
+    }
+}
+
+#[test]
 fn config_init_local_conflicts_with_an_explicit_config() {
     let parsed = Cli::try_parse_from([
         "colossus",
@@ -1424,16 +1507,19 @@ fn tui_parses_with_the_global_inline_flag_and_repl_is_rejected() {
     let default = Cli::try_parse_from(["colossus", "tui"]).expect("default TUI");
     assert!(!default.no_alt_screen);
     assert!(!default.alt_screen);
+    assert_eq!(default.screen_mode(), ScreenMode::Alternate);
 
     let tui = Cli::try_parse_from(["colossus", "tui", "--no-alt-screen"]).expect("explicit TUI");
     assert!(tui.no_alt_screen);
     assert!(!tui.alt_screen);
     assert!(matches!(tui.command, Command::Tui { .. }));
+    assert_eq!(tui.screen_mode(), ScreenMode::Inline);
 
     let alternate =
         Cli::try_parse_from(["colossus", "tui", "--alt-screen"]).expect("alternate TUI");
     assert!(alternate.alt_screen);
     assert!(!alternate.no_alt_screen);
+    assert_eq!(alternate.screen_mode(), ScreenMode::Alternate);
 
     let conflict = Cli::try_parse_from(["colossus", "tui", "--alt-screen", "--no-alt-screen"])
         .err()

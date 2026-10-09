@@ -34,6 +34,10 @@ pub(super) struct GoalCreationResult {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum WorkOperation {
+    SessionSetTitle {
+        session_id: String,
+        title: String,
+    },
     TaskCreate {
         session_id: String,
         title: String,
@@ -191,6 +195,7 @@ pub(super) enum DecisionListScope {
 impl WorkOperation {
     pub(super) fn action(&self) -> &'static str {
         match self {
+            Self::SessionSetTitle { .. } => "session.set_title",
             Self::TaskCreate { .. } => "task.create",
             Self::TaskUpdate { .. } => "task.update",
             Self::TaskList { .. } => "task.list",
@@ -229,7 +234,8 @@ impl WorkOperation {
 
     pub(super) fn resource(&self) -> &str {
         match self {
-            Self::TaskCreate { session_id, .. }
+            Self::SessionSetTitle { session_id, .. }
+            | Self::TaskCreate { session_id, .. }
             | Self::TaskList { session_id, .. }
             | Self::DecisionCreate { session_id, .. }
             | Self::PlanCreate { session_id, .. }

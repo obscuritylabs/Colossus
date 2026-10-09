@@ -39,8 +39,8 @@ const ready = true;
     expect(markup).toContain("<code>inline code</code>");
     expect(markup).toContain('class="markdown-table-scroll"');
     expect(markup).toContain("<table>");
-    expect(markup).toContain(
-      'aria-label="Scrollable Markdown code block" tabindex="0"',
+    expect(markup).toMatch(
+      /aria-label="Scrollable Markdown code block [^"]+" tabindex="0"/,
     );
     expect(markup).toContain('<code class="language-ts">');
   });

@@ -16,6 +16,8 @@ import {
   type ProviderConnectionIdentity,
 } from "../providerBrand";
 import "./provider-icon.css";
+import { safeSetupIcon } from "../setupPackages";
+import { useSetupPresentation } from "../SetupPresentation";
 
 const assets: Record<ProviderBrand, { light: string; dark?: string }> = {
   openai: { light: openai },
@@ -33,17 +35,34 @@ export function ProviderIcon({
   presetId,
   provider,
   size = 20,
+  customIcon,
+  customDarkIcon,
 }: {
   presetId?: string;
   provider?: ProviderConnectionIdentity | null;
   size?: number;
+  customIcon?: string | null | undefined;
+  customDarkIcon?: string | null | undefined;
 }) {
+  const presentation = useSetupPresentation(provider);
+  const icon = safeSetupIcon(
+    customIcon === undefined ? presentation?.icon : customIcon,
+  );
+  const darkIcon = safeSetupIcon(
+    customDarkIcon === undefined ? presentation?.darkIcon : customDarkIcon,
+  );
+  const [failedIcon, setFailedIcon] = useState<string | null>(null);
   const brand =
     presetId === undefined
       ? providerConnectionBrand(provider)
       : providerPresetBrand(presetId);
   const [failedBrand, setFailedBrand] = useState<ProviderBrand | null>(null);
-  const asset = brand && brand !== failedBrand ? assets[brand] : null;
+  const asset =
+    (icon || darkIcon) && (icon ?? darkIcon) !== failedIcon
+      ? { light: icon ?? darkIcon!, dark: darkIcon }
+      : brand && brand !== failedBrand
+        ? assets[brand]
+        : null;
   return (
     <span
       className="provider-icon"
@@ -60,7 +79,10 @@ export function ProviderIcon({
             height={size}
             alt=""
             draggable={false}
-            onError={() => setFailedBrand(brand)}
+            onError={() => {
+              setFailedBrand(brand);
+              setFailedIcon(icon ?? darkIcon ?? null);
+            }}
           />
           {asset.dark ? (
             <img
@@ -70,7 +92,10 @@ export function ProviderIcon({
               height={size}
               alt=""
               draggable={false}
-              onError={() => setFailedBrand(brand)}
+              onError={() => {
+                setFailedBrand(brand);
+                setFailedIcon(icon ?? darkIcon ?? null);
+              }}
             />
           ) : null}
         </>

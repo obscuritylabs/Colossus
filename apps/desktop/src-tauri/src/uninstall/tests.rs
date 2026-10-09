@@ -1,6 +1,12 @@
 use super::*;
 use colossus_windows_native::{create_private_directory, create_private_file};
+use fs4::fs_std::FileExt as _;
 use std::os::windows::fs::OpenOptionsExt as _;
+
+// Windows Credential Manager can retain a deleted entry while another native
+// fixture writes to the store. Model uninstall's stopped-consumer precondition
+// and keep the exact deletion assertions by isolating the live store fixtures.
+static NATIVE_CREDENTIAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
     let parent = directories::BaseDirs::new()
@@ -35,6 +41,16 @@ fn cleanup_removes_only_the_supplied_private_test_home_and_is_repeatable() {
     create_private_file(&home.join("AGENTS.md"), b"desktop data").unwrap();
     create_private_directory(&home.join("plugins")).unwrap();
     create_private_directory(&home.join("plugins/cli")).unwrap();
+    create_private_directory(&home.join("desktop")).unwrap();
+    create_private_file(&home.join("desktop/remembered-commands.json"), b"[]").unwrap();
+    create_private_file(
+        &home.join(format!(
+            "desktop/.remembered-commands.json.{}.tmp",
+            uuid::Uuid::new_v4()
+        )),
+        b"[]",
+    )
+    .unwrap();
     cleanup(&home).unwrap();
     cleanup(&home).unwrap();
     assert!(!home.exists());
@@ -57,11 +73,15 @@ fn cleanup_rejects_busy_data_before_removing_any_files() {
 }
 
 fn plugin_blob(home: &Path, linked: bool) -> std::path::PathBuf {
+    plugin_blob_at(&home.join("plugins"), linked)
+}
+
+fn plugin_blob_at(store: &Path, linked: bool) -> std::path::PathBuf {
     let blob = "a".repeat(64);
     let layout = "b".repeat(64);
-    let global = home.join("plugins/blobs/sha256").join(&blob);
-    let retained = home
-        .join("plugins/layouts/sha256")
+    let global = store.join("blobs/sha256").join(&blob);
+    let retained = store
+        .join("layouts/sha256")
         .join(layout)
         .join("blobs/sha256")
         .join(blob);
@@ -90,6 +110,175 @@ fn plugin_blob(home: &Path, linked: bool) -> std::path::PathBuf {
         fs::set_permissions(path, permissions).unwrap();
     }
     global
+}
+
+fn workspace_plugin_store(home: &Path) -> std::path::PathBuf {
+    let partition = home.join("workspaces").join("c".repeat(64));
+    for directory in [home.join("workspaces"), partition.clone()] {
+        create_private_directory(&directory).unwrap();
+    }
+    let store = partition.join("workspace-plugins");
+    create_private_directory(&store).unwrap();
+    colossus_plugins::PluginStore::new(store)
+        .unwrap()
+        .root()
+        .to_owned()
+}
+
+#[test]
+fn cleanup_removes_empty_workspace_plugin_store_created_by_runtime_startup() {
+    let (_guard, home) = fixture();
+    workspace_plugin_store(&home);
+    cleanup(&home).unwrap();
+    assert!(!home.exists());
+}
+
+#[test]
+fn cleanup_removes_workspace_plugin_snapshots_and_pending_layouts() {
+    for linked in [false, true] {
+        let (_guard, home) = fixture();
+        let store = workspace_plugin_store(&home);
+        let blob = plugin_blob_at(&store, linked);
+        for prefix in ["generated-layout-", "retained-layout-"] {
+            let staging = store
+                .join("staging")
+                .join(format!("{prefix}{}", uuid::Uuid::new_v4()))
+                .join("blobs/sha256");
+            fs::create_dir_all(&staging).unwrap();
+            fs::hard_link(&blob, staging.join(blob.file_name().unwrap())).unwrap();
+        }
+        cleanup(&home).unwrap();
+        assert!(!home.exists());
+    }
+}
+
+#[test]
+fn cleanup_preserves_external_workspace_plugin_blob_links_and_attributes() {
+    let (guard, home) = fixture();
+    let store = workspace_plugin_store(&home);
+    let blob = plugin_blob_at(&store, true);
+    let external = guard.path().join("external-workspace-blob");
+    fs::hard_link(&blob, &external).unwrap();
+    assert_eq!(cleanup(&home), Err(CleanupError::UnsafeData));
+    assert_eq!(fs::read(&external).unwrap(), b"installed plugin blob");
+    assert!(fs::metadata(&external).unwrap().permissions().readonly());
+    assert!(store.is_dir());
+}
+
+#[test]
+fn cleanup_rechecks_workspace_plugin_blob_links_added_after_inspection() {
+    let (guard, home) = fixture();
+    let store = workspace_plugin_store(&home);
+    let blob = plugin_blob_at(&store, true);
+    let plan = plan::CleanupPlan::inspect(&home).unwrap();
+    fs::hard_link(blob, guard.path().join("late-workspace-blob-link")).unwrap();
+    assert_eq!(plan.check_idle(), Err(CleanupError::UnsafeData));
+}
+
+#[test]
+fn cleanup_preserves_plugin_data_created_after_the_final_idle_check() {
+    for workspace in [false, true] {
+        let (_guard, home) = fixture();
+        let store = if workspace {
+            workspace_plugin_store(&home)
+        } else {
+            create_private_directory(&home.join("plugins")).unwrap();
+            home.join("plugins")
+        };
+        let original = plugin_blob_at(&store, true);
+        let plan = plan::CleanupPlan::inspect(&home).unwrap();
+        plan.check_idle().unwrap();
+        let concurrent = store.join("new-grants.redb");
+        create_private_file(&concurrent, b"concurrent CLI grants").unwrap();
+        assert_eq!(plan.remove_data(), Err(CleanupError::UnsafeData));
+        assert_eq!(fs::read(concurrent).unwrap(), b"concurrent CLI grants");
+        assert_eq!(fs::read(&original).unwrap(), b"installed plugin blob");
+        assert!(fs::metadata(original).unwrap().permissions().readonly());
+    }
+}
+
+#[test]
+fn cleanup_holds_plugin_writers_from_inspection_through_removal() {
+    for workspace in [false, true] {
+        let (_guard, home) = fixture();
+        let store = if workspace {
+            workspace_plugin_store(&home)
+        } else {
+            create_private_directory(&home.join("plugins")).unwrap();
+            home.join("plugins")
+        };
+        let state = store.join("state.redb");
+        create_private_file(&state, b"original committed grants").unwrap();
+        let plan = plan::CleanupPlan::inspect(&home).unwrap();
+        plan.check_idle().unwrap();
+        let competing = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(store.join("state.redb.writer.lock"))
+            .unwrap();
+        assert!(!competing.try_lock_exclusive().unwrap());
+        drop(competing);
+        assert_eq!(fs::read(&state).unwrap(), b"original committed grants");
+        plan.remove_data().unwrap();
+        assert!(!home.exists());
+    }
+}
+
+#[test]
+fn cleanup_rejects_an_active_plugin_writer_before_inspecting_its_state() {
+    let (_guard, home) = fixture();
+    let store = workspace_plugin_store(&home);
+    let state = store.join("state.redb");
+    create_private_file(&state, b"committed grants").unwrap();
+    let path = store.join("state.redb.writer.lock");
+    create_private_file(&path, b"").unwrap();
+    let writer = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    assert!(writer.try_lock_exclusive().unwrap());
+    assert!(matches!(
+        plan::CleanupPlan::inspect(&home),
+        Err(CleanupError::Busy)
+    ));
+    assert_eq!(fs::read(state).unwrap(), b"committed grants");
+    drop(writer);
+    cleanup(&home).unwrap();
+}
+
+#[test]
+fn cleanup_preserves_nested_plugin_snapshots_created_after_inspection() {
+    let (_guard, home) = fixture();
+    let store = workspace_plugin_store(&home);
+    plugin_blob_at(&store, true);
+    let plan = plan::CleanupPlan::inspect(&home).unwrap();
+    plan.check_idle().unwrap();
+    // The deep workspace cache needs a verbatim path for native Win32 creation.
+    let concurrent = fs::canonicalize(store.join("layouts/sha256"))
+        .unwrap()
+        .join("d".repeat(64));
+    create_private_directory(&concurrent).unwrap();
+    create_private_file(&concurrent.join("index.json"), b"new CLI snapshot").unwrap();
+    assert_eq!(plan.remove_data(), Err(CleanupError::UnsafeData));
+    assert_eq!(
+        fs::read(concurrent.join("index.json")).unwrap(),
+        b"new CLI snapshot"
+    );
+}
+
+#[test]
+fn cleanup_preserves_cache_blobs_linked_externally_after_the_final_idle_check() {
+    let (guard, home) = fixture();
+    let store = workspace_plugin_store(&home);
+    let blob = plugin_blob_at(&store, true);
+    let plan = plan::CleanupPlan::inspect(&home).unwrap();
+    plan.check_idle().unwrap();
+    let external = guard.path().join("late-external-cache-link");
+    fs::hard_link(&blob, &external).unwrap();
+    assert_eq!(plan.remove_data(), Err(CleanupError::UnsafeData));
+    assert_eq!(fs::read(&external).unwrap(), b"installed plugin blob");
+    assert!(fs::metadata(external).unwrap().permissions().readonly());
 }
 
 #[test]
@@ -263,21 +452,32 @@ fn cleanup_rejects_foreign_key_service_and_shared_cli_data_without_deletion() {
     let partition = home.join("workspaces").join("a".repeat(64));
     create_private_directory(&partition).unwrap();
     create_private_directory(&partition.join("cli")).unwrap();
+    create_private_file(&partition.join("cli/state.redb"), b"preserve CLI data").unwrap();
     assert!(cleanup(&home).is_err());
+    assert_eq!(
+        fs::read(partition.join("cli/state.redb")).unwrap(),
+        b"preserve CLI data"
+    );
     assert!(home.is_dir());
 }
 
 #[test]
 #[ignore = "requires Windows Credential Manager; uses only generated disposable entries"]
 fn native_uninstall_removes_exact_owned_keys_and_preserves_unrelated_entries() {
+    let _native_store = NATIVE_CREDENTIAL_TEST_LOCK.lock().unwrap();
     let (_guard, home) = fixture();
     plugin_blob(&home, true);
     let id = uuid::Uuid::new_v4();
     runtime(&home, RUNTIME_SERVICE, id);
     let modifiers = std::collections::HashMap::from([("persistence", "Local")]);
     let store = windows_native_keyring_store::Store::new().unwrap();
-    let plan = plan::CleanupPlan::inspect(&home).unwrap();
-    for (service, account) in &plan.keys {
+    let keys = {
+        let plan = plan::CleanupPlan::inspect(&home).unwrap();
+        // Inspection owns the plugin writer lock. Release this fixture plan
+        // before uninstall acquires its own plan; retain only the key names.
+        plan.keys.clone()
+    };
+    for (service, account) in &keys {
         store
             .build(service, account, Some(&modifiers))
             .unwrap()
@@ -294,14 +494,16 @@ fn native_uninstall_removes_exact_owned_keys_and_preserves_unrelated_entries() {
     unrelated.delete_credential().unwrap();
     result.unwrap();
     assert!(preserved);
-    for (service, account) in &plan.keys {
-        assert!(matches!(
-            store
-                .build(service, account, Some(&modifiers))
-                .unwrap()
-                .get_secret(),
-            Err(keyring_core::Error::NoEntry)
-        ));
+    for (service, account) in &keys {
+        let observed = store
+            .build(service, account, Some(&modifiers))
+            .unwrap()
+            .get_secret();
+        assert!(
+            matches!(observed, Err(keyring_core::Error::NoEntry)),
+            "credential deletion post-check: {:?}",
+            observed.map(|value| value.len())
+        );
     }
 }
 
@@ -312,6 +514,7 @@ fn native_uninstall_removes_the_saved_credential_vault_key() {
     use colossus_ports::{CredentialKey, CredentialVault as _};
     use redb::ReadableDatabase as _;
 
+    let _native_store = NATIVE_CREDENTIAL_TEST_LOCK.lock().unwrap();
     let (_guard, home) = fixture();
     plugin_blob(&home, true);
     let desktop = home.join("desktop");
@@ -359,11 +562,162 @@ fn native_uninstall_removes_the_saved_credential_vault_key() {
         .unwrap();
     assert!(entry.get_secret().is_ok());
     let result = cleanup(&home);
-    let removed = matches!(entry.get_secret(), Err(keyring_core::Error::NoEntry));
+    let observed = entry.get_secret();
+    let removed = matches!(observed, Err(keyring_core::Error::NoEntry));
     if !removed {
         entry.delete_credential().unwrap();
     }
     result.unwrap();
-    assert!(removed);
+    assert!(
+        removed,
+        "credential deletion post-check: {:?}",
+        observed.map(|value| value.len())
+    );
+    assert!(!home.exists());
+}
+
+#[test]
+fn cleanup_removes_empty_cli_surface_created_by_desktop_commands() {
+    use colossus_home::{ColossusHome, HomeSurface, detect_workspace_identity};
+
+    let (guard, home) = fixture();
+    let project = guard.path().join("project");
+    create_private_directory(&project).unwrap();
+    create_private_file(&project.join("source.txt"), b"keep project").unwrap();
+    let identity = detect_workspace_identity(&project).unwrap();
+    let application_home = ColossusHome::ensure_at(&home).unwrap();
+    let cli = application_home
+        .workspace_surface_dir(
+            identity.canonical_path(),
+            identity.as_ref(),
+            HomeSurface::Cli,
+        )
+        .unwrap();
+    assert!(cli.is_dir());
+    assert_eq!(fs::read_dir(&cli).unwrap().count(), 0);
+    drop(application_home);
+
+    cleanup(&home).unwrap();
+
+    assert!(!home.exists());
+    assert_eq!(
+        fs::read(project.join("source.txt")).unwrap(),
+        b"keep project"
+    );
+}
+
+fn empty_cli_surface(home: &Path) -> std::path::PathBuf {
+    let partition = home.join("workspaces").join("a".repeat(64));
+    let cli = partition.join("cli");
+    create_private_directory(&home.join("workspaces")).unwrap();
+    create_private_directory(&partition).unwrap();
+    create_private_directory(&cli).unwrap();
+    cli
+}
+
+#[test]
+fn cleanup_preserves_cli_subdirectories_even_without_files() {
+    let (_guard, home) = fixture();
+    let cli = empty_cli_surface(&home);
+    create_private_directory(&cli.join("project")).unwrap();
+    assert_eq!(cleanup(&home), Err(CleanupError::UnsafeData));
+    assert!(cli.join("project").is_dir());
+}
+
+#[test]
+fn cleanup_rechecks_cli_data_created_after_inspection() {
+    let (_guard, home) = fixture();
+    let cli = empty_cli_surface(&home);
+    let plan = plan::CleanupPlan::inspect(&home).unwrap();
+    create_private_file(&cli.join("state.redb"), b"new CLI data").unwrap();
+    assert_eq!(plan.check_idle(), Err(CleanupError::UnsafeData));
+    assert_eq!(fs::read(cli.join("state.redb")).unwrap(), b"new CLI data");
+}
+
+#[test]
+fn cleanup_rejects_replaced_empty_cli_directory() {
+    let (guard, home) = fixture();
+    let cli = empty_cli_surface(&home);
+    let plan = plan::CleanupPlan::inspect(&home).unwrap();
+    fs::rename(&cli, guard.path().join("original-cli")).unwrap();
+    create_private_directory(&cli).unwrap();
+    assert_eq!(plan.check_idle(), Err(CleanupError::UnsafeData));
+    assert!(cli.is_dir());
+}
+
+#[test]
+#[ignore = "requires the prepared bundled CLI; uses only a disposable home and workspace"]
+fn native_uninstall_cleans_home_after_bundled_cli_provider_presets() {
+    let (guard, home) = fixture();
+    let project = guard.path().join("project");
+    create_private_directory(&project).unwrap();
+    create_private_file(&project.join("source.txt"), b"keep project").unwrap();
+    let cli = std::env::var_os("COLOSSUS_ACCEPTANCE_CLI").map_or_else(
+        || {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("binaries/colossus-x86_64-pc-windows-msvc.exe")
+        },
+        std::path::PathBuf::from,
+    );
+    let output = std::process::Command::new(cli)
+        .arg("--workspace")
+        .arg(&project)
+        .args(["provider", "presets"])
+        .env("COLOSSUS_HOME", &home)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "bundled CLI provider presets failed: {}",
+        output.status
+    );
+    assert!(home.join("workspaces").is_dir());
+    plugin_blob(&home, true);
+    cleanup(&home).unwrap();
+    assert!(!home.exists());
+    assert_eq!(
+        fs::read(project.join("source.txt")).unwrap(),
+        b"keep project"
+    );
+}
+
+#[test]
+fn cleanup_preserves_cli_data_written_after_the_final_idle_check() {
+    let (_guard, home) = fixture();
+    let cli = empty_cli_surface(&home);
+    let plan = plan::CleanupPlan::inspect(&home).unwrap();
+    plan.check_idle().unwrap();
+    // This is the interval between the final preflight and actual deletion.
+    create_private_file(&cli.join("state.redb"), b"concurrent CLI data").unwrap();
+    assert_eq!(plan.remove_data(), Err(CleanupError::UnsafeData));
+    assert_eq!(
+        fs::read(cli.join("state.redb")).unwrap(),
+        b"concurrent CLI data"
+    );
+}
+
+#[test]
+fn cleanup_preserves_cli_partitions_created_after_the_final_idle_check() {
+    let (_guard, home) = fixture();
+    let plan = plan::CleanupPlan::inspect(&home).unwrap();
+    plan.check_idle().unwrap();
+    let cli = empty_cli_surface(&home);
+    create_private_file(&cli.join("state.redb"), b"new CLI partition").unwrap();
+    assert_eq!(plan.remove_data(), Err(CleanupError::UnsafeData));
+    assert_eq!(
+        fs::read(cli.join("state.redb")).unwrap(),
+        b"new CLI partition"
+    );
+}
+
+#[test]
+fn cleanup_removes_read_only_home_metadata() {
+    let (_guard, home) = fixture();
+    let path = home.join("AGENTS.md");
+    create_private_file(&path, b"generated instructions").unwrap();
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&path, permissions).unwrap();
+    cleanup(&home).unwrap();
     assert!(!home.exists());
 }

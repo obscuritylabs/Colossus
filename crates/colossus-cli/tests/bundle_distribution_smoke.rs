@@ -82,6 +82,16 @@ fn trusted_bundle_is_built_verified_installed_and_executed_without_network() {
     let artifact = artifact_path(&staged, target);
     fs::create_dir_all(artifact.parent().expect("artifact parent")).expect("artifact directory");
     fs::copy(source_binary, &artifact).expect("stage binary");
+    // Bundles ship stripped Unix release executables. Keep the real test-built
+    // program while removing debug sections that exceed the distribution bound.
+    #[cfg(unix)]
+    assert!(
+        Command::new("strip")
+            .arg(&artifact)
+            .status()
+            .expect("strip packaged fixture")
+            .success()
+    );
     fs::write(staged.join("LICENSE"), b"Apache-2.0\n").expect("stage license");
     fs::write(
         root.join("config.yaml"),

@@ -1,0 +1,18 @@
+.thread-actions-trigger {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  transform: translateY(-50%);
+}
+.thread-actions-trigger[data-state="open"] {
+  opacity: 1;
+}
+.thread-action-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+}
+.thread-action-label > svg {
+  flex-shrink: 0;
+}

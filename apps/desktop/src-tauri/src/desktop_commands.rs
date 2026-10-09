@@ -17,21 +17,22 @@ use crate::{
     connection,
     desktop_credentials::DesktopCredentials,
     desktop_dto::{
-        ApplyManagedModelConfigurationInput, ConfigureManagedRuntimeInput, CredentialActionInput,
-        DesktopApprovalModeDto, DesktopCapabilitiesDto, DesktopReleaseChannelDto, DesktopStatusDto,
-        ManagedModelConfigurationDto, ManagedRuntimeStateDto, ProviderSummaryDto, RuntimeTargetDto,
-        RuntimeTargetKindDto, SpaceAttentionDto, SpaceSearchPageDto, SpaceStatusEventDto,
-        SpaceSummaryDto, WorkspaceSummaryDto,
+        ApplyManagedModelConfigurationInput, ClientIdentityStatusDto, ConfigureManagedRuntimeInput,
+        CredentialActionInput, DesktopApprovalModeDto, DesktopCapabilitiesDto,
+        DesktopReleaseChannelDto, DesktopStatusDto, ManagedModelConfigurationDto,
+        ManagedRuntimeStateDto, ProviderSummaryDto, RuntimeTargetDto, RuntimeTargetKindDto,
+        SpaceAttentionDto, SpaceSearchPageDto, SpaceStatusEventDto, SpaceSummaryDto,
+        WorkspaceSummaryDto,
     },
     desktop_settings::{
-        AccessProfileSetting, DesktopSettings, ExecutionBoundarySetting, ExternalTargetSetting,
-        LOCAL_TERMINAL_CONSENT_VERSION, MAX_EXTERNAL_TARGETS, MAX_PENDING_PROVIDER_CLEANUPS,
-        ModelCapabilitiesSetting, ModelSetting, ProviderKindSetting, ProviderSetting,
-        SettingsStore, WorkspaceSetting, provider_base_url, revalidate_workspace,
-        validate_workspace,
+        AccessProfileSetting, ClientIdentitySetting, DesktopSettings, ExecutionBoundarySetting,
+        ExternalTargetSetting, LOCAL_TERMINAL_CONSENT_VERSION, MAX_EXTERNAL_TARGETS,
+        MAX_PENDING_PROVIDER_CLEANUPS, ModelCapabilitiesSetting, ModelSetting, ProviderKindSetting,
+        ProviderSetting, SettingsStore, WorkspaceSetting, provider_base_url, read_ca_bundle_source,
+        read_client_key_source, revalidate_workspace, validate_workspace,
     },
     dto::{CommandErrorDto, ConnectionStateDto, ConnectionStatusDto, RunDto},
-    managed_runtime, provider_enrollment, run_list, space_search,
+    managed_runtime, provider_enrollment, space_search,
     state::{AppState, ExternalHealth, ManagedHealth, TargetConsentContext, TargetHandle},
 };
 
@@ -276,6 +277,100 @@ pub(crate) async fn remove_ca_bundle(
     }
     store.delete_ca_bundle(&previous)?;
     desktop_status_from(&state, &settings).await
+}
+
+#[tauri::command]
+pub(crate) async fn import_client_identity(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<DesktopStatusDto>, CommandErrorDto> {
+    let certificate = app
+        .dialog()
+        .file()
+        .add_filter("PEM client certificate", &["pem", "crt", "cer"])
+        .blocking_pick_file();
+    let Some(certificate) = certificate else {
+        return Ok(None);
+    };
+    let key = app
+        .dialog()
+        .file()
+        .add_filter("PEM private key", &["pem", "key"])
+        .blocking_pick_file();
+    let Some(key) = key else { return Ok(None) };
+    let certificate = certificate
+        .into_path()
+        .map_err(|_| client_identity_error())?;
+    let key = key.into_path().map_err(|_| client_identity_error())?;
+    let certificate = read_ca_bundle_source(&certificate).map_err(|_| client_identity_error())?;
+    let key = read_client_key_source(&key).map_err(|_| client_identity_error())?;
+    let identity = colossus_network::ClientIdentity::from_pem_pair(&certificate, &key)
+        .map_err(|_| client_identity_error())?;
+    let _guard = connect_guard(&state)?;
+    reject_active_managed_runs(&state).await?;
+    let store = settings_store()?;
+    let mut settings = store.load()?;
+    let previous = settings.client_identity.clone();
+    let staged = ClientIdentitySetting {
+        identity_id: Uuid::now_v7().to_string(),
+        leaf_fingerprint_sha256: identity.leaf_fingerprint_sha256().to_owned(),
+    };
+    let credentials = DesktopCredentials::for_settings(&state, &store)?;
+    credentials
+        .write_client_identity(&staged.identity_id, &certificate, &key)
+        .await?;
+    settings.client_identity = Some(staged.clone());
+    if let Err(error) = store.save(&settings) {
+        let _ = credentials.delete(&staged.identity_id).await;
+        return Err(error);
+    }
+    if has_managed_configuration(&settings)
+        && let Err(start_error) = managed_runtime::start(&state, &store, &settings, true).await
+    {
+        settings.client_identity = previous.clone();
+        store.save(&settings)?;
+        let _ = credentials.delete(&staged.identity_id).await;
+        restore_managed_after_rollback(&state, &store, &settings).await?;
+        return Err(start_error);
+    }
+    if let Some(previous) = previous {
+        credentials.delete(&previous.identity_id).await?;
+    }
+    desktop_status_from(&state, &settings).await.map(Some)
+}
+
+#[tauri::command]
+pub(crate) async fn remove_client_identity(
+    state: State<'_, AppState>,
+) -> Result<DesktopStatusDto, CommandErrorDto> {
+    let _guard = connect_guard(&state)?;
+    reject_active_managed_runs(&state).await?;
+    let store = settings_store()?;
+    let mut settings = store.load()?;
+    let Some(previous) = settings.client_identity.take() else {
+        return desktop_status_from(&state, &settings).await;
+    };
+    store.save(&settings)?;
+    if has_managed_configuration(&settings)
+        && let Err(start_error) = managed_runtime::start(&state, &store, &settings, true).await
+    {
+        settings.client_identity = Some(previous);
+        store.save(&settings)?;
+        restore_managed_after_rollback(&state, &store, &settings).await?;
+        return Err(start_error);
+    }
+    DesktopCredentials::for_settings(&state, &store)?
+        .delete(&previous.identity_id)
+        .await?;
+    desktop_status_from(&state, &settings).await
+}
+
+fn client_identity_error() -> CommandErrorDto {
+    CommandErrorDto::local_sanitized(
+        "client_identity_invalid",
+        "Select a valid PEM client certificate chain and matching unencrypted private key (up to 64 KiB each).",
+        false,
+    )
 }
 
 #[tauri::command]
@@ -836,18 +931,15 @@ async fn refresh_live_space_search_index(state: &AppState, settings: &DesktopSet
                 let remaining = SPACE_SUMMARY_REFRESH_TIMEOUT.checked_sub(started.elapsed())?;
                 let response = tokio::time::timeout(
                     remaining,
-                    run_list::list_runs(
-                        &target.client,
-                        ListRunsRequest {
-                            session_id: None,
-                            statuses: Vec::new(),
-                            page: Some(PageRequest {
-                                page_size: SPACE_SEARCH_INDEX_PAGE_SIZE,
-                                page_token,
-                            }),
-                            include_archived: false,
-                        },
-                    ),
+                    target.list_runs(ListRunsRequest {
+                        session_id: None,
+                        statuses: Vec::new(),
+                        page: Some(PageRequest {
+                            page_size: SPACE_SEARCH_INDEX_PAGE_SIZE,
+                            page_token,
+                        }),
+                        include_archived: false,
+                    }),
                 )
                 .await
                 .ok()?
@@ -1250,6 +1342,7 @@ async fn configure_managed_codex_runtime(
         ));
     }
     settings.providers = vec![ProviderSetting {
+        credential_required: false,
         profile: "primary-provider".into(),
         kind: ProviderKindSetting::Codex,
         base_url: provider_base_url(ProviderKindSetting::Codex).into(),
@@ -1263,9 +1356,10 @@ async fn configure_managed_codex_runtime(
         context_window_tokens: 128_000,
         max_output_tokens: 16_000,
         capabilities: ModelCapabilitiesSetting {
-            tool_calls: true,
-            streaming: true,
-            image_inputs: false,
+            tool_calls: true.into(),
+            streaming: true.into(),
+            image_inputs: false.into(),
+            ..Default::default()
         },
         reasoning_effort: None,
     }];
@@ -1308,12 +1402,22 @@ pub(crate) async fn apply_managed_model_configuration(
     request: ApplyManagedModelConfigurationInput,
     appearance: provider_enrollment::DialogAppearanceInput,
 ) -> Result<DesktopStatusDto, CommandErrorDto> {
-    request.validate()?;
     let _guard = connect_guard(&state)?;
+    apply_managed_model_configuration_locked(&app, &state, request, appearance).await
+}
+
+/// Caller must retain the connection guard across preparation and application.
+pub(crate) async fn apply_managed_model_configuration_locked(
+    app: &AppHandle,
+    state: &AppState,
+    request: ApplyManagedModelConfigurationInput,
+    appearance: provider_enrollment::DialogAppearanceInput,
+) -> Result<DesktopStatusDto, CommandErrorDto> {
+    request.validate()?;
     let store = settings_store()?;
     let mut settings = store.load()?;
-    cleanup_pending_provider_credentials(&state, &store, &mut settings).await?;
-    confirm_managed_model_configuration(&app, &state, &settings, &request).await?;
+    cleanup_pending_provider_credentials(state, &store, &mut settings).await?;
+    confirm_managed_model_configuration(app, state, &settings, &request).await?;
     if request
         .providers
         .iter()
@@ -1323,10 +1427,10 @@ pub(crate) async fn apply_managed_model_configuration(
     }
 
     let previous_settings = settings.clone();
-    let credentials = plan_provider_credentials(&state, &store, &settings, &request).await?;
+    let credentials = plan_provider_credentials(state, &store, &settings, &request).await?;
     stage_provider_credentials(
-        &app,
-        &state,
+        app,
+        state,
         &store,
         &mut settings,
         &previous_settings,
@@ -1355,9 +1459,12 @@ pub(crate) async fn apply_managed_model_configuration(
                 .push(credential_id.clone());
         }
     }
-    if let Err(error) = store.save(&settings) {
+    if let Err(error) = crate::setup_package::sync_configured_credentials(&mut settings)
+        .and_then(|()| crate::managed_configuration::select_configured_models(&mut settings))
+        .and_then(|()| store.save(&settings))
+    {
         rollback_staged_provider_credentials(
-            &state,
+            state,
             &store,
             &mut settings,
             previous_settings,
@@ -1367,7 +1474,7 @@ pub(crate) async fn apply_managed_model_configuration(
         return Err(error);
     }
     restart_after_model_configuration(
-        &state,
+        state,
         &store,
         &mut settings,
         previous_settings,
@@ -1613,7 +1720,7 @@ async fn rollback_staged_provider_credentials(
     Ok(())
 }
 
-async fn reject_active_managed_runs(state: &AppState) -> Result<(), CommandErrorDto> {
+pub(crate) async fn reject_active_managed_runs(state: &AppState) -> Result<(), CommandErrorDto> {
     let Some(target_id) = state.selected_target_id().await else {
         return Ok(());
     };
@@ -1630,9 +1737,8 @@ pub(crate) async fn reject_active_managed_runs_for(
     if !matches!(target.consent, TargetConsentContext::ManagedLocal) {
         return Ok(());
     }
-    let runs = run_list::list_runs(
-        &target.client,
-        ListRunsRequest {
+    let runs = target
+        .list_runs(ListRunsRequest {
             session_id: None,
             statuses: vec![
                 RunStatus::Queued,
@@ -1645,10 +1751,9 @@ pub(crate) async fn reject_active_managed_runs_for(
                 page_token: String::new(),
             }),
             include_archived: false,
-        },
-    )
-    .await
-    .map_err(CommandErrorDto::from_api)?;
+        })
+        .await
+        .map_err(CommandErrorDto::from_api)?;
     if runs.runs.is_empty() {
         Ok(())
     } else {
@@ -1914,6 +2019,7 @@ fn persist_provider_rotation(
     let cleanup_staged = settings.clone();
     store_secret(&credential_id, secret)?;
     settings.providers = vec![ProviderSetting {
+        credential_required: false,
         profile: "primary-provider".into(),
         kind: request.provider_kind,
         base_url: provider_base_url(request.provider_kind).to_owned(),
@@ -1927,9 +2033,10 @@ fn persist_provider_rotation(
         context_window_tokens: 128_000,
         max_output_tokens: 16_000,
         capabilities: ModelCapabilitiesSetting {
-            tool_calls: true,
-            streaming: true,
-            image_inputs: false,
+            tool_calls: true.into(),
+            streaming: true.into(),
+            image_inputs: false.into(),
+            ..Default::default()
         },
         reasoning_effort: None,
     }];
@@ -2041,7 +2148,7 @@ async fn retire_pending_provider_credential(
     Ok(())
 }
 
-async fn restore_managed_after_rollback(
+pub(crate) async fn restore_managed_after_rollback(
     state: &AppState,
     store: &SettingsStore,
     settings: &DesktopSettings,
@@ -2057,7 +2164,7 @@ async fn restore_managed_after_rollback(
     }
 }
 
-fn has_managed_configuration(settings: &DesktopSettings) -> bool {
+pub(crate) fn has_managed_configuration(settings: &DesktopSettings) -> bool {
     settings.workspace.is_some() && settings.managed_configured()
 }
 
@@ -2488,7 +2595,7 @@ async fn connect_external(
     target: &ExternalTargetSetting,
 ) -> Result<(), CommandErrorDto> {
     let generation = state.begin_external_probe(&target.target_id).await;
-    let client = match connection::connect(target).await {
+    let client = match connection::connect(target, state.external_credential_read_slots()).await {
         Ok(client) => client,
         Err(error) => {
             state
@@ -2597,27 +2704,23 @@ async fn probe_connected_external(
         }),
         include_archived: false,
     };
-    let mut probe = tauri::async_runtime::spawn(async move {
-        // The permit lives with the actual request task. If the health deadline
-        // expires, a non-cancellable platform-keychain read remains globally bounded.
-        let _permit = permit;
-        run_list::list_runs(&existing.client, request).await
-    });
-    let result = tokio::time::timeout(EXTERNAL_PROBE_TIMEOUT, &mut probe).await;
+    let _permit = permit;
+    // The timeout owns the read future so expiry releases the shared listing slot.
+    // The SDK keeps a separate native-read permit inside any uncancellable keychain job.
+    let result = tokio::time::timeout(EXTERNAL_PROBE_TIMEOUT, existing.list_runs(request)).await;
     let health = match result {
-        Ok(Ok(Ok(_))) => Some(ExternalHealth::connected()),
-        Ok(Ok(Err(error))) if error.code == ApiErrorCode::Unavailable => {
+        Ok(Ok(_)) => Some(ExternalHealth::connected()),
+        Ok(Err(error)) if error.code == ApiErrorCode::Unavailable => {
             Some(ExternalHealth::unreachable())
         }
-        Ok(Ok(Err(error))) if error.code == ApiErrorCode::Unauthenticated => {
+        Ok(Err(error)) if error.code == ApiErrorCode::Unauthenticated => {
             Some(ExternalHealth::authentication_failed())
         }
-        Ok(Ok(Err(_))) => {
+        Ok(Err(_)) => {
             // An authenticated server response proves transport liveness; workload-
             // specific denial or pressure is not a connection loss.
             Some(ExternalHealth::connected())
         }
-        Ok(Err(_)) => Some(ExternalHealth::connection_failed("internal")),
         Err(_) => Some(ExternalHealth::stalled()),
     };
     state
@@ -2632,9 +2735,10 @@ async fn probe_disconnected_external(
     permit: tokio::sync::OwnedSemaphorePermit,
 ) {
     let target_for_probe = target.clone();
+    let read_slots = state.external_credential_read_slots();
     let mut probe = tauri::async_runtime::spawn(async move {
         let _permit = permit;
-        match connection::connect(&target_for_probe).await {
+        match connection::connect(&target_for_probe, read_slots).await {
             Ok(client) => {
                 let _ = client.close().await;
                 ExternalHealth::available()
@@ -2725,10 +2829,11 @@ fn desktop_capabilities(
         delegation: advertised.contains("agent_runs.delegation"),
         plugins: advertised.contains("plugins.discovery"),
         plugin_skill_selection: advertised.contains("plugins.skill_selection"),
+        process_sessions: advertised.contains("process_sessions.v1"),
         tui: selected_managed && cfg!(any(target_os = "macos", target_os = "windows")),
         shell_terminal: managed_workspace_is_selected(settings)
             && workspace_available
-            && cfg!(target_os = "macos"),
+            && cfg!(any(target_os = "macos", target_os = "windows")),
         files: selected_managed
             && workspace_available
             && settings.access_profile != AccessProfileSetting::Minimal,
@@ -2916,7 +3021,9 @@ async fn desktop_status_from(
             None => DesktopApprovalModeDto::Ask,
         },
         terminal_enabled: settings.local_terminal_enabled(),
+        terminal_consent_pending: settings.terminal_consent_pending(),
         additional_ca_bundle: crate::desktop_dto::CaBundleStatusDto::from_settings(settings),
+        client_identity: ClientIdentityStatusDto::from_settings(settings),
         capabilities,
     })
 }
@@ -3192,6 +3299,7 @@ mod tests {
     fn settings_with_provider(credential_id: &str) -> DesktopSettings {
         DesktopSettings {
             providers: vec![ProviderSetting {
+                credential_required: false,
                 profile: "primary-provider".into(),
                 kind: crate::desktop_settings::ProviderKindSetting::Compatible,
                 base_url: crate::desktop_settings::OPENROUTER_BASE_URL.into(),
@@ -3205,9 +3313,10 @@ mod tests {
                 context_window_tokens: 128_000,
                 max_output_tokens: 16_000,
                 capabilities: ModelCapabilitiesSetting {
-                    tool_calls: true,
-                    streaming: true,
-                    image_inputs: false,
+                    tool_calls: true.into(),
+                    streaming: true.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
                 reasoning_effort: None,
             }],

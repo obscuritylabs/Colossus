@@ -1,0 +1,210 @@
+.automation-surface {
+  padding: 20px var(--settings-gutter);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+  container-type: inline-size;
+  overflow: auto;
+  color: var(--text);
+}
+.automation-welcome {
+  max-width: 880px;
+  margin: 64px auto 32px;
+  padding: 40px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.automation-welcome > h3 {
+  font-size: var(--font-size-title);
+  margin: 24px 0 12px;
+}
+.automation-welcome > p {
+  color: var(--muted);
+  max-width: 64ch;
+  line-height: var(--line-height-body);
+  margin-bottom: 24px;
+}
+.automation-welcome-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--icon-surface);
+  color: var(--icon-text);
+}
+.automation-welcome-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+  padding-top: 24px;
+  margin-top: 32px;
+  border-top: 1px solid var(--border);
+}
+.automation-welcome-steps svg {
+  color: var(--muted);
+}
+.automation-welcome-steps h4 {
+  margin: 12px 0 8px;
+}
+.automation-welcome-steps p {
+  color: var(--muted);
+  margin: 0;
+}
+.automation-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+  margin: 0;
+  padding: 20px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.automation-overview dt {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+.automation-overview dd {
+  margin: 10px 0 0;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+.automation-inventory .catalog-name-column {
+  width: 30%;
+}
+.automation-inventory small {
+  display: block;
+  margin-top: 3px;
+  font-size: var(--font-size-caption);
+  color: var(--muted);
+  font-weight: 400;
+}
+.automation-examples {
+  max-width: 1100px;
+  margin: 32px auto;
+}
+.automation-examples header h3,
+.automation-example h4 {
+  margin: 0;
+  font-size: var(--font-size-heading-sm);
+}
+.automation-examples header p,
+.automation-example p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+.automation-example-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin: 24px 0 16px;
+}
+.automation-example {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.automation-example-icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--icon-surface);
+  color: var(--icon-text);
+}
+.automation-example-timing {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  margin-top: auto;
+  padding-top: 8px;
+}
+.automation-example .button {
+  margin-top: 4px;
+}
+@container (max-width: 840px) {
+  .automation-example-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@container (max-width: 520px) {
+  .automation-example-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .automation-example {
+    padding: 20px;
+  }
+}
+
+.automation-examples,
+.automation-welcome,
+.automation-inventory,
+.automation-overview {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+  color: var(--text);
+}
+.automation-examples :is(h3, h4),
+.automation-welcome :is(h3, h4) {
+  color: var(--text-strong);
+  line-height: var(--line-height-tight);
+}
+.automation-help {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+.automation-welcome-steps h4 {
+  font-size: var(--font-size-heading-sm);
+}
+.automation-status {
+  border-color: var(--border-strong);
+  background: var(--surface-control);
+  color: var(--muted);
+}
+.automation-status[data-state="enabled"] {
+  color: var(--green-text);
+  border-color: var(--green-border);
+}
+.automation-status[data-state="blocked"] {
+  color: var(--amber-text);
+  border-color: var(--amber-border);
+}
+@container (max-width: 760px) {
+  .automation-welcome {
+    margin-top: 24px;
+    padding: 24px;
+  }
+  .automation-welcome-steps {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+}
+@container (max-width: 640px) {
+  .automation-inventory .catalog-inventory-row > td[data-label] {
+    padding-left: 0;
+    flex-wrap: wrap;
+  }
+}
+@container (max-width: 520px) {
+  .automation-overview {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+}

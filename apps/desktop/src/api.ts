@@ -1,6 +1,132 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { PluginInventory, PluginRequest } from "./plugins";
+import type {
+  StartWorkflowRunRequest,
+  CreateScheduleRequest,
+  RegisteredWorkflow,
+  WorkflowContext,
+  WorkflowPage,
+  WorkflowRun,
+  WorkflowSchedule,
+} from "./workflows";
+
+export function workflowContext(targetId: string): Promise<WorkflowContext> {
+  return call("workflow_context", { targetId });
+}
+export function listRegisteredWorkflows(
+  targetId: string,
+  selectionEpoch: number,
+  after: string | null,
+): Promise<WorkflowPage<RegisteredWorkflow>> {
+  return call("list_registered_workflows", { targetId, selectionEpoch, after });
+}
+export function getRegisteredWorkflow(
+  targetId: string,
+  selectionEpoch: number,
+  workflowId: string,
+): Promise<RegisteredWorkflow> {
+  return call("get_registered_workflow", {
+    targetId,
+    selectionEpoch,
+    workflowId,
+  });
+}
+export function validateWorkflowDefinition(
+  targetId: string,
+  selectionEpoch: number,
+  yaml: string,
+): Promise<RegisteredWorkflow> {
+  return call("validate_workflow_definition", {
+    targetId,
+    selectionEpoch,
+    yaml,
+  });
+}
+export function registerWorkflowDefinition(
+  targetId: string,
+  selectionEpoch: number,
+  yaml: string,
+  expectedHash: string,
+  idempotencyKey: string,
+): Promise<RegisteredWorkflow> {
+  return call("register_workflow_definition", {
+    targetId,
+    selectionEpoch,
+    yaml,
+    expectedHash,
+    idempotencyKey,
+  });
+}
+export function listWorkflowSchedules(
+  targetId: string,
+  selectionEpoch: number,
+  after: string | null,
+): Promise<WorkflowPage<WorkflowSchedule>> {
+  return call("list_workflow_schedules", { targetId, selectionEpoch, after });
+}
+export function getWorkflowSchedule(
+  targetId: string,
+  selectionEpoch: number,
+  scheduleId: string,
+): Promise<WorkflowSchedule> {
+  return call("get_workflow_schedule", {
+    targetId,
+    selectionEpoch,
+    scheduleId,
+  });
+}
+export function createWorkflowSchedule(
+  targetId: string,
+  selectionEpoch: number,
+  request: CreateScheduleRequest,
+): Promise<WorkflowSchedule> {
+  return call("create_workflow_schedule", {
+    targetId,
+    selectionEpoch,
+    request,
+  });
+}
+export function deleteWorkflowSchedule(
+  targetId: string,
+  selectionEpoch: number,
+  scheduleId: string,
+  etag: string,
+): Promise<{ schedule_id: string }> {
+  return call("delete_workflow_schedule", {
+    targetId,
+    selectionEpoch,
+    request: { schedule_id: scheduleId, etag },
+  });
+}
+export function setWorkflowScheduleEnabled(
+  targetId: string,
+  selectionEpoch: number,
+  scheduleId: string,
+  enabled: boolean,
+  etag: string,
+): Promise<WorkflowSchedule> {
+  return call("set_workflow_schedule_enabled", {
+    targetId,
+    selectionEpoch,
+    request: { schedule_id: scheduleId, enabled, etag },
+  });
+}
+export function getScheduledWorkflowRun(
+  targetId: string,
+  selectionEpoch: number,
+  runId: string,
+): Promise<WorkflowRun> {
+  return call("get_scheduled_workflow_run", {
+    targetId,
+    selectionEpoch,
+    runId,
+  });
+}
+import type {
+  OutlookCompanionStatus,
+  PluginInventory,
+  PluginRequest,
+} from "./plugins";
 import { readNativeDialogAppearance } from "./theme/appearance";
 import type { ProviderPreset, ProviderCatalogModel } from "./providerCatalog";
 import type { GitStatus, GitCommitPage, GitCommitDetails } from "./git";
@@ -13,6 +139,13 @@ export function getWorkspaceGitDiff(
   return call("get_workspace_git_diff", {
     request: { workspaceId, path, ...selection },
   });
+}
+
+export function rememberedCommandCount(spaceId: string): Promise<number> {
+  return call("remembered_command_count", { spaceId });
+}
+export function clearRememberedCommands(spaceId: string): Promise<void> {
+  return call("clear_remembered_commands", { spaceId });
 }
 
 export interface WorkspaceSearchResults {
@@ -54,6 +187,73 @@ export function getWorkspaceGitCommit(
   });
 }
 
+export function listSetupPackages(): Promise<
+  import("./setupPackages").SetupPackage[]
+> {
+  return call("list_setup_packages");
+}
+export function inspectSetupPackage(
+  packageId: string | null,
+): Promise<import("./setupPackages").SetupPackage | null> {
+  return call("inspect_setup_package", { packageId });
+}
+export function cancelSetupPackageReview(sha256: string): Promise<void> {
+  return call("cancel_setup_package_review", { sha256 });
+}
+export function applySetupPackage(request: {
+  sha256: string;
+  trustCertificates: boolean;
+  replaceExisting: boolean;
+  applyDefaults?: boolean;
+}): Promise<void> {
+  return call("apply_setup_package", { request });
+}
+export function configureSetupCredential(request: {
+  id: string;
+  sha256: string;
+  profile: string;
+  credentialId?: string;
+}): Promise<void> {
+  return call("configure_setup_credential", {
+    request,
+    appearance: readNativeDialogAppearance(),
+  });
+}
+export function useSetupModel(request: {
+  id: string;
+  sha256: string;
+  profile: string;
+  modelProfile: string;
+  workspaceId: string;
+  replaceConflicts: boolean;
+}): Promise<DesktopStatus> {
+  return call("use_setup_model", {
+    request,
+    appearance: readNativeDialogAppearance(),
+  });
+}
+export function removeSetupPackage(request: {
+  id: string;
+  sha256: string;
+}): Promise<void> {
+  return call("remove_setup_package", { request });
+}
+export function exportSetupPackage(packageId: string | null): Promise<boolean> {
+  return call("export_setup_package", { packageId });
+}
+export function openSetupLink(id: string, url: string): Promise<void> {
+  return call("open_setup_link", { request: { id, url } });
+}
+
+export function openProviderInstructionsLink(
+  resourceId: string,
+  url: string,
+): Promise<void> {
+  return call("open_setup_link", {
+    request: { id: "", providerResourceId: resourceId, url },
+  });
+}
+
 export function getProviderPresets(): Promise<ProviderPreset[]> {
   return call("get_provider_presets");
 }
@@ -82,6 +282,17 @@ export function discoverManagedProviderModels(
 
 export function getPluginInventory(targetId: string): Promise<PluginInventory> {
   return call("get_plugin_inventory", { targetId });
+}
+export function getOutlookCompanionStatus(
+  spaceId: string,
+): Promise<OutlookCompanionStatus> {
+  return call("outlook_companion_status", { spaceId });
+}
+export function configureOutlookCompanion(
+  spaceId: string,
+  enabled: boolean,
+): Promise<OutlookCompanionStatus> {
+  return call("configure_outlook_companion", { spaceId, enabled });
 }
 export function resolvePluginSelection(
   targetId: string,
@@ -134,6 +345,7 @@ import type {
   ConfigureManagedRuntimeRequest,
   CodexAuthStatus,
   ConnectionStatus,
+  ControlPlaneProfiles,
   CreateRunRequest,
   DesktopStatus,
   DesktopReleaseChannel,
@@ -286,6 +498,11 @@ export function desktopStatus(): Promise<DesktopStatus> {
   return call("desktop_status");
 }
 
+/** Cached public status and saved bookmarks; does not read the enrollment vault. */
+export function controlPlaneProfiles(): Promise<ControlPlaneProfiles> {
+  return call("control_plane_profiles");
+}
+
 export function codexAuthStatus(): Promise<CodexAuthStatus> {
   return call("codex_auth_status");
 }
@@ -304,6 +521,14 @@ export function importCaBundle(): Promise<DesktopStatus | null> {
 
 export function removeCaBundle(): Promise<DesktopStatus> {
   return call("remove_ca_bundle");
+}
+
+export function importClientIdentity(): Promise<DesktopStatus | null> {
+  return call("import_client_identity");
+}
+
+export function removeClientIdentity(): Promise<DesktopStatus> {
+  return call("remove_client_identity");
 }
 
 export function addExternalTarget(): Promise<DesktopStatus | null> {
@@ -515,6 +740,7 @@ export function upsertGlobalProvider(request: {
   resourceId: string | null;
   label: string;
   provider: ManagedProviderCatalogValue;
+  presentation?: import("./types").ProviderPresentation;
 }): Promise<ManagedSettingsSnapshot> {
   return call("upsert_global_provider", { request });
 }
@@ -627,6 +853,44 @@ export function onSpaceAttention(
   return listen<SpaceAttentionEvent>("space-attention", (event) =>
     handler(event.payload),
   );
+}
+
+export interface StatusBarPin {
+  runId: string;
+  title: string;
+}
+
+export type StatusBarAction =
+  { type: "new_work" } | { type: "open_run"; runId: string };
+
+export type BackgroundNotificationKind =
+  "needs_attention" | "work_completed" | "work_failed";
+
+export function syncStatusBarPins(
+  pins: readonly StatusBarPin[],
+): Promise<void> {
+  return call("sync_status_bar_pins", { pins });
+}
+
+export function onStatusBarAction(
+  handler: (action: StatusBarAction) => void,
+): Promise<UnlistenFn> {
+  return listen<StatusBarAction>("status-bar-action", (event) =>
+    handler(event.payload),
+  );
+}
+
+export interface BackgroundNotificationContent {
+  threadTitle: string;
+  outputPreview: string;
+}
+
+export function notifyBackground(
+  kind: BackgroundNotificationKind,
+  runId: string,
+  content: BackgroundNotificationContent,
+): Promise<boolean> {
+  return call("notify_background", { kind, runId, content });
 }
 
 export function listWorkspaceDirectory(
@@ -850,4 +1114,45 @@ export function signalTerminal(
 
 export function closeTerminal(sessionId: string): Promise<void> {
   return call("close_terminal", { request: { sessionId } });
+}
+
+export function listShellSessions(
+  targetId: string,
+  after: string | null,
+): Promise<import("./shellSessions").ShellPage> {
+  return call("list_shell_sessions", { targetId, after });
+}
+export function readShellSession(
+  targetId: string,
+  sessionId: string,
+  afterSequence: number,
+): Promise<import("./shellSessions").ShellSnapshot> {
+  return call("read_shell_session", { targetId, sessionId, afterSequence });
+}
+export function stopShellSession(
+  targetId: string,
+  sessionId: string,
+): Promise<import("./shellSessions").ShellSnapshot> {
+  return call("stop_shell_session", { targetId, sessionId });
+}
+
+export function listWorkflowRuns(
+  targetId: string,
+  selectionEpoch: number,
+  workflowId: string,
+  after: string | null,
+): Promise<WorkflowPage<WorkflowRun>> {
+  return call("list_workflow_runs", {
+    targetId,
+    selectionEpoch,
+    workflowId,
+    after,
+  });
+}
+export function startWorkflowRun(
+  targetId: string,
+  selectionEpoch: number,
+  request: StartWorkflowRunRequest,
+): Promise<WorkflowRun> {
+  return call("start_workflow_run", { targetId, selectionEpoch, request });
 }

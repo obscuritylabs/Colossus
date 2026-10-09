@@ -4,7 +4,7 @@ test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 950 });
   await page.goto("/?fixture=operations-studio");
   await page
-    .getByRole("button", { name: "Close thread details", exact: true })
+    .getByRole("button", { name: "Close tool pane", exact: true })
     .click();
 });
 

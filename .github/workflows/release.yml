@@ -34,6 +34,7 @@ jobs:
       release_channel: ${{ steps.request.outputs.release_channel }}
       target_channel: ${{ steps.request.outputs.target_channel }}
       prerelease: ${{ steps.request.outputs.prerelease }}
+      test_release: ${{ steps.request.outputs.test_release }}
     steps:
       - name: Check out complete release history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -68,6 +69,11 @@ jobs:
         with:
           tool: cargo-deny@0.20.2,cargo-audit@0.22.2
           fallback: none
+
+      - name: Install Node.js 22.18
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
 
       - name: Validate tag, version, changelog, and ancestry
         id: request
@@ -125,7 +131,11 @@ jobs:
             "$(git rev-list -n 1 "$sdk_base_tag")" "$source_commit"
           workspace_version=$(cargo metadata --locked --no-deps --format-version 1 \
             | jq -r '.packages[] | select(.name == "colossus-cli") | .version')
-          test "$version" = "$workspace_version"
+          version=$(node scripts/ci/release-source-version.mjs "$tag" "$workspace_version")
+          test_release=false
+          if [ "$version" != "${tag#v}" ]; then
+            test_release=true
+          fi
           grep -F "## [$version]" CHANGELOG.md >/dev/null
           {
             printf 'version=%s\n' "$version"
@@ -137,7 +147,29 @@ jobs:
             printf 'release_channel=%s\n' "$release_channel"
             printf 'target_channel=%s\n' "$tag_channel"
             printf 'prerelease=%s\n' "$prerelease"
+            printf 'test_release=%s\n' "$test_release"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog and release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.request.outputs.tag }}
+          SOURCE_COMMIT: ${{ steps.request.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          history="$RUNNER_TEMP/release-history"
+          node scripts/ci/release-notes.mjs \
+            --tag "$RELEASE_TAG" --source "$SOURCE_COMMIT" \
+            --changelog-output "$history/CHANGELOG.md" \
+            --notes-output "$history/RELEASE_NOTES.md"
+
+      - name: Retain generated release history for review
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-history
+          path: ${{ runner.temp }}/release-history/*.md
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Prepare exact-path AppArmor profile for readiness tests
         run: |
@@ -158,6 +190,9 @@ jobs:
     name: Release ${{ matrix.target }}
     needs: validate
     runs-on: ${{ matrix.runner }}
+    environment:
+      name: ${{ needs.validate.outputs.publish_draft == 'true' && vars.SCCACHE_R2_ENABLED == 'true' && 'sccache-r2-write' || 'release-validation' }}
+      deployment: false
     timeout-minutes: 60
     env:
       SCCACHE_GHA_ENABLED: "true"
@@ -202,6 +237,17 @@ jobs:
         id: sccache
         continue-on-error: true
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Configure R2 compiler cache for tagged release
+        if: needs.validate.outputs.publish_draft == 'true' && vars.SCCACHE_R2_ENABLED == 'true' && steps.sccache.outcome == 'success'
+        shell: bash
+        env:
+          R2_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+          R2_REGION: ${{ secrets.SCCACHE_REGION }}
+          R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
+        run: ./scripts/ci/configure-sccache-r2.sh write
 
       - name: Activate shared compiler cache
         if: steps.sccache.outcome == 'success'
@@ -389,6 +435,7 @@ jobs:
 
   bootstrap_installers:
     name: Package repository-owned bootstrap installers
+    if: needs.validate.outputs.test_release != 'true'
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -449,8 +496,12 @@ jobs:
     if: needs.validate.outputs.target_channel == 'stable'
     needs: validate
     runs-on: ubuntu-latest-m
+    environment:
+      name: ${{ needs.validate.outputs.publish_draft == 'true' && vars.SCCACHE_R2_ENABLED == 'true' && 'sccache-r2-write' || 'release-validation' }}
+      deployment: false
     timeout-minutes: 45
     env:
+      SCCACHE_GHA_ENABLED: "true"
       SDK_BASE_TAG: ${{ needs.validate.outputs.sdk_base_tag }}
       SOURCE_DATE_EPOCH: ${{ needs.validate.outputs.source_date_epoch }}
     steps:
@@ -488,6 +539,26 @@ jobs:
         with:
           toolchain: 1.96.0
 
+      - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Configure R2 compiler cache for tagged release
+        if: needs.validate.outputs.publish_draft == 'true' && vars.SCCACHE_R2_ENABLED == 'true' && steps.sccache.outcome == 'success'
+        shell: bash
+        env:
+          R2_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+          R2_REGION: ${{ secrets.SCCACHE_REGION }}
+          R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
+        run: ./scripts/ci/configure-sccache-r2.sh write
+
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+
       - name: Generate, test, and validate all SDK packages
         run: cargo xtask check sdk --base "$SDK_BASE_TAG"
 
@@ -524,7 +595,6 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target
       COLOSSUS_DESKTOP_TARGET: aarch64-apple-darwin
-      SCCACHE_GHA_ENABLED: "true"
       COLOSSUS_DESKTOP_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
       COLOSSUS_DESKTOP_RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
       COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ""
@@ -545,21 +615,14 @@ jobs:
         with:
           toolchain: 1.96.0
 
-      - name: Enable shared compiler cache
-        id: sccache
-        continue-on-error: true
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
-
-      - name: Activate shared compiler cache
-        if: steps.sccache.outcome == 'success'
-        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
-
-      - name: Cache the single desktop release target
+      - name: Restore main Desktop bundle build cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          workspaces: apps/desktop/src-tauri -> apps/desktop/src-tauri/target
-          key: release-desktop-aarch64-apple-darwin
-          cache-targets: false
+          workspaces: apps/desktop/src-tauri -> target
+          shared-key: macos-desktop-bundle
+          key: recipe-v1
+          cache-targets: true
+          save-if: false
 
       - name: Install locked desktop dependencies
         working-directory: apps/desktop
@@ -1136,6 +1199,128 @@ jobs:
           compression-level: 0
           retention-days: 14
 
+  control_plane:
+    name: Control Plane ${{ matrix.target }}
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest-m
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the portable server and web image from pinned inputs
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
+        run: |
+          docker build --file deploy/control-plane/Dockerfile \
+            --label org.opencontainers.image.source=https://github.com/obscuritylabs/Colossus \
+            --label "org.opencontainers.image.revision=$SOURCE_COMMIT" \
+            --label "org.opencontainers.image.version=$RELEASE_TAG" \
+            --tag colossus-control-plane:release .
+      - name: Smoke the actual unprivileged image
+        run: |
+          test "$(docker image inspect colossus-control-plane:release --format '{{.Config.User}}')" = 10001:10001
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges colossus-control-plane:release --version
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges colossus-control-plane:release --help
+      - name: Package matching server, web, deployment, and offline Docker assets
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          TARGET: ${{ matrix.target }}
+          SOURCE_DATE_EPOCH: ${{ needs.validate.outputs.source_date_epoch }}
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/control-plane-stage"
+          output="$RUNNER_TEMP/control-plane-release"
+          mkdir -p "$stage/bin" "$stage/web" "$stage/deploy" "$output"
+          container=$(docker create colossus-control-plane:release)
+          trap 'docker rm "$container" >/dev/null 2>&1 || true' EXIT
+          docker cp "$container:/usr/local/bin/colossus-control-plane" "$stage/bin/"
+          docker cp "$container:/opt/colossus/web/." "$stage/web/"
+          cp -R deploy/control-plane/. "$stage/deploy/"
+          cp LICENSE "$stage/"
+          cp docs/admin/cloud-control-plane.md "$stage/README.md"
+          archive="Colossus-Control-Plane-${RELEASE_TAG}-${TARGET}.tar.gz"
+          tar --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 --numeric-owner -czf "$output/$archive" -C "$stage" .
+          image="Colossus-Control-Plane-${RELEASE_TAG}-${TARGET}.docker.tar.gz"
+          docker save colossus-control-plane:release | gzip -n > "$output/$image"
+          (cd "$output" && sha256sum "$archive" > "$archive.sha256" && sha256sum "$image" > "$image.sha256")
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: colossus-control-plane-${{ matrix.target }}
+          path: ${{ runner.temp }}/control-plane-release/*
+          if-no-files-found: error
+          retention-days: 30
+
+  vscode:
+    name: VSIX ${{ matrix.target }}
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64, win32-arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: |
+            sdk/package-lock.json
+            sdk/typescript/package-lock.json
+            apps/vscode/package-lock.json
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: 1.25.0
+          cache-dependency-path: sdk/go/go.sum
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: 3.10.18
+      - name: Generate and verify the pinned SDK bindings
+        run: |
+          ./sdk/scripts/install-codegen-tools
+          ./sdk/scripts/generate
+          git diff --exit-code -- sdk
+      - name: Check and build the shared extension
+        run: |
+          cd sdk/typescript
+          npm run build
+          cd ../../apps/vscode
+          npm ci --ignore-scripts --legacy-peer-deps --install-links
+          npm run check
+          npm run build
+      - name: Package the locked native binding for the exact VS Code target
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cd apps/vscode
+          node scripts/package.mjs "$TARGET"
+          version=$(node -p "require('./package.json').version")
+          output="$RUNNER_TEMP/vsix-release"
+          mkdir -p "$output"
+          asset="Colossus-VSCode-${RELEASE_TAG}-${TARGET}.vsix"
+          cp "artifacts/colossus-${TARGET}-${version}.vsix" "$output/$asset"
+          (cd "$output" && sha256sum "$asset" > "$asset.sha256")
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: colossus-vsix-${{ matrix.target }}
+          path: ${{ runner.temp }}/vsix-release/*
+          if-no-files-found: error
+
   gate:
     name: Colossus release gate
     if: always()
@@ -1150,6 +1335,8 @@ jobs:
         desktop_macos,
         desktop_windows_preview,
         desktop_windows_signed,
+        control_plane,
+        vscode,
       ]
     runs-on: ubuntu-slim
     timeout-minutes: 5
@@ -1166,12 +1353,21 @@ jobs:
           WINDOWS_DESKTOP_RESULT: ${{ needs.desktop_windows_preview.result }}
           WINDOWS_SIGNED_DESKTOP_RESULT: ${{ needs.desktop_windows_signed.result }}
           WINDOWS_CLI_SIGN_RESULT: ${{ needs.windows_cli_sign.result }}
+          TEST_RELEASE: ${{ needs.validate.outputs.test_release }}
+          BOOTSTRAP_RESULT: ${{ needs.bootstrap_installers.result }}
         run: |
           set -euo pipefail
           ./scripts/ci/require-success.sh \
             validate=${{ needs.validate.result }} \
             artifacts=${{ needs.artifacts.result }} \
-            bootstrap_installers=${{ needs.bootstrap_installers.result }}
+            control_plane=${{ needs.control_plane.result }} \
+            vscode=${{ needs.vscode.result }}
+          if [ "$TEST_RELEASE" = true ]; then
+            test "$TARGET_CHANNEL" = developer_preview
+            test "$BOOTSTRAP_RESULT" = skipped
+          else
+            ./scripts/ci/require-success.sh bootstrap_installers="$BOOTSTRAP_RESULT"
+          fi
           if [ "$TARGET_CHANNEL" = stable ]; then
             ./scripts/ci/require-success.sh sdk_release="$SDK_RELEASE_RESULT"
             test "$MACOS_DESKTOP_BUILD_RESULT" = skipped
@@ -1224,6 +1420,12 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Download generated release history
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-history
+          path: ${{ runner.temp }}/release-history
+
       - name: Verify complete release asset set
         shell: bash
         env:
@@ -1231,11 +1433,12 @@ jobs:
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
           SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
+          TEST_RELEASE: ${{ needs.validate.outputs.test_release }}
         run: |
           set -euo pipefail
           case "$RELEASE_CHANNEL" in
             stable)
-              test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 25
+              test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 45
               windows="Colossus-Desktop-STABLE-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe"
               test -f "dist/$windows"
               test -f "dist/$windows.sha256"
@@ -1256,7 +1459,11 @@ jobs:
                 "$sdk_dir" "$RELEASE_VERSION" "$SOURCE_COMMIT"
               ;;
             developer_preview)
-              test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 22
+              expected_assets=42
+              if [ "$TEST_RELEASE" = true ]; then
+                expected_assets=38
+              fi
+              test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq "$expected_assets"
               desktop="Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip"
               windows="Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe"
               test -f "dist/$windows"
@@ -1272,12 +1479,24 @@ jobs:
               exit 1
               ;;
           esac
-          for bootstrap_asset in \
-            colossus-install.sh \
-            colossus-install.sh.sha256 \
-            colossus-install.ps1 \
-            colossus-install.ps1.sha256; do
-            test -f "dist/$bootstrap_asset"
+          if [ "$TEST_RELEASE" != true ]; then
+            for bootstrap_asset in \
+              colossus-install.sh \
+              colossus-install.sh.sha256 \
+              colossus-install.ps1 \
+              colossus-install.ps1.sha256; do
+              test -f "dist/$bootstrap_asset"
+            done
+          fi
+          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            test -f "dist/Colossus-Control-Plane-${RELEASE_TAG}-${target}.tar.gz"
+            test -f "dist/Colossus-Control-Plane-${RELEASE_TAG}-${target}.tar.gz.sha256"
+            test -f "dist/Colossus-Control-Plane-${RELEASE_TAG}-${target}.docker.tar.gz"
+            test -f "dist/Colossus-Control-Plane-${RELEASE_TAG}-${target}.docker.tar.gz.sha256"
+          done
+          for target in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64 win32-arm64; do
+            test -f "dist/Colossus-VSCode-${RELEASE_TAG}-${target}.vsix"
+            test -f "dist/Colossus-VSCode-${RELEASE_TAG}-${target}.vsix.sha256"
           done
           for checksum in dist/*.sha256; do
             (cd dist && sha256sum --check --strict "$(basename "$checksum")")
@@ -1291,6 +1510,9 @@ jobs:
           RELEASE_PRERELEASE: ${{ needs.validate.outputs.prerelease }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
           RUNNER_TEMP: ${{ runner.temp }}
+          TEST_RELEASE: ${{ needs.validate.outputs.test_release }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_NOTES_FILE: ${{ runner.temp }}/release-history/RELEASE_NOTES.md
         run: |
           set -euo pipefail
           existing=$RUNNER_TEMP/existing-release.json
@@ -1352,13 +1574,21 @@ jobs:
                 "$checksum_note" \
                 '' \
                 'For first launch, extract the archive, Control-click **Colossus Desktop**, choose **Open**, then confirm **Open**. If macOS still blocks it, use **System Settings > Privacy & Security > Open Anyway**. Do not disable Gatekeeper globally.')
+              if [ "$TEST_RELEASE" = true ]; then
+                preview_notes=$(printf '%s\n\n%s\n%s\n' "$preview_notes" \
+                  "This test build keeps source version $RELEASE_VERSION without a version bump. CLI archives retain the source version in their names and version output." \
+                  'Install Desktop using the attached installer or app archive. Extract CLI archives manually. Bootstrap installers are omitted because their exact tag/version contract does not apply to this test build. No SDK packages are published.')
+              fi
+              preview_notes_file="$RUNNER_TEMP/preview-release-notes.md"
+              printf '%s\n\n' "$preview_notes" > "$preview_notes_file"
+              cat "$RELEASE_NOTES_FILE" >> "$preview_notes_file"
               gh release create "$RELEASE_TAG" dist/* \
-                --draft --prerelease --verify-tag --generate-notes \
-                --notes "$preview_notes" \
+                --draft --prerelease --verify-tag \
+                --notes-file "$preview_notes_file" \
                 --title "$release_title"
             else
               gh release create "$RELEASE_TAG" dist/* \
-                --draft --verify-tag --generate-notes \
+                --draft --verify-tag --notes-file "$RELEASE_NOTES_FILE" \
                 --title "$release_title"
             fi
           else

@@ -10,13 +10,15 @@ use colossus_sdk::{
     ApiMajor, AppPrivateInstanceDir, BackendKind, Colossus, CreateRunRequest, GetRunRequest,
     InputContentPart, InstanceId, ManagedAccessProfile, ManagedExecutionBoundary,
     ManagedRuntimeConfig, NativeSidecarLifecycle, NativeSidecarStatus, RunMode, RunStatus,
-    Sha256Digest, SidecarApplicationGrant, SidecarBootstrapConfig, SidecarOptions,
-    VerifiedExecutable, WorkspaceIdentity,
+    Sha256Digest, SidecarApplicationGrant, SidecarApprovalBrokerGrant, SidecarBootstrapConfig,
+    SidecarOptions, VerifiedExecutable, WorkspaceIdentity,
 };
 use colossus_windows_native::{BoundPath, create_private_directory};
+use colossus_worker_protocol::{WorkerApprovalMode, WorkerControlClient, worker_ipc_endpoint};
 use sha2::{Digest as _, Sha256};
 use std::{fs::File, io::Read as _, path::Path, time::Duration};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 const KEYRING_SERVICE: &str = "com.obscuritylabs.colossus.managed-runtime";
 
@@ -141,7 +143,31 @@ async fn verified_sidecar_bootstraps_pinned_grpc_runs_echo_and_closes() {
     )
     .expect("bootstrap")
     .with_expected_workspace_identity(workspace_identity(&workspace))
-    .expect("expected workspace identity");
+    .expect("expected workspace identity")
+    .with_approval_broker_grant(
+        SidecarApprovalBrokerGrant::new(
+            "app:native-sidecar-windows-acceptance",
+            ["primary".into()],
+        )
+        .unwrap(),
+    )
+    .expect("approval broker")
+    .with_connector_grant(
+        SidecarApplicationGrant::new(
+            "app:cloud-windows-acceptance",
+            [
+                ApiScope::new(scopes::RUNS_EXECUTE).unwrap(),
+                ApiScope::new(scopes::RUNS_READ).unwrap(),
+            ],
+            ["primary".into()],
+            Vec::<String>::new(),
+        )
+        .unwrap(),
+    )
+    .expect("independent cloud grant")
+    .with_risk_auto_approvals()
+    .with_worker_ipc_authentication(colossus_sdk::Secret::new(vec![0x5a; 32]).expect("worker key"))
+    .expect("worker authentication");
     let lifecycle = NativeSidecarLifecycle::new(bootstrap);
     let options = SidecarOptions::new(
         InstanceId::from_uuid(instance_id),
@@ -156,7 +182,7 @@ async fn verified_sidecar_bootstraps_pinned_grpc_runs_echo_and_closes() {
     .expect("sidecar options");
 
     let started = std::time::Instant::now();
-    let client = match Colossus::start_sidecar(&lifecycle, options).await {
+    let client = match Colossus::start_sidecar(&lifecycle, options.clone()).await {
         Ok(client) => client,
         Err(error) => {
             let entries = std::fs::read_dir(&instance.path)
@@ -171,6 +197,34 @@ async fn verified_sidecar_bootstraps_pinned_grpc_runs_echo_and_closes() {
     };
     assert_eq!(lifecycle.status(), NativeSidecarStatus::Ready);
     assert_eq!(client.backend_kind(), BackendKind::Sidecar);
+    let state_path = instance
+        .path
+        .join("state.redb")
+        .canonicalize()
+        .expect("state");
+    let worker = WorkerControlClient::new(
+        worker_ipc_endpoint(&state_path).expect("worker endpoint"),
+        Zeroizing::new([0x5a; 32]),
+    )
+    .expect("authenticated worker");
+    assert_eq!(
+        worker.approval_mode().await.expect("initial approval mode"),
+        Some(WorkerApprovalMode::RiskAuto)
+    );
+    assert_eq!(
+        worker
+            .set_approval_mode(WorkerApprovalMode::Ask)
+            .await
+            .expect("manual Ask"),
+        WorkerApprovalMode::Ask
+    );
+    assert_eq!(
+        worker
+            .approval_mode()
+            .await
+            .expect("selected approval mode"),
+        Some(WorkerApprovalMode::Ask)
+    );
     let created = client
         .create_run(CreateRunRequest {
             plugin_skill_ids: Vec::new(),
@@ -191,9 +245,65 @@ async fn verified_sidecar_bootstraps_pinned_grpc_runs_echo_and_closes() {
         .expect("create run");
     let run_id = created.run.run_id;
     assert!(!run_id.is_empty());
+    let connector = client
+        .connector_runs()
+        .expect("dedicated Windows cloud client");
+    assert!(client.instance_id().is_some());
+    assert!(
+        connector
+            .get_run(GetRunRequest {
+                run_id: run_id.clone()
+            })
+            .await
+            .is_err(),
+        "cloud cannot inherit Desktop runs"
+    );
+    let cloud_run = connector
+        .create_run(CreateRunRequest {
+            plugin_skill_ids: vec![],
+            input: vec![InputContentPart::Text(
+                "Windows cloud grant self-test".into(),
+            )],
+            session_id: None,
+            end_user_id: None,
+            role: "primary".into(),
+            mode: RunMode::Execute,
+            research_depth: None,
+            research_sources: vec![],
+            plan_action: None,
+            branch: None,
+            max_turns: 1,
+            idempotency_key: IdempotencyKey::new("windows-cloud-once").unwrap(),
+        })
+        .await
+        .expect("cloud grant executes");
+    assert!(
+        client
+            .get_run(GetRunRequest {
+                run_id: cloud_run.run.run_id.clone()
+            })
+            .await
+            .is_err(),
+        "Desktop cannot inherit cloud runs"
+    );
+    connector
+        .get_run(GetRunRequest {
+            run_id: cloud_run.run.run_id,
+        })
+        .await
+        .expect("cloud reads its own run");
     assert_eq!(
         wait_for_terminal_run(&client, &run_id).await,
         RunStatus::Completed
     );
     client.close().await.expect("graceful close");
+    let restarted = Colossus::start_sidecar(&lifecycle, options)
+        .await
+        .expect("restart sidecar");
+    let restarted_mode = worker.approval_mode().await;
+    restarted.close().await.expect("close restarted sidecar");
+    assert_eq!(
+        restarted_mode.expect("restarted approval mode"),
+        Some(WorkerApprovalMode::RiskAuto)
+    );
 }

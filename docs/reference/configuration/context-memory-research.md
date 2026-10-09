@@ -19,7 +19,8 @@ for model work, but they own different state and lifecycles:
 Context snapshots do not delete transcript messages. Memory indexes do not own memory
 lifecycle state. Research evidence is not automatically promoted into general memory.
 
-For user workflows, see [Sessions and context](../../use/sessions-context.md),
+For user workflows, see [Sessions](../../use/sessions.md) and
+[Context and snapshots](../../use/sessions-context.md),
 [Memories](../../use/memories.md), and [Deep research](../../use/deep-research.md).
 
 ## Choose a starting point
@@ -31,14 +32,14 @@ For user workflows, see [Sessions and context](../../use/sessions-context.md),
 | Long sessions with a dedicated summarizer | Route `context_summarizer` to a reviewed model and keep recent-message preservation explicit |
 | Meaning-based memory retrieval | Add Chroma with local embeddings before introducing a second remote embedding service |
 | Web-backed research | Configure the top-level `search.roles.research` route |
-| MCP-backed research | Add explicit `mcp.servers.*.researchTools` templates; allowing an MCP tool alone is insufficient |
+| MCP-backed research | Enable the server's ordinary `allowedTools`; optionally override its research calls with `researchTools` |
 
 Omitting all three blocks selects these defaults:
 
 ```yaml
 context:
   autoCompaction: true
-  compactAtPercent: 70
+  compactAtPercent: 85
   targetPercent: 45
   preserveRecentMessages: 8
   modelAssisted: true
@@ -68,7 +69,7 @@ through session commands and audit state.
 | Field | Meaning | Constraint | Default |
 | --- | --- | --- | ---: |
 | `autoCompaction` | Create a snapshot automatically after the threshold is crossed | Boolean | `true` |
-| `compactAtPercent` | Percentage of the effective model input budget that triggers compaction | `1..99` and above `targetPercent` | `70` |
+| `compactAtPercent` | Percentage of the effective model input budget that triggers compaction | `1..99` and above `targetPercent` | `85` |
 | `targetPercent` | Desired prepared-context size after compaction | `1..99` and below `compactAtPercent` | `45` |
 | `preserveRecentMessages` | Newest canonical messages not summarized automatically | `0..=1024` | `8` |
 | `modelAssisted` | Prefer a bounded summarizer-model result before deterministic fallback | Boolean | `true` |
@@ -112,7 +113,7 @@ values are still validated together:
 ```yaml
 context:
   autoCompaction: false
-  compactAtPercent: 70
+  compactAtPercent: 85
   targetPercent: 45
   preserveRecentMessages: 8
   modelAssisted: false
@@ -415,7 +416,7 @@ will run.
 | --- | --- | --- |
 | `repo` | Readable selected workspace and normal filesystem authorization | Reads bounded repository evidence |
 | `web` | Exact top-level `search.roles.research` route | Sends planned queries and saves released normalized results |
-| `mcp` | At least one explicit MCP `researchTools` template | Calls the configured template for each attempted MCP query |
+| `mcp` | Enabled MCP tools and a tool-capable research model, or explicit `researchTools` projections | Selects calls from the live allowed catalog; nonempty projections override inheritance for their server |
 
 Every collection is an ordinary authorized effect. A denied, unavailable, failed, or
 budget-skipped lane becomes a durable limitation while other released evidence can still
@@ -427,8 +428,10 @@ through [MCP research templates](mcp.md#research-templates).
 ### Research model roles and fallback
 
 Research uses the fixed `research_planner`, `research_worker`, and
-`research_synthesizer` model roles for query planning, claim extraction, and final report
-synthesis. Unconfigured specialized roles fall back to `primary`.
+`research_synthesizer` model roles for query planning, MCP call selection and claim
+extraction, and final report synthesis. Unconfigured specialized roles fall back to
+`primary`. Automatic MCP selection requires tool-call support on `research_worker`;
+explicit projections do not need a selection model.
 
 Model output is accepted only after strict phase-specific validation. If planning,
 extraction, or synthesis fails or returns invalid output, Colossus records the fallback
@@ -500,7 +503,7 @@ always rechecks canonical lifecycle and scope before composing memory context.
 | Web research is disabled | Configure the exact top-level `search.roles.research` route |
 | Research lanes are unexpectedly skipped | `maxWorkers` counts query/lane jobs; compare depth × selected lanes with the configured bound |
 | Research reaches the source limit early | `maxSources` applies across every query and lane in the run |
-| MCP research is disabled despite allowed tools | Add explicit `researchTools`; `allowedTools` alone does not create a research template |
+| MCP research releases no sources | Inspect the MCP lane status, allowed tool selection, credentials, and policy; automatic selection also needs a tool-capable `research_worker` model, or configure explicit projections |
 
 ## Validate the result
 

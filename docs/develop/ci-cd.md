@@ -59,16 +59,15 @@ flowchart LR
 
 ## Tiers and cost ceilings
 
-| Tier | Trigger | Hosted coverage | Stable gate | Planning ceiling |
-|---|---|---|---|---:|
-| PR validation | Open, edit, reopen, synchronize, or mark ready | Linux and selected documentation/dependency jobs | `Colossus PR gate` | $0.15 per update |
-| Pre-merge acceptance | Apply `ci:full` | macOS 14 ARM, Windows 2025 x64, bounded fuzzing, supply chain, Chroma, PostgreSQL, OCI, OPA, and mTLS | `Colossus pre-merge gate` | $0.75 per final run |
-| Release | Push an annotated stable or approved prerelease tag | Six CLI targets; signed Windows CLI and Desktop; stable SDK or macOS Developer Preview | `Colossus release gate` | Varies with Windows signing time |
+| Tier                 | Trigger                                             | Hosted coverage                                                                                                            | Stable gate               | Runner cost                                                                           |
+| -------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------- |
+| PR validation        | Open, edit, reopen, synchronize, or mark ready      | Parallel standard Linux formatting, lint, unit, SDK, Desktop, documentation, and dependency jobs selected by changed paths | `Colossus PR gate`        | Free standard public runners                                                          |
+| Pre-merge acceptance | Apply `ci:full`                                     | macOS 14 ARM, Windows 2025 x64, Linux integration, bounded fuzzing, supply chain, Chroma, PostgreSQL, OCI, OPA, and mTLS   | `Colossus pre-merge gate` | Larger Linux and Windows Desktop runners are billed; standard public runners are free |
+| Release              | Push an annotated stable or approved prerelease tag | Six CLI targets; signed Windows CLI and Desktop; stable SDK or macOS Developer Preview                                     | `Colossus release gate`   | Larger runners are billed                                                             |
 
-These ceilings are planning targets based on hosted-runner rates and observed durations,
-not billing or runtime enforcement. A job timeout remains mandatory for every hosted job.
-The four-core `ubuntu-latest-m` larger runner is reserved for the longest CPU-bound x64
-Linux lane in each tier: complete PR validation, live OCI/OPA acceptance, release
+A job timeout remains mandatory for every hosted job.
+The four-core `ubuntu-latest-m` larger runner is reserved for final Linux integration,
+live OCI/OPA acceptance, release
 readiness, and the x86_64 Linux release artifact. Short control jobs, documentation,
 dependency inspection, service-backed integration tests, and bounded single-process
 fuzzing stay on standard or slim runners so larger-runner capacity is not spent where it
@@ -76,15 +75,95 @@ does not materially shorten the critical path. The repository's
 `.github/actionlint.yaml` registers the provisioned larger-runner name so local workflow
 linting recognizes it.
 
+## Rust build caches
+
+GitHub scopes a cache written by a pull-request run to that PR's merge ref. Another
+PR cannot restore it, even when its cache key is identical. The `Warm Rust build
+caches` workflow writes dependency build archives on `main` after Rust manifests,
+lockfiles, toolchain files, or the cache workflows change. Writers can also run it
+manually to fill a missing archive. It uses standard public Linux and macOS runners
+and is not a merge gate. The `recipe-v1` key is shared by each warmer and its
+consumers. When changing warm-up commands without changing the Rust environment,
+bump this key in all eight cache steps to create fresh archives; GitHub cannot
+replace an existing exact cache entry.
+
+The Linux PR lint and unit jobs restore one shared dependency build cache from
+`main`. The two macOS Desktop pre-merge jobs restore separate debug acceptance and
+release bundle caches. The unsigned macOS Desktop release job also restores the
+main release bundle cache. Its runner, target directory, recipe key and compiler
+environment match the warmer, including the absence of `RUSTC_WRAPPER`.
+Each `rust-cache` workspace maps its target relative to its workspace
+(`apps/desktop/src-tauri -> target`), and those jobs do not save duplicate PR- or
+tag-scoped archives. `rust-cache` caches dependency build artifacts in `target`,
+not the application binaries or workspace crates, so a warm run still compiles changed
+Colossus code. Cache misses build normally. Other PR and pre-merge lanes use the
+optional `sccache` compiler cache in GitHub read-only mode by default. When R2
+credentials are configured, those jobs read the R2 compiler cache instead. This
+preserves existing GitHub compiler cache reads until R2 is ready without flooding
+GitHub's per-repository cache upload limit.
+Tagged CLI release builds and the stable SDK candidate use R2 in read/write mode
+after release validation when R2 is enabled. Manual release validation retains the
+GitHub `sccache` backend. The stable SDK publisher reads R2.
+
+The optional R2 compiler cache covers the PR SDK and Desktop jobs and the five
+pre-merge jobs that already use `sccache`. A separate `Warm R2 compiler cache`
+workflow writes from `main` on Linux, macOS, and Windows. It leaves the existing
+`rust-cache` dependency archives intact. PR and pre-merge jobs read R2 only; on
+forks or before credentials are configured, they keep their read-only GitHub
+compiler-cache fallback. R2 is not used by the macOS Desktop acceptance, bundle,
+or unsigned release jobs, which restore the main branch's target archives.
+The signed Windows Desktop release keeps its signing environment and GitHub compiler cache; the unsigned macOS
+Desktop release keeps its credential-free build path. The main warmer also runs
+when the release workflow changes.
+
+To enable R2 for this repository:
+
+1. Keep the bucket private. Set repository secrets `SCCACHE_BUCKET` to its name,
+   `SCCACHE_ENDPOINT` to `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` without
+   a bucket path, and `SCCACHE_REGION` to `auto`.
+2. Create an R2 token limited to this bucket with **Object Read only** access.
+   Store its S3 Access Key ID and Secret Access Key as repository secrets
+   `SCCACHE_R2_READ_ACCESS_KEY_ID` and `SCCACHE_R2_READ_SECRET_ACCESS_KEY`.
+   These are available to same-repository PR jobs, so the token must not grant
+   object writes or access to another bucket. Fork PRs do not receive secrets.
+3. Restrict creation of `v*` release tags to repository administrators using the
+   release tag ruleset. Create the GitHub Actions environment `sccache-r2-write`
+   and allow only the selected branch `main` and selected tag pattern `v*`. Create
+   a second R2 token limited to this bucket with **Object Read & Write** access.
+   Store that pair as environment secrets `SCCACHE_R2_WRITE_ACCESS_KEY_ID` and
+   `SCCACHE_R2_WRITE_SECRET_ACCESS_KEY`. The write key is used by the manual
+   `main` warmer and validated tagged CLI and stable SDK builds.
+4. Set the repository variable `SCCACHE_R2_ENABLED` to `true`, then dispatch
+   `Warm R2 compiler cache` on `main` once. The job fails on an incomplete or
+   invalid endpoint, region, or write credential configuration.
+
+Run the R2 warmer manually on `main` after a dependency or toolchain change when
+repeated PR or pre-merge builds justify refilling the cache. It does not run on
+each main push. Existing R2 objects remain available to later jobs whose compiler
+inputs still match. Check the warmer's `sccache stats` for cache writes and later
+PR/pre-merge job summaries for hits, misses, and errors. Compare completed run
+duration and total runner usage against prior runs before attributing a net
+speedup to R2: a cache hit alone does not prove a shorter critical path. R2
+object storage and request usage can grow with each three-platform warm-up.
+
+To inspect the shared archives or fill a missing one:
+
+```bash
+gh cache list --key v0-rust --ref refs/heads/main
+gh workflow run cache-warm.yml --ref main
+```
+
 ## Steps
 
 ## Pull-request validation
 
 The classifier fails closed. Documentation-only paths build the documentation site and
 skip Rust. Code, configuration, build, release, CI, renamed unknown paths, and unknown
-new paths run the complete Linux Rust gate. API and SDK paths additionally select SDK
-generation, compatibility, language tests, and release-package checks inside that job.
-Desktop application, launcher, and Rust SDK paths select renderer checks there and the
+new paths run Linux formatting, Clippy, and workspace library tests on separate standard
+public runners. API and SDK paths additionally select SDK
+generation, compatibility, language tests, and release-package checks on a separate
+standard public Linux runner. Desktop application, launcher, and Rust SDK paths select
+sidecar and renderer checks on another standard public Linux runner and the
 native Tauri acceptance described below. Rust, npm, Go, and Python dependency manifests
 and lockfiles also run license, source, ban, and advisory policy, including the standalone
 desktop Cargo graph.
@@ -108,18 +187,19 @@ predates the SDK or desktop outputs, the workflow appends both selections as `tr
 old base cannot silently skip either component. This prevents a CI-changing PR from
 suppressing validation by weakening its own classifier or gate scripts.
 
-The Rust job combines Conventional Commit validation, exact AppArmor installation, and
-the repository-owned `cargo xtask` component checks. The Rust component covers
-formatting, crate-root structure, locked metadata, Clippy, the complete workspace suite,
-and fuzz-harness linting. When selected, the SDK component installs pinned Node.js,
+Classification owns Conventional Commit validation. The three Rust jobs independently
+check formatting and crate structure, Clippy including fuzz harnesses, and workspace
+library tests. They run on standard public Linux runners. When selected, the SDK component installs pinned Node.js,
 Python, and Go toolchains for reproducible generation and packaging, while the Desktop
 component checks the standalone native bridge formatting, installs the renderer
 lockfile, and audits, tests, and builds the renderer. Desktop selection also exercises
-the managed-sidecar protocol and host crates. The workflow retains trusted-base
+the managed-sidecar protocol and host crates. All selected jobs run concurrently after
+classification, and each owns its own toolchain and cache. The workflow retains trusted-base
 classification and runner provisioning, but does not duplicate portable check recipes
 or allocate macOS or Windows runners.
 The aggregate gate accepts a skipped job only when the classifier explicitly marked
-that job unnecessary; the stable seven-argument gate contract remains unchanged.
+that job unnecessary; it invokes the trusted base revision's seven-argument selector
+three times to cover formatting, lint, unit, SDK, Desktop, documentation, and dependency policy.
 
 Documentation deployment is separate: pull requests build documentation in PR
 validation, while `main` changes are deployed by the Documentation workflow.
@@ -136,20 +216,26 @@ Apply `ci:full` only after the PR is ready to merge:
 3. Mark the PR ready for review if it is still a draft.
 4. As a repository writer, apply the label:
 
-    ```bash
-    gh pr edit PR_NUMBER --add-label ci:full
-    ```
+   ```bash
+   gh pr edit PR_NUMBER --add-label ci:full
+   ```
 
 Eligibility is checked on a cheap Linux runner before macOS or Windows is allocated. It
 rejects draft PRs, actors below write permission, and a missing or failed current-head PR
 gate. The required pre-merge gate fails on failed, cancelled, or unexpectedly skipped
-acceptance work. Separate macOS jobs keep the root native-debug graph from coexisting
-with the standalone Tauri graph on the runner's bounded disk. The desktop job lints and
-tests the standalone native bridge; runs pinned Chromium keyboard,
-accessibility, high-contrast, drawer, approval, and 880×640 layout acceptance; deletes
-its debug artifacts; then builds the bundled sidecar, CLI, and Tauri application into one
-shared non-incremental release tree. Its 75-minute job limit accommodates both the
-debug/browser checks and a cold optimized build when compiler-cache reuse is low.
+acceptance work. Three macOS jobs run concurrently on separate standard public runners.
+The complete Linux Rust suite, including native sandbox integration, runs on one larger
+Linux runner only after `ci:full` eligibility. Its exact-path AppArmor profile grants
+the temporary root-owned CLI the Linux user namespace authority needed by those tests.
+The required gate waits for this suite and all platform jobs.
+The native job keeps the root native-debug graph separate from the standalone Tauri
+graph on bounded runner disks. Desktop acceptance lints and tests the standalone native
+bridge and runs pinned Chromium keyboard, accessibility, high-contrast, drawer, approval,
+and 880×640 layout checks. Desktop packaging independently builds the bundled sidecar,
+CLI, and Tauri application in a non-incremental release tree, then verifies its bundle
+structure. Neither Desktop job waits for the other, and neither transfers its build tree.
+Each Desktop job allows 75 minutes for a cold build when the compiler cache is unavailable.
+All acceptance and packaging checks remain required.
 The native job exercises the otherwise-ignored real sidecar
 bootstrap/pinned-gRPC/guardian lifecycle and sandbox acceptance. Together they prove the
 pruned locked build, then create an ad-hoc signed two-phase app bundle and verify the outer
@@ -158,11 +244,13 @@ uses the explicit `ADHOC` team sentinel, tests structure only, and produces a ru
 intentionally refuses to start Managed Local. Distributable builds embed the expected
 10-character Apple Team ID, use Developer ID and notarization, and verify exact code
 identifiers for the app, sidecar, and CLI.
-The Windows lane runs renderer typechecking, renderer tests, and platform-sensitive
-Desktop contract tests before installing Rust or starting native compilation. Those
-independent checks continue into Windows native, worker, sandbox, binary preparation,
-Desktop Clippy, and Desktop library-test acceptance, then report every failed outcome
-together before the lane fails. Desktop checks run only when their required binaries were staged.
+The Windows runtime and Desktop jobs also run concurrently. Runtime uses a standard
+public Windows 2025 runner for renderer typechecking, tests, platform-sensitive contracts,
+native runtime, worker, and AppContainer sandbox acceptance. The Desktop job retains the
+larger GitHub Windows runner for binary preparation, native bridge, credential controls,
+WebView2, plugin, and approval acceptance. Each job reports all independent failed
+outcomes before failing; the required gate waits for both jobs. Desktop checks run only
+when their required binaries were staged.
 Portable formatting remains owned by the PR tier instead of being repeated on platform
 runners.
 Supply-chain acceptance audits both the root sidecar graph and the desktop's independent
@@ -198,7 +286,11 @@ merging; a conflict-free merge alone does not prove the combined result was test
 
 A release tag must be annotated, match either `vX.Y.Z` or `vX.Y.Z-preview.N` with
 `N > 0`, point to a commit contained in `main`, and match both the workspace version and
-changelog heading. Tag pushes run local release-readiness verification and exactly six
+prepared changelog heading. Release validation automatically generates the changelog
+and draft notes from the exact source commit and retains both in the `release-history`
+Actions artifact. The generator uses the previous published stable release and
+preserves curated highlights; see [release preparation](releasing.md#generate-the-changelog-and-release-notes)
+for updating the checked-in history. Tag pushes run local release-readiness verification and exactly six
 native CLI targets. Each CLI target combines its security acceptance, locked release
 build, archive and checksum generation, clean installation, offline echo/audit, and
 signed-bundle smoke.
@@ -342,3 +434,32 @@ For a normal contribution, resolve review and follow
 [Request pre-merge acceptance](#request-pre-merge-acceptance). For repository rollout,
 follow [Bootstrap repository enforcement](#bootstrap-repository-enforcement) without
 skipping the evaluation run.
+
+## Control Plane and VSIX release artifacts
+
+The coordinated release gate also requires native Linux x64/arm64 Control Plane
+server/web and offline container bundles, plus six platform-targeted VSIX packages.
+`control-plane-image.yml` publishes the exact tested release images after release
+publication and verifies the two-platform index. It compares release assets against
+successful exact-tag Actions candidates before loading images; a conflicting immutable
+tag fails. See [release operations](releasing.md#control-plane-containers-and-vs-code-packages)
+for recovery and anonymous distribution verification.
+
+## Documentation container publication
+
+`documentation-candidate.yml` builds and smoke-tests the public documentation image
+on native Linux amd64 and arm64 runners. Documentation and container pull requests
+exercise the same build and HTTP smoke with their proposed source. Release candidates
+require an annotated stable or preview tag on `main`; only successful tag pushes retain
+the tested offline images and source-bound candidate manifests for 30 days. The
+candidate jobs have no registry write credentials.
+
+`documentation-image.yml` publishes after the reviewed GitHub Release is published,
+or retries an exact tag from `main`. Its contracts and publishing job use the same
+resolved protected-main publisher revision. Before any registry write, it requires
+successful exact-tag release and documentation candidate runs, verifies both retained
+image archives and source identities, and checks the published release channel. It
+refuses conflicting existing version tags and verifies the two-platform executable
+index by digest. Documentation publication is separate from the CLI release inventory;
+it adds no CLI assets. See [documentation image operations](releasing.md#documentation-container)
+for recovery and public-distribution verification.

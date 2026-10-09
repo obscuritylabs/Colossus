@@ -63,7 +63,11 @@ pub(super) fn compose_access_policy(
         model_network_tools,
         interactive,
     } = inputs;
-    let mut candidate_tool_specs = builtin_specs();
+    let mut candidate_tool_specs = colossus_tools::with_process_limits(
+        builtin_specs(),
+        config.sandbox.timeout_ms,
+        config.sandbox.max_output_bytes,
+    );
     let mut tool_descriptors = candidate_tool_specs
         .iter()
         .map(|spec| builtin_tool_descriptor(&spec.name))
@@ -349,12 +353,7 @@ pub(super) fn compose_access_policy(
                 .unwrap_or(config.sandbox.timeout_ms);
             provider_action_timeouts.insert(
                 "research.run",
-                composition::research_run_timeout_ms(
-                    provider_timeout_ms,
-                    config.sandbox.timeout_ms,
-                    config.research.max_sources,
-                    config.research.max_workers,
-                ),
+                composition::research_run_timeout_ms(provider_timeout_ms, config),
             );
             for (action, timeout_ms) in provider_action_timeouts {
                 policy = policy.with_action_timeout(action, timeout_ms);

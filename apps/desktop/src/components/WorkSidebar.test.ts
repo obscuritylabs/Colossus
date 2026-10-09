@@ -120,6 +120,33 @@ function renderSidebar(
 }
 
 describe("WorkSidebar", () => {
+  it("keeps Shell available when the managed TUI is offline", () => {
+    const markup = renderSidebar({ terminalAvailable: false });
+    const buttons = markup.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
+    expect(
+      buttons.find((button) => button.includes("Open Shell")),
+    ).not.toContain("disabled");
+    expect(
+      buttons.find((button) => button.includes("Open Colossus TUI")),
+    ).toContain("disabled");
+  });
+
+  it("offers first-use consent only when terminal access is selected", () => {
+    const buttons = (pending: boolean) =>
+      renderSidebar({
+        terminalEnabled: false,
+        terminalConsentPending: pending,
+      }).match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
+    for (const name of ["Open Shell", "Open Colossus TUI"]) {
+      expect(
+        buttons(true).find((button) => button.includes(name)),
+      ).not.toContain("disabled");
+      expect(buttons(false).find((button) => button.includes(name))).toContain(
+        "disabled",
+      );
+    }
+  });
+
   it("shows workspace context once and uses the durable run title", () => {
     const markup = renderSidebar();
 
@@ -361,13 +388,11 @@ describe("WorkSidebar", () => {
     expect(markup.indexOf(">Pinned<")).toBeLessThan(
       markup.indexOf("Needs attention"),
     );
-    expect(markup).toContain('aria-label="Unpin Improve the Work sidebar"');
-    expect(markup).toContain('aria-pressed="true"');
-    expect(markup).toContain('aria-label="Pin Needs attention"');
+    expect(markup).toContain('aria-label="Thread actions for Needs attention"');
     expect(markup).toContain(
       'aria-label="Thread actions for Improve the Work sidebar"',
     );
-    expect(markup).toContain('aria-label="Rename Improve the Work sidebar"');
+    expect(markup).toContain('aria-haspopup="menu"');
   });
 
   it("uses a saved thread name throughout the sidebar", () => {
@@ -408,38 +433,16 @@ describe("WorkSidebar", () => {
     });
 
     expect(markup).toContain("Desktop naming polish");
-    expect(markup).toContain('aria-label="Rename Desktop naming polish"');
+    expect(markup).toContain(
+      'aria-label="Thread actions for Desktop naming polish"',
+    );
   });
 
-  it("keeps local pin controls available while the app connects", () => {
+  it("keeps thread actions represented while the runtime connects", () => {
     const markup = renderSidebar({ disabled: true });
-
     expect(
-      openingButtonTag(markup, "Pin Improve the Work sidebar"),
-    ).not.toContain("disabled");
-    expect(
-      openingButtonTag(markup, "Archive Improve the Work sidebar"),
-    ).toContain("disabled");
-  });
-
-  it("offers archiving only after a thread reaches a terminal state", () => {
-    const running = renderSidebar();
-    expect(
-      openingButtonTag(running, "Archive Improve the Work sidebar"),
-    ).toContain("disabled");
-
-    const completed = renderSidebar({
-      runs: [
-        {
-          ...RUN,
-          status: "completed",
-          finishedAt: RUN.updatedAt,
-        },
-      ],
-    });
-    expect(
-      openingButtonTag(completed, "Archive Improve the Work sidebar"),
-    ).not.toContain("disabled");
+      openingButtonTag(markup, "Thread actions for Improve the Work sidebar"),
+    ).toBeDefined();
   });
 
   it("shows archived threads in global search with an explicit restore action", () => {

@@ -4,8 +4,15 @@ import { join, relative, resolve } from "node:path";
 const desktop = resolve(process.argv[2] ?? "apps/desktop");
 const dist = join(desktop, "dist");
 const maximumJavaScriptChunkBytes = 700_000;
-const maximumRendererBytes = 4_000_000;
+// Regular dictation includes a bounded 50 KB allowance; weights stay native.
+// Desktop's shared shadcn thread menu adds ~81 KB of Radix menu/focus/positioning
+// code in a lazy chunk. Allow 100 KB total growth while retaining the chunk limit.
+// Shared automation tables, badges and host-owned navigation retry state add
+// about 4 KB; reserve 10 KB across platform-specific bundler output. The 700 KB
+// per-chunk limit and production fixture exclusions remain unchanged.
+const maximumRendererBytes = 4_160_000;
 const forbiddenFixtureStrings = [
+  "Offline dictation preview",
   "fixture-run-desktop-release",
   "fixture-session-operations-studio",
   "fixture-managed-local",

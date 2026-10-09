@@ -5,7 +5,8 @@ use colossus_contracts::{CredentialError, VaultRecord};
 use colossus_home::{ConfinedRoot, HomeError};
 use colossus_ports::{CredentialKey, CredentialVault};
 use fs4::fs_std::FileExt as _;
-use redb::{Database, Durability, ReadableDatabase as _};
+use redb::{Durability, ReadableDatabase as _};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::{
     fmt,
@@ -22,6 +23,60 @@ use crate::{
 };
 
 const VERIFICATION: &[u8] = b"colossus-native-credential-vault-key-v1";
+
+/// Nonsecret exact vault identity for an explicitly reviewed offline rewrap.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultKeyMetadata {
+    /// Original versioned vault identity, retained during rewrap.
+    pub vault_id: String,
+    /// Original master-key identity, retained during rewrap.
+    pub key_id: String,
+    /// Original native owner-purpose binding, never a caller authorization claim.
+    pub owner_scope_hash: String,
+    /// Exact fixed-service platform envelope selector derived from the identity.
+    pub account: String,
+}
+impl From<&Metadata> for VaultKeyMetadata {
+    fn from(value: &Metadata) -> Self {
+        Self {
+            vault_id: value.vault_id.clone(),
+            key_id: value.key_id.clone(),
+            owner_scope_hash: value.owner_scope_hash.clone(),
+            account: value.account(),
+        }
+    }
+}
+/// Ciphertext-only identity of one exact existing credential record.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultRecordMetadata {
+    /// Exact original vault identity; its master is never exported for record copy.
+    pub vault: VaultKeyMetadata,
+    /// SHA-256 of the selected ciphertext, binding reviewed source content.
+    pub ciphertext_sha256: String,
+}
+
+/// Opaque source-read-only observation retained through an offline custody apply.
+/// Holds writer exclusion and identity/hash proof, never a key or recovered database.
+pub struct VaultSourceGuard {
+    root: ConfinedRoot,
+    observation: crate::metadata_view::SourceObservation,
+}
+impl fmt::Debug for VaultSourceGuard {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VaultSourceGuard")
+            .finish_non_exhaustive()
+    }
+}
+impl VaultSourceGuard {
+    /// Recheck the retained original source immediately before activating custody.
+    /// A replaced, modified or unsafe source fails without reading any credential.
+    pub fn revalidate(&self) -> Result<(), CredentialError> {
+        self.observation.revalidate(&self.root)
+    }
+}
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -60,6 +115,137 @@ impl fmt::Debug for PlatformCredentialVault {
 }
 
 impl PlatformCredentialVault {
+    /// Retain a read-only source lease/hash through a multi-source offline apply.
+    /// Validates existing public metadata only. No source file or key is created,
+    /// repaired or read from a platform store; dropping the guard releases writers.
+    pub fn source_guard(&self) -> Result<VaultSourceGuard, CredentialError> {
+        let view = crate::metadata_view::MetadataView::open_existing(&self.root)?
+            .ok_or(CredentialError::MissingKey)?;
+        view.metadata(&self.owner_scope_hash)?;
+        view.revalidate(&self.root)?;
+        Ok(VaultSourceGuard {
+            root: self.root.clone(),
+            observation: view.into_observation(),
+        })
+    }
+
+    /// Read one existing ciphertext identity only, without initializing any source
+    /// or reading an OS key. Missing records fail rather than selecting another.
+    pub fn record_metadata(
+        root: &ConfinedRoot,
+        owner_scope: &str,
+        key: &CredentialKey,
+    ) -> Result<Option<VaultRecordMetadata>, CredentialError> {
+        let Some(database) = crate::metadata_view::MetadataView::open_existing(root)? else {
+            return Ok(None);
+        };
+        let metadata = database.metadata(&hex::encode(Sha256::digest(owner_scope.as_bytes())))?;
+        let read = database.begin_read()?;
+        let table = read
+            .open_table(RECORDS)
+            .map_err(|_| CredentialError::Corrupt)?;
+        let id = record_id(key);
+        let Some(value) = table.get(id.as_str()).map_err(|_| CredentialError::Io)? else {
+            database.revalidate(root)?;
+            return Ok(None);
+        };
+        if value.value().len() > crypto::MAX_CIPHERTEXT_BYTES {
+            return Err(CredentialError::Oversized);
+        }
+        let ciphertext_sha256 = hex::encode(Sha256::digest(value.value()));
+        database.revalidate(root)?;
+        Ok(Some(VaultRecordMetadata {
+            vault: VaultKeyMetadata::from(&metadata),
+            ciphertext_sha256,
+        }))
+    }
+
+    /// Copy only one approved record into an independently keyed target vault.
+    /// No source master, sibling record, grant or enrollment is exported/rotated.
+    pub fn copy_existing_record(
+        &self,
+        target: &dyn CredentialVault,
+        key: &CredentialKey,
+        expected: &VaultRecordMetadata,
+    ) -> Result<bool, CredentialError> {
+        if std::ptr::addr_eq(self as &dyn CredentialVault, target) {
+            return Err(CredentialError::InvalidInput);
+        }
+        let source = crate::metadata_view::MetadataView::open_existing(&self.root)?
+            .ok_or(CredentialError::MissingKey)?;
+        let metadata = source.metadata(&self.owner_scope_hash)?;
+        if VaultKeyMetadata::from(&metadata) != expected.vault {
+            return Err(CredentialError::Corrupt);
+        }
+        let id = record_id(key);
+        let ciphertext = {
+            let read = source.begin_read()?;
+            let table = read
+                .open_table(RECORDS)
+                .map_err(|_| CredentialError::Corrupt)?;
+            let value = table
+                .get(id.as_str())
+                .map_err(|_| CredentialError::Io)?
+                .ok_or(CredentialError::MissingKey)?;
+            if value.value().len() > crypto::MAX_CIPHERTEXT_BYTES {
+                return Err(CredentialError::Oversized);
+            }
+            if hex::encode(Sha256::digest(value.value())) != expected.ciphertext_sha256 {
+                return Err(CredentialError::Corrupt);
+            }
+            value.value().to_vec()
+        };
+        source.revalidate(&self.root)?;
+        let envelope = self
+            .keys
+            .read(&metadata.account())?
+            .ok_or(CredentialError::MissingKey)?;
+        let master = verified_source_key(&metadata, &envelope)?;
+        let plaintext = crypto::decrypt(&master, &metadata.aad(&id), &ciphertext)?;
+        source.revalidate(&self.root)?;
+        let copied = crate::development::seal_existing_record(target, key, &plaintext)?;
+        source.revalidate(&self.root)?;
+        Ok(copied)
+    }
+    /// Inspect existing public metadata only. Missing sources stay absent; no
+    /// lease file, vault, platform entry or key is created. An active writer fails.
+    pub fn key_metadata(
+        root: &ConfinedRoot,
+        owner_scope: &str,
+    ) -> Result<Option<VaultKeyMetadata>, CredentialError> {
+        let Some(database) = crate::metadata_view::MetadataView::open_existing(root)? else {
+            return Ok(None);
+        };
+        let metadata = database.metadata(&hex::encode(Sha256::digest(owner_scope.as_bytes())))?;
+        database.revalidate(root)?;
+        Ok(Some(VaultKeyMetadata::from(&metadata)))
+    }
+
+    /// Rewrap only this reviewed ready vault's verified small master envelope.
+    /// Source records/metadata and the old platform entry remain unchanged. It
+    /// holds read-only source leases that exclude writers and never repairs or
+    /// initializes the original source database.
+    pub fn rewrap_key(
+        &self,
+        target: &dyn PlatformKeyStore,
+        expected: &VaultKeyMetadata,
+    ) -> Result<bool, CredentialError> {
+        let source = crate::metadata_view::MetadataView::open_existing(&self.root)?
+            .ok_or(CredentialError::MissingKey)?;
+        let metadata = source.metadata(&self.owner_scope_hash)?;
+        if VaultKeyMetadata::from(&metadata) != *expected {
+            return Err(CredentialError::Corrupt);
+        }
+        let envelope = self
+            .keys
+            .read(&metadata.account())?
+            .ok_or(CredentialError::MissingKey)?;
+        let _key = verified_source_key(&metadata, &envelope)?;
+        source.revalidate(&self.root)?;
+        let copied = crate::development::seal_existing(target, &metadata.account(), &envelope)?;
+        source.revalidate(&self.root)?;
+        Ok(copied)
+    }
     /// Bind an existing owner-private root without creating any file or OS-store entry.
     pub fn new(
         root: ConfinedRoot,
@@ -150,6 +336,7 @@ impl PlatformCredentialVault {
         {
             return Err(CredentialError::Busy);
         }
+        let lease = crate::database::VaultLease(lease);
         let file = if create {
             self.root.open_file(Path::new(DATABASE_FILE))
         } else {
@@ -157,19 +344,7 @@ impl PlatformCredentialVault {
                 .open_existing_file_read_write(Path::new(DATABASE_FILE))
         }
         .map_err(home_error)?;
-        let database = Database::builder()
-            .create_file(file.file().try_clone().map_err(|_| CredentialError::Io)?)
-            .map_err(|error| match error {
-                redb::DatabaseError::DatabaseAlreadyOpen => CredentialError::Busy,
-                redb::DatabaseError::Storage(redb::StorageError::Io(_)) => CredentialError::Io,
-                _ => CredentialError::Corrupt,
-            })?;
-        let vault = OpenedVault {
-            database,
-            master: None,
-            file,
-            lease,
-        };
+        let vault = OpenedVault::open(file, lease)?;
         vault.revalidate(&self.root)?;
         *guard = Some(vault);
         #[cfg(test)]
@@ -376,7 +551,28 @@ pub(crate) fn record_id(key: &CredentialKey) -> String {
     format!("{}\0{}", key.purpose(), key.id())
 }
 
-fn home_error(error: HomeError) -> CredentialError {
+fn verified_source_key(
+    metadata: &Metadata,
+    envelope: &[u8],
+) -> Result<crypto::MasterKey, CredentialError> {
+    let key = crypto::decode_key(envelope, &metadata.vault_id, &metadata.key_id)?;
+    let verification = metadata
+        .verification
+        .as_deref()
+        .ok_or(CredentialError::Corrupt)?;
+    if verification.len() > 256 {
+        return Err(CredentialError::Corrupt);
+    }
+    let encoded = STANDARD
+        .decode(verification)
+        .map_err(|_| CredentialError::Corrupt)?;
+    if crypto::decrypt(&key, &metadata.aad("verification"), &encoded)?.as_slice() != VERIFICATION {
+        return Err(CredentialError::Corrupt);
+    }
+    Ok(key)
+}
+
+pub(crate) fn home_error(error: HomeError) -> CredentialError {
     match error {
         HomeError::Io { .. } => CredentialError::Io,
         _ => CredentialError::Corrupt,

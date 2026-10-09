@@ -173,10 +173,19 @@ export interface ManagedProviderConfiguration {
   effectiveTimeoutMs: number;
 }
 
+export type ModelFeatureMode = "off" | "auto" | "on";
+
 export interface ManagedModelCapabilities {
-  toolCalls: boolean;
-  streaming: boolean;
-  imageInputs: boolean;
+  toolCalls: ModelFeatureMode;
+  streaming: ModelFeatureMode;
+  imageInputs: ModelFeatureMode;
+  serverCompaction?: ModelFeatureMode;
+  declared?: {
+    toolCalls?: boolean | null;
+    streaming?: boolean | null;
+    imageInputs?: boolean | null;
+    serverCompaction?: boolean | null;
+  };
 }
 
 export interface ManagedModelConfiguration {
@@ -231,8 +240,35 @@ export interface DesktopStatus {
   executionBoundary: ExecutionBoundary;
   approvalMode: ApprovalMode;
   terminalEnabled: boolean;
+  terminalConsentPending?: boolean;
   additionalCaBundle: CaBundleStatus;
+  clientIdentity: ClientIdentityStatus;
   capabilities: DesktopCapabilities;
+}
+
+export interface ControlPlaneProfile {
+  id: string;
+  label: string;
+  endpoint: string;
+}
+
+/** Public native enrollment metadata; contains no runtime credentials. */
+export interface ControlPlaneEnrollmentStatus {
+  targetId: string;
+  status: string;
+  projectId: string | null;
+  endpoint: string | null;
+  sharedSessions: boolean;
+  sharingRecoveryRequired?: boolean;
+  sharingRestartRequired?: boolean;
+}
+
+export interface ControlPlaneProfiles {
+  revision: number;
+  profiles: ControlPlaneProfile[];
+  defaultProfile: string | null;
+  connections: ControlPlaneEnrollmentStatus[];
+  connectionStatusUnavailable?: boolean;
 }
 
 export type ApprovalMode = "deny" | "ask" | "risk_auto" | "full_access";
@@ -246,6 +282,11 @@ export interface CaBundleStatus {
   fingerprintsSha256: string[];
 }
 
+export interface ClientIdentityStatus {
+  configured: boolean;
+  leafFingerprintSha256: string | null;
+}
+
 export interface DesktopCapabilities {
   research?: boolean;
   delegation: boolean;
@@ -253,6 +294,7 @@ export interface DesktopCapabilities {
   pluginSkillSelection?: boolean;
   tui: boolean;
   shellTerminal: boolean;
+  processSessions?: boolean;
   files: boolean;
   artifacts: boolean;
   planContinuation: boolean;
@@ -275,9 +317,10 @@ export interface ConfigureManagedRuntimeRequest {
   modelMetadata?: {
     contextWindowTokens: number;
     maxOutputTokens: number;
-    toolCalls: boolean;
-    imageInputs: boolean;
-    streaming: boolean;
+    toolCalls?: boolean;
+    imageInputs?: boolean;
+    streaming?: boolean;
+    capabilities?: ManagedModelCapabilities;
   };
 }
 
@@ -348,6 +391,8 @@ export interface ManagedMcpResearchTool {
   arguments: Record<string, unknown>;
 }
 
+export type McpProtocolVersion = "auto" | "2026-07-28" | "2025-11-25";
+
 export interface ManagedMcpServer {
   name: string;
   transport: "stdio" | "streamable_http";
@@ -359,6 +404,7 @@ export interface ManagedMcpServer {
   headers: Record<string, string>;
   credentialHeaders: Record<string, ManagedMcpCredentialHeader>;
   allowStateless: boolean;
+  protocolVersion?: McpProtocolVersion;
   oauth: ManagedMcpOAuth | null;
   allowedTools: string[];
   researchTools: ManagedMcpResearchTool[];
@@ -396,6 +442,7 @@ export interface McpHealthReport {
     credentialHeaders: number;
     oauth: boolean;
     allowStateless: boolean;
+    protocolVersion?: McpProtocolVersion;
     configuredTimeoutMs: number | null;
   } | null;
 }
@@ -452,11 +499,18 @@ export interface ManagedExtensionInventory {
   workflows: ManagedWorkflowCatalogEntry[];
 }
 
+export interface ProviderPresentation {
+  descriptionMarkdown: string;
+  icon: string | null;
+  darkIcon: string | null;
+}
+
 export interface ManagedProviderCatalogValue {
   profile: string;
   kind: ProviderKind;
   baseUrl: string;
   credentialId?: string | null;
+  credentialRequired?: boolean;
   timeoutMs?: number | null;
 }
 
@@ -556,6 +610,7 @@ export interface ManagedSpaceConfigurationSnapshot {
   statusMessage: string;
   pendingGlobalRevision: number | null;
   configuration: ManagedSpaceConfiguration;
+  effectiveModelRoles: Record<string, string>;
   effectiveValues: ManagedEffectiveValue[];
   effectiveYaml: string;
 }
@@ -583,6 +638,7 @@ export interface ManagedLockedInvariant {
 }
 
 export interface ManagedSettingsSnapshot {
+  providerPresentations?: Record<string, ProviderPresentation>;
   globalConfiguration: ManagedGlobalConfiguration;
   credentialAvailability: Record<
     string,
@@ -1085,7 +1141,16 @@ export interface SessionMessage {
   createdAt: string;
 }
 
+export interface ProviderRetry {
+  attempt: number;
+  max_retries: number;
+  http_status: number;
+  state: "backoff" | "retrying" | "recovered";
+  retry_at: string | null;
+}
+
 export type RunUpdateKind =
+  | { type: "provider_retry"; retry: ProviderRetry }
   | { type: "state"; status: RunStatus }
   | { type: "output_delta"; delta: string }
   | { type: "reasoning_summary"; summary: string }
@@ -1191,6 +1256,8 @@ export interface CreateRunRequest {
   planAction?: PlanRunAction;
   branch?: {
     sourceRunId: string;
+    /** Desktop presentation only; canonical history is resolved natively. */
+    kind?: "aside" | "thread";
   };
   /** Positive override, or USE_CONFIGURED_MAX_TURNS for the server default. */
   maxTurns: number;

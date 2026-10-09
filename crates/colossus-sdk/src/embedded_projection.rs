@@ -348,6 +348,7 @@ pub(super) fn run_update(
         core::RunUpdateKind::Message { message } => {
             RunUpdateKind::Message(released_message(message))
         }
+        core::RunUpdateKind::ProviderRetry { retry } => RunUpdateKind::ProviderRetry(retry),
         core::RunUpdateKind::Notice { notice } => RunUpdateKind::Notice {
             reason: notice.reason,
             message: notice.message,
@@ -686,6 +687,7 @@ mod tests {
             choices: Vec::new(),
             allow_free_form: false,
             request_hash: Some("ab".repeat(32)),
+            command_context: None,
             action: Some(private_action.into()),
             resource: Some(private_resource.into()),
             risk: Some(core::ApprovalRisk::High),

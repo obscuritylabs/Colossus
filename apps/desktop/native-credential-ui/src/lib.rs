@@ -5,11 +5,14 @@
 //! the displayed control contents can be explicitly cleared here.
 
 mod appearance;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 mod lifecycle;
 mod prompt;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 mod validation;
+
+#[cfg(target_os = "linux")]
+mod linux;
 
 #[cfg(target_os = "macos")]
 mod macos;

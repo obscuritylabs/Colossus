@@ -16,6 +16,11 @@ pub use path::{
 };
 
 #[cfg(windows)]
+mod desktop_instance;
+#[cfg(windows)]
+pub use desktop_instance::DesktopLaunchGuard;
+
+#[cfg(windows)]
 mod conpty;
 #[cfg(windows)]
 mod process;
@@ -25,7 +30,8 @@ mod windows;
 #[cfg(windows)]
 pub use conpty::{
     ConptyChild, ConptyControl, DesktopTuiAuthenticationChannels, SpawnedConpty,
-    spawn_verified_conpty, take_desktop_tui_authentication_channels,
+    SpawnedShellConpty, spawn_system_shell_conpty, spawn_verified_conpty, system_powershell,
+    take_desktop_tui_authentication_channels,
 };
 #[cfg(windows)]
 pub use process::{

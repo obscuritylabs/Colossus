@@ -320,7 +320,7 @@ button.git-file-row:hover,
   background: var(--surface-raised);
 }
 .git-file-inspector {
-  max-height: 45%;
+  max-height: 60%;
   min-height: 0;
   overflow: auto;
   flex-shrink: 0;

@@ -1,489 +1,75 @@
 ---
-title: Colossus Desktop
-description: Start with the managed local runtime, connect a provider, and understand external targets and local terminals.
+title: Start with Desktop on macOS
+description: Install Colossus Desktop, choose a workspace and model, and run your first task.
 audience: user
-type: how-to
+type: tutorial
+icon: lucide/monitor-down
 ---
 
-# Colossus Desktop
+# Start with Desktop on macOS
 
-## Goal
+Colossus Desktop opens a project folder and starts its own local agent runtime. You can begin with an offline self-test, then connect a model when you are ready to work. For the feature tour, see [Desktop overview](../desktop/index.md). Windows users can start with the [Windows installation guide](windows-desktop.md).
 
-Open one repository in Colossus Desktop without installing or starting a daemon, then
-confirm that work uses the app-managed runtime and its bounded access profile.
+## Install the app
 
-## Prerequisites
-
-- macOS 13 or later for the first desktop release.
-- Apple silicon for the first direct-download build.
-- A folder you own and intend Colossus to use as its workspace.
-- An OpenAI Responses or OpenAI-compatible provider key, or the official Codex CLI
-  installed for ChatGPT subscription-backed model runs.
-
-The offline self-test does not require a provider key or network connection.
-
-For signed Windows 10/11 x64 packages, use the
-[Windows Desktop](windows-desktop.md) guide.
-
-## Steps
-
-### 1. Download and verify Desktop
-
-From the `v0.10.2-preview.10` Developer Preview, download
-`Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.2-preview.10-aarch64-apple-darwin.zip`
-and its adjacent `.sha256` file. Keep both files together and verify the archive before
-opening it:
+On macOS 13 or later with Apple silicon, download the Desktop archive and its adjacent `.sha256` file from [Colossus releases](https://github.com/obscuritylabs/Colossus/releases). Keep the files together and verify the archive before opening it:
 
 ```bash
-shasum -a 256 -c \
-  Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.2-preview.10-aarch64-apple-darwin.zip.sha256
+shasum -a 256 -c Colossus-Desktop-*.zip.sha256
 ```
 
-The check must report success. Expand the zip and move **Colossus Desktop** to
-Applications. A checksum detects damage or substitution after the checksum was produced;
-it does not by itself authenticate the publisher.
+Expand the ZIP and move **Colossus Desktop** to Applications. Check the release notes for its signing and notarization status. A Developer Preview may need a first-launch **Control-click → Open** approval in macOS; it is a preview build, not a stable production release. A checksum detects changes relative to the published checksum, but does not authenticate the publisher by itself.
 
-This Developer Preview is ad-hoc signed and is not notarized by Apple. Control-click
-**Colossus Desktop**, choose **Open**, and confirm **Open** on first launch. If macOS
-still blocks it, use **System Settings → Privacy & Security → Open Anyway**. Do not
-disable Gatekeeper globally, and do not treat this preview as a stable production build.
+## Choose a workspace
 
-### 2. Set up the desktop and workspace
+First launch walks through **Desktop → Workspace → Provider → Model → Start**.
 
-First launch guides you through **Desktop → Workspace → Provider → Model → Start**.
-Choose a theme and text size on the Desktop step. If your organization uses a custom
-certificate authority, expand **Advanced: CA certificates** to import its CA bundle.
-Appearance preferences and imported certificates apply immediately; you can change them
-later in Settings. Use **Back** or a completed step to revisit your choices without
-losing the setup draft.
+1. Choose the appearance you want. If your organization gave you a `.colossus-setup` file, select **Import setup file** to review its providers, models, instructions, and optional certificates. [How setup files work](desktop-setup-files.md)
+2. On **Workspace**, select a folder with the native picker. Use a project you intend Colossus to inspect or change. Desktop names the workspace after that folder.
+3. Review the access profile and execution boundary on the final setup step. **Allow all** with **Full access** lets authorized tools reach host resources outside the selected folder. Choose **Workspace isolated** or **Offline isolated** when the folder must be an execution boundary. [Understand these controls](../desktop/settings.md#access-and-execution-boundaries)
 
-On the Workspace step, choose a folder through the native picker. The app records
-an opaque workspace binding in `$COLOSSUS_HOME/desktop/settings.json`. It does not write
-Colossus configuration, state, or credentials into the selected repository. Managed
-Local keeps its generated configuration, canonical database, indexes, and private
-runtime files in the selected workspace's isolated
-`workspaces/<partition-id>/desktop/` home partition; it never aliases CLI/TUI state.
+Desktop keeps its managed configuration and conversation state in a private partition under the Colossus home, not in your repository. The app selects **Managed Local** for this path and supervises its bundled runtime. When the workspace reaches **Ready**, the sidebar shows the local agent as online.
 
-An older preview that recorded only a path or inode cannot safely prove that the
-current folder is the one you chose after the app has exited. After upgrading such a
-preview, Desktop intentionally asks you to choose the folder again and starts a fresh
-managed state partition; it never attaches the replacement folder to the old state.
-This release also starts fresh in the Colossus home rather than migrating earlier
-application-support data. That legacy data is preserved and ignored, not imported or
-deleted. Keep it until the new workspace has been verified.
+### Check startup without a provider
 
-New installations select **Managed Local**. The signed app supervises its bundled
-`colossus-sidecar`, and the native desktop backend connects to that process over the
-same authenticated, pinned loopback gRPC contract used by application SDKs. A WebView
-reload does not stop the runtime.
+Use the setup flow's **offline self-test** if you only want to check the local runtime. It needs no API key or network connection. A provider-backed conversation becomes available after you select a model.
 
-The repository remains Desktop's context, relative-path anchor, and state identity.
-Selecting it does not relocate the Colossus home. **Full access**, the default for fresh
-Managed Local settings, allows authorized tools to use host resources outside that
-repository; choose **Workspace isolated** or **Offline isolated** when it must be a
-resource boundary. Top-level Desktop agent runs automatically snapshot
-`$COLOSSUS_HOME/AGENTS.md` followed by the selected repository's `AGENTS.md`; see the
-[home and instruction reference](../reference/colossus-home.md#load-agentsmd).
+## Connect a model
 
-**Offline isolated** is not an air gap. It uses platform isolation without derived
-workspace resources and hides the generic model-visible `network.http`, `web.fetch`,
-and `docs.fetch` tools. Managed Local still retains the exact provider service and
-authentication/refresh destinations required by the selected provider, so model calls
-and Codex authentication can work; those retained destinations do not make the generic
-fetch tools visible. Search, MCP, and integration adapters remain independently
-controlled by their own configuration. For a deployment with no remote transport, use
-the [offline and air-gapped operation guide](../admin/offline-airgap.md).
+On **Provider**, pick a preset such as OpenAI, OpenRouter, or **Codex (ChatGPT subscription)**. For a compatible service, enter its API base URL. On **Model**, choose **Load models** to browse the provider catalog or enter a model ID manually.
 
-### 3. Connect a provider and choose a model
+For an API-key provider, Desktop opens a native credential prompt. Enter the key there; the conversation view does not receive it. For Codex, install the official Codex CLI, select **Sign in with ChatGPT**, and complete its sign-in flow. Imported setup files can recommend models, but they never contain your API key.
 
-Choose a provider preset, such as OpenAI, OpenRouter, or **Codex (ChatGPT subscription)**.
-For another service, choose a custom Chat Completions or Responses connection and enter
-its API base URL. Continue to the Model step and choose **Load models** to browse the
-provider's catalog, or enter a model ID manually. API-key connections use a separate
-native dialog to confirm the provider address and enter the key; the
-WebView never receives the secret. The native layer encrypts that key in
-Desktop's credential vault, and Managed Local resolves only its opaque `host:` reference
-after policy permits the provider action.
+Review the workspace, model, access profile, and execution boundary on **Start**, then choose **Save and start**. When the runtime is ready, the Work composer shows your model and an **Agent online** indicator.
 
-For Codex, choose **Sign in with ChatGPT**. Desktop confirms the operation natively and
-starts the official Codex CLI login flow. The resulting credential stays in the
-Codex-owned private file store. The WebView receives only signed-in, signed-out, or
-unavailable status; the native host passes the validated file path—not its tokens or
-account identifier—over inherited bootstrap IPC. Sign-out uses the official CLI too.
+## Run a first task
 
-Later model or access-profile edits reuse the existing encrypted credential when the
-provider preset is unchanged. Select **Replace the stored API key** to rotate it;
-first setup and every API-key provider-preset change always force the native key
-prompt. Advanced model configuration also exposes the provider-neutral reasoning-effort
-setting used by Codex and other adapters that support it.
+In **Work**, choose **Plan**, **Execute**, or **Research** beside the prompt box. A gentle first request is:
 
-On the Start step, review your workspace, model, and tool access before launching.
-The key is not written to YAML, argv, environment variables, renderer state, logs, or
-terminal sessions. Real model runs remain unavailable until this setup succeeds. Use
-the explicit offline self-test when you only need to validate local startup.
-
-### Manage inherited configuration
-
-After upgrading to the credential-vault release, open **Settings → Global →
-Credentials** and choose **Re-enter token** for each missing credential. Re-entry
-preserves its ID and existing references; rotation creates a new credential revision.
-MCP OAuth connections require a fresh sign-in. Non-secret settings remain, and old
-OS credential entries are left untouched rather than imported or deleted.
-
-Manual tokens may contain up to 65,536 bytes of visible ASCII. The native dialog
-shows the byte count and rejects excess input without truncating the token.
-Desktop creates `$COLOSSUS_HOME/desktop/credentials-v1.redb` and a small companion
-lock file only when it first saves a credential. All manual tokens share this
-encrypted database. The OS keychain holds only its small encryption key. Platform
-OAuth creates its own shared vault lazily within the existing isolated runtime
-state directory. Neither workspace selection nor missing-credential checks create
-credential databases or master keys.
-
-Open **Settings** to enter its dedicated view. Choose **Global** or **Workspace** in
-the settings sidebar, then choose a category below. For Workspace settings, select
-the workspace in that same sidebar. The heading, search, and content area stay in
-place when you change scope. **Back to work** returns to your conversation.
-
-Global resources are
-immutable revisioned definitions for providers, models, credentials, MCP servers,
-search, and telemetry. A Workspace pins the exact revisions it uses. Saved global updates
-apply automatically when the workspace is idle. Active runs keep their current configuration
-until they finish. Open terminal sessions also defer automatic restarts until closed;
-archived workspaces keep their pinned revisions until restored.
-Permission and sensitive telemetry changes require native confirmation. The settings footer
-shows when an update is waiting, needs confirmation, or failed. Use **Apply global updates**
-or **Retry global update** there when needed.
-Workspace edits use **Apply Workspace changes** in the same footer, which also includes any
-pending global update. **Discard** removes unsaved workspace edits, not saved global changes.
-Updates pass configuration preflight and any required native authority confirmation before
-the workspace restarts. Clean settings show a saved status without disabled action buttons.
-
-To remove an unused model or provider, open **Settings → Global → Models** or
-**Providers**, open the entry's **More actions** menu, choose **Delete**, and confirm. If it is still in
-use, the dialog lists the models or workspaces that reference it. Change or remove
-those references and apply workspace changes first; restore archived workspaces
-before editing them. Delete unused models before deleting their provider connection.
-
-Both inventories have search and aligned rows for each saved resource. Select a
-name or usage count to see connection details, configured models, or active workspace
-references. **Edit** opens the existing configuration form. Credentials and account
-labels describe configuration; they do not indicate a successful connection check.
-Deletion removes the saved entry and its versions. It keeps saved credentials,
-provider accounts, and other connections.
-
-Each ordinary setting shows whether its effective value comes from the Colossus
-built-in default, a Global override, or a Workspace override. **Inherit** removes an
-override instead of copying the current value. The read-only effective YAML view is
-sanitized and marks Desktop-owned runtime identities and private storage paths.
-
-Global catalog editors preserve the complete managed resource revision. In particular,
-model reasoning effort and image-input capability, nullable provider defaults, explicit
-telemetry sensitivity acknowledgments, and the complete MCP transport contract can be
-reviewed without hand-editing YAML. MCP exposes exact arguments and tool names one per
-line, working directories, multiple native credential bindings, non-secret static
-headers, OAuth, research projections, stateless HTTP, and optional runtime limits.
-Credential values remain native-only; the editor stores and displays identifiers.
-
-To remove a saved MCP server, open **Settings → Global → MCP servers**, choose
-**Delete** beside the server, and confirm. First disable the server and apply changes
-in every workspace listed in the dialog; restore archived workspaces before doing so.
-Deletion removes the saved definition and all its versions, while keeping credentials
-and OAuth data. It does not uninstall the server or change repository configuration.
-Plugin-provided servers remain managed through their plugin.
-
-Use **Import config** in a Workspace to inspect `.colossus/config.yaml` without modifying
-the repository. Desktop proposes reusable catalog resources, Workspace overrides, and
-native credential mappings. Same-name conflicts require **Rename**, **Replace**, or
-**Skip**. Re-import compares the stored source hash before applying any changes.
-Repository `env:` references must map to native credentials; secret values and static
-MCP headers never cross into the WebView.
-
-For an active Workspace, provider, model, search, MCP, and OTLP health checks run through that
-Workspace's authenticated worker using its accepted revisions, CA trust, credentials,
-network grants, and sandbox. MCP OAuth status, login completion, and logout remain
-runtime-owned; Desktop exposes only bounded status and authorization metadata. The OTLP
-check emits bounded diagnostic signals and flushes the live host-owned exporters. Its
-result contains only per-signal pass, fail, or disabled status, never collector errors,
-endpoints, headers, credentials, or payloads.
-
-Applying a Workspace edit while work is active moves the Workspace to **Draining**. Existing runs
-finish against their pinned configuration, new runs are rejected, and Desktop restarts
-the Workspace only after the active set is empty. A bounded drain timeout leaves the current
-runtime and persisted settings unchanged.
-
-### 4. Start work
-
-Create new work, choose Plan or Execute, and submit a prompt. Every request names the
-selected runtime target. Access and execution boundary are separate controls. The
-default access profile is **Allow all**, and **Full access** is the default execution
-boundary for fresh Managed Local settings. Schema-v1–v3 migrations preserve the prior
-platform-isolated behavior: **Minimal** maps to **Offline isolated**, while
-**Development** and legacy `allow_all` map to **Workspace isolated**. Full access is
-intentionally unsafe: registered tools are allowed without built-in approval friction
-and may use ambient host filesystem, process, environment, and HTTP(S) resources. The
-warning banners at the top of the app are off by default. Enable
-**Show security warnings** under **Settings → Global → Desktop → Appearance**
-to display Full access and Developer Preview banners. This device-local preference
-persists across restarts and only
-controls banner visibility. Choose **Workspace isolated** or **Offline isolated**
-to restore platform containment; choose **Development** or
-**Minimal** to narrow tool decisions independently.
-
-Typing `/` at the start of the Work composer opens Desktop's bounded command menu.
-Desktop intercepts these commands locally; neither supported nor unknown slash commands
-are submitted as model prompts. The core set includes `/plan`, `/plan new`, `/plan on`,
-`/plan off`, `/plan status`, `/plans`, `/execute`, `/research`, `/new`, `/resume`,
-`/permissions`, `/work`, `/agents`, `/artifacts`, `/connections`, `/settings`, and
-`/tui`. Use Up or Down to select a completion, Tab to accept it, Escape to close the
-menu, and Enter to run an exact command. Plan approval, revision, and execution remain
-authenticated Plan-card actions in Desktop; use the bundled TUI for its larger
-`/plan use`, `/plan approve`, and `/plan execute` workflow instead of treating those
-strings as Desktop authority.
-
-The Work surface keeps every released, listable session record available. **Snapshots**
-lists immutable context-compaction records and opens their summary, message range,
-pinned facts, open tasks, touched files, notable tool results, and strategy. **Resources**
-links plans, sources, snapshots, and artifacts and expands delegated agents, goals,
-tasks, workspace-wide key decisions, memories, and research runs for direct inspection.
-The decision view shows the session where each decision was recorded. The session map
-uses bounded projections; opening these views never exposes canonical secrets or deletes
-conversation history.
-Managed Local's native layer requires an operating-system confirmation before widening
-access or execution authority. Its
-primary credential has exactly the run and prompt scopes plus the reviewed built-in tool
-ceiling for that selection. That ceiling includes bounded, non-recursive delegation when
-`agent.delegate` is selected; it never creates undeclared tools or administrative authority.
-Approval responses use a separate native-only, tool-less credential after the operating-system
-confirmation. Neither credential grants administrative authority or bypasses Agent Plugin
-policy.
-
-The permission selector beside the Work composer changes how Managed Local handles
-approval-required effects for subsequent work without restarting the runtime. **Deny**
-fails those effects closed, **Ask** pauses for the app's approval card, **Risk auto**
-allows eligible low-risk effects after evaluator review, and **Full access** satisfies
-approval obligations without asking. Moving to Risk auto or Full access requires an
-operating-system confirmation, and the mode cannot change while a managed run is
-active. This runtime-local selection returns to Ask when Managed Local restarts. It
-does not change policy decisions, tool authority, access profile, or execution boundaries,
-and it is unavailable for independently administered External targets.
-
-Settings shows the runtime as `Starting`, `Ready`, `Restarting`, `Stopping`, or
-`Failed`. Workspace and provider changes drain and restart the sidecar. Unexpected
-exits receive at most three bounded restart attempts; in-flight mutations are not
-automatically replayed.
-
-For a private provider or enterprise TLS interception root, open
-**Settings → Additional CA certificates** and import a PEM bundle. Desktop copies and
-validates it in private native storage and shows only its certificate count and SHA-256
-fingerprints. Import and removal restart Managed Local transactionally; the renderer
-never receives the original or private storage path.
-
-If an MCP server works in the CLI but fails in Desktop, run its workspace **Test**
-action and expand **Connection diagnostics**. The report comes from the active worker
-and includes the failing stage, a sanitized failure category, any HTTP status, elapsed
-time, runtime version, endpoint fingerprint, and the count and fingerprint of the
-additional CA roots actually loaded. The HTTP client uses direct connections with
-certificate verification; MCP subprocesses manage their own TLS configuration.
-
-On the same computer, run `colossus mcp doctor SERVER` with the CLI configuration that
-works. Compare `report.configuration` with the Desktop report. Different endpoint or
-CA fingerprints identify different effective configuration even if the Settings page
-looks similar. Matching fingerprints do not establish that the credentials or network
-permissions match. The doctor command performs ordinary authorized tool discovery and
-reports failures in `report.healthy` and `report.failure`.
-
-**Settings → Diagnostics → Export diagnostics** includes the last eight MCP health
-reports from the current Desktop process. Reproduce the failure before exporting.
-Reports exclude endpoint text, certificate paths, credential values, headers, and
-response bodies. The generic application version identifies the desktop shell; use
-the report's runtime version when comparing it with the CLI.
-
-### 5. Check the signed update channel
-
-Only stable builds advertise an automatic update channel. Desktop does not perform a
-background update request: the check occurs only after
-**Settings → Desktop updates → Check for updates**. Developer Preview, validation-only,
-and development builds have no update authority; install later previews manually from
-GitHub Releases.
-
-Both the metadata request and package download use the shared Colossus network
-configuration, including an imported additional CA bundle. The native updater rejects
-non-HTTPS endpoints, HTTP redirect downgrades, mismatched channel metadata, and
-unsupported platform targets. **Install update** opens a native confirmation, downloads
-the package, verifies its Tauri updater signature with the public key sealed into the
-application, and only then invokes the platform installer. The renderer receives only
-whether an update is configured or available and the public version/channel values; it
-does not receive update URLs, signatures, or package bytes.
-
-### 6. Add an External target when needed
-
-Use **External** for an installed daemon or fleet node that was enrolled for this
-application. External targets preserve their independent endpoint, certificate pin,
-instance identity, application credential, and lifecycle. Fleet can show multiple
-targets, while Work sends operations only to the selected target.
-
-In **Settings → External targets**, choose **Add daemon** and select the non-secret
-connection JSON created from the worker application-enrollment output. The strict file
-contains `instanceId`, `certificateSha256`, `publicApiDir`, `credentialService`, and
-`credentialAccount`, plus an optional human-readable `label`. Start from
-`apps/desktop/src-tauri/connection.json` when creating it; map the CLI's printed
-`instance_id`, `certificate_sha256`, and credential destination names to the camel-case
-fields. Never add the bearer credential or provider key to this file.
-
-Enroll an External target into Desktop's identity-bound keyring namespace with
-`credential-keyring-account auto`. The CLI expands `auto` to an account bound to the
-daemon's full instance ID and TLS certificate fingerprint and prints the exact result
-for the JSON:
-
-```bash
-colossus --config .colossus/config.yaml worker \
-  --public-api-dir "$HOME/.colossus-public-api" \
-  --enroll-application app:colossus-desktop \
-  --scope runs:execute --scope runs:read --scope runs:control \
-  --scope prompts:respond --scope approvals:respond --role primary \
-  --credential-keyring-service com.obscuritylabs.colossus.desktop.external \
-  --credential-keyring-account auto
+```text
+Explain the structure of this repository. Do not change files.
 ```
 
-Add exact `--tool TOOL_NAME` ceilings when that External target should execute tools.
-The explicit `approvals:respond` scope lets Desktop answer a policy approval for those
-effects; omit that scope when the target has no approval-gated tools or approvals are
-handled by a different application credential. It never expands the tool ceiling.
-The connection file cannot choose an arbitrary keychain entry: Desktop accepts only
-the fixed service and the account derived from the file's instance and certificate
-anchors. A target saved by an older Desktop build remains listed but reports that
-re-enrollment is required. Migrate its legacy credential explicitly while the worker is
-stopped:
+**Plan** creates a plan for review, **Execute** performs an authorized task, and **Research** gathers and organizes sources when that mode is available for the selected runtime. Your thread appears under its workspace in the sidebar. Open it later to continue the conversation or inspect [plans, activity, sources, and resources](../desktop/session-views.md).
 
-```bash
-colossus --config .colossus/config.yaml worker \
-  --public-api-dir "$HOME/.colossus-public-api" \
-  --enroll-application app:colossus-desktop \
-  --scope runs:execute --scope runs:read --scope runs:control \
-  --scope prompts:respond --scope approvals:respond --role primary \
-  --credential-keyring-service com.obscuritylabs.colossus.desktop.external \
-  --credential-keyring-account auto \
-  --retire-credential-keyring-service com.obscuritylabs.colossus.desktop \
-  --retire-credential-keyring-account colossus-public-api
-```
+[![A completed response in Colossus Desktop with the agent online and session views above the conversation](../assets/screenshots/desktop-conversation.png)](../assets/screenshots/desktop-conversation.png)
 
-Add the same exact `--tool` ceilings the application needs. Omit
-`--scope approvals:respond` during migration only when Desktop must not approve
-effects for that target. The CLI reads the legacy
-bearer only from the operating-system keyring, proves that it is an active credential
-for `app:colossus-desktop` under this daemon's API authentication root, delivers and
-activates the new identity-bound credential, durably revokes the legacy credential,
-and only then deletes the legacy keyring entry. The retirement flags must appear
-together and conflict with `--replace-credential`.
+*This response was produced by a live local Managed Local session using a connected Codex model. Its prompt requested no file access or changes.*
 
-Import the updated JSON to upgrade that same target in place. Desktop never copies a
-bearer out of a legacy selector. If the CLI reports an unconfirmed revocation or
-keyring cleanup, keep the printed non-secret credential IDs for reconciliation; the
-new credential remains active and neither bearer is printed. Do not delete the source
-selector's current value unless it is confirmed to be the printed prior credential;
-another process may have replaced that keyring entry.
+## Keep the app available
 
-Desktop accepts only a bounded, regular, non-symlink connection file owned by the
-current user and not writable by group or other users. Before import, selection,
-reconnection, or removal, a native dialog identifies the daemon by label, instance ID,
-and full certificate SHA-256 pin. It copies the validated trust
-anchors into owner-private native settings. The renderer receives only a newly
-generated opaque target ID and the display label; discovery paths, certificate pins,
-and keyring lookup labels are never returned to it. Removing a target deletes this
-saved native connection record but does not revoke its worker credential or stop the
-daemon; use worker administration when revocation is required.
+On macOS, closing the main window hides Desktop in the menu bar while managed work continues. Use the menu bar icon to reopen it, start **New Work**, or open a loaded pinned thread. Choose **Shut Down Colossus** to exit and stop its managed runtime. When work finishes or needs input while the window is hidden or unfocused, macOS may show a notification with the thread title and a short response or error preview. Control these notifications in macOS settings.
 
-A workspace already owned by another worker is never stopped or taken over. Connect
-that worker as External instead. Closing Desktop stops Managed Local after graceful
-drain and checkpoint; it does not stop an installed External daemon.
+## If setup does not finish
 
-### 7. Opt into local terminals
+- **Needs workspace:** choose an ordinary folder you own through Desktop's native picker. A folder moved or replaced since a previous preview may need to be selected again.
+- **Needs provider or model:** select a supported provider and model, complete its sign-in or native API-key prompt, or use the offline self-test first.
+- **Provider unavailable:** check the provider preset, endpoint, model ID, credential status, and the workspace's provider test in [Settings](../desktop/settings.md).
+- **Runtime integrity failure:** reinstall an intact Desktop release rather than replacing files inside its bundle.
+- **Workspace already owned:** leave the existing worker running and use an [External target](../desktop/external-targets.md) if you need to reach it from Desktop.
 
-The dedicated terminal WebView can open the bundled Colossus TUI for the active managed
-workspace and, on macOS, one fixed local shell. Enabling this feature for the first time
-requires a native operating-system confirmation. Consent recorded by an earlier
-TUI-only build does not silently enable shell authority. The terminal renderer cannot
-supply an executable, environment, absolute working directory, or arbitrary arguments.
-Clipboard escape writes, automatic URL opening, remote navigation, and general
-renderer-initiated process spawning are disabled; manual copy and paste remain user
-actions.
+## What's next?
 
-**Open Colossus TUI** starts the verified bundled CLI suspended with fixed arguments,
-binds its live code identity to the signed bundle manifest before resuming it, and then
-requires the CLI to open and attest the exact selected workspace before delivering
-worker authentication through bounded one-use inherited anonymous pipes that never
-traverse the PTY. It requires the existing managed worker and fails instead of opening
-a second writer. Inside that TUI, `/permissions` shows the active approval mode and
-`/permissions deny`, `/permissions ask`, `/permissions risk-auto`, or
-`/permissions full-access` changes it for subsequent interactive operations from that
-TUI. The selection is client-scoped: it does not change the managed worker default for
-Desktop or other clients. TUI actions remain inside normal Colossus policy and audit.
-External targets never offer a TUI action.
-
-**Open Shell** is a privileged local-user convenience, not an agent tool. Native macOS
-code launches exactly the validated system `/bin/zsh -l` with a cleared,
-native-constructed environment and the selected workspace. It receives no worker
-authentication. It runs outside Colossus policy, approvals, journal, and audit. It can
-remain available while Managed Local is unavailable so an operator can inspect or
-repair the repository directly. Closing the tab, disabling the feature, closing the
-terminal window, or exiting Desktop requests best-effort process-group cleanup; macOS
-cannot guarantee cleanup after an arbitrary shell child deliberately detaches and
-reparents itself.
-
-## Inspect Git
-
-For a local workspace with file access enabled, the Work header shows the current
-branch and changed-file count. Select it to open the resizable Git panel. **Changes**
-groups staged, unstaged, untracked, and conflicted files; **History** shows recent
-commits and their affected files. A file can appear in both staged and unstaged groups,
-while the header counts it once. The branch belongs to the current workspace checkout.
-
-Git refreshes on focus, workspace changes, run state changes, and periodically while
-the app is visible. You can also select **Refresh Git**. The reader is packaged with
-Desktop, so inspection does not require installing Git separately. It does not stage,
-commit, switch branches, or contact remotes.
-
-For linked worktrees and folders inside a larger repository, **Connect Git** opens a
-native confirmation before reading metadata outside the selected folder. Commit
-messages describe the repository, while file lists stay limited to the workspace.
-The panel explains unsupported configurations, limited results, and read errors.
-External daemon repositories cannot be inspected by the local reader.
-
-## Expected result
-
-The selected folder appears as a Managed Local workspace, runtime health reaches
-`Ready`, and a provider-backed or offline test run produces ordered durable updates.
-No daemon enrollment or terminal command is required for the default path.
-
-## Verification
-
-Open Settings and confirm the selected target, workspace display name, provider/model,
-access profile, and runtime health. Restart Managed Local once and confirm that Work
-refetches durable runs without resubmitting a create or effect request.
-
-If the local TUI is enabled, open it and confirm that it attaches to the existing worker;
-it must fail safely if Managed Local is not ready.
-
-## Failure path
-
-- **Needs workspace:** choose a folder through the native picker; renderer-supplied
-  paths are intentionally unsupported. Upgrades from a preview-era path-only or
-  inode-only binding also require this explicit reselection.
-- **Needs provider:** choose a supported provider preset, enter its model, and save a
-  valid key through the native secure prompt, or use the offline self-test.
-- **Runtime integrity failure:** do not replace bundled files. Reinstall a signed
-  desktop build.
-- **Workspace already owned:** leave the owner running and add its authenticated daemon
-  as an External target.
-- **External re-enrollment required:** provision the credential into the Desktop-bound
-  service with account `auto`, update the connection JSON from the command output, and
-  import it again.
-- **Provider failure:** confirm the fixed provider preset, model, keychain access, and
-  key format. Errors shown to the renderer are sanitized.
-- **TUI unavailable:** wait for Managed Local to become Ready; the launcher never falls
-  back to a second local runtime.
-
-## Next step
-
-Read [Core concepts](core-concepts.md) before broadening access, or learn the full
-[Terminal UI](../use/terminal-ui.md) interaction model.
+- [Work with threads](../desktop/work.md) to queue follow-ups and control a run.
+- [Open tools beside the conversation](../desktop/tools.md) to inspect files, changes, and outputs.
+- [Configure Desktop](../desktop/settings.md) to choose models, access, search, MCP, and other workspace settings.

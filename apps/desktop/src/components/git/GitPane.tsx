@@ -7,6 +7,7 @@ import {
 } from "@tabler/icons-react";
 import { useState, type Ref } from "react";
 import { gitBranchLabel } from "../../git";
+import { useDesktopPreferences } from "../../DesktopPreferencesProvider";
 import { GitChanges } from "./GitChanges";
 import { GitHistory } from "./GitHistory";
 import type { GitController } from "./useGit";
@@ -83,7 +84,8 @@ export function GitPane({
   ) => void;
   closeRef: Ref<HTMLButtonElement>;
 }) {
-  const [tab, setTab] = useState<"changes" | "history">("changes");
+  const { gitAutoRefresh, gitDefaultView } = useDesktopPreferences();
+  const [tab, setTab] = useState<"changes" | "history">(gitDefaultView);
   const repository = git.status?.repository;
   return (
     <section className="git-pane" aria-label="Workspace Git">
@@ -271,8 +273,10 @@ export function GitPane({
             </>
           ) : git.error ? (
             "Refresh failed"
-          ) : (
+          ) : gitAutoRefresh ? (
             "Auto-refresh on"
+          ) : (
+            "Manual refresh"
           )}
         </span>
       </footer>

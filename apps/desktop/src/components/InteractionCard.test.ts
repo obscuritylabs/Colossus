@@ -97,6 +97,8 @@ describe("command approval details", () => {
     expect(markup).not.toContain("<script>");
     expect(markup).toContain("Credential-bearing text is redacted");
     expect(markup).toContain("Show full command");
+    expect(markup).toContain("Review command…</button>");
+    expect(markup).not.toContain("Allow once</button>");
   });
 
   it("does not invent task intent for older targets", () => {
@@ -114,5 +116,6 @@ describe("command approval details", () => {
       }),
     );
     expect(markup).toContain("Task-specific reason unavailable");
+    expect(markup).toContain("Review approval…</button>");
   });
 });

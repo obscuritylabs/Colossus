@@ -1,4 +1,7 @@
-use colossus_sdk::{Colossus, NativeSidecarFailure, NativeSidecarStatus};
+use colossus_sdk::{
+    ApiError, Colossus, ListRunsRequest, ListRunsResponse, NativeSidecarFailure,
+    NativeSidecarStatus,
+};
 use colossus_worker_protocol::WorkerControlClient;
 use std::{
     collections::HashMap,
@@ -17,6 +20,7 @@ use tokio::sync::{
 
 use crate::{
     desktop_dto::{DesktopApprovalModeDto, ManagedRuntimeStateDto, RuntimeFailureCodeDto},
+    run_list::RunList,
     terminal::{TerminalKind, TerminalManager, TerminalPlanContext, TerminalWorkspace},
 };
 
@@ -26,6 +30,7 @@ pub(crate) const MAX_LIVE_MANAGED_SPACES: usize = 4;
 const MAX_NATIVE_WATCHES_PER_TARGET: usize = 8;
 const MAX_NATIVE_UNARY_CALLS_PER_TARGET: usize = 16;
 const MAX_CONCURRENT_EXTERNAL_PROBES: usize = 4;
+const MAX_CONCURRENT_EXTERNAL_CREDENTIAL_READS: usize = 4;
 const MAX_RUN_TARGET_BINDINGS: usize = 4_096;
 const EXTERNAL_PROBE_COOLDOWN: Duration = Duration::from_secs(15);
 
@@ -78,6 +83,7 @@ impl SelectedTargetLease<'_> {
 struct TargetLimits {
     watch_slots: Arc<Semaphore>,
     unary_slots: Arc<Semaphore>,
+    run_list: RunList,
 }
 
 impl TargetHandle {
@@ -97,6 +103,13 @@ impl TargetHandle {
         self.limits.try_unary_slot()
     }
 
+    pub(crate) async fn list_runs(
+        &self,
+        request: ListRunsRequest,
+    ) -> Result<ListRunsResponse, ApiError> {
+        self.limits.run_list.list_runs(&self.client, request).await
+    }
+
     fn is_closed(&self) -> bool {
         self.client.agent_runs().is_closed()
     }
@@ -107,6 +120,7 @@ impl TargetLimits {
         Self {
             watch_slots: Arc::new(Semaphore::new(MAX_NATIVE_WATCHES_PER_TARGET)),
             unary_slots: Arc::new(Semaphore::new(MAX_NATIVE_UNARY_CALLS_PER_TARGET)),
+            run_list: RunList::default(),
         }
     }
 
@@ -252,11 +266,15 @@ pub(crate) struct AppState {
         >,
     >,
     pub(crate) browser: crate::browser::BrowserManager,
+    pub(crate) cloud_connections: Mutex<HashMap<String, crate::cloud_connector::CloudSession>>,
+    pub(crate) cloud_operation: Mutex<()>,
     pub(crate) credential_vault:
         StdMutex<Option<Arc<crate::desktop_credentials::DesktopCredentials>>>,
     pub(crate) mcp_health_history:
         StdMutex<std::collections::VecDeque<crate::mcp_health::RecentMcpHealth>>,
     pub(crate) plugin_operations: StdMutex<HashMap<String, (String, watch::Sender<bool>)>>,
+    #[cfg(windows)]
+    outlook_companions: Mutex<HashMap<String, crate::outlook_companion::OutlookCompanion>>,
     targets: RwLock<HashMap<String, TargetHandle>>,
     selected_target_id: RwLock<Option<String>>,
     selection_epoch: AtomicU64,
@@ -277,6 +295,7 @@ pub(crate) struct AppState {
     external_health: RwLock<HashMap<String, ExternalHealth>>,
     external_health_generation: AtomicU64,
     external_probe_slots: Arc<Semaphore>,
+    external_credential_read_slots: Arc<Semaphore>,
     connect_guard: Mutex<()>,
     approval_mode_run_guard: Arc<RwLock<()>>,
     managed_spaces: RwLock<HashMap<String, Arc<ManagedSpaceRuntime>>>,
@@ -416,12 +435,16 @@ impl Default for AppState {
         let (selection_updates, _) = watch::channel(0);
         Self {
             browser: crate::browser::BrowserManager::default(),
+            cloud_connections: Mutex::new(HashMap::new()),
+            cloud_operation: Mutex::new(()),
             configuration_updates: Mutex::new(HashMap::new()),
             targets: RwLock::new(HashMap::new()),
             credential_vault: StdMutex::new(None),
             mcp_health_history: StdMutex::new(std::collections::VecDeque::new()),
             selected_target_id: RwLock::new(None),
             plugin_operations: StdMutex::new(HashMap::new()),
+            #[cfg(windows)]
+            outlook_companions: Mutex::new(HashMap::new()),
             selection_epoch: AtomicU64::new(0),
             selection_updates,
             run_targets: RwLock::new(HashMap::new()),
@@ -440,6 +463,9 @@ impl Default for AppState {
             external_health: RwLock::new(HashMap::new()),
             external_health_generation: AtomicU64::new(0),
             external_probe_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_EXTERNAL_PROBES)),
+            external_credential_read_slots: Arc::new(Semaphore::new(
+                MAX_CONCURRENT_EXTERNAL_CREDENTIAL_READS,
+            )),
             connect_guard: Mutex::new(()),
             approval_mode_run_guard: Arc::new(RwLock::new(())),
             managed_spaces: RwLock::new(HashMap::new()),
@@ -557,7 +583,85 @@ impl AppState {
     }
 
     pub(crate) async fn remove_target(&self, target_id: &str) -> Option<TargetHandle> {
-        self.targets.write().await.remove(target_id)
+        let target = self.targets.write().await.remove(target_id);
+        #[cfg(windows)]
+        self.stop_outlook_companion_for(target_id).await;
+        target
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn install_outlook_companion_for(
+        &self,
+        space_id: &str,
+        companion: crate::outlook_companion::OutlookCompanion,
+    ) {
+        let previous = self
+            .outlook_companions
+            .lock()
+            .await
+            .insert(space_id.to_owned(), companion);
+        if let Some(previous) = previous {
+            previous.stop().await;
+        }
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn stop_outlook_companion_for(&self, space_id: &str) {
+        let companion = self.outlook_companions.lock().await.remove(space_id);
+        if let Some(companion) = companion {
+            companion.stop().await;
+        }
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn stop_all_outlook_companions(&self) {
+        let companions = self
+            .outlook_companions
+            .lock()
+            .await
+            .drain()
+            .map(|(_, companion)| companion)
+            .collect::<Vec<_>>();
+        for companion in companions {
+            companion.stop().await;
+        }
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn outlook_companion_digest_for(&self, space_id: &str) -> Option<String> {
+        self.outlook_companions
+            .lock()
+            .await
+            .get_mut(space_id)
+            .and_then(crate::outlook_companion::OutlookCompanion::active_digest)
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn outlook_companion_snapshots(&self) -> Vec<(String, String)> {
+        self.outlook_companions
+            .lock()
+            .await
+            .iter()
+            .map(|(space_id, companion)| (space_id.clone(), companion.digest.clone()))
+            .collect()
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn stop_outlook_companion_if_digest(&self, space_id: &str, digest: &str) {
+        let companion = {
+            let mut current = self.outlook_companions.lock().await;
+            if current
+                .get(space_id)
+                .is_some_and(|value| value.digest == digest)
+            {
+                current.remove(space_id)
+            } else {
+                None
+            }
+        };
+        if let Some(companion) = companion {
+            companion.stop().await;
+        }
     }
 
     pub(crate) async fn connected(&self, target_id: &str) -> bool {
@@ -593,6 +697,8 @@ impl AppState {
             return;
         }
         *selected = target_id;
+        // Never expose the old workspace while the new target is activating.
+        self.terminal_workspace.write().await.take();
         self.browser.selection_changed(selected.clone());
         self.run_targets.write().await.clear();
         let epoch = self
@@ -1130,6 +1236,10 @@ impl AppState {
         Some(generation)
     }
 
+    pub(crate) fn external_credential_read_slots(&self) -> Arc<Semaphore> {
+        Arc::clone(&self.external_credential_read_slots)
+    }
+
     pub(crate) async fn acquire_external_probe_slot(&self) -> Option<OwnedSemaphorePermit> {
         Arc::clone(&self.external_probe_slots)
             .acquire_owned()
@@ -1196,11 +1306,17 @@ impl AppState {
         self.approval_mode_run_guard.write().await
     }
 
+    pub(crate) async fn approval_guard(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.approval_guard.lock().await
+    }
+
     pub(crate) fn try_approval_guard(&self) -> Option<tokio::sync::MutexGuard<'_, ()>> {
         self.approval_guard.try_lock().ok()
     }
 
     pub(crate) async fn close_all(&self) {
+        #[cfg(windows)]
+        self.stop_all_outlook_companions().await;
         {
             // Terminal processes may hold worker IPC (notably the bundled TUI).
             // Revoke their document authority and tear down their process trees
@@ -1982,6 +2098,14 @@ mod tests {
             restarted.config,
             Some("/private/tmp/config-2.yaml".into()),
             "a new TUI must receive only the current runtime configuration"
+        );
+        state.begin_managed_lifecycle_for("space-other").await;
+        state.select_target(Some("space-other".into())).await;
+        let (_, workspace, selected_managed) = state.terminal_workspace_context().await;
+        assert!(selected_managed);
+        assert!(
+            workspace.is_none(),
+            "selection must clear the previous workspace before activation"
         );
     }
 

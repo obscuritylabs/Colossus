@@ -1,3 +1,6 @@
+mod model_selection;
+pub(crate) use model_selection::select_configured_models;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -128,6 +131,9 @@ pub(crate) struct McpServerSetting {
     pub(crate) credential_headers: BTreeMap<String, McpCredentialHeaderSetting>,
     #[serde(default)]
     pub(crate) allow_stateless: bool,
+    /// Remote MCP protocol lifecycle.
+    #[serde(default)]
+    pub(crate) protocol_version: colossus_contracts::McpProtocolVersion,
     #[serde(default)]
     pub(crate) oauth: Option<McpOAuthSetting>,
     #[serde(default)]
@@ -230,7 +236,10 @@ impl Default for GlobalDefaultsSetting {
             current_revision: 1,
             revisions: vec![CatalogRevisionSetting {
                 revision: 1,
-                value: DefaultOverridesSetting::default(),
+                value: DefaultOverridesSetting {
+                    terminal_enabled: Some(true),
+                    ..DefaultOverridesSetting::default()
+                },
             }],
         }
     }
@@ -255,6 +264,9 @@ pub(crate) struct GlobalConfigurationSetting {
     pub(crate) revision: u64,
     #[serde(default)]
     pub(crate) providers: Vec<CatalogEntrySetting<ProviderSetting>>,
+    /// User-authored presentation overrides, keyed by stable catalog ID.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) provider_presentations: BTreeMap<String, crate::setup_package::ProviderPresentation>,
     #[serde(default)]
     pub(crate) models: Vec<CatalogEntrySetting<ModelSetting>>,
     #[serde(default)]
@@ -274,6 +286,7 @@ impl Default for GlobalConfigurationSetting {
         Self {
             revision: 1,
             providers: Vec::new(),
+            provider_presentations: BTreeMap::new(),
             models: Vec::new(),
             mcp_servers: Vec::new(),
             search_providers: Vec::new(),
@@ -339,19 +352,13 @@ pub(crate) fn resolve_space_configuration(
         .defaults
         .revision(space.configuration.accepted_global_revision)
         .ok_or_else(configuration_error)?;
-    let mut field_overrides = defaults
-        .field_overrides
-        .iter()
-        .map(|field| (field.field_id.clone(), field.value.clone()))
-        .collect::<BTreeMap<_, _>>();
-    for field in &space.configuration.field_overrides {
-        field_overrides.insert(field.field_id.clone(), field.value.clone());
-    }
+    let field_overrides = merge_field_overrides(defaults, &space.configuration)?;
     let mut providers = resolve_catalog_values(
         &global.providers,
         &space.configuration.catalog_revisions,
         "provider:",
     )?;
+    model_selection::require_provider_credentials(&providers)?;
     for provider in &mut providers {
         if let Some(credential) = provider.credential_id.as_mut() {
             apply_credential_override(credential, &space.configuration.credential_overrides);
@@ -418,7 +425,7 @@ pub(crate) fn resolve_space_configuration(
             .configuration
             .terminal_enabled_override
             .or(defaults.terminal_enabled)
-            .unwrap_or(false),
+            .unwrap_or(true),
         field_overrides: field_overrides
             .into_iter()
             .map(|(field_id, value)| FieldOverrideSetting { field_id, value })
@@ -431,6 +438,75 @@ pub(crate) fn resolve_space_configuration(
         mcp_servers,
         telemetry,
     })
+}
+
+fn merge_field_overrides(
+    defaults: &DefaultOverridesSetting,
+    space: &SpaceConfigurationSetting,
+) -> Result<BTreeMap<String, Value>, CommandErrorDto> {
+    let mut fields = defaults
+        .field_overrides
+        .iter()
+        .map(|field| (field.field_id.clone(), field.value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for field in &space.field_overrides {
+        let value = if field.field_id == "plugins.mcpServers"
+            && field.value.get(PLUGIN_SERVER_PATCH_MARKER) == Some(&Value::Bool(true))
+        {
+            merge_plugin_server_overrides(fields.get(&field.field_id), &field.value)?
+        } else {
+            field.value.clone()
+        };
+        fields.insert(field.field_id.clone(), value);
+    }
+    Ok(fields)
+}
+
+pub(crate) const PLUGIN_SERVER_PATCH_MARKER: &str = "$colossusPatchV1";
+
+fn merge_plugin_server_overrides(
+    inherited: Option<&Value>,
+    local: &Value,
+) -> Result<Value, CommandErrorDto> {
+    let mut servers = match inherited {
+        Some(value) => value.as_object().cloned().ok_or_else(configuration_error)?,
+        None => serde_json::Map::new(),
+    };
+    let local = local.as_object().ok_or_else(configuration_error)?;
+    for (name, override_value) in local {
+        if name == PLUGIN_SERVER_PATCH_MARKER {
+            continue;
+        }
+        let mut server = match servers.get(name) {
+            Some(value) => value.as_object().cloned().ok_or_else(configuration_error)?,
+            None => serde_json::Map::new(),
+        };
+        let patch = override_value.as_object().ok_or_else(configuration_error)?;
+        let inherited_binding = server
+            .get("workspacePluginDigest")
+            .cloned()
+            .unwrap_or(Value::Null);
+        if !patch.contains_key("workspacePluginDigest") && inherited_binding != Value::Null {
+            // A legacy child patch has no evidence that its credentials or tool
+            // authority belong to the newly inherited workspace source. Require
+            // an explicit reconnect, releasing neither parent's nor child's secrets.
+            server.clear();
+            server.insert("workspacePluginDigest".into(), inherited_binding);
+            server.insert("enabled".into(), Value::Bool(false));
+            server.insert("allowedTools".into(), Value::Array(Vec::new()));
+        } else {
+            if let Some(binding) = patch.get("workspacePluginDigest")
+                && binding != &inherited_binding
+            {
+                // Source changes start with a new connection. Global or previous local
+                // credentials and authority cannot flow into an explicitly rebound source.
+                server.clear();
+            }
+            server.extend(patch.clone());
+        }
+        servers.insert(name.clone(), Value::Object(server));
+    }
+    Ok(Value::Object(servers))
 }
 
 fn resolve_optional_catalog_value<T: Clone>(
@@ -616,6 +692,12 @@ pub(crate) fn validate_configuration(
         || global.credentials.len() > MAX_CATALOG_ENTRIES
     {
         return Err(configuration_error());
+    }
+    for (id, presentation) in &global.provider_presentations {
+        if !global.providers.iter().any(|entry| &entry.id == id) {
+            return Err(configuration_error());
+        }
+        presentation.clone().normalized()?;
     }
     validate_default_revisions(&global.defaults)?;
     validate_entries(&global.providers)?;
@@ -980,10 +1062,12 @@ mod tests {
     use crate::desktop_settings::{
         ModelCapabilitiesSetting, ProviderKindSetting, WorkspaceSetting,
     };
+    use serde_json::json;
     use std::path::PathBuf;
 
     fn provider(base_url: &str) -> ProviderSetting {
         ProviderSetting {
+            credential_required: false,
             profile: "primary-provider".into(),
             kind: ProviderKindSetting::Compatible,
             base_url: base_url.into(),
@@ -1000,9 +1084,10 @@ mod tests {
             context_window_tokens: 32_768,
             max_output_tokens: 4_096,
             capabilities: ModelCapabilitiesSetting {
-                tool_calls: true,
-                streaming: true,
-                image_inputs: false,
+                tool_calls: true.into(),
+                streaming: true.into(),
+                image_inputs: false.into(),
+                ..Default::default()
             },
             reasoning_effort: None,
         }
@@ -1027,8 +1112,40 @@ mod tests {
             access_profile: AccessProfileSetting::AllowAll,
             execution_boundary: ExecutionBoundarySetting::FullAccess,
             terminal_enabled: false,
+            outlook_companion_enabled: false,
             configuration: SpaceConfigurationSetting::default(),
         }
+    }
+
+    #[test]
+    fn local_terminal_defaults_on_but_explicit_off_is_preserved() {
+        let mut global = GlobalConfigurationSetting::default();
+        let mut workspace = space("one", provider("https://example.test/v1"));
+        workspace.configuration.accepted_global_revision = global.revision;
+        assert_eq!(
+            global.defaults.current().unwrap().terminal_enabled,
+            Some(true)
+        );
+        assert!(
+            resolve_space_configuration(&global, &workspace)
+                .unwrap()
+                .terminal_enabled
+        );
+
+        workspace.configuration.terminal_enabled_override = Some(false);
+        assert!(
+            !resolve_space_configuration(&global, &workspace)
+                .unwrap()
+                .terminal_enabled
+        );
+
+        global.defaults.revisions[0].value.terminal_enabled = None;
+        workspace.configuration.terminal_enabled_override = None;
+        assert!(
+            resolve_space_configuration(&global, &workspace)
+                .unwrap()
+                .terminal_enabled
+        );
     }
 
     #[test]
@@ -1052,6 +1169,51 @@ mod tests {
             spaces[0].configuration.catalog_revisions["provider:primary-provider"].resource_id,
             spaces[2].configuration.catalog_revisions["provider:primary-provider"].resource_id
         );
+    }
+
+    #[test]
+    fn pending_imported_provider_cannot_be_activated_as_an_anonymous_connection() {
+        let mut connection = provider("https://example.test/v1");
+        connection.credential_id = None;
+        connection.credential_required = true;
+        let mut spaces = vec![space("one", connection)];
+        let mut global = GlobalConfigurationSetting::default();
+        initialize_catalog(&mut global, &mut spaces);
+        let error = resolve_space_configuration(&global, &spaces[0]).unwrap_err();
+        assert!(format!("{error:?}").contains("Add an API key"));
+    }
+
+    #[test]
+    fn explicit_setup_selection_replaces_runtime_model_pins_and_keeps_other_workspaces() {
+        let mut spaces = vec![
+            space("one", provider("https://old.example.test/v1")),
+            space("two", provider("https://old.example.test/v1")),
+        ];
+        let mut global = GlobalConfigurationSetting::default();
+        initialize_catalog(&mut global, &mut spaces);
+        let untouched = spaces[1].clone();
+        let new_provider = provider("https://new.example.test/v1");
+        let new_model = model("new-model");
+        let mut settings = crate::desktop_settings::DesktopSettings {
+            selected_space_id: Some(spaces[0].id.clone()),
+            providers: vec![new_provider.clone()],
+            models: vec![new_model.clone()],
+            model_roles: BTreeMap::from([("primary".into(), new_model.profile.clone())]),
+            spaces,
+            global_configuration: global,
+            ..Default::default()
+        };
+        select_configured_models(&mut settings).unwrap();
+        let resolved =
+            resolve_space_configuration(&settings.global_configuration, &settings.spaces[0])
+                .unwrap();
+        assert_eq!(resolved.providers, vec![new_provider]);
+        assert_eq!(resolved.models, vec![new_model]);
+        assert_eq!(resolved.model_roles, settings.model_roles);
+        assert_eq!(settings.spaces[1], untouched);
+        let before = settings.global_configuration.clone();
+        select_configured_models(&mut settings).unwrap();
+        assert_eq!(settings.global_configuration, before);
     }
 
     #[test]
@@ -1160,6 +1322,125 @@ mod tests {
             spaces[0].configuration.catalog_revisions["model:primary"],
             model_pin
         );
+    }
+
+    #[test]
+    fn plugin_server_override_keeps_unrelated_inherited_servers() {
+        let mut spaces = vec![space("one", provider("https://example.test/v1"))];
+        let mut global = GlobalConfigurationSetting::default();
+        initialize_catalog(&mut global, &mut spaces);
+        global.defaults.revisions[0]
+            .value
+            .field_overrides
+            .push(FieldOverrideSetting {
+                field_id: "plugins.mcpServers".into(),
+                value: serde_json::json!({
+                    "example/mail": {"enabled": false, "allowedTools": ["list_mail"]},
+                    "other/docs": {"enabled": true, "allowedTools": ["search"]}
+                }),
+            });
+        spaces[0]
+            .configuration
+            .field_overrides
+            .push(FieldOverrideSetting {
+                field_id: "plugins.mcpServers".into(),
+                value: serde_json::json!({
+                    "$colossusPatchV1": true,
+                    "example/mail": {"enabled": true}
+                }),
+            });
+        let resolved = resolve_space_configuration(&global, &spaces[0]).expect("resolved");
+        let servers = &resolved
+            .field_overrides
+            .iter()
+            .find(|field| field.field_id == "plugins.mcpServers")
+            .expect("plugin servers")
+            .value;
+        assert_eq!(servers["example/mail"]["enabled"], true);
+        assert_eq!(
+            servers["example/mail"]["allowedTools"],
+            serde_json::json!(["list_mail"])
+        );
+        assert_eq!(
+            servers["other/docs"]["allowedTools"],
+            serde_json::json!(["search"])
+        );
+    }
+
+    #[test]
+    fn legacy_plugin_server_override_still_replaces_global_servers() {
+        let mut spaces = vec![space("one", provider("https://example.test/v1"))];
+        let mut global = GlobalConfigurationSetting::default();
+        initialize_catalog(&mut global, &mut spaces);
+        global.defaults.revisions[0]
+            .value
+            .field_overrides
+            .push(FieldOverrideSetting {
+                field_id: "plugins.mcpServers".into(),
+                value: serde_json::json!({"global/mail": {"enabled": true}}),
+            });
+        spaces[0]
+            .configuration
+            .field_overrides
+            .push(FieldOverrideSetting {
+                field_id: "plugins.mcpServers".into(),
+                value: serde_json::json!({"local/docs": {"enabled": true}}),
+            });
+        let resolved = resolve_space_configuration(&global, &spaces[0]).expect("resolved");
+        let servers = &resolved
+            .field_overrides
+            .iter()
+            .find(|field| field.field_id == "plugins.mcpServers")
+            .expect("plugin servers")
+            .value;
+        assert!(servers.get("global/mail").is_none());
+        assert_eq!(servers["local/docs"]["enabled"], true);
+    }
+
+    #[test]
+    fn source_binding_change_drops_inherited_credentials_and_authority() {
+        let inherited = json!({ "example/mail": { "enabled": true, "allowedTools": ["old"], "credentialHeaders": { "Authorization": "vault:old" }, "environment": { "TOKEN": "env:OLD" }, "oauth": { "clientId": "old" } }, "other/docs": { "enabled": true } });
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let local = json!({ PLUGIN_SERVER_PATCH_MARKER: true, "example/mail": { "workspacePluginDigest": digest, "enabled": true, "allowedTools": ["search"] } });
+        let merged =
+            merge_plugin_server_overrides(Some(&inherited), &local).expect("local binding");
+        assert_eq!(merged["example/mail"], local["example/mail"]);
+        assert_eq!(merged["other/docs"], inherited["other/docs"]);
+        let global = json!({ PLUGIN_SERVER_PATCH_MARKER: true, "example/mail": { "workspacePluginDigest": null, "enabled": false } });
+        let reverted =
+            merge_plugin_server_overrides(Some(&merged), &global).expect("installed binding");
+        assert_eq!(reverted["example/mail"], global["example/mail"]);
+    }
+
+    #[test]
+    fn source_binding_inherited_workspace_requires_explicit_child_reconnection() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let mut spaces = vec![space("one", provider("https://example.test/v1"))];
+        let mut global = GlobalConfigurationSetting::default();
+        initialize_catalog(&mut global, &mut spaces);
+        global.defaults.revisions[0].value.field_overrides.push(FieldOverrideSetting {
+            field_id: "plugins.mcpServers".into(),
+            value: json!({ "example/mail": { "workspacePluginDigest": digest, "enabled": true, "allowedTools": ["parent"], "credentialHeaders": { "Authorization": "vault:parent" } }, "other/docs": { "enabled": true } }),
+        });
+        spaces[0].configuration.field_overrides.push(FieldOverrideSetting {
+            field_id: "plugins.mcpServers".into(),
+            value: json!({ PLUGIN_SERVER_PATCH_MARKER: true, "example/mail": { "enabled": true, "allowedTools": ["old"], "credentialHeaders": { "Authorization": "vault:old" }, "environment": { "TOKEN": "env:OLD" }, "oauth": { "clientId": "old" } } }),
+        });
+        let resolved = resolve_space_configuration(&global, &spaces[0]).expect("resolved defaults");
+        let servers = &resolved
+            .field_overrides
+            .iter()
+            .find(|field| field.field_id == "plugins.mcpServers")
+            .unwrap()
+            .value;
+        assert_eq!(
+            servers["example/mail"],
+            json!({ "workspacePluginDigest": digest, "enabled": false, "allowedTools": [] })
+        );
+        assert_eq!(servers["other/docs"], json!({ "enabled": true }));
+        let explicit = json!({ PLUGIN_SERVER_PATCH_MARKER: true, "example/mail": { "workspacePluginDigest": digest, "enabled": true, "allowedTools": ["search"], "credentialHeaders": { "Authorization": "vault:fresh" } } });
+        let reconnected = merge_plugin_server_overrides(Some(servers), &explicit).unwrap();
+        assert_eq!(reconnected["example/mail"], explicit["example/mail"]);
     }
 
     #[test]

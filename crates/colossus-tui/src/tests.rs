@@ -1,6 +1,62 @@
 use super::*;
 
 mod command_approval;
+mod layout;
+
+#[test]
+fn lifecycle_observer_tracks_busy_decisions_and_session_changes() {
+    struct Recorder(std::sync::Mutex<Vec<(String, bool, bool, String)>>);
+
+    impl InteractiveLifecycleObserver for Recorder {
+        fn observe(&self, session_id: &str, working: bool, blocked: bool, approval_mode: &str) {
+            self.0.lock().expect("recording").push((
+                session_id.into(),
+                working,
+                blocked,
+                approval_mode.into(),
+            ));
+        }
+    }
+
+    let recorder = Recorder(std::sync::Mutex::new(Vec::new()));
+    let mut state = TuiState::from_snapshot(snapshot());
+    observe_lifecycle(&state, Some(&recorder));
+    state.operation = Some(OperationKind::Run);
+    observe_lifecycle(&state, Some(&recorder));
+    state.operation = Some(OperationKind::Command);
+    let (session_response, _session_receiver) = oneshot::channel();
+    handle_host_event(
+        &mut state,
+        HostEvent::SessionBrowser(session_browser(session_response)),
+    );
+    observe_lifecycle(&state, Some(&recorder));
+    state.overlay = None;
+    let (theme_response, _theme_receiver) = oneshot::channel();
+    handle_host_event(
+        &mut state,
+        HostEvent::ThemePicker(theme_picker(theme_response)),
+    );
+    observe_lifecycle(&state, Some(&recorder));
+    state.operation = None;
+    state.overlay = Some(Overlay::QueuePaused);
+    observe_lifecycle(&state, Some(&recorder));
+    state.overlay = None;
+    state.session_id = "next-session".into();
+    state.footer.approval_mode = "deny".into();
+    observe_lifecycle(&state, Some(&recorder));
+
+    assert_eq!(
+        *recorder.0.lock().expect("recording"),
+        vec![
+            ("019f-test".into(), false, false, "ask".into()),
+            ("019f-test".into(), true, false, "ask".into()),
+            ("019f-test".into(), true, true, "ask".into()),
+            ("019f-test".into(), true, true, "ask".into()),
+            ("019f-test".into(), false, true, "ask".into()),
+            ("next-session".into(), false, false, "deny".into()),
+        ]
+    );
+}
 
 #[test]
 fn terminal_query_requires_a_real_emulator_hint() {
@@ -26,7 +82,7 @@ use colossus_contracts::{
 };
 use ratatui::{Terminal, backend::TestBackend};
 
-fn snapshot() -> InteractiveSnapshot {
+pub(super) fn snapshot() -> InteractiveSnapshot {
     InteractiveSnapshot {
         session_id: "019f-test".into(),
         fresh_session: false,
@@ -210,46 +266,38 @@ fn launch_rail_labels_the_sandbox_profile_field_as_the_sandbox_profile() {
 }
 
 #[test]
-fn footer_uses_a_terminal_native_obscurity_labs_segment() {
-    let backend = TestBackend::new(80, 1);
+fn footer_uses_readable_highlights_for_mode_and_status() {
+    let backend = TestBackend::new(80, FOOTER_HEIGHT);
     let mut terminal = Terminal::new(backend).expect("test terminal");
     let state = TuiState::from_snapshot(snapshot());
     terminal
-        .draw(|frame| render_footer(frame, &state, frame.area()))
-        .expect("draw branded footer");
+        .draw(|frame| render_footer(frame, &state, frame.area(), true))
+        .expect("draw footer");
     let rendered = (0..80)
         .filter_map(|x| terminal.backend().buffer().cell((x, 0)))
         .map(|cell| cell.symbol())
         .collect::<String>();
     assert!(
-        rendered.starts_with(" Obscurity Labs // COLOSSUS 019f-tes"),
+        rendered.contains("execute") && rendered.contains("ready · approval ask"),
         "{rendered}"
     );
-    let brand = terminal
-        .backend()
-        .buffer()
-        .cell((1, 0))
-        .expect("brand cell");
-    assert_eq!(
-        brand.fg,
-        ratatui_style(TerminalPalette::for_preferences(&state.preferences).meta_style())
-            .fg
-            .unwrap_or(Color::Reset)
-    );
-    assert!(brand.modifier.contains(Modifier::BOLD));
+    let mode = terminal.backend().buffer().cell((1, 0)).expect("mode cell");
+    assert_eq!(mode.fg, Color::Black);
+    assert_ne!(mode.bg, Color::Reset);
+    assert!(mode.modifier.contains(Modifier::BOLD));
 
     let mut mono_source = snapshot();
     mono_source.preferences.theme = colossus_contracts::ThemeName::Mono;
     let mono = TuiState::from_snapshot(mono_source);
     terminal
-        .draw(|frame| render_footer(frame, &mono, frame.area()))
+        .draw(|frame| render_footer(frame, &mono, frame.area(), true))
         .expect("draw monochrome branded footer");
     let brand = terminal
         .backend()
         .buffer()
         .cell((1, 0))
         .expect("monochrome brand cell");
-    assert_eq!(brand.bg, Color::Reset);
+    assert_eq!(brand.bg, Color::Gray);
     assert!(brand.modifier.contains(Modifier::BOLD));
 }
 
@@ -427,7 +475,7 @@ fn danger_full_access_posture_adds_a_non_durable_card_and_persistent_footer_badg
     let backend = TestBackend::new(80, 1);
     let mut terminal = Terminal::new(backend).expect("test terminal");
     terminal
-        .draw(|frame| render_footer(frame, &state, frame.area()))
+        .draw(|frame| render_footer(frame, &state, frame.area(), true))
         .expect("draw footer");
     let footer = (0..80)
         .filter_map(|x| terminal.backend().buffer().cell((x, 0)))
@@ -435,24 +483,26 @@ fn danger_full_access_posture_adds_a_non_durable_card_and_persistent_footer_badg
         .collect::<String>();
     assert!(footer.contains("Security: 2"));
     assert!(
-        footer.starts_with(" Obscurity Labs // COLOSSUS  ⚠ Security: 2"),
-        "the branded footer must retain the persistent security status: {footer}"
+        footer.contains("execute") && footer.contains("ready · approval ask"),
+        "status and permissions must remain readable beside the warning count: {footer}"
     );
-    assert_ne!(
+    assert_eq!(
         terminal
             .backend()
             .buffer()
             .cell((79, 0))
             .expect("footer surface cell")
             .bg,
-        Color::Reset,
-        "the footer surface should fill the available status row"
+        chrome_band_style(&TerminalPalette::for_preferences(&state.preferences))
+            .bg
+            .expect("status surface"),
+        "the status band must have a quiet neutral surface"
     );
     assert_ne!(
         terminal
             .backend()
             .buffer()
-            .cell((31, 0))
+            .cell((65, 0))
             .expect("security badge cell")
             .bg,
         terminal
@@ -461,18 +511,18 @@ fn danger_full_access_posture_adds_a_non_durable_card_and_persistent_footer_badg
             .cell((79, 0))
             .expect("footer surface cell")
             .bg,
-        "the warning badge should read as a distinct shell-style segment"
+        "the warning badge must stand out from the status surface"
     );
     for width in [40, 42, 43] {
         let mut terminal = Terminal::new(TestBackend::new(width, 1)).expect("narrow terminal");
         terminal
-            .draw(|frame| render_footer(frame, &state, frame.area()))
+            .draw(|frame| render_footer(frame, &state, frame.area(), true))
             .expect("draw narrow footer");
         let footer = (0..width)
             .filter_map(|x| terminal.backend().buffer().cell((x, 0)))
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(footer.contains("Obscurity Labs"), "{width}: {footer}");
+        assert!(footer.contains("ready · approval ask"), "{width}: {footer}");
         assert!(
             footer.contains("⚠ Security: 2"),
             "the warning count must remain visible at {width} columns: {footer}"
@@ -879,20 +929,29 @@ fn preview_cache_bounds_resize_workers_per_image() {
 
 #[test]
 fn parser_handles_process_local_permission_modes() {
-    assert_eq!(
-        parse_interactive_command("/permissions"),
-        InteractiveCommand::Runtime(RuntimeCommand::Permissions(None))
-    );
+    for input in ["/permissions", " \t/permissions\r\n"] {
+        assert_eq!(
+            parse_interactive_command(input),
+            InteractiveCommand::Runtime(RuntimeCommand::Permissions(None)),
+            "{input:?}"
+        );
+    }
     for (value, mode) in [
         ("deny", InteractiveApprovalMode::Deny),
         ("ask", InteractiveApprovalMode::Ask),
         ("risk-auto", InteractiveApprovalMode::RiskAuto),
         ("full-access", InteractiveApprovalMode::FullAccess),
     ] {
-        assert_eq!(
-            parse_interactive_command(&format!("/permissions {value}")),
-            InteractiveCommand::Runtime(RuntimeCommand::Permissions(Some(mode)))
-        );
+        for input in [
+            format!("/permissions {value}"),
+            format!(" \t/permissions\t{value}\r\n"),
+        ] {
+            assert_eq!(
+                parse_interactive_command(&input),
+                InteractiveCommand::Runtime(RuntimeCommand::Permissions(Some(mode))),
+                "{input:?}"
+            );
+        }
     }
     for input in ["/permissions automatic", "/permissions ask now"] {
         assert!(matches!(
@@ -941,47 +1000,81 @@ fn help_is_generated_from_the_available_command_catalog() {
 
 #[test]
 fn parser_enforces_the_exact_plan_command_grammar() {
-    assert_eq!(
-        parse_interactive_command("/plan"),
-        InteractiveCommand::Plan(PlanCommand::Toggle)
-    );
-    assert_eq!(
-        parse_interactive_command("/plan on"),
-        InteractiveCommand::Plan(PlanCommand::On)
-    );
-    assert_eq!(
-        parse_interactive_command("/plan use plan-1"),
-        InteractiveCommand::Plan(PlanCommand::Use {
-            plan_id: "plan-1".into(),
-        })
-    );
-    assert_eq!(
-        parse_interactive_command("/plan show"),
-        InteractiveCommand::Plan(PlanCommand::Show { plan_id: None })
-    );
-    assert_eq!(
-        parse_interactive_command("/plan execute direct"),
-        InteractiveCommand::Plan(PlanCommand::Execute {
-            strategy: Some(PlanExecutionStrategy::Direct),
-        })
-    );
-    assert_eq!(
-        parse_interactive_command("/plan execute goal"),
-        InteractiveCommand::Plan(PlanCommand::Execute {
-            strategy: Some(PlanExecutionStrategy::Goal { max_iterations: 5 }),
-        })
-    );
-    assert_eq!(
-        parse_interactive_command("/plan execute goal 50"),
-        InteractiveCommand::Plan(PlanCommand::Execute {
-            strategy: Some(PlanExecutionStrategy::Goal { max_iterations: 50 }),
-        })
-    );
+    for (input, expected) in [
+        ("/plan", PlanCommand::Toggle),
+        ("/plan on", PlanCommand::On),
+        ("/plan off", PlanCommand::Off),
+        ("/plan status", PlanCommand::Status),
+        ("/plan new", PlanCommand::New),
+        ("/plan list", PlanCommand::List),
+        (
+            "/plan use plan-1",
+            PlanCommand::Use {
+                plan_id: "plan-1".into(),
+            },
+        ),
+        ("/plan show", PlanCommand::Show { plan_id: None }),
+        (
+            "/plan show plan-1",
+            PlanCommand::Show {
+                plan_id: Some("plan-1".into()),
+            },
+        ),
+        ("/plan approve", PlanCommand::Approve),
+        ("/plan discard", PlanCommand::Discard),
+        ("/plan execute", PlanCommand::Execute { strategy: None }),
+        (
+            "/plan execute direct",
+            PlanCommand::Execute {
+                strategy: Some(PlanExecutionStrategy::Direct),
+            },
+        ),
+        (
+            "/plan execute goal",
+            PlanCommand::Execute {
+                strategy: Some(PlanExecutionStrategy::Goal { max_iterations: 5 }),
+            },
+        ),
+        (
+            "/plan execute goal 1",
+            PlanCommand::Execute {
+                strategy: Some(PlanExecutionStrategy::Goal { max_iterations: 1 }),
+            },
+        ),
+        (
+            "/plan execute goal 50",
+            PlanCommand::Execute {
+                strategy: Some(PlanExecutionStrategy::Goal { max_iterations: 50 }),
+            },
+        ),
+    ] {
+        for input in [
+            input.to_owned(),
+            format!(" \t{}\r\n", input.replace(' ', "\t")),
+        ] {
+            assert_eq!(
+                parse_interactive_command(&input),
+                InteractiveCommand::Plan(expected.clone()),
+                "{input:?}"
+            );
+        }
+    }
     for input in [
+        "/plan on extra",
+        "/plan off extra",
+        "/plan status extra",
+        "/plan new extra",
+        "/plan list extra",
         "/plan use",
+        "/plan use plan-1 extra",
+        "/plan show plan-1 extra",
         "/plan approve extra",
+        "/plan discard extra",
+        "/plan execute direct extra",
         "/plan execute goal 0",
         "/plan execute goal 51",
+        "/plan execute goal nope",
+        "/plan execute goal 5 extra",
         "/plan execute other",
         "/plan unknown",
     ] {
@@ -1627,8 +1720,8 @@ fn plan_mode_and_selection_are_visible_in_composer_and_footer() {
         .expect("draw plan mode");
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("Plan plan-019"), "{rendered}");
-    assert!(rendered.contains("mode=plan"), "{rendered}");
-    assert!(rendered.contains("plan=plan-019:r7:draft"), "{rendered}");
+    assert!(rendered.contains(" plan "), "{rendered}");
+    assert!(rendered.contains("plan plan-019 r7 draft"), "{rendered}");
 }
 
 #[test]
@@ -1641,11 +1734,8 @@ fn research_mode_is_visible_in_composer_and_footer() {
         .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
         .expect("draw research mode");
     let rendered = terminal.backend().to_string();
-    assert!(
-        rendered.contains("Research · sourced question"),
-        "{rendered}"
-    );
-    assert!(rendered.contains("mode=research"), "{rendered}");
+    assert!(rendered.contains("Research · Enter sends"), "{rendered}");
+    assert!(rendered.contains(" research "), "{rendered}");
 }
 
 #[test]
@@ -1800,9 +1890,9 @@ fn multiline_history_search_and_first_line_navigation_preserve_the_draft() {
     assert_eq!(state.draft(), "first\n界");
     assert_eq!(state.cursor(), "first".len());
 
-    state.overlay = Some(Overlay::HistorySearch {
-        query: "older".into(),
-    });
+    state.overlay = Some(Overlay::HistorySearch(HistorySearchState::new(
+        &state.history,
+    )));
     handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(state.draft(), "first\n界");
 }
@@ -1931,7 +2021,7 @@ fn structured_completion_tracks_slash_commands_and_skill_tokens() {
     let mut state = TuiState::from_snapshot(snapshot());
     state.completions.extend([
         "@coding".into(),
-        "@offline-dev".into(),
+        "@plugin-authoring".into(),
         "@security-review".into(),
     ]);
 
@@ -1949,17 +2039,17 @@ fn structured_completion_tracks_slash_commands_and_skill_tokens() {
     assert!(commands.contains(&"/plan execute goal"));
 
     state.composer.clear();
-    state.composer.insert("please @off");
+    state.composer.insert("please @plu");
     assert_eq!(
         state.structured_completion_context(),
         Some(CompletionContext {
-            prefix: "@off",
+            prefix: "@plu",
             kind: CompletionKind::Skill,
         })
     );
-    assert_eq!(state.ghost_text(), Some("line-dev"));
+    assert_eq!(state.ghost_text(), Some("gin-authoring"));
     assert!(state.accept_completion());
-    assert_eq!(state.draft(), "please @offline-dev ");
+    assert_eq!(state.draft(), "please @plugin-authoring ");
 }
 
 #[test]
@@ -2023,8 +2113,8 @@ fn command_completion_is_left_aligned_compact_and_described() {
         "/tui prefs".into(),
         "/tui save".into(),
         "/tui reset".into(),
-        "/provider diagnostics on".into(),
-        "/provider diagnostics off".into(),
+        "/provider diagnostics".into(),
+        "/permissions".into(),
     ];
     state.composer.insert("/");
 
@@ -2079,11 +2169,11 @@ fn roomy_command_completion_doubles_visible_rows_and_expands_width() {
         "/permissions".into(),
         "/theme".into(),
         "/theme list".into(),
-        "/stream on".into(),
-        "/events compact".into(),
-        "/reasoning on".into(),
-        "/transcript comfortable".into(),
-        "/multiline on".into(),
+        "/stream".into(),
+        "/events".into(),
+        "/reasoning".into(),
+        "/transcript".into(),
+        "/multiline".into(),
         "/trace".into(),
         "/resume".into(),
     ];
@@ -2115,7 +2205,7 @@ fn roomy_command_completion_doubles_visible_rows_and_expands_width() {
         "{rendered}"
     );
     assert_eq!(controls_row - title_row + 1, ROOMY_COMPLETION_MENU_ROWS + 2);
-    assert!(rendered.contains("/multiline on"), "{rendered}");
+    assert!(rendered.contains("/multiline"), "{rendered}");
     assert!(!rendered.contains("/trace"), "{rendered}");
 }
 
@@ -2320,47 +2410,64 @@ fn canonical_system_messages_are_excluded() {
 
 #[test]
 fn historical_tool_results_are_correlated_with_assistant_calls() {
-    let mut source = snapshot();
-    source.transcript.messages = vec![
-        SessionMessage {
-            session_id: "019f-test".into(),
-            run_id: "run".into(),
-            sequence: 1,
-            message: ModelMessage {
-                role: ModelMessageRole::Assistant,
-                content: String::new().into(),
-                tool_call_id: None,
-                tool_calls: vec![ModelToolCall {
-                    call_id: "call-1".into(),
-                    name: "filesystem.search".into(),
-                    arguments: serde_json::json!({"query": "needle"}),
-                }],
+    for (name, arguments, label) in [
+        (
+            "filesystem.search",
+            serde_json::json!({"query": "needle"}),
+            "filesystem.search",
+        ),
+        (
+            "mcp.call",
+            serde_json::json!({"server": "Splunk", "tool": "search"}),
+            "mcp.call · Splunk · search",
+        ),
+    ] {
+        let mut source = snapshot();
+        source.transcript.messages = vec![
+            SessionMessage {
+                session_id: "019f-test".into(),
+                run_id: "run".into(),
+                sequence: 1,
+                message: ModelMessage {
+                    role: ModelMessageRole::Assistant,
+                    content: String::new().into(),
+                    tool_call_id: None,
+                    tool_calls: vec![ModelToolCall {
+                        call_id: "call-1".into(),
+                        name: name.into(),
+                        arguments,
+                    }],
+                },
+                created_at: "2026-07-15T00:00:00Z".into(),
             },
-            created_at: "2026-07-15T00:00:00Z".into(),
-        },
-        SessionMessage {
-            session_id: "019f-test".into(),
-            run_id: "run".into(),
-            sequence: 2,
-            message: ModelMessage {
-                role: ModelMessageRole::Tool,
-                content: "found".into(),
-                tool_call_id: Some("call-1".into()),
-                tool_calls: Vec::new(),
+            SessionMessage {
+                session_id: "019f-test".into(),
+                run_id: "run".into(),
+                sequence: 2,
+                message: ModelMessage {
+                    role: ModelMessageRole::Tool,
+                    content: "found".into(),
+                    tool_call_id: Some("call-1".into()),
+                    tool_calls: Vec::new(),
+                },
+                created_at: "2026-07-15T00:00:00Z".into(),
             },
-            created_at: "2026-07-15T00:00:00Z".into(),
-        },
-    ];
-    let state = TuiState::from_snapshot(source);
-    let rendered = transcript_lines(&state, 80)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        rendered.contains("Completed filesystem.search"),
-        "{rendered}"
-    );
+        ];
+        let state = TuiState::from_snapshot(source);
+        let rendered = transcript_lines(&state, 80)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains(&format!("Completed {label}")),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(&format!("Requested {label}")),
+            "{rendered}"
+        );
+    }
 }
 
 #[test]
@@ -2602,7 +2709,7 @@ fn session_switch_replaces_transcript_and_resets_live_scroll_state() {
 
 #[test]
 fn native_history_commits_every_finalized_entry_and_keeps_only_streaming_output_live() {
-    assert_eq!(ScreenMode::default(), ScreenMode::Inline);
+    assert_eq!(ScreenMode::default(), ScreenMode::Alternate);
     let mut state = TuiState::from_snapshot(snapshot());
     state.transcript.clear();
     state.transcript_sources.clear();
@@ -3137,7 +3244,8 @@ fn approval_is_bottom_docked_with_preserved_composer_and_inspectable_sections() 
     assert!(rendered.contains("Tab sections"));
     assert!(!rendered.contains("S/R/P inspect"));
     assert!(!rendered.contains("request-line-00"));
-    assert!(rendered.contains("Message · paused for approval · draft preserved"));
+    assert!(rendered.contains("Message · paused for approval"));
+    assert!(rendered.contains("Draft preserved"));
     assert!(rendered.contains("draft stays visible"));
     let approval_row = rendered
         .lines()
@@ -3381,7 +3489,7 @@ fn theme_picker_previews_reversibly_and_applies_only_after_enter() {
 #[test]
 fn theme_picker_is_master_detail_without_false_saved_state() {
     let mut state = TuiState::from_snapshot(snapshot());
-    state.composer.insert("draft remains visible");
+    state.composer.insert("draft stays preserved");
     let (response, _received) = oneshot::channel();
     handle_host_event(&mut state, HostEvent::ThemePicker(theme_picker(response)));
     handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -3396,7 +3504,13 @@ fn theme_picker_is_master_detail_without_false_saved_state() {
     assert!(rendered.contains("hacker preview"), "{rendered}");
     assert!(rendered.contains("preview only until Enter"), "{rendered}");
     assert!(rendered.contains("Cancel and restore"), "{rendered}");
-    assert!(rendered.contains("draft remains visible"), "{rendered}");
+    assert!(!rendered.contains("draft stays preserved"), "{rendered}");
+    assert_eq!(state.draft(), "draft stays preserved");
+    assert!(rendered.contains("View"), "{rendered}");
+    assert!(
+        !rendered.contains("Obscurity Labs // COLOSSUS"),
+        "{rendered}"
+    );
     assert!(!rendered.contains("Theme applied"), "{rendered}");
     assert!(!rendered.contains("Saved"), "{rendered}");
 
@@ -3407,7 +3521,7 @@ fn theme_picker_is_master_detail_without_false_saved_state() {
         .expect("draw compact theme picker");
     let compact = terminal.backend().to_string();
     assert!(compact.contains("Choose theme"), "{compact}");
-    assert!(compact.contains("Enter apply"), "{compact}");
+    assert!(compact.contains("Enter Apply"), "{compact}");
 }
 
 #[test]
@@ -3613,7 +3727,7 @@ fn session_browser_matches_the_master_detail_reference_and_remains_responsive() 
         let mut state = TuiState::from_snapshot(snapshot());
         state.operation = Some(OperationKind::Command);
         state.activity = Some("/resume".into());
-        state.composer.insert("draft stays visible");
+        state.composer.insert("draft stays preserved");
         let (response, _received) = oneshot::channel();
         handle_host_event(
             &mut state,
@@ -3632,7 +3746,7 @@ fn session_browser_matches_the_master_detail_reference_and_remains_responsive() 
             "{width}x{height}: {rendered}"
         );
         assert!(
-            rendered.contains("draft stays visible"),
+            !rendered.contains("draft stays preserved"),
             "{width}x{height}: {rendered}"
         );
         if width >= 72 {
@@ -3643,18 +3757,18 @@ fn session_browser_matches_the_master_detail_reference_and_remains_responsive() 
             let lines = rendered.lines().collect::<Vec<_>>();
             let current_row = lines
                 .iter()
-                .position(|line| line.contains("Dangerous full access"))
+                .position(|line| line.contains("CURRENT"))
                 .expect("current session row");
             let selected_row = lines
                 .iter()
-                .position(|line| line.contains("│ › Rust PR compiler"))
+                .position(|line| line.contains("› Rust PR compiler"))
                 .expect("selected session row");
             let shell_row = lines
                 .iter()
                 .position(|line| line.contains("Run PowerShell"))
                 .expect("following session row");
-            assert_eq!(selected_row, current_row + 2, "{rendered}");
-            assert_eq!(shell_row, selected_row + 2, "{rendered}");
+            assert_eq!(selected_row, current_row + 1, "{rendered}");
+            assert_eq!(shell_row, selected_row + 1, "{rendered}");
         }
     }
 }
@@ -3722,9 +3836,9 @@ fn mouse_wheel_scrolls_transcript_by_lines_and_returns_to_live_output() {
     assert!(requested_older);
 
     let offset = state.scroll_from_bottom;
-    state.overlay = Some(Overlay::HistorySearch {
-        query: String::new(),
-    });
+    state.overlay = Some(Overlay::HistorySearch(HistorySearchState::new(
+        &state.history,
+    )));
     assert!(!handle_mouse(&mut state, mouse(MouseEventKind::ScrollUp)));
     assert_eq!(state.scroll_from_bottom, offset);
 }
@@ -3757,7 +3871,7 @@ fn mouse_scrolling_keeps_the_composer_and_status_footer_sticky() {
         .expect("draw scrolled TUI");
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("sticky draft"), "{rendered}");
-    assert!(rendered.contains("primary:echo@echo"), "{rendered}");
+    assert!(rendered.contains("ready · approval ask"), "{rendered}");
     assert!(state.scroll_from_bottom > 0);
 }
 
@@ -3968,4 +4082,64 @@ fn labeled_transcript_content_reserves_its_indent_within_the_viewport() {
                 .join("\n")
         );
     }
+}
+
+#[test]
+fn provider_recovery_updates_the_activity_rail_without_transcript_noise() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.operation = Some(OperationKind::Run);
+    state.control = Some(RunControl::default());
+    let original_entries = state.transcript.len();
+    let retry = colossus_contracts::ProviderRetry {
+        attempt: 2,
+        max_retries: 5,
+        http_status: 503,
+        state: colossus_contracts::ProviderRetryState::Backoff,
+        retry_at: Some(
+            (time::OffsetDateTime::now_utc() + time::Duration::seconds(4))
+                .format(&time::format_description::well_known::Rfc3339)
+                .expect("retry deadline"),
+        ),
+    };
+    let event = |retry| RunEventEnvelope {
+        schema_version: 1,
+        run_id: "run-retry".into(),
+        session_id: "session-retry".into(),
+        event: RunEvent::Provider {
+            event: ProviderEvent::Retry { retry },
+        },
+    };
+    handle_run_event(&mut state, event(retry.clone()));
+    let backend = TestBackend::new(120, 3);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_activity(frame, &state, Rect::new(0, 0, 120, 1)))
+        .expect("draw");
+    let rendered: String = (0..120)
+        .filter_map(|x| terminal.backend().buffer().cell((x, 0)))
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(rendered.contains("Reconnecting to provider"), "{rendered}");
+    assert!(rendered.contains("Retry 2 of 5"), "{rendered}");
+    assert!(rendered.contains("next attempt in 4s"), "{rendered}");
+    assert_eq!(state.transcript.len(), original_entries);
+    handle_run_event(
+        &mut state,
+        event(colossus_contracts::ProviderRetry {
+            state: colossus_contracts::ProviderRetryState::Recovered,
+            retry_at: None,
+            ..retry.clone()
+        }),
+    );
+    assert!(state.provider_retry.is_none());
+    assert_eq!(state.activity.as_deref(), Some("waiting for model"));
+    handle_run_event(&mut state, event(retry.clone()));
+    state.cancel_focus();
+    assert!(state.provider_retry.is_none());
+    handle_run_event(&mut state, event(retry));
+    assert!(
+        state.provider_retry.is_none(),
+        "late retry must not overwrite cancellation"
+    );
+    assert_eq!(state.transcript.len(), original_entries);
 }

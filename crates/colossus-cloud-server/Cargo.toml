@@ -1,0 +1,61 @@
+[package]
+name = "colossus-cloud-server"
+default-run = "colossus-control-plane"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+argon2.workspace = true
+axum.workspace = true
+chrono.workspace = true
+async-trait.workspace = true
+colossus-cloud.workspace = true
+colossus-cloud-postgres.workspace = true
+colossus-contracts.workspace = true
+colossus-network.workspace = true
+chacha20poly1305.workspace = true
+colossus-cloud-protocol.workspace = true
+colossus-ports.workspace = true
+colossus-home.workspace = true
+colossus-sdk = { workspace = true, features = ["serialization"] }
+futures.workspace = true
+hex.workspace = true
+openidconnect.workspace = true
+rcgen = { workspace = true, features = ["x509-parser"] }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+rustls.workspace = true
+tower-http = { version = "0.6.11", features = ["fs", "set-header"] }
+tokio-stream = { workspace = true, features = ["net"] }
+tonic = { workspace = true, features = ["transport", "tls-ring"] }
+getrandom.workspace = true
+time.workspace = true
+url.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tower.workspace = true
+colossus-connector.workspace = true
+colossus-testkit.workspace = true
+colossus-runtime.workspace = true
+serde-saphyr.workspace = true
+base64.workspace = true
+p256.workspace = true
+colossus-api-runtime.workspace = true
+colossus-api.workspace = true
+colossus-policy.workspace = true
+colossus-credentials.workspace = true
+colossus-sdk = { workspace = true, features = ["embedded", "serialization", "sidecar"] }
+keyring.workspace = true
+
+[lints]
+workspace = true

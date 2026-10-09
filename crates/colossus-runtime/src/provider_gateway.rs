@@ -3,6 +3,10 @@ use super::*;
 pub(super) struct GatewayModelProvider {
     pub(super) gateway: Arc<EffectGateway>,
     pub(super) providers: Arc<ProviderRegistry>,
+    pub(super) sessions: Arc<dyn SessionRepository>,
+    pub(super) snapshots: Arc<dyn ContextRepository>,
+    pub(super) continuations: Arc<dyn colossus_ports::ProviderContinuationRepository>,
+    pub(super) pending: StdMutex<BTreeMap<String, String>>,
 }
 
 pub(super) struct GatewaySearchProvider {
@@ -188,6 +192,7 @@ fn sanitized_mcp_risk_content(request: &EffectRequest) -> Value {
             "identity": request.resource,
             "transport": transport,
             "allow_stateless": content.and_then(|content| content.get("allow_stateless")),
+            "protocol_version": content.and_then(|content| content.get("protocol_version")),
         },
         "server": operation.and_then(|operation| operation.get("server")),
         "tool": {
@@ -392,6 +397,25 @@ impl RiskEvaluator for GatewayRiskEvaluator {
 }
 
 impl GatewayModelProvider {
+    fn resolve_workflow_model(
+        &self,
+        role: &str,
+        options: &colossus_contracts::WorkflowAgentOptions,
+    ) -> Result<colossus_provider::ResolvedModel, ModelProviderError> {
+        match &options.model_profile {
+            Some(profile) if !profile.is_empty() && profile.len() <= 128 => {
+                self.providers.model(profile)
+            }
+            Some(_) => {
+                return Err(ModelProviderError::Configuration(
+                    "invalid configured model profile".into(),
+                ));
+            }
+            None => self.providers.resolve(role),
+        }
+        .map_err(|error| ModelProviderError::Configuration(error.to_string()))
+    }
+
     async fn turn_with_options(
         &self,
         role: &str,
@@ -399,11 +423,26 @@ impl GatewayModelProvider {
         context: ExecutionContext,
         options: ProviderTurnOptions,
     ) -> Result<ProviderTurn, ModelProviderError> {
-        let resolved = self
-            .providers
-            .resolve(role)
-            .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
-        let route = resolved.route();
+        let resolved = self.resolve_workflow_model(role, &options.agent_options)?;
+        let route = self.route_with_options(role, &options.agent_options)?;
+        self.remember_candidate(context.session_id.as_deref(), None)?;
+        let mut continuation_plan = options.continuation.clone();
+        if let Some(plan) = &mut continuation_plan {
+            plan.snapshot_epoch = self
+                .snapshots
+                .activation_epoch(&plan.session_id)
+                .map_err(|e| ModelProviderError::Failed(e.to_string()))?;
+        }
+        let server_compaction_threshold =
+            self.providers
+                .server_compaction_enabled(&resolved)
+                .then(|| {
+                    (route.limits.input_budget_tokens / 4 * 3
+                        + route.limits.input_budget_tokens % 4 * 3 / 4)
+                        .max(1)
+                });
+        let request_evidence = request.clone();
+        let session_id = context.session_id.clone();
         let provider = resolved.provider();
         validate_route_image_inputs(&route, provider.profile().kind, &request)?;
         let max_output_tokens = resolved_output_limit(&route, &request)?;
@@ -419,6 +458,9 @@ impl GatewayModelProvider {
             provider.profile().kind.generation_action(),
             endpoint,
             serde_json::to_value(ProviderEffectInput {
+                stream_response: None,
+                server_compaction_threshold,
+                continuation: continuation_plan,
                 provider_profile: route.provider_profile,
                 model_profile: Some(route.model_profile),
                 model: Some(route.model),
@@ -442,19 +484,72 @@ impl GatewayModelProvider {
                 serde_json::from_slice::<ProviderResponseDiagnostic>(&released.bytes)
         {
             return Err(ModelProviderError::ResponseDiagnostic {
+                failure: colossus_provider::classify_response_diagnostic(&diagnostic),
                 diagnostic: Box::new(diagnostic),
             });
         }
-        serde_json::from_slice(&released.bytes).map_err(|_| {
-            ModelProviderError::Failed(
-                "released provider output violated the normalized turn contract".into(),
-            )
-        })
+        if let Ok(rejection) =
+            serde_json::from_slice::<colossus_provider::ProviderFeatureRejection>(&released.bytes)
+        {
+            return Err(self.rejection(&resolved, &rejection));
+        }
+        let output =
+            serde_json::from_slice::<colossus_provider::ProviderAdapterTurn>(&released.bytes)
+                .map_err(|_| {
+                    ModelProviderError::Failed(
+                        "released provider output violated the normalized turn contract".into(),
+                    )
+                })?;
+        self.accepted(
+            &resolved,
+            &request_evidence,
+            false,
+            output.continuation_id.is_some(),
+        );
+        self.remember_candidate(session_id.as_deref(), output.continuation_id)?;
+        Ok(output.turn)
     }
 }
 
 #[async_trait]
 impl ModelProvider for GatewayModelProvider {
+    fn continuation_plan(
+        &self,
+        role: &str,
+        request: &ModelRequest,
+        context: &ExecutionContext,
+    ) -> Result<Option<colossus_contracts::ProviderContinuationPlan>, ModelProviderError> {
+        self.plan(role, request, context)
+    }
+    fn settle_continuation(&self, context: &ExecutionContext) -> Result<(), ModelProviderError> {
+        self.settle(context)
+    }
+    fn discard_continuation(&self, context: &ExecutionContext) -> Result<(), ModelProviderError> {
+        self.remember_candidate(context.session_id.as_deref(), None)?;
+        if let Some(session) = &context.session_id {
+            self.continuations.clear(session, context).map_err(|_| {
+                ModelProviderError::Failed("unable to retire Responses state".into())
+            })?;
+        }
+        Ok(())
+    }
+    fn route_with_options(
+        &self,
+        role: &str,
+        options: &colossus_contracts::WorkflowAgentOptions,
+    ) -> Result<ModelRoute, ModelProviderError> {
+        let resolved = self.resolve_workflow_model(role, options)?;
+        let mut route = resolved.route();
+        if let Some(effort) = options.reasoning_effort {
+            if route.provider == "echo" {
+                return Err(ModelProviderError::Configuration(
+                    "Echo does not support reasoning effort".into(),
+                ));
+            }
+            route.reasoning_effort = Some(effort);
+        }
+        Ok(route)
+    }
     fn route(&self, role: &str) -> Result<ModelRoute, ModelProviderError> {
         let resolved = self
             .providers
@@ -498,21 +593,26 @@ impl ModelProvider for GatewayModelProvider {
         options: ProviderTurnOptions,
         observer: &mut dyn ProviderEventObserver,
     ) -> Result<ProviderTurn, ModelProviderError> {
-        let route = self.route(role)?;
-        if !route.capabilities.streaming {
-            let turn = self
-                .turn_with_options(role, request, context, options)
-                .await?;
-            for event in &turn.events {
-                observer.observe(event.clone()).await?;
-            }
-            return Ok(turn);
+        let resolved = self.resolve_workflow_model(role, &options.agent_options)?;
+        let route = self.route_with_options(role, &options.agent_options)?;
+        self.remember_candidate(context.session_id.as_deref(), None)?;
+        let mut continuation_plan = options.continuation.clone();
+        if let Some(plan) = &mut continuation_plan {
+            plan.snapshot_epoch = self
+                .snapshots
+                .activation_epoch(&plan.session_id)
+                .map_err(|e| ModelProviderError::Failed(e.to_string()))?;
         }
-        let resolved = self
-            .providers
-            .resolve(role)
-            .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
-        let route = resolved.route();
+        let server_compaction_threshold =
+            self.providers
+                .server_compaction_enabled(&resolved)
+                .then(|| {
+                    (route.limits.input_budget_tokens / 4 * 3
+                        + route.limits.input_budget_tokens % 4 * 3 / 4)
+                        .max(1)
+                });
+        let request_evidence = request.clone();
+        let session_id = context.session_id.clone();
         let provider = resolved.provider();
         validate_route_image_inputs(&route, provider.profile().kind, &request)?;
         let max_output_tokens = resolved_output_limit(&route, &request)?;
@@ -528,6 +628,9 @@ impl ModelProvider for GatewayModelProvider {
             provider.profile().kind.generation_action(),
             endpoint,
             serde_json::to_value(ProviderEffectInput {
+                stream_response: Some(route.capabilities.streaming),
+                server_compaction_threshold,
+                continuation: continuation_plan,
                 provider_profile: route.provider_profile,
                 model_profile: Some(route.model_profile),
                 model: Some(route.model),
@@ -547,7 +650,19 @@ impl ModelProvider for GatewayModelProvider {
             .execute_stream(effect, provider.as_ref(), &mut bridge)
             .await
             .map_err(model_gateway_error)?;
-        bridge.finish(&terminal.bytes, options.include_response_diagnostics)
+        if let Some(rejection) = &bridge.rejection {
+            return Err(self.rejection(&resolved, rejection));
+        }
+        let candidate = bridge.continuation_id.clone();
+        let turn = bridge.finish(&terminal.bytes, options.include_response_diagnostics)?;
+        self.accepted(
+            &resolved,
+            &request_evidence,
+            route.capabilities.streaming,
+            candidate.is_some(),
+        );
+        self.remember_candidate(session_id.as_deref(), candidate)?;
+        Ok(turn)
     }
 }
 
@@ -592,6 +707,8 @@ pub(super) struct ReleasedProviderStream<'a> {
     pub(super) events: Vec<ProviderEvent>,
     pub(super) completed: Option<(String, String, String, String, Option<String>)>,
     pub(super) diagnostic: Option<ProviderResponseDiagnostic>,
+    continuation_id: Option<String>,
+    rejection: Option<colossus_provider::ProviderFeatureRejection>,
 }
 
 impl<'a> ReleasedProviderStream<'a> {
@@ -601,6 +718,8 @@ impl<'a> ReleasedProviderStream<'a> {
             events: Vec::new(),
             completed: None,
             diagnostic: None,
+            continuation_id: None,
+            rejection: None,
         }
     }
 
@@ -609,11 +728,18 @@ impl<'a> ReleasedProviderStream<'a> {
         terminal: &[u8],
         include_response_diagnostics: bool,
     ) -> Result<ProviderTurn, ModelProviderError> {
-        let expected: ProviderStreamItem = serde_json::from_slice(terminal).map_err(|_| {
-            ModelProviderError::Failed(
-                "released provider stream terminal violated its contract".into(),
-            )
-        })?;
+        let expected: colossus_provider::ProviderAdapterStreamItem =
+            serde_json::from_slice(terminal).map_err(|_| {
+                ModelProviderError::Failed(
+                    "released provider stream terminal violated its contract".into(),
+                )
+            })?;
+        if expected.continuation_id != self.continuation_id {
+            return Err(ModelProviderError::Failed(
+                "provider continuation completion did not match".into(),
+            ));
+        }
+        let expected = expected.item;
         if let ProviderStreamItem::Diagnostic { diagnostic } = expected {
             if include_response_diagnostics
                 && self.events.is_empty()
@@ -621,6 +747,7 @@ impl<'a> ReleasedProviderStream<'a> {
                 && self.diagnostic.as_ref() == Some(&diagnostic)
             {
                 return Err(ModelProviderError::ResponseDiagnostic {
+                    failure: colossus_provider::classify_response_diagnostic(&diagnostic),
                     diagnostic: Box::new(diagnostic),
                 });
             }
@@ -670,10 +797,41 @@ impl<'a> ReleasedProviderStream<'a> {
 #[async_trait]
 impl ReleasedEffectObserver for ReleasedProviderStream<'_> {
     async fn observe(&mut self, result: ReleasedEffectResult) -> Result<(), ExecutionError> {
-        let item: ProviderStreamItem = serde_json::from_slice(&result.bytes).map_err(|_| {
-            ExecutionError::Failed("released provider stream item violated its contract".into())
-        })?;
-        match item {
+        if let Ok(rejection) =
+            serde_json::from_slice::<colossus_provider::ProviderFeatureRejection>(&result.bytes)
+        {
+            if self.rejection.is_some() || !self.events.is_empty() || self.completed.is_some() {
+                return Err(ExecutionError::Failed(
+                    "invalid feature rejection sequence".into(),
+                ));
+            }
+            self.rejection = Some(rejection);
+            return Ok(());
+        }
+        let envelope: colossus_provider::ProviderAdapterStreamItem =
+            serde_json::from_slice(&result.bytes).map_err(|_| {
+                ExecutionError::Failed("released provider stream item violated its contract".into())
+            })?;
+        if self.rejection.is_some() {
+            return Err(ExecutionError::Failed(
+                "provider emitted output after rejection".into(),
+            ));
+        }
+        if envelope.continuation_id.is_some()
+            && !matches!(envelope.item, ProviderStreamItem::Completed { .. })
+        {
+            return Err(ExecutionError::Failed("invalid continuation marker".into()));
+        }
+        if envelope.continuation_id.is_some() {
+            self.continuation_id = envelope.continuation_id;
+        }
+        match envelope.item {
+            ProviderStreamItem::Retry { retry } => {
+                self.observer
+                    .observe(ProviderEvent::Retry { retry })
+                    .await
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+            }
             ProviderStreamItem::Event { event } => {
                 self.observer
                     .observe(event.clone())
@@ -753,6 +911,7 @@ fn resolved_output_limit(
 
 pub(super) fn model_gateway_error(error: GatewayError) -> ModelProviderError {
     match error {
+        GatewayError::ProviderRejected(failure) => ModelProviderError::Rejected(failure),
         GatewayError::RecoverableExecution {
             code,
             message,

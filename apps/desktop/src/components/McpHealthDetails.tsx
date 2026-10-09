@@ -65,6 +65,17 @@ export function McpHealthDetails({
                     : `${configuration.additionalCaCertificates} additional CA certificates loaded`}
                 </dd>
               </div>
+              <div>
+                <dt>Protocol</dt>
+                <dd>
+                  {configuration.transport === "stdio"
+                    ? "2025 initialization"
+                    : configuration.protocolVersion === "auto" ||
+                        !configuration.protocolVersion
+                      ? "Automatic"
+                      : configuration.protocolVersion}
+                </dd>
+              </div>
             </>
           )}
           {report.failure && (
@@ -83,6 +94,7 @@ export function McpHealthDetails({
         (diagnostic.tools.length > 0 ? (
           <details className="mcp-health-disclosure">
             <summary>Discovered tools</summary>
+            <p>These tools match the saved allowed-tool selectors.</p>
             <ul
               className="mcp-health-tools"
               aria-label={`${diagnostic.server} discovered tools`}
@@ -96,7 +108,10 @@ export function McpHealthDetails({
             </ul>
           </details>
         ) : (
-          <p className="mcp-health-empty">No allowlisted tools</p>
+          <p className="mcp-health-empty">
+            No allowlisted tools. Check the saved names or patterns against the
+            server’s tool names; matching is case-sensitive.
+          </p>
         ))}
       {report && (
         <details className="mcp-health-disclosure">

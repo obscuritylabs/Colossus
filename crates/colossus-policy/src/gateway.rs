@@ -112,6 +112,11 @@ fn supported_mcp_review_metadata(request: &EffectRequest) -> bool {
         && supported_description
         && supported_annotations
         && operation.get("arguments").is_some_and(Value::is_object)
+        && operation.get("output_schema").is_none_or(|value| {
+            value.is_null()
+                || (value.is_object()
+                    && canonical_bytes(value).is_ok_and(|bytes| bytes.len() <= 256 * 1024))
+        })
         && schema_hash_matches
 }
 
@@ -166,7 +171,7 @@ impl QuarantinedEffectObserver for GatewayStreamSink<'_> {
         self.total_bytes = self.total_bytes.saturating_add(result.bytes.len());
         if self.total_bytes > limit {
             let failure = StreamSinkFailure::Unknown(
-                "streamed provider output exceeds the cumulative permitted bound".into(),
+                "streamed effect output exceeds the cumulative permitted bound".into(),
             );
             let error = failure.execution_error();
             self.failure = Some(failure);
@@ -196,6 +201,9 @@ impl QuarantinedEffectObserver for GatewayStreamSink<'_> {
         };
         if let Err(error) = self.observer.observe(released).await {
             let failure = match error {
+                ExecutionError::ProviderRejected(failure) => StreamSinkFailure::Unknown(format!(
+                    "released stream observation failed: {failure}"
+                )),
                 ExecutionError::ReleaseDenied(message) => StreamSinkFailure::Denied(message),
                 ExecutionError::Failed(message)
                 | ExecutionError::OutcomeUnknown(message)
@@ -776,6 +784,20 @@ impl EffectGateway {
         .await
         {
             Ok(Ok(result)) => result,
+            Ok(Err(ExecutionError::ProviderRejected(failure))) => {
+                self.event(
+                    &request,
+                    "effect.failed.v1",
+                    EventClassification::Effect,
+                    json!({
+                        "code": failure.reason.code(),
+                        "message": failure.reason.message(),
+                        "recoverable": false,
+                        "http_status": failure.http_status,
+                    }),
+                )?;
+                return Err(GatewayError::ProviderRejected(failure));
+            }
             Ok(Err(ExecutionError::Failed(message))) => {
                 self.event(
                     &request,

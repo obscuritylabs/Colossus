@@ -28,7 +28,7 @@ workflow and container declarations are checked against this inventory.
 | Rust protobuf compiler | Root Cargo manifest/lock own `protoc-bin-vendored`. | Cargo integrity/locked resolution; Rust API build and tests. |
 | Language linters and tests | Desktop/SDK npm manifests and locks, Python development requirements, and Go module files own tools. | Desktop TypeScript/Vitest/Prettier checks; SDK Ruff/mypy/Python tests, Go tests/vet/gofmt and TypeScript checks. |
 | Browser acceptance | Desktop npm lock owns Playwright; `test:browser:install` installs its browser payloads in premerge. | Native browser acceptance jobs and Desktop tests. |
-| Documentation | `scripts/docs-site` owns the Zensical image version/digest; docs jobs and developers invoke it through Docker. | Digest-pinned build, strict site checks and Rust documentation examples via `cargo xtask check docs`. |
+| Documentation | `scripts/docs-site` owns the Zensical image version/digest; `deploy/documentation/Dockerfile` mirrors that generator and pins the Nginx static runtime. Docs jobs and developers invoke Docker. | Digest-pinned build, strict site checks and Rust documentation examples via `cargo xtask check docs`; on-prem image HTTP checks use `deploy/documentation/smoke.mjs`. |
 | ORAS and OPA | `release-image.yml` owns ORAS downloads; `premerge.yml` owns OPA download. | Explicit checksums; OCI roundtrip and live OPA acceptance. |
 | Containers and devcontainer features | Workflow service/acceptance images, devcontainer Docker stages and `devcontainer-lock.json` own immutable references. `oci-proxy.Dockerfile` uses `scratch`. | Preserve image digests and feature lock; live PostgreSQL, Chroma, OCI and OPA suites. |
 | Native build tools and container engines | Runner images and OS package installation supply Clang, CMake, pkg-config, Tauri libraries, Docker/Podman and platform packaging/signing tools. | Native CI/release acceptance; these are not supplied by `mise install`. |
@@ -66,13 +66,14 @@ is not platform execution evidence; native premerge acceptance remains required.
 Cargo-audit uses verified prebuilt archives on Linux/Windows and native
 `cargo install --locked` on macOS, because upstream supplies no ARM64 macOS binary.
 The source backend disables binstall and relies on Cargo registry integrity plus the
-crate’s published dependency lock. Mise still records unused upstream archive metadata
-when cross-platform locking; the tool’s OS restriction controls installation. Rust compiler archives use rustup verification rather than
+crate's published dependency lock. Mise still records unused upstream archive metadata
+when cross-platform locking; the tool's OS restriction controls installation. Rust compiler archives use rustup verification rather than
 mise archive checksums; the Rust lock records the channel, profile and components.
 Other release architectures continue using their existing setup until separately verified.
 
 PR setup installs only the job's requested tools: Node/actionlint/Python for workflow
-contracts (including Python source-archive tests), Rust plus conditionally selected SDK/Desktop languages for validation,
+contracts (including Python source-archive tests), Rust for the separate formatting,
+lint and unit-test jobs, Rust/Node/Python/Go for SDKs, Rust/Node for Desktop,
 Rust for docs, and Rust/deny/audit for dependency policy. Mise caches installed tools;
 separate npm, pip and Go caches retain package reuse. Existing sccache and Cargo registry
 caches remain independent. Direct bin paths avoid auto-installing unselected tools

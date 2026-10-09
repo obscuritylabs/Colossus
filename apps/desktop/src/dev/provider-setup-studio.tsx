@@ -38,6 +38,7 @@ const desktop: DesktopStatus = {
     certificateCount: 0,
     fingerprintsSha256: [],
   },
+  clientIdentity: { configured: false, leafFingerprintSha256: null },
   capabilities: {
     delegation: false,
     plugins: false,
@@ -104,9 +105,9 @@ export default function ProviderSetupStudio({
                 contextWindowTokens: 32768,
                 maxOutputTokens: 4096,
                 capabilities: {
-                  toolCalls: false,
-                  imageInputs: false,
-                  streaming: false,
+                  toolCalls: "off",
+                  imageInputs: "off",
+                  streaming: "off",
                 },
                 reasoningEffort: null,
               },
@@ -221,6 +222,7 @@ export default function ProviderSetupStudio({
             onImportCaBundle={async () => {
               setCertificatesImported(true);
             }}
+            onImportClientIdentity={async () => {}}
             onConfigure={(request) =>
               save(() => configureManagedRuntime(request))
             }

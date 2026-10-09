@@ -8,6 +8,197 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+### Added
+
+- Colossus Control Plane with independent PostgreSQL persistence, users, named OIDC
+  and optional local sign-in, explicit project roles/hierarchy, and administration.
+- Fleet agents, workspace/thread navigation, retained realtime conversations, shared
+  Desktop/VS Code/web Markdown and composer components, and shadcn task tables.
+- Project analytics, runtime-reported policy inspection and monitoring baselines,
+  configurable classification markings, and global Desktop connection profiles.
+- Linux Control Plane server/web bundles and offline Docker images, six platform
+  VSIX packages, and verified multi-platform server container publication.
+
+- Workspace workflow schedule management with definition import, reviewed creation,
+  pause/enable controls, and independent run inspection.
+- Separate Workflows library with manual runs, schema-based inputs, owned history, and
+  bounded final results; Schedules supports plain-language tasks and reusable workflows.
+- Daily and weekly schedules in IANA timezones, preserving local time across DST, plus
+  configured task model profiles and reasoning effort through the normal provider path.
+- Read-only workflow logic graphs with conditional branches, parallel joins, bounded
+  loops, and recorded step states and completion counts.
+
+- Six editable schedule examples with copyable agent prompts and the bundled
+  `colossus/schedule-task` skill. Agents can use `workflow.task.schedule` through
+  normal schedule permissions, review, ownership, and retry protections.
+
+### Changed
+
+- Workflows and Schedules use shared UI typography and theme tokens, with a compact
+  Providers-style schedule inventory and front-end development rules in `AGENTS.md`.
+
+### Fixed
+
+- Agent schedule creation and pause/enable approvals publish the valid public schedule
+  review category, retaining exact response binding and owner isolation.
+- Offline development credential rewrap on Windows fingerprints journals through
+  their retained exclusive lease, preserving source bytes and writer exclusion.
+
+## [0.11.7] - 2026-10-03
+
+### Added
+
+- Automatic model capability discovery and Responses conversation compaction,
+  with Auto/On/Off feature controls in Desktop.
+- Full-screen TUI session, theme, and history browsers with a searchable list and
+  a right-hand preview pane. Settings such as permissions open a current-value
+  chooser while retaining direct command arguments.
+- A persistent workspace/session top bar, readable highlighted status and warning
+  badges, and a faint encoded Obscurity Labs mark on the welcome screen.
+
+### Fixed
+
+- Transient provider gateway failures retry with visible recovery status.
+- Prompt history caches search matches between redraws, and preview paging
+  stops at the end so PageUp responds immediately after repeated PageDown.
+- Multiline composition accepts legacy newline input and exposes Ctrl-J as a
+  newline shortcut. Cursor navigation follows visual rows in wrapped drafts.
+- Welcome security warnings no longer hide the background mark, and narrow
+  layouts preserve status, permissions, and warning counts without overlap.
+
+### Changed
+
+- TUI sessions use the alternate screen by default; `--no-alt-screen` preserves
+  native scrollback, including resumed Herdr sessions.
+- Aligned workspace, bundled plugin, and SDK candidate metadata to `0.11.7`.
+  This release publishes Core/Desktop only; SDK registry publishing remains disabled.
+
+## [0.11.6] - 2026-10-02
+
+### Added
+
+- Global PEM client certificate and private key configuration for Colossus-owned TLS
+  requests, including provider, HTTP MCP, policy, database, and plugin registry calls.
+- Desktop imports the identity into private native storage and supplies it to managed
+  runtimes. CLI configuration accepts certificate and key paths.
+
+### Fixed
+
+- Desktop repository imports keep native client identity paths under global control.
+- OPA decision requests reject redirects so client identity cannot follow a redirect.
+- Release-build TUI command parsing retains its input behavior.
+
+### Changed
+
+- Desktop settings use compact catalogs and organized preferences, with updated guides.
+- Aligned workspace, bundled plugin, and SDK candidate metadata to `0.11.6`.
+  This release publishes Core/Desktop only; SDK registry publishing remains disabled.
+
+## [0.11.5] - 2026-10-01
+
+### Added
+
+- Desktop Stop pauses queued messages for Resume, with a slow activity glow.
+- Compact Shell and TUI controls, with a native system shell beside authenticated
+  Colossus sessions. Active shells exposes managed background output and Stop.
+- Tool access patterns such as `get_*` for built-in and MCP tool selections.
+- Native command review offers Allow once and Always allow for the exact command
+  and working directory in a workspace, with a control to clear remembered choices.
+- Provider presentation settings include custom icons and Markdown instructions
+  in portable Desktop setup packages.
+
+### Fixed
+
+- Managed shell commands retain interactive approval routing before detaching.
+  Initial waits honor their yield budget, and denied or failed launches no longer
+  appear successful. Terminal denials also finish their activity rows.
+- Small supported output budgets retain stdout and stderr. Managed command previews
+  include released output, status, exit codes, and truncation information.
+- Active shells distinguishes loading, unavailable, and empty states and discards
+  stale responses after workspace changes. Shell and TUI use the active native
+  workspace, clearing prior workspace context during selection changes.
+- Windows launches restore the original Desktop window instead of creating extra
+  tray instances. Startup shows a loading state before choosing setup or Work.
+- Credential export preserves readable names with empty import placeholders;
+  rotation retains credential identity, and unreferenced revision history no longer
+  prevents removal while active and pinned references remain protected.
+
+### Changed
+
+- Desktop-managed runtimes start in Risk Auto. Other SDK hosts retain Ask by default.
+- Completion notifications include the thread title and a bounded output snippet.
+- Aligned workspace, bundled plugin, and SDK candidate metadata to `0.11.5`.
+  This release publishes Core/Desktop only; SDK registry publishing remains disabled.
+
+## [0.11.4] - 2026-09-30
+
+### Added
+
+- A compact Tools menu and shared right pane for Files, Browser, Terminal,
+  Changes, Artifacts, thread details, and Aside. Tool switching preserves
+  conversation drafts, browser tabs, and local terminal sessions.
+- The integrated browser is enabled in normal Windows Desktop builds, with
+  isolated temporary sessions and native file-picker cancellation.
+
+### Fixed
+
+- Windows TUI windows now load their bundled document and assets correctly.
+  ConPTY children receive console streams even when Desktop starts with
+  redirected standard handles.
+- The local TUI opens beside the conversation with bounded native positioning,
+  workspace-scoped cleanup, and terminal-only PTY permissions.
+
+### Changed
+
+- Aligned workspace, bundled plugin, and SDK candidate metadata to `0.11.4`.
+
+
+## [0.11.3] - 2026-09-29
+
+### Added
+
+- Desktop setup packages can share global defaults, sandbox settings, limits, MCP
+  servers, search providers, and telemetry profiles. Export the current global
+  configuration with portable credential placeholders for offline onboarding.
+- Desktop model routing displays all seven roles with their responsibilities,
+  model-selection guidance, and the effective primary fallback.
+- Added macOS menu-bar and Windows system-tray controls for the Desktop lifecycle.
+
+### Changed
+
+- Model discovery recognizes additional context-window and capability fields from
+  compatible providers, including vLLM and Azure-style responses, while preserving
+  explicit unsupported capabilities.
+- Provider and model connection tests now appear beside their settings rows, with
+  progress, inline results, detailed failures, and retry.
+- Aligned workspace, bundled plugin, and SDK package metadata to `0.11.3`.
+
+### Fixed
+
+- MCP Test and OAuth actions remain unavailable until workspace selections are
+  applied and the runtime is active. Pending changes no longer appear enabled.
+- Imported setup providers remain available throughout onboarding, with clearer
+  workspace activation and optional credential enrollment.
+- Windows uninstall cleanup accepts an empty generated CLI home without removing
+  unrecognized or shared application data.
+
+## [0.11.2] - 2026-09-28
+
+### Added
+
+- Added offline Desktop setup packages with canonical YAML provider/model settings,
+  Markdown onboarding instructions, bundled provider icons, and optional CA certificates.
+  Imports preview endpoints, models and trust changes before saving; credentials stay
+  in the native vault and can be added when the provider is first used.
+- Added a five-provider sample package and a documented manifest schema for administrators.
+
+### Changed
+
+- Kept Desktop import compact and moved provider instructions, credential setup and
+  model selection into their respective onboarding steps. Imported model limits,
+  capabilities, reasoning settings and provider timeouts survive workspace activation.
+- Updated the coordinated workspace, bundled plugin and SDK metadata to `0.11.2`.
+
 ### Fixed
 
 - Windows Desktop application-data cleanup now accepts hard links contained entirely

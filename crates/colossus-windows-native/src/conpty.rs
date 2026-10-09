@@ -1,7 +1,7 @@
-//! Race-free ConPTY launch for the one bundled Colossus TUI.
+//! Suspended, Job-bound ConPTY launch for the bundled TUI and fixed system shell.
 //!
-//! The child starts suspended with only two private authentication-pipe handles in
-//! its inherited handle list. Its executable and workspace identities are checked,
+//! The child starts suspended. Only the TUI inherits two private authentication-pipe
+//! handles; the shell inherits none. Executable and workspace identities are checked,
 //! it is assigned to a kill-on-close Job Object, and only then is its first thread
 //! resumed. The renderer never receives a process handle, pipe handle, or path.
 
@@ -12,10 +12,10 @@ use std::{
     io::Write,
     mem::{size_of, zeroed},
     os::windows::{
-        ffi::OsStrExt as _,
+        ffi::{OsStrExt as _, OsStringExt as _},
         io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle},
     },
-    path::Path,
+    path::{Path, PathBuf},
     ptr::{null, null_mut},
     sync::{Arc, Mutex},
 };
@@ -28,12 +28,13 @@ use windows_sys::Win32::{
     System::{
         Console::{COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole},
         Pipes::CreatePipe,
+        SystemInformation::GetSystemDirectoryW,
         Threading::{
             CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
             DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
             INFINITE, InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-            PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, STARTUPINFOEXW,
-            UpdateProcThreadAttribute, WaitForSingleObject,
+            PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
+            STARTUPINFOEXW, UpdateProcThreadAttribute, WaitForSingleObject,
         },
     },
 };
@@ -62,6 +63,88 @@ pub struct SpawnedConpty {
     pub authentication_output: File,
 }
 
+/// A local-user shell session, with no worker authentication handles.
+pub struct SpawnedShellConpty {
+    /// Complete process-tree and pseudo-console control.
+    pub control: ConptyControl,
+    /// Exact verified child process.
+    pub child: ConptyChild,
+    /// Bytes written here become terminal input.
+    pub input: File,
+    /// Terminal output is read here.
+    pub output: File,
+}
+
+struct ParentAuthentication {
+    input: File,
+    output: File,
+}
+
+struct SpawnedSession {
+    terminal: SpawnedShellConpty,
+    authentication: Option<ParentAuthentication>,
+}
+
+/// Resolve the OS-installed Windows PowerShell without consulting PATH or environment overrides.
+pub fn system_powershell() -> Result<PathBuf, WindowsNativeError> {
+    let mut buffer = [0_u16; 32_768];
+    // SAFETY: the buffer is writable for the length passed to GetSystemDirectoryW.
+    let length = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
+    if length == 0 || length >= buffer.len() {
+        return Err(last_error("resolve Windows system directory"));
+    }
+    let path = PathBuf::from(OsString::from_wide(&buffer[..length]))
+        .join(r"WindowsPowerShell\v1.0\powershell.exe");
+    crate::windows::open_bound(&path, crate::windows::BoundKind::File)?;
+    Ok(path)
+}
+
+/// Launch interactive Windows PowerShell as the local user, without TUI authentication.
+/// The executable and arguments are fixed by native code. The caller supplies a
+/// native-owned workspace and a bounded, explicitly constructed environment.
+pub fn spawn_system_shell_conpty(
+    environment: &[(OsString, OsString)],
+    workspace: &Path,
+    expected_workspace: FileIdentity,
+    rows: u16,
+    columns: u16,
+) -> Result<SpawnedShellConpty, WindowsNativeError> {
+    let executable = system_powershell()?;
+    let binding = crate::windows::open_bound(&executable, crate::windows::BoundKind::File)?;
+    // Windows PowerShell 5 treats verbatim paths as provider-qualified locations.
+    // Reopen the ordinary spelling below and compare the exact directory identity.
+    let workspace = ordinary_shell_workspace(workspace);
+    let spawned = spawn_conpty(
+        &executable,
+        binding.identity,
+        &[OsString::from("-NoLogo"), OsString::from("-NoProfile")],
+        environment,
+        &workspace,
+        expected_workspace,
+        rows,
+        columns,
+        false,
+    )?;
+    Ok(spawned.terminal)
+}
+
+fn ordinary_shell_workspace(path: &Path) -> PathBuf {
+    let wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    let verbatim = r"\\?\".encode_utf16().collect::<Vec<_>>();
+    let unc = r"\\?\UNC\".encode_utf16().collect::<Vec<_>>();
+    let ordinary = if wide.starts_with(&unc) {
+        r"\\"
+            .encode_utf16()
+            .chain(wide[unc.len()..].iter().copied())
+            .collect::<Vec<_>>()
+    } else if wide.starts_with(&verbatim) {
+        wide[verbatim.len()..].to_vec()
+    } else {
+        wide
+    };
+    PathBuf::from(OsString::from_wide(&ordinary))
+}
+
 /// Cloneable control for one ConPTY and its kill-on-close process Job.
 #[derive(Clone)]
 pub struct ConptyControl(Arc<ConptyControlInner>);
@@ -75,7 +158,7 @@ impl std::fmt::Debug for ConptyControl {
 }
 
 struct ConptyControlInner {
-    pseudo_console: PseudoConsole,
+    pseudo_console: Mutex<Option<PseudoConsole>>,
     job: crate::windows::KillOnCloseJob,
     interrupt: Mutex<File>,
     terminated: Mutex<bool>,
@@ -87,7 +170,25 @@ impl ConptyControl {
         if rows < 2 || columns < 2 || rows > 512 || columns > 512 {
             return Err(WindowsNativeError::InvalidInput);
         }
-        self.0.pseudo_console.resize(rows, columns)
+        self.0
+            .pseudo_console
+            .lock()
+            .map_err(|_| WindowsNativeError::InvalidInput)?
+            .as_ref()
+            .ok_or(WindowsNativeError::InvalidInput)?
+            .resize(rows, columns)
+    }
+
+    fn close_console(&self) {
+        // ClosePseudoConsole can wait for its output to drain. Never hold the
+        // console lock or perform this close on the output reader's thread.
+        let console = self
+            .0
+            .pseudo_console
+            .lock()
+            .ok()
+            .and_then(|mut console| console.take());
+        drop(console);
     }
 
     /// Deliver the terminal's interrupt byte without using a shell or console attach.
@@ -238,6 +339,48 @@ pub fn spawn_verified_conpty(
     rows: u16,
     columns: u16,
 ) -> Result<SpawnedConpty, WindowsNativeError> {
+    let spawned = spawn_conpty(
+        executable,
+        expected_image,
+        arguments,
+        environment,
+        workspace,
+        expected_workspace,
+        rows,
+        columns,
+        true,
+    )?;
+    let authentication = spawned
+        .authentication
+        .ok_or(WindowsNativeError::InvalidInput)?;
+    let SpawnedShellConpty {
+        control,
+        child,
+        input,
+        output,
+    } = spawned.terminal;
+    Ok(SpawnedConpty {
+        control,
+        child,
+        input,
+        output,
+        authentication_input: authentication.input,
+        authentication_output: authentication.output,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_conpty(
+    executable: &Path,
+    expected_image: FileIdentity,
+    arguments: &[OsString],
+    environment: &[(OsString, OsString)],
+    workspace: &Path,
+    expected_workspace: FileIdentity,
+    rows: u16,
+    columns: u16,
+    authenticate: bool,
+) -> Result<SpawnedSession, WindowsNativeError> {
     if rows < 2
         || columns < 2
         || rows > 512
@@ -265,46 +408,69 @@ pub fn spawn_verified_conpty(
     drop(conpty_input_read);
     drop(conpty_output_write);
 
-    let (child_authentication_input, parent_authentication_input) = anonymous_pipe(true)?;
-    clear_inherit(&parent_authentication_input)?;
-    let (parent_authentication_output, child_authentication_output) = anonymous_pipe(true)?;
-    clear_inherit(&parent_authentication_output)?;
-    let inherited_handles = [
-        child_authentication_input.as_raw_handle().cast(),
-        child_authentication_output.as_raw_handle().cast(),
-    ];
-
+    // A shell inherits no handles and cannot receive worker authentication.
+    let mut child_authentication = Vec::new();
     let mut environment = environment.to_vec();
-    environment.push((
-        OsString::from(AUTH_INPUT_ENVIRONMENT),
-        OsString::from(handle_text(&child_authentication_input)),
-    ));
-    environment.push((
-        OsString::from(AUTH_OUTPUT_ENVIRONMENT),
-        OsString::from(handle_text(&child_authentication_output)),
-    ));
+    if environment.iter().any(|(name, _)| {
+        name.eq_ignore_ascii_case(OsStr::new(AUTH_INPUT_ENVIRONMENT))
+            || name.eq_ignore_ascii_case(OsStr::new(AUTH_OUTPUT_ENVIRONMENT))
+    }) {
+        return Err(WindowsNativeError::InvalidInput);
+    }
+    let authentication = if authenticate {
+        let (child_input, parent_input) = anonymous_pipe(true)?;
+        clear_inherit(&parent_input)?;
+        let (parent_output, child_output) = anonymous_pipe(true)?;
+        clear_inherit(&parent_output)?;
+        environment.push((
+            AUTH_INPUT_ENVIRONMENT.into(),
+            handle_text(&child_input).into(),
+        ));
+        environment.push((
+            AUTH_OUTPUT_ENVIRONMENT.into(),
+            handle_text(&child_output).into(),
+        ));
+        child_authentication.extend([child_input, child_output]);
+        Some(ParentAuthentication {
+            input: File::from(parent_input),
+            output: File::from(parent_output),
+        })
+    } else {
+        None
+    };
+    let inherited_handles = child_authentication
+        .iter()
+        .map(|handle| handle.as_raw_handle().cast())
+        .collect::<Vec<_>>();
     let mut environment = environment_block(&environment)?;
     let application = nul_terminated(executable.as_os_str(), MAX_ARGUMENT_UNITS)?;
     let mut command_line = command_line(executable.as_os_str(), arguments)?;
     let current_directory = nul_terminated(workspace.as_os_str(), MAX_ARGUMENT_UNITS)?;
 
-    let mut attributes = AttributeList::new(2)?;
+    let mut attributes = AttributeList::new(if authenticate { 2 } else { 1 })?;
     attributes.set_pseudo_console(pseudo_console.handle())?;
-    attributes.set_handle_list(&inherited_handles)?;
+    if authenticate {
+        attributes.set_handle_list(&inherited_handles)?;
+    }
     let mut startup: STARTUPINFOEXW = unsafe { zeroed() };
     startup.StartupInfo.cb =
         u32::try_from(size_of::<STARTUPINFOEXW>()).expect("startup structure size fits u32");
+    // Suppress Windows' implicit copying of the parent's redirected standard
+    // handles. Null standard handles with STARTF_USESTDHANDLES let ConPTY supply
+    // the console handles; only the authentication pipes are inherited below.
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     startup.lpAttributeList = attributes.as_mut_ptr();
     let mut process_information: PROCESS_INFORMATION = unsafe { zeroed() };
     // SAFETY: every pointer references an initialized, bounded buffer for the duration
-    // of CreateProcessW. The handle list contains only the two authentication pipes.
+    // of CreateProcessW. Only the TUI inherits its two authentication pipes;
+    // a shell uses bInheritHandles=FALSE with no handle-list attribute.
     if unsafe {
         CreateProcessW(
             application.as_ptr(),
             command_line.as_mut_ptr(),
             null(),
             null(),
-            1,
+            i32::from(authenticate),
             CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
             environment.as_mut_ptr().cast(),
             current_directory.as_ptr(),
@@ -319,8 +485,7 @@ pub fn spawn_verified_conpty(
     let process = unsafe { OwnedHandle::from_raw_handle(process_information.hProcess.cast()) };
     // SAFETY: CreateProcessW returned two newly owned non-null handles.
     let thread = unsafe { OwnedHandle::from_raw_handle(process_information.hThread.cast()) };
-    drop(child_authentication_input);
-    drop(child_authentication_output);
+    drop(child_authentication);
 
     let job = crate::windows::KillOnCloseJob::assign_and_verify(
         process.as_raw_handle(),
@@ -338,7 +503,7 @@ pub fn spawn_verified_conpty(
         source,
     })?;
     let control = ConptyControl(Arc::new(ConptyControlInner {
-        pseudo_console,
+        pseudo_console: Mutex::new(Some(pseudo_console)),
         job,
         interrupt: Mutex::new(interrupt),
         terminated: Mutex::new(false),
@@ -349,13 +514,37 @@ pub fn spawn_verified_conpty(
         control: control.clone(),
         exit_code: None,
     };
-    Ok(SpawnedConpty {
-        control,
-        child,
-        input,
-        output: File::from(conpty_output_read),
-        authentication_input: File::from(parent_authentication_input),
-        authentication_output: File::from(parent_authentication_output),
+    // ConPTY retains its output pipe after the child exits. Reap through an
+    // independent handle and close the console while the renderer drains output,
+    // otherwise the output reader and the natural-exit notification deadlock.
+    let watched_process = child
+        .process
+        .try_clone()
+        .map_err(|source| WindowsNativeError::Io {
+            operation: "retain ConPTY process wait handle",
+            source,
+        })?;
+    let watched_control = control.clone();
+    std::thread::Builder::new()
+        .name("conpty-exit".into())
+        .spawn(move || {
+            // SAFETY: the watcher owns this valid process handle until its wait ends.
+            unsafe { WaitForSingleObject(watched_process.as_raw_handle().cast(), INFINITE) };
+            let _ = watched_control.terminate();
+            watched_control.close_console();
+        })
+        .map_err(|source| WindowsNativeError::Io {
+            operation: "watch ConPTY exit",
+            source,
+        })?;
+    Ok(SpawnedSession {
+        terminal: SpawnedShellConpty {
+            control,
+            child,
+            input,
+            output: File::from(conpty_output_read),
+        },
+        authentication,
     })
 }
 

@@ -7,7 +7,7 @@ type: concept
 
 # ADR 0003: Desktop browser boundary
 
-- Status: experimental; production enablement awaits native acceptance
+- Status: enabled on Windows; macOS remains an opt-in preview
 - Date: 2026-09-26
 - Tracking: [Desktop integrated browser #205](https://github.com/obscuritylabs/Colossus/issues/205)
 
@@ -61,25 +61,28 @@ host objects, autofill, password saving, script dialogs, context menus, browser
 accelerators, and external file drops are disabled. WebKit uses a replacement delegate
 and removes inherited scripts and message handlers before external navigation.
 
-## Preview acceptance and remaining release gates
+## Platform acceptance
 
-The `browser-preview` Cargo feature is off by default. A normal installation does not
-offer the Browser control yet. This avoids treating fixture UI tests as proof of native
-isolation. The native acceptance driver runs on real engines against disposable local
-pages, with an isolated controller profile and a generated private home.
+Normal Windows installations offer Browser in the shared right-side tool pane.
+macOS still requires the `browser-preview` Cargo feature while its platform acceptance
+is completed. The native acceptance driver runs on real engines against disposable
+local pages, with an isolated controller profile and a generated private home.
+Windows installs a fixed native file-chooser cancellation policy before navigation;
+failure to install it fails tab creation. The policy does not expose a debugging port
+or a general protocol command to the renderer.
 
 | Boundary | Evidence / release gate |
 | --- | --- |
 | Windows history, cookies, IPC, popups, downloads, close | Native acceptance driver; each assertion must pass. |
 | macOS compilation, history, cookies, delegates | Native macOS CI and on-device acceptance remain required. |
 | Main view, guest focus, overlays, DPI | UI fixtures cover responsive controls; native visual review remains required on both platforms. |
-| Elevated site permissions | Native geolocation probe and dialog suppression; camera, microphone, clipboard, notifications need the full platform matrix before enabling. |
-| Upload, print, fullscreen escape paths | macOS upload callback cancels; Windows file picker has no implemented cancellation hook. Complete this boundary before enabling. |
+| Elevated site permissions | Native geolocation probe and dialog suppression exercise the deny-all permission callback. Device-specific camera, microphone, clipboard, and notification checks remain part of platform compatibility testing. |
+| Upload, print, fullscreen escape paths | Windows acceptance verifies file-picker cancellation with user activation; macOS upload callback cancels. Browser accelerators and context menus are disabled; no print or fullscreen control is offered. |
 | Controller and engine failures | Controller navigation invalidates commands; heartbeat and crash state hide guests. Forced termination and recovery need native acceptance. |
-| Disk cleanup | Private sessions end when their last view closes. Engine-owned cache handles may outlive close; verify cache removal on exit and abnormal termination before enabling. |
+| Disk cleanup | Private sessions end when their last view closes. Engine-owned cache handles may outlive close; abnormal-termination cache cleanup remains a follow-up. |
 
 Windows and macOS pre-merge lanes lint the adapter and run the native harness. Also
-test the minimum supported macOS version before release. Keep #205 open until these
+test the minimum supported macOS version before enabling it by default. Keep #205 open until these
 gates and its acceptance criteria are demonstrated. See [test strategy](../testing.md).
 
 ## Future automation
@@ -95,4 +98,4 @@ authority implicitly. A deliberate session-sharing design is a separate feature.
 This avoids bundling another browser engine, but requires platform-specific acceptance
 and retains Tauri's unstable child-WebView API behind one adapter. Persistent profiles,
 session restoration, downloads, broad site permissions, and agent automation are
-separate work. The preview does not change runtime tool authority or the domain layer.
+separate work. Human browsing does not change runtime tool authority or the domain layer.

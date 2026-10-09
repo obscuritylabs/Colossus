@@ -178,8 +178,8 @@ describe("RunTimeline assistant output", () => {
       "complete",
     );
 
-    expect(markup).toContain('class="markdown-content"');
-    expect(markup).toContain('<h3 class="feed-entry-title">Colossus</h3>');
+    expect(markup).toContain('class="shared-markdown markdown-content"');
+    expect(markup).toContain("<strong>Colossus</strong>");
     expect(markup).toContain("<h4>Ready</h4>");
     expect(markup).toContain("<strong>security</strong>");
   });
@@ -384,6 +384,55 @@ describe("RunTimeline assistant output", () => {
       "The tool completed, but this activity feed does not include an output preview.",
     );
   });
+
+  it.each(["completed", "failed"] as const)(
+    "keeps the MCP server in the collapsed heading after a %s update without input",
+    (state) => {
+      const updates: RunUpdate[] = [
+        {
+          runId: "run-markdown-test",
+          sequence: 1,
+          createdAt: "2026-07-21T12:00:00Z",
+          update: {
+            type: "tool_activity",
+            activity: {
+              callId: "call-mcp",
+              toolName: "mcp.call",
+              state: "started",
+              summary: "tool execution started at turn 1",
+              input: JSON.stringify({
+                server: "GitLab",
+                tool: "list_issues",
+                arguments: { server: "payload-server" },
+              }),
+            },
+          },
+        },
+        {
+          runId: "run-markdown-test",
+          sequence: 2,
+          createdAt: "2026-07-21T12:00:01Z",
+          update: {
+            type: "tool_activity",
+            activity: {
+              callId: "call-mcp",
+              toolName: "mcp.call",
+              state,
+              summary: `tool execution ${state} at turn 1`,
+            },
+          },
+        },
+      ];
+      const markup = renderOutput("Done", "completed", "complete", updates);
+      const heading = markup.match(
+        /class="compact-tool-activity[^>]*><summary>(.*?)<\/summary>/su,
+      )?.[1];
+      expect(heading).toContain("GitLab · list_issues");
+      expect(heading).not.toContain("payload-server");
+      expect(markup).toContain("activity-kind-mcp");
+      expect(markup.match(/class="compact-tool-activity/gu)).toHaveLength(1);
+    },
+  );
 
   it("interleaves released reasoning summaries with tool actions in the working thread", () => {
     const updates: RunUpdate[] = [
@@ -713,5 +762,60 @@ describe("RunTimeline assistant output", () => {
     expect(markup).toContain("42s");
     expect(markup).not.toContain("0 actions");
     expect(markup).not.toContain("<small>0 steps · 0s</small>");
+  });
+});
+
+describe("provider recovery presentation", () => {
+  const retryUpdate = (
+    state: "backoff" | "retrying" | "recovered",
+  ): RunUpdate => ({
+    runId: "run-markdown-test",
+    sequence: 4,
+    createdAt: "2026-10-03T00:00:00Z",
+    update: {
+      type: "provider_retry",
+      retry: {
+        attempt: 2,
+        max_retries: 5,
+        http_status: 503,
+        state,
+        retry_at: state === "backoff" ? "2026-10-03T00:00:04Z" : null,
+      },
+    },
+  });
+
+  it("shows one inline countdown without adding recovery to the transcript", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-10-03T00:00:00Z"));
+      const markup = renderOutput("", "running", "watching", [
+        retryUpdate("backoff"),
+      ]);
+      expect(markup).toContain("provider-retry-status");
+      expect(markup).toContain("Next attempt in 4s");
+      expect(markup).toContain('role="status"');
+      expect(markup).toContain('aria-live="polite"');
+      expect(markup.match(/Reconnecting to provider/g)).toHaveLength(1);
+      expect(markup).not.toContain("HTTP 503");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("replaces the countdown while dispatching and clears on recovery or cancellation", () => {
+    expect(
+      renderOutput("", "running", "watching", [retryUpdate("retrying")]),
+    ).toContain("Retrying now…");
+    for (const status of [
+      "running",
+      "cancelling",
+      "failed",
+      "cancelled",
+    ] as const) {
+      const state = status === "running" ? "recovered" : "backoff";
+      expect(
+        renderOutput("", status, "watching", [retryUpdate(state)]),
+      ).not.toContain("provider-retry-status");
+    }
   });
 });

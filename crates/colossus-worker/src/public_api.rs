@@ -302,6 +302,9 @@ impl PreparedPublicApi {
         )
         .await
         .map_err(|error| WorkerError::PublicApi(error.to_string()))?
+        .with_workflows(Arc::new(colossus_api_runtime::RuntimeWorkflowApi::new(
+            Arc::clone(&runtime),
+        )))
         .with_extensions(Arc::new(colossus_api_runtime::RuntimeExtensionApi::new(
             Arc::clone(&runtime),
         )));

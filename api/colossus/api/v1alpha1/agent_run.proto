@@ -12,6 +12,15 @@ option java_package = "com.obscuritylabs.colossus.api.v1alpha1";
 
 // AgentRunService manages durable asynchronous runs and one-use interactions.
 service AgentRunService {
+  // ListProcessSessions discovers caller-owned managed shells in this runtime.
+  rpc ListProcessSessions(ListProcessSessionsRequest) returns (ListProcessSessionsResponse);
+
+  // ReadProcessSession reads released logs, with a bounded optional wait.
+  rpc ReadProcessSession(ReadProcessSessionRequest) returns (ReadProcessSessionResponse);
+
+  // StopProcessSession requests idempotent stop of an exact caller-owned shell.
+  rpc StopProcessSession(StopProcessSessionRequest) returns (StopProcessSessionResponse);
+
   // CreateRun durably allocates a run before execution begins.
   rpc CreateRun(CreateRunRequest) returns (CreateRunResponse);
 
@@ -38,6 +47,13 @@ service AgentRunService {
 
   // RespondInteraction answers one caller-bound prompt or approval exactly once.
   rpc RespondInteraction(RespondInteractionRequest) returns (RespondInteractionResponse);
+
+  // The local application explicitly releases its own workspace sessions.
+  rpc SetWorkspaceSharing(SetWorkspaceSharingRequest) returns (SetWorkspaceSharingResponse);
+  // Discovery includes only owned or explicitly shared released runs.
+  rpc ListVisibleRuns(ListVisibleRunsRequest) returns (ListVisibleRunsResponse);
+  // Caller-scoped configuration metadata; never an enforcement attestation or raw config.
+  rpc GetRuntimePolicyPosture(GetRuntimePolicyPostureRequest) returns (GetRuntimePolicyPostureResponse);
 }
 
 // RunMode selects the runtime's public execution mode.
@@ -920,6 +936,32 @@ message TokenUsage {
   optional uint64 reasoning_tokens = 5;
 }
 
+// ProviderRetryState identifies one stage of automatic provider recovery.
+enum ProviderRetryState {
+  // PROVIDER_RETRY_STATE_UNSPECIFIED is never emitted.
+  PROVIDER_RETRY_STATE_UNSPECIFIED = 0;
+  // PROVIDER_RETRY_STATE_BACKOFF waits until retry_at.
+  PROVIDER_RETRY_STATE_BACKOFF = 1;
+  // PROVIDER_RETRY_STATE_RETRYING dispatches the next request.
+  PROVIDER_RETRY_STATE_RETRYING = 2;
+  // PROVIDER_RETRY_STATE_RECOVERED returns to normal model activity.
+  PROVIDER_RETRY_STATE_RECOVERED = 3;
+}
+
+// ProviderRetry is credential-free progress, separate from model output.
+message ProviderRetry {
+  // attempt is the one-based retry number, excluding the original request.
+  uint32 attempt = 1;
+  // max_retries is the bounded retry allowance.
+  uint32 max_retries = 2;
+  // http_status is the confirmed transient upstream response.
+  uint32 http_status = 3;
+  // state identifies waiting, dispatch, or recovery.
+  ProviderRetryState state = 4;
+  // retry_at is the UTC RFC3339 deadline, present only during backoff.
+  optional string retry_at = 5;
+}
+
 // RunNotice is a bounded non-terminal user-safe notice.
 message RunNotice {
   // reason is a stable machine-readable notice reason.
@@ -989,5 +1031,158 @@ message RunUpdate {
 
     // cancellation is the exact cancelled terminal update at this sequence.
     RunCancellation cancellation = 14;
+
+    // provider_retry is bounded recovery progress without conversation output.
+    ProviderRetry provider_retry = 15;
   }
+}
+
+// ProcessSession is safe metadata for one runtime-owned invocation.
+message ProcessSession {
+  // Opaque invocation identifier; never an operating-system PID.
+  string id = 1;
+  // Owning conversation identifier.
+  string session_id = 2;
+  // Initiating agent run identifier.
+  string run_id = 3;
+  // Initiating application identity, supplied by the authenticated runtime.
+  string owner_id = 4;
+  // Delegated agent lineage when present.
+  optional string subagent_id = 5;
+  // Immutable lifetime: run or workspace.
+  string lifetime = 6;
+  // starting, running, stopping, exited, stopped, timed_out, failed, interrupted, or outcome_unknown.
+  string status = 7;
+  // Credential-redacted command display.
+  string command = 8;
+  // Sanitized working directory.
+  string cwd = 9;
+  // Acceptance time in Unix milliseconds.
+  uint64 created_at_ms = 10;
+  // Execution deadline in Unix milliseconds; waits never extend it.
+  optional uint64 deadline_ms = 11;
+  // Confirmed exit code when available.
+  optional int32 exit_code = 12;
+  // Bounded terminal explanation.
+  optional string reason = 13;
+  // True when output was discarded because of a bound.
+  bool truncated = 14;
+  // Latest released output cursor.
+  uint64 output_sequence = 15;
+}
+
+// ProcessOutputChunk contains only policy-released display-safe UTF-8 output.
+message ProcessOutputChunk {
+  // Exclusive cursor for a subsequent read.
+  uint64 sequence = 1;
+  // Standard output.
+  string stdout = 2;
+  // Standard error.
+  string stderr = 3;
+}
+
+// ProcessSessionSnapshot contains current status and one bounded output page.
+message ProcessSessionSnapshot {
+  // Current invocation status.
+  ProcessSession session = 1;
+  // New output chunks, ordered by sequence.
+  repeated ProcessOutputChunk chunks = 2;
+  // Exclusive cursor for the next read.
+  uint64 next_sequence = 3;
+  // Requested output is no longer retained, including after runtime restart.
+  bool gap = 4;
+}
+
+// ListProcessSessionsRequest discovers shells owned by the authenticated application.
+message ListProcessSessionsRequest {
+  // Exclusive identifier from a previous response.
+  optional string after = 1;
+}
+// ListProcessSessionsResponse is bounded to one hundred summaries.
+message ListProcessSessionsResponse {
+  // Caller-owned invocations.
+  repeated ProcessSession sessions = 1;
+  // Exclusive identifier for a subsequent page.
+  optional string next_cursor = 2;
+}
+// ReadProcessSessionRequest reads or waits without modifying execution authority.
+message ReadProcessSessionRequest {
+  // Opaque invocation identity.
+  string session_id = 1;
+  // Exclusive output cursor, zero initially.
+  uint64 after_sequence = 2;
+  // Wait interval between zero and thirty thousand milliseconds.
+  uint64 wait_ms = 3;
+  // Output page bound between 16384 and 65536 bytes.
+  uint32 max_output_bytes = 4;
+}
+// ReadProcessSessionResponse contains the latest status and released output.
+message ReadProcessSessionResponse {
+  // Bounded process snapshot.
+  ProcessSessionSnapshot snapshot = 1;
+}
+// StopProcessSessionRequest only targets an exact caller-owned invocation.
+message StopProcessSessionRequest {
+  // Opaque invocation identity.
+  string session_id = 1;
+}
+// StopProcessSessionResponse distinguishes a stop request from confirmed termination.
+message StopProcessSessionResponse {
+  // Bounded process snapshot.
+  ProcessSessionSnapshot snapshot = 1;
+}
+
+// Change the authenticated application's local workspace disclosure relationship.
+message SetWorkspaceSharingRequest {
+  // Exact independently enrolled recipient application identity.
+  string recipient_application_id = 1;
+  // Release source-owned sessions, or revoke future reads.
+  bool enabled = 2;
+  // Permit recipient-owned runs to continue source sessions under its own grant.
+  bool allow_continuation = 3;
+}
+// Durable local sharing posture. Enrollment alone does not enable sharing.
+message SetWorkspaceSharingResponse {
+  // Exact recipient application identity.
+  string recipient_application_id = 1;
+  // Whether released source sessions are visible to the recipient.
+  bool enabled = 2;
+  // Whether recipient-owned runs may continue shared sessions.
+  bool allow_continuation = 3;
+}
+// Bounded discovery filters for caller-owned and explicitly shared runs.
+message ListVisibleRunsRequest {
+  // Optional exact session identity within the released source scope.
+  optional string session_id = 1;
+  // Distinct optional lifecycle states; empty includes all states.
+  repeated RunStatus statuses = 2;
+  // Bounded page size and opaque source-stable continuation cursor.
+  PageRequest page = 3;
+  // Include shared and owned archived threads.
+  bool include_archived = 4;
+}
+// Released run and authority derived by the authenticated runtime.
+message VisibleRun {
+  // Public run projection; never private worker data.
+  Run run = 1;
+  // Whether this caller owns cancellation and interaction response authority.
+  bool controllable = 2;
+  // Whether the caller may continue this session using its own grant.
+  bool continuable = 3;
+}
+// Bounded source-stable page of owned and explicitly shared runs.
+message ListVisibleRunsResponse {
+  // Runtime-authorized released run projections.
+  repeated VisibleRun runs = 1;
+  // Opaque continuation cursor bound to current sharing relationships.
+  PageResponse page = 2;
+}
+
+// Requests current metadata beneath the authenticated application ceiling.
+message GetRuntimePolicyPostureRequest {}
+
+// Contains one closed, validated metadata-only RuntimePolicyPosture contract.
+message GetRuntimePolicyPostureResponse {
+  // Strict RuntimePolicyPosture JSON, at most64KiB; unknown fields are rejected by SDKs.
+  bytes policy_json = 1;
 }

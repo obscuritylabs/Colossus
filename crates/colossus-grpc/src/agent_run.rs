@@ -134,6 +134,10 @@ pub struct AgentRunServiceAdapter {
 }
 
 impl AgentRunServiceAdapter {
+    pub(crate) fn with_watch_slots(mut self, slots: Arc<Semaphore>) -> Self {
+        self.watch_slots = slots;
+        self
+    }
     /// Wrap a transport-neutral run API.
     pub fn new(api: Arc<dyn AgentRunApi>) -> Self {
         Self {
@@ -145,6 +149,196 @@ impl AgentRunServiceAdapter {
 
 #[tonic::async_trait]
 impl AgentRunService for AgentRunServiceAdapter {
+    async fn get_runtime_policy_posture(
+        &self,
+        request: Request<colossus_api_proto::v1alpha1::GetRuntimePolicyPostureRequest>,
+    ) -> Result<Response<colossus_api_proto::v1alpha1::GetRuntimePolicyPostureResponse>, Status>
+    {
+        let caller = caller_context(&request)?;
+        let posture = self
+            .api
+            .get_runtime_policy_posture(caller)
+            .await
+            .map_err(api_status)?;
+        if !posture.validate() {
+            return Err(Status::internal("runtime policy metadata is unavailable"));
+        }
+        let policy_json = serde_json::to_vec(&posture)
+            .map_err(|_| Status::internal("runtime policy metadata is unavailable"))?;
+        if policy_json.len() > 65536 {
+            return Err(Status::resource_exhausted(
+                "runtime policy metadata exceeds its bound",
+            ));
+        }
+        Ok(Response::new(
+            colossus_api_proto::v1alpha1::GetRuntimePolicyPostureResponse { policy_json },
+        ))
+    }
+    async fn set_workspace_sharing(
+        &self,
+        request: Request<colossus_api_proto::v1alpha1::SetWorkspaceSharingRequest>,
+    ) -> Result<Response<colossus_api_proto::v1alpha1::SetWorkspaceSharingResponse>, Status> {
+        let caller = caller_context(&request)?.clone();
+        let request = request.into_inner();
+        validate_identifier(
+            &caller,
+            "recipient_application_id",
+            &request.recipient_application_id,
+        )?;
+        let response = self
+            .api
+            .set_workspace_sharing(
+                &caller,
+                colossus_api::SetWorkspaceSharingRequest {
+                    recipient_application_id: request.recipient_application_id,
+                    enabled: request.enabled,
+                    allow_continuation: request.allow_continuation,
+                },
+            )
+            .await
+            .map_err(api_status)?;
+        Ok(Response::new(
+            colossus_api_proto::v1alpha1::SetWorkspaceSharingResponse {
+                recipient_application_id: response.recipient_application_id,
+                enabled: response.enabled,
+                allow_continuation: response.allow_continuation,
+            },
+        ))
+    }
+
+    async fn list_visible_runs(
+        &self,
+        request: Request<colossus_api_proto::v1alpha1::ListVisibleRunsRequest>,
+    ) -> Result<Response<colossus_api_proto::v1alpha1::ListVisibleRunsResponse>, Status> {
+        let caller = caller_context(&request)?.clone();
+        let request = request.into_inner();
+        if let Some(session_id) = &request.session_id {
+            validate_identifier(&caller, "session_id", session_id)?;
+        }
+        if request.statuses.len() > MAX_RUN_STATUS_FILTERS {
+            return Err(invalid(&caller, "statuses", "too many lifecycle states"));
+        }
+        let statuses = request
+            .statuses
+            .into_iter()
+            .map(|status| core_run_status(&caller, status))
+            .collect::<Result<Vec<_>, _>>()?;
+        let (page_size, page_token) = request.page.map_or((0, None), |page| {
+            (
+                page.page_size,
+                (!page.page_token.is_empty()).then_some(page.page_token),
+            )
+        });
+        if let Some(token) = &page_token {
+            validate_opaque(&caller, "page.page_token", token)?;
+        }
+        let response = self
+            .api
+            .list_visible_runs(
+                &caller,
+                CoreListRunsRequest {
+                    session_id: request.session_id,
+                    statuses,
+                    page_size,
+                    page_token,
+                    include_archived: request.include_archived,
+                },
+            )
+            .await
+            .map_err(api_status)?;
+        let runs = response
+            .runs
+            .into_iter()
+            .map(|value| {
+                Ok(colossus_api_proto::v1alpha1::VisibleRun {
+                    run: Some(proto_run(value.run)?),
+                    controllable: value.controllable,
+                    continuable: value.continuable,
+                })
+            })
+            .collect::<Result<Vec<_>, Status>>()?;
+        Ok(Response::new(
+            colossus_api_proto::v1alpha1::ListVisibleRunsResponse {
+                runs,
+                page: Some(PageResponse {
+                    next_page_token: response.next_page_token.unwrap_or_default(),
+                }),
+            },
+        ))
+    }
+    async fn list_process_sessions(
+        &self,
+        request: Request<colossus_api_proto::v1alpha1::ListProcessSessionsRequest>,
+    ) -> Result<Response<colossus_api_proto::v1alpha1::ListProcessSessionsResponse>, Status> {
+        let caller = caller_context(&request)?.clone();
+        let response = self
+            .api
+            .list_process_sessions(
+                &caller,
+                colossus_api::ListProcessSessionsRequest {
+                    after: request.into_inner().after,
+                },
+            )
+            .await
+            .map_err(api_status)?;
+        Ok(Response::new(
+            colossus_api_proto::v1alpha1::ListProcessSessionsResponse {
+                sessions: response
+                    .sessions
+                    .into_iter()
+                    .map(super::process_sessions::summary_to_proto)
+                    .collect(),
+                next_cursor: response.next_cursor,
+            },
+        ))
+    }
+    async fn read_process_session(
+        &self,
+        request: Request<colossus_api_proto::v1alpha1::ReadProcessSessionRequest>,
+    ) -> Result<Response<colossus_api_proto::v1alpha1::ReadProcessSessionResponse>, Status> {
+        let caller = caller_context(&request)?.clone();
+        let request = request.into_inner();
+        let response = self
+            .api
+            .read_process_session(
+                &caller,
+                colossus_api::ReadProcessSessionRequest {
+                    session_id: request.session_id,
+                    after_sequence: request.after_sequence,
+                    wait_ms: request.wait_ms,
+                    max_output_bytes: request.max_output_bytes,
+                },
+            )
+            .await
+            .map_err(api_status)?;
+        Ok(Response::new(
+            colossus_api_proto::v1alpha1::ReadProcessSessionResponse {
+                snapshot: Some(super::process_sessions::snapshot_to_proto(response)),
+            },
+        ))
+    }
+    async fn stop_process_session(
+        &self,
+        request: Request<colossus_api_proto::v1alpha1::StopProcessSessionRequest>,
+    ) -> Result<Response<colossus_api_proto::v1alpha1::StopProcessSessionResponse>, Status> {
+        let caller = caller_context(&request)?.clone();
+        let response = self
+            .api
+            .stop_process_session(
+                &caller,
+                colossus_api::StopProcessSessionRequest {
+                    session_id: request.into_inner().session_id,
+                },
+            )
+            .await
+            .map_err(api_status)?;
+        Ok(Response::new(
+            colossus_api_proto::v1alpha1::StopProcessSessionResponse {
+                snapshot: Some(super::process_sessions::snapshot_to_proto(response)),
+            },
+        ))
+    }
+
     async fn create_run(
         &self,
         request: Request<CreateRunRequest>,
@@ -1214,6 +1408,19 @@ async fn proto_update(
         }
         CoreRunUpdateKind::Message { message } => {
             run_update::Update::Message(proto_released_message(message)?)
+        }
+        CoreRunUpdateKind::ProviderRetry { retry } => {
+            run_update::Update::ProviderRetry(colossus_api_proto::v1alpha1::ProviderRetry {
+                attempt: retry.attempt,
+                max_retries: retry.max_retries,
+                http_status: retry.http_status,
+                state: match retry.state {
+                    colossus_contracts::ProviderRetryState::Backoff => 1,
+                    colossus_contracts::ProviderRetryState::Retrying => 2,
+                    colossus_contracts::ProviderRetryState::Recovered => 3,
+                },
+                retry_at: retry.retry_at,
+            })
         }
         CoreRunUpdateKind::Notice { notice } => run_update::Update::Notice(RunNotice {
             reason: notice.reason,

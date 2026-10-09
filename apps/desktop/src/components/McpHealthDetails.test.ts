@@ -55,6 +55,7 @@ describe("MCP health details", () => {
     expect(html).toContain('role="status"');
     expect(html).toContain("No allowlisted tools");
     expect(html).toContain("0 allowlisted tools discovered.");
+    expect(html).toContain("matching is case-sensitive");
     expect(html).not.toContain('role="alert"');
   });
 

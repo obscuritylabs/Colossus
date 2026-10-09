@@ -27,7 +27,7 @@ harness = false
 required-features = ["native-test-driver"]
 
 [dependencies]
-colossus-contracts = { version = "=0.11.1", path = "../../../crates/colossus-contracts" }
+colossus-contracts = { version = "=0.11.7", path = "../../../crates/colossus-contracts" }
 tauri = { version = "=2.11.5", features = [] }
 tokio = { version = "1.49.0", features = ["sync"] }
 zeroize = "1.8.2"
@@ -48,6 +48,9 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std", "NSDate", "NSFormatter", "NSGeometry", "NSNotification", "NSObject", "NSString", "NSThread", "NSTimer",
 ] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "=0.18.2"
 
 [lints.clippy]
 all = "warn"

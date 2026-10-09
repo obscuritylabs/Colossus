@@ -105,12 +105,18 @@ fn tag_validation_and_draft_publication_fail_closed() {
         "git merge-base --is-ancestor",
         "workspace_version",
         "grep -F \"## [$version]\" CHANGELOG.md",
+        "node scripts/ci/release-notes.mjs",
+        "--tag \"$RELEASE_TAG\" --source \"$SOURCE_COMMIT\"",
         "publish_draft=false",
         "release_channel=validation_only",
-        "--draft --verify-tag --generate-notes",
+        "--draft --verify-tag --notes-file \"$RELEASE_NOTES_FILE\"",
         "refusing to retain unexpected draft asset",
-        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 25",
-        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 22",
+        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 45",
+        "expected_assets=42",
+        "expected_assets=38",
+        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq \"$expected_assets\"",
+        "if [ \"$TEST_RELEASE\" = true ]; then",
+        "node scripts/ci/release-source-version.mjs \"$tag\" \"$workspace_version\"",
         "Colossus-Desktop-STABLE-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe",
         "Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe",
     ] {
@@ -133,6 +139,19 @@ fn tag_validation_and_draft_publication_fail_closed() {
     );
     named_step(draft, "Check out the exact release verifier");
     named_step(draft, "Verify complete release asset set");
+    named_step(
+        job(jobs, "validate"),
+        "Generate changelog and release notes",
+    );
+    let history = named_step(draft, "Download generated release history");
+    assert_eq!(
+        field(
+            mapping(field(history, "with"), "release history artifact"),
+            "name"
+        )
+        .as_str(),
+        Some("release-history")
+    );
 }
 
 #[test]
@@ -197,7 +216,8 @@ fn developer_preview_is_explicitly_ad_hoc_labeled_and_prerelease() {
         "tag_channel=developer_preview",
         "COLOSSUS_DESKTOP_RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}",
         "Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip",
-        "--draft --prerelease --verify-tag --generate-notes",
+        "--draft --prerelease --verify-tag",
+        "--notes-file \"$preview_notes_file\"",
         "Developer Preview (Unnotarized)",
         "ad-hoc signed and not notarized by Apple",
         "preview_checksum=\"Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip.sha256\"",
@@ -305,6 +325,10 @@ fn public_bootstrap_installers_are_fixed_origin_bounded_and_release_owned() {
     let workflow = workflow("release.yml");
     let release_jobs = jobs(&workflow);
     let bootstrap = job(release_jobs, "bootstrap_installers");
+    assert_eq!(
+        field(bootstrap, "if").as_str(),
+        Some("needs.validate.outputs.test_release != 'true'")
+    );
     named_step(bootstrap, "Validate bootstrap installer syntax");
     named_step(bootstrap, "Stage immutable bootstrap installer assets");
     named_step(bootstrap, "Upload bootstrap installers and checksums");
@@ -313,7 +337,10 @@ fn public_bootstrap_installers_are_fixed_origin_bounded_and_release_owned() {
         fs::read_to_string(repository_root().join(".github/workflows/release.yml"))
             .expect("read release workflow");
     for required in [
-        "bootstrap_installers=${{ needs.bootstrap_installers.result }}",
+        "BOOTSTRAP_RESULT: ${{ needs.bootstrap_installers.result }}",
+        "bootstrap_installers=\"$BOOTSTRAP_RESULT\"",
+        "test \"$TARGET_CHANNEL\" = developer_preview",
+        "test \"$BOOTSTRAP_RESULT\" = skipped",
         "dist/colossus-install.sh",
         "dist/colossus-install.ps1",
         "colossus-install.sh.sha256",
@@ -653,8 +680,8 @@ fn temporary_lru_advisory_exception_is_exact_documented_and_consistent() {
         );
     }
     assert!(
-        deny.contains("[advisories]\nignore = []"),
-        "cargo-deny must retain its fail-closed empty advisory ignore list"
+        !deny.contains(ADVISORY),
+        "cargo-deny must not ignore the informational lru advisory"
     );
     for required in ["LruCache<usize, Block>", "Tantivy PR #3034", "`lru` 0.18.2"] {
         assert!(
@@ -664,6 +691,32 @@ fn temporary_lru_advisory_exception_is_exact_documented_and_consistent() {
     }
     assert!(lock.contains("name = \"lru\"\nversion = \"0.18.2\""));
     assert!(!lock.contains("name = \"lru\"\nversion = \"0.18.1\""));
+}
+
+#[test]
+fn oidc_public_verification_exception_is_exact_and_scoped() {
+    const ADVISORY: &str = "RUSTSEC-2023-0071";
+    let root = repository_root();
+    let deny = fs::read_to_string(root.join("deny.toml")).unwrap();
+    assert_eq!(
+        deny.matches("RUSTSEC-").count(),
+        1,
+        "the policy permits only the reviewed RSA exception"
+    );
+    assert!(deny.contains(ADVISORY));
+    assert!(deny.contains("no application RSA private-key operations"));
+    for path in [
+        "xtask/src/checks/surfaces.rs",
+        "release/verify-release-readiness.sh",
+        "docs/develop/adr/0006-cloud-control-plane.md",
+    ] {
+        assert!(
+            fs::read_to_string(root.join(path))
+                .unwrap()
+                .contains(ADVISORY),
+            "{path} must document the exact exception"
+        );
+    }
 }
 
 #[test]
@@ -695,12 +748,15 @@ fn linux_profile_and_release_package_remain_hardened() {
     assert!(unix.contains("release/install-apparmor.sh"));
     assert!(unix.contains("release/colossus.apparmor.in"));
 
-    for workflow_path in [".github/workflows/pr.yml", ".github/workflows/release.yml"] {
+    for workflow_path in [
+        ".github/workflows/premerge.yml",
+        ".github/workflows/release.yml",
+    ] {
         let source = fs::read_to_string(repository_root().join(workflow_path))
             .unwrap_or_else(|error| panic!("read {workflow_path}: {error}"));
         let staging_directory =
             r#"install_dir="/colossus-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}""#;
-        let expected_staging_count = if workflow_path.ends_with("/pr.yml") {
+        let expected_staging_count = if workflow_path.ends_with("/premerge.yml") {
             1
         } else {
             2

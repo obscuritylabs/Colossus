@@ -39,7 +39,7 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: printf '%s\n' "$PR_TITLE" | sh .ci-trusted/scripts/check_conventional_commit.sh --stdin
 
-      - name: Install workflow tools
+      - name: Install selected language toolchains
         uses: ./.github/actions/setup-toolchain
         with:
           tools: node aqua:rhysd/actionlint python
@@ -82,14 +82,69 @@ jobs:
       - name: Lint GitHub Actions workflows
         run: actionlint
 
-  rust:
-    name: Rust PR validation
+  format:
+    name: Rust formatting and structure
     if: needs.classify.outputs.rust_required == 'true'
     needs: classify
-    runs-on: ubuntu-latest-m
-    timeout-minutes: 45
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install selected language toolchains
+        uses: ./.github/actions/setup-toolchain
+        with:
+          tools: rust
+
+      - name: Check formatting and crate structure
+        run: |
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
+          ./scripts/check_crate_roots.sh
+          cargo metadata --locked --no-deps --format-version 1 >/dev/null
+          cargo metadata --locked --manifest-path fuzz/Cargo.toml --no-deps --format-version 1 >/dev/null
+
+  lint:
+    name: Rust Clippy and fuzz harness lint
+    if: needs.classify.outputs.rust_required == 'true'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
     env:
-      SCCACHE_GHA_ENABLED: "true"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install selected language toolchains
+        uses: ./.github/actions/setup-toolchain
+        with:
+          tools: rust
+
+      - name: Restore main Rust dependency build cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: . -> target
+          shared-key: pr-linux
+          key: recipe-v1
+          cache-targets: true
+          save-if: false
+      - name: Lint Rust workspace
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Lint fuzz harnesses
+        run: cargo clippy --locked --manifest-path fuzz/Cargo.toml --bins -- -D warnings
+
+  rust:
+    name: Rust unit tests
+    if: needs.classify.outputs.rust_required == 'true'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -99,33 +154,60 @@ jobs:
       - name: Install selected language toolchains
         uses: ./.github/actions/setup-toolchain
         with:
-          tools: rust ${{ (needs.classify.outputs.sdk_required == 'true' || needs.classify.outputs.desktop_required == 'true') && 'node' || '' }} ${{ needs.classify.outputs.sdk_required == 'true' && 'python go' || '' }}
+          tools: rust
+
+      - name: Restore main Rust dependency build cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: . -> target
+          shared-key: pr-linux
+          key: recipe-v1
+          cache-targets: true
+          save-if: false
+
+      - name: Run Rust workspace unit tests
+        run: cargo test --locked --workspace --lib
+
+  sdk:
+    name: Public SDK PR validation
+    if: needs.classify.outputs.sdk_required == 'true'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Install selected language toolchains
+        uses: ./.github/actions/setup-toolchain
+        with:
+          tools: rust node python go
 
       - name: Cache npm downloads
-        if: needs.classify.outputs.sdk_required == 'true' || needs.classify.outputs.desktop_required == 'true'
         uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: |
             ~/.npm
             ${{ runner.temp }}/npm-pack-cache
-          key: npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.lock', 'apps/desktop/package-lock.json', 'sdk/package-lock.json', 'sdk/typescript/package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.lock', 'sdk/package-lock.json', 'sdk/typescript/package-lock.json', 'apps/vscode/package-lock.json') }}
 
       - name: Cache pip downloads
-        if: needs.classify.outputs.sdk_required == 'true'
         uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: ~/.cache/pip
           key: pip-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.lock', 'sdk/python/requirements-codegen.txt', 'sdk/python/requirements-dev.txt') }}
 
       - name: Locate Go caches
-        if: needs.classify.outputs.sdk_required == 'true'
         id: go-cache
         run: |
           printf 'build=%s\n' "$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
           printf 'mod=%s\n' "$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
 
       - name: Cache Go modules and builds
-        if: needs.classify.outputs.sdk_required == 'true'
         uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: |
@@ -137,45 +219,113 @@ jobs:
         id: sccache
         continue-on-error: true
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
-
       - name: Activate shared compiler cache
         if: steps.sccache.outcome == 'success'
         run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
-
+      - name: Configure read-only R2 compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        env:
+          R2_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+          R2_REGION: ${{ secrets.SCCACHE_REGION }}
+          R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+        run: ./scripts/ci/configure-sccache-r2.sh read
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: . -> target
+          key: pr-sdk
           cache-targets: false
-
-      - name: Test Managed Local sidecar contracts
-        if: needs.classify.outputs.desktop_required == 'true'
-        run: cargo xtask check sidecar
-
-      - name: Prepare exact-path AppArmor profile for workspace tests
-        run: |
-          install_dir="/colossus-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          staged_binary="$install_dir/colossus"
-          sudo install -d -o root -g root -m 0755 "$install_dir"
-          sudo install -o root -g root -m 0755 /bin/true "$staged_binary"
-          sudo release/install-apparmor.sh "$staged_binary"
-          cargo build --locked -p colossus-cli --bin colossus
-          sudo install -o root -g root -m 0755 \
-            target/debug/colossus "$staged_binary"
-          printf 'COLOSSUS_NATIVE_TEST_BINARY=%s\n' "$staged_binary" >> "$GITHUB_ENV"
-
-      - name: Run complete Rust validation
-        run: cargo xtask check rust
-
       - name: Validate public SDKs
-        if: needs.classify.outputs.sdk_required == 'true'
         env:
           EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           npm_config_cache: ${{ runner.temp }}/npm-pack-cache
         run: cargo xtask check sdk --base "$EVENT_BASE_SHA"
+      - name: Validate the VS Code extension
+        working-directory: apps/vscode
+        run: |
+          npm ci --ignore-scripts
+          npm run check
+          npm run build
+          npm audit --audit-level=high
+      - name: Exercise VS Code against the real worker
+        run: |
+          cargo build --locked -p colossus-cli --example sdk_ephemeral_local
+          npm --prefix apps/vscode run test:live
+      - name: Exercise VS Code's Electron transport
+        run: |
+          colossus_electron_dir="$(mktemp -d)"
+          trap 'rm -rf "$colossus_electron_dir"' EXIT
+          curl --fail --location --retry 3 \
+            https://github.com/electron/electron/releases/download/v42.10.0/electron-v42.10.0-linux-x64.zip \
+            --output "$colossus_electron_dir/runtime.zip"
+          printf '%s  %s\n' \
+            edcfae0a8cf2a75ceee8a9842a0117521283164708b193495f4cb60ab2d6aa0d \
+            "$colossus_electron_dir/runtime.zip" | sha256sum --check
+          unzip -q "$colossus_electron_dir/runtime.zip" -d "$colossus_electron_dir/runtime"
+          npm --prefix apps/vscode run test:live -- --electron "$colossus_electron_dir/runtime/electron"
+      - name: Exercise the VS Code sidebar
+        working-directory: apps/vscode
+        run: |
+          npm exec -- playwright install --with-deps chromium
+          npm run test:browser
+      - name: Package the VS Code MVP
+        working-directory: apps/vscode
+        run: node scripts/package.mjs
 
+  desktop:
+    name: Desktop PR validation
+    if: needs.classify.outputs.desktop_required == 'true'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install selected language toolchains
+        uses: ./.github/actions/setup-toolchain
+        with:
+          tools: rust node
+
+      - name: Cache npm downloads
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: |
+            ~/.npm
+            ${{ runner.temp }}/npm-pack-cache
+          key: npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.lock', 'apps/desktop/package-lock.json') }}
+
+      - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Configure read-only R2 compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        env:
+          R2_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+          R2_REGION: ${{ secrets.SCCACHE_REGION }}
+          R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+        run: ./scripts/ci/configure-sccache-r2.sh read
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: . -> target
+          key: pr-desktop
+          cache-targets: false
+      - name: Test Managed Local sidecar contracts
+        run: cargo xtask check sidecar
       - name: Validate desktop renderer
-        if: needs.classify.outputs.desktop_required == 'true'
         run: cargo xtask check desktop
 
   documentation:
@@ -188,7 +338,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install documentation compiler
+      - name: Install selected language toolchains
         uses: ./.github/actions/setup-toolchain
         with:
           tools: rust
@@ -215,7 +365,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install supply-chain tools and compiler
+      - name: Install selected language toolchains
         uses: ./.github/actions/setup-toolchain
         with:
           tools: rust aqua:EmbarkStudios/cargo-deny aqua:rustsec/rustsec/cargo-audit
@@ -226,7 +376,7 @@ jobs:
   gate:
     name: Colossus PR gate
     if: always()
-    needs: [classify, rust, documentation, dependency-policy]
+    needs: [classify, format, lint, rust, sdk, desktop, documentation, dependency-policy]
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
@@ -239,8 +389,14 @@ jobs:
       - name: Require every selected PR validation
         env:
           CLASSIFY_RESULT: ${{ needs.classify.result }}
+          FORMAT_RESULT: ${{ needs.format.result }}
+          LINT_RESULT: ${{ needs.lint.result }}
           RUST_REQUIRED: ${{ needs.classify.outputs.rust_required }}
           RUST_RESULT: ${{ needs.rust.result }}
+          SDK_REQUIRED: ${{ needs.classify.outputs.sdk_required }}
+          SDK_RESULT: ${{ needs.sdk.result }}
+          DESKTOP_REQUIRED: ${{ needs.classify.outputs.desktop_required }}
+          DESKTOP_RESULT: ${{ needs.desktop.result }}
           DOCS_REQUIRED: ${{ needs.classify.outputs.docs_required }}
           DOCS_RESULT: ${{ needs.documentation.result }}
           DEPENDENCY_REQUIRED: ${{ needs.classify.outputs.dependency_required }}
@@ -254,11 +410,26 @@ jobs:
               "$RUST_REQUIRED" "$RUST_RESULT" \
               "$DOCS_REQUIRED" "$DOCS_RESULT" \
               "$DEPENDENCY_REQUIRED" "$DEPENDENCY_RESULT"
+            # Reuse the base revision's fail-closed selector for the two new jobs.
+            sh "$trusted_gate" \
+              "$CLASSIFY_RESULT" \
+              "$SDK_REQUIRED" "$SDK_RESULT" \
+              "$DESKTOP_REQUIRED" "$DESKTOP_RESULT" \
+              false skipped
+            sh "$trusted_gate" \
+              "$CLASSIFY_RESULT" \
+              "$RUST_REQUIRED" "$FORMAT_RESULT" \
+              "$RUST_REQUIRED" "$LINT_RESULT" \
+              false skipped
           else
             # The base predates the contract, so the classifier selected every
             # validation tier. Require each one explicitly for this bootstrap run.
             test "$CLASSIFY_RESULT" = success
             test "$RUST_REQUIRED:$RUST_RESULT" = true:success
+            test "$RUST_REQUIRED:$FORMAT_RESULT" = true:success
+            test "$RUST_REQUIRED:$LINT_RESULT" = true:success
             test "$DOCS_REQUIRED:$DOCS_RESULT" = true:success
             test "$DEPENDENCY_REQUIRED:$DEPENDENCY_RESULT" = true:success
+            test "$SDK_REQUIRED:$SDK_RESULT" = true:success
+            test "$DESKTOP_REQUIRED:$DESKTOP_RESULT" = true:success
           fi

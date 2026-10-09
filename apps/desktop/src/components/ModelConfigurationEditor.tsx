@@ -14,7 +14,9 @@ import {
   REMOTE_PROVIDER_TIMEOUT_MS,
   automaticProviderTimeoutMs,
 } from "../providerTimeout";
+import { ModelFeatureControl } from "./ModelFeatureControl";
 import { DropdownSelect } from "./DropdownSelect";
+import { ModelRoleRouting } from "./ModelRoleRouting";
 import { ProviderPresetSelect } from "./ProviderPresetSelect";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import {
@@ -24,26 +26,6 @@ import {
 } from "../providerCatalog";
 import { discoverManagedProviderModels } from "../api";
 import { requiresAdvancedModelSetup } from "../onboarding";
-
-const ROLES = [
-  "primary",
-  "risk_evaluator",
-  "context_summarizer",
-  "subagent_default",
-  "research_planner",
-  "research_worker",
-  "research_synthesizer",
-] as const;
-
-const ROLE_LABELS: Record<(typeof ROLES)[number], string> = {
-  primary: "Primary",
-  risk_evaluator: "Risk evaluator",
-  context_summarizer: "Context summarizer",
-  subagent_default: "Default subagent",
-  research_planner: "Research planner",
-  research_worker: "Research worker",
-  research_synthesizer: "Research synthesizer",
-};
 
 const REASONING_EFFORTS: readonly ReasoningEffort[] = [
   "none",
@@ -178,9 +160,10 @@ function initialModels(desktop: DesktopStatus): ManagedModelConfiguration[] {
         maxOutputTokens: 4_096,
         reasoningEffort: null,
         capabilities: {
-          toolCalls: false,
-          streaming: false,
-          imageInputs: false,
+          toolCalls: "auto",
+          streaming: "auto",
+          imageInputs: "auto",
+          serverCompaction: "auto",
         },
       },
     ];
@@ -292,12 +275,7 @@ export function ModelConfigurationEditor({
       desktop.managedModelConfiguration.roles.primary ??
       initialModels(desktop)[0]?.profile ??
       "";
-    return Object.fromEntries(
-      ROLES.map((role) => [
-        role,
-        desktop.managedModelConfiguration.roles[role] ?? primary,
-      ]),
-    );
+    return { ...desktop.managedModelConfiguration.roles, primary };
   });
   const [accessProfile, setAccessProfile] = useState<
     ApplyManagedModelConfigurationRequest["accessProfile"]
@@ -353,7 +331,6 @@ export function ModelConfigurationEditor({
   }
 
   const providerProfiles = providers.map((provider) => provider.profile);
-  const modelProfiles = models.map((model) => model.profile);
   const requiresCodexAuth = providers.some(
     (provider) => provider.providerKind === "open_ai_codex",
   );
@@ -843,54 +820,32 @@ export function ModelConfigurationEditor({
               ))}
             </DropdownSelect>
           </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={model.capabilities.toolCalls}
+          {(
+            [
+              ["toolCalls", "Tool use"],
+              ["streaming", "Streaming"],
+              ["imageInputs", "Images"],
+              ["serverCompaction", "Server compaction"],
+            ] as const
+          ).map(([feature, label]) => (
+            <ModelFeatureControl
+              key={feature}
+              label={label}
+              declared={model.capabilities.declared?.[feature]}
+              value={model.capabilities[feature] ?? "auto"}
               disabled={busy}
-              onChange={(event) =>
+              onChange={(mode) =>
                 updateModel(index, {
-                  capabilities: {
-                    ...model.capabilities,
-                    toolCalls: event.target.checked,
-                  },
+                  capabilities: { ...model.capabilities, [feature]: mode },
                 })
               }
             />
-            <span>Tool use</span>
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={model.capabilities.streaming}
-              disabled={busy}
-              onChange={(event) =>
-                updateModel(index, {
-                  capabilities: {
-                    ...model.capabilities,
-                    streaming: event.target.checked,
-                  },
-                })
-              }
-            />
-            <span>Streaming</span>
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={model.capabilities.imageInputs}
-              disabled={busy}
-              onChange={(event) =>
-                updateModel(index, {
-                  capabilities: {
-                    ...model.capabilities,
-                    imageInputs: event.target.checked,
-                  },
-                })
-              }
-            />
-            <span>Images</span>
-          </label>
+          ))}
+          <p className="provider-wide-field">
+            Auto uses advertised support and learns from provider responses. On
+            forces an attempt. Local summarization remains available when server
+            compaction is off or unsupported.
+          </p>
           {models.length > 1 ? (
             <>
               {Object.values(roles).includes(model.profile) ? (
@@ -933,9 +888,10 @@ export function ModelConfigurationEditor({
                 maxOutputTokens: 4_096,
                 reasoningEffort: null,
                 capabilities: {
-                  toolCalls: false,
-                  streaming: false,
-                  imageInputs: false,
+                  toolCalls: "auto",
+                  streaming: "auto",
+                  imageInputs: "auto",
+                  serverCompaction: "auto",
                 },
               },
             ])
@@ -945,29 +901,14 @@ export function ModelConfigurationEditor({
         </button>
       ) : null}
 
+      <ModelRoleRouting
+        roles={roles}
+        models={models.map((model) => ({ ...model, label: model.profile }))}
+        disabled={busy}
+        onChange={setRoles}
+      />
       <fieldset className="provider-fields">
-        <legend>Models for each role</legend>
-        {ROLES.map((role) => (
-          <label key={role}>
-            <span>{ROLE_LABELS[role]}</span>
-            <DropdownSelect
-              value={roles[role] ?? roles.primary ?? ""}
-              disabled={busy}
-              onChange={(event) =>
-                setRoles((current) => ({
-                  ...current,
-                  [role]: event.target.value,
-                }))
-              }
-            >
-              {modelProfiles.map((profile) => (
-                <option key={profile} value={profile}>
-                  {profile}
-                </option>
-              ))}
-            </DropdownSelect>
-          </label>
-        ))}
+        <legend>Workspace access</legend>
         <label className="provider-wide-field">
           <span>Tool access</span>
           <DropdownSelect

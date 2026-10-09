@@ -10,7 +10,7 @@ use super::{
 };
 #[cfg(unix)]
 use super::{ProcessSpec, execute_sandbox_job, normalize_path_arguments};
-use super::{ProcessStdinCompletion, StdinCompletionMonitor};
+use super::{ProcessStdinCompletion, StdinAction, StdinCompletionMonitor};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::{native_helper_diagnostics, native_target_pid};
 use base64::Engine as _;
@@ -207,6 +207,8 @@ fn proxy_environment_overrides_both_unix_spellings() {
 fn authenticated_helper_job_rejects_tampering_and_expiry() {
     let job = SandboxJob {
         schema_version: 2,
+        streaming: false,
+        deadline_unix_ms: None,
         job_id: "018f0f9b-7b6e-7cc0-8000-000000000001".into(),
         request_id: "request".into(),
         request_hash: "hash".into(),
@@ -215,6 +217,7 @@ fn authenticated_helper_job_rejects_tampering_and_expiry() {
         permit_expires_at_unix_ms: i128::MAX,
         executable: PathBuf::from("/bin/echo"),
         process: super::ProcessSpec {
+            lifetime: None,
             cwd: PathBuf::from("/tmp"),
             args: Vec::new(),
             environment: BTreeMap::new(),
@@ -270,6 +273,7 @@ fn authenticated_helper_job_rejects_tampering_and_expiry() {
 fn process_stdin_completion_is_additive_strict_and_mcp_only() {
     let directory = tempdir().expect("directory");
     let mut process = super::ProcessSpec {
+        lifetime: None,
         cwd: directory.path().into(),
         args: Vec::new(),
         environment: BTreeMap::new(),
@@ -363,6 +367,60 @@ fn json_rpc_stdin_completion_rejects_oversized_lines_before_eof() {
     assert!(incomplete.should_close(incomplete_notification.as_bytes(), false));
 }
 
+#[test]
+fn mcp_exchange_waits_for_supported_initialize_before_writing_a_call() {
+    let request = serde_json::json!({"jsonrpc":"2.0", "id":2, "method":"tools/call", "params":{"name":"effect", "arguments":{}}});
+    for version in ["2026-07-28", "2099-01-01", "2025-11-25"] {
+        let mut monitor = StdinCompletionMonitor::new(&ProcessStdinCompletion::McpExchange {
+            request: request.clone(),
+        });
+        assert!(matches!(monitor.observe(b"", false), StdinAction::Continue));
+        let response = serde_json::json!({"jsonrpc":"2.0", "id":1, "result":{"protocolVersion":version, "capabilities":{"tools":{}}, "serverInfo":{"name":"fixture", "version":"1"}}});
+        let action = monitor.observe(format!("{response}\n").as_bytes(), false);
+        if version == "2025-11-25" {
+            let StdinAction::Write(bytes) = action else {
+                panic!("validated request must be sent");
+            };
+            let frames: Vec<serde_json::Value> = std::str::from_utf8(&bytes)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(frames[0]["method"], "notifications/initialized");
+            assert_eq!(frames[1], request);
+        } else {
+            assert!(
+                matches!(action, StdinAction::Close),
+                "unsupported negotiation must close without a call"
+            );
+        }
+    }
+}
+
+#[test]
+fn mcp_exchange_follows_cursors_in_one_child_and_stops_cycles() {
+    let mut monitor = StdinCompletionMonitor::new(&ProcessStdinCompletion::McpExchange {
+        request: serde_json::json!({"jsonrpc":"2.0", "id":2, "method":"tools/list", "params":{}}),
+    });
+    let mut stdout = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"fixture\",\"version\":\"1\"}}}\n".to_vec();
+    assert!(matches!(
+        monitor.observe(&stdout, false),
+        StdinAction::Write(_)
+    ));
+    stdout.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[],\"nextCursor\":\"session-cursor\"}}\n");
+    let StdinAction::Write(bytes) = monitor.observe(&stdout, false) else {
+        panic!("next page must be sent");
+    };
+    let next: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(next["id"], 3);
+    assert_eq!(next["params"]["cursor"], "session-cursor");
+    stdout.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"tools\":[],\"nextCursor\":\"session-cursor\"}}\n");
+    assert!(matches!(
+        monitor.observe(&stdout, false),
+        StdinAction::Close
+    ));
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn linux_process_usage_counts_threaded_program_once() {
@@ -422,6 +480,8 @@ fn explicit_direct_backends_execute_without_the_native_kernel_sandbox() {
     for backend in ["external", "danger_full_access"] {
         let job = SandboxJob {
             schema_version: 2,
+            streaming: false,
+            deadline_unix_ms: None,
             job_id: format!("direct-{backend}"),
             request_id: "request".into(),
             request_hash: "hash".into(),
@@ -430,6 +490,7 @@ fn explicit_direct_backends_execute_without_the_native_kernel_sandbox() {
             permit_expires_at_unix_ms: i128::MAX,
             executable: PathBuf::from("/bin/echo"),
             process: super::ProcessSpec {
+                lifetime: None,
                 cwd: PathBuf::from("/tmp"),
                 args: vec!["direct".into()],
                 environment: BTreeMap::new(),
@@ -457,7 +518,7 @@ fn explicit_direct_backends_execute_without_the_native_kernel_sandbox() {
             oci_proxy_image: None,
             temporary_root: None,
         };
-        let result = execute_sandbox_job(job, &[7_u8; 32]).expect("direct execution");
+        let result = execute_sandbox_job(job, &[7_u8; 32], None).expect("direct execution");
         assert_eq!(result.backend, backend);
         assert!(result.success);
         assert_eq!(
@@ -487,6 +548,7 @@ fn direct_backends_do_not_claim_filesystem_confinement_for_cwd_or_argv() {
             ..PolicyObligations::default()
         };
         let mut process = ProcessSpec {
+            lifetime: None,
             cwd: cwd.path().into(),
             args: vec!["/path/outside/declared/filesystem".into()],
             environment: BTreeMap::new(),
@@ -513,6 +575,7 @@ fn danger_full_access_requires_no_process_resource_allowlists() {
         .canonicalize()
         .expect("canonical executable");
     let process = ProcessSpec {
+        lifetime: None,
         cwd: cwd.path().into(),
         args: Vec::new(),
         environment: BTreeMap::from([("UNDECLARED_ENVIRONMENT".into(), "available".into())]),
@@ -708,6 +771,8 @@ fn oci_profile_applies_resource_and_privilege_limits_without_argv_secrets() {
         });
     obligations.allowed_environment.push("TOKEN".into());
     let job = SandboxJob {
+        streaming: false,
+        deadline_unix_ms: None,
         schema_version: 1,
         job_id: "018f0f9b-7b6e-7cc0-8000-000000000002".into(),
         request_id: "request".into(),
@@ -717,6 +782,7 @@ fn oci_profile_applies_resource_and_privilege_limits_without_argv_secrets() {
         permit_expires_at_unix_ms: i128::MAX,
         executable: PathBuf::from("/usr/bin/example"),
         process: super::ProcessSpec {
+            lifetime: None,
             cwd: directory.path().into(),
             args: vec!["check".into()],
             environment: BTreeMap::from([("TOKEN".into(), "secret-value".into())]),
@@ -738,14 +804,44 @@ fn oci_profile_applies_resource_and_privilege_limits_without_argv_secrets() {
         .expect("exact OCI image executable");
     let mut oversized_request = job.process.clone();
     oversized_request.timeout_ms = Some(job.obligations.timeout_ms.saturating_add(1));
-    assert!(
-        validate_process_spec(&oversized_request, "/usr/bin/example", &job.obligations,).is_err()
-    );
+    let error = validate_process_spec(&oversized_request, "/usr/bin/example", &job.obligations)
+        .expect_err("timeout above policy ceiling")
+        .to_string();
+    assert!(error.contains("timeout_ms"));
+    assert!(error.contains(&format!("allowed 1..={} ms", job.obligations.timeout_ms)));
     oversized_request.timeout_ms = None;
     oversized_request.max_output_bytes = Some(job.obligations.max_output_bytes.saturating_add(1));
+    let error = validate_process_spec(&oversized_request, "/usr/bin/example", &job.obligations)
+        .expect_err("output above policy ceiling")
+        .to_string();
+    assert!(error.contains("max_output_bytes"));
+    assert!(error.contains(&format!(
+        "allowed 1024..={} bytes",
+        job.obligations.max_output_bytes
+    )));
+    // Validate before launching: too little space for network evidence must not
+    // execute the command and later turn a confirmed exit into OutcomeUnknown.
+    let mut network_obligations = job.obligations.clone();
+    network_obligations.max_output_bytes = 65_536;
+    network_obligations.network_destinations = (0..8)
+        .map(|i| format!("https://{}{i}.example.test", "a".repeat(40)))
+        .collect();
+    let mut network_request = job.process.clone();
+    network_request.max_output_bytes = Some(1024);
+    let error = validate_process_spec(&network_request, "/usr/bin/example", &network_obligations)
+        .expect_err("small cap must preserve network evidence")
+        .to_string();
+    assert!(error.contains("completion and network-origin evidence"));
+    network_request.max_output_bytes = Some(4096);
+    validate_process_spec(&network_request, "/usr/bin/example", &network_obligations)
+        .expect("bounded exact origin list fits");
+    network_obligations.network_destinations = vec!["*".into()];
     assert!(
-        validate_process_spec(&oversized_request, "/usr/bin/example", &job.obligations,).is_err()
+        validate_process_spec(&network_request, "/usr/bin/example", &network_obligations).is_err()
     );
+    network_request.max_output_bytes = None;
+    validate_process_spec(&network_request, "/usr/bin/example", &network_obligations)
+        .expect("policy cap fits wildcard evidence");
     assert_eq!(
         oci_remove_arguments(docker_runtime.as_path(), "job").expect("Docker cleanup"),
         ["container", "rm", "--force", "job"]
@@ -1252,6 +1348,9 @@ fn ambient_workspace_search_respects_repository_ignores_and_releases_context() {
         1024 * 1024,
         true,
         &[application_home],
+        &super::ProtectedFilesystem::default()
+            .snapshot()
+            .expect("unprotected snapshot"),
     )
     .expect("workspace-scoped ambient search");
     let value: serde_json::Value = serde_json::from_slice(&result.bytes).expect("JSON");
@@ -1518,67 +1617,104 @@ async fn public_wildcard_proxy_rejects_loopback_without_an_exact_origin() {
 
 #[tokio::test]
 async fn authenticated_allowlist_proxy_rejects_missing_credentials_and_strips_valid_ones() {
-    let upstream = TcpListener::bind(("127.0.0.1", 0)).await.expect("listen");
-    let address = upstream.local_addr().expect("address");
-    let origin = format!("http://{address}");
-    let credential = "a".repeat(64);
-    let proxy = AllowlistProxy::start_authenticated(vec![origin.clone()], &credential)
-        .await
-        .expect("authenticated proxy");
-
-    let mut unauthorized = TcpStream::connect(("127.0.0.1", proxy.port()))
-        .await
-        .expect("unauthorized connect");
-    unauthorized
-        .write_all(format!("GET {origin}/denied HTTP/1.1\r\nHost: {address}\r\n\r\n").as_bytes())
-        .await
-        .expect("unauthorized request");
-    let mut response = Vec::new();
-    unauthorized
-        .read_to_end(&mut response)
-        .await
-        .expect("unauthorized response");
-    assert!(response.starts_with(b"HTTP/1.1 407"));
-
-    let server = tokio::spawn(async move {
-        let (mut stream, _) = upstream.accept().await.expect("authorized accept");
-        let mut request = Vec::new();
-        let mut buffer = [0_u8; 1024];
-        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-            let count = stream.read(&mut buffer).await.expect("authorized read");
-            assert!(count > 0);
-            request.extend_from_slice(&buffer[..count]);
-        }
-        assert!(
-            !String::from_utf8_lossy(&request)
-                .to_ascii_lowercase()
-                .contains("proxy-authorization:")
-        );
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-            .await
-            .expect("authorized response");
-    });
-    let authorization = format!("Basic {}", BASE64.encode(format!("colossus:{credential}")));
-    let mut authorized = TcpStream::connect(("127.0.0.1", proxy.port()))
-        .await
-        .expect("authorized connect");
-    authorized
-            .write_all(
-                format!(
-                    "GET {origin}/allowed HTTP/1.1\r\nHost: {address}\r\nProxy-Authorization: {authorization}\r\nConnection: close\r\n\r\n"
-                )
-                .as_bytes(),
+    for dual_stack in [false, true] {
+        let upstream = TcpListener::bind(("127.0.0.1", 0)).await.expect("listen");
+        let address = upstream.local_addr().expect("address");
+        let origin = format!("http://{address}");
+        let credential = "a".repeat(64);
+        let authorization = format!("Basic {}", BASE64.encode(format!("colossus:{credential}")));
+        let proxy = if dual_stack {
+            AllowlistProxy::start_with_authorization(
+                vec![origin.clone()],
+                Some(authorization.clone()),
+                true,
             )
             .await
-            .expect("authorized request");
-    let mut response = Vec::new();
-    authorized
-        .read_to_end(&mut response)
-        .await
-        .expect("authorized response");
-    assert!(response.starts_with(b"HTTP/1.1 200"));
-    server.await.expect("server");
+        } else {
+            AllowlistProxy::start_authenticated(vec![origin.clone()], &credential).await
+        }
+        .expect("authenticated proxy");
+        let mut endpoints = vec![proxy.address];
+        if dual_stack {
+            endpoints.push(SocketAddr::new(
+                IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+                proxy.port(),
+            ));
+        }
+        let requests = endpoints.len();
+        let server = tokio::spawn(async move {
+            for _ in 0..requests {
+                let (mut stream, _) = upstream.accept().await.expect("authorized accept");
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let count = stream.read(&mut buffer).await.expect("authorized read");
+                    assert!(count > 0);
+                    request.extend_from_slice(&buffer[..count]);
+                    assert!(request.len() <= 16 * 1024);
+                }
+                assert!(
+                    !String::from_utf8_lossy(&request)
+                        .to_ascii_lowercase()
+                        .contains("proxy-authorization:")
+                );
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await
+                    .expect("authorized response");
+            }
+        });
+        for endpoint in &endpoints {
+            let response = proxy_test_response(
+                *endpoint,
+                format!("GET {origin}/denied HTTP/1.1\r\nHost: {address}\r\n\r\n"),
+            )
+            .await;
+            assert!(response.starts_with(b"HTTP/1.1 407"));
+            let response = proxy_test_response(*endpoint,
+                format!("GET http://127.0.0.1:1/denied HTTP/1.1\r\nHost: 127.0.0.1:1\r\nProxy-Authorization: {authorization}\r\n\r\n"),
+            ).await;
+            assert!(response.starts_with(b"HTTP/1.1 403"));
+            let response = proxy_test_response(*endpoint,
+                format!("GET {origin}/allowed HTTP/1.1\r\nHost: {address}\r\nProxy-Authorization: {authorization}\r\nConnection: close\r\n\r\n"),
+            ).await;
+            assert!(response.starts_with(b"HTTP/1.1 200"));
+            assert!(response.ends_with(b"ok"));
+        }
+        server.await.expect("server");
+        assert_eq!(proxy.observed_origins(), vec![origin]);
+        drop(proxy);
+        for endpoint in endpoints {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while let Ok(stream) = TcpStream::connect(endpoint).await {
+                    drop(stream);
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("private proxy listener closes on drop");
+        }
+    }
+}
+
+async fn proxy_test_response(endpoint: SocketAddr, request: String) -> Vec<u8> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut stream = TcpStream::connect(endpoint).await.expect("proxy connect");
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .expect("proxy request");
+        let mut response = Vec::new();
+        stream
+            .read_to_end(&mut response)
+            .await
+            .expect("proxy response");
+        response
+    })
+    .await
+    .expect("proxy response deadline")
 }
 
 #[tokio::test]

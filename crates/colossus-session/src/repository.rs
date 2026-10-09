@@ -55,6 +55,77 @@ impl SessionRepository for EventSourcedSessionRepository {
         })
     }
 
+    fn set_title(&self, id: &str, title: &str, actor: Actor) -> Result<SessionSummary, StoreError> {
+        validate_session_id(id)?;
+        let title = title.trim();
+        if title.is_empty()
+            || title.len() > MAX_TITLE_BYTES
+            || title.chars().any(|character| {
+                character.is_control()
+                    || matches!(
+                        character,
+                        '\u{061c}'
+                            | '\u{200e}'
+                            | '\u{200f}'
+                            | '\u{202a}'..='\u{202e}'
+                            | '\u{2066}'..='\u{2069}'
+                    )
+            })
+        {
+            return Err(StoreError::Adapter(format!(
+                "session title must be 1..={MAX_TITLE_BYTES} bytes without unsafe formatting"
+            )));
+        }
+        let stream_id = Self::stream(id);
+        let created = self.journal.read_stream_from(&stream_id, 0, 1)?;
+        if created
+            .first()
+            .is_none_or(|event| event.event_type != SESSION_EVENT)
+        {
+            return Err(StoreError::NotFound(format!("session {id}")));
+        }
+        let version = self
+            .journal
+            .read_stream_backwards(&stream_id, None, 1)?
+            .first()
+            .map_or(0, |event| event.stream_version);
+        let index_stream = format!("session-title:{id}");
+        let index_version = self
+            .journal
+            .read_stream_backwards(&index_stream, None, 1)?
+            .first()
+            .map_or(0, |event| event.stream_version);
+        let context = ExecutionContext {
+            correlation_id: id.into(),
+            session_id: Some(id.into()),
+            ..ExecutionContext::default()
+        };
+        self.journal.append_batch(vec![
+            NewEvent {
+                event_version: 1,
+                stream_id,
+                expected_stream_version: version,
+                classification: EventClassification::Domain,
+                event_type: TITLE_EVENT.into(),
+                actor: actor.clone(),
+                context: context.clone(),
+                payload: json!({"title": title}),
+            },
+            NewEvent {
+                event_version: 1,
+                stream_id: index_stream,
+                expected_stream_version: index_version,
+                classification: EventClassification::Domain,
+                event_type: TITLE_INDEX_EVENT.into(),
+                actor,
+                context,
+                payload: json!({"title": title}),
+            },
+        ])?;
+        self.get_session(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("session {id}")))
+    }
+
     fn get_session(&self, id: &str) -> Result<Option<SessionSummary>, StoreError> {
         validate_session_id(id)?;
         let events = self.journal.read_stream(&Self::stream(id))?;

@@ -56,6 +56,7 @@ pub(super) async fn dispatch(
                         tool_calls: args.tool_calls,
                         streaming: args.streaming,
                         image_inputs: args.image_inputs,
+                        server_compaction: args.server_compaction,
                     },
                     card.as_ref(),
                 )?;
@@ -276,7 +277,7 @@ mod tests {
             panic!("provider setup");
         };
         assert_eq!(args.connection.preset.as_deref(), Some("custom-responses"));
-        assert_eq!(args.tool_calls, Some(true));
-        assert_eq!(args.streaming, Some(false));
+        assert_eq!(args.tool_calls, Some(true.into()));
+        assert_eq!(args.streaming, Some(false.into()));
     }
 }

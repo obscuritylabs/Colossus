@@ -23,6 +23,7 @@ fn plan_mode_allowlist_blocks_implementation_and_external_mutation() {
         "git.diff",
         "patch.preview",
         "plan.create",
+        "session.set_title",
         "memory.search",
         "user.ask",
         "context.show",
@@ -65,6 +66,73 @@ fn plan_mode_allowlist_blocks_implementation_and_external_mutation() {
 struct ScriptedProvider {
     turns: Mutex<VecDeque<Result<ProviderTurn, ModelProviderError>>>,
     requests: Mutex<Vec<ModelRequest>>,
+}
+
+#[tokio::test]
+async fn new_session_receives_one_time_title_instruction() {
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        turn(vec![ProviderEvent::FinalOutput {
+            text: "first".into(),
+        }]),
+        turn(vec![ProviderEvent::FinalOutput {
+            text: "second".into(),
+        }]),
+        turn(vec![ProviderEvent::FinalOutput {
+            text: "explicit".into(),
+        }]),
+    ]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["session.set_title".into()]).expect("catalog")),
+        Arc::new(EchoTools),
+        Arc::clone(&sessions) as Arc<dyn SessionRepository>,
+    );
+    let first = service
+        .run("primary", "base instructions", "Plan a release", 1)
+        .await
+        .expect("first run");
+    service
+        .run_in_session(
+            "primary",
+            "base instructions",
+            "Change direction",
+            1,
+            first.session_id.as_deref(),
+        )
+        .await
+        .expect("second run");
+    sessions
+        .create_session("named-session", Some("Chosen by user"), test_actor())
+        .expect("named session");
+    service
+        .run_in_session(
+            "primary",
+            "base instructions",
+            "New work",
+            1,
+            Some("named-session"),
+        )
+        .await
+        .expect("named run");
+    let requests = provider.requests.lock().expect("requests");
+    assert!(
+        requests[0]
+            .instructions
+            .contains("Set this new session's title once")
+    );
+    assert!(
+        !requests[1]
+            .instructions
+            .contains("Set this new session's title once")
+    );
+    assert!(
+        !requests[2]
+            .instructions
+            .contains("Set this new session's title once")
+    );
 }
 
 #[derive(Default)]
@@ -265,6 +333,7 @@ impl ModelProvider for MidRunDiagnosticProvider {
                     "diagnostic failure must happen on the post-tool continuation"
                 );
                 Err(ModelProviderError::ResponseDiagnostic {
+                    failure: None,
                     diagnostic: Box::new(ProviderResponseDiagnostic {
                         request_method: "POST".into(),
                         request_url: "http://127.0.0.1:9000/v1/chat/completions".into(),
@@ -391,6 +460,10 @@ impl SessionRepository for RejectingToolTurnCompletionRepository {
         actor: Actor,
     ) -> Result<SessionSummary, StoreError> {
         self.inner.create_session(id, title, actor)
+    }
+
+    fn set_title(&self, id: &str, title: &str, actor: Actor) -> Result<SessionSummary, StoreError> {
+        self.inner.set_title(id, title, actor)
     }
 
     fn get_session(&self, id: &str) -> Result<Option<SessionSummary>, StoreError> {
@@ -553,6 +626,8 @@ impl ContextPreparer for FixedContext {
             ..
         } = request;
         Ok(PreparedContext {
+            context_binding_hash: String::new(),
+            continuation_id: None,
             messages,
             token_estimate: 10,
             original_token_estimate: 100,
@@ -592,6 +667,8 @@ impl ContextPreparer for LogicalTurnContext {
             .sum::<usize>();
         assert!(tool_bytes <= MAX_MODEL_TOOL_TURN_BYTES);
         Ok(PreparedContext {
+            context_binding_hash: String::new(),
+            continuation_id: None,
             messages,
             token_estimate: 10,
             original_token_estimate: 10,
@@ -828,6 +905,7 @@ async fn plan_mode_create_offers_exact_catalog_and_dispatches_only_one_bound_wri
             "repo.map",
             "repo.references",
             "repo.symbol_search",
+            "session.set_title",
             "task.list",
             "tool.search",
             "user.ask",
@@ -1742,13 +1820,16 @@ async fn assert_terminal_tool_turn_is_settled(kind: TerminalToolKind, call_count
         Arc::clone(&sessions) as Arc<dyn SessionRepository>,
     );
 
+    let mut observer = RecordingRunObserver::default();
     let error = service
-        .run_in_session(
+        .run_in_session_with_skills_stream(
             "primary",
             "test",
             "run terminal tool",
             2,
             Some("terminal-session"),
+            &[],
+            &mut observer,
         )
         .await
         .expect_err("terminal tool error");
@@ -1767,6 +1848,29 @@ async fn assert_terminal_tool_turn_is_settled(kind: TerminalToolKind, call_count
         }
     }
     assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+    let completed = observer
+        .events
+        .iter()
+        .filter_map(|event| match &event.event {
+            RunEvent::ToolCompleted { result, .. } => Some(result),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        completed.len(),
+        1,
+        "terminal failures must finish their activity row"
+    );
+    assert_eq!(completed[0].call_id, "call-1");
+    assert_ne!(completed[0].exit_code, 0);
+    assert_eq!(
+        observer
+            .events
+            .iter()
+            .filter(|event| matches!(event.event, RunEvent::ToolCancelled { .. }))
+            .count(),
+        call_count - 1
+    );
 
     let durable = sessions
         .list_messages("terminal-session")
@@ -2991,7 +3095,8 @@ async fn explicit_diagnostics_capture_a_post_tool_failure_without_persisting_the
         )
         .await
         .expect_err("second provider turn must fail");
-    let AgentError::Provider(ModelProviderError::ResponseDiagnostic { diagnostic }) = error else {
+    let AgentError::Provider(ModelProviderError::ResponseDiagnostic { diagnostic, .. }) = error
+    else {
         panic!("expected typed provider response diagnostic");
     };
     assert_eq!(diagnostic.status, 400);
@@ -3015,4 +3120,38 @@ async fn explicit_diagnostics_capture_a_post_tool_failure_without_persisting_the
             .iter()
             .all(|event| !format!("{event:?}").contains("mid-run-private-diagnostic"))
     );
+}
+
+struct RejectRunOwnership(AtomicUsize);
+#[async_trait]
+impl colossus_ports::AgentRunLifecycle for RejectRunOwnership {
+    fn begin_run(
+        &self,
+        _context: &ExecutionContext,
+        _initiator: &Actor,
+        _control: RunControl,
+    ) -> Result<(), ToolError> {
+        Err(ToolError::Failed("duplicate active run".into()))
+    }
+    fn cancel_run(&self, _run_id: &str) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+    async fn finish_run(&self, _run_id: &str) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+#[tokio::test]
+async fn rejected_run_registration_never_cancels_another_owners_sessions() {
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let lifecycle = Arc::new(RejectRunOwnership(AtomicUsize::new(0)));
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::new(ScriptedProvider::new(vec![])),
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::new(EchoTools),
+        Arc::new(EventSourcedSessionRepository::new(journal)),
+    )
+    .with_run_lifecycle(lifecycle.clone());
+    assert!(service.run("primary", "test", "test", 1).await.is_err());
+    assert_eq!(lifecycle.0.load(Ordering::SeqCst), 0);
 }

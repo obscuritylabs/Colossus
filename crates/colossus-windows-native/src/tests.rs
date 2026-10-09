@@ -325,13 +325,25 @@ fn private_file_creation_is_exclusive_and_owner_private() {
 #[cfg(windows)]
 #[test]
 fn private_file_replacement_is_atomic_and_preserves_private_access() {
+    use std::io::Read as _;
+
     let parent = local_app_data_tempdir("colossus-native-private-replace-");
     let directory = parent.path().join("private");
     create_private_directory(&directory).expect("create private directory");
     let destination = directory.join("settings.json");
     let source = directory.join(".settings.next");
-    std::fs::write(&destination, b"old").expect("write original");
+    create_private_file(&source, b"old").expect("stage initial private file");
+    replace_private_file(&source, &destination).expect("commit initially absent private file");
+    assert!(!source.exists());
+    assert_eq!(
+        std::fs::read(&destination).expect("read initial file"),
+        b"old"
+    );
     std::fs::write(&source, b"new").expect("write replacement");
+    let old = BoundPath::open_file_read_write(&destination).expect("retain original writer");
+    let staged = BoundPath::open_file_read_write(&source).expect("retain replacement writer");
+    let mut old_reader = old.try_clone_file().expect("retain original reader");
+    let mut staged_reader = staged.try_clone_file().expect("retain replacement reader");
 
     replace_private_file(&source, &destination).expect("replace private file");
 
@@ -340,8 +352,28 @@ fn private_file_replacement_is_atomic_and_preserves_private_access() {
         std::fs::read(&destination).expect("read replacement"),
         b"new"
     );
-    BoundPath::open_file(&destination)
-        .expect("bind replacement")
+    let committed = BoundPath::open_file(&destination).expect("bind replacement");
+    assert_eq!(committed.identity(), staged.identity());
+    assert_ne!(committed.identity(), old.identity());
+    let mut original = Vec::new();
+    old_reader
+        .read_to_end(&mut original)
+        .expect("read displaced file");
+    assert_eq!(original, b"old");
+    let mut replacement = Vec::new();
+    staged_reader
+        .read_to_end(&mut replacement)
+        .expect("read retained replacement");
+    assert_eq!(replacement, b"new");
+    assert!(
+        old.revalidate().is_err(),
+        "the old name now identifies a different object"
+    );
+    assert!(staged.revalidate().is_err(), "the staged name was removed");
+    committed
+        .revalidate()
+        .expect("committed identity remains bound");
+    committed
         .validate_private_owner_dacl()
         .expect("replacement remains private");
 }
@@ -377,11 +409,16 @@ fn private_file_replacement_rejects_untrusted_ancestor_authority() {
 #[cfg(windows)]
 #[test]
 fn conpty_fixture_process() {
-    use std::io::{Read as _, Write as _};
+    use std::io::{IsTerminal as _, Read as _, Write as _};
 
     if std::env::var_os("COLOSSUS_DESKTOP_TUI_AUTH_INPUT_HANDLE_V1").is_none() {
         return;
     }
+    // Authentication alone does not prove that a real CLI will enter TUI mode.
+    // Redirected parent handles must never replace the child's console streams.
+    assert!(std::io::stdin().is_terminal(), "ConPTY stdin");
+    assert!(std::io::stdout().is_terminal(), "ConPTY stdout");
+    assert!(std::io::stderr().is_terminal(), "ConPTY stderr");
     let mut channels = take_desktop_tui_authentication_channels().expect("authentication channels");
     let mut request = [0_u8; 4];
     channels

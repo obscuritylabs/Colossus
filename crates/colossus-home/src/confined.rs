@@ -106,6 +106,62 @@ impl ConfinedRoot {
         })
     }
 
+    /// Atomically replace an existing direct child with a staged direct child.
+    ///
+    /// Both distinct leaves must still identify their retained private single-link
+    /// files beneath this exact root. The staged contents are flushed before the
+    /// native replacement; the destination is reopened and must identify that same
+    /// staged object. Success removes the staged name and syncs the directory.
+    /// An error after the rename may mean replacement committed but subsequent
+    /// namespace or durability verification failed; callers must not retry blindly.
+    pub fn replace_existing_file(
+        &self,
+        staged: &ConfinedFile,
+        existing: &ConfinedFile,
+    ) -> Result<ConfinedFile, HomeError> {
+        let (staged_parents, staged_leaf) = relative_file_parts(self.relative(staged.path())?)?;
+        let (existing_parents, existing_leaf) =
+            relative_file_parts(self.relative(existing.path())?)?;
+        if !staged_parents.is_empty()
+            || !existing_parents.is_empty()
+            || staged_leaf == existing_leaf
+            || staged.shares_identity(existing.file())?
+        {
+            return Err(HomeError::UnsafeConfinedPath(existing.path().to_owned()));
+        }
+        staged.revalidate(self)?;
+        existing.revalidate(self)?;
+        staged
+            .file()
+            .sync_all()
+            .map_err(|error| HomeError::io(staged.path(), error))?;
+        staged.revalidate(self)?;
+        existing.revalidate(self)?;
+        #[cfg(unix)]
+        rustix::fs::renameat(
+            &self.directory,
+            &staged_leaf,
+            &self.directory,
+            &existing_leaf,
+        )
+        .map_err(|error| HomeError::io(existing.path(), error.into()))?;
+        #[cfg(windows)]
+        colossus_windows_native::replace_private_file(staged.path(), existing.path())
+            .map_err(|_| HomeError::UnsafeConfinedPath(existing.path().to_owned()))?;
+        #[cfg(not(any(unix, windows)))]
+        return Err(HomeError::UnsafeConfinedPath(existing.path().to_owned()));
+        #[cfg(any(unix, windows))]
+        {
+            let committed = self.open_existing_file(Path::new(&existing_leaf))?;
+            if !staged.shares_identity(committed.file())? {
+                return Err(HomeError::UnsafeConfinedPath(existing.path().to_owned()));
+            }
+            self.sync_directory()?;
+            committed.revalidate(self)?;
+            Ok(committed)
+        }
+    }
+
     /// Ensure and bind a confined owner-private directory path.
     pub fn prepare_directory(&self, relative: &Path) -> Result<PathBuf, HomeError> {
         let components = relative_components(relative)?;
@@ -207,6 +263,37 @@ impl ConfinedFile {
     /// Borrow the retained file while this object continues to own its path binding.
     pub fn file(&self) -> &File {
         &self.file
+    }
+
+    /// Compare another open descriptor with this retained private file without
+    /// reading either file's contents. Both descriptors remain alive during the
+    /// comparison, including on Windows where file identity can otherwise be reused.
+    pub fn shares_identity(&self, other: &File) -> Result<bool, HomeError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            let retained = self
+                .file
+                .metadata()
+                .map_err(|error| HomeError::io(&self.path, error))?;
+            let candidate = other
+                .metadata()
+                .map_err(|error| HomeError::io(&self.path, error))?;
+            Ok(retained.dev() == candidate.dev() && retained.ino() == candidate.ino())
+        }
+        #[cfg(windows)]
+        {
+            let retained = colossus_windows_native::FileIdentity::of(&self.file)
+                .map_err(|_| HomeError::UnsafeConfinedPath(self.path.clone()))?;
+            let candidate = colossus_windows_native::FileIdentity::of(other)
+                .map_err(|_| HomeError::UnsafeConfinedPath(self.path.clone()))?;
+            Ok(retained == candidate)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = other;
+            Err(HomeError::UnsafeConfinedPath(self.path.clone()))
+        }
     }
 
     /// Prove this private file is still named by its original confined leaf.
@@ -850,9 +937,90 @@ mod tests {
     use crate::test_support::private_tempdir;
 
     #[test]
+    fn retained_direct_file_replacement_is_atomic_and_preserves_staged_identity() {
+        use std::io::{Read as _, Seek as _, Write as _};
+        let temporary = private_tempdir();
+        let root =
+            ConfinedRoot::bind(temporary.path().canonicalize().unwrap().join("private")).unwrap();
+        let existing = root.open_file(Path::new("current.json")).unwrap();
+        let staged = root.open_file(Path::new(".next.json")).unwrap();
+        existing.file().write_all(b"original").unwrap();
+        staged.file().write_all(b"replacement").unwrap();
+        let committed = root.replace_existing_file(&staged, &existing).unwrap();
+        assert_eq!(committed.path(), existing.path());
+        assert!(!committed.was_created());
+        assert!(staged.shares_identity(committed.file()).unwrap());
+        assert!(!existing.shares_identity(committed.file()).unwrap());
+        assert!(!staged.path().exists());
+        assert_eq!(fs::read(committed.path()).unwrap(), b"replacement");
+        let mut original = existing.file();
+        original.rewind().unwrap();
+        let mut bytes = Vec::new();
+        original.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"original");
+        committed.revalidate(&root).unwrap();
+        assert!(existing.revalidate(&root).is_err());
+    }
+
+    #[test]
+    fn retained_file_replacement_refuses_cross_root_nested_and_identical_sources() {
+        use std::io::Write as _;
+        let temporary = private_tempdir();
+        let parent = temporary.path().canonicalize().unwrap();
+        let root = ConfinedRoot::bind(parent.join("private")).unwrap();
+        let other = ConfinedRoot::bind(parent.join("other")).unwrap();
+        let existing = root.open_file(Path::new("current.json")).unwrap();
+        let external = other.open_file(Path::new(".next.json")).unwrap();
+        let nested = root.open_file(Path::new("nested/.next.json")).unwrap();
+        existing.file().write_all(b"original").unwrap();
+        external.file().write_all(b"external").unwrap();
+        nested.file().write_all(b"nested").unwrap();
+        assert!(root.replace_existing_file(&external, &existing).is_err());
+        assert!(root.replace_existing_file(&nested, &existing).is_err());
+        assert!(root.replace_existing_file(&existing, &existing).is_err());
+        assert_eq!(fs::read(existing.path()).unwrap(), b"original");
+        assert_eq!(fs::read(external.path()).unwrap(), b"external");
+        assert_eq!(fs::read(nested.path()).unwrap(), b"nested");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retained_file_replacement_refuses_parent_namespace_swaps_without_writing() {
+        use std::io::Write as _;
+        let temporary = private_tempdir();
+        let parent = temporary.path().canonicalize().unwrap();
+        let original_path = parent.join("private");
+        let root = ConfinedRoot::bind(&original_path).unwrap();
+        let existing = root.open_file(Path::new("current.json")).unwrap();
+        let staged = root.open_file(Path::new(".next.json")).unwrap();
+        existing.file().write_all(b"original").unwrap();
+        staged.file().write_all(b"staged").unwrap();
+        let displaced = parent.join("displaced");
+        fs::rename(&original_path, &displaced).unwrap();
+        let replacement = ConfinedRoot::bind(&original_path).unwrap();
+        replacement
+            .open_file(Path::new("current.json"))
+            .unwrap()
+            .file()
+            .write_all(b"different-root")
+            .unwrap();
+        assert!(root.replace_existing_file(&staged, &existing).is_err());
+        assert_eq!(
+            fs::read(displaced.join("current.json")).unwrap(),
+            b"original"
+        );
+        assert_eq!(fs::read(displaced.join(".next.json")).unwrap(), b"staged");
+        assert_eq!(
+            fs::read(original_path.join("current.json")).unwrap(),
+            b"different-root"
+        );
+    }
+
+    #[test]
     fn retained_file_revalidation_rejects_missing_and_replaced_leaf_names() {
         let temporary = private_tempdir();
-        let root = ConfinedRoot::bind(temporary.path().join("private")).unwrap();
+        let root =
+            ConfinedRoot::bind(temporary.path().canonicalize().unwrap().join("private")).unwrap();
         let retained = root.open_file(Path::new("state.redb")).unwrap();
         retained.revalidate(&root).unwrap();
         fs::rename(retained.path(), root.path().join("moved.redb")).unwrap();
@@ -867,7 +1035,8 @@ mod tests {
     fn existing_read_write_open_never_creates_a_missing_leaf_or_parent() {
         use std::io::{Read as _, Seek as _, Write as _};
         let temporary = private_tempdir();
-        let root = ConfinedRoot::bind(temporary.path().join("private")).unwrap();
+        let root =
+            ConfinedRoot::bind(temporary.path().canonicalize().unwrap().join("private")).unwrap();
         assert!(
             root.open_existing_file_read_write(Path::new("missing.redb"))
                 .is_err()
@@ -893,7 +1062,8 @@ mod tests {
     #[test]
     fn existing_read_write_open_rejects_hard_links_and_escaping_paths() {
         let temporary = private_tempdir();
-        let root = ConfinedRoot::bind(temporary.path().join("private")).unwrap();
+        let root =
+            ConfinedRoot::bind(temporary.path().canonicalize().unwrap().join("private")).unwrap();
         drop(root.open_file(Path::new("state.redb")).unwrap());
         fs::hard_link(
             root.path().join("state.redb"),

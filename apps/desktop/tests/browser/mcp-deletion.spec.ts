@@ -162,6 +162,7 @@ test("MCP deletion stays busy during the native save and retains the row on fail
     state.mcpDeleteCalls = [];
     state.__TAURI_INTERNALS__ = {
       invoke: (command: string, args: unknown) => {
+        if (command === "list_setup_packages") return Promise.resolve([]);
         state.mcpDeleteCalls.push({ command, args });
         return new Promise((_resolve, reject) => {
           state.rejectMcpDelete = (inUse = false) =>

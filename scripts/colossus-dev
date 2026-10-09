@@ -8,6 +8,13 @@ fail() {
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 repository=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
+development_custody=false
+if [ "${1:-}" = --dev-credentials ]; then
+    development_custody=true
+    shift
+    [ -n "${COLOSSUS_HOME:-}" ] || fail "--dev-credentials requires an explicit private COLOSSUS_HOME outside the workspace"
+    case "$COLOSSUS_HOME" in /*) ;; *) fail "COLOSSUS_HOME must be absolute" ;; esac
+fi
 config=${COLOSSUS_DEV_CONFIG:-"$repository/.colossus/config.dev.yaml"}
 source_config=${COLOSSUS_DEV_SOURCE_CONFIG:-"$repository/.colossus/config.yaml"}
 keys_file=${COLOSSUS_DEV_KEYS_FILE:-"$repository/.colossus/dev-keys.env"}
@@ -24,9 +31,14 @@ mkdir -p -- "$config_dir" "$keys_dir"
 
 cd -- "$repository"
 unset COLOSSUS_DEV_JOURNAL_KEY COLOSSUS_DEV_SIGNING_KEY
-cargo build --offline -q --target-dir "$repository/target" -p colossus-cli --bin colossus
+node "$script_dir/development-launch.mjs" -- cargo build --offline -q --target-dir "$repository/target" -p colossus-cli --bin colossus
 colossus="$repository/target/debug/colossus"
 [ -x "$colossus" ] || fail "development binary was not created: $colossus"
+
+if [ "$development_custody" = true ]; then
+    [ -f "$config" ] || fail "--dev-credentials requires a reviewed existing configuration; prepare dev-credentials plan/rewrap before launch"
+    exec node "$script_dir/development-launch.mjs" --authority-home "$COLOSSUS_HOME" --workspace "$repository" --cli "$colossus" -- "$colossus" --config "$config" "$@"
+fi
 
 if [ ! -e "$config" ]; then
     if [ -e "$source_config" ]; then

@@ -595,6 +595,7 @@ fn imported_providers(
             Ok((
                 profile.clone(),
                 ProviderSetting {
+                    credential_required: false,
                     profile: profile.clone(),
                     kind,
                     base_url,
@@ -739,6 +740,13 @@ fn imported_mcp(
                         .get("allowStateless")
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
+                    protocol_version: value
+                        .get("protocolVersion")
+                        .cloned()
+                        .map(serde_json::from_value)
+                        .transpose()
+                        .map_err(|_| invalid_repository_config())?
+                        .unwrap_or_default(),
                     oauth,
                     allowed_tools: value_array(value, "allowedTools")?,
                     research_tools: value
@@ -1104,6 +1112,8 @@ fn locked_import_fields(explicit_fields: &[String]) -> Vec<String> {
         "schemaVersion",
         "storage",
         "network.caBundlePath",
+        "network.clientCertificatePath",
+        "network.clientKeyPath",
         "sandbox.backend",
         "memory.indexPath",
         "plugins.trustProfiles",
@@ -1346,6 +1356,7 @@ mod tests {
             access_profile: AccessProfileSetting::AllowAll,
             execution_boundary: ExecutionBoundarySetting::FullAccess,
             terminal_enabled: false,
+            outlook_companion_enabled: false,
             configuration: crate::managed_configuration::SpaceConfigurationSetting {
                 accepted_global_revision: 1,
                 ..crate::managed_configuration::SpaceConfigurationSetting::default()
@@ -1381,6 +1392,25 @@ mod tests {
     }
 
     #[test]
+    fn repository_client_identity_paths_are_locked_to_native_configuration() {
+        let fields = vec![
+            "network.clientCertificatePath".into(),
+            "network.clientKeyPath".into(),
+        ];
+        let proposal = proposal_from_canonical(
+            "space-one",
+            "a".repeat(64),
+            None,
+            false,
+            &canonical(),
+            &fields,
+            &GlobalConfigurationSetting::default(),
+        );
+        assert_eq!(proposal.locked_fields, fields);
+        assert!(proposal.field_overrides.is_empty());
+    }
+
+    #[test]
     fn imported_resources_resolve_only_native_credential_ids() {
         let mappings = BTreeMap::from([
             ("env:OPENAI_API_KEY".into(), "credential-provider".into()),
@@ -1392,11 +1422,24 @@ mod tests {
             Some("credential-provider")
         );
         let mcp = imported_mcp(&canonical(), &mappings).expect("MCP");
+        assert_eq!(
+            mcp[0].1.protocol_version,
+            colossus_contracts::McpProtocolVersion::Auto
+        );
         assert!(mcp[0].1.headers.is_empty());
         assert_eq!(
             mcp[0].1.credential_headers["Authorization"].credential_id,
             "credential-docs"
         );
+        let mut current = canonical();
+        current["mcp"]["servers"]["docs"]["protocolVersion"] = serde_json::json!("2026-07-28");
+        let mcp = imported_mcp(&current, &mappings).expect("2026 MCP");
+        assert_eq!(
+            mcp[0].1.protocol_version,
+            colossus_contracts::McpProtocolVersion::V2026
+        );
+        let persisted = serde_json::to_value(&mcp[0].1).expect("Desktop setting");
+        assert_eq!(persisted["protocolVersion"], "2026-07-28");
     }
 
     #[test]
@@ -1468,6 +1511,7 @@ mod tests {
         });
         let mut target = space("target");
         target.providers = vec![ProviderSetting {
+            credential_required: false,
             profile: "primary-provider".into(),
             kind: ProviderKindSetting::Codex,
             base_url: CODEX_BASE_URL.into(),

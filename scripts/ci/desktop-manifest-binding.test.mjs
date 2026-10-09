@@ -25,7 +25,7 @@ const placeholder = `${prefix}${"0".repeat(64)}${suffix}`;
 function manifest({
   targetTriple = "aarch64-apple-darwin",
   sidecar = "colossus-sidecar",
-    cli = "colossus",
+  cli = "colossus",
   ripgrep = "rg",
 } = {}) {
   return `${JSON.stringify({
@@ -199,7 +199,7 @@ test("rejects non-Mach-O executables and noncanonical manifests", () => {
     chmodSync(executablePath, 0o755);
     let result = run(executablePath, manifestPath);
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /not a supported Mach-O or PE image/u);
+    assert.match(result.stderr, /not a supported Mach-O, PE, or ELF image/u);
 
     writeFileSync(executablePath, executable([placeholder]), { mode: 0o755 });
     chmodSync(executablePath, 0o755);
@@ -207,6 +207,32 @@ test("rejects non-Mach-O executables and noncanonical manifests", () => {
     result = run(executablePath, manifestPath);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /canonical release schema/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("binds a Linux ELF preview and rejects a non-executable ELF type", () => {
+  const { root, executablePath, manifestPath } = fixture();
+  try {
+    writeFileSync(
+      manifestPath,
+      manifest({ targetTriple: "aarch64-unknown-linux-gnu" }),
+      { mode: 0o644 },
+    );
+    const header = Buffer.alloc(64);
+    header.set([0x7f, 0x45, 0x4c, 0x46, 2, 1]);
+    header.writeUInt16LE(3, 16);
+    const image = Buffer.concat([header, Buffer.from(placeholder)]);
+    writeFileSync(executablePath, image, { mode: 0o755 });
+    chmodSync(executablePath, 0o755);
+    assert.equal(run(executablePath, manifestPath).status, 0);
+    header.writeUInt16LE(1, 16);
+    writeFileSync(
+      executablePath,
+      Buffer.concat([header, Buffer.from(placeholder)]),
+    );
+    assert.notEqual(run(executablePath, manifestPath).status, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

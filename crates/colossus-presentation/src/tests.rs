@@ -325,10 +325,10 @@ fn transcript_collections_render_as_readable_borderless_scan_rows() {
             },
             {
                 "active": false,
-                "name": "offline-dev",
-                "description": "Prefer credential-free and network-free verification paths.",
+                "name": "security-review",
+                "description": "Review security boundaries and report supported findings.",
                 "version": "0.1.0",
-                "source": "bundled:offline-dev"
+                "source": "bundled:security-review"
             }
         ]),
         Some("Skills"),
@@ -343,7 +343,10 @@ fn transcript_collections_render_as_readable_borderless_scan_rows() {
 
     assert!(rendered.contains("◆ Skills"), "{rendered}");
     assert!(rendered.contains("• coding  ✓ active"), "{rendered}");
-    assert!(rendered.contains("• offline-dev  · inactive"), "{rendered}");
+    assert!(
+        rendered.contains("• security-review  · inactive"),
+        "{rendered}"
+    );
     assert!(rendered.contains("Description: Implement"), "{rendered}");
     assert!(
         !rendered.contains(['┌', '┐', '└', '┘', '│', '─']),
@@ -844,6 +847,82 @@ fn provider_events_respect_reasoning_events_and_theme_independently() {
         .expect("correlated")
         .expect("visible");
     assert!(correlated.starts_with("run=run-1 session=session-1"));
+}
+
+#[test]
+fn mcp_identity_remains_visible_in_terminal_lifecycle_and_result_cards() {
+    let call = ToolCall {
+        call_id: "call-mcp".into(),
+        name: "mcp.call".into(),
+        arguments: serde_json::json!({
+            "server": "GitLab",
+            "tool": "list_issues",
+            "arguments": {"server": "payload-server"},
+        }),
+    };
+    let result = ToolResult {
+        call_id: call.call_id.clone(),
+        name: call.name.clone(),
+        output: serde_json::json!({"error": {"message": "Connection failed"}}).to_string(),
+        exit_code: 1,
+    };
+    for transcript_density in [TranscriptDensity::Compact, TranscriptDensity::Comfortable] {
+        for events_mode in [
+            EventDisplayMode::Compact,
+            EventDisplayMode::Verbose,
+            EventDisplayMode::Off,
+        ] {
+            let renderer = SemanticRenderer::new(TerminalPreferences {
+                transcript_density,
+                events_mode,
+                ..TerminalPreferences::default()
+            });
+            for event in [
+                RunEvent::ToolStarted {
+                    turn: 1,
+                    call: call.clone(),
+                    elapsed_seconds: 0.25,
+                },
+                RunEvent::ToolCancelled {
+                    turn: 1,
+                    call: call.clone(),
+                    elapsed_seconds: 0.5,
+                },
+            ] {
+                let rendered = renderer
+                    .run_event(&event)
+                    .expect("render")
+                    .expect("visible");
+                assert!(
+                    rendered.contains("mcp.call · GitLab · list_issues"),
+                    "{rendered}"
+                );
+            }
+            let rendered = renderer
+                .tool_completed_with_call(1, &result, 0.25, 0.5, Some(&call))
+                .expect("render failure")
+                .expect("visible failure");
+            assert!(
+                rendered.contains("mcp.call · GitLab · list_issues"),
+                "{rendered}"
+            );
+        }
+    }
+    let document = crate::tool_result_document(&result, 0.25, Some(&call));
+    assert!(matches!(
+        &document.blocks[0],
+        PresentationBlock::Card { title, .. } if title == "Failed mcp.call · GitLab · list_issues"
+    ));
+    let successful = ToolResult {
+        output: serde_json::json!({"server": "Splunk", "tool": "search", "result": {}}).to_string(),
+        exit_code: 0,
+        ..result
+    };
+    let document = crate::tool_result_document(&successful, 0.25, None);
+    assert!(matches!(
+        &document.blocks[0],
+        PresentationBlock::Card { title, .. } if title == "Completed mcp.call · Splunk · search"
+    ));
 }
 
 #[test]

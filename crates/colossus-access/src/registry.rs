@@ -27,6 +27,7 @@ pub fn builtin_tool_descriptor(name: &str) -> Result<ToolDescriptor, AccessError
                 ToolPrerequisite::GitExecutable,
             ],
         ),
+        "shell.wait" | "shell.read" | "shell.list" | "shell.stop" => simple_tool("process"),
         "shell.run" => ("process", vec![ToolPrerequisite::AnyExecutable]),
         "repo.map" | "repo.symbol_search" | "repo.references" | "repo.file_summary" => {
             ("repository", vec![ToolPrerequisite::FilesystemRead])
@@ -34,6 +35,15 @@ pub fn builtin_tool_descriptor(name: &str) -> Result<ToolDescriptor, AccessError
         "patch.preview" => ("patch", vec![ToolPrerequisite::FilesystemRead]),
         "patch.apply" | "patch.reverse" => ("patch", vec![ToolPrerequisite::FilesystemWrite]),
         "trace.export" => ("trace", vec![ToolPrerequisite::FilesystemWrite]),
+        "session.set_title" => simple_tool("sessions"),
+        "workflow.definition.list"
+        | "workflow.definition.get"
+        | "workflow.schedule.list"
+        | "workflow.schedule.get"
+        | "workflow.schedule.create"
+        | "workflow.task.schedule"
+        | "workflow.schedule.set_enabled"
+        | "workflow.schedule.delete" => simple_tool("workflows"),
         "task.create" | "task.update" | "task.list" => simple_tool("tasks"),
         "decision.create" | "decision.update" | "decision.list" | "decision.archive"
         | "decision.supersede" => simple_tool("decisions"),
@@ -96,6 +106,10 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
         &mut descriptors,
         ActionClass::Read,
         &[
+            "workflow.definition.read",
+            "workflow.schedule.list",
+            "workflow.schedule.get",
+            "workflow.run.read",
             "filesystem.read",
             "filesystem.list",
             "filesystem.metadata",
@@ -110,6 +124,8 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "context.show",
             "context.snapshots",
             "patch.preview",
+            "shell.read",
+            "shell.list",
             "task.list",
             "decision.list",
             "plan.show",
@@ -135,6 +151,8 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
         &mut descriptors,
         ActionClass::LocalState,
         &[
+            "shell.stop",
+            "session.set_title",
             "context.compact",
             "context.restore",
             "presentation.preferences.update",
@@ -227,10 +245,17 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
         &mut descriptors,
         ActionClass::Administration,
         &[
+            "workflow.schedule.create",
+            "workflow.schedule.set_enabled",
+            "workflow.schedule.delete",
+            "workflow.definition.register",
+            "workflow.run.start",
             "plan.approve_request",
             "audit.export.worm.write",
             "plugin.install",
             "plugin.enable",
+            "plugin.workspace.accept",
+            "plugin.workspace.disable",
             "plugin.disable",
             "plugin.update",
             "plugin.uninstall",

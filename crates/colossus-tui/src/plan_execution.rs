@@ -14,7 +14,7 @@ pub(super) fn plan_execution_dock_height(
         .saturating_sub(MINIMUM_APPROVAL_TRANSCRIPT_ROWS)
         .saturating_sub(activity_height)
         .saturating_sub(composer_height)
-        .saturating_sub(1);
+        .saturating_sub(FOOTER_HEIGHT);
     if available < MIN_PLAN_EXECUTION_DOCK_ROWS {
         return 0;
     }

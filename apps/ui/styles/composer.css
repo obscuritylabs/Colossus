@@ -1,0 +1,71 @@
+/* Shared controls; each host owns the dock, capabilities, and submission. */
+.composer-input {
+  display: block;
+  width: 100%;
+  resize: none;
+  color: var(--text);
+  font: inherit;
+}
+.mode-switch {
+  display: flex;
+  gap: 3px;
+  padding: 2px;
+  margin: 0 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-muted);
+}
+
+.mode-switch label {
+  position: relative;
+}
+
+.mode-switch input {
+  width: 1px;
+  height: 1px;
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mode-switch span {
+  display: block;
+  padding: 4px 8px;
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+  font-weight: 650;
+}
+
+.mode-switch input:checked + span {
+  background: var(--blue-soft);
+  color: var(--blue-strong);
+}
+
+.mode-switch input:focus-visible + span {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.send-button {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--blue);
+  background: var(--blue);
+  color: var(--text-on-accent);
+}
+
+.send-button:not(:disabled):hover {
+  background: var(--blue-hover);
+}
+
+.send-button {
+  display: grid;
+  place-items: center;
+  padding: 5px;
+  border-radius: var(--radius-sm);
+}
+.mode-switch input:disabled + span {
+  opacity: var(--disabled-opacity);
+  cursor: default;
+}

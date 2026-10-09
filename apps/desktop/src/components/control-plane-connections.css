@@ -1,0 +1,79 @@
+.control-plane-connection-list {
+  display: grid;
+  gap: 8px;
+}
+.control-plane-connection-row {
+  min-width: 0;
+  padding: var(--settings-row-padding, 10px 12px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-panel);
+}
+.control-plane-connection-heading {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: var(--font-size-body-sm);
+}
+.control-plane-connection-heading > strong {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.control-plane-connection-heading > svg {
+  flex: none;
+  color: var(--muted);
+}
+.control-plane-connection-row dl {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 4px 10px;
+  margin: 10px 0 0;
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+.control-plane-connection-row dt,
+.control-plane-connection-note {
+  color: var(--muted);
+}
+.control-plane-connection-row dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.control-plane-connection-note {
+  margin: 6px 0 0;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+}
+.control-plane-bookmarks {
+  margin-top: var(--settings-section-gap);
+  padding-top: var(--settings-section-gap);
+  border-top: 1px solid var(--border);
+}
+.control-plane-bookmarks h4 {
+  margin: 0;
+  font-size: var(--font-size-body-sm);
+}
+.control-plane-bookmarks ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.control-plane-bookmarks li {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: center;
+  font-size: var(--font-size-body-sm);
+}
+.control-plane-bookmarks li > span:not(.status-chip) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}

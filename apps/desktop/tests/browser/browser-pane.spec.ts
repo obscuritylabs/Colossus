@@ -35,7 +35,7 @@ test("tabs survive closing the pane and switching app surfaces", async ({
   await address.press("Enter");
   await expect(address).toHaveValue("https://example.com/docs");
   await page
-    .getByRole("button", { name: "Close browser pane", exact: true })
+    .getByRole("button", { name: "Close tool pane", exact: true })
     .click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Back to work", exact: true }).click();
@@ -76,7 +76,7 @@ test("a failed page has retry controls and does not cover the app", async ({
     .getByRole("textbox", { name: "Prompt", exact: true })
     .fill("The conversation still works.");
   await page
-    .getByRole("button", { name: "Close browser pane", exact: true })
+    .getByRole("button", { name: "Close tool pane", exact: true })
     .click();
   await expect(
     page.getByRole("textbox", { name: "Prompt", exact: true }),
@@ -93,11 +93,11 @@ test("browser pane expands, resizes, and has accessible controls", async ({
   await expect(
     page.getByRole("separator", { name: "Resize browser pane" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Expand browser pane" }).click();
+  await page.getByRole("button", { name: "Expand tool pane" }).click();
   await expect(
     page.getByRole("region", { name: "Work conversation" }),
   ).not.toBeVisible();
-  await page.getByRole("button", { name: "Restore browser pane" }).click();
+  await page.getByRole("button", { name: "Restore tool pane" }).click();
   await expect(
     page.getByRole("region", { name: "Work conversation" }),
   ).toBeVisible();
@@ -108,7 +108,7 @@ test("browser pane expands, resizes, and has accessible controls", async ({
       page.getByRole("textbox", { name: "Web address" }),
     ).toBeInViewport();
     await expect(
-      page.getByRole("button", { name: "Close browser pane", exact: true }),
+      page.getByRole("button", { name: "Close tool pane", exact: true }),
     ).toBeInViewport();
   }
   const report = await new AxeBuilder({ page })
@@ -136,7 +136,7 @@ test("browser uses two compact rows and keeps pane actions visible with many tab
     await page.setViewportSize({ width, height: 640 });
     await expect(addTab).toBeInViewport();
     await expect(
-      page.getByRole("button", { name: "Close browser pane", exact: true }),
+      page.getByRole("button", { name: "Close tool pane", exact: true }),
     ).toBeInViewport();
     await expect(
       page.getByRole("textbox", { name: "Web address" }),

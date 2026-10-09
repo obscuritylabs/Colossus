@@ -1,13 +1,23 @@
+import { lazy, Suspense } from "react";
+import { DesktopStartup } from "./components/DesktopStartup";
 import { createRoot } from "react-dom/client";
+import { SetupPresentationProvider } from "./SetupPresentation";
+import { DesktopPreferencesProvider } from "./DesktopPreferencesProvider";
 
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import {
   AppearanceProvider,
   initializeAppearance,
 } from "./theme/AppearanceProvider";
-import "./theme/theme.css";
+import "@colossus/ui/styles/theme.css";
+import "@colossus/ui/styles/shadcn.css";
+import "@colossus/ui/styles/conversation.css";
+import "@colossus/ui/styles/workspace-sidebar.css";
+import "@colossus/ui/styles/work-welcome.css";
 import "./styles.css";
-import "./settings-layout.css";
+import "@colossus/ui/styles/composer.css";
+import "@colossus/ui/styles/select.css";
+import "@colossus/ui/styles/settings.css";
 
 const root = document.getElementById("root");
 
@@ -36,6 +46,19 @@ if (
             hasCredential={false}
             showControls={false}
           />
+        </AppearanceProvider>,
+      );
+    },
+  );
+} else if (
+  import.meta.env.DEV &&
+  new URLSearchParams(window.location.search).get("fixture") === "cloud"
+) {
+  void import("./dev/cloud-connection-preview").then(
+    ({ default: CloudPreview }) => {
+      createRoot(root).render(
+        <AppearanceProvider initialPreference={initialAppearance}>
+          <CloudPreview />
         </AppearanceProvider>,
       );
     },
@@ -77,13 +100,18 @@ if (
     );
   });
 } else {
-  void import("./App").then(({ default: App }) => {
-    createRoot(root).render(
-      <AppearanceProvider initialPreference={initialAppearance}>
+  const App = lazy(() => import("./App"));
+  createRoot(root).render(
+    <AppearanceProvider initialPreference={initialAppearance}>
+      <DesktopPreferencesProvider>
         <AppErrorBoundary>
-          <App />
+          <Suspense fallback={<DesktopStartup />}>
+            <SetupPresentationProvider>
+              <App />
+            </SetupPresentationProvider>
+          </Suspense>
         </AppErrorBoundary>
-      </AppearanceProvider>,
-    );
-  });
+      </DesktopPreferencesProvider>
+    </AppearanceProvider>,
+  );
 }

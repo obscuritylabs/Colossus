@@ -27,7 +27,7 @@ test.beforeEach(async ({ page }) => {
       },
       skills: [
         "coding",
-        "offline-dev",
+        "schedule-task",
         "security-review",
         "plugin-authoring",
       ].map((name) => ({
@@ -72,6 +72,15 @@ test.beforeEach(async ({ page }) => {
         signer: null,
       },
     };
+    const local = {
+      ...imported,
+      origin: "workspace",
+      source: ".agents/plugins/example",
+      actions: ["inspect", "workspace_accept"],
+      manifest: { ...imported.manifest, description: "Local review source" },
+      unavailable_reason:
+        "Accept this workspace source before using its skills",
+    };
     const state = window as unknown as {
       __TAURI_INTERNALS__: unknown;
       pluginCalls: { command: string; args: Record<string, unknown> }[];
@@ -81,6 +90,7 @@ test.beforeEach(async ({ page }) => {
       pluginMcpDiagnostic?: unknown;
       pluginHoldInventory?: boolean;
       pluginReleaseInventory?: (fail?: boolean) => void;
+      pluginShowWorkspace?: boolean;
     };
     state.pluginCalls = [];
     state.__TAURI_INTERNALS__ = {
@@ -89,7 +99,11 @@ test.beforeEach(async ({ page }) => {
         if (command === "get_plugin_inventory") {
           core.mcp_servers[0]!.enabled = state.pluginMcpEnabled === true;
           const snapshot = structuredClone({
-            plugins: [core, imported],
+            plugins: [
+              core,
+              imported,
+              ...(state.pluginShowWorkspace ? [local] : []),
+            ],
             managementAvailable: args.targetId === "local",
           });
           if (state.pluginHoldInventory) {
@@ -102,6 +116,31 @@ test.beforeEach(async ({ page }) => {
             });
           }
           return snapshot;
+        }
+        if (command === "get_managed_configuration")
+          return {
+            globalConfiguration: { revision: 4 },
+            spaces: [
+              {
+                id: "local",
+                archived: false,
+                effectiveValues: [{ fieldId: "plugins.mcpServers", value: {} }],
+                configuration: {
+                  accessProfileOverride: null,
+                  executionBoundaryOverride: null,
+                  terminalEnabledOverride: null,
+                  fieldOverrides: [],
+                  catalogRevisions: {},
+                  searchRoles: {},
+                  modelRoles: {},
+                  credentialOverrides: {},
+                },
+              },
+            ],
+          };
+        if (command === "save_space_configuration") {
+          state.pluginMcpEnabled = true;
+          return {};
         }
         if (command === "managed_mcp_oauth_status")
           return {
@@ -190,6 +229,11 @@ test.beforeEach(async ({ page }) => {
             }
           ).request;
           const plugin = request.name === "colossus" ? core : imported;
+          if (request.operation === "accept_workspace") {
+            local.available = true;
+            local.status = "enabled";
+            local.actions = ["inspect", "workspace_disable"];
+          }
           if (request.operation === "disable") {
             plugin.status = "disabled";
             plugin.available = false;
@@ -211,6 +255,126 @@ test.beforeEach(async ({ page }) => {
   await expect(
     page.getByRole("button", { name: /colossus 0\.11/u }),
   ).toBeVisible();
+});
+
+test("accepts a workspace source with an exact digest and distinguishes an installed copy", async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    (
+      window as unknown as { pluginShowWorkspace: boolean }
+    ).pluginShowWorkspace = true;
+  });
+  await page.getByRole("button", { name: "Refresh plugins" }).click();
+  await page
+    .locator(".plugin-card")
+    .filter({ hasText: "Local review source" })
+    .click();
+  await expect(
+    page
+      .locator(".plugin-detail")
+      .getByText("Workspace source", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Use workspace source", exact: true })
+    .click();
+  await expect(page.getByRole("form")).toContainText("only in this workspace");
+  for (const [theme, palette, width, textSize] of [
+    ["light", "neutral", 1280, "comfortable"],
+    ["dark", "neutral", 880, "large"],
+    ["dark", "hacker", 390, "large"],
+  ] as const) {
+    await page.setViewportSize({ width, height: 920 });
+    await page.evaluate(
+      ({ theme, palette, textSize }) => {
+        Object.assign(document.documentElement.dataset, {
+          theme,
+          palette,
+          textSize,
+        });
+      },
+      { theme, palette, textSize },
+    );
+    await page.locator(".plugin-surface").screenshot({
+      path: `output/playwright/plugin-workspace-${theme}-${palette}.png`,
+      animations: "disabled",
+    });
+  }
+  const accessibility = await new AxeBuilder({ page })
+    .include(".plugin-surface")
+    .analyze();
+  expect(
+    accessibility.violations.filter(({ impact }) =>
+      ["critical", "serious"].includes(impact ?? ""),
+    ),
+  ).toEqual([]);
+  await page
+    .getByRole("form")
+    .getByRole("button", { name: "Continue", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Disable workspace source" }),
+  ).toBeVisible();
+  const request = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          pluginCalls: { command: string; args: unknown }[];
+        }
+      ).pluginCalls
+        .filter((call) => call.command === "manage_plugin")
+        .at(-1)?.args,
+  );
+  expect(request).toMatchObject({
+    input: {
+      request: {
+        operation: "accept_workspace",
+        path: ".agents/plugins/example",
+        digest: `sha256:${"2".repeat(64)}`,
+      },
+    },
+  });
+  await page
+    .locator(".plugin-card")
+    .filter({ hasText: "Unsigned candidate" })
+    .click();
+  await expect(
+    page.getByText("Installed plugin", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Disable workspace source" }),
+  ).toHaveCount(0);
+});
+
+test("enables a plugin connection from its detail view", async ({ page }) => {
+  const controls = page.getByRole("group", {
+    name: "colossus/docs connection",
+  });
+  await controls
+    .getByRole("button", { name: "Enable all plugin tools" })
+    .click();
+  await expect(
+    controls.getByRole("button", { name: "Disable connection" }),
+  ).toBeVisible();
+  const request = await page.evaluate(() => {
+    const state = window as unknown as {
+      pluginCalls: { command: string; args: Record<string, unknown> }[];
+    };
+    return state.pluginCalls.find(
+      (entry) => entry.command === "save_space_configuration",
+    )?.args.request;
+  });
+  expect(request).toMatchObject({
+    spaceId: "local",
+    fieldOverrides: [
+      {
+        fieldId: "plugins.mcpServers",
+        value: {
+          "colossus/docs": { enabled: true, allowedTools: ["*"] },
+        },
+      },
+    ],
+  });
 });
 
 test("failed plugin MCP diagnostics keep TLS evidence readable before expansion", async ({
@@ -558,6 +722,7 @@ test("queued inventory does not fetch or populate a departed target", async ({
 });
 
 for (const action of [
+  "add",
   "install",
   "validate",
   "verify",
@@ -569,20 +734,29 @@ for (const action of [
   test(`management ${action} translates a typed native request`, async ({
     page,
   }) => {
-    if (action !== "install")
+    if (action !== "add")
       await page.getByText("Developer tools", { exact: true }).click();
-    const actions = action === "install" ? page : page.locator(".plugin-tools");
+    const actions = action === "add" ? page : page.locator(".plugin-tools");
     await actions
       .getByRole("button", {
         name:
-          action === "gc"
-            ? "Garbage collect"
-            : action[0]!.toUpperCase() + action.slice(1),
+          action === "add"
+            ? "Add plugin"
+            : action === "gc"
+              ? "Garbage collect"
+              : action[0]!.toUpperCase() + action.slice(1),
         exact: true,
       })
       .click();
     const form = page.getByRole("form", { name: `${action} plugin` });
     await expect(form).toBeFocused();
+    if (action === "install" || action === "add") {
+      await form
+        .getByLabel("OCI plugin reference")
+        .fill(
+          "oci://ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:0.1.0-alpha.3.ci.3.1-windows-amd64",
+        );
+    }
     if (action === "pull" || action === "push") {
       await form
         .getByLabel("Registry profile", { exact: true })
@@ -612,8 +786,9 @@ for (const action of [
 test("archive candidates, cancellation, external discovery and unavailable capability", async ({
   page,
 }) => {
+  await page.getByText("Developer tools", { exact: true }).click();
   await page.getByRole("button", { name: "Install", exact: true }).click();
-  await page.getByRole("combobox", { name: "Installation source" }).click();
+  await page.getByRole("combobox", { name: "Plugin source" }).click();
   await page
     .getByRole("option", { name: "OCI layout archive", exact: true })
     .click();

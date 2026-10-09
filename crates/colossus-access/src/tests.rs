@@ -38,6 +38,56 @@ fn default_access_is_allow_all() {
     assert_eq!(AccessProfile::default(), AccessProfile::AllowAll);
     assert_eq!(AccessConfig::default().profile, AccessProfile::AllowAll);
 }
+
+#[test]
+fn persistent_schedule_mutations_default_to_review_and_preserve_explicit_policy() {
+    let resolve = |config: &AccessConfig, external| {
+        resolve_access(
+            config,
+            &[],
+            builtin_action_descriptors(),
+            [],
+            &AccessContext::default(),
+            external,
+        )
+        .unwrap()
+    };
+    let defaults = resolve(&AccessConfig::default(), false);
+    for action in [
+        "workflow.definition.read",
+        "workflow.schedule.list",
+        "workflow.schedule.get",
+    ] {
+        assert_eq!(
+            defaults.action_decision(action),
+            Some(AccessDecision::Allow)
+        );
+    }
+    for action in [
+        "workflow.schedule.create",
+        "workflow.schedule.set_enabled",
+        "workflow.schedule.delete",
+    ] {
+        assert_eq!(
+            defaults.action_decision(action),
+            Some(AccessDecision::RequireApproval)
+        );
+    }
+    let mut config = AccessConfig::default();
+    config
+        .actions
+        .deny
+        .push("workflow.schedule.set_enabled".into());
+    assert_eq!(
+        resolve(&config, false).action_decision("workflow.schedule.set_enabled"),
+        Some(AccessDecision::Deny)
+    );
+    let external = resolve(&AccessConfig::default(), true);
+    assert_eq!(
+        external.action_decision("workflow.schedule.create"),
+        Some(AccessDecision::ExternalPolicy)
+    );
+}
 use colossus_contracts::ToolSpec;
 
 fn tool(name: &str, action: Option<&str>) -> ToolSpec {
@@ -433,4 +483,109 @@ fn unknown_core_tool_fails_closed() {
     )
     .expect_err("unclassified");
     assert!(matches!(error, AccessError::Unclassified(_)));
+}
+
+#[test]
+fn patterns_select_trusted_tools_with_exclusions_and_preserve_action_policy() {
+    let config = AccessConfig {
+        profile: AccessProfile::Pinned,
+        tools: ToolAccessConfig {
+            include: vec!["filesystem.*".into(), "future_*".into()],
+            exclude: vec!["*.write".into()],
+        },
+        ..AccessConfig::default()
+    };
+    let specs = [
+        tool("filesystem.read", Some("filesystem.read")),
+        tool("filesystem.write", Some("filesystem.write")),
+        tool("echo", None),
+    ];
+    let descriptors = [
+        core_tool("filesystem.read"),
+        core_tool("filesystem.write"),
+        core_tool("echo"),
+    ];
+    let resolve = |context| {
+        resolve_access(
+            &config,
+            &specs,
+            builtin_action_descriptors(),
+            descriptors.clone(),
+            &context,
+            false,
+        )
+    };
+    let unavailable =
+        resolve(AccessContext::default()).expect("unmet wildcard prerequisite hides tool");
+    assert!(unavailable.active_tool_names().is_empty());
+    let resolution = resolve(AccessContext {
+        filesystem_read: true,
+        filesystem_write: true,
+        ..AccessContext::default()
+    })
+    .unwrap();
+    assert_eq!(resolution.active_tool_names(), ["filesystem.read"]);
+    assert_eq!(
+        resolution.action_decision("filesystem.read"),
+        Some(AccessDecision::Deny)
+    );
+    let excluded = resolution
+        .tools
+        .iter()
+        .find(|tool| tool.name == "filesystem.write")
+        .unwrap();
+    assert_eq!(excluded.reason, "wildcard exclude: *.write");
+    assert!(
+        resolve_access(
+            &config,
+            &specs,
+            builtin_action_descriptors(),
+            [],
+            &AccessContext::default(),
+            false
+        )
+        .is_err(),
+        "patterns never classify untrusted tools"
+    );
+    let mut explicit = config.clone();
+    explicit.tools.include = vec!["filesystem.write".into()];
+    let resolution = resolve_access(
+        &explicit,
+        &specs,
+        builtin_action_descriptors(),
+        descriptors,
+        &AccessContext::default(),
+        false,
+    )
+    .unwrap();
+    assert!(
+        resolution.active_tool_names().is_empty(),
+        "exclusion wins even over exact inclusion"
+    );
+}
+
+#[test]
+fn patterns_do_not_allow_action_wildcards_or_unknown_exact_tool_names() {
+    for invalid in ["get_**", "get_*[ab]", "get_*?", "get_*|delete_*"] {
+        let mut config = AccessConfig::default();
+        config.tools.include.push(invalid.into());
+        assert!(validate_config(&config, false).is_err());
+    }
+    for actions in [0, 1, 2] {
+        let mut config = AccessConfig::default();
+        match actions {
+            0 => config.actions.allow.push("filesystem.*".into()),
+            1 => config.actions.require_approval.push("filesystem.*".into()),
+            _ => config.actions.deny.push("filesystem.*".into()),
+        }
+        assert!(validate_config(&config, false).is_err());
+    }
+    let mut config = AccessConfig::default();
+    config.tools.include.push("unknown.exact".into());
+    assert!(matches!(
+        resolve_access(&config, &[], [], [], &AccessContext::default(), false),
+        Err(AccessError::Unclassified(_))
+    ));
+    config.tools.include = vec!["unknown.*".into()];
+    assert!(resolve_access(&config, &[], [], [], &AccessContext::default(), false).is_ok());
 }

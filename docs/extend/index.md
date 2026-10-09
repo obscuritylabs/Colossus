@@ -1,32 +1,105 @@
 ---
-title: Automate and extend
-description: Build durable workflows and add Agent Plugins, integrations, and standalone MCP servers.
+title: Extend Colossus
+description: Build workflows, add tools and integrations, and customize the terminal.
 audience: developer
 type: concept
+icon: lucide/blocks
 ---
 
-# Automate and extend
+# Extend Colossus
 
-Colossus extensions enter through explicit, inspectable boundaries. Choose the smallest
-mechanism that fits the capability.
+Choose what you want to build. Each guide starts with a concrete workflow, connection,
+or file you can make your own.
 
-| Need | Mechanism |
-| --- | --- |
-| Orchestrate bounded durable steps | [Workflow](workflows/first-workflow.md) |
-| Distribute Agent Skills, resources, and MCP servers | [Agent Plugin](plugins.md) |
-| Connect a supported service or OpenAPI operation | [Integration](integrations.md) |
-| Run a configured external tool server | [MCP](mcp.md) |
-| Use Colossus as an agent inside a compatible editor | [ACP](acp.md) |
+## Automate work
 
-## One trust model
+<div class="grid cards" markdown>
 
-Extensions do not create a parallel execution path. Their tools are candidates only
-after configuration, connection, verification, or trust makes them applicable. Calls
-still pass through access selection, policy, approval, one-use permits, sandbox
-enforcement, output bounds, quarantine, release, and audit.
+-   :lucide-play:{ .lg .middle } **First workflow**
 
-Agent Skills contribute instructions and bounded resources from an immutable plugin.
-Referenced scripts and plugin MCP servers still cross the ordinary tool, policy, approval,
-permit, sandbox, quarantine, and audit boundaries.
+    ---
 
-Start with [Your first workflow](workflows/first-workflow.md).
+    Create, validate, register, and run a workflow with no external effects.
+
+    [Build a first workflow :lucide-arrow-right:](workflows/first-workflow.md)
+
+-   :lucide-workflow:{ .lg .middle } **Workflow authoring**
+
+    ---
+
+    Define inputs, steps, capabilities, and execution bounds.
+
+    [Author a workflow :lucide-arrow-right:](workflows/authoring.md)
+
+-   :lucide-refresh-cw:{ .lg .middle } **Triggers and recovery**
+
+    ---
+
+    Start workflows from schedules or events and handle interrupted runs.
+
+    [Configure triggers :lucide-arrow-right:](workflows/triggers-recovery.md)
+
+</div>
+
+## Add tools and editors
+
+<div class="grid cards" markdown>
+
+-   :lucide-wrench:{ .lg .middle } **Tools**
+
+    ---
+
+    See the active tool catalog and what each field means.
+
+    [Explore tools :lucide-arrow-right:](../use/tools.md)
+
+-   :lucide-puzzle:{ .lg .middle } **Agent Plugins**
+
+    ---
+
+    Package and distribute Agent Skills, resources, and MCP servers.
+
+    [Explore Agent Plugins :lucide-arrow-right:](plugins.md)
+
+-   :lucide-plug:{ .lg .middle } **Integrations**
+
+    ---
+
+    Connect a supported service or import OpenAPI operations.
+
+    [Connect an integration :lucide-arrow-right:](integrations.md)
+
+-   :lucide-network:{ .lg .middle } **MCP**
+
+    ---
+
+    Configure an external tool server for Colossus to use.
+
+    [Configure MCP :lucide-arrow-right:](mcp.md)
+
+-   :lucide-code:{ .lg .middle } **ACP in editors**
+
+    ---
+
+    Use Colossus as a local agent in a compatible editor.
+
+    [Connect an editor :lucide-arrow-right:](acp.md)
+
+</div>
+
+## Customize the terminal
+
+<div class="grid cards" markdown>
+
+-   :lucide-paintbrush:{ .lg .middle } **Author a theme**
+
+    ---
+
+    Create a TOML theme, preview it, and select it in the terminal UI.
+
+    [Create your own theme :lucide-arrow-right:](author-theme.md)
+
+</div>
+
+Configured extensions still use Colossus's
+[access, approval, sandbox, and audit boundaries](../get-started/core-concepts.md).

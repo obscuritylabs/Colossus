@@ -12,11 +12,14 @@ mod auth;
 mod endpoint;
 mod extensions;
 mod journal_credentials;
+mod process_sessions;
 mod request_guard;
 mod server;
 mod status;
 mod system;
 mod tls_identity;
+pub mod workflow_wire;
+mod workflows;
 
 pub use agent_run::{AgentRunServiceAdapter, MAX_ACTIVE_WATCH_STREAMS};
 pub use artifact::ArtifactServiceAdapter;
@@ -40,3 +43,4 @@ pub use system::{
     FixedReadiness, PublicReadiness, ReadinessProvider, SystemMetadata, SystemServiceAdapter,
 };
 pub use tls_identity::{TlsIdentity, TlsIdentityError, TlsKeySeed};
+pub use workflows::AutomationServiceAdapter;

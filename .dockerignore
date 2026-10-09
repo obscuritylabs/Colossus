@@ -4,11 +4,15 @@
 .githooks/
 .agents/
 .codex/
+.local/
+.playwright-cli/
 
 # Local runtime state and credentials must never enter the build context.
 .colossus/
 **/.env
 **/.env.*
+**/development-credentials/
+**/.authority-key.env
 **/.aws/
 **/.ssh/
 **/.git-credentials

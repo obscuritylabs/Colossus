@@ -7,6 +7,10 @@ export interface ProviderPreset {
   protocol: "chat_completions" | "responses" | "codex";
   baseUrl: string | null;
   credentialEnv: string | null;
+  setup?: {
+    packageId: string;
+    provider: import("./setupPackages").SetupProvider;
+  };
 }
 
 export interface ProviderCatalogModel {
@@ -20,6 +24,7 @@ export interface ProviderCatalogModel {
   tool_calls?: boolean;
   image_inputs?: boolean;
   streaming?: boolean;
+  server_compaction?: boolean;
   supported_reasoning_efforts?: string[];
 }
 
@@ -50,7 +55,7 @@ export function matchingProviderPreset(
   );
 }
 
-/** Only advertised fields overwrite the user's explicit configuration. */
+/** Import model-card declarations separately from saved feature preferences. */
 export function applyCatalogModel(
   current: ManagedModelConfiguration,
   model: ProviderCatalogModel,
@@ -66,9 +71,13 @@ export function applyCatalogModel(
       Math.floor(contextWindowTokens / 2),
     ),
     capabilities: {
-      toolCalls: model.tool_calls ?? current.capabilities.toolCalls,
-      streaming: model.streaming ?? current.capabilities.streaming,
-      imageInputs: model.image_inputs ?? current.capabilities.imageInputs,
+      ...current.capabilities,
+      declared: {
+        toolCalls: model.tool_calls ?? null,
+        streaming: model.streaming ?? null,
+        imageInputs: model.image_inputs ?? null,
+        serverCompaction: model.server_compaction ?? null,
+      },
     },
   };
 }
@@ -82,7 +91,15 @@ export function resetModelMetadata(
     contextWindowTokens: 32_768,
     maxOutputTokens: 4_096,
     reasoningEffort: null,
-    capabilities: { toolCalls: false, streaming: false, imageInputs: false },
+    capabilities: {
+      ...current.capabilities,
+      declared: {
+        toolCalls: null,
+        streaming: null,
+        imageInputs: null,
+        serverCompaction: null,
+      },
+    },
   };
 }
 

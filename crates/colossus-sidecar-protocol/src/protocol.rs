@@ -21,7 +21,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 /// Exact bootstrap protocol version.
-pub const PROTOCOL_VERSION: u16 = 10;
+pub const PROTOCOL_VERSION: u16 = 12;
 /// Exact desktop-to-TUI inherited-channel protocol version.
 pub const DESKTOP_TUI_PROTOCOL_VERSION: u16 = 3;
 /// Fixed child descriptor from which the bundled TUI reads native authentication.
@@ -485,15 +485,53 @@ impl ManagedProviderConfig {
 
 /// Explicit request-shaping capabilities for an app-managed model.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct ManagedModelCapabilities {
     /// Whether the model receives tools and structured tool history.
-    pub tool_calls: bool,
+    pub tool_calls: colossus_contracts::ModelFeatureMode,
     /// Whether the model uses provider streaming.
-    pub streaming: bool,
+    pub streaming: colossus_contracts::ModelFeatureMode,
     /// Whether the model receives verified encrypted run-input images.
-    #[serde(default)]
-    pub image_inputs: bool,
+    #[serde(default = "legacy_image_mode")]
+    pub image_inputs: colossus_contracts::ModelFeatureMode,
+    /// Optional Responses server compaction preference.
+    pub server_compaction: colossus_contracts::ModelFeatureMode,
+    /// Advertised model-card metadata, independent of the saved preference.
+    pub declared: colossus_contracts::ModelFeatureDeclarations,
+}
+
+fn legacy_image_mode() -> colossus_contracts::ModelFeatureMode {
+    colossus_contracts::ModelFeatureMode::Off
+}
+
+impl Default for ManagedModelCapabilities {
+    fn default() -> Self {
+        colossus_contracts::ModelFeatureSettings::default().into()
+    }
+}
+
+impl From<colossus_contracts::ModelFeatureSettings> for ManagedModelCapabilities {
+    fn from(value: colossus_contracts::ModelFeatureSettings) -> Self {
+        Self {
+            tool_calls: value.tool_calls,
+            streaming: value.streaming,
+            image_inputs: value.image_inputs,
+            server_compaction: value.server_compaction,
+            declared: value.declared,
+        }
+    }
+}
+
+impl From<ManagedModelCapabilities> for colossus_contracts::ModelFeatureSettings {
+    fn from(value: ManagedModelCapabilities) -> Self {
+        Self {
+            tool_calls: value.tool_calls,
+            streaming: value.streaming,
+            image_inputs: value.image_inputs,
+            server_compaction: value.server_compaction,
+            declared: value.declared,
+        }
+    }
 }
 
 /// Compact explicit model metadata without provider credentials.
@@ -678,9 +716,12 @@ pub struct ManagedMcpServerConfig {
     pub credential_headers: BTreeMap<String, ManagedMcpCredentialHeader>,
     /// Permit an explicitly configured remote server to omit session identifiers.
     pub allow_stateless: bool,
+    /// Remote MCP protocol lifecycle.
+    #[serde(default)]
+    pub protocol_version: colossus_contracts::McpProtocolVersion,
     /// Optional OAuth client metadata.
     pub oauth: Option<ManagedMcpOAuthConfig>,
-    /// Exact allowed MCP tools or the sole wildcard `*`.
+    /// Exact allowed MCP tools or star patterns; `*` must stand alone.
     pub allowed_tools: Vec<String>,
     /// Research collection templates.
     pub research_tools: Vec<ManagedMcpResearchTool>,
@@ -704,7 +745,7 @@ impl ManagedMcpServerConfig {
             || self
                 .allowed_tools
                 .iter()
-                .any(|tool| tool != "*" && !valid_token(tool))
+                .any(|tool| colossus_contracts::ToolNamePattern::parse(tool).is_err())
             || (self.allowed_tools.iter().any(|tool| tool == "*") && self.allowed_tools.len() != 1)
             || self
                 .environment_credentials
@@ -762,6 +803,7 @@ impl ManagedMcpServerConfig {
                     || !self.headers.is_empty()
                     || !self.credential_headers.is_empty()
                     || self.allow_stateless
+                    || self.protocol_version != colossus_contracts::McpProtocolVersion::Auto
                     || self.oauth.is_some()
                 {
                     return Err(ProtocolError::InvalidFrame);
@@ -1119,6 +1161,7 @@ pub const MANAGED_EDITABLE_FIELD_IDS: &[&str] = &[
     "research.maxSources",
     "research.maxWorkers",
     "plugins.enabled",
+    "plugins.workspaceDiscovery",
     "plugins.include",
     "plugins.exclude",
     "plugins.trustProfiles",
@@ -1196,9 +1239,10 @@ impl ManagedRuntimeConfig {
                 context_window_tokens: 32_768,
                 max_output_tokens: 4_096,
                 capabilities: ManagedModelCapabilities {
-                    tool_calls: true,
-                    streaming: true,
-                    image_inputs: false,
+                    tool_calls: true.into(),
+                    streaming: true.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
                 reasoning_effort: None,
             }],
@@ -1389,12 +1433,25 @@ pub struct BootstrapRequest {
     /// runtime state; the sidecar never migrates an existing journal in place.
     #[serde(default)]
     pub plaintext_journal_for_development: bool,
+    /// Start this owned runtime in Risk Auto instead of Ask, including supervised restarts.
+    ///
+    /// Only the trusted native host selects this bootstrap policy. It never enters
+    /// managed YAML or public run requests, and does not widen tool or sandbox authority.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub risk_auto_approvals: bool,
     /// Optional app-private PEM bundle copied and validated by the native host.
     ///
     /// This path travels only on the authenticated local bootstrap channel and is
     /// never part of the public API or renderer DTOs.
     #[serde(default)]
     pub ca_bundle_path: Option<String>,
+    /// Native-supplied PEM client identity, available only on inherited bootstrap IPC.
+    /// The private key never enters generated runtime YAML or renderer DTOs.
+    #[serde(default)]
+    pub client_certificate_pem: Option<SecretString>,
+    /// Matching PEM private key, sent only through authenticated bootstrap IPC.
+    #[serde(default)]
+    pub client_key_pem: Option<SecretString>,
     /// Optional native-selected official Codex credential file.
     ///
     /// This path travels only through inherited bootstrap IPC. It is required exactly
@@ -1407,6 +1464,8 @@ pub struct BootstrapRequest {
     pub grant: BootstrapGrant,
     /// Optional native-only credential allowed to answer effect approvals and nothing else.
     pub approval_broker_grant: Option<BootstrapGrant>,
+    /// Optional independent application grant for an explicitly enrolled cloud connector.
+    pub connector_grant: Option<BootstrapGrant>,
     /// Provider credentials referenced by opaque `host:` identifiers.
     pub host_credentials: Vec<HostCredential>,
     /// Optional worker IPC key supplied by a native host for its bundled TUI.
@@ -1414,6 +1473,12 @@ pub struct BootstrapRequest {
     /// The encoded key is accepted only through the inherited sidecar bootstrap
     /// channel and is never written into the generated managed configuration.
     pub worker_ipc_authentication: Option<SecretString>,
+}
+
+// Preserve the wire shape for hosts retaining Ask; an older child must reject
+// an explicit Risk Auto request rather than silently launch with a different mode.
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 impl BootstrapRequest {
@@ -1431,6 +1496,7 @@ impl BootstrapRequest {
             || self.ca_bundle_path.as_deref().is_some_and(|path| {
                 path.len() > MAX_PRIVATE_PATH_BYTES || !absolute_non_root(Path::new(path))
             })
+            || self.client_certificate_pem.is_some() != self.client_key_pem.is_some()
             || self.codex_auth_path.as_deref().is_some_and(|path| {
                 path.len() > MAX_PRIVATE_PATH_BYTES || !absolute_non_root(Path::new(path))
             })
@@ -1439,6 +1505,26 @@ impl BootstrapRequest {
             return Err(ProtocolError::InvalidFrame);
         }
         self.grant.validate()?;
+        if let Some(connector) = &self.connector_grant {
+            connector.validate()?;
+            if connector.application_id == self.grant.application_id
+                || connector
+                    .allowed_roles
+                    .iter()
+                    .any(|role| !self.grant.allowed_roles.contains(role))
+                || connector
+                    .allowed_tools
+                    .iter()
+                    .any(|tool| !self.grant.allowed_tools.contains(tool))
+                || connector.scopes.iter().any(|scope| {
+                    !(self.grant.scopes.contains(scope)
+                        || scope == "approvals:respond" && self.approval_broker_grant.is_some())
+                })
+            {
+                return Err(ProtocolError::InvalidFrame);
+            }
+        }
+
         self.workspace_identity.validate()?;
         if let Some(grant) = &self.approval_broker_grant {
             grant.validate_approval_broker(&self.grant)?;
@@ -1521,7 +1607,9 @@ impl fmt::Debug for BootstrapRequest {
                 "plaintext_journal_for_development",
                 &self.plaintext_journal_for_development,
             )
+            .field("risk_auto_approvals", &self.risk_auto_approvals)
             .field("ca_bundle_configured", &self.ca_bundle_path.is_some())
+            .field("client_identity_configured", &self.client_key_pem.is_some())
             .field("codex_auth_configured", &self.codex_auth_path.is_some())
             .field("runtime", &self.runtime)
             .field("grant", &self.grant)
@@ -1695,6 +1783,8 @@ pub struct AckRequest {
     pub credential_id: String,
     /// Pending approval-broker credential identifier, when one was requested.
     pub approval_broker_credential_id: Option<String>,
+    /// Independent pending cloud connector credential identity.
+    pub connector_credential_id: Option<String>,
 }
 
 /// Child frames sent to the native host.
@@ -1735,8 +1825,12 @@ pub struct ReadyResponse {
     pub bearer: SecretString,
     /// Non-secret pending approval-broker credential identifier.
     pub approval_broker_credential_id: Option<String>,
+    /// Independent pending cloud connector credential identity.
+    pub connector_credential_id: Option<String>,
     /// Approval-broker bearer delivered once through this inherited channel.
     pub approval_broker_bearer: Option<SecretString>,
+    /// Independent connector bearer delivered only through native bootstrap IPC.
+    pub connector_bearer: Option<SecretString>,
 }
 
 impl ReadyResponse {
@@ -1758,6 +1852,10 @@ impl ReadyResponse {
                 &self.approval_broker_bearer,
             )
             || self.approval_broker_credential_id.as_deref() == Some(self.credential_id.as_str())
+            || !matching_optional_credential(&self.connector_credential_id, &self.connector_bearer)
+            || self.connector_credential_id.as_deref() == Some(self.credential_id.as_str())
+            || (self.connector_credential_id.is_some()
+                && self.connector_credential_id == self.approval_broker_credential_id)
         {
             return Err(ProtocolError::InvalidFrame);
         }
@@ -1800,6 +1898,8 @@ pub struct ActivatedResponse {
     pub credential_id: String,
     /// Activated approval-broker credential identifier, when one was requested.
     pub approval_broker_credential_id: Option<String>,
+    /// Independent pending cloud connector credential identity.
+    pub connector_credential_id: Option<String>,
 }
 
 /// Sanitized startup failure codes suitable for a native status surface.
@@ -1974,7 +2074,10 @@ mod tests {
             colossus_home: None,
             suppress_automatic_agent_instructions: false,
             plaintext_journal_for_development: false,
+            risk_auto_approvals: false,
             ca_bundle_path: None,
+            client_certificate_pem: None,
+            client_key_pem: None,
             codex_auth_path: None,
             runtime: ManagedRuntimeConfig {
                 access_profile: ManagedAccessProfile::Development,
@@ -1994,9 +2097,10 @@ mod tests {
                     context_window_tokens: 32_768,
                     max_output_tokens: 4_096,
                     capabilities: ManagedModelCapabilities {
-                        tool_calls: true,
-                        streaming: true,
-                        image_inputs: false,
+                        tool_calls: true.into(),
+                        streaming: true.into(),
+                        image_inputs: false.into(),
+                        ..Default::default()
                     },
                     reasoning_effort: None,
                 }],
@@ -2013,6 +2117,7 @@ mod tests {
                 allowed_roles: vec!["primary".into()],
                 allowed_tools: vec!["session.list".into()],
             },
+            connector_grant: None,
             approval_broker_grant: Some(BootstrapGrant {
                 application_id: "app:desktop".into(),
                 scopes: vec![APPROVALS_RESPOND_SCOPE.into()],
@@ -2218,6 +2323,7 @@ mod tests {
             headers: BTreeMap::new(),
             credential_headers: BTreeMap::new(),
             allow_stateless: false,
+            protocol_version: Default::default(),
             oauth: None,
             allowed_tools: vec!["search".into()],
             research_tools: Vec::new(),
@@ -2270,6 +2376,7 @@ mod tests {
                 },
             )]),
             allow_stateless: false,
+            protocol_version: Default::default(),
             oauth: None,
             allowed_tools: vec!["search".into()],
             research_tools: vec![ManagedMcpResearchTool {
@@ -2293,6 +2400,15 @@ mod tests {
             .get_mut("Authorization")
             .expect("credential header")
             .credential_id = "mcp-token".into();
+        runtime.mcp_servers[0].allowed_tools =
+            vec!["get_*".into(), "*_search".into(), "echo".into()];
+        runtime
+            .validate()
+            .expect("mixed exact and pattern MCP allowlist");
+        for invalid in ["get_?", "get_[ab]", "get_**", "^get_.*$"] {
+            runtime.mcp_servers[0].allowed_tools = vec![invalid.into()];
+            assert!(runtime.validate().is_err(), "{invalid}");
+        }
         runtime.mcp_servers[0].allowed_tools = vec!["*".into()];
         runtime.validate().expect("sole wildcard MCP allowlist");
         runtime.mcp_servers[0].allowed_tools = vec!["*".into(), "search".into()];
@@ -2304,6 +2420,8 @@ mod tests {
         let mut request = request();
         let ca_bundle_path = absolute_test_path("company-ca.pem");
         request.ca_bundle_path = Some(ca_bundle_path.clone());
+        request.client_certificate_pem = Some(SecretString::new("public-client-cert").unwrap());
+        request.client_key_pem = Some(SecretString::new("secret-client-key").unwrap());
         request.validate().expect("request");
         let frame = ParentFrame::Bootstrap(Box::new(request));
         let mut bytes = Vec::new();
@@ -2328,12 +2446,20 @@ mod tests {
         assert!(!format!("{decoded:?}").contains(&"5a".repeat(32)));
         assert!(!format!("{decoded:?}").contains(&decoded.workspace_identity.sha256));
         assert!(!format!("{decoded:?}").contains("company-ca.pem"));
+        assert!(!format!("{decoded:?}").contains("secret-client-key"));
+        assert_eq!(
+            decoded.client_key_pem.as_ref().unwrap().expose(),
+            "secret-client-key"
+        );
         assert_eq!(
             decoded.ca_bundle_path.as_deref(),
             Some(ca_bundle_path.as_str())
         );
 
         decoded.ca_bundle_path = Some("../company-ca.pem".into());
+        assert_eq!(decoded.validate(), Err(ProtocolError::InvalidFrame));
+        decoded.ca_bundle_path = Some(ca_bundle_path);
+        decoded.client_key_pem = None;
         assert_eq!(decoded.validate(), Err(ProtocolError::InvalidFrame));
     }
 
@@ -2396,6 +2522,33 @@ mod tests {
         assert!(
             !decoded.suppress_automatic_agent_instructions,
             "an omitted private flag must preserve normal AGENTS.md loading"
+        );
+    }
+
+    #[test]
+    fn risk_auto_approvals_require_explicit_native_bootstrap_opt_in() {
+        let mut request = request();
+        assert!(!request.risk_auto_approvals);
+        assert!(
+            serde_json::to_value(&request)
+                .expect("Ask request JSON")
+                .get("risk_auto_approvals")
+                .is_none()
+        );
+        request.risk_auto_approvals = true;
+        request.validate().expect("Risk Auto bootstrap");
+        let wire = serde_json::to_value(&request).expect("request JSON");
+        let decoded: BootstrapRequest = serde_json::from_value(wire.clone()).expect("request");
+        assert!(decoded.risk_auto_approvals);
+        let mut legacy = wire;
+        legacy
+            .as_object_mut()
+            .expect("request object")
+            .remove("risk_auto_approvals");
+        let decoded: BootstrapRequest = serde_json::from_value(legacy).expect("legacy request");
+        assert!(
+            !decoded.risk_auto_approvals,
+            "older native hosts retain Ask"
         );
     }
 
@@ -2751,7 +2904,9 @@ mod tests {
             credential_id: primary_id.clone(),
             bearer: SecretString::new("primary-secret").expect("secret"),
             approval_broker_credential_id: Some(broker_id),
+            connector_credential_id: None,
             approval_broker_bearer: Some(SecretString::new("approval-secret").expect("secret")),
+            connector_bearer: None,
         };
         ready.validate().expect("paired delivery");
         let debug = format!("{ready:?}");
@@ -2760,6 +2915,7 @@ mod tests {
 
         let duplicated = ReadyResponse {
             approval_broker_credential_id: Some(primary_id),
+            connector_credential_id: None,
             ..ready
         };
         assert_eq!(duplicated.validate(), Err(ProtocolError::InvalidFrame));

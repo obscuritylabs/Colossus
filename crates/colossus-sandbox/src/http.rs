@@ -407,7 +407,7 @@ pub async fn run_oci_proxy_from_environment() -> Result<(), ExecutionError> {
 impl AllowlistProxy {
     #[cfg(test)]
     pub(super) async fn start(origins: Vec<String>) -> Result<Self, ExecutionError> {
-        Self::start_with_authorization(origins, None).await
+        Self::start_with_authorization(origins, None, cfg!(target_os = "macos")).await
     }
 
     pub(super) async fn start_authenticated(
@@ -415,16 +415,16 @@ impl AllowlistProxy {
         credential: &str,
     ) -> Result<Self, ExecutionError> {
         let authorization = format!("Basic {}", BASE64.encode(format!("colossus:{credential}")));
-        Self::start_with_authorization(origins, Some(authorization)).await
+        Self::start_with_authorization(origins, Some(authorization), cfg!(target_os = "macos"))
+            .await
     }
 
-    async fn start_with_authorization(
+    pub(super) async fn start_with_authorization(
         origins: Vec<String>,
         authorization: Option<String>,
+        dual_stack: bool,
     ) -> Result<Self, ExecutionError> {
-        let listener = TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .map_err(adapter_failure)?;
+        let (listener, ipv6_listener) = bind_proxy_loopbacks(dual_stack).await?;
         let address = listener.local_addr().map_err(adapter_failure)?;
         let allowed = Arc::new(origins);
         let resolved = Arc::new(BTreeMap::new());
@@ -436,7 +436,16 @@ impl AllowlistProxy {
             loop {
                 tokio::select! {
                     _ = &mut shutdown_rx => break,
-                    accepted = listener.accept() => {
+                    accepted = async {
+                        if let Some(ipv6_listener) = &ipv6_listener {
+                            tokio::select! {
+                                accepted = listener.accept() => accepted,
+                                accepted = ipv6_listener.accept() => accepted,
+                            }
+                        } else {
+                            listener.accept().await
+                        }
+                    } => {
                         let Ok((stream, _)) = accepted else { break };
                         let allowed = Arc::clone(&allowed);
                         let resolved = Arc::clone(&resolved);
@@ -478,6 +487,30 @@ impl AllowlistProxy {
             .cloned()
             .collect()
     }
+}
+
+async fn bind_proxy_loopbacks(
+    dual_stack: bool,
+) -> Result<(TcpListener, Option<TcpListener>), ExecutionError> {
+    for _ in 0..8 {
+        let ipv4 = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .map_err(adapter_failure)?;
+        if !dual_stack {
+            return Ok((ipv4, None));
+        }
+        let port = ipv4.local_addr().map_err(adapter_failure)?.port();
+        // Own both localhost addresses before exposing its URL. Seatbelt already
+        // grants this one loopback port; native IPv6 avoids IPv4-mapped socket denials.
+        match TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port)).await {
+            Ok(ipv6) => return Ok((ipv4, Some(ipv6))),
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
+            Err(error) => return Err(adapter_failure(error)),
+        }
+    }
+    Err(adapter_failure(
+        "could not reserve both private proxy loopbacks",
+    ))
 }
 
 impl Drop for AllowlistProxy {
@@ -535,6 +568,7 @@ pub(super) async fn proxy_connection(
     if method.eq_ignore_ascii_case("CONNECT") {
         let (host, port) = authority(target, 443)?;
         let origin = canonical_origin("https", &host, port)?;
+        validate_observed_origin(&origin)?;
         let Some(matched) =
             network_destination_match(allowed_origins, &origin).map_err(adapter_failure)?
         else {
@@ -587,6 +621,7 @@ pub(super) async fn proxy_connection(
         ));
     }
     let origin = url.origin().ascii_serialization();
+    validate_observed_origin(&origin)?;
     let Some(matched) =
         network_destination_match(allowed_origins, &origin).map_err(adapter_failure)?
     else {
@@ -646,6 +681,15 @@ pub(super) async fn proxy_connection(
     tokio::io::copy_bidirectional(&mut client, &mut upstream)
         .await
         .map_err(adapter_failure)?;
+    Ok(())
+}
+
+pub(super) fn validate_observed_origin(origin: &str) -> Result<(), ExecutionError> {
+    if serde_json::to_vec(origin).map_err(adapter_failure)?.len() > MAX_OBSERVED_ORIGIN_JSON_BYTES {
+        return Err(adapter_failure(
+            "proxy origin exceeds completion evidence bound",
+        ));
+    }
     Ok(())
 }
 

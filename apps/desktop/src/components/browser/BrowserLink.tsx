@@ -1,12 +1,13 @@
 import { createContext, useContext } from "react";
 import type { ReactNode } from "react";
 
-export const BrowserLinkContext = createContext<((url: string) => void) | null>(
-  null,
-);
+export const BrowserLinkContext = createContext<
+  ((url: string, originalHref?: string) => void) | null
+>(null);
 
 // This only controls presentation. Native navigation validates the destination
 // again and applies app-origin and per-tab loopback rules.
+// The original href lets saved-instruction controllers check the exact authored URL.
 export function webLink(value: string | undefined): string | null {
   if (!value || value.length > 8192 || /[\u0000-\u0020\\]/.test(value))
     return null;
@@ -36,7 +37,7 @@ export function BrowserLink({
       className="browser-content-link"
       type="button"
       title={`Open in browser: ${url}`}
-      onClick={() => open(url)}
+      onClick={() => open(url, href)}
     >
       {children}
       <span className="sr-only"> (open in browser)</span>

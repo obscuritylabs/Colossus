@@ -3,6 +3,7 @@ title: CLI reference
 description: Global options, every public command route, defaults, and machine-output contracts.
 audience: developer
 type: reference
+icon: lucide/list
 ---
 
 # CLI reference
@@ -19,8 +20,8 @@ colossus [OPTIONS] <COMMAND>
 | `--config PATH` | YAML path | See below | Select one explicit configuration |
 | `--approval-mode MODE` | `deny`, `ask`, `risk-auto`, `full-access` | See below | Satisfy existing approval obligations |
 | `--output FORMAT` | `auto`, `human`, `json` | `auto` | Select structured output rendering |
-| `--alt-screen` | Flag | Off | Use the full-screen application-owned transcript viewport |
-| `--no-alt-screen` | Flag | Off | Compatibility alias for the default inline native-scrollback viewport |
+| `--alt-screen` | Flag | Full-screen view | Explicitly select the default application-owned alternate-screen viewport |
+| `--no-alt-screen` | Flag | Off | Use an inline view with finalized output in native terminal scrollback |
 | `-h`, `--help` | Flag | — | Show command help |
 | `-V`, `--version` | Flag | — | Show binary version |
 
@@ -91,7 +92,7 @@ model output.
 | `memories` | Create, search, archive, supersede, and index memories |
 | `research` | Run and inspect source-backed research |
 | `telemetry` | Inspect metadata-only run telemetry |
-| `plugins` | Validate, verify, install, activate, package, pull, push, export, and collect Agent Plugins |
+| `plugins` | Discover workspace sources, add signed packages, inspect, configure availability, and manage Agent Plugins |
 | `bundle` | Build, verify, and install signed offline bundles |
 | `integrations` | Manage persisted integrations and imported OpenAPI tools |
 | `mcp` | Discover and invoke configured MCP servers |
@@ -140,7 +141,7 @@ positional:
 | `memories index` | `status`, `sync`, `rebuild` |
 | `research` | `run QUESTION`, `list`, `show RUN_ID`, `sources RUN_ID`, `claims RUN_ID` |
 | `telemetry` | `runs`, `show RUN_ID`, `metrics` |
-| `plugins` | `list`, `show NAME`, `validate DIRECTORY`, `verify PATH`, `install (--directory|--reference|--layout|--archive)`, `enable NAME --digest DIGEST`, `disable NAME`, `update NAME REFERENCE`, `uninstall NAME --digest DIGEST [--purge-data]`, `gc`, `package DIRECTORY --output LAYOUT`, `push LAYOUT REFERENCE`, `pull REFERENCE --output LAYOUT`, `export NAME --output LAYOUT_TAR` |
+| `plugins` | `list`, `show NAME`, `add PATH_OR_OCI_REFERENCE [--registry NAME]`, `workspace-accept PATH [--digest DIGEST]`, `workspace-disable PATH`, `validate DIRECTORY`, `verify PATH`, `install (--directory|--reference|--layout|--archive)`, `enable NAME --digest DIGEST`, `disable NAME`, `update NAME REFERENCE`, `uninstall NAME --digest DIGEST [--purge-data]`, `gc`, `package DIRECTORY --output LAYOUT`, `push LAYOUT REFERENCE`, `pull REFERENCE --output LAYOUT`, `export NAME --output LAYOUT_TAR` |
 | `bundle` | `key-info`, `verify PATH`, `build SOURCE DESTINATION`, `install PATH --prefix PATH` |
 | `integrations` | `list`, `show NAME`, `connect NAME`, `import-openapi NAME SPEC`, `disconnect NAME`, `call TOOL ARGUMENTS` |
 | `mcp` | `servers`, `tools`, `doctor SERVER`, `call SERVER TOOL ARGUMENTS`, `auth login SERVER [--manual]`, `auth status SERVER`, `auth logout SERVER` |
@@ -169,7 +170,7 @@ positional:
 | `research run` | `--depth standard`; planned-query budgets are `quick=1`, `standard=3`, `deep=6`; `--source repo,web,mcp` |
 | `artifacts upload` | Policy-authorized bounded files; `--purpose run-input`; encrypted bytes are owner-bound to the CLI application identity |
 | `run` | `--role primary`; `--goal-max-iterations 5`; fresh session unless `--session` or `--resume`; `--attach PATH` repeats up to 16 inputs. Text files retain the 1 MiB aggregate UTF-8 bound; static PNG, JPEG, and WebP images are limited to 16 MiB each and 32 MiB combined. |
-| `acp` | ACP v1 on stdin/stdout, selected workspace only, one active prompt per workspace, `primary` role, one MiB text prompt bound; see [ACP editor setup](../extend/acp.md) |
+| `acp` | ACP v1 on stdin/stdout, selected workspace only, one active prompt per workspace, `primary` role, one MiB text prompt bound; see [ACP in editors](../extend/acp.md) |
 | `tui` | fresh session unless `--session` or `--resume` |
 | `worker` | serves authenticated local IPC; add `--public-api-dir ABS_OWNER_PRIVATE_DIR` to host authenticated loopback gRPC; `--once`, `--status`, `--shutdown`, enrollment, and revocation modes conflict |
 

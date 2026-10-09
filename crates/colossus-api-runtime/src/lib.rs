@@ -12,10 +12,15 @@ mod interactions;
 #[cfg(test)]
 mod plugin_tests;
 mod plugins;
+mod run_failures;
 mod service;
 #[cfg(test)]
 mod service_tests;
+#[cfg(test)]
+mod workflow_tests;
+mod workflows;
 mod writer;
+pub use workflows::RuntimeWorkflowApi;
 
 pub use admission::{RunAdmissionConfig, RunAdmissionConfigError};
 pub use interactions::{PublicApprovalMode, PublicApprovalModeProvider, PublicInteractionRouter};

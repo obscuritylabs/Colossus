@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { checkServerIdentity } from "node:tls";
+import { checkServerIdentity, createSecureContext } from "node:tls";
 
 import * as grpc from "@grpc/grpc-js";
 
@@ -47,7 +47,9 @@ export function assertCompatibleServerInfo(
     expectedDeploymentMode !== DeploymentMode.DEPLOYMENT_MODE_SHARED_DAEMON &&
     expectedDeploymentMode !== DeploymentMode.DEPLOYMENT_MODE_SIDECAR
   ) {
-    throw new TypeError("expected deployment mode must be shared_daemon or sidecar");
+    throw new TypeError(
+      "expected deployment mode must be shared_daemon or sidecar",
+    );
   }
   if (
     serverInfo === undefined ||
@@ -81,10 +83,14 @@ export async function createSecureGrpcClient<Client extends grpc.Client>(
     "",
   );
 
-  const transportCredentials = grpc.credentials.createSsl(
-    roots,
-    undefined,
-    undefined,
+  const transportCredentials = grpc.credentials.createFromSecureContext(
+    createSecureContext({
+      ca: roots,
+      minVersion: "TLSv1.3",
+      // The independently pinned CA=false leaf is the trust anchor. Electron's
+      // BoringSSL needs direct trust enabled instead of looking for its issuer.
+      allowPartialTrustChain: true,
+    }),
     {
       checkServerIdentity(_hostname, peerCertificate) {
         const peerPin = normalizePeerPin(peerCertificate.raw);
@@ -114,7 +120,7 @@ export async function createSecureGrpcClient<Client extends grpc.Client>(
     // Full command context plus the bounded response envelope; sends stay unchanged.
     "grpc.max_receive_message_length": 8 * 1024 * 1024,
     "grpc.max_send_message_length": 4 * 1024 * 1024,
-    "grpc.primary_user_agent": "colossus-typescript-sdk/0.11.1",
+    "grpc.primary_user_agent": "colossus-typescript-sdk/0.11.7",
     // grpc-js always forwards its TLS servername, while Node rejects IP
     // literals in SNI. Use an inert SNI value and verify the descriptor's
     // literal IP SAN explicitly in checkServerIdentity above.
@@ -135,20 +141,22 @@ export async function createSecureGrpcClient<Client extends grpc.Client>(
         channelOverride: client.getChannel(),
       },
     );
-    const serverInfo = await new Promise<ServerInfo | undefined>((resolve, reject) => {
-      system.getServerInfo(
-        {},
-        new grpc.Metadata(),
-        { deadline: Date.now() + 5_000 },
-        (error, response) => {
-          if (error !== null) {
-            reject(error);
-            return;
-          }
-          resolve(response.serverInfo);
-        },
-      );
-    });
+    const serverInfo = await new Promise<ServerInfo | undefined>(
+      (resolve, reject) => {
+        system.getServerInfo(
+          {},
+          new grpc.Metadata(),
+          { deadline: Date.now() + 5_000 },
+          (error, response) => {
+            if (error !== null) {
+              reject(error);
+              return;
+            }
+            resolve(response.serverInfo);
+          },
+        );
+      },
+    );
     assertCompatibleServerInfo(
       serverInfo,
       expectedInstanceId,

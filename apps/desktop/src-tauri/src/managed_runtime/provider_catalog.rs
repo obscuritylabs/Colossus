@@ -72,6 +72,12 @@ pub(crate) async fn discover_provider_models(
             .with_additional_ca_bundle_path(store.ca_bundle_path(bundle)?)
             .map_err(CommandErrorDto::from_sdk)?;
     }
+    if let Some(identity) = settings.client_identity.as_ref() {
+        let (certificate, key) = DesktopCredentials::for_settings(state, store)?
+            .read_client_identity(&identity.identity_id, &identity.leaf_fingerprint_sha256)
+            .await?;
+        bootstrap = bootstrap.with_client_identity(certificate, key);
+    }
     if provider.kind == ProviderKindSetting::Codex {
         bootstrap = bootstrap
             .with_codex_auth_path(crate::codex_auth::require_codex_auth_path()?)
@@ -122,6 +128,7 @@ mod tests {
     #[test]
     fn discovery_needs_no_selected_model_and_grants_no_extra_tools() {
         let runtime = catalog_runtime(&ProviderSetting {
+            credential_required: false,
             profile: "setup-provider".into(),
             kind: ProviderKindSetting::Compatible,
             base_url: "https://models.example.test/v1".into(),

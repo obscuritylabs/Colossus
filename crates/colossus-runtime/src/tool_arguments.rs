@@ -202,6 +202,7 @@ pub(super) fn tool_process_spec(
     max_output_bytes: Option<u64>,
 ) -> ProcessSpec {
     ProcessSpec {
+        lifetime: None,
         cwd,
         args,
         environment,
@@ -460,7 +461,7 @@ fn model_workspace_denied() -> ToolError {
     )
 }
 
-fn strip_workspace_prefix<'input>(
+pub(super) fn strip_workspace_prefix<'input>(
     workspace: &Path,
     requested: &'input Path,
 ) -> Result<&'input Path, ToolError> {

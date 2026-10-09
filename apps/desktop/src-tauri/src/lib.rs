@@ -1,3 +1,10 @@
+mod cloud_connector;
+mod control_plane_profiles;
+use cloud_connector::{
+    cloud_connect, cloud_disconnect, cloud_enroll, cloud_forget, cloud_revoke,
+    cloud_set_workspace_sharing, cloud_status,
+};
+use control_plane_profiles::{control_plane_profiles, save_control_plane_profiles};
 mod app_context;
 mod approval_adapter;
 mod browser;
@@ -6,33 +13,53 @@ mod codex_auth;
 mod command_review;
 mod command_review_protocol;
 mod commands;
+mod process_session_commands;
+mod workflow_commands;
+use process_session_commands::{list_shell_sessions, read_shell_session, stop_shell_session};
+use workflow_commands::{
+    create_workflow_schedule, delete_workflow_schedule, get_registered_workflow,
+    get_scheduled_workflow_run, get_workflow_schedule, list_registered_workflows,
+    list_workflow_runs, list_workflow_schedules, register_workflow_definition,
+    set_workflow_schedule_enabled, start_workflow_run, validate_workflow_definition,
+    workflow_context,
+};
 mod configuration_import;
 mod connection;
 mod desktop_commands;
 mod desktop_credentials;
 mod desktop_dto;
+mod desktop_instance;
 mod desktop_settings;
 mod diagnostics;
+mod dictation;
 mod dto;
 mod managed_configuration;
 mod managed_configuration_commands;
 mod managed_diagnostics;
 mod managed_runtime;
 mod mcp_health;
+#[cfg(windows)]
+mod outlook_companion;
 mod plugin_adapter;
 mod plugin_commands;
 mod plugin_selection;
 mod provider_catalog;
 mod provider_enrollment;
+mod remembered_approvals;
 mod run_list;
+mod setup_package;
 mod space_search;
 mod state;
+mod status_bar;
 mod terminal;
 mod terminal_commands;
 mod terminal_process;
 mod terminal_protocol;
 #[cfg(windows)]
 mod uninstall;
+#[cfg(all(test, not(windows)))]
+#[path = "uninstall/ownership.rs"]
+mod uninstall_ownership;
 mod updates;
 mod workspace_files;
 mod workspace_git;
@@ -40,8 +67,9 @@ mod workspace_search;
 
 /// Run the opt-in native browser acceptance harness.
 #[cfg(feature = "browser-test-bridge")]
-pub fn run_browser_acceptance() {
-    browser::acceptance::run();
+#[must_use]
+pub fn run_browser_acceptance() -> i32 {
+    browser::acceptance::run()
 }
 
 use browser::commands::{browser_command, browser_context, browser_viewport};
@@ -56,11 +84,17 @@ use desktop_commands::{
     add_external_target, apply_managed_model_configuration, archive_space, choose_workspace,
     configure_managed_runtime, connect_colossus, connection_status, create_space,
     desktop_release_channel, desktop_status, get_session_map, get_thread_delegate,
-    import_ca_bundle, initialize_desktop, list_spaces, remove_ca_bundle, remove_external_target,
-    rename_space, restart_managed_runtime, restore_space, run_managed_self_test,
-    search_space_threads, select_space, select_target, set_approval_mode, set_terminal_enabled,
+    import_ca_bundle, import_client_identity, initialize_desktop, list_spaces, remove_ca_bundle,
+    remove_client_identity, remove_external_target, rename_space, restart_managed_runtime,
+    restore_space, run_managed_self_test, search_space_threads, select_space, select_target,
+    set_approval_mode, set_terminal_enabled,
 };
 use diagnostics::{desktop_release_metadata, export_diagnostics};
+use dictation::{
+    cancel_dictation_download, choose_dictation_model, control_dictation, dictation_status,
+    download_dictation_model, get_dictation_settings, poll_dictation, save_dictation_settings,
+    start_dictation,
+};
 use managed_configuration_commands::catalog_deletion::{
     delete_global_model, delete_global_provider,
 };
@@ -79,10 +113,18 @@ use managed_diagnostics::{
     managed_mcp_oauth_status,
 };
 use plugin_commands::{
-    cancel_plugin_operation, get_plugin_inventory, manage_plugin, read_plugin_preview,
+    cancel_plugin_operation, configure_outlook_companion, get_plugin_inventory, manage_plugin,
+    outlook_companion_status, read_plugin_preview,
 };
 use plugin_selection::resolve_plugin_selection;
 use provider_catalog::{discover_managed_provider_models, get_provider_presets};
+use remembered_approvals::{clear_remembered_commands, remembered_command_count};
+use setup_package::{
+    apply_setup_package, cancel_setup_package_review, configure_setup_credential,
+    export_setup_package, inspect_setup_package, list_setup_packages, open_setup_link,
+    remove_setup_package, use_setup_model,
+};
+use terminal_commands::pane::{mount_terminal_pane, terminal_pane_viewport};
 use terminal_commands::{
     close_terminal, open_terminal, resize_terminal, show_terminal_window, signal_terminal,
     terminal_context, write_terminal,
@@ -103,15 +145,27 @@ use workspace_git::commands::{
 // Composition-only registration list: native command implementations stay in modules.
 #[allow(clippy::too_many_lines)]
 pub fn run() {
+    #[cfg(feature = "dictation")]
+    if let Some(code) = colossus_native_dictation::run_if_requested() {
+        std::process::exit(code);
+    }
     #[cfg(windows)]
     if let Some(code) = uninstall::run_if_requested() {
         std::process::exit(code);
     }
+    let context = app_context::create();
+    #[cfg(windows)]
+    let launch_guard =
+        colossus_windows_native::DesktopLaunchGuard::acquire(&context.config().identifier)
+            .expect("another Colossus launch did not finish");
     if let Err(error) = desktop_settings::SettingsStore::open_application() {
         eprintln!("Colossus Desktop could not start: {}", error.message);
         std::process::exit(1);
     }
-    let application = tauri::Builder::default()
+    let application = tauri::Builder::default();
+    #[cfg(windows)]
+    let application = application.plugin(desktop_instance::plugin());
+    let application = application
         .register_uri_scheme_protocol(command_review_protocol::SCHEME, |context, request| {
             command_review_protocol::respond(&context, &request)
         })
@@ -119,13 +173,24 @@ pub fn run() {
             terminal_protocol::respond(&context, &request)
         })
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build());
+    #[cfg(any(target_os = "macos", windows))]
+    let application = application.plugin(tauri_plugin_notification::init());
+    let application = application
         .manage(state::AppState::default())
+        .manage(dictation::DictationState::default())
+        .manage(terminal_commands::pane::TerminalPaneState::default())
+        .manage(status_bar::StatusBarState::default())
+        .manage(setup_package::SetupReviewState::default())
         .manage(command_review::CommandReviewState::default())
         .manage(workspace_git::commands::GitState::default())
         .manage(workspace_search::SearchState::default())
         .setup(|app| {
+            status_bar::setup(app)?;
             browser::start_watchdog(app.handle().clone());
+            #[cfg(windows)]
+            outlook_companion::start_watchdog(app.handle().clone());
+            terminal_commands::pane::start_watchdog(app.handle().clone());
             Ok(())
         })
         .on_page_load(|view, payload| {
@@ -133,33 +198,73 @@ pub fn run() {
                 && matches!(payload.event(), tauri::webview::PageLoadEvent::Started)
             {
                 use tauri::Manager as _;
+                view.state::<dictation::DictationState>().cancel();
                 view.state::<state::AppState>().browser.controller_loading();
+                terminal_commands::pane::hide(view.app_handle(), true);
             }
         })
-        .on_window_event(browser::handle_window_event)
+        .on_window_event(|window, event| {
+            if window.label() == "main"
+                && matches!(
+                    event,
+                    tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+                )
+            {
+                use tauri::Manager as _;
+                window.state::<dictation::DictationState>().cancel();
+            }
+            browser::handle_window_event(window, event);
+            status_bar::handle_window_event(window, event);
+        })
         .invoke_handler(tauri::generate_handler![
+            dictation_status,
+            get_dictation_settings,
+            download_dictation_model,
+            cancel_dictation_download,
+            save_dictation_settings,
+            choose_dictation_model,
+            start_dictation,
+            poll_dictation,
+            control_dictation,
+            mount_terminal_pane,
+            terminal_pane_viewport,
             browser_context,
             browser_command,
             browser_viewport,
             command_review_context,
             finish_command_review,
+            remembered_command_count,
+            clear_remembered_commands,
             get_plugin_inventory,
             resolve_plugin_selection,
             read_plugin_preview,
             manage_plugin,
             cancel_plugin_operation,
+            outlook_companion_status,
+            configure_outlook_companion,
             desktop_release_channel,
             desktop_release_metadata,
             check_desktop_update,
             install_desktop_update,
             export_diagnostics,
+            open_setup_link,
+            list_setup_packages,
+            inspect_setup_package,
+            cancel_setup_package_review,
+            apply_setup_package,
+            configure_setup_credential,
+            use_setup_model,
+            remove_setup_package,
+            export_setup_package,
             initialize_desktop,
             desktop_status,
             codex_auth_status,
             codex_auth_login,
             codex_auth_logout,
             import_ca_bundle,
+            import_client_identity,
             remove_ca_bundle,
+            remove_client_identity,
             add_external_target,
             remove_external_target,
             choose_workspace,
@@ -212,11 +317,36 @@ pub fn run() {
             set_terminal_enabled,
             connect_colossus,
             connection_status,
+            cloud_enroll,
+            cloud_connect,
+            cloud_status,
+            control_plane_profiles,
+            save_control_plane_profiles,
+            cloud_set_workspace_sharing,
+            cloud_disconnect,
+            cloud_forget,
+            cloud_revoke,
             create_run,
             choose_run_attachment,
             read_artifact_content,
             get_run,
             list_runs,
+            list_shell_sessions,
+            workflow_context,
+            list_registered_workflows,
+            get_registered_workflow,
+            validate_workflow_definition,
+            register_workflow_definition,
+            list_workflow_schedules,
+            get_workflow_schedule,
+            create_workflow_schedule,
+            set_workflow_schedule_enabled,
+            delete_workflow_schedule,
+            get_scheduled_workflow_run,
+            list_workflow_runs,
+            start_workflow_run,
+            read_shell_session,
+            stop_shell_session,
             list_session_activity,
             list_asides,
             watch_run,
@@ -238,12 +368,27 @@ pub fn run() {
             resize_terminal,
             signal_terminal,
             close_terminal,
+            status_bar::sync_status_bar_pins,
+            status_bar::notify_background,
         ])
-        .build(app_context::create())
+        .build(context)
         .expect("failed to build the Colossus desktop application");
+    #[cfg(windows)]
+    drop(launch_guard);
     application.run(|app, event| {
+        #[cfg(target_os = "macos")]
+        if matches!(
+            event,
+            tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            }
+        ) {
+            status_bar::show_main_window(app);
+        }
         if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
             use tauri::Manager as _;
+            app.state::<dictation::DictationState>().cancel();
 
             tauri::async_runtime::block_on(app.state::<state::AppState>().close_all());
         }

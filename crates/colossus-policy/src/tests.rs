@@ -924,6 +924,26 @@ async fn direct_process_backends_require_the_exact_session_acknowledgement() {
             .await
             .expect("direct process cwd does not require an unenforced filesystem declaration");
         assert_eq!(executor.calls.load(Ordering::Acquire), 2);
+        gate.revoke_session_acknowledgement("session-1");
+        let scope =
+            with_sandbox_boundary_acknowledgement(Some(INTERACTIVE_CAPABILITY.into()), async {
+                crate::SandboxBoundaryScope::capture()
+            })
+            .await;
+        scope
+            .clone()
+            .scope(gateway.execute(request(), &executor))
+            .await
+            .expect("trusted continuation retains its exact scope");
+        gate.revoke_interactive_client_acknowledgement(INTERACTIVE_CAPABILITY);
+        assert!(
+            scope
+                .scope(gateway.execute(request(), &executor))
+                .await
+                .is_err(),
+            "captured scope must respect revocation"
+        );
+        assert_eq!(executor.calls.load(Ordering::Acquire), 3);
     }
 }
 
@@ -2937,6 +2957,44 @@ async fn opa_adapter_accepts_strict_decisions_and_rejects_invalid_responses() {
     ));
 }
 
+#[tokio::test]
+async fn opa_does_not_follow_a_decision_redirect_to_another_origin() {
+    let destination = TcpListener::bind("127.0.0.1:0").unwrap();
+    destination.set_nonblocking(true).unwrap();
+    let source = TcpListener::bind("127.0.0.1:0").unwrap();
+    let source_address = source.local_addr().unwrap();
+    let destination_address = destination.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = source.accept().unwrap();
+        let mut request = [0_u8; 8192];
+        let read = stream.read(&mut request).unwrap();
+        assert!(String::from_utf8_lossy(&request[..read]).contains("/v1/data/colossus/effect"));
+        write!(
+            stream,
+            "HTTP/1.1 302 Found\r\nLocation: http://{destination_address}/capture\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+    });
+    let policy =
+        super::OpaPolicy::new(local_opa_config(format!("http://{source_address}/"))).unwrap();
+    let decision = colossus_ports::PolicyDecisionPoint::decide(
+        &policy,
+        &effect_request(
+            system_actor("test"),
+            "provider.echo",
+            "provider:echo",
+            serde_json::json!({"message":"ok"}),
+        ),
+    )
+    .await;
+    assert!(decision.is_err());
+    server.join().unwrap();
+    assert!(
+        destination.accept().is_err(),
+        "OPA request escaped to redirected origin"
+    );
+}
+
 #[test]
 fn remote_opa_requires_disclosure_https_pinned_trust_and_mtls() {
     let mut config = local_opa_config("https://opa.example.test/".into());
@@ -2957,4 +3015,180 @@ fn remote_opa_requires_disclosure_https_pinned_trust_and_mtls() {
         super::OpaPolicy::new(config),
         Err(colossus_ports::PolicyError::InvalidDecision(_))
     ));
+}
+
+#[test]
+fn default_effect_timeout_allows_fifteen_minutes() {
+    assert_eq!(super::default_obligations().timeout_ms, 900_000);
+}
+
+#[tokio::test]
+async fn persistent_schedule_actions_require_review_even_for_low_risk_and_explicit_deny_wins() {
+    for action in ["workflow.schedule.create", "workflow.schedule.set_enabled"] {
+        for enabled in [false, true] {
+            let approvals = Arc::new(RiskAutoApproval {
+                prompts: AtomicUsize::new(0),
+                notices: Mutex::new(Vec::new()),
+            });
+            let evaluator = Arc::new(StaticRiskEvaluator {
+                calls: AtomicUsize::new(0),
+                assessment: Some(RiskAssessment {
+                    risk_level: RiskLevel::Low,
+                    recommended_decision: RiskRecommendation::Allow,
+                    reason: "would allow an eligible action".into(),
+                }),
+            });
+            let evaluator_port: Arc<dyn RiskEvaluator> = evaluator.clone();
+            let gateway = EffectGateway::new(
+                Arc::new(InMemoryEventJournal::default()),
+                Arc::new(
+                    BuiltInPolicy::offline_default()
+                        .with_action(action, DecisionOutcome::RequireApproval)
+                        .with_post_effect(true),
+                ),
+                approvals.clone(),
+                SafetyKernel::new([action.into()]),
+                [79; 32],
+            );
+            gateway
+                .bind_risk_evaluator(Arc::downgrade(&evaluator_port))
+                .unwrap();
+            let mut request = effect_request(
+                system_actor("schedule-test"),
+                action,
+                "workflow-schedule:daily",
+                serde_json::json!({"schedule_id": "daily", "enabled": enabled}),
+            );
+            request.capabilities = vec![action.into()];
+            let executor = CountingExecutor {
+                calls: AtomicUsize::new(0),
+            };
+            gateway.execute(request.clone(), &executor).await.unwrap();
+            assert_eq!(approvals.prompts.load(Ordering::Acquire), 1);
+            assert_eq!(evaluator.calls.load(Ordering::Acquire), 0);
+            assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+            let elevated = EffectGateway::new(
+                Arc::new(InMemoryEventJournal::default()),
+                Arc::new(
+                    BuiltInPolicy::offline_default()
+                        .with_action(action, DecisionOutcome::RequireApproval),
+                ),
+                Arc::new(AllowApproval {
+                    approved_by: "explicit-full-access".into(),
+                }),
+                SafetyKernel::new([action.into()]),
+                [82; 32],
+            );
+            elevated.execute(request.clone(), &executor).await.unwrap();
+            assert_eq!(executor.calls.load(Ordering::Acquire), 2);
+            let denied = EffectGateway::new(
+                Arc::new(InMemoryEventJournal::default()),
+                Arc::new(
+                    BuiltInPolicy::offline_default().with_action(action, DecisionOutcome::Deny),
+                ),
+                Arc::new(AllowApproval {
+                    approved_by: "explicit-full-access".into(),
+                }),
+                SafetyKernel::new([action.into()]),
+                [80; 32],
+            );
+            assert!(denied.execute(request.clone(), &executor).await.is_err());
+            assert_eq!(executor.calls.load(Ordering::Acquire), 2);
+            let no_approval = EffectGateway::new(
+                Arc::new(InMemoryEventJournal::default()),
+                Arc::new(
+                    BuiltInPolicy::offline_default()
+                        .with_action(action, DecisionOutcome::RequireApproval),
+                ),
+                Arc::new(super::DenyApproval),
+                SafetyKernel::new([action.into()]),
+                [81; 32],
+            );
+            assert!(no_approval.execute(request, &executor).await.is_err());
+            assert_eq!(executor.calls.load(Ordering::Acquire), 2);
+        }
+    }
+}
+
+#[tokio::test]
+async fn schedule_authority_is_bound_to_every_reviewed_field_and_workspace_context() {
+    let policy = Arc::new(
+        BuiltInPolicy::offline_default()
+            .with_action("workflow.schedule.create", DecisionOutcome::RequireApproval),
+    );
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        policy.clone(),
+        Arc::new(AllowApproval {
+            approved_by: "operator".into(),
+        }),
+        SafetyKernel::new(["workflow.schedule.create".into()]),
+        [83; 32],
+    );
+    let mut request = effect_request(
+        system_actor("schedule-agent"),
+        "workflow.schedule.create",
+        "workflow-schedule:daily",
+        serde_json::json!({
+            "schedule_id": "daily", "workflow_id": "health:1.0.0", "expected_hash": "a".repeat(64),
+            "inputs": {"message": "health"}, "cadence_seconds": 3600, "starts_at": "2026-10-05T09:00:00Z", "misfire_policy": "fire_once", "enabled": false,
+            "idempotency_key": "reviewed-key", "etag": "b".repeat(64),
+        }),
+    );
+    request.context.session_id = Some("workspace-chat".into());
+    request.context.run_id = Some("origin-run".into());
+    let decision = policy.decide(&request).await.unwrap();
+    let mint = || {
+        gateway
+            .mint_permit(
+                &request,
+                super::sha256_hex(&super::canonical_bytes(&request).unwrap()),
+                &decision,
+            )
+            .unwrap()
+    };
+    for (field, replacement) in [
+        ("schedule_id", serde_json::json!("other")),
+        ("workflow_id", serde_json::json!("health:2.0.0")),
+        ("expected_hash", serde_json::json!("c".repeat(64))),
+        ("inputs", serde_json::json!({"message": "changed"})),
+        ("cadence_seconds", serde_json::json!(86400)),
+        ("starts_at", serde_json::json!("2026-10-06T09:00:00Z")),
+        ("misfire_policy", serde_json::json!("skip")),
+        ("enabled", serde_json::json!(true)),
+        ("idempotency_key", serde_json::json!("new-key")),
+        ("etag", serde_json::json!("d".repeat(64))),
+    ] {
+        let mut changed = request.clone();
+        changed.content[field] = replacement;
+        assert!(
+            gateway
+                .authenticate_and_consume(&mint(), &changed, &decision)
+                .is_err(),
+            "{field}"
+        );
+    }
+    let mut switched = request.clone();
+    switched.context.session_id = Some("other-workspace-chat".into());
+    assert!(
+        gateway
+            .authenticate_and_consume(&mint(), &switched, &decision)
+            .is_err()
+    );
+    let mut expired = mint();
+    expired.expires_at_unix_ms = super::now_unix_ms() - 1;
+    assert!(
+        gateway
+            .authenticate_and_consume(&expired, &request, &decision)
+            .is_err()
+    );
+    let permit = mint();
+    gateway
+        .authenticate_and_consume(&permit, &request, &decision)
+        .unwrap();
+    assert!(
+        gateway
+            .authenticate_and_consume(&permit, &request, &decision)
+            .is_err()
+    );
 }

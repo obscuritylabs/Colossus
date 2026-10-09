@@ -56,6 +56,15 @@ impl Fixture {
         fs::create_dir(&stage).expect("package stage");
         let packaged_binary = stage.join("colossus");
         fs::copy(env!("CARGO_BIN_EXE_colossus"), &packaged_binary).expect("package binary");
+        // Match release packaging: debug symbols otherwise exhaust the installer's
+        // expanded-archive bound as the runtime and its adapters grow.
+        assert!(
+            Command::new("strip")
+                .arg(&packaged_binary)
+                .status()
+                .expect("strip packaged fixture")
+                .success()
+        );
         fs::set_permissions(&packaged_binary, fs::Permissions::from_mode(0o755))
             .expect("binary permissions");
         let tools = stage.join("tools");

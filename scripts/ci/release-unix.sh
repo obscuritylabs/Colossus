@@ -26,7 +26,7 @@ cp release/smoke-config.yaml "$smoke/config.yaml"
     "$binary" --version | grep '^colossus '
     "$binary" --config config.yaml config show >/dev/null
     "$binary" --config config.yaml plugins list >plugins.json
-    jq -e 'length == 1 and .[0].manifest.name == "colossus" and .[0].origin == "bundled" and .[0].available and ([.[0].skills[].id] | sort) == ["colossus/coding", "colossus/offline-dev", "colossus/plugin-authoring", "colossus/security-review"]' plugins.json >/dev/null
+    jq -e 'length == 1 and .[0].manifest.name == "colossus" and .[0].origin == "bundled" and .[0].available and ([.[0].skills[].id] | sort) == ["colossus/coding", "colossus/plugin-authoring", "colossus/schedule-task", "colossus/security-review"]' plugins.json >/dev/null
     "$binary" --config config.yaml run connected >result.json
     jq -e '.output == "connected" and .profile == "echo" and .event_count >= 3' result.json >/dev/null
     "$binary" --config config.yaml audit verify >audit.json

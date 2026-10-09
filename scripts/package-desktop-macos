@@ -183,14 +183,15 @@ build_unsigned_app() {
             fail "desktop release version must be canonical semantic versioning"
     fi
 
+    node "$script_dir/stage-dictation-model.mjs"
     COLOSSUS_DESKTOP_TARGET=$target "$script_dir/prepare-desktop-binaries" release
     node "$script_dir/stage-ripgrep.mjs" --target "$target" \
         --output "$desktop/src-tauri/binaries" --binary-name "rg-$target"
 
     cd "$desktop"
-    tauri_override='{"bundle":{"externalBin":["binaries/colossus-sidecar","binaries/colossus","binaries/rg"],"resources":{"binaries/COPYING":"ripgrep/COPYING","binaries/LICENSE-MIT":"ripgrep/LICENSE-MIT","binaries/UNLICENSE":"ripgrep/UNLICENSE"}}}'
+    tauri_override='{"bundle":{"externalBin":["binaries/colossus-sidecar","binaries/colossus","binaries/rg"],"resources":{"dictation-assets/ggml-tiny.en.bin":"dictation/ggml-tiny.en.bin","dictation-assets/models.json":"dictation/models.json","dictation-assets/LICENSE-MIT":"dictation/LICENSE-MIT","binaries/COPYING":"ripgrep/COPYING","binaries/LICENSE-MIT":"ripgrep/LICENSE-MIT","binaries/UNLICENSE":"ripgrep/UNLICENSE"}}}'
     if [ -n "$release_version" ]; then
-        tauri_override=$(printf '{"version":"%s","bundle":{"externalBin":["binaries/colossus-sidecar","binaries/colossus","binaries/rg"],"resources":{"binaries/COPYING":"ripgrep/COPYING","binaries/LICENSE-MIT":"ripgrep/LICENSE-MIT","binaries/UNLICENSE":"ripgrep/UNLICENSE"}}}' "$release_version")
+        tauri_override=$(printf '{"version":"%s","bundle":{"externalBin":["binaries/colossus-sidecar","binaries/colossus","binaries/rg"],"resources":{"dictation-assets/ggml-tiny.en.bin":"dictation/ggml-tiny.en.bin","dictation-assets/models.json":"dictation/models.json","dictation-assets/LICENSE-MIT":"dictation/LICENSE-MIT","binaries/COPYING":"ripgrep/COPYING","binaries/LICENSE-MIT":"ripgrep/LICENSE-MIT","binaries/UNLICENSE":"ripgrep/UNLICENSE"}}}' "$release_version")
         "$tauri" build --config "$tauri_override" --no-sign --bundles app -- --locked
     else
         "$tauri" build --config "$tauri_override" --no-sign --bundles app -- --locked
@@ -208,12 +209,16 @@ build_unsigned_app() {
 sign_one() {
     candidate=$1
     code_identifier=$2
+    set --
+    case "$code_identifier" in
+        "$cli_identifier" | "$desktop_identifier") set -- --entitlements "$desktop/src-tauri/dictation.entitlements.plist" ;;
+    esac
     if [ "$identity" = - ]; then
         codesign --force --sign - --options runtime \
-            --identifier "$code_identifier" "$candidate"
+            --identifier "$code_identifier" "$@" "$candidate"
     else
         codesign --force --timestamp --sign "$identity" --options runtime \
-            --identifier "$code_identifier" "$candidate"
+            --identifier "$code_identifier" "$@" "$candidate"
     fi
 }
 

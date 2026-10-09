@@ -3,6 +3,7 @@ title: Workflow authoring
 description: Author bounded Colossus workflows with explicit schemas, capabilities, and deterministic step composition.
 audience: developer
 type: how-to
+icon: lucide/workflow
 ---
 
 # Workflow authoring

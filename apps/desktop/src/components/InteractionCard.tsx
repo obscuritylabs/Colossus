@@ -75,7 +75,15 @@ export function InteractionCard({
             </span>
           )}
         </div>
-        <p>{content.reason}</p>
+        <p
+          className={
+            content.action === "workflow.schedule.control"
+              ? "preserve-lines"
+              : undefined
+          }
+        >
+          {content.reason}
+        </p>
         {content.commandContext ? (
           <CommandApprovalDetails context={content.commandContext} />
         ) : content.action === "process.execute" ? (
@@ -96,6 +104,11 @@ export function InteractionCard({
             {error}
           </p>
         )}
+        <p className="muted">
+          {content.commandContext
+            ? "Review the full command and choose Allow once or Always allow for this workspace."
+            : "Review the action details and approve or deny in one window."}
+        </p>
         <div className="interaction-actions">
           <button
             className="button secondary"
@@ -123,7 +136,11 @@ export function InteractionCard({
               })
             }
           >
-            {submitting ? "Sending…" : "Allow once"}
+            {submitting
+              ? "Awaiting confirmation…"
+              : content.commandContext
+                ? "Review command…"
+                : "Review approval…"}
           </button>
         </div>
       </section>

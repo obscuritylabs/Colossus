@@ -1,3 +1,4 @@
+mod development;
 mod support;
 
 use crate::{
@@ -726,6 +727,23 @@ fn vault_process_child() {
             let vault = PlatformCredentialVault::new(root, "native-platform-acceptance").unwrap();
             assert!(vault.read(&key()).unwrap().unwrap().expose() == record(8192).expose());
             vault.write(&key(), &record(65536)).unwrap();
+        }
+        "unclean-exit" => {
+            use fs4::fs_std::FileExt as _;
+            let lease = root
+                .open_existing_file_read_write(Path::new(crate::database::LEASE_FILE))
+                .unwrap();
+            assert!(lease.file().try_lock_exclusive().unwrap());
+            let file = root
+                .open_existing_file_read_write(Path::new(DATABASE_FILE))
+                .unwrap();
+            let database = redb::Database::builder()
+                .create_file(file.into_file())
+                .unwrap();
+            database.begin_write().unwrap().commit().unwrap();
+            // OS process teardown releases locks without redb's clean allocator
+            // shutdown; no platform key or encrypted record is read or changed.
+            std::process::exit(0);
         }
         _ => panic!("unknown credential subprocess mode"),
     }

@@ -1,0 +1,49 @@
+schemaVersion: 2
+id: company-ai
+name: Company AI setup
+version: "2"
+descriptionMarkdown: |
+  Five example providers for exploring Desktop setup. Company AI is recommended to start.
+
+  These are sample endpoints and model IDs. Replace them with your organization’s connections before distribution.
+providers:
+  company:
+    displayName: Company AI
+    descriptionMarkdown: |
+      ### Get an API token
+      1. Open the [AI portal](https://ai.example.com/tokens).
+      2. Select **Create token**.
+      3. Use **Add API key** to enter it securely.
+
+      Connect to your company network before using this provider.
+  research:
+    displayName: Research Gateway
+    descriptionMarkdown: |
+      ### Request access
+      Ask your research team administrator for a token, then choose **Add API key**.
+
+      Use this connection for long documents and analysis.
+  vision:
+    displayName: Vision Gateway
+    descriptionMarkdown: |
+      ### Connect your account
+      Create a token in the [vision portal](https://vision.example.com/tokens).
+
+      This model accepts **images and text** through the Responses API.
+  code:
+    displayName: Code Lab
+    descriptionMarkdown: |
+      ### Get a development token
+      Visit the [developer portal](https://code.example.com/tokens) and request access to Code Lab.
+
+      Keep tokens private. Enter them only in the secure Colossus prompt.
+  local:
+    displayName: Local Models
+    descriptionMarkdown: |
+      ### Start your local server
+      Run your compatible model server on **port 11434**, then update the sample model ID to one installed on your computer.
+
+      No API key is required. Your server must be running before you connect.
+# Optional PNG and darkIcon paths belong under the matching provider.
+# Include referenced PNG files in assets/ and public CA bundles in certificates/.
+# caBundle: certificates/company-ca.pem

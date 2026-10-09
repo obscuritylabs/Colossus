@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { WorkspaceSummary } from "../types";
 import { AppearanceProvider } from "../theme/AppearanceProvider";
+import { DEFAULT_APPEARANCE } from "../theme/appearance";
 import { WorkspaceFiles } from "./WorkspaceFiles";
 
 const workspace: WorkspaceSummary = {
@@ -18,9 +19,8 @@ function renderFiles(available: boolean): string {
       AppearanceProvider,
       {
         initialPreference: {
+          ...DEFAULT_APPEARANCE,
           colorTheme: "light",
-          textSize: "comfortable",
-          showSecurityWarnings: false,
         },
       },
       createElement(WorkspaceFiles, {

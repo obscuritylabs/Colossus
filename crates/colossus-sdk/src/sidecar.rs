@@ -241,9 +241,13 @@ pub struct SidecarBootstrapConfig {
     colossus_home: Option<PathBuf>,
     suppress_automatic_agent_instructions: bool,
     plaintext_journal_for_development: bool,
+    risk_auto_approvals: bool,
     ca_bundle_path: Option<PathBuf>,
+    client_certificate_pem: Option<HostSecret>,
+    client_key_pem: Option<HostSecret>,
     codex_auth_path: Option<PathBuf>,
     approval_broker_grant: Option<SidecarApprovalBrokerGrant>,
+    connector_grant: Option<SidecarApplicationGrant>,
     host_credentials: Vec<SidecarHostCredential>,
     worker_ipc_authentication: Option<SecretString>,
 }
@@ -269,9 +273,13 @@ impl SidecarBootstrapConfig {
             colossus_home: None,
             suppress_automatic_agent_instructions: false,
             plaintext_journal_for_development: false,
+            risk_auto_approvals: false,
             ca_bundle_path: None,
+            client_certificate_pem: None,
+            client_key_pem: None,
             codex_auth_path: None,
             approval_broker_grant: None,
+            connector_grant: None,
             host_credentials: Vec::new(),
             worker_ipc_authentication: None,
         })
@@ -300,6 +308,17 @@ impl SidecarBootstrapConfig {
     #[must_use]
     pub fn without_automatic_agent_instructions_for_diagnostics(mut self) -> Self {
         self.suppress_automatic_agent_instructions = true;
+        self
+    }
+
+    /// Start the owned runtime in Risk Auto on launch and every supervised restart.
+    ///
+    /// Eligible low-risk effects may be approved after evaluator review. Policy denials,
+    /// tool authority, and execution boundaries remain unchanged. Other effects still
+    /// require approval. The default for hosts that do not opt in remains Ask.
+    #[must_use]
+    pub const fn with_risk_auto_approvals(mut self) -> Self {
+        self.risk_auto_approvals = true;
         self
     }
 
@@ -347,6 +366,14 @@ impl SidecarBootstrapConfig {
         Ok(self)
     }
 
+    /// Supply one global PEM client certificate chain and key through private bootstrap IPC.
+    #[must_use]
+    pub fn with_client_identity(mut self, certificate: HostSecret, key: HostSecret) -> Self {
+        self.client_certificate_pem = Some(certificate);
+        self.client_key_pem = Some(key);
+        self
+    }
+
     /// Bind a managed Codex provider to one explicit official Codex credential file.
     ///
     /// The path crosses only the inherited private bootstrap channel. Credential bytes
@@ -391,6 +418,35 @@ impl SidecarBootstrapConfig {
             ));
         }
         self.approval_broker_grant = Some(grant);
+        Ok(self)
+    }
+
+    pub(crate) fn has_connector_grant(&self) -> bool {
+        self.connector_grant.is_some()
+    }
+
+    /// Provision an independent cloud application beneath the local grant's ceilings.
+    /// Native hosts opt in before launch; enrollment is a separate explicit action.
+    pub fn with_connector_grant(mut self, grant: SidecarApplicationGrant) -> SdkResult<Self> {
+        if grant.application_id == self.grant.application_id
+            || grant
+                .allowed_roles
+                .iter()
+                .any(|role| !self.grant.allowed_roles.contains(role))
+            || grant
+                .allowed_tools
+                .iter()
+                .any(|tool| !self.grant.allowed_tools.contains(tool))
+            || grant.scopes.iter().any(|scope| {
+                !(self.grant.scopes.contains(scope)
+                    || scope == "approvals:respond" && self.approval_broker_grant.is_some())
+            })
+        {
+            return Err(SdkError::InvalidConfiguration(
+                "connector grant exceeds local authority",
+            ));
+        }
+        self.connector_grant = Some(grant);
         Ok(self)
     }
 
@@ -475,6 +531,7 @@ impl SidecarBootstrapConfig {
                 .transpose()?,
             suppress_automatic_agent_instructions: self.suppress_automatic_agent_instructions,
             plaintext_journal_for_development: self.plaintext_journal_for_development,
+            risk_auto_approvals: self.risk_auto_approvals,
             ca_bundle_path: self
                 .ca_bundle_path
                 .as_ref()
@@ -486,6 +543,18 @@ impl SidecarBootstrapConfig {
                         ))
                 })
                 .transpose()?,
+            client_certificate_pem: self
+                .client_certificate_pem
+                .as_ref()
+                .map(|pem| SecretString::new(pem.expose().to_owned()))
+                .transpose()
+                .map_err(|_| SdkError::SidecarFailed)?,
+            client_key_pem: self
+                .client_key_pem
+                .as_ref()
+                .map(|pem| SecretString::new(pem.expose().to_owned()))
+                .transpose()
+                .map_err(|_| SdkError::SidecarFailed)?,
             codex_auth_path: self
                 .codex_auth_path
                 .as_ref()
@@ -503,6 +572,10 @@ impl SidecarBootstrapConfig {
                 .approval_broker_grant
                 .as_ref()
                 .map(SidecarApprovalBrokerGrant::wire),
+            connector_grant: self
+                .connector_grant
+                .as_ref()
+                .map(SidecarApplicationGrant::wire),
             host_credentials: self
                 .host_credentials
                 .iter()
@@ -609,7 +682,9 @@ impl fmt::Debug for SidecarBootstrapConfig {
                 "plaintext_journal_for_development",
                 &self.plaintext_journal_for_development,
             )
+            .field("risk_auto_approvals", &self.risk_auto_approvals)
             .field("ca_bundle_configured", &self.ca_bundle_path.is_some())
+            .field("client_identity_configured", &self.client_key_pem.is_some())
             .field("codex_auth_configured", &self.codex_auth_path.is_some())
             .field("runtime", &self.runtime)
             .field("grant", &self.grant)
@@ -726,6 +801,49 @@ mod tests {
     const TEST_WORKSPACE: &str = r"C:\private\colossus-sdk-sidecar-workspace";
     #[cfg(not(windows))]
     const TEST_WORKSPACE: &str = "/tmp/colossus-sdk-sidecar-workspace";
+
+    #[test]
+    fn risk_auto_approval_policy_is_retained_in_each_bootstrap_exchange() {
+        let options = SidecarOptions::new(
+            InstanceId::from_uuid(Uuid::now_v7()),
+            AppPrivateInstanceDir::new(TEST_WORKSPACE).unwrap(),
+            VerifiedExecutable::new(TEST_WORKSPACE, crate::Sha256Digest::from_bytes([1; 32]))
+                .unwrap(),
+            ApiMajor::new(1).unwrap(),
+        )
+        .unwrap();
+        let bootstrap = SidecarBootstrapConfig::new(
+            TEST_WORKSPACE,
+            runtime(),
+            primary_grant(&[scopes::RUNS_READ]),
+        )
+        .unwrap();
+        let request = || {
+            bootstrap
+                .request(
+                    &options,
+                    std::path::Path::new(TEST_WORKSPACE),
+                    WorkspaceIdentity::from_unix_parts(42, 84),
+                )
+                .unwrap()
+        };
+        assert!(!request().risk_auto_approvals);
+        let bootstrap = bootstrap.with_risk_auto_approvals();
+        let request = || {
+            bootstrap
+                .request(
+                    &options,
+                    std::path::Path::new(TEST_WORKSPACE),
+                    WorkspaceIdentity::from_unix_parts(42, 84),
+                )
+                .unwrap()
+        };
+        let first = request();
+        let restart = request();
+        assert!(first.risk_auto_approvals && restart.risk_auto_approvals);
+        assert_ne!(first.exchange_id, restart.exchange_id);
+        assert_eq!(first.grant.scopes, [scopes::RUNS_READ]);
+    }
 
     #[test]
     fn approval_broker_scope_and_tools_are_fixed_by_type() {

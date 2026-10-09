@@ -28,11 +28,33 @@ import type {
 import type { AgentParticipant } from "./AgentFlow";
 import { AgentFlow } from "./AgentFlow";
 import { ManagedSettingsPane } from "./ManagedSettingsPane";
+import { ControlPlaneConnections } from "./ControlPlaneConnections";
 import { PluginsSurface } from "./PluginsSurface";
+import { WorkflowsSurface } from "./WorkflowsSurface";
+import { SchedulesSurface } from "./SchedulesSurface";
+import type { ScheduleRunAttempt } from "../workflows";
 import type { WorkspaceSurface } from "./ProductRail";
 
 interface OperationsSurfaceProps {
-  initialSettingsTab?: "runtime" | "providers" | undefined;
+  scheduleRunAttempts: Map<string, ScheduleRunAttempt>;
+  onCreateWithAgent: (prompt: string) => void;
+  agentStarting: boolean;
+  scheduleInspection?:
+    { scheduleId: string; showRun: boolean } | null | undefined;
+  initialSettingsTab?:
+    | "runtime"
+    | "providers"
+    | "models"
+    | "plugins"
+    | "terminal"
+    | "dictation"
+    | "cloud"
+    | "control-plane"
+    | undefined;
+  initialSettingsSpaceId?: string | undefined;
+  onManageControlPlaneWorkspace: (spaceId: string) => void;
+  onManageControlPlaneProfiles: () => void;
+  onConfigurePluginConnection?: () => void;
   pluginSelections?: readonly string[];
   onUsePluginSkill?: (id: string) => void;
   surface: Exclude<WorkspaceSurface, "work" | "terminal">;
@@ -62,6 +84,8 @@ interface OperationsSurfaceProps {
   onInstallUpdate: () => void;
   onImportCaBundle: () => void;
   onRemoveCaBundle: () => void;
+  onImportClientIdentity: () => void;
+  onRemoveClientIdentity: () => void;
 }
 
 function SurfaceHeader({
@@ -364,6 +388,8 @@ function ConnectionsView({
   onSelectTarget,
   onAddExternalTarget,
   onRemoveExternalTarget,
+  onManageControlPlaneWorkspace,
+  onManageControlPlaneProfiles,
 }: Pick<
   OperationsSurfaceProps,
   | "desktop"
@@ -371,6 +397,8 @@ function ConnectionsView({
   | "onSelectTarget"
   | "onAddExternalTarget"
   | "onRemoveExternalTarget"
+  | "onManageControlPlaneWorkspace"
+  | "onManageControlPlaneProfiles"
 >) {
   const externalTargets = desktop.targets.filter(
     (target) => target.kind === "external_daemon",
@@ -420,6 +448,12 @@ function ConnectionsView({
               ))}
           </div>
         </section>
+        <ControlPlaneConnections
+          spaces={desktop.spaces}
+          disabled={connecting}
+          onManageWorkspace={onManageControlPlaneWorkspace}
+          onManageProfiles={onManageControlPlaneProfiles}
+        />
         <section className="overview-section">
           <div className="section-heading">
             <div>
@@ -517,6 +551,7 @@ function effectiveManagedConfiguration(desktop: DesktopStatus): string {
 
 function SettingsView({
   initialSettingsTab,
+  initialSettingsSpaceId,
   onReturnToWork,
   connection,
   desktop,
@@ -537,9 +572,12 @@ function SettingsView({
   updateMessage,
   onImportCaBundle,
   onRemoveCaBundle,
+  onImportClientIdentity,
+  onRemoveClientIdentity,
 }: Pick<
   OperationsSurfaceProps,
   | "initialSettingsTab"
+  | "initialSettingsSpaceId"
   | "onReturnToWork"
   | "connection"
   | "desktop"
@@ -560,6 +598,8 @@ function SettingsView({
   | "updateMessage"
   | "onImportCaBundle"
   | "onRemoveCaBundle"
+  | "onImportClientIdentity"
+  | "onRemoveClientIdentity"
 >) {
   const localTarget = desktop.targets.find(
     (target) => target.kind === "managed_local",
@@ -588,6 +628,7 @@ function SettingsView({
       <div className="overview-scroll settings-scroll" tabIndex={0}>
         <ManagedSettingsPane
           initialSpaceTab={initialSettingsTab}
+          initialSpaceId={initialSettingsSpaceId}
           onReturnToWork={onReturnToWork}
           desktop={desktop}
           connecting={connecting}
@@ -604,6 +645,8 @@ function SettingsView({
           onInstallUpdate={onInstallUpdate}
           onImportCaBundle={onImportCaBundle}
           onRemoveCaBundle={onRemoveCaBundle}
+          onImportClientIdentity={onImportClientIdentity}
+          onRemoveClientIdentity={onRemoveClientIdentity}
           onExportDiagnostics={onExportDiagnostics}
         />
         <section className="settings-card">
@@ -1004,10 +1047,49 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
         </button>
       ) : null}
       {props.surface === "fleet" ? <FleetView {...props} /> : null}
+      {props.surface === "workflows" ? (
+        <WorkflowsSurface
+          onCreateWithAgent={props.onCreateWithAgent}
+          agentStarting={props.agentStarting}
+          key={props.desktop.selectedTargetId}
+          targetId={props.desktop.selectedTargetId}
+          workspaceName={
+            props.desktop.workspace?.displayName || "Selected runtime"
+          }
+          runtimeReady={
+            props.connection.state === "connected" &&
+            props.connection.targetId === props.desktop.selectedTargetId
+          }
+        />
+      ) : null}
+      {props.surface === "schedules" ? (
+        <SchedulesSurface
+          runAttempts={props.scheduleRunAttempts}
+          attemptScope={JSON.stringify([
+            props.desktop.selectedTargetId,
+            props.desktop.workspace?.workspaceId,
+            props.desktop.selectedSpaceId,
+          ])}
+          onCreateWithAgent={props.onCreateWithAgent}
+          agentStarting={props.agentStarting}
+          key={props.desktop.selectedTargetId}
+          targetId={props.desktop.selectedTargetId}
+          workspaceName={
+            props.desktop.workspace?.displayName || "Selected runtime"
+          }
+          runtimeReady={
+            props.connection.state === "connected" &&
+            props.connection.targetId === props.desktop.selectedTargetId
+          }
+          initialInspection={props.scheduleInspection}
+        />
+      ) : null}
       {props.surface === "plugins" ? (
         <PluginsSurface
           key={props.desktop.selectedTargetId}
           targetId={props.desktop.selectedTargetId}
+          spaceId={props.desktop.selectedSpaceId}
+          onConfigureConnection={props.onConfigurePluginConnection}
           supported={props.desktop.capabilities.plugins}
           selections={props.pluginSelections}
           onUseSkill={
@@ -1024,6 +1106,7 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
       {props.surface === "settings" ? (
         <SettingsView
           initialSettingsTab={props.initialSettingsTab}
+          initialSettingsSpaceId={props.initialSettingsSpaceId}
           onReturnToWork={props.onReturnToWork}
           connection={props.connection}
           desktop={props.desktop}
@@ -1044,6 +1127,8 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
           updateMessage={props.updateMessage}
           onImportCaBundle={props.onImportCaBundle}
           onRemoveCaBundle={props.onRemoveCaBundle}
+          onImportClientIdentity={props.onImportClientIdentity}
+          onRemoveClientIdentity={props.onRemoveClientIdentity}
         />
       ) : null}
     </main>

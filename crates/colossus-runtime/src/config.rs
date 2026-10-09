@@ -71,6 +71,10 @@ pub struct RuntimeConfig {
 pub struct NetworkConfig {
     /// Optional PEM CA bundle added to the built-in public trust roots.
     pub ca_bundle_path: Option<PathBuf>,
+    /// PEM client certificate chain, paired with `clientKeyPath` for outbound mTLS.
+    pub client_certificate_path: Option<PathBuf>,
+    /// PEM private key for the outbound client certificate.
+    pub client_key_path: Option<PathBuf>,
 }
 
 /// Durable audit evidence export configuration.
@@ -339,17 +343,20 @@ const fn default_search_timeout_ms() -> u64 {
     30_000
 }
 
-/// Agent Plugins configuration for one workspace using the owner-scoped global store.
+/// Plugin discovery and exposure within one workspace and explicit Colossus home.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginsConfig {
-    /// Whether this workspace exposes globally active plugins at all.
+    /// Whether this workspace exposes accepted local or globally active plugins.
     pub enabled: bool,
-    /// Optional exact allowlist of globally active plugin names.
+    /// Discover fixed workspace plugin directories; presence never grants execution.
+    pub workspace_discovery: bool,
+    /// Optional exact allowlist of accepted local and globally active plugin names.
     pub include: Vec<String>,
     /// Exact denylist applied after `include`.
     pub exclude: Vec<String>,
     /// Reusable supply-chain trust policies.
+    #[serde(deserialize_with = "deserialize_plugin_trust_profiles")]
     pub trust_profiles: BTreeMap<String, PluginTrustProfile>,
     /// Exact-origin OCI registry profiles.
     pub registries: BTreeMap<String, PluginRegistryProfile>,
@@ -361,13 +368,80 @@ impl Default for PluginsConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            workspace_discovery: true,
             include: Vec::new(),
             exclude: Vec::new(),
-            trust_profiles: BTreeMap::from([("default".into(), PluginTrustProfile::default())]),
-            registries: BTreeMap::new(),
+            trust_profiles: default_plugin_trust_profiles(),
+            registries: default_plugin_registries(),
             mcp_servers: BTreeMap::new(),
         }
     }
+}
+
+fn default_plugin_trust_profiles() -> BTreeMap<String, PluginTrustProfile> {
+    BTreeMap::from([
+        ("default".into(), PluginTrustProfile::default()),
+        (
+            "obscuritylabs".into(),
+            PluginTrustProfile {
+                identities: vec![colossus_plugins::SigstoreIdentity {
+                    issuer: "https://token.actions.githubusercontent.com".into(),
+                    subject: "https://github.com/obscuritylabs/colossus-plugins/.github/workflows/plugins.yml@refs/heads/main".into(),
+                }],
+                ..PluginTrustProfile::default()
+            },
+        ),
+    ])
+}
+
+fn default_plugin_registries() -> BTreeMap<String, PluginRegistryProfile> {
+    BTreeMap::from([(
+        "obscuritylabs".into(),
+        PluginRegistryProfile {
+            origin: "https://ghcr.io".into(),
+            trust_profile: "obscuritylabs".into(),
+            token_origins: vec!["https://ghcr.io".into()],
+            blob_redirect_origins: vec!["https://pkg-containers.githubusercontent.com".into()],
+            ..PluginRegistryProfile::default()
+        },
+    )])
+}
+
+fn deserialize_plugin_trust_profiles<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, PluginTrustProfile>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut profiles = default_plugin_trust_profiles();
+    let configured = BTreeMap::<String, PluginTrustProfile>::deserialize(deserializer)?;
+    if configured
+        .get("obscuritylabs")
+        .is_some_and(|profile| profiles.get("obscuritylabs") != Some(profile))
+    {
+        return Err(serde::de::Error::custom(
+            "plugins.trustProfiles.obscuritylabs is a reserved built-in signing identity",
+        ));
+    }
+    profiles.extend(configured);
+    Ok(profiles)
+}
+
+pub(super) fn validate_builtin_plugin_trust_identity(
+    config: &PluginsConfig,
+) -> Result<(), RuntimeError> {
+    if config
+        .trust_profiles
+        .get("obscuritylabs")
+        .is_some_and(|profile| {
+            default_plugin_trust_profiles().get("obscuritylabs") != Some(profile)
+        })
+    {
+        return Err(RuntimeError::Config(
+            "plugins.trustProfiles.obscuritylabs is a reserved built-in signing identity".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Workspace authority overlay for one canonical `<plugin>/<server>` MCP identity.
@@ -376,18 +450,24 @@ impl Default for PluginsConfig {
 pub struct PluginMcpServerConfig {
     /// Explicitly expose this portable server to the runtime.
     pub enabled: bool,
+    /// Bind a workspace-local connection to this exact unsigned snapshot.
+    /// Installed connections must leave this absent.
+    pub workspace_plugin_digest: Option<String>,
     /// Secret child-environment values expressed as credential references.
     pub environment: BTreeMap<String, String>,
     /// Secret HTTP header overlays expressed as credential references.
     pub credential_headers: BTreeMap<String, McpCredentialHeaderConfig>,
     /// Optional client-owned OAuth configuration.
     pub oauth: Option<McpOAuthConfig>,
-    /// Exact tools that may be exposed, or the sole wildcard `*`.
+    /// Exact tool names or star patterns that may be exposed; `*` must stand alone.
     pub allowed_tools: Vec<String>,
-    /// Optional research-tool mappings for this server.
+    /// Optional research calls overriding this server's inherited allowed tool selection.
     pub research_tools: Vec<McpResearchToolConfig>,
     /// Permit a remote server to omit MCP session identifiers.
     pub allow_stateless: bool,
+    /// Remote MCP protocol lifecycle.
+    #[serde(default)]
+    pub protocol_version: colossus_contracts::McpProtocolVersion,
     /// Optional server timeout bounded by normal sandbox policy.
     pub timeout_ms: Option<u64>,
     /// Optional output cap bounded by normal sandbox policy.
@@ -474,11 +554,11 @@ impl Default for ModelsConfig {
                     model: "echo".into(),
                     context_window_tokens: 32_768,
                     max_output_tokens: 4_096,
-                    capabilities: ModelCapabilities {
+                    capabilities: ModelFeatureSettings::from(ModelCapabilities {
                         tool_calls: true,
                         streaming: true,
                         image_inputs: false,
-                    },
+                    }),
                     reasoning_effort: None,
                 },
             )]),
@@ -499,8 +579,9 @@ pub struct ModelProfileConfig {
     pub context_window_tokens: u64,
     /// Maximum generated tokens reserved from the context window.
     pub max_output_tokens: u64,
-    /// Explicit request-shaping capabilities.
-    pub capabilities: ModelCapabilities,
+    /// Saved request preferences; legacy booleans preserve explicit choices.
+    #[serde(default)]
+    pub capabilities: ModelFeatureSettings,
     /// Optional reasoning effort sent on every turn for this model profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -610,7 +691,7 @@ impl Default for SandboxConfig {
             executables: Vec::new(),
             environment: Vec::new(),
             network_destinations: Vec::new(),
-            timeout_ms: 30_000,
+            timeout_ms: default_sandbox_timeout_ms(),
             max_output_bytes: default_sandbox_max_output_bytes(),
             max_processes: 16,
             max_memory_bytes: default_sandbox_max_memory_bytes(),
@@ -721,7 +802,7 @@ fn default_sandbox_profile() -> String {
 }
 
 const fn default_sandbox_timeout_ms() -> u64 {
-    30_000
+    colossus_contracts::DEFAULT_SANDBOX_TIMEOUT_MS
 }
 
 const fn default_sandbox_max_output_bytes() -> u64 {
@@ -1012,6 +1093,23 @@ impl RuntimeConfig {
         {
             return Err(RuntimeError::Config(
                 "network.caBundlePath must be a nonempty file path".into(),
+            ));
+        }
+        if config.network.client_certificate_path.is_some()
+            != config.network.client_key_path.is_some()
+            || config
+                .network
+                .client_certificate_path
+                .as_ref()
+                .is_some_and(|path| path.as_os_str().is_empty())
+            || config
+                .network
+                .client_key_path
+                .as_ref()
+                .is_some_and(|path| path.as_os_str().is_empty())
+        {
+            return Err(RuntimeError::Config(
+                "network.clientCertificatePath and network.clientKeyPath must be nonempty and configured together".into(),
             ));
         }
         if !matches!(
@@ -1563,6 +1661,7 @@ impl RuntimeConfig {
 }
 
 fn validate_plugins_config(config: &PluginsConfig) -> Result<(), RuntimeError> {
+    validate_builtin_plugin_trust_identity(config)?;
     fn valid_name(value: &str) -> bool {
         !value.is_empty()
             && value.len() <= 128
@@ -1663,6 +1762,22 @@ fn validate_plugins_config(config: &PluginsConfig) -> Result<(), RuntimeError> {
         }
     }
     for (id, server) in &config.mcp_servers {
+        if server
+            .workspace_plugin_digest
+            .as_ref()
+            .is_some_and(|digest| {
+                digest.strip_prefix("sha256:").is_none_or(|value| {
+                    value.len() != 64
+                        || !value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                })
+            })
+        {
+            return Err(RuntimeError::Config(format!(
+                "plugins.mcpServers.{id}.workspacePluginDigest must be a canonical sha256 manifest digest"
+            )));
+        }
         let Some((plugin, name)) = id.split_once('/') else {
             return Err(RuntimeError::Config(format!(
                 "plugins.mcpServers key {id} must be a qualified <plugin>/<server> identity"
@@ -1679,7 +1794,9 @@ fn validate_plugins_config(config: &PluginsConfig) -> Result<(), RuntimeError> {
             )));
         }
         if server.environment.keys().any(|name| {
-            !valid_environment_name(name) || matches!(name.as_str(), "PLUGIN_ROOT" | "PLUGIN_DATA")
+            !valid_environment_name(name)
+                || name.eq_ignore_ascii_case("PLUGIN_ROOT")
+                || name.eq_ignore_ascii_case("PLUGIN_DATA")
         }) {
             return Err(RuntimeError::Config(format!(
                 "plugins.mcpServers.{id}.environment contains an invalid or reserved variable"

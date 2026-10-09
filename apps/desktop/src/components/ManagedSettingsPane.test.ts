@@ -1,5 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { RadioGroup } from "@colossus/ui";
 import { describe, expect, it, vi } from "vitest";
 import { deleteMcpFixture, managedMcpConsumers } from "../mcp-deletion";
 import { McpDeleteDialog } from "./McpDeleteDialog";
@@ -232,9 +233,9 @@ function desktop(): DesktopStatus {
           contextWindowTokens: 128_000,
           maxOutputTokens: 16_384,
           capabilities: {
-            toolCalls: true,
-            streaming: true,
-            imageInputs: false,
+            toolCalls: "on",
+            streaming: "on",
+            imageInputs: "off",
           },
           reasoningEffort: null,
         },
@@ -250,6 +251,7 @@ function desktop(): DesktopStatus {
       certificateCount: 0,
       fingerprintsSha256: [],
     },
+    clientIdentity: { configured: false, leafFingerprintSha256: null },
     capabilities: {
       research: true,
       delegation: true,
@@ -266,7 +268,9 @@ function desktop(): DesktopStatus {
   };
 }
 
-function renderPane(): string {
+function renderPane(
+  overrides: Partial<Parameters<typeof ManagedSettingsPane>[0]> = {},
+): string {
   return renderToStaticMarkup(
     createElement(ManagedSettingsPane, {
       desktop: desktop(),
@@ -284,7 +288,10 @@ function renderPane(): string {
       onInstallUpdate: vi.fn(),
       onImportCaBundle: vi.fn(),
       onRemoveCaBundle: vi.fn(),
+      onImportClientIdentity: vi.fn(),
+      onRemoveClientIdentity: vi.fn(),
       onExportDiagnostics: vi.fn(),
+      ...overrides,
     }),
   );
 }
@@ -408,6 +415,19 @@ function renderImport(
 }
 
 describe("ManagedSettingsPane", () => {
+  it("starts role editing from resolved legacy routes without overriding explicit workspace routes", () => {
+    const snapshot = buildManagedSettingsFixture(desktop());
+    const space = snapshot.spaces[0]!;
+    space.configuration.modelRoles = {};
+    space.effectiveModelRoles = {
+      primary: "primary",
+      research_planner: "planner",
+    };
+    expect(spaceDraft(space).modelRoles).toEqual(space.effectiveModelRoles);
+    space.configuration.modelRoles = { primary: "replacement" };
+    expect(spaceDraft(space).modelRoles).toEqual({ primary: "replacement" });
+  });
+
   it("builds a revisioned, renderer-safe snapshot from Desktop status", () => {
     const snapshot = buildManagedSettingsFixture(desktop());
 
@@ -452,6 +472,7 @@ describe("ManagedSettingsPane", () => {
 
     snapshot.globalConfiguration.providers[0]!.archived = true;
     expect(managedCredentialConsumers(snapshot, credentialId)).toEqual([
+      "Provider · openapi (archived)",
       "Workspace · Colossus",
     ]);
   });
@@ -944,7 +965,20 @@ describe("ManagedSettingsPane", () => {
     });
 
     expect(draft.allowStateless).toBe(true);
+    expect(draft.protocolVersion).toBe("auto");
     expect(managedMcpServer(draft).allowStateless).toBe(true);
+    for (const protocolVersion of [
+      "auto",
+      "2026-07-28",
+      "2025-11-25",
+    ] as const) {
+      const saved = managedMcpServer({ ...draft, protocolVersion });
+      expect(saved.protocolVersion).toBe(protocolVersion);
+      expect(
+        managedMcpServer({ ...draft, transport: "stdio", protocolVersion })
+          .protocolVersion,
+      ).toBe("auto");
+    }
     expect(
       managedMcpServer({ ...draft, transport: "stdio" }).allowStateless,
     ).toBe(false);
@@ -1147,7 +1181,7 @@ describe("ManagedSettingsPane", () => {
         callbackPort: 8787,
         scopes: ["read:tools", "execute:tools"],
       },
-      allowedTools: ["search", "read"],
+      allowedTools: ["get_*", "*_search", "read"],
       researchTools: [],
       timeoutMs: 45_000,
       maxOutputBytes: null,
@@ -1163,7 +1197,10 @@ describe("ManagedSettingsPane", () => {
 
     const draft = mcpDraft(entry);
 
-    expect(managedMcpServer(draft)).toEqual(server);
+    expect(managedMcpServer(draft)).toEqual({
+      ...server,
+      protocolVersion: "auto",
+    });
     expect(draft.argsText).toContain(server.args[0] ?? "");
   });
 
@@ -1257,6 +1294,24 @@ describe("ManagedSettingsPane", () => {
       revisions: [{ revision: 1, value: provider }],
     };
     expect(managedProvider(providerDraft(providerEntry))).toEqual(provider);
+    const pendingProvider = {
+      ...provider,
+      credentialId: null,
+      credentialRequired: true,
+    };
+    const pendingEntry = {
+      ...providerEntry,
+      revisions: [{ revision: 1, value: pendingProvider }],
+    };
+    expect(managedProvider(providerDraft(pendingEntry))).toEqual(
+      pendingProvider,
+    );
+    expect(
+      managedProvider({
+        ...providerDraft(pendingEntry),
+        credentialId: "saved-key",
+      }).credentialRequired,
+    ).toBeUndefined();
 
     const model: ManagedModelCatalogValue = {
       profile: "reasoning",
@@ -1265,9 +1320,9 @@ describe("ManagedSettingsPane", () => {
       contextWindowTokens: 200_000,
       maxOutputTokens: 32_000,
       capabilities: {
-        toolCalls: true,
-        streaming: false,
-        imageInputs: true,
+        toolCalls: "on",
+        streaming: "off",
+        imageInputs: "on",
       },
       reasoningEffort: "xhigh",
     };
@@ -1278,7 +1333,10 @@ describe("ManagedSettingsPane", () => {
       archived: false,
       revisions: [{ revision: 1, value: model }],
     };
-    expect(managedModel(modelDraft(modelEntry))).toEqual(model);
+    expect(managedModel(modelDraft(modelEntry))).toEqual({
+      ...model,
+      capabilities: { ...model.capabilities, serverCompaction: "auto" },
+    });
 
     const telemetry: ManagedTelemetryProfile = {
       name: "colossus-desktop",
@@ -1563,4 +1621,47 @@ describe("MCP deletion", () => {
       deleteMcpFixture(source, { expectedRevision: 4, resourceId: "missing" }),
     ).toThrow(/unknown/);
   });
+});
+
+it("offers compact settings radio choices without changing the default cards or selection semantics", () => {
+  const options = [
+    { value: "private", label: "Control Plane conversations only" },
+    { value: "read", label: "Share Desktop history for viewing" },
+  ];
+  const compact = renderToStaticMarkup(
+    createElement(RadioGroup, {
+      value: "private",
+      onValueChange: () => undefined,
+      options,
+      variant: "compact",
+      "aria-label": "Desktop conversation sharing",
+    }),
+  );
+  expect(compact).toContain("ui-radio-group--compact");
+  expect(compact).toContain('role="radiogroup"');
+  expect(compact).toContain('aria-label="Desktop conversation sharing"');
+  expect(compact).toMatch(/aria-checked="true"[^>]*tabindex="0"/);
+  expect(compact).toMatch(/aria-checked="false"[^>]*tabindex="-1"/);
+  const cards = renderToStaticMarkup(
+    createElement(RadioGroup, {
+      value: "private",
+      onValueChange: () => undefined,
+      options,
+      "aria-label": "Desktop conversation sharing",
+    }),
+  );
+  expect(cards).not.toContain("ui-radio-group--compact");
+  expect(cards).toContain("ui:px-3 ui:py-3");
+});
+
+it("opens explicit Control Plane settings without falling through a missing workspace", () => {
+  expect(renderPane({ initialSpaceTab: "control-plane" })).toContain(
+    "Loading Control Plane connections",
+  );
+  const missing = renderPane({
+    initialSpaceTab: "cloud",
+    initialSpaceId: "missing-workspace",
+  });
+  expect(missing).not.toContain("cloud-settings-state");
+  expect(missing).not.toContain("Make this runtime available");
 });

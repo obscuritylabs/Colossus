@@ -62,6 +62,23 @@ desktop_required=false' api/colossus/api/v1alpha1/agent_run.proto sdk/typescript
 expect_classification 'rust_required=true
 docs_required=false
 dependency_required=false
+sdk_required=true
+desktop_required=false' apps/vscode/src/extension.ts
+expect_classification 'rust_required=true
+docs_required=false
+dependency_required=true
+sdk_required=true
+desktop_required=false' apps/vscode/package-lock.json
+
+expect_classification 'rust_required=true
+docs_required=false
+dependency_required=false
+sdk_required=true
+desktop_required=true' apps/ui/src/components/Composer.tsx
+
+expect_classification 'rust_required=true
+docs_required=false
+dependency_required=false
 sdk_required=false
 desktop_required=true' apps/desktop/src/App.tsx release/ripgrep.json scripts/desktop-dev scripts/package-desktop-macos scripts/package-desktop-windows.ps1 scripts/stage-ripgrep.mjs scripts/patch-desktop-manifest-binding.mjs scripts/prepare-desktop-binaries scripts/write-desktop-bundle-manifest.mjs scripts/verify-desktop-bundle.mjs scripts/verify-desktop-unsigned-archive.mjs crates/colossus-sdk/src/lib.rs crates/colossus-sidecar/src/main.rs crates/colossus-sidecar-protocol/src/lib.rs
 expect_classification 'rust_required=true
@@ -69,6 +86,11 @@ docs_required=false
 dependency_required=false
 sdk_required=false
 desktop_required=true' crates/colossus-cli/src/main.rs
+expect_classification 'rust_required=true
+docs_required=false
+dependency_required=false
+sdk_required=false
+desktop_required=true' apps/web/src/App.tsx
 expect_classification 'rust_required=true
 docs_required=false
 dependency_required=false
@@ -161,9 +183,46 @@ if $script_dir/require-success.sh eligibility=skipped >/dev/null 2>&1; then
     exit 1
 fi
 
+# The optional R2 backend must not replace the GitHub read-only fallback when
+# fork PRs have no secrets, and must never write with a read credential.
+r2_env_file=$(mktemp)
+trap 'rm -f "$r2_env_file"' EXIT HUP INT TERM
+GITHUB_ENV=$r2_env_file "$script_dir/configure-sccache-r2.sh" read >/dev/null
+test ! -s "$r2_env_file"
+R2_BUCKET=colossus-sccache \
+R2_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
+R2_REGION=auto R2_ACCESS_KEY_ID=test-read R2_SECRET_ACCESS_KEY=test-secret \
+GITHUB_ENV=$r2_env_file "$script_dir/configure-sccache-r2.sh" read >/dev/null
+grep -Fx 'SCCACHE_GHA_ENABLED=false' "$r2_env_file" >/dev/null
+grep -Fx 'SCCACHE_S3_RW_MODE=READ_ONLY' "$r2_env_file" >/dev/null
+grep -Fx 'AWS_ACCESS_KEY_ID=test-read' "$r2_env_file" >/dev/null
+if grep -Fx 'SCCACHE_S3_RW_MODE=READ_WRITE' "$r2_env_file" >/dev/null; then
+    printf 'read-only R2 configuration unexpectedly allowed writes\n' >&2
+    exit 1
+fi
+if R2_BUCKET=colossus-sccache \
+    R2_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/colossus-sccache \
+    R2_REGION=auto R2_ACCESS_KEY_ID=test-write R2_SECRET_ACCESS_KEY=test-secret \
+    GITHUB_ENV=$r2_env_file "$script_dir/configure-sccache-r2.sh" write >/dev/null 2>&1; then
+    printf 'R2 endpoint with a bucket path unexpectedly succeeded\n' >&2
+    exit 1
+fi
+R2_BUCKET=colossus-sccache \
+R2_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
+R2_REGION=auto R2_ACCESS_KEY_ID=test-write R2_SECRET_ACCESS_KEY=test-secret \
+GITHUB_ENV=$r2_env_file "$script_dir/configure-sccache-r2.sh" write >/dev/null
+grep -Fx 'SCCACHE_S3_RW_MODE=READ_WRITE' "$r2_env_file" >/dev/null
+rm -f "$r2_env_file"
+trap - EXIT HUP INT TERM
+
 "${NODE:-node}" --test "$script_dir/sdk-release.test.mjs"
 "${NODE:-node}" --test "$script_dir/homebrew-formula.test.mjs"
 "${NODE:-node}" --test "$script_dir/ripgrep-pin.test.mjs"
 "${NODE:-node}" --test "$script_dir/release-oci.test.mjs"
 "${NODE:-node}" "$script_dir/check-toolchain.mjs"
 "${NODE:-node}" --test "$script_dir/check-toolchain.test.mjs"
+"${NODE:-node}" --test "$script_dir/control-plane-assets.test.mjs"
+"${NODE:-node}" --test "$script_dir/documentation-candidate.test.mjs"
+"${NODE:-node}" --test "$script_dir/release-source-version.test.mjs"
+"${NODE:-node}" --test "$script_dir/release-notes.test.mjs"
+"${NODE:-node}" --test "$script_dir/../development-launch.test.mjs"

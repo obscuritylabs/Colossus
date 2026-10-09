@@ -1,153 +1,112 @@
 ---
 title: Agent runs
-description: Run bounded Colossus agent turns interactively or as stable machine-readable output.
+description: Run a single Colossus task from the CLI and choose how to receive its result.
 audience: user
 type: how-to
+icon: lucide/play
 ---
 
 # Agent runs
 
-## Goal
+Use `colossus run` when you have a prompt to complete from the shell. Each invocation
+returns a final response and saves the conversation as a session, so you can return to
+it later.
 
-Choose the right one-shot run mode, control its bounds, and capture either a human result
-or stable JSON without mixing streamed events into stdout.
+## Run a task
 
-## Prerequisites
-
-- An initialized configuration.
-- A working provider route. The offline `echo` route is sufficient for the examples.
-- Any tools required by the prompt visible in `config effective`, with matching policy
-  and sandbox grants.
-
-## Steps
-
-### 1. Run one prompt
+From an initialized repository, run:
 
 ```bash
-colossus -w /absolute/path/to/repository \
-  --config .colossus/config.yaml run \
-  "Summarize this repository"
+colossus -w /absolute/path/to/repository run \
+  "Summarize this repository and identify its main components"
 ```
 
-Interactive stdout contains only the Markdown-capable assistant response. Piped or
-redirected stdout defaults to the complete stable JSON result.
+In a terminal, the response is readable text. When stdout is redirected or piped,
+Colossus uses JSON by default. Set `--output human` or `--output json` before `run`
+when you need a particular format.
 
-### 2. Set explicit bounds when needed
+Give the agent a concrete outcome and any limits that matter. For a bounded change:
 
 ```bash
-colossus --config .colossus/config.yaml run --max-turns 12 \
-  "Inspect the problem, implement the smallest change, and verify it"
+colossus -w /absolute/path/to/repository run --max-turns 12 \
+  "Fix the failing parser test, then run the focused test"
 ```
 
-Use `--role ROLE` to select an operator-configured model role. The role chooses a route;
-the model cannot choose an endpoint or credential.
+`--max-turns` limits the model's turns. It does not grant tools or override the
+configured [access and approval rules](../admin/access-and-approvals.md). If a run
+needs interactive approval, use the [Terminal UI](terminal-ui.md). Noninteractive
+runs deny outstanding approval requests by default.
 
-The sparse default is immediately usable `allow_all` plus acknowledged full host
-access. For a narrower development session, explicitly select `access.profile:
-development` and `sandbox.profile: workspace-development`, then satisfy each execution
-approval interactively or with a reviewed mode:
+## Watch progress or capture JSON
 
-```bash
-colossus -w /absolute/path/to/repository \
-  --config .colossus/config.yaml \
-  --approval-mode risk-auto run \
-  "Inspect the failing tests, implement the smallest fix, and verify it"
-```
-
-`risk-auto` can produce a request-bound proof for a low-risk `shell.run`, `web.search`,
-bodyless `network.http` GET, or configured top-level `mcp.call` outside workflow
-lineage. MCP review receives credential-free metadata for the exact freshly discovered
-call; descriptions and annotations remain untrusted hints. It does not apply to
-workspace mutations, non-read-only network methods, integrations, plugin-provided MCP
-actions, workflows, or system actors.
-When it grants a proof, Colossus emits an **Automatic approval review** notice with the
-reviewed action, resource, low-risk result, authorization mode, and reason.
-If the evaluator is unavailable or returns an invalid assessment, Colossus emits an
-**Automatic approval review failed** warning and then requests explicit approval. The
-warning is sanitized and does not echo raw provider output.
-
-### 3. Stream released progress
+Add `--stream` to see released progress while the run is active:
 
 ```bash
-colossus --config .colossus/config.yaml run --stream \
+colossus -w /absolute/path/to/repository run --stream \
   "Inspect the active tool surface"
 ```
 
-Released deltas and events go to stderr. The final selected result remains on stdout, so
-redirecting stdout still produces a clean artifact:
+Progress goes to stderr; the final result stays on stdout. You can save a clean JSON
+result while watching progress in the terminal:
 
 ```bash
-colossus --config .colossus/config.yaml --output json \
+colossus -w /absolute/path/to/repository --output json \
   run --stream "Report repository status" > result.json
 ```
 
-For a private CLI run, attach bounded UTF-8 workspace files or supported images directly:
+## Include files with the prompt
+
+Use `--attach` for a supported workspace text file or image:
 
 ```bash
-colossus run --attach design.md --attach src/lib.rs \
-  "Review the attached files and identify inconsistent assumptions"
+colossus -w /absolute/path/to/repository run \
+  --attach design.md --attach src/lib.rs \
+  "Review these files for inconsistent assumptions"
 ```
 
-Attachment paths are sent to the active runtime, which performs each read through the
-normal filesystem policy and audit boundary. The CLI never pre-reads attachment content
-to bypass workspace restrictions.
+Attached files still follow the workspace's filesystem policy. Image input also
+requires an image-capable model profile. See the [CLI reference](../reference/cli.md)
+for accepted formats and limits.
 
-Static PNG, JPEG, and WebP files become encrypted `run_input` artifacts. Colossus
-validates their signature, exact byte digest, decoded dimensions, and allocation bounds
-before accepting the run, then resolves the exact bytes only after the provider effect is
-authorized. A model profile must explicitly set `imageInputs: true`; Echo and Research
-routes reject images locally. Up to 16 images are accepted, with a 16 MiB per-image and
-32 MiB combined bound.
+## Continue a run later
 
-For reusable opaque content, upload through the encrypted artifact service:
+Use `--resume` for the most recently updated session in this workspace, or
+`--session SESSION_ID` to choose one exactly:
 
 ```bash
-colossus artifacts upload design.md
-colossus artifacts show ARTIFACT_ID
-colossus artifacts download ARTIFACT_ID restored-design.md
-```
-
-Artifact commands preserve only the display name and declared media type in released
-metadata. The authoritative bytes remain encrypted and bound to the CLI application
-identity; downloads still pass through the normal filesystem policy boundary.
-
-### 4. Attach to durable context
-
-```bash
-colossus --config .colossus/config.yaml run --resume \
+colossus -w /absolute/path/to/repository run --resume \
   "Continue with the next step"
 ```
 
-Use `--session SESSION_ID` instead when the exact session matters.
+See [Sessions](sessions.md) to list sessions, inspect messages, and resume the same
+conversation in the terminal UI.
 
-## Expected result
+## What's next?
 
-The command returns one final response, records the run in a durable session, and appends
-provider and effect lifecycle evidence to the hash-chained journal. Configured protected
-storage encrypts its payloads.
+<div class="grid cards" markdown>
 
-## Verification
+-   :lucide-terminal:{ .lg .middle } **Work interactively**
 
-```bash
-colossus --config .colossus/config.yaml sessions list
-colossus --config .colossus/config.yaml telemetry runs
-colossus --config .colossus/config.yaml audit verify
-```
+    ---
 
-Confirm that the session and run appear and the journal verifies.
+    Follow live output, answer questions, and review approvals in the terminal.
 
-## Failure path
+    [Open the Terminal UI guide :lucide-arrow-right:](terminal-ui.md)
 
-- **Tool is missing:** run `config effective` and resolve its selection or prerequisite.
-- **Request needs approval:** noninteractive runs default to `deny`; use the terminal UI
-  for human approval or an explicitly reviewed approval mode.
-- **Shell tool is missing:** inspect `config effective` for the selected workspace,
-  sandbox profile, resolved shell, and actor scope.
-- **Policy denies the action:** changing approval mode cannot reverse a deny.
-- **Provider request is unknown:** inspect provider-side state before retrying.
-- **Output format is wrong:** place global `--output human|json` before `run`.
+-   :lucide-messages-square:{ .lg .middle } **Return to a session**
 
-## Next step
+    ---
 
-Use the [Terminal UI](terminal-ui.md) for live approvals and queued turns, or
-[Sessions and context](sessions-context.md) to manage durable history.
+    Find a conversation and continue it from the CLI or terminal UI.
+
+    [Explore sessions :lucide-arrow-right:](sessions.md)
+
+-   :lucide-code:{ .lg .middle } **Work in an editor**
+
+    ---
+
+    Connect an ACP-compatible editor to the Colossus CLI.
+
+    [Set up ACP :lucide-arrow-right:](../extend/acp.md)
+
+</div>

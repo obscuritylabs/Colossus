@@ -1,102 +1,123 @@
 ---
-title: Sessions and context
-description: Resume durable conversations and compact model context without deleting canonical messages.
+title: Context and snapshots
+description: Read the model context budget and manage snapshots for a long session.
 audience: user
 type: how-to
+icon: lucide/layers
 ---
 
-# Sessions and context
+# Context and snapshots
 
-## Goal
+Colossus saves the full conversation in a durable session. For each model turn,
+it prepares a bounded view of that history. A context snapshot summarizes older
+messages when the working view gets large; it does not remove the original messages.
 
-Find or create a durable session, continue it explicitly, and control the derived model
-context while preserving the complete encrypted transcript.
+## Check the current context
 
-## Prerequisites
+In the Terminal UI, enter:
 
-- An initialized configuration with at least one completed run.
-- The same canonical state and keys used to create the session.
-
-## Steps
-
-### 1. Find a session
-
-```bash
-colossus --config .colossus/config.yaml sessions list
-colossus --config .colossus/config.yaml sessions show SESSION_ID
-colossus --config .colossus/config.yaml sessions messages SESSION_ID
+```text
+/context status
 ```
 
-Create an empty named session when work needs a clean boundary:
+A status display looks like this. Your model, session ID, and numbers will differ:
 
-```bash
-colossus --config .colossus/config.yaml sessions new "Release review"
+```text
+◆ Context
+  Session         0195b640-8a41-7b35-948d-3d58b39e783a
+  Model profile   codex
+  Messages        8
+  Tokens          614 / 344000
+  Context window  400000
+  Output reserve  16000
+  Safety reserve  40000
+  Compacted       no
+  Snapshot        —
 ```
 
-### 2. Continue the exact session
+| Field | What it means |
+| --- | --- |
+| **Session** | The conversation whose context is being measured. |
+| **Model profile** | The profile selected for the `primary` model role. |
+| **Messages** | Saved session messages; compaction does not delete them. |
+| **Tokens** | Estimated current prepared context, followed by the effective input budget. This is not a usage or billing counter; the next prompt and tools can change the request size. |
+| **Context window** | The configured total token window for the model profile. |
+| **Output reserve** | Tokens held back for the model's response. |
+| **Safety reserve** | Extra room kept for estimation differences and request overhead. |
+| **Compacted / Snapshot** | Whether an active snapshot is shaping future context, and its ID when one is active. |
+
+In this example, `400000 − 16000 − 40000 = 344000` tokens remain for input.
+The estimated `614` tokens are well below that budget, so there is no reason to
+compact this session now. The status is an estimate of the current context, not
+a promise that every future prompt will fit.
+
+From a shell, use the session ID in the same workspace and configuration:
 
 ```bash
-colossus --config .colossus/config.yaml run --session SESSION_ID \
-  "Continue the review"
+colossus -w /absolute/path/to/repository context status SESSION_ID
 ```
 
-`run --resume` uses the most recently updated session. In the terminal UI, `/resume`
-opens a full-width session browser with the current session marked, searchable recent
-sessions on the left, and the selected session's recent conversation on the right.
-The preview shows the last eight user and assistant messages; tool-heavy sessions are
-paged backward past tool records so the preview stays populated. Use `/` to search, Up/Down to select, PageUp/PageDown to scroll the preview, and Enter
-to resume. In the default inline TUI, the browser uses a temporary full-screen viewport
-and restores the original terminal history when it closes. `/resume SESSION_ID` still
-chooses an exact record directly.
+## When Colossus compacts a session
 
-### 3. Inspect the context budget
+With automatic compaction enabled, Colossus creates a snapshot when the working
+context crosses the configured threshold. The default threshold is 85% of the
+effective input budget. A snapshot keeps a bounded summary of older messages and
+preserves recent messages for the next model turn. The full transcript remains in
+the session; [Sessions](sessions.md) shows how to read it.
+
+After compaction, `/context status` reports **Compacted: yes** and a **Snapshot**
+ID. The token estimate may fall because the model receives the summary in place
+of the older message range. If a single new turn or required context is too large,
+compaction can still fail rather than silently discard it.
+
+Operators can adjust the threshold and preservation settings in
+[context configuration](../reference/configuration/context-memory-research.md#context-configuration).
+
+## Inspect or restore snapshots
+
+Use these commands in the Terminal UI:
+
+| What you want to do | Command |
+| --- | --- |
+| List saved snapshots for this session | `/context list` |
+| Create a snapshot now | `/context compact` |
+| Use an older snapshot for future turns | `/context restore SNAPSHOT_ID` |
+
+Manual compaction changes the model's working view even when the automatic
+threshold has not been reached. Restore changes which immutable snapshot is
+active; it does not delete later messages or rewrite the snapshot. Both actions
+follow the configured authorization rules.
+
+From a shell, use the matching commands with the session ID:
 
 ```bash
-colossus --config .colossus/config.yaml context status SESSION_ID
+colossus -w /absolute/path/to/repository context list SESSION_ID
+colossus -w /absolute/path/to/repository context compact SESSION_ID
+colossus -w /absolute/path/to/repository context restore SESSION_ID SNAPSHOT_ID
 ```
 
-Colossus estimates the complete provider request, including instructions and tool
-schemas. Automatic compaction can create a snapshot at the configured threshold.
+Colossus Desktop also lists the same snapshots in a thread's **Snapshots** view.
+For context that should be reusable across conversations, use
+[Memories](memories.md) instead of relying on a session snapshot.
 
-### 4. Compact or restore deliberately
+## What's next?
 
-```bash
-colossus --config .colossus/config.yaml context compact SESSION_ID
-colossus --config .colossus/config.yaml context list SESSION_ID
-colossus --config .colossus/config.yaml context restore \
-  SESSION_ID SNAPSHOT_ID
-```
+<div class="grid cards" markdown>
 
-Restore changes the active derived snapshot for future turns. It does not delete later
-messages or mutate the snapshot.
+-   :lucide-messages-square:{ .lg .middle } **Sessions**
 
-In Desktop, open a thread and select **Snapshots** to list the same immutable records.
-Select a snapshot to inspect its bounded summary, source message range, pinned facts,
-open tasks, touched files, notable tool results, and compaction strategy. **Resources**
-also links snapshots beside every other released, listable session record.
+    ---
 
-## Expected result
+    Read the complete transcript or return to the conversation later.
 
-New runs append to the selected session. Context status identifies the active snapshot
-and budget, while all canonical messages remain available through `sessions messages`.
+    [Explore sessions :lucide-arrow-right:](sessions.md)
 
-## Verification
+-   :lucide-brain:{ .lg .middle } **Memories**
 
-Compare `sessions messages SESSION_ID` before and after compaction. The message history
-should remain append-only even though `context status` reports a new active snapshot.
+    ---
 
-## Failure path
+    Save useful context that can be found beyond this one session.
 
-- **Session is not found:** copy the complete ID from `sessions list`; state identities
-  do not cross independent configurations.
-- **Summary generation fails:** Colossus uses deterministic fallback extraction and
-  preserves raw history.
-- **Restore is denied:** it is an independently authorized context transition; inspect
-  the exact action in `config effective`.
-- **Context still overflows:** reduce tool surface or context settings with an operator;
-  do not delete canonical state to solve a request budget.
+    [Explore memories :lucide-arrow-right:](memories.md)
 
-## Next step
-
-Capture durable commitments with
-[Tasks, decisions, and plans](tasks-decisions-plans.md).
+</div>

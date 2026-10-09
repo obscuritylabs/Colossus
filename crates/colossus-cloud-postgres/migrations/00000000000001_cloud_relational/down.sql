@@ -1,0 +1,2 @@
+-- Explicit destructive reset of the cloud schema.
+DROP TABLE IF EXISTS user_login_metadata,connection_leases,browser_sessions,delivery_outbox,cloud_audit,sync_cursors,released_event_heads,released_events,oidc_flows,control_plane_settings,certificate_renewals,enrollment_invitations,admission_counters,thread_sources,node_task_placements,run_allocations,commands,tasks,conversation_messages,conversation_threads,workspaces,runtime_agents,hosts,project_memberships,local_credentials,user_identities,cloud_users,projects CASCADE;

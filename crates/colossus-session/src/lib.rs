@@ -10,6 +10,8 @@ use serde_json::{Value, json};
 use std::{collections::BTreeSet, sync::Arc};
 
 const SESSION_EVENT: &str = "session.created.v1";
+const TITLE_EVENT: &str = "session.title.set.v1";
+const TITLE_INDEX_EVENT: &str = "session.title.indexed.v1";
 const MESSAGE_EVENT: &str = "session.message.appended.v1";
 const TOOL_TURN_PENDING_EVENT: &str = "session.tool_turn.pending.v1";
 const TOOL_TURN_COMPLETED_EVENT: &str = "session.tool_turn.completed.v1";

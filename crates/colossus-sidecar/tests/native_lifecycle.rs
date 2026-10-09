@@ -201,7 +201,20 @@ async fn verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof() {
         .with_worker_ipc_authentication(
             Secret::new(vec![0x5a; 32]).expect("bounded worker authentication"),
         )
-        .expect("worker authentication bootstrap");
+        .expect("worker authentication bootstrap")
+        .with_connector_grant(
+            SidecarApplicationGrant::new(
+                "app:cloud-connector-acceptance",
+                [
+                    ApiScope::new(scopes::RUNS_EXECUTE).unwrap(),
+                    ApiScope::new(scopes::RUNS_READ).unwrap(),
+                ],
+                ["primary".into()],
+                Vec::<String>::new(),
+            )
+            .unwrap(),
+        )
+        .expect("independent connector grant");
     let lifecycle = NativeSidecarLifecycle::new(bootstrap);
     assert_eq!(lifecycle.status(), NativeSidecarStatus::Starting);
     let options = SidecarOptions::new(
@@ -232,9 +245,9 @@ async fn verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof() {
     assert_eq!(skills.len(), 4);
     for name in [
         "coding",
-        "offline-dev",
         "security-review",
         "plugin-authoring",
+        "schedule-task",
     ] {
         assert!(
             skills
@@ -273,6 +286,51 @@ async fn verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof() {
         .expect("create run");
     let run_id = created.run.run_id;
     assert!(!run_id.is_empty());
+    let connector = client
+        .connector_runs()
+        .expect("independent native cloud client");
+    assert!(client.instance_id().is_some());
+    let rejected = connector
+        .get_run(GetRunRequest {
+            run_id: run_id.clone(),
+        })
+        .await;
+    assert!(
+        rejected.is_err(),
+        "cloud caller must not inherit primary Desktop runs"
+    );
+    let cloud_run = connector
+        .create_run(CreateRunRequest {
+            plugin_skill_ids: vec![],
+            input: vec![InputContentPart::Text("cloud caller self-test".into())],
+            session_id: None,
+            end_user_id: None,
+            role: "primary".into(),
+            mode: RunMode::Execute,
+            research_depth: None,
+            research_sources: vec![],
+            plan_action: None,
+            branch: None,
+            max_turns: 1,
+            idempotency_key: IdempotencyKey::new("independent-cloud-run").unwrap(),
+        })
+        .await
+        .expect("cloud application executes beneath its native grant");
+    assert!(
+        client
+            .get_run(GetRunRequest {
+                run_id: cloud_run.run.run_id.clone()
+            })
+            .await
+            .is_err(),
+        "primary caller must not inherit cloud runs"
+    );
+    connector
+        .get_run(GetRunRequest {
+            run_id: cloud_run.run.run_id,
+        })
+        .await
+        .expect("cloud caller reads its own run");
     assert_eq!(
         wait_for_terminal_run(&client, &run_id).await,
         RunStatus::Completed

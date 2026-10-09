@@ -24,7 +24,7 @@ pub struct Secret {
 impl Secret {
     /// Wrap non-empty credential bytes.
     pub fn new(bytes: impl Into<Vec<u8>>) -> SdkResult<Self> {
-        let bytes = bytes.into();
+        let bytes = Zeroizing::new(bytes.into());
         if bytes.is_empty()
             || bytes.len() > MAX_CREDENTIAL_BYTES
             || !bytes.iter().all(|byte| (0x21..=0x7e).contains(byte))
@@ -33,9 +33,7 @@ impl Secret {
                 "credential must be bounded visible ASCII",
             ));
         }
-        Ok(Self {
-            bytes: Zeroizing::new(bytes),
-        })
+        Ok(Self { bytes })
     }
 
     /// Borrow the secret for an authenticated transport operation.

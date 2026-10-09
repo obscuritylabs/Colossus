@@ -88,6 +88,23 @@ pub(crate) fn collect_regular_files_with_limit(
         files,
         &mut 0,
         max_file_bytes,
+        &mut (MAX_FILES * 2),
+    )
+}
+
+pub(crate) fn collect_regular_files_with_entry_budget(
+    root: &Path,
+    files: &mut Vec<PathBuf>,
+    remaining: &mut usize,
+) -> Result<(), StoreError> {
+    collect_bound_files(
+        &ReadRoot::bind(root)?,
+        Path::new(""),
+        0,
+        files,
+        &mut 0,
+        MAX_FILE_BYTES,
+        remaining,
     )
 }
 
@@ -98,11 +115,12 @@ fn collect_bound_files(
     files: &mut Vec<PathBuf>,
     visited: &mut usize,
     max_file_bytes: u64,
+    remaining: &mut usize,
 ) -> Result<(), StoreError> {
     if depth > 128 {
         return Err(adapter("plugin depth limit exceeded"));
     }
-    for entry in reader.entries(relative)? {
+    for entry in reader.entries_with_budget(relative, remaining)? {
         *visited = visited.saturating_add(1);
         if *visited > MAX_FILES * 2 {
             return Err(adapter("plugin tree entry limit exceeded"));
@@ -115,6 +133,7 @@ fn collect_bound_files(
                 files,
                 visited,
                 max_file_bytes,
+                remaining,
             )?;
         } else {
             if entry.size > max_file_bytes {

@@ -80,6 +80,286 @@ fn actionlint_recognizes_the_provisioned_larger_runner() {
 }
 
 #[test]
+fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
+    let warm = workflow("cache-warm.yml");
+    let warm_root = mapping(&warm, "cache warm workflow");
+    let triggers = mapping(field(warm_root, "on"), "cache warm triggers");
+    assert_eq!(
+        triggers.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        ["push", "workflow_dispatch"].into_iter().collect()
+    );
+    let push = mapping(field(triggers, "push"), "cache warm push trigger");
+    assert_eq!(
+        strings(field(push, "branches"), "cache warm branches"),
+        ["main".to_owned()].into_iter().collect()
+    );
+    assert!(
+        strings(field(push, "paths"), "cache warm paths").contains(".github/workflows/release.yml")
+    );
+
+    let pr = workflow("pr.yml");
+    let premerge = workflow("premerge.yml");
+    let release = workflow("release.yml");
+    for (warm_job, consumer_job, consumer_workflow, cache_step, shared_key, workspace, runner) in [
+        (
+            "linux-pr",
+            "lint",
+            &pr,
+            "Restore main Rust dependency build cache",
+            "pr-linux",
+            ". -> target",
+            "ubuntu-latest",
+        ),
+        (
+            "linux-pr",
+            "rust",
+            &pr,
+            "Restore main Rust dependency build cache",
+            "pr-linux",
+            ". -> target",
+            "ubuntu-latest",
+        ),
+        (
+            "macos-desktop-acceptance",
+            "macos-desktop-acceptance",
+            &premerge,
+            "Restore main Desktop acceptance build cache",
+            "macos-desktop-acceptance",
+            "apps/desktop/src-tauri -> target",
+            "macos-14",
+        ),
+        (
+            "macos-desktop-bundle",
+            "macos-desktop-bundle",
+            &premerge,
+            "Restore main Desktop bundle build cache",
+            "macos-desktop-bundle",
+            "apps/desktop/src-tauri -> target",
+            "macos-14",
+        ),
+        (
+            "macos-desktop-bundle",
+            "desktop_macos_build",
+            &release,
+            "Restore main Desktop bundle build cache",
+            "macos-desktop-bundle",
+            "apps/desktop/src-tauri -> target",
+            "macos-14",
+        ),
+    ] {
+        let warm_job = job(jobs(&warm), warm_job);
+        let consumer_job = job(jobs(consumer_workflow), consumer_job);
+        assert_eq!(field(warm_job, "runs-on").as_str(), Some(runner));
+        assert_eq!(field(consumer_job, "runs-on").as_str(), Some(runner));
+        let warm_cache_name = if runner == "ubuntu-latest" {
+            "Save Linux PR dependency build cache"
+        } else if shared_key == "macos-desktop-acceptance" {
+            "Save macOS Desktop acceptance build cache"
+        } else {
+            "Save macOS Desktop bundle build cache"
+        };
+        let warm_inputs = mapping(
+            field(named_step(warm_job, warm_cache_name), "with"),
+            "main cache inputs",
+        );
+        let consumer_inputs = mapping(
+            field(named_step(consumer_job, cache_step), "with"),
+            "consumer cache inputs",
+        );
+        for inputs in [warm_inputs, consumer_inputs] {
+            assert_eq!(field(inputs, "shared-key").as_str(), Some(shared_key));
+            assert_eq!(field(inputs, "key").as_str(), Some("recipe-v1"));
+            assert_eq!(field(inputs, "workspaces").as_str(), Some(workspace));
+            assert_eq!(field(inputs, "cache-targets").as_bool(), Some(true));
+        }
+        assert_eq!(field(consumer_inputs, "save-if").as_bool(), Some(false));
+        if runner == "macos-14" {
+            for cache_job in [warm_job, consumer_job] {
+                assert!(
+                    !mapping(field(cache_job, "env"), "macOS cache environment")
+                        .contains_key("RUSTC_WRAPPER")
+                );
+            }
+            for name in ["CARGO_INCREMENTAL", "CARGO_TARGET_DIR"] {
+                assert_eq!(
+                    field(mapping(field(warm_job, "env"), "warm environment"), name),
+                    field(
+                        mapping(field(consumer_job, "env"), "consumer environment"),
+                        name
+                    ),
+                    "macOS cache environment must match the main warmer"
+                );
+            }
+            let consumer_steps = serde_json::to_string(field(consumer_job, "steps"))
+                .expect("serialize macOS build steps");
+            assert!(
+                !consumer_steps.contains("RUSTC_WRAPPER")
+                    && !consumer_steps.contains("sccache-action"),
+                "a compiler wrapper changes the warmer's cache environment hash"
+            );
+        }
+    }
+
+    let acceptance = job(jobs(&warm), "macos-desktop-acceptance");
+    let steps = field(acceptance, "steps")
+        .as_array()
+        .expect("macOS acceptance warm steps");
+    let step_index = |name| {
+        steps
+            .iter()
+            .position(|step| step.get("name").and_then(|name| name.as_str()) == Some(name))
+            .expect("required macOS acceptance warm step")
+    };
+    assert!(
+        step_index("Prepare verified debug desktop executables")
+            < step_index("Build Desktop native test dependencies")
+    );
+
+    for (workflow, names) in [
+        (&pr, &["sdk", "desktop"][..]),
+        (
+            &premerge,
+            &[
+                "linux-rust-integration",
+                "macos-native",
+                "windows-runtime",
+                "windows-desktop",
+                "fuzz",
+            ][..],
+        ),
+    ] {
+        for name in names {
+            let env = mapping(field(job(jobs(workflow), name), "env"), name);
+            assert_eq!(
+                field(env, "SCCACHE_GHA_RW_MODE").as_str(),
+                Some("READ_ONLY"),
+                "{name} must not spend the repository's cache upload rate limit"
+            );
+        }
+    }
+}
+
+#[test]
+fn r2_compiler_cache_writes_only_from_protected_main_or_release_tags() {
+    let warm = workflow("sccache-warm.yml");
+    let root = mapping(&warm, "R2 warmer");
+    let triggers = mapping(field(root, "on"), "R2 warm triggers");
+    assert_eq!(
+        triggers.keys().collect::<Vec<_>>(),
+        [&"workflow_dispatch"],
+        "R2 warming must not spend runner time on every matching main push"
+    );
+    let warm_job = job(jobs(&warm), "warm");
+    assert!(
+        field(warm_job, "if")
+            .as_str()
+            .is_some_and(|guard| guard.contains("github.ref == 'refs/heads/main'")
+                && guard.contains("vars.SCCACHE_R2_ENABLED == 'true'"))
+    );
+    assert_eq!(
+        field(
+            mapping(field(warm_job, "environment"), "R2 write environment"),
+            "name"
+        )
+        .as_str(),
+        Some("sccache-r2-write")
+    );
+    let write_env = mapping(
+        field(named_step(warm_job, "Configure R2 compiler cache"), "env"),
+        "R2 write credentials",
+    );
+    assert_eq!(
+        field(write_env, "R2_ACCESS_KEY_ID").as_str(),
+        Some("${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}")
+    );
+    assert_eq!(
+        field(write_env, "R2_SECRET_ACCESS_KEY").as_str(),
+        Some("${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}")
+    );
+
+    let pr = workflow("pr.yml");
+    let premerge = workflow("premerge.yml");
+    for (workflow, names) in [
+        (&pr, &["sdk", "desktop"][..]),
+        (
+            &premerge,
+            &[
+                "linux-rust-integration",
+                "macos-native",
+                "windows-runtime",
+                "windows-desktop",
+                "fuzz",
+            ][..],
+        ),
+    ] {
+        for name in names {
+            let consumer = job(jobs(workflow), name);
+            let step = named_step(consumer, "Configure read-only R2 compiler cache");
+            assert_eq!(
+                field(step, "run").as_str(),
+                Some("./scripts/ci/configure-sccache-r2.sh read")
+            );
+            let env = mapping(field(step, "env"), "R2 read credentials");
+            assert_eq!(
+                field(env, "R2_ACCESS_KEY_ID").as_str(),
+                Some("${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}")
+            );
+            assert_eq!(
+                field(env, "R2_SECRET_ACCESS_KEY").as_str(),
+                Some("${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}")
+            );
+        }
+    }
+
+    let release = workflow("release.yml");
+    for name in ["artifacts", "sdk_release"] {
+        let release_job = job(jobs(&release), name);
+        let environment = mapping(field(release_job, "environment"), "release R2 environment");
+        let environment_name = field(environment, "name")
+            .as_str()
+            .expect("conditional release R2 environment");
+        assert!(environment_name.contains("needs.validate.outputs.publish_draft == 'true'"));
+        assert!(environment_name.contains("vars.SCCACHE_R2_ENABLED == 'true'"));
+        assert!(environment_name.contains("sccache-r2-write"));
+        let write = named_step(
+            release_job,
+            "Configure R2 compiler cache for tagged release",
+        );
+        let condition = field(write, "if")
+            .as_str()
+            .expect("tagged release R2 condition");
+        assert!(condition.contains("needs.validate.outputs.publish_draft == 'true'"));
+        assert!(condition.contains("vars.SCCACHE_R2_ENABLED == 'true'"));
+        assert_eq!(
+            field(write, "run").as_str(),
+            Some("./scripts/ci/configure-sccache-r2.sh write")
+        );
+        let env = mapping(field(write, "env"), "release R2 write credentials");
+        assert_eq!(
+            field(env, "R2_ACCESS_KEY_ID").as_str(),
+            Some("${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}")
+        );
+        assert_eq!(
+            field(env, "R2_SECRET_ACCESS_KEY").as_str(),
+            Some("${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}")
+        );
+    }
+
+    let publisher = workflow("publish-sdk.yml");
+    let publish = job(jobs(&publisher), "publish");
+    let read = named_step(publish, "Configure read-only R2 compiler cache");
+    assert_eq!(
+        field(read, "run").as_str(),
+        Some("./scripts/ci/configure-sccache-r2.sh read")
+    );
+    let env = mapping(field(read, "env"), "SDK publication R2 read credentials");
+    assert_eq!(
+        field(env, "R2_ACCESS_KEY_ID").as_str(),
+        Some("${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}")
+    );
+}
+
+#[test]
 fn pr_workflow_selects_only_the_required_validation_tier() {
     let workflow = workflow("pr.yml");
     let root = mapping(&workflow, "PR workflow");
@@ -106,17 +386,43 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         [
             "classify",
             "dependency-policy",
+            "desktop",
             "documentation",
+            "format",
             "gate",
-            "rust"
+            "lint",
+            "rust",
+            "sdk",
         ]
         .into_iter()
         .collect()
     );
     assert_eq!(
         field(job(jobs, "rust"), "runs-on").as_str(),
-        Some("ubuntu-latest-m")
+        Some("ubuntu-latest")
     );
+    for name in ["format", "lint", "rust"] {
+        assert_eq!(
+            field(job(jobs, name), "runs-on").as_str(),
+            Some("ubuntu-latest")
+        );
+        assert_eq!(
+            field(job(jobs, name), "if").as_str(),
+            Some("needs.classify.outputs.rust_required == 'true'")
+        );
+        assert_eq!(field(job(jobs, name), "needs").as_str(), Some("classify"));
+    }
+    for (name, selector) in [("sdk", "sdk_required"), ("desktop", "desktop_required")] {
+        assert_eq!(
+            field(job(jobs, name), "runs-on").as_str(),
+            Some("ubuntu-latest")
+        );
+        assert_eq!(
+            field(job(jobs, name), "if").as_str(),
+            Some(format!("needs.classify.outputs.{selector} == 'true'").as_str())
+        );
+        assert_eq!(field(job(jobs, name), "needs").as_str(), Some("classify"));
+    }
     assert_eq!(
         field(job(jobs, "documentation"), "if").as_str(),
         Some("needs.classify.outputs.docs_required == 'true'")
@@ -126,6 +432,44 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         Some("Colossus PR gate")
     );
     assert_eq!(field(job(jobs, "gate"), "if").as_str(), Some("always()"));
+    let gate_needs = strings(field(job(jobs, "gate"), "needs"), "PR gate needs");
+    for name in [
+        "format",
+        "lint",
+        "rust",
+        "sdk",
+        "desktop",
+        "documentation",
+        "dependency-policy",
+    ] {
+        assert!(gate_needs.contains(name), "PR gate must require {name}");
+    }
+    let rust_source = serde_json::to_string(job(jobs, "rust")).expect("serialize Rust PR job");
+    assert!(rust_source.contains("cargo test --locked --workspace --lib"));
+    assert!(!rust_source.contains("install-apparmor.sh"));
+    assert!(!rust_source.contains("cargo xtask check rust"));
+    assert!(!rust_source.contains("cargo xtask check sdk"));
+    assert!(!rust_source.contains("cargo xtask check desktop"));
+    assert!(
+        serde_json::to_string(job(jobs, "sdk"))
+            .expect("serialize SDK PR job")
+            .contains("cargo xtask check sdk")
+    );
+    let desktop_source =
+        serde_json::to_string(job(jobs, "desktop")).expect("serialize Desktop PR job");
+    assert!(desktop_source.contains("cargo xtask check sidecar"));
+    assert!(desktop_source.contains("cargo xtask check desktop"));
+    let gate_run = field(
+        named_step(job(jobs, "gate"), "Require every selected PR validation"),
+        "run",
+    )
+    .as_str()
+    .expect("PR gate must run the base-revision selector");
+    assert_eq!(gate_run.matches("sh \"$trusted_gate\"").count(), 3);
+    assert!(gate_run.contains("\"$RUST_REQUIRED\" \"$FORMAT_RESULT\""));
+    assert!(gate_run.contains("\"$RUST_REQUIRED\" \"$LINT_RESULT\""));
+    assert!(gate_run.contains("\"$SDK_REQUIRED\" \"$SDK_RESULT\""));
+    assert!(gate_run.contains("\"$DESKTOP_REQUIRED\" \"$DESKTOP_RESULT\""));
 
     let source = fs::read_to_string(repository_root().join(".github/workflows/pr.yml"))
         .expect("read PR workflow");
@@ -133,14 +477,15 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         assert!(!source.contains(forbidden), "PR tier contains {forbidden}");
     }
     for required in [
-        "cargo xtask check rust",
+        "cargo fmt --all -- --check",
+        "cargo clippy --locked --workspace --all-targets -- -D warnings",
+        "cargo test --locked --workspace --lib",
         "cargo xtask check sidecar",
         "cargo xtask check sdk --base \"$EVENT_BASE_SHA\"",
         "cargo xtask check desktop",
         "cargo xtask check dependencies",
-        "release/install-apparmor.sh",
         "uses: ./.github/actions/setup-toolchain",
-        "tools: node aqua:rhysd/actionlint",
+        "tools: node aqua:rhysd/actionlint python",
         "tools: rust aqua:EmbarkStudios/cargo-deny aqua:rustsec/rustsec/cargo-audit",
         "--diff-filter=ACDMRTUXB",
         "ref: ${{ github.event.pull_request.base.sha }}",
@@ -160,13 +505,30 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
     ] {
         assert!(source.contains(required), "PR tier is missing {required}");
     }
-    let setup = named_step(job(jobs, "rust"), "Install selected language toolchains");
-    let tools = field(mapping(field(setup, "with"), "toolchain inputs"), "tools")
-        .as_str()
-        .expect("selected tools expression");
-    assert!(tools.starts_with("rust "));
-    assert!(tools.contains("(needs.classify.outputs.sdk_required == 'true' || needs.classify.outputs.desktop_required == 'true') && 'node' || ''"));
-    assert!(tools.contains("needs.classify.outputs.sdk_required == 'true' && 'python go' || ''"));
+    for (name, expected) in [
+        ("classify", "node aqua:rhysd/actionlint python"),
+        ("format", "rust"),
+        ("lint", "rust"),
+        ("rust", "rust"),
+        ("sdk", "rust node python go"),
+        ("desktop", "rust node"),
+        ("documentation", "rust"),
+        (
+            "dependency-policy",
+            "rust aqua:EmbarkStudios/cargo-deny aqua:rustsec/rustsec/cargo-audit",
+        ),
+    ] {
+        let setup = named_step(job(jobs, name), "Install selected language toolchains");
+        assert_eq!(
+            field(setup, "uses").as_str(),
+            Some("./.github/actions/setup-toolchain"),
+            "{name} must use the locked toolchain setup"
+        );
+        let tools = field(mapping(field(setup, "with"), "toolchain inputs"), "tools")
+            .as_str()
+            .expect("selected tools");
+        assert_eq!(tools, expected, "{name} tool selection");
+    }
     let setup_source =
         fs::read_to_string(repository_root().join(".github/actions/setup-toolchain/action.yml"))
             .expect("read shared PR setup");
@@ -233,26 +595,59 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
 
     let jobs = jobs(&workflow);
     assert_eq!(
+        field(job(jobs, "linux-rust-integration"), "runs-on").as_str(),
+        Some("ubuntu-latest-m")
+    );
+    assert_eq!(
+        field(
+            named_step(
+                job(jobs, "linux-rust-integration"),
+                "Run complete Rust validation"
+            ),
+            "run"
+        )
+        .as_str(),
+        Some("cargo xtask check rust")
+    );
+    assert_eq!(
         field(job(jobs, "macos-native"), "runs-on").as_str(),
         Some("macos-14")
     );
     assert_eq!(
-        field(job(jobs, "macos-desktop"), "runs-on").as_str(),
+        field(job(jobs, "macos-desktop-acceptance"), "runs-on").as_str(),
         Some("macos-14")
     );
     assert_eq!(
-        field(job(jobs, "macos-desktop"), "timeout-minutes").as_u64(),
+        field(job(jobs, "macos-desktop-acceptance"), "timeout-minutes").as_u64(),
         Some(75),
-        "macOS Desktop acceptance must allow native/browser tests and cold release builds to finish"
+        "macOS Desktop acceptance must allow native and browser tests to finish"
+    );
+    assert_eq!(
+        field(job(jobs, "macos-desktop-bundle"), "runs-on").as_str(),
+        Some("macos-14")
+    );
+    assert_eq!(
+        field(job(jobs, "macos-desktop-bundle"), "timeout-minutes").as_u64(),
+        Some(75),
+        "macOS Desktop packaging must allow a cold optimized build to finish"
     );
     assert_eq!(
         field(job(jobs, "windows-runtime"), "runs-on").as_str(),
-        Some("windows-latest-l")
+        Some("windows-2025")
     );
     assert_eq!(
         field(job(jobs, "windows-runtime"), "timeout-minutes").as_u64(),
+        Some(40),
+        "Windows runtime acceptance must allow cold standard-runner compilation"
+    );
+    assert_eq!(
+        field(job(jobs, "windows-desktop"), "runs-on").as_str(),
+        Some("windows-latest-l")
+    );
+    assert_eq!(
+        field(job(jobs, "windows-desktop"), "timeout-minutes").as_u64(),
         Some(75),
-        "Windows acceptance must allow the native and Desktop checks to finish"
+        "Windows Desktop acceptance must allow a cold native build"
     );
     assert_eq!(
         field(job(jobs, "gate"), "name").as_str(),
@@ -263,10 +658,28 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         Some("always()"),
         "the required gate must fail closed on synchronize and non-ci:full label events"
     );
+    let gate_needs = strings(field(job(jobs, "gate"), "needs"), "pre-merge gate needs");
     for name in [
-        "macos-native",
-        "macos-desktop",
+        "linux-rust-integration",
+        "linux-desktop",
+        "macos-desktop-acceptance",
+        "macos-desktop-bundle",
         "windows-runtime",
+        "windows-desktop",
+    ] {
+        assert!(
+            gate_needs.contains(name),
+            "pre-merge gate must require {name}"
+        );
+    }
+    for name in [
+        "linux-rust-integration",
+        "linux-desktop",
+        "macos-native",
+        "macos-desktop-acceptance",
+        "macos-desktop-bundle",
+        "windows-runtime",
+        "windows-desktop",
         "fuzz",
         "supply-chain",
         "chroma",
@@ -296,6 +709,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "github.event.action == 'synchronize'",
         "--method DELETE",
         ".ci-trusted/scripts/ci/require-success.sh",
+        "release/install-apparmor.sh",
         "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0",
         "components: clippy,rustfmt",
         "CARGO_INCREMENTAL: \"0\"",
@@ -312,8 +726,6 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "--test native_lifecycle -- --ignored --nocapture",
         "cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings",
         "cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
-        "test \"$CARGO_TARGET_DIR\" = \"$expected\"",
-        "rm -rf \"$expected/debug\"",
         "for attempt in 1 2 3",
         "docker pull \"${{ matrix.image }}\"",
         "cargo xtask check dependencies",
@@ -399,11 +811,16 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     assert!(!native_source.contains("npm run tauri:"));
     assert!(!native_source.contains("apps/desktop/src-tauri/target"));
 
-    let desktop_source =
-        serde_json::to_string(job(jobs, "macos-desktop")).expect("serialize macOS desktop job");
-    assert!(desktop_source.contains("npm run tauri:build"));
-    assert!(desktop_source.contains("npm run tauri:bundle:macos"));
-    assert!(desktop_source.contains("CARGO_TARGET_DIR"));
+    let desktop_acceptance = serde_json::to_string(job(jobs, "macos-desktop-acceptance"))
+        .expect("serialize macOS desktop acceptance job");
+    let desktop_bundle = serde_json::to_string(job(jobs, "macos-desktop-bundle"))
+        .expect("serialize macOS desktop bundle job");
+    assert!(desktop_acceptance.contains("npm run test:browser-native"));
+    assert!(!desktop_acceptance.contains("npm run tauri:build"));
+    assert!(desktop_bundle.contains("npm run tauri:build"));
+    assert!(desktop_bundle.contains("npm run tauri:bundle:macos"));
+    assert!(desktop_bundle.contains("CARGO_TARGET_DIR"));
+    assert!(!desktop_bundle.contains("npm run test:browser-native"));
 
     let concurrency = mapping(field(root, "concurrency"), "pre-merge concurrency");
     assert_eq!(
@@ -455,12 +872,14 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
         [
             "artifacts",
             "bootstrap_installers",
+            "control_plane",
             "desktop_macos",
             "desktop_macos_build",
             "desktop_windows_preview",
             "desktop_windows_signed",
             "sdk_release",
             "validate",
+            "vscode",
             "windows_cli_sign",
         ]
         .into_iter()
@@ -490,6 +909,8 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
         "test \"$WINDOWS_DESKTOP_RESULT\" = skipped",
         "windows_cli_sign=\"$WINDOWS_CLI_SIGN_RESULT\"",
         "desktop_windows_signed=\"$WINDOWS_SIGNED_DESKTOP_RESULT\"",
+        "control_plane=${{ needs.control_plane.result }}",
+        "vscode=${{ needs.vscode.result }}",
         "test \"$SDK_RELEASE_RESULT\" = skipped",
         "obscuritylabs-colossus-sdk-${RELEASE_VERSION}.tgz",
         "obscuritylabs_colossus_sdk-${RELEASE_VERSION}-py3-none-any.whl",
@@ -522,8 +943,9 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
         "codeSigning = 'azure_artifact_signing'",
         "Colossus-Desktop-STABLE-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe",
         "Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe",
-        "-eq 25",
-        "-eq 22",
+        "-eq 45",
+        "expected_assets=42",
+        "expected_assets=38",
     ] {
         assert!(
             source.contains(required),
@@ -548,14 +970,14 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
         .find("  desktop_windows_signed:")
         .map(|offset| windows_start + offset)
         .expect("Windows signed job");
-    let gate_start = source[signed_windows_start..]
-        .find("  gate:")
+    let control_plane_start = source[signed_windows_start..]
+        .find("  control_plane:")
         .map(|offset| signed_windows_start + offset)
-        .expect("gate job");
+        .expect("Control Plane job");
     let build_job = &source[build_start..sign_start];
     let sign_job = &source[sign_start..windows_start];
     let windows_job = &source[windows_start..signed_windows_start];
-    let signed_windows_job = &source[signed_windows_start..gate_start];
+    let signed_windows_job = &source[signed_windows_start..control_plane_start];
     for forbidden in [
         "${{ secrets.",
         "MACOS_DEVELOPER_ID_P12",
@@ -1073,6 +1495,7 @@ fn conventional_commit_checker_remains_python_free() {
 fn windows_native_acceptance_cannot_be_masked_by_a_later_command() {
     let premerge = workflow("premerge.yml");
     let premerge_windows = job(jobs(&premerge), "windows-runtime");
+    let premerge_desktop = job(jobs(&premerge), "windows-desktop");
     assert_eq!(
         field(
             named_step(
@@ -1121,9 +1544,6 @@ fn windows_native_acceptance_cannot_be_masked_by_a_later_command() {
         "Run Windows Colossus-home acceptance",
         "Run Windows Codex credential-store acceptance",
         "Run Windows worker and AppContainer escape acceptance",
-        "Prepare Windows Managed Local executables",
-        "Lint the Windows native Desktop bridge",
-        "Test the Windows native Desktop bridge",
     ] {
         assert_eq!(
             field(named_step(premerge_windows, name), "continue-on-error").as_bool(),
@@ -1131,7 +1551,21 @@ fn windows_native_acceptance_cannot_be_masked_by_a_later_command() {
             "{name} must preserve later independent outcomes"
         );
     }
-    let aggregate = named_step(premerge_windows, "Require every Windows acceptance check");
+    for name in [
+        "Prepare Windows Managed Local executables",
+        "Lint the Windows native Desktop bridge",
+        "Test the Windows native Desktop bridge",
+    ] {
+        assert_eq!(
+            field(named_step(premerge_desktop, name), "continue-on-error").as_bool(),
+            Some(true),
+            "{name} must preserve later independent outcomes"
+        );
+    }
+    let aggregate = named_step(
+        premerge_windows,
+        "Require every Windows runtime acceptance check",
+    );
     let aggregate_run = field(aggregate, "run")
         .as_str()
         .expect("Windows acceptance aggregate must be a script");
@@ -1143,13 +1577,29 @@ fn windows_native_acceptance_cannot_be_masked_by_a_later_command() {
         "HOME_OUTCOME",
         "CODEX_AUTH_OUTCOME",
         "WORKER_OUTCOME",
-        "PREPARE_OUTCOME",
-        "CLIPPY_OUTCOME",
-        "NATIVE_TEST_OUTCOME",
     ] {
         assert!(
             aggregate_run.contains(outcome),
             "Windows acceptance aggregate is missing {outcome}"
+        );
+    }
+    let desktop_aggregate = named_step(
+        premerge_desktop,
+        "Require every Windows Desktop acceptance check",
+    );
+    let desktop_run = field(desktop_aggregate, "run")
+        .as_str()
+        .expect("Windows Desktop acceptance aggregate must be a script");
+    for outcome in [
+        "PREPARE_OUTCOME",
+        "CLIPPY_OUTCOME",
+        "NATIVE_TEST_OUTCOME",
+        "PLUGIN_RUNTIME_OUTCOME",
+        "APPROVAL_RUNTIME_OUTCOME",
+    ] {
+        assert!(
+            desktop_run.contains(outcome),
+            "Windows Desktop acceptance aggregate is missing {outcome}"
         );
     }
 

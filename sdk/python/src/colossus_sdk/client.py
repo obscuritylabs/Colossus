@@ -9,6 +9,7 @@ from typing import Any
 
 from .credential import StaticBearerCredential
 from .endpoint import EndpointDescriptor, assert_pinned_leaf_certificate
+from .posture import RuntimePolicyPosture, decode_runtime_policy_posture
 from .watch import RunFeedItem, RunWatchReconciliation, watch_run
 
 _TERMINAL_UPDATE_CASES = frozenset({"result", "failure", "cancellation"})
@@ -48,6 +49,13 @@ class AgentRuns:
         self._stub = stub
         self._pb2 = pb2
 
+    async def get_runtime_policy_posture(self) -> RuntimePolicyPosture:
+        """Read released policy metadata once; malformed responses fail closed."""
+        response = await self._stub.GetRuntimePolicyPosture(
+            self._pb2.GetRuntimePolicyPostureRequest()
+        )
+        return decode_runtime_policy_posture(response.policy_json)
+
     async def create_run(self, request: Any) -> Any:
         """Create a run once; the SDK does not retry this effectful call."""
 
@@ -58,6 +66,16 @@ class AgentRuns:
 
     async def list_runs(self, request: Any) -> Any:
         return await self._stub.ListRuns(request)
+
+    async def list_visible_runs(self, request: Any) -> Any:
+        """Discover only runtime-authorized owned and explicitly shared runs."""
+
+        return await self._stub.ListVisibleRuns(request)
+
+    async def set_workspace_sharing(self, request: Any) -> Any:
+        """Change source-owned disclosure once, without retrying this mutation."""
+
+        return await self._stub.SetWorkspaceSharing(request)
 
     async def cancel_run(self, run_id: str, idempotency_key: str) -> Any:
         request = self._pb2.CancelRunRequest(
@@ -215,7 +233,7 @@ class ColossusClient:
             # Full command context plus the bounded envelope; sends stay unchanged.
             ("grpc.max_receive_message_length", 8 * 1024 * 1024),
             ("grpc.max_send_message_length", 4 * 1024 * 1024),
-            ("grpc.primary_user_agent", "colossus-python-sdk/0.11.1"),
+            ("grpc.primary_user_agent", "colossus-python-sdk/0.11.7"),
         ]
         channel = grpc.aio.secure_channel(
             descriptor.target,

@@ -33,9 +33,13 @@ pub(super) fn redact_value_exact(value: &mut Value, secret: Option<&str>) {
         Value::Array(values) => values
             .iter_mut()
             .for_each(|value| redact_value_exact(value, Some(secret))),
-        Value::Object(values) => values
-            .values_mut()
-            .for_each(|value| redact_value_exact(value, Some(secret))),
+        Value::Object(values) => {
+            for (key, value) in values {
+                if key != "encrypted_content" {
+                    redact_value_exact(value, Some(secret));
+                }
+            }
+        }
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
 }
@@ -168,6 +172,13 @@ impl ProviderStreamState {
         }
     }
 
+    pub(super) fn output_items(&self) -> &[Value] {
+        match self {
+            Self::Responses(state) => &state.output_items,
+            Self::Chat(_) => &[],
+        }
+    }
+
     pub(super) fn response_id(&self) -> Option<&str> {
         match self {
             Self::Responses(state) => state.response_id.as_deref(),
@@ -178,6 +189,8 @@ impl ProviderStreamState {
 
 #[derive(Default)]
 pub(super) struct ResponsesStreamState {
+    output_items: Vec<Value>,
+    completed_items: BTreeMap<u64, Value>,
     tool_names: ProviderToolNames,
     response_id: Option<String>,
     text: String,
@@ -214,13 +227,27 @@ impl ResponsesStreamState {
                         "Responses output_item.done has no item object".into(),
                     ));
                 };
+                if let Some(index) = object.get("output_index").and_then(Value::as_u64) {
+                    if index >= 512
+                        || self
+                            .completed_items
+                            .get(&index)
+                            .is_some_and(|prior| prior != &Value::Object(item.clone()))
+                    {
+                        return Err(ProviderError::Malformed(
+                            "Responses output item index is invalid or changed".into(),
+                        ));
+                    }
+                    self.completed_items
+                        .insert(index, Value::Object(item.clone()));
+                }
                 self.tool_event(item)
                     .map(|event| event.into_iter().collect())
             }
             "response.completed" => self.complete(object),
-            "response.failed" | "response.incomplete" | "error" => Err(ProviderError::Malformed(
-                format!("provider stream terminated with {event_type}"),
-            )),
+            "response.failed" | "response.incomplete" | "error" => {
+                Err(terminal_provider_error(&value))
+            }
             _ => Ok(Vec::new()),
         }
     }
@@ -309,6 +336,7 @@ impl ResponsesStreamState {
         self.capture_response_id(response.get("id"))?;
         let mut events = Vec::new();
         if let Some(output) = response.get("output").and_then(Value::as_array) {
+            self.output_items = output.clone();
             for item in output.iter().filter_map(Value::as_object) {
                 if let Some(event) = self.tool_event(item)? {
                     events.push(event);
@@ -322,6 +350,9 @@ impl ResponsesStreamState {
         }
         if let Some(usage) = normalize_usage(response.get("usage"), UsageShape::Responses)? {
             events.push(ProviderEvent::Usage { usage });
+        }
+        if self.output_items.is_empty() && !self.completed_items.is_empty() {
+            self.output_items = self.completed_items.values().cloned().collect();
         }
         self.completed = true;
         Ok(events)
@@ -362,6 +393,9 @@ impl ChatStreamState {
         let object = value
             .as_object()
             .ok_or_else(|| ProviderError::Malformed("chat stream chunk is not an object".into()))?;
+        if object.get("error").is_some_and(|error| !error.is_null()) {
+            return Err(terminal_provider_error(&value));
+        }
         if let Some(id) = object
             .get("id")
             .and_then(Value::as_str)
@@ -413,17 +447,15 @@ impl ChatStreamState {
             }
             self.ingest_tool_deltas(delta.get("tool_calls"))?;
             if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
+                if let Some(error) = chat_finish_error(reason) {
+                    return Err(error);
+                }
                 match reason {
                     "stop" | "tool_calls" | "function_call" => self.terminal_seen = true,
-                    "length" | "content_filter" => {
-                        return Err(ProviderError::Malformed(format!(
-                            "chat stream terminated with finish_reason={reason}"
-                        )));
-                    }
-                    other => {
-                        return Err(ProviderError::Malformed(format!(
-                            "chat stream returned unknown finish_reason={other}"
-                        )));
+                    _ => {
+                        return Err(ProviderError::Malformed(
+                            "chat stream returned an unrecognized finish reason".into(),
+                        ));
                     }
                 }
             }

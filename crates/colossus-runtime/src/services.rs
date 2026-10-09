@@ -77,16 +77,7 @@ impl Runtime {
 
     /// Live management inventory, including disabled installations and workspace exclusions.
     pub fn plugin_inventory(&self) -> Result<Vec<PluginInventoryEntry>, RuntimeError> {
-        let inventory = self
-            .plugin_store
-            .as_ref()
-            .map(|store| store.inventory())
-            .transpose()?
-            .unwrap_or_default();
-        Ok(super::plugin_catalog::narrow_plugin_inventory(
-            inventory,
-            &self.plugin_configuration,
-        ))
+        self.plugin_catalog.live_inventory()
     }
 
     /// Return every machine-scoped plugin installation, including inactive digests.
@@ -364,8 +355,9 @@ impl Runtime {
             .prefix(".plugin-pull-")
             .tempdir_in(&self.workspace)?;
         let layout = temporary.path().join("layout");
-        self.pull_plugin(registry, reference, &layout).await?;
-        let artifact = colossus_plugins::verify_plugin_layout(&layout, None)?;
+        let transfer = self.pull_plugin(registry, reference, &layout).await?;
+        let artifact =
+            colossus_plugins::verify_plugin_layout(&layout, Some(&transfer.manifest_digest))?;
         let config: colossus_contracts::AgentPluginOciConfig =
             serde_json::from_slice(&artifact.config)
                 .map_err(|error| RuntimeError::Config(error.to_string()))?;
@@ -413,6 +405,31 @@ impl Runtime {
             })
     }
 
+    pub(super) fn plugin_registry_for_reference(
+        &self,
+        reference: &str,
+    ) -> Result<String, RuntimeError> {
+        let origin = colossus_plugins::RegistryReference::parse(reference)
+            .map_err(|error| RuntimeError::Config(error.to_string()))?
+            .origin;
+        let matches = self
+            .plugin_configuration
+            .registries
+            .iter()
+            .filter(|(_, profile)| profile.origin == origin)
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [name] => Ok((*name).to_owned()),
+            [] => Err(RuntimeError::Config(format!(
+                "no plugin registry profile is configured for {origin}; use --registry after configuring one"
+            ))),
+            _ => Err(RuntimeError::Config(format!(
+                "multiple plugin registry profiles match {origin}; select one with --registry"
+            ))),
+        }
+    }
+
     async fn execute_plugin_registry_operation(
         &self,
         profile: PluginRegistryProfile,
@@ -435,6 +452,7 @@ impl Runtime {
                 Arc::clone(&self.process_executor),
                 self.workspace.clone(),
                 self.sandbox_backend == "oci",
+                self.tls_roots.client_identity().cloned(),
             )),
         );
         let released = self.gateway.execute(request, &executor).await?;

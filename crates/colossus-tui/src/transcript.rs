@@ -39,7 +39,7 @@ pub(super) fn transcript_from_messages(
 ) -> (Vec<TranscriptEntry>, Vec<Option<TranscriptRenderSource>>) {
     let mut entries = Vec::new();
     let mut sources = Vec::new();
-    let mut tool_names = BTreeMap::<String, String>::new();
+    let mut tool_names = BTreeMap::<String, (String, String)>::new();
     for record in messages {
         let (kind, document, source) = match record.message.role {
             ModelMessageRole::System => continue,
@@ -56,7 +56,12 @@ pub(super) fn transcript_from_messages(
                     ));
                 }
                 for call in record.message.tool_calls {
-                    tool_names.insert(call.call_id.clone(), call.name.clone());
+                    let display_name =
+                        colossus_presentation::tool_display_name(&call.name, &call.arguments);
+                    tool_names.insert(
+                        call.call_id.clone(),
+                        (call.name.clone(), display_name.clone()),
+                    );
                     let input = if call.name == "shell.run" {
                         // Retained model calls have no prepared, sanitized context.
                         // Do not reconstruct command disclosure from their raw input.
@@ -71,7 +76,7 @@ pub(super) fn transcript_from_messages(
                         }
                     };
                     document.push(PresentationBlock::Card {
-                        title: format!("Requested {}", call.name),
+                        title: format!("Requested {display_name}"),
                         tone: PresentationTone::Tool,
                         body: vec![input],
                     });
@@ -84,7 +89,9 @@ pub(super) fn transcript_from_messages(
                     |id| {
                         tool_names.get(id).map_or_else(
                             || (format!("Tool result {id}"), None),
-                            |name| (format!("Completed {name}"), Some(name.clone())),
+                            |(name, display_name)| {
+                                (format!("Completed {display_name}"), Some(name.clone()))
+                            },
                         )
                     },
                 );
@@ -263,11 +270,11 @@ pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
                 ),
                 (
                     "Newline".into(),
-                    "Shift+Enter; if your terminal sends plain Enter, use /multiline on".into(),
+                    "Shift+Enter or Ctrl+J; /multiline changes Enter behavior".into(),
                 ),
                 (
                     "Scroll".into(),
-                    "Mouse wheel uses native scrollback; --alt-screen uses captured wheel or PageUp/PageDown".into(),
+                    "Mouse wheel or PageUp/PageDown scroll the full-screen transcript; --no-alt-screen uses native scrollback".into(),
                 ),
                 (
                     "Complete".into(),
@@ -275,7 +282,7 @@ pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
                 ),
                 (
                     "History".into(),
-                    "Up on the first line starts history; Up/Down browse; Down past newest restores the draft; Ctrl-R searches".into(),
+                    "Up/Down move through draft rows; Up on the first row starts history; Down past newest restores the draft; Ctrl-R searches".into(),
                 ),
                 (
                     "Cancel".into(),
@@ -477,117 +484,6 @@ pub(super) fn ratatui_style(style: ThemeTextStyle) -> Style {
     rendered
 }
 
-pub(super) fn composer_height(state: &TuiState, width: u16) -> u16 {
-    let layout = composer_layout(
-        &state.composer.draft,
-        "",
-        state.composer.cursor,
-        composer_inner_width(width),
-    );
-    let preview_rows = if state.pending_images.is_empty() {
-        0
-    } else {
-        6
-    };
-    u16::try_from(layout.lines.len().clamp(1, 6) + preview_rows + 2).unwrap_or(14)
-}
-
-pub(super) fn composer_inner_width(width: u16) -> usize {
-    usize::from(width.saturating_sub(2)).max(1)
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(super) struct ComposerVisualLine {
-    pub(super) draft: String,
-    pub(super) ghost: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct ComposerLayout {
-    pub(super) lines: Vec<ComposerVisualLine>,
-    pub(super) cursor_row: usize,
-    pub(super) cursor_column: usize,
-}
-
-pub(super) fn composer_layout(
-    draft: &str,
-    ghost: &str,
-    cursor: usize,
-    width: usize,
-) -> ComposerLayout {
-    debug_assert!(cursor <= draft.len() && draft.is_char_boundary(cursor));
-    let width = width.max(1);
-    let mut lines = vec![ComposerVisualLine::default()];
-    let mut row = 0;
-    let mut column = 0;
-    let mut pending_wrap = false;
-    let mut cursor_position = None;
-
-    for (value, offset, is_ghost) in [(draft, 0, false), (ghost, draft.len(), true)] {
-        for (index, grapheme) in value.grapheme_indices(true) {
-            let grapheme_width = UnicodeWidthStr::width(grapheme);
-            let wrapped_before_grapheme = if pending_wrap {
-                lines.push(ComposerVisualLine::default());
-                row += 1;
-                column = 0;
-                pending_wrap = false;
-                true
-            } else if grapheme != "\n" && column + grapheme_width > width {
-                lines.push(ComposerVisualLine::default());
-                row += 1;
-                column = 0;
-                true
-            } else {
-                false
-            };
-            let grapheme_start = offset + index;
-            let cursor_inside_grapheme =
-                !is_ghost && grapheme_start < cursor && cursor < grapheme_start + grapheme.len();
-
-            if cursor_position.is_none() && grapheme_start == cursor {
-                cursor_position = Some((row, column));
-            }
-
-            if grapheme == "\n" {
-                if !wrapped_before_grapheme {
-                    lines.push(ComposerVisualLine::default());
-                    row += 1;
-                    column = 0;
-                }
-                continue;
-            }
-
-            let line = lines.last_mut().expect("composer has at least one line");
-            if is_ghost {
-                line.ghost.push_str(grapheme);
-            } else {
-                line.draft.push_str(grapheme);
-            }
-            column += grapheme_width;
-            pending_wrap = column >= width;
-            if cursor_position.is_none() && cursor_inside_grapheme {
-                cursor_position = Some(if pending_wrap {
-                    (row + 1, 0)
-                } else {
-                    (row, column)
-                });
-            }
-        }
-    }
-
-    if pending_wrap {
-        lines.push(ComposerVisualLine::default());
-        row += 1;
-        column = 0;
-    }
-    let (cursor_row, cursor_column) = cursor_position.unwrap_or((row, column));
-    ComposerLayout {
-        lines,
-        cursor_row,
-        cursor_column,
-    }
-}
-
 pub(super) fn completion_menu_height(
     state: &TuiState,
     total_width: u16,
@@ -603,7 +499,7 @@ pub(super) fn completion_menu_height(
         .saturating_sub(MINIMUM_COMPLETION_TRANSCRIPT_ROWS)
         .saturating_sub(activity_height)
         .saturating_sub(composer_height)
-        .saturating_sub(1);
+        .saturating_sub(FOOTER_HEIGHT);
     if available < 3 {
         return 0;
     }

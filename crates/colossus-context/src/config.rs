@@ -20,7 +20,7 @@ impl Default for ContextConfig {
     fn default() -> Self {
         Self {
             auto_compaction: true,
-            compact_at_percent: 70,
+            compact_at_percent: 85,
             target_percent: 45,
             preserve_recent_messages: 8,
             model_assisted: true,
@@ -45,10 +45,14 @@ impl ContextConfig {
     }
 
     pub(super) fn threshold_tokens(&self, input_budget_tokens: u64) -> u64 {
-        input_budget_tokens * u64::from(self.compact_at_percent) / 100
+        percentage(input_budget_tokens, self.compact_at_percent)
     }
 
     pub(super) fn target_tokens(&self, input_budget_tokens: u64) -> u64 {
-        input_budget_tokens * u64::from(self.target_percent) / 100
+        percentage(input_budget_tokens, self.target_percent)
     }
+}
+
+fn percentage(tokens: u64, percent: u8) -> u64 {
+    tokens / 100 * u64::from(percent) + tokens % 100 * u64::from(percent) / 100
 }

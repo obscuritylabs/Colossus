@@ -3,6 +3,7 @@ title: Triggers and recovery
 description: Trigger exact workflow definitions from schedules, authenticated webhooks, or repository events and recover without unsafe replay.
 audience: developer
 type: how-to
+icon: lucide/refresh-cw
 ---
 
 # Triggers and recovery
@@ -13,6 +14,12 @@ Bind an exact registered workflow to a durable trigger, operate its queue throug
 worker, and recover interrupted work without replaying an uncertain external effect.
 
 ## Prerequisites
+
+Desktop operators can use [Workflows and schedules](../../desktop/schedules.md) to register
+existing YAML and control schedules in their private Workspace partition. The
+authenticated application API exposes the same canonical scheduler with owner-bound
+resources, exact definition hashes, durable request receipts, and revision-bound
+controls. Separate CLI state is not imported implicitly.
 
 - A validated and registered workflow.
 - Input JSON that conforms to the workflow schema.
@@ -136,6 +143,18 @@ due-time behavior without changing the system clock.
 - **Run has outcome-unknown:** reconcile the target system or require operator input;
   do not blindly resume the effect.
 - **Schedule backlog is unexpected:** inspect its `fire-once` or `skip` misfire policy.
+
+The CLI command above uses fixed elapsed time from 60 seconds through 31 days, with
+UTC boundaries. Desktop and authenticated applications also support daily/weekly
+calendar recurrence in an IANA timezone and plain-language agent tasks. Calendar timing
+keeps its local hour across DST, skips missing times, and runs repeated times once.
+See the [Schedule contract](../../reference/workflow-schema.md#schedule-contract).
+One due boundary queues under either policy. Multiple due boundaries fire the latest
+once or skip all and advance into the future. Pause does not cancel existing runs;
+re-enable preserves the boundary. Application controls serialize their exact canonical
+revision check with ticks. A creation receipt commits atomically with allocation and
+survives restart; replaying the same owner/key/normalized intent returns the original
+allocation even after ticks. Reusing that key for different intent conflicts.
 
 ## Next step
 

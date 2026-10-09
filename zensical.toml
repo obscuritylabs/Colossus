@@ -14,21 +14,65 @@ edit_uri = "https://github.com/obscuritylabs/Colossus/edit/main/docs/"
 extra_css = ["stylesheets/extra.css"]
 extra_javascript = ["assets/vendor/mermaid-11.15.0.min.js"]
 nav = [
-  { "Home" = "index.md" },
   { "Get started" = [
-    { "Overview" = "get-started/index.md" },
-    { "Install" = "get-started/install.md" },
-    { "Colossus Desktop" = "get-started/desktop.md" },
-    { "Windows Desktop preview" = "get-started/windows-desktop.md" },
-    { "Five-minute quickstart" = "get-started/quickstart.md" },
-    { "Connect a model" = "get-started/connect-model.md" },
-    { "First repository task" = "get-started/first-repository-task.md" },
+    { "Start here" = "index.md" },
+    { "First run roadmap" = "get-started/index.md" },
     { "Core concepts" = "get-started/core-concepts.md" },
     { "Upgrade and compatibility" = "get-started/upgrade-compatibility.md" },
   ] },
-  { "Use Colossus" = [
+  { "CLI" = [
+    { "Getting started" = [
+      { "Install" = "get-started/install.md" },
+      { "Five-minute quickstart" = "get-started/quickstart.md" },
+      { "Connect a model" = "get-started/connect-model.md" },
+      { "First repository task" = "get-started/first-repository-task.md" },
+    ] },
+    { "Work with the CLI" = [
+      { "Agent runs" = "use/agent-runs.md" },
+      { "Terminal UI" = "use/terminal-ui.md" },
+      { "ACP in editors" = "extend/acp.md" },
+      { "Sessions" = "use/sessions.md" },
+      { "Context" = "use/sessions-context.md" },
+      { "Planning" = "use/planning.md" },
+      { "Research" = "use/research.md" },
+      { "Memories" = "use/memories.md" },
+      { "Decisions" = "use/decisions.md" },
+      { "Tools" = "use/tools.md" },
+      { "Skills and plugins" = "use/skills-plugins.md" },
+      { "Classic Outlook" = "use/outlook-classic.md" },
+      { "MCP servers" = "use/mcp-servers.md" },
+      { "Theme" = "use/theme.md" },
+    ] },
+    { "CLI reference" = [
+      { "Installation options" = "get-started/install-options.md" },
+      { "Update and remove" = "get-started/cli-installation-lifecycle.md" },
+      { "Commands and flags" = "reference/cli.md" },
+      { "TUI commands and keys" = "reference/tui.md" },
+    ] },
+  ] },
+  { "Desktop" = [
+    { "Overview" = "desktop/index.md" },
+    { "Get started" = [
+      { "Start on macOS" = "get-started/desktop.md" },
+      { "Start on Windows" = "get-started/windows-desktop.md" },
+      { "Workspaces" = "desktop/workspaces.md" },
+    ] },
+    { "Work in Desktop" = [
+      { "Work and threads" = "desktop/work.md" },
+      { "Session views" = "desktop/session-views.md" },
+      { "Workflows and schedules" = "desktop/schedules.md" },
+      { "Tools beside your work" = "desktop/tools.md" },
+    ] },
+    { "Configure and extend" = [
+      { "Capabilities and plugins" = "desktop/capabilities.md" },
+      { "Settings and access" = "desktop/settings.md" },
+      { "External targets" = "desktop/external-targets.md" },
+      { "Desktop setup files" = "get-started/desktop-setup-files.md" },
+    ] },
+  ] },
+  { "Use" = [
     { "Overview" = "use/index.md" },
-    { "Connect providers" = [
+    { "Connect a model" = [
       { "Choose a provider" = "use/providers/index.md" },
       { "Codex or ChatGPT subscription" = "use/providers/codex-chatgpt.md" },
       { "OpenAI API" = "use/providers/openai-api.md" },
@@ -36,26 +80,34 @@ nav = [
       { "Local models" = "use/providers/local-models.md" },
       { "Other OpenAI-compatible endpoints" = "use/providers/openai-compatible.md" },
     ] },
-    { "Agent runs" = "use/agent-runs.md" },
-    { "Terminal UI" = "use/terminal-ui.md" },
-    { "Sessions and context" = "use/sessions-context.md" },
-    { "Tasks, decisions, and plans" = "use/tasks-decisions-plans.md" },
-    { "Goals and subagents" = "use/goals-subagents.md" },
-    { "Memories" = "use/memories.md" },
-    { "Research overview" = "use/research-search.md" },
-    { "Deep research" = "use/deep-research.md" },
-    { "Web search" = "use/web-search.md" },
+    { "Keep work moving" = [
+      { "Tasks, decisions, and plans" = "use/tasks-decisions-plans.md" },
+      { "Goals and subagents" = "use/goals-subagents.md" },
+    ] },
+    { "Find information" = [
+      { "Search" = "use/web-search.md" },
+      { "Deep research" = "use/deep-research.md" },
+    ] },
   ] },
-  { "Automate & extend" = [
+  { "Extend" = [
     { "Overview" = "extend/index.md" },
-    { "First workflow" = "extend/workflows/first-workflow.md" },
-    { "Workflow authoring" = "extend/workflows/authoring.md" },
-    { "Triggers and recovery" = "extend/workflows/triggers-recovery.md" },
-    { "Agent Plugins" = "extend/plugins.md" },
-    { "Integrations" = "extend/integrations.md" },
-    { "MCP" = "extend/mcp.md" },
+    { "Workflows" = [
+      { "First workflow" = "extend/workflows/first-workflow.md" },
+      { "Workflow authoring" = "extend/workflows/authoring.md" },
+      { "Triggers and recovery" = "extend/workflows/triggers-recovery.md" },
+    ] },
+    { "Tools and editors" = [
+      { "Agent Plugins" = "extend/plugins.md" },
+      { "Create a plugin" = "extend/plugin-authoring.md" },
+      { "Distribute and trust plugins" = "extend/plugin-distribution.md" },
+      { "Integrations" = "extend/integrations.md" },
+      { "MCP" = "extend/mcp.md" },
+    ] },
+    { "Appearance" = [
+      { "Author a theme" = "extend/author-theme.md" },
+    ] },
   ] },
-  { "Administer & secure" = [
+  { "Admin" = [
     { "Overview" = "admin/index.md" },
     { "Configuration recipes" = "admin/configuration.md" },
     { "Providers and routing" = "admin/providers-routing.md" },
@@ -63,6 +115,8 @@ nav = [
     { "Policy and OPA" = "admin/policy-opa.md" },
     { "Sandbox" = "admin/sandbox.md" },
     { "Storage and worker" = "admin/storage-worker.md" },
+    { "Cloud control plane" = "admin/cloud-control-plane.md" },
+    { "Host public documentation" = "admin/documentation-hosting.md" },
     { "Audit, telemetry, and recovery" = "admin/audit-telemetry-recovery.md" },
     { "Offline operation" = "admin/offline-airgap.md" },
     { "Troubleshooting" = "admin/troubleshooting.md" },
@@ -70,8 +124,6 @@ nav = [
   { "Reference" = [
     { "Overview" = "reference/index.md" },
     { "Colossus home" = "reference/colossus-home.md" },
-    { "CLI" = "reference/cli.md" },
-    { "TUI commands and keys" = "reference/tui.md" },
     { "Configuration schema" = [
       { "Overview" = "reference/configuration.md" },
       { "Access" = "reference/configuration/access.md" },
@@ -101,6 +153,7 @@ nav = [
   { "Develop" = [
     { "Overview" = "develop/index.md" },
     { "Contributing" = "develop/contributing.md" },
+    { "Front-end development" = "develop/frontend.md" },
     { "Source setup and test tiers" = "develop/setup-testing.md" },
     { "Tiered CI/CD" = "develop/ci-cd.md" },
     { "Toolchain inventory" = "develop/toolchain-inventory.md" },
@@ -116,10 +169,13 @@ nav = [
       { "ADR 0002: Interface boundary" = "develop/adr/0002-interface-presentation-boundary.md" },
       { "ADR 0004: Desktop Git inspection" = "develop/adr/0004-desktop-git-inspection.md" },
       { "ADR 0005: Desktop file search and diffs" = "develop/adr/0005-desktop-file-diffs.md" },
+      { "ADR 0006: Cloud control plane" = "develop/adr/0006-cloud-control-plane.md" },
     ] },
     { "Runtime and ports" = "develop/runtime-ports.md" },
     { "OpenTelemetry implementation" = "develop/observability.md" },
     { "Public API and application SDKs" = "develop/application-sdk.md" },
+    { "Cloud control plane" = "develop/cloud-control-plane.md" },
+    { "Evaluate offline Desktop dictation" = "develop/desktop-dictation.md" },
     { "State and recovery" = "develop/state-recovery.md" },
     { "Security architecture" = "develop/security-architecture.md" },
     { "Extensions and presentation" = "develop/extensions-presentation.md" },
@@ -147,6 +203,7 @@ features = [
   "navigation.instant",
   "navigation.instant.progress",
   "navigation.path",
+  "navigation.sections",
   "navigation.tabs",
   "navigation.tabs.sticky",
   "navigation.top",

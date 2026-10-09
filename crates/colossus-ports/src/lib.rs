@@ -28,6 +28,9 @@ use thiserror::Error;
 mod control;
 pub use control::*;
 
+mod context_error;
+pub use context_error::*;
+
 mod run_provenance;
 pub use run_provenance::*;
 
@@ -39,6 +42,8 @@ pub use journal::*;
 
 mod provider;
 pub use provider::*;
+mod provider_continuation;
+pub use provider_continuation::*;
 
 mod tools;
 pub use tools::*;

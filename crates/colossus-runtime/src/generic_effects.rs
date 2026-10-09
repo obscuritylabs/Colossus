@@ -106,7 +106,7 @@ impl EffectExecutor for WorkflowAgentExecutor {
             .ok_or_else(|| ExecutionError::Failed("workflow attempt is missing".into()))?;
         let result = self
             .agent
-            .run_workflow_step(
+            .run_workflow_step_with_options(
                 "primary",
                 "You are executing one bounded declarative workflow step. Complete only the supplied step and return its result.",
                 prompt,
@@ -116,6 +116,7 @@ impl EffectExecutor for WorkflowAgentExecutor {
                 step_id,
                 attempt,
                 &request.context.offered_tools,
+                serde_json::from_value(request.content.get("options").cloned().unwrap_or_else(|| json!({"model_profile": null, "reasoning_effort": null}))).map_err(|_| ExecutionError::Failed("invalid workflow model preferences".into()))?,
             )
             .await
             .map_err(workflow_agent_execution_error)?;
@@ -134,6 +135,11 @@ impl EffectExecutor for WorkflowAgentExecutor {
 
 fn workflow_agent_execution_error(error: AgentError) -> ExecutionError {
     match error {
+        AgentError::Provider(ModelProviderError::Rejected(failure))
+        | AgentError::Provider(ModelProviderError::ResponseDiagnostic {
+            failure: Some(failure),
+            ..
+        }) => ExecutionError::ProviderRejected(failure),
         AgentError::Provider(ModelProviderError::Recoverable {
             code,
             message,
@@ -148,7 +154,7 @@ fn workflow_agent_execution_error(error: AgentError) -> ExecutionError {
         AgentError::Provider(ModelProviderError::HttpStatus { status, message }) => {
             ExecutionError::HttpStatus { status, message }
         }
-        AgentError::Provider(ModelProviderError::ResponseDiagnostic { diagnostic }) => {
+        AgentError::Provider(ModelProviderError::ResponseDiagnostic { diagnostic, .. }) => {
             ExecutionError::HttpStatus {
                 status: diagnostic.status,
                 message: format!("provider endpoint returned HTTP {}", diagnostic.status),

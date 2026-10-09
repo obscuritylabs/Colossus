@@ -189,8 +189,11 @@ fn manual_responses_setup_writes_only_a_credential_reference_and_never_overwrite
         (model.context_window_tokens, model.max_output_tokens),
         (64_000, 8_000)
     );
-    assert!(model.capabilities.tool_calls && model.capabilities.image_inputs);
-    assert!(!model.capabilities.streaming);
+    assert!(
+        model.capabilities.capabilities().tool_calls
+            && model.capabilities.capabilities().image_inputs
+    );
+    assert!(!model.capabilities.capabilities().streaming);
     assert_eq!(config.models.roles["primary"], "primary");
     assert_eq!(
         config.sandbox.network_destinations,
@@ -270,6 +273,12 @@ fn chat_and_responses_discovery_load_cards_before_setup_and_persist_effect_evide
                 "id": "catalog-model", "name": "Catalog model", "description": "A discovered model.",
                 "context_length": 128_000, "top_provider": {"max_completion_tokens": 16_384},
                 "supported_parameters": ["tools"], "architecture": {"input_modalities": ["text", "image"]}
+            }, {
+                "id": "custom-flat", "max_model_len": 131_072, "tooling_support": true,
+                "max_tokens_field": "max_completion_tokens"
+            }, {
+                "id": "custom-nested", "context_window_tokens": 200_000, "max_completion_tokens": 32_000,
+                "capabilities": {"tool_calls": true, "image_inputs": true, "streaming": false}
             }]}).to_string();
             write!(stream, "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()).expect("catalog response");
             stream.flush().expect("catalog flush");
@@ -294,6 +303,16 @@ fn chat_and_responses_discovery_load_cards_before_setup_and_persist_effect_evide
         assert_eq!(models[0]["max_output_tokens"], 16_384);
         assert_eq!(models[0]["tool_calls"], true);
         assert_eq!(models[0]["image_inputs"], true);
+        assert_eq!(models[1]["id"], "custom-flat");
+        assert_eq!(models[1]["context_window_tokens"], 131_072);
+        assert_eq!(models[1]["tool_calls"], true);
+        assert!(models[1].get("max_output_tokens").is_none());
+        assert_eq!(models[2]["id"], "custom-nested");
+        assert_eq!(models[2]["context_window_tokens"], 200_000);
+        assert_eq!(models[2]["max_output_tokens"], 32_000);
+        assert_eq!(models[2]["tool_calls"], true);
+        assert_eq!(models[2]["image_inputs"], true);
+        assert_eq!(models[2]["streaming"], false);
         fixture.assert_no_configuration();
     }
     for request in server.join().expect("catalog server") {

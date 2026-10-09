@@ -10,9 +10,18 @@ mod artifacts;
 mod error;
 mod identity;
 mod plugins;
+mod posture;
+mod process_sessions;
 mod repository;
 mod runs;
+mod sharing;
+pub use posture::*;
+pub use sharing::{
+    ListVisibleRunsResponse, SetWorkspaceSharingRequest, VisibleRun, WorkspaceSharingState,
+};
 mod validation;
+mod workflows;
+pub use workflows::*;
 
 pub use artifacts::{
     ARTIFACT_CHUNK_BYTES, ArtifactApi, ArtifactChunk, ArtifactDownload, ArtifactPurpose,
@@ -28,6 +37,7 @@ pub use identity::{
     scopes,
 };
 pub use plugins::*;
+pub use process_sessions::*;
 pub use repository::{EventSourcedRunRepository, RunRepository};
 pub use runs::{
     AgentRunApi, ApprovalRisk, ArchiveThreadRequest, CancelRunRequest, ContentPart,
@@ -44,6 +54,9 @@ pub use runs::{
     ThreadLifecycle, TokenUsage, ToolActivity, ToolActivityState, WatchRunRequest,
     validate_public_approval_display, validate_public_command_context,
 };
+
+/// Safe automatic provider recovery progress.
+pub use colossus_contracts::{ProviderRetry, ProviderRetryState};
 
 #[cfg(test)]
 mod tests;

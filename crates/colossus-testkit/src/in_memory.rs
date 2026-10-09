@@ -15,9 +15,16 @@ struct State {
 pub struct InMemoryEventJournal {
     state: Mutex<State>,
     reject_global_reads: AtomicBool,
+    reject_stream_reads: AtomicBool,
 }
 
 impl InMemoryEventJournal {
+    /// Require indexed pages and ranged stream reads after fixture setup.
+    pub fn require_bounded_reads(&self) {
+        self.reject_global_reads.store(true, Ordering::SeqCst);
+        self.reject_stream_reads.store(true, Ordering::SeqCst);
+    }
+
     /// Build a journal that fails if repository code falls back to a global event scan.
     pub fn rejecting_global_reads() -> Self {
         Self {
@@ -114,6 +121,11 @@ impl EventJournal for InMemoryEventJournal {
     }
 
     fn read_stream(&self, stream_id: &str) -> Result<Vec<EventEnvelope>, StoreError> {
+        if self.reject_stream_reads.load(Ordering::SeqCst) {
+            return Err(failure(
+                "unbounded stream reads are forbidden in this fixture",
+            ));
+        }
         Ok(self
             .state
             .lock()

@@ -1,9 +1,13 @@
 //! Opt-in stdio acceptance host. Never built or invoked by the shipped application.
-//! Only test-owned confirmation replaces OS UI; challenge refetch and broker stay real.
+//! The isolated review supplies the final decision; challenge refetch and broker stay real.
 #[path = "../src/approval_adapter.rs"]
 mod approval_adapter;
 #[path = "approval-test-bridge/diagnostics.rs"]
 mod diagnostics;
+#[path = "approval-test-bridge/process_acceptance.rs"]
+mod process_acceptance;
+#[path = "approval-test-bridge/workflow_acceptance.rs"]
+mod workflow_acceptance;
 
 use anyhow::Context as _;
 use colossus_sdk::{
@@ -27,7 +31,12 @@ use std::{
 async fn main() -> anyhow::Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     anyhow::ensure!(
-        args.len() == 3,
+        args.len() == 3
+            || (args.len() == 4
+                && matches!(
+                    args[3].as_str(),
+                    "process-acceptance" | "workflow-acceptance"
+                )),
         "expected sidecar, private fixture root, loopback provider URL"
     );
     let root = std::fs::canonicalize(&args[1])?;
@@ -40,18 +49,43 @@ async fn main() -> anyhow::Result<()> {
     runtime.providers[0].base_url = Some(args[2].clone());
     runtime.providers[0].timeout_ms = 5000;
     runtime.models[0].model = "approval-fixture".into();
+    let workflow_acceptance = args
+        .get(3)
+        .is_some_and(|mode| mode == "workflow-acceptance");
+    let mut primary_scopes = vec![
+        scopes::RUNS_EXECUTE,
+        scopes::RUNS_READ,
+        scopes::RUNS_CONTROL,
+    ];
+    if workflow_acceptance {
+        primary_scopes.extend([
+            scopes::WORKFLOWS_READ,
+            scopes::WORKFLOWS_REGISTER,
+            scopes::SCHEDULES_READ,
+            scopes::SCHEDULES_CREATE,
+            scopes::SCHEDULES_CONTROL,
+            scopes::WORKFLOW_RUNS_READ,
+            scopes::WORKFLOW_RUNS_START,
+        ]);
+    }
     let grant = SidecarApplicationGrant::new(
         "app:approval-acceptance",
-        [
-            scopes::RUNS_EXECUTE,
-            scopes::RUNS_READ,
-            scopes::RUNS_CONTROL,
-        ]
-        .into_iter()
-        .map(ApiScope::new)
-        .collect::<Result<Vec<_>, _>>()?,
+        primary_scopes
+            .into_iter()
+            .map(ApiScope::new)
+            .collect::<Result<Vec<_>, _>>()?,
         ["primary".into()],
-        ["shell.run".into()],
+        if workflow_acceptance {
+            vec![
+                "shell.run".into(),
+                "workflow.task.schedule".into(),
+                "workflow.schedule.list".into(),
+                "workflow.schedule.get".into(),
+                "workflow.schedule.delete".into(),
+            ]
+        } else {
+            vec!["shell.run".into()]
+        },
     )?;
     let bootstrap = SidecarBootstrapConfig::new(&workspace, runtime, grant)?
         .with_colossus_home(root.join("home"))?
@@ -71,7 +105,13 @@ async fn main() -> anyhow::Result<()> {
         ApiMajor::new(1)?,
     )?;
     let client = Colossus::start_sidecar(&NativeSidecarLifecycle::new(bootstrap), options).await?;
-    let result = serve(&client, &instance).await;
+    let result = if workflow_acceptance {
+        workflow_acceptance::serve(&client, &instance).await
+    } else if args.len() == 4 {
+        process_acceptance::serve(&client, &instance).await
+    } else {
+        serve(&client, &instance).await
+    };
     client.close().await?;
     result
 }
@@ -96,7 +136,7 @@ fn executable_digest(path: &Path) -> anyhow::Result<[u8; 32]> {
 
 async fn serve(client: &Colossus, instance: &Path) -> anyhow::Result<()> {
     let request = start_run(client, instance).await?;
-    review_loop(client, request).await
+    review_loop(client, instance, request).await
 }
 
 async fn start_run(
@@ -126,7 +166,7 @@ async fn start_run(
             plan_action: None,
             branch: None,
             max_turns: 4,
-            idempotency_key: IdempotencyKey::new("approval-acceptance")?,
+            idempotency_key: IdempotencyKey::new(uuid::Uuid::new_v4().to_string())?,
         })
         .await?;
     tokio::time::timeout(Duration::from_secs(30), async {
@@ -170,7 +210,7 @@ async fn start_run(
                     run_id: interaction.run_id.clone(),
                     interaction_id: interaction.interaction_id.clone(),
                     etag: interaction.etag.clone(),
-                    idempotency_key: IdempotencyKey::new("approval-response")?,
+                    idempotency_key: IdempotencyKey::new(uuid::Uuid::new_v4().to_string())?,
                     response: InteractionAnswer::Approval {
                         approved: true,
                         request_hash: approval.request_hash.clone(),
@@ -188,7 +228,11 @@ async fn start_run(
     .await?
 }
 
-async fn review_loop(client: &Colossus, request: RespondInteractionRequest) -> anyhow::Result<()> {
+async fn review_loop(
+    client: &Colossus,
+    instance: &Path,
+    request: RespondInteractionRequest,
+) -> anyhow::Result<()> {
     let began = std::time::Instant::now();
     let frozen = match approval_adapter::pending(client, &request).await {
         Ok(frozen) => frozen,
@@ -238,12 +282,16 @@ async fn review_loop(client: &Colossus, request: RespondInteractionRequest) -> a
         }
     });
     let mut submitted = false;
+    let mut remembered_key: Option<String> = None;
     while let Some(line) = receive.recv().await {
         let value: Value = serde_json::from_str(&line)?;
         if value["command"] == "close" {
             break;
         }
         let outcome = async {
+            if value["command"] == "repeat_command" {
+                return repeat_command(client, instance, remembered_key.as_deref()).await;
+            }
             if value["command"] == "released_activity" {
                 return released_activity(client, &request.run_id).await;
             }
@@ -253,14 +301,18 @@ async fn review_loop(client: &Colossus, request: RespondInteractionRequest) -> a
             }
             anyhow::ensure!(approval_adapter::pending(client, &request).await? == frozen, "stale challenge");
             match value["command"].as_str() {
-                Some("command_review_context") => Ok(json!({"reviewId": review_id, "target": "Managed Local — isolated acceptance workspace", "commandContext": approval_adapter::CommandApprovalContextDto::from(frozen.command_context.clone().ok_or_else(|| anyhow::anyhow!("missing command context"))?)})),
+                Some("command_review_context") => Ok(json!({"reviewId": review_id, "target": "Managed Local — isolated acceptance workspace", "canRemember": approval_adapter::command_key(&frozen).is_some(), "commandContext": approval_adapter::CommandApprovalContextDto::from(frozen.command_context.clone().ok_or_else(|| anyhow::anyhow!("missing command context"))?)})),
                 Some("finish_command_review") => {
                     anyhow::ensure!(!submitted && value["args"]["reviewId"] == review_id, "stale review identity");
-                    let approved = value["args"]["approved"].as_bool().ok_or_else(|| anyhow::anyhow!("missing decision"))?;
+                    let choice = value["args"]["decision"].as_str().ok_or_else(|| anyhow::anyhow!("missing decision"))?;
+                    anyhow::ensure!(matches!(choice, "allow_once" | "always_allow" | "deny"), "unsupported decision");
+                    let approved = choice != "deny";
+                    let key = if choice == "always_allow" { Some(approval_adapter::command_key(&frozen).ok_or_else(|| anyhow::anyhow!("ineligible command"))?) } else { None };
                     let mut response = request.clone();
                     let InteractionAnswer::Approval { approved: decision, .. } = &mut response.response else { unreachable!() };
                     *decision = approved;
                     client.respond_interaction(response).await?;
+                    remembered_key = key;
                     submitted = true;
                     Ok(Value::Null)
                 }
@@ -278,6 +330,33 @@ async fn review_loop(client: &Colossus, request: RespondInteractionRequest) -> a
         std::io::stdout().flush()?;
     }
     Ok(())
+}
+
+async fn repeat_command(
+    client: &Colossus,
+    instance: &Path,
+    remembered_key: Option<&str>,
+) -> anyhow::Result<Value> {
+    let key = remembered_key.ok_or_else(|| anyhow::anyhow!("no remembered command"))?;
+    let repeated = start_run(client, instance).await?;
+    let repeated_id = repeated.run_id.clone();
+    let resolved = approval_adapter::answer_remembered(client, repeated, key)
+        .await
+        .ok();
+    let approved = resolved.is_some();
+    if !approved {
+        client
+            .cancel_run(CancelRunRequest {
+                run_id: repeated_id.clone(),
+                idempotency_key: IdempotencyKey::new(uuid::Uuid::new_v4().to_string())?,
+            })
+            .await?;
+    }
+    let activity = released_activity(client, &repeated_id).await?;
+    Ok(json!({"approved": approved, "result": activity,
+        "resolvedInteractionStatus": resolved.as_ref().map(|interaction| format!("{:?}", interaction.status)),
+        "respondableByCaller": resolved.as_ref().is_some_and(|interaction| interaction.respondable_by_caller),
+    }))
 }
 
 async fn released_activity(client: &Colossus, run_id: &str) -> anyhow::Result<Value> {

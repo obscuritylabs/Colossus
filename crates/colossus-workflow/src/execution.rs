@@ -627,6 +627,7 @@ impl WorkflowService {
             WorkflowStep::Agent {
                 id,
                 prompt,
+                options,
                 idempotency,
             } => {
                 let _permit = semaphore
@@ -637,7 +638,7 @@ impl WorkflowService {
                     WorkflowEffect {
                         kind: "agent".into(),
                         action: "agent.run".into(),
-                        content: json!({"prompt": prompt}),
+                        content: json!({"prompt": prompt, "options": options}),
                         idempotency: idempotency
                             .as_ref()
                             .map(|strategy| format!("{strategy}:{run_id}:{execution_id}")),
@@ -1028,11 +1029,12 @@ impl WorkflowService {
                 WorkflowStep::Agent {
                     id,
                     prompt,
+                    options,
                     idempotency,
                 } => WorkflowEffect {
                     kind: "agent".into(),
                     action: "agent.run".into(),
-                    content: json!({"prompt": prompt}),
+                    content: json!({"prompt": prompt, "options": options}),
                     idempotency: idempotency.clone(),
                     credential_references: Vec::new(),
                     allowed_tools: allowed_tools.as_ref().clone(),

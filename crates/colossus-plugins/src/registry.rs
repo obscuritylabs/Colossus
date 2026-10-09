@@ -165,7 +165,7 @@ impl RegistryReference {
 }
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use colossus_network::{AdditionalRootCertificates, pinned_reqwest_client};
+use colossus_network::{AdditionalRootCertificates, ClientIdentity, pinned_reqwest_client};
 use colossus_ports::CredentialResolver;
 use futures::StreamExt as _;
 use reqwest::{Method, Response, StatusCode, header};
@@ -492,6 +492,7 @@ pub struct PluginRegistryClient {
     credential: RegistryCredential,
     timeout_ms: u64,
     clients: tokio::sync::Mutex<BTreeMap<String, reqwest::Client>>,
+    client_identity: Option<ClientIdentity>,
 }
 
 impl PluginRegistryClient {
@@ -507,7 +508,15 @@ impl PluginRegistryClient {
             credential,
             timeout_ms: REGISTRY_TIMEOUT_MS,
             clients: tokio::sync::Mutex::new(BTreeMap::new()),
+            client_identity: None,
         })
+    }
+
+    /// Present one app-owned TLS identity to permitted registry and token origins.
+    #[must_use]
+    pub fn with_client_identity(mut self, identity: Option<ClientIdentity>) -> Self {
+        self.client_identity = identity;
+        self
     }
 
     /// Override the bounded end-to-end request timeout.
@@ -698,7 +707,7 @@ impl PluginRegistryClient {
         })
     }
 
-    /// Fetch the OCI 1.1 referrers index for an exact subject digest.
+    /// Fetch the OCI referrers index for an exact subject digest, including the tag fallback.
     pub async fn referrers(
         &self,
         reference: &str,
@@ -714,6 +723,9 @@ impl PluginRegistryClient {
                 false,
             )
             .await?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return self.pull_referrers_tag(&parsed, subject_digest).await;
+        }
         require_status(&response, StatusCode::OK, "referrers pull")?;
         serde_json::from_slice(&read_response(response, MAX_MANIFEST_BYTES).await?).map_err(adapter)
     }
@@ -837,13 +849,13 @@ impl PluginRegistryClient {
                 false,
             )
             .await?;
-        if response.status() == StatusCode::NOT_FOUND {
-            return Ok((Vec::new(), Vec::new()));
-        }
-        require_status(&response, StatusCode::OK, "referrers pull")?;
-        let index: Value =
+        let index: Value = if response.status() == StatusCode::NOT_FOUND {
+            self.pull_referrers_tag(reference, subject_digest).await?
+        } else {
+            require_status(&response, StatusCode::OK, "referrers pull")?;
             serde_json::from_slice(&read_response(response, MAX_MANIFEST_BYTES).await?)
-                .map_err(adapter)?;
+                .map_err(adapter)?
+        };
         if index.get("schemaVersion") != Some(&json!(2)) {
             return Err(StoreError::Adapter("invalid OCI referrers index".into()));
         }
@@ -877,7 +889,7 @@ impl PluginRegistryClient {
             {
                 continue;
             }
-            let manifest = self.pull_blob(reference, digest, size).await?;
+            let manifest = self.pull_referrer_manifest(reference, digest, size).await?;
             let value: Value = serde_json::from_slice(&manifest).map_err(adapter)?;
             if value
                 .get("subject")
@@ -916,6 +928,60 @@ impl PluginRegistryClient {
             retained.push(descriptor.clone());
         }
         Ok((retained, blobs))
+    }
+
+    async fn pull_referrers_tag(
+        &self,
+        reference: &RegistryReference,
+        subject_digest: &str,
+    ) -> Result<Value, StoreError> {
+        let encoded = subject_digest
+            .strip_prefix("sha256:")
+            .ok_or_else(|| StoreError::Adapter("unsupported referrer subject digest".into()))?;
+        let tag = format!("sha256-{encoded}");
+        let url = self.registry_url(reference, "manifests", &tag)?;
+        let response = self
+            .authenticated_get(
+                url,
+                Some(format!("repository:{}:pull", reference.repository)),
+                false,
+            )
+            .await?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(json!({"schemaVersion": 2, "manifests": []}));
+        }
+        require_status(&response, StatusCode::OK, "referrers tag pull")?;
+        require_media_type(&response, OCI_IMAGE_INDEX_MEDIA_TYPE, "referrers tag")?;
+        serde_json::from_slice(&read_response(response, MAX_MANIFEST_BYTES).await?).map_err(adapter)
+    }
+
+    async fn pull_referrer_manifest(
+        &self,
+        reference: &RegistryReference,
+        digest: &str,
+        size: u64,
+    ) -> Result<Vec<u8>, StoreError> {
+        let url = self.registry_url(reference, "manifests", digest)?;
+        let response = self
+            .authenticated_get(
+                url,
+                Some(format!("repository:{}:pull", reference.repository)),
+                false,
+            )
+            .await?;
+        require_status(&response, StatusCode::OK, "referrer manifest pull")?;
+        require_media_type(
+            &response,
+            OCI_IMAGE_MANIFEST_MEDIA_TYPE,
+            "referrer manifest",
+        )?;
+        let bytes = read_response(response, MAX_MANIFEST_BYTES).await?;
+        if u64::try_from(bytes.len()).map_err(adapter)? != size || sha256_digest(&bytes) != digest {
+            return Err(StoreError::Verification(
+                "OCI referrer manifest digest or size does not match its descriptor".into(),
+            ));
+        }
+        Ok(bytes)
     }
 
     async fn push_referrer_material(
@@ -1223,10 +1289,14 @@ impl PluginRegistryClient {
         } else {
             self.profile.blob_redirect_ca_bundle_paths.get(&origin)
         };
-        path.map_or_else(
+        let roots = path.map_or_else(
             || Ok(AdditionalRootCertificates::default()),
             |path| AdditionalRootCertificates::from_pem_bundle_path(path).map_err(adapter),
-        )
+        )?;
+        Ok(match &self.client_identity {
+            Some(identity) => roots.with_client_identity(identity.clone()),
+            None => roots,
+        })
     }
 }
 

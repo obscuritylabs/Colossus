@@ -12,9 +12,19 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         bootstrap,
         screen_mode,
         background_notice,
+        lifecycle,
+        dictation,
     } = options;
     let snapshot = host.bootstrap(bootstrap).await.map_err(TuiError::Host)?;
     let mut state = TuiState::from_snapshot(snapshot);
+    state.dictation.port = dictation;
+    state.completions.extend([
+        "/dictate".into(),
+        "/dictate settings".into(),
+        "/dictate on".into(),
+        "/dictate microphones".into(),
+    ]);
+    observe_lifecycle(&state, lifecycle.as_deref());
     if screen_mode == ScreenMode::Inline {
         preload_native_history(&mut state, Arc::clone(&host)).await;
     }
@@ -38,6 +48,10 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         while let Ok(host_event) = event_rx.try_recv() {
             handle_host_event(&mut state, host_event);
         }
+        crate::dictation::tick(&mut state, event_tx.clone());
+        if let Some(line) = crate::dictation::take_send(&mut state) {
+            submit_line(&mut state, line, Arc::clone(&host), event_tx.clone());
+        }
         schedule_visible_previews(&mut state, Arc::clone(&host), event_tx.clone());
         start_sandbox_boundary_acknowledgement(&mut state, Arc::clone(&host), event_tx.clone());
         continue_native_history_preload(
@@ -47,7 +61,14 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
             screen_mode,
         );
         if !state.is_busy() && state.overlay.is_none() {
-            if let Some(command) = state.pending_plan_command.take() {
+            if let Some(command) = state.pending_setting_command.take() {
+                start_line(
+                    &mut state,
+                    command.into(),
+                    Arc::clone(&host),
+                    event_tx.clone(),
+                );
+            } else if let Some(command) = state.pending_plan_command.take() {
                 handle_plan_command(&mut state, command, Arc::clone(&host), event_tx.clone());
             } else if let Some(request) = state.pending_plan_execution.take() {
                 start_plan_execution(&mut state, request, Arc::clone(&host), event_tx.clone());
@@ -60,6 +81,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         if state.should_exit {
             break;
         }
+        observe_lifecycle(&state, lifecycle.as_deref());
         if event::poll(Duration::from_millis(33))? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
@@ -76,14 +98,46 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
                         request_older_page(&mut state, Arc::clone(&host), event_tx.clone());
                     }
                 }
-                Event::Paste(text) => insert_active_text(&mut state, &text),
+                Event::Paste(text)
+                    if !state.dictation.active
+                        || (state.dictation.paused && !state.dictation.pending) =>
+                {
+                    insert_active_text(&mut state, &text)
+                }
                 Event::Resize(_, _) => {}
                 _ => {}
             }
+            observe_lifecycle(&state, lifecycle.as_deref());
         }
     }
+    crate::dictation::cancel(&mut state);
     terminal.finish()?;
     Ok(())
+}
+
+pub(super) fn observe_lifecycle(
+    state: &TuiState,
+    observer: Option<&dyn InteractiveLifecycleObserver>,
+) {
+    if let Some(observer) = observer {
+        observer.observe(
+            &state.session_id,
+            state.is_busy(),
+            matches!(
+                state.overlay.as_ref(),
+                Some(
+                    Overlay::Prompt { .. }
+                        | Overlay::SessionBrowser(_)
+                        | Overlay::ThemePicker(_)
+                        | Overlay::SettingsPicker(_)
+                        | Overlay::PlanExecutionChoice { .. }
+                        | Overlay::PlanReviewChoice { .. }
+                        | Overlay::QueuePaused
+                )
+            ),
+            &state.footer.approval_mode,
+        );
+    }
 }
 
 fn preview_picker(screen_mode: ScreenMode) -> Picker {
@@ -338,6 +392,9 @@ fn handle_key(
     event_tx: mpsc::Sender<HostEvent>,
     screen_mode: ScreenMode,
 ) {
+    if crate::dictation::key(state, key, event_tx.clone()) {
+        return;
+    }
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         state.interrupt_or_exit();
         return;
@@ -355,16 +412,19 @@ fn handle_key(
                 submit_line(state, line, host, event_tx);
             }
         }
+        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.composer.insert("\n");
+        }
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.overlay = Some(Overlay::HistorySearch {
-                query: String::new(),
-            });
+            state.overlay = Some(Overlay::HistorySearch(HistorySearchState::new(
+                &state.history,
+            )));
         }
         KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.composer.cursor = 0;
+            state.composer.move_to(0);
         }
         KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.composer.cursor = state.composer.draft.len();
+            state.composer.move_to(state.composer.draft.len());
         }
         KeyCode::Char(character)
             if !key
@@ -382,12 +442,12 @@ fn handle_key(
             }
             state.composer.move_right();
         }
-        KeyCode::Home => state.composer.cursor = 0,
+        KeyCode::Home => state.composer.move_to(0),
         KeyCode::End => {
             if state.composer.cursor == state.composer.draft.len() {
                 state.end();
             } else {
-                state.composer.cursor = state.composer.draft.len();
+                state.composer.move_to(state.composer.draft.len());
             }
         }
         KeyCode::Up if !state.completion_menu_candidates().is_empty() => {
@@ -396,8 +456,26 @@ fn handle_key(
         KeyCode::Down if !state.completion_menu_candidates().is_empty() => {
             state.advance_completion();
         }
-        KeyCode::Up => state.previous_history(),
-        KeyCode::Down => state.next_history(),
+        KeyCode::Up => {
+            if state.composer.history_index.is_some()
+                || !state.composer.move_vertical(
+                    ComposerVerticalDirection::Previous,
+                    state.transcript_width.saturating_sub(2).max(1),
+                )
+            {
+                state.previous_history();
+            }
+        }
+        KeyCode::Down => {
+            if state.composer.history_index.is_some() {
+                state.next_history();
+            } else {
+                state.composer.move_vertical(
+                    ComposerVerticalDirection::Next,
+                    state.transcript_width.saturating_sub(2).max(1),
+                );
+            }
+        }
         KeyCode::Tab => {
             state.accept_completion();
         }
@@ -565,31 +643,43 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
             }
             _ => {}
         },
-        Overlay::HistorySearch { query } => match key.code {
+        Overlay::HistorySearch(search) => match key.code {
             KeyCode::Enter => {
-                let selected = state
-                    .history
-                    .iter()
-                    .rev()
-                    .find(|entry| entry.contains(query.as_str()))
-                    .cloned();
-                state.overlay = None;
-                if let Some(selected) = selected {
+                if let Some(selected) = search
+                    .selected
+                    .and_then(|index| state.history.get(index))
+                    .cloned()
+                {
+                    state.overlay = None;
                     state.composer.set(selected);
                 }
             }
+            KeyCode::Up | KeyCode::BackTab => search.move_selection(-1),
+            KeyCode::Down | KeyCode::Tab => search.move_selection(1),
+            KeyCode::Home => search.select_boundary(false),
+            KeyCode::End => search.select_boundary(true),
+            KeyCode::PageUp => search.scroll_preview(false),
+            KeyCode::PageDown => search.scroll_preview(true),
             KeyCode::Backspace => {
-                query.pop();
+                search.query.pop();
+                search.reconcile_selection(&state.history);
             }
             KeyCode::Char(character)
                 if !key
                     .modifiers
                     .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
             {
-                query.push(character);
+                search.query.push(character);
+                search.reconcile_selection(&state.history);
             }
             _ => {}
         },
+        Overlay::SettingsPicker(picker) => {
+            if let Some(command) = picker.handle_key(key) {
+                state.pending_setting_command = Some(command);
+                state.overlay = None;
+            }
+        }
         Overlay::PlanReviewChoice { selected, .. } => match key.code {
             KeyCode::Enter => {
                 let Some(selected) = *selected else {
@@ -886,8 +976,9 @@ pub(super) fn insert_active_text(state: &mut TuiState, text: &str) {
             Overlay::Prompt { request, input, .. } if !request.kind.uses_decision_dock() => {
                 input.push_str(&text);
             }
-            Overlay::HistorySearch { query: input } => {
-                input.push_str(&text);
+            Overlay::HistorySearch(search) => {
+                search.query.push_str(&text);
+                search.reconcile_selection(&state.history);
             }
             Overlay::SessionBrowser(browser) if browser.search_active => {
                 browser.query.push_str(&text);
@@ -903,6 +994,7 @@ pub(super) fn insert_active_text(state: &mut TuiState, text: &str) {
             Overlay::Prompt { .. }
             | Overlay::SessionBrowser(_)
             | Overlay::ThemePicker(_)
+            | Overlay::SettingsPicker(_)
             | Overlay::PlanReviewChoice { .. }
             | Overlay::PlanExecutionChoice { .. }
             | Overlay::QueuePaused => {}
@@ -923,6 +1015,9 @@ pub(super) fn submit_line(
 ) {
     let line = line.trim().to_owned();
     if line.is_empty() {
+        return;
+    }
+    if crate::dictation::command(state, &line, event_tx.clone()) {
         return;
     }
     state.dismiss_welcome();
@@ -964,6 +1059,10 @@ pub(super) fn start_line(
     host: Arc<dyn InteractiveHost>,
     event_tx: mpsc::Sender<HostEvent>,
 ) {
+    if let Some(picker) = SettingsPickerState::for_command(&line, state) {
+        state.overlay = Some(Overlay::SettingsPicker(picker));
+        return;
+    }
     match parse_interactive_command(&line) {
         InteractiveCommand::Empty => {}
         InteractiveCommand::Local(command) => handle_local_command(state, command, host, event_tx),
@@ -1431,6 +1530,18 @@ pub(super) fn handle_local_command(
 
 pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
     match event {
+        HostEvent::Dictation {
+            generation,
+            action,
+            result,
+        } => crate::dictation::apply(state, generation, action, result),
+        HostEvent::DictationSettings(result) => {
+            state.dictation.pending = false;
+            match result {
+                Ok(message) => state.append_plain(TranscriptKind::Command, &message),
+                Err(error) => state.append_plain(TranscriptKind::Error, &error),
+            }
+        }
         HostEvent::Run(envelope) => handle_run_event(state, envelope),
         HostEvent::Notice(document) => {
             state.append_entry(TranscriptEntry {
@@ -1525,6 +1636,7 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
             state.operation = None;
             state.control = None;
             state.activity = None;
+            state.provider_retry = None;
             state.started_at = None;
             let successful = match result {
                 Ok(OperationResult::Command(result)) => {
@@ -1685,6 +1797,7 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
         HostEvent::AttachmentFinished(result) => {
             state.operation = None;
             state.activity = None;
+            state.provider_retry = None;
             state.started_at = None;
             match result {
                 Ok(image) => {
@@ -1760,7 +1873,38 @@ fn offer_plan_execution_choice(state: &mut TuiState) {
 
 pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope) {
     let event = envelope.event;
+    if !matches!(
+        &event,
+        RunEvent::Provider {
+            event: ProviderEvent::Retry { .. }
+        }
+    ) {
+        state.provider_retry = None;
+    }
     match &event {
+        RunEvent::Provider {
+            event: ProviderEvent::Retry { retry },
+        } => {
+            if state
+                .control
+                .as_ref()
+                .is_some_and(|control| control.is_cancelled())
+            {
+                return;
+            }
+            if retry.state == colossus_contracts::ProviderRetryState::Recovered {
+                state.provider_retry = None;
+                state.activity = Some("waiting for model".into());
+            } else if state.operation.is_some()
+                && !state
+                    .control
+                    .as_ref()
+                    .is_some_and(|control| control.is_cancelled())
+            {
+                state.provider_retry = Some(retry.clone());
+            }
+            return;
+        }
         RunEvent::Provider {
             event: ProviderEvent::ModelDelta { text },
         } if state.preferences.stream_mode != colossus_contracts::StreamDisplayMode::Off => {
@@ -1789,7 +1933,10 @@ pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope)
         }
         RunEvent::ToolStarted { call, .. } => {
             finalize_intermediate_assistant_output(state);
-            state.activity = Some(format!("running {}", call.name));
+            state.activity = Some(format!(
+                "running {}",
+                colossus_presentation::tool_display_name(&call.name, &call.arguments)
+            ));
             state
                 .active_calls
                 .insert(call.call_id.clone(), call.clone());

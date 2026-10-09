@@ -10,7 +10,9 @@ import {
   useState,
 } from "react";
 import type { CSSProperties, FormEvent, ReactNode } from "react";
+import { DesktopStartup } from "./components/DesktopStartup";
 import { syncSavedSettings } from "./managed-settings-updates";
+import { terminalRequestForScope } from "./components/tools/TerminalDock";
 
 import {
   CommandFailure,
@@ -34,6 +36,7 @@ import {
   getSessionMap,
   getThreadDelegate,
   importCaBundle,
+  importClientIdentity,
   installDesktopUpdate,
   initializeDesktop,
   listAsides,
@@ -42,7 +45,9 @@ import {
   searchWorkspaceFiles,
   getWorkspaceGitDiff,
   listRuns,
+  notifyBackground,
   onSpaceAttention,
+  onStatusBarAction,
   onSpaceStatusChanged,
   readArtifactContent,
   readWorkspaceFile,
@@ -51,6 +56,7 @@ import {
   restoreThread,
   restoreSpace,
   removeCaBundle,
+  removeClientIdentity,
   removeExternalTarget,
   respondInteraction,
   resolvePluginSelection,
@@ -60,10 +66,12 @@ import {
   selectTarget,
   setApprovalMode,
   setTerminalEnabled,
-  showTerminalWindow,
+  syncStatusBarPins,
   archiveSpace,
   watchRun,
 } from "./api";
+import type { StatusBarAction } from "./api";
+import type { ScheduleRunAttempt } from "./workflows";
 import type { AgentParticipant } from "./components/AgentFlow";
 import type {
   ArtifactPreviewLine,
@@ -73,14 +81,31 @@ import {
   ExecutionBoundaryBanner,
   executionBoundaryBannerVisible,
 } from "./components/ExecutionBoundaryBanner";
-import { OperationsSurface } from "./components/OperationsSurface";
 import { pluginSelectionKey } from "./plugins";
 import { usePluginSkills } from "./use-plugin-skills";
 import type { AsideDraft } from "./components/AsidePanel";
 import { ReleaseChannelBanner } from "./components/ReleaseChannelBanner";
 import type { WorkspaceSurface } from "./components/ProductRail";
 import { WorkComposer } from "./components/WorkComposer";
+import { useDictation } from "./use-dictation";
+import type { ComposerDraft } from "./composer-paste";
+import {
+  composerDraft,
+  editComposerDraft,
+  expandComposerDraft,
+  pasteIntoComposerDraft,
+} from "./composer-paste";
 import { WorkSidebar } from "./components/WorkSidebar";
+import {
+  canForkThread,
+  createThreadForkDraft,
+  defaultForkTitle,
+  readThreadForkDrafts,
+  storeThreadForkDrafts,
+  threadForkBranch,
+  threadForkDraftRun,
+} from "./thread-fork";
+import type { ThreadForkDraft } from "./thread-fork";
 import { ToastRegion, useToastQueue } from "./components/ToastRegion";
 import type {
   SpaceActionFeedback,
@@ -144,6 +169,12 @@ import {
 } from "./sidebar-width";
 import { projectSpaceArchived, projectSpaceRestored } from "./space-lifecycle";
 import {
+  backgroundNotificationContent,
+  backgroundRunNotifications,
+  backgroundRunSnapshot,
+  selectStatusBarPins,
+} from "./status-bar";
+import {
   pinnedThreadIdsForSpace,
   readStoredThreadPins,
   setThreadPinned,
@@ -203,15 +234,24 @@ const OnboardingSurface = lazy(() =>
   })),
 );
 
+const OperationsSurface = lazy(() =>
+  import("./components/OperationsSurface").then((module) => ({
+    default: module.OperationsSurface,
+  })),
+);
+
 const FIXTURE_QUERY = new URLSearchParams(window.location.search);
 const FIXTURE_SCENARIO = FIXTURE_QUERY.get("fixture");
 const FIXTURE_MODE =
   import.meta.env.DEV &&
-  (FIXTURE_SCENARIO === "operations-studio" ||
+  (FIXTURE_SCENARIO === "provider-retry" ||
+    FIXTURE_SCENARIO === "operations-studio" ||
     FIXTURE_SCENARIO === "command-approval" ||
     FIXTURE_SCENARIO === "activity-comparison" ||
     FIXTURE_SCENARIO === "interaction-question" ||
     FIXTURE_SCENARIO === "plan-workflow");
+const FIXTURE_TERMINAL_CONSENT_PENDING =
+  FIXTURE_MODE && FIXTURE_QUERY.get("terminalConsentPending") === "1";
 function readDesktopDiff(
   workspaceId: string,
   path: string,
@@ -387,9 +427,9 @@ const INITIAL_DESKTOP: DesktopStatus = {
             maxOutputTokens: 16_000,
             reasoningEffort: null,
             capabilities: {
-              toolCalls: true,
-              streaming: true,
-              imageInputs: false,
+              toolCalls: "on",
+              streaming: "on",
+              imageInputs: "off",
             },
           },
         ]
@@ -399,12 +439,14 @@ const INITIAL_DESKTOP: DesktopStatus = {
   accessProfile: FIXTURE_MODE ? "allow_all" : "minimal",
   executionBoundary: FIXTURE_MODE ? "full_access" : "offline_isolated",
   approvalMode: "ask",
-  terminalEnabled: false,
+  terminalEnabled: FIXTURE_MODE && !FIXTURE_TERMINAL_CONSENT_PENDING,
+  terminalConsentPending: FIXTURE_TERMINAL_CONSENT_PENDING,
   additionalCaBundle: {
     configured: false,
     certificateCount: 0,
     fingerprintsSha256: [],
   },
+  clientIdentity: { configured: false, leafFingerprintSha256: null },
   capabilities: {
     research: true,
     delegation: false,
@@ -852,6 +894,7 @@ interface RunSubmission {
   idempotencyKey: string;
   sessionId?: string;
   planRevision?: PlanRevisionTarget;
+  branch?: CreateRunRequest["branch"];
 }
 
 type RunSubmissionResult =
@@ -864,16 +907,20 @@ export default function App() {
   const [chat, dispatch] = useReducer(
     chatReducer,
     FIXTURE_MODE
-      ? FIXTURE_SCENARIO === "activity-comparison"
-        ? developmentFixtures().buildActivityComparisonFixture()
-        : FIXTURE_SCENARIO === "plan-workflow"
-          ? developmentFixtures().buildPlanWorkflowFixture()
-          : developmentFixtures().buildOperationsStudioFixture(
-              FIXTURE_SCENARIO === "interaction-question"
-                ? "user_prompt"
-                : "approval",
-              FIXTURE_SCENARIO === "command-approval",
-            )
+      ? FIXTURE_SCENARIO === "provider-retry"
+        ? developmentFixtures().buildProviderRetryFixture()
+        : FIXTURE_SCENARIO === "activity-comparison"
+          ? developmentFixtures().buildActivityComparisonFixture()
+          : FIXTURE_SCENARIO === "plan-workflow"
+            ? developmentFixtures().buildPlanWorkflowFixture()
+            : FIXTURE_QUERY.get("scheduleActivity") === "1"
+              ? developmentFixtures().buildWorkflowScheduleFixture()
+              : developmentFixtures().buildOperationsStudioFixture(
+                  FIXTURE_SCENARIO === "interaction-question"
+                    ? "user_prompt"
+                    : "approval",
+                  FIXTURE_SCENARIO === "command-approval",
+                )
       : initialChatState,
   );
   const chatRef = useRef(chat);
@@ -904,12 +951,24 @@ export default function App() {
     );
   const [asideHistory, setAsideHistory] = useState<readonly Aside[]>([]);
   const [asideBusy, setAsideBusy] = useState(false);
+  const forkDraftFocus = useRef<string | null>(null);
+  const [threadForkDrafts, setThreadForkDrafts] =
+    useState(readThreadForkDrafts);
+  const [forkPreviewViews, setForkPreviewViews] = useState<
+    ReadonlyMap<string, readonly RunView[]>
+  >(new Map());
   const [asideError, setAsideError] = useState<CommandError | null>(null);
   const [asideReadOnly, setAsideReadOnly] = useState(false);
   const appShellRef = useRef<HTMLDivElement>(null);
   const [initialWorkSidebarWidth] = useState(readStoredWorkSidebarWidth);
   const workSidebarWidthRef = useRef(initialWorkSidebarWidth);
   const [desktop, setDesktop] = useState<DesktopStatus>(INITIAL_DESKTOP);
+  const activeForkDraft = threadForkDrafts.find(
+    (draft) =>
+      draft.id === chat.activeRunId &&
+      draft.materializedSessionId === undefined &&
+      draft.spaceId === desktop.selectedSpaceId,
+  );
   const [conversationSkills, setConversationSkills] = useState<
     Record<string, readonly string[]>
   >({});
@@ -948,17 +1007,46 @@ export default function App() {
       threadNameForWorkspace(storedThreadNames, spaceId, sessionId) ?? fallback,
     [storedThreadNames],
   );
+  const statusBarPins = useMemo(
+    () =>
+      selectStatusBarPins(
+        pinnedThreadIdsForSpace(storedThreadPins, desktop.selectedSpaceId),
+        chat.recentRuns,
+        (sessionId, fallback) =>
+          resolveThreadTitle(desktop.selectedSpaceId, sessionId, fallback),
+      ),
+    [
+      chat.recentRuns,
+      desktop.selectedSpaceId,
+      resolveThreadTitle,
+      storedThreadPins,
+    ],
+  );
   const [releaseChannel, setReleaseChannel] = useState(
     INITIAL_DESKTOP.releaseChannel,
   );
   const [releaseMetadata, setReleaseMetadata] =
     useState<DesktopReleaseMetadata>(INITIAL_RELEASE_METADATA);
   const desktopRef = useRef(desktop);
+  const [startup, setStartup] = useState<"loading" | "ready" | "failed">(
+    FIXTURE_MODE ? "ready" : "loading",
+  );
+  const [startupAttempt, setStartupAttempt] = useState(0);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [surface, setSurface] = useState<WorkspaceSurface>("work");
   const [settingsStartTab, setSettingsStartTab] = useState<
-    "runtime" | "providers"
+    | "runtime"
+    | "providers"
+    | "models"
+    | "plugins"
+    | "terminal"
+    | "dictation"
+    | "cloud"
+    | "control-plane"
   >("runtime");
+  const [settingsSpaceId, setSettingsSpaceId] = useState<string | undefined>(
+    undefined,
+  );
   const [workNavigationOpen, setWorkNavigationOpen] = useState(false);
   const [workspaceFileOpenRequest, setWorkspaceFileOpenRequest] =
     useState<WorkspaceFileOpenRequest | null>(null);
@@ -996,7 +1084,33 @@ export default function App() {
   const [listBusy, setListBusy] = useState(false);
   const [listError, setListError] = useState("");
   const [runLoadError, setRunLoadError] = useState("");
-  const [prompt, setPrompt] = useState("");
+  const [draft, commitDraft] = useState(composerDraft);
+  const draftRef = useRef(draft);
+  const setDraft = (
+    next: ComposerDraft | ((current: ComposerDraft) => ComposerDraft),
+  ) => {
+    const value = typeof next === "function" ? next(draftRef.current) : next;
+    draftRef.current = value;
+    commitDraft(value);
+  };
+  const dictation = useDictation(
+    JSON.stringify([
+      desktop.selectedSpaceId,
+      desktop.selectedTargetId,
+      surface,
+      activeSessionWorkspaceView === "topology" ||
+        activeSessionWorkspaceView === "activity",
+    ]),
+    () => draftRef.current,
+    setDraft,
+  );
+  const prompt = draft.display;
+  const expandedPrompt = expandComposerDraft(draft);
+  const setPrompt = (value: string) => {
+    if (!dictation?.controller.getSnapshot().sending)
+      dictation?.controller.reset();
+    setDraft(composerDraft(value));
+  };
   const completionSkills = usePluginSkills(
     desktop.selectedTargetId,
     desktop.capabilities.pluginSkillSelection === true,
@@ -1037,6 +1151,29 @@ export default function App() {
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateMessage, setUpdateMessage] = useState("");
   const [cancelling, setCancelling] = useState(false);
+  const [pausedQueues, setPausedQueues] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const pausedQueuesRef = useRef<ReadonlySet<string>>(new Set());
+  function setThreadQueuePaused(
+    targetId: string,
+    sessionId: string,
+    paused: boolean,
+  ) {
+    const key = JSON.stringify([targetId, sessionId]);
+    const next = new Set(
+      [...pausedQueuesRef.current].filter((key) =>
+        queuedMessagesRef.current.some(
+          (message) =>
+            JSON.stringify([message.targetId, message.sessionId]) === key,
+        ),
+      ),
+    );
+    if (paused) next.add(key);
+    else next.delete(key);
+    pausedQueuesRef.current = next;
+    setPausedQueues(next);
+  }
   const [threadLifecycleBusySessionId, setThreadLifecycleBusySessionId] =
     useState<string | null>(null);
   const watchedRuns = useRef(new Map<string, symbol>());
@@ -1051,6 +1188,10 @@ export default function App() {
         "managed_local",
       );
       targetRoutes.current.bindRuns(chat.views.keys(), route);
+      targetRoutes.current.bindRuns(
+        chat.recentRuns.map((run) => run.runId),
+        route,
+      );
     }
   }
   const connectingRef = useRef(false);
@@ -1058,6 +1199,7 @@ export default function App() {
   const queuedMessagesRef = useRef<readonly QueuedMessage[]>([]);
   const queueDeliveryRef = useRef<string | null>(null);
   const createAttempt = useRef<RoutedAttempt | null>(null);
+  const scheduleRunAttempts = useRef(new Map<string, ScheduleRunAttempt>());
   const asideCreateAttempt = useRef<RoutedAttempt | null>(null);
   const cancelAttempts = useRef(new Map<string, IdempotentAttempt>());
   const responseAttempts = useRef(new Map<string, IdempotentAttempt>());
@@ -1066,6 +1208,63 @@ export default function App() {
   const cancelRequest = useRef<symbol | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const composerFormRef = useRef<HTMLFormElement>(null);
+  const statusBarPinsRef = useRef(statusBarPins);
+  const statusBarActionRef = useRef<(action: StatusBarAction) => void>(
+    () => {},
+  );
+  const lastStatusBarPinsRef = useRef("");
+  const previousBackgroundRunsRef = useRef(
+    backgroundRunSnapshot(chat.recentRuns),
+  );
+
+  useEffect(() => {
+    statusBarPinsRef.current = statusBarPins;
+    if (FIXTURE_MODE) {
+      return;
+    }
+    const serialized = JSON.stringify(statusBarPins);
+    if (lastStatusBarPinsRef.current === serialized) {
+      return;
+    }
+    lastStatusBarPinsRef.current = serialized;
+    void syncStatusBarPins(statusBarPins).catch(() => {
+      lastStatusBarPinsRef.current = "";
+    });
+  }, [statusBarPins]);
+
+  useEffect(() => {
+    const previous = previousBackgroundRunsRef.current;
+    previousBackgroundRunsRef.current = backgroundRunSnapshot(chat.recentRuns);
+    if (FIXTURE_MODE) {
+      return;
+    }
+    for (const { kind, runId } of backgroundRunNotifications(
+      previous,
+      chat.recentRuns,
+    )) {
+      const run = chat.recentRuns.find(
+        (candidate) => candidate.runId === runId,
+      );
+      if (run === undefined) continue;
+      const targetId = desktop.selectedTargetId;
+      void backgroundNotificationContent(
+        run,
+        resolveThreadTitle(desktop.selectedSpaceId, run.sessionId, run.title),
+        chat.views.get(runId)?.output ?? "",
+        () => getRun(targetId ?? "", { runId }),
+      )
+        .then((content) => notifyBackground(kind, runId, content))
+        .catch(() => {
+          // The run remains visible in Colossus if OS notifications are unavailable.
+        });
+    }
+  }, [
+    chat.recentRuns,
+    chat.views,
+    desktop.selectedSpaceId,
+    desktop.selectedTargetId,
+    resolveThreadTitle,
+  ]);
 
   const commitQueuedMessages = useCallback(
     (messages: readonly QueuedMessage[]) => {
@@ -1132,9 +1331,146 @@ export default function App() {
     });
   }
 
+  function updateForkDrafts(
+    update: (drafts: readonly ThreadForkDraft[]) => readonly ThreadForkDraft[],
+  ) {
+    setThreadForkDrafts((current) => {
+      const next = update(current);
+      storeThreadForkDrafts(next);
+      return next;
+    });
+  }
+
+  async function beginThreadFork(run: Run) {
+    const spaceId = desktopRef.current.selectedSpaceId;
+    if (
+      !canForkThread(run) ||
+      spaceId === null ||
+      submitInFlight.current ||
+      connectingRef.current
+    )
+      return;
+    try {
+      const title = defaultForkTitle(
+        resolveThreadTitle(spaceId, run.sessionId, run.title),
+      );
+      const draft = createThreadForkDraft(run, spaceId, title);
+      updateForkDrafts((current) => [draft, ...current].slice(0, 64));
+      dictation?.controller.reset();
+      setPrompt("");
+      setAttachments([]);
+      setComposerError(null);
+      await openForkDraft(draft);
+    } catch (error: unknown) {
+      setActionError(commandError(error));
+    }
+  }
+
+  async function loadForkPreview(draft: ThreadForkDraft, route: TargetRoute) {
+    try {
+      let preview = chatRef.current;
+      let sourceSessionId = draft.sourceSessionId;
+      let sourceCreatedAt = draft.sourceCreatedAt;
+      if (FIXTURE_MODE) {
+        const source = preview.recentRuns.find(
+          (run) => run.runId === draft.sourceRunId,
+        );
+        if (source !== undefined)
+          preview = chatReducer(preview, { type: "upsert_run", run: source });
+      } else {
+        const details = await getRun(route.targetId, {
+          runId: draft.sourceRunId,
+        });
+        if (targetRoutes.current?.isCurrent(route) !== true) return;
+        sourceSessionId = details.run.sessionId;
+        sourceCreatedAt = details.run.createdAt;
+        preview = chatReducer(preview, { type: "hydrate_run", details });
+        const history = await listRuns(route.targetId, {
+          sessionId: sourceSessionId,
+          pageToken: "",
+        });
+        for (const run of history.runs
+          .filter(
+            (run) =>
+              run.runId !== draft.sourceRunId &&
+              run.createdAt <= sourceCreatedAt,
+          )
+          .slice(0, MAX_CONVERSATION_RUNS - 1)) {
+          if (targetRoutes.current?.isCurrent(route) !== true) return;
+          const historical = await getRun(route.targetId, { runId: run.runId });
+          preview = chatReducer(preview, {
+            type: "hydrate_run",
+            details: historical,
+          });
+        }
+      }
+      if (targetRoutes.current?.isCurrent(route) !== true) return;
+      const views = selectConversationViews(preview, sourceSessionId).filter(
+        (view) => view.run.createdAt <= sourceCreatedAt,
+      );
+      setForkPreviewViews((current) => {
+        const next = new Map(current);
+        next.delete(draft.id);
+        next.set(draft.id, views);
+        while (next.size > 8) {
+          const oldest = next.keys().next().value;
+          if (oldest === undefined) break;
+          next.delete(oldest);
+        }
+        return next;
+      });
+    } catch (error: unknown) {
+      if (
+        targetRoutes.current?.isCurrent(route) === true &&
+        (chatRef.current.activeRunId === draft.id ||
+          chatRef.current.views.get(chatRef.current.activeRunId ?? "")?.run
+            .sessionId === draft.materializedSessionId)
+      )
+        setRunLoadError(commandError(error).message);
+    }
+  }
+
+  async function openForkDraft(draft: ThreadForkDraft) {
+    const route = targetRoutes.current?.capture() ?? null;
+    if (
+      route === null ||
+      draft.spaceId !== desktopRef.current.selectedSpaceId ||
+      submitInFlight.current ||
+      connectingRef.current
+    )
+      return;
+    setPlanRevision(null);
+    setWorkNavigationOpen(false);
+    setSurface("work");
+    setRole(draft.role);
+    setRunLoadError("");
+    setActionError(null);
+    forkDraftFocus.current = draft.id;
+    dispatch({ type: "select_run", runId: draft.id });
+    await loadForkPreview(draft, route);
+  }
+
   useEffect(() => {
     chatRef.current = chat;
   }, [chat]);
+
+  useEffect(() => {
+    const draftId = forkDraftFocus.current;
+    if (draftId === null) return;
+    if (chat.activeRunId !== draftId || surface !== "work") {
+      forkDraftFocus.current = null;
+      return;
+    }
+    if (workNavigationOpen) return;
+    // The compact drawer must release the workspace's inert state first.
+    const frame = requestAnimationFrame(() => {
+      if (chatRef.current.activeRunId === draftId) {
+        composerRef.current?.focus();
+        forkDraftFocus.current = null;
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [chat.activeRunId, surface, workNavigationOpen]);
 
   useEffect(() => {
     desktopRef.current = desktop;
@@ -1330,7 +1666,7 @@ export default function App() {
           dispatch({ type: "hydrate_run", details });
         },
       })
-        .then((result) => {
+        .then(async (result) => {
           if (
             result.type === "stale" ||
             targetRoutes.current?.isCurrent(route) !== true
@@ -1339,6 +1675,14 @@ export default function App() {
           }
           if (result.type === "complete") {
             dispatch({ type: "watch_complete", runId });
+            try {
+              const details = await getRun(route.targetId, { runId });
+              if (targetRoutes.current?.isCurrent(route) === true) {
+                dispatch({ type: "hydrate_run", details });
+              }
+            } catch {
+              // The next run-list refresh will reconcile the display title.
+            }
             return;
           }
           markConnectionFailure(result.error, route);
@@ -1390,7 +1734,7 @@ export default function App() {
           dispatchAside({ type: "hydrate_run", details });
         },
       })
-        .then((result) => {
+        .then(async (result) => {
           if (
             result.type === "stale" ||
             targetRoutes.current?.isCurrent(route) !== true
@@ -1399,6 +1743,14 @@ export default function App() {
           }
           if (result.type === "complete") {
             dispatchAside({ type: "watch_complete", runId });
+            try {
+              const details = await getRun(route.targetId, { runId });
+              if (targetRoutes.current?.isCurrent(route) === true) {
+                dispatchAside({ type: "hydrate_run", details });
+              }
+            } catch {
+              // The next run-list refresh will reconcile the display title.
+            }
           } else {
             dispatchAside({ type: "watch_error", runId, error: result.error });
           }
@@ -1556,6 +1908,7 @@ export default function App() {
       .then(async (status) => {
         if (!cancelled) {
           await acceptDesktopStatus(status, true);
+          if (!cancelled) setStartup("ready");
         }
       })
       .catch((error: unknown) => {
@@ -1563,6 +1916,7 @@ export default function App() {
           const failure = commandError(error);
           markConnectionFailure(failure);
           setActionError(failure);
+          setStartup("failed");
         }
       })
       .finally(() => {
@@ -1574,10 +1928,10 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [acceptDesktopStatus, markConnectionFailure]);
+  }, [acceptDesktopStatus, markConnectionFailure, startupAttempt]);
 
   useEffect(() => {
-    if (FIXTURE_MODE) {
+    if (FIXTURE_MODE || startup !== "ready") {
       return;
     }
     let cancelled = false;
@@ -1612,7 +1966,7 @@ export default function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [acceptDesktopStatus]);
+  }, [acceptDesktopStatus, startup]);
 
   useEffect(() => {
     const query = deferredWorkQuery.trim();
@@ -1822,7 +2176,17 @@ export default function App() {
   }
 
   async function openRun(run: Run) {
+    dictation?.controller.reset();
     if (submitInFlight.current || connectingRef.current) {
+      return;
+    }
+    const forkDraft = threadForkDrafts.find(
+      (draft) =>
+        draft.id === run.runId &&
+        draft.spaceId === desktopRef.current.selectedSpaceId,
+    );
+    if (forkDraft !== undefined) {
+      await openForkDraft(forkDraft);
       return;
     }
     if (FIXTURE_MODE) {
@@ -1833,6 +2197,14 @@ export default function App() {
       dispatch({ type: "select_run", runId: run.runId });
       setRunLoadError("");
       setActionError(null);
+      const origin = threadForkDrafts.find(
+        (draft) =>
+          draft.materializedSessionId === run.sessionId &&
+          draft.spaceId === desktopRef.current.selectedSpaceId,
+      );
+      const route = targetRoutes.current?.capture() ?? null;
+      if (origin !== undefined && route !== null)
+        void loadForkPreview(origin, route);
       return;
     }
     const route = targetRoutes.current?.routeForRun(run.runId) ?? null;
@@ -1841,6 +2213,12 @@ export default function App() {
       return;
     }
     targetRoutes.current.bindRun(run.runId, route);
+    const origin = threadForkDrafts.find(
+      (draft) =>
+        draft.materializedSessionId === run.sessionId &&
+        draft.spaceId === desktopRef.current.selectedSpaceId,
+    );
+    if (origin !== undefined) void loadForkPreview(origin, route);
     setPlanRevision(null);
     setWorkNavigationOpen(false);
     setSurface("work");
@@ -1905,6 +2283,7 @@ export default function App() {
   }
 
   function newWork() {
+    dictation?.controller.reset();
     if (submitInFlight.current) {
       return;
     }
@@ -1922,6 +2301,49 @@ export default function App() {
     setAttachments([]);
     requestAnimationFrame(() => composerRef.current?.focus());
   }
+
+  statusBarActionRef.current = (action) => {
+    if (action.type === "new_work") {
+      newWork();
+    } else if (action.type === "open_run") {
+      if (!statusBarPinsRef.current.some((pin) => pin.runId === action.runId)) {
+        return;
+      }
+      const run = chatRef.current.recentRuns.find(
+        (candidate) => candidate.runId === action.runId,
+      );
+      if (run !== undefined) {
+        void openRun(run);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (FIXTURE_MODE) {
+      return;
+    }
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void onStatusBarAction((action) => {
+      if (!cancelled) {
+        statusBarActionRef.current(action);
+      }
+    })
+      .then((stop) => {
+        if (cancelled) {
+          stop();
+        } else {
+          unlisten = stop;
+        }
+      })
+      .catch(() => {
+        // The main window remains usable if the native menu is unavailable.
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   const performRunSubmission = useCallback(
     async (
@@ -1957,6 +2379,9 @@ export default function App() {
         ...(submission.sessionId === undefined
           ? {}
           : { sessionId: submission.sessionId }),
+        ...(submission.branch === undefined
+          ? {}
+          : { branch: submission.branch }),
         ...(submission.planRevision === undefined
           ? {}
           : {
@@ -2062,17 +2487,72 @@ export default function App() {
     [markConnectionFailure, startWatch],
   );
 
+  async function createAutomationWithAgent(fullPrompt: string) {
+    if (
+      submitInFlight.current ||
+      connectingRef.current ||
+      connection.state !== "connected"
+    )
+      return;
+    const route = targetRoutes.current?.capture() ?? null;
+    if (!route || targetRoutes.current?.isCurrent(route) !== true) return;
+    newWork();
+    setPrompt(fullPrompt);
+    setRole("primary");
+    setMode("execute");
+    const fingerprint = operationFingerprint([
+      fullPrompt.trim(),
+      route.targetId,
+      "",
+      "primary",
+      "execute",
+      maxTurns,
+      "",
+      "",
+      "",
+      "",
+      0,
+    ]);
+    const previous = createAttempt.current;
+    const attempt = stableIdempotentAttempt(
+      previous?.targetId === route.targetId ? previous.attempt : null,
+      fingerprint,
+    );
+    createAttempt.current = { targetId: route.targetId, attempt };
+    const result = await performRunSubmission(
+      {
+        prompt: fullPrompt.trim(),
+        pluginSkillIds: [],
+        attachments: [],
+        role: "primary",
+        mode: "execute",
+        researchDepth,
+        researchSources,
+        maxTurns,
+        idempotencyKey: attempt.key,
+      },
+      route,
+    );
+    if (result.type === "accepted") {
+      createAttempt.current = null;
+      setPrompt("");
+    } else if (result.type === "failed") {
+      setComposerError(result.error);
+    }
+  }
+
   async function enqueueCurrentMessage(
     currentView: NonNullable<ReturnType<typeof chat.views.get>>,
     route: TargetRoute,
     placement: QueuePlacement,
   ): Promise<QueuedMessage | null> {
-    const cleanPrompt = prompt.trim();
+    const expandedPrompt = expandComposerDraft(draftRef.current);
+    const cleanPrompt = expandedPrompt.trim();
     const cleanRole = role.trim();
     if (
       cleanPrompt.length === 0 ||
       cleanRole.length === 0 ||
-      !isPromptWithinByteLimit(prompt) ||
+      !isPromptWithinByteLimit(expandedPrompt) ||
       (mode === "research" && researchSources.length === 0)
     ) {
       return null;
@@ -2267,7 +2747,7 @@ export default function App() {
         );
         if (
           !desktop.capabilities.tui ||
-          !desktop.terminalEnabled ||
+          (!desktop.terminalEnabled && !desktop.terminalConsentPending) ||
           selected?.terminalAvailable !== true
         ) {
           setSlashCommandError(
@@ -2283,7 +2763,31 @@ export default function App() {
 
   async function submitRun(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const cleanPrompt = prompt.trim();
+    await withDictationSend(submitSettledRun);
+  }
+
+  async function withDictationSend(action: () => Promise<void>) {
+    if (!dictation) {
+      await action();
+      return;
+    }
+    if (
+      submitInFlight.current ||
+      connectingRef.current ||
+      dictation.controller.getSnapshot().sending
+    )
+      return;
+    const allowed = await dictation.controller.beginSend();
+    try {
+      if (allowed) await action();
+    } finally {
+      dictation.controller.endSend();
+    }
+  }
+
+  async function submitSettledRun() {
+    const expandedPrompt = expandComposerDraft(draftRef.current);
+    const cleanPrompt = expandedPrompt.trim();
     const slashCommand = parseDesktopSlashCommand(cleanPrompt);
     if (slashCommand.type === "invalid") {
       setSlashCommandError(slashCommand.message);
@@ -2304,7 +2808,7 @@ export default function App() {
       cleanPrompt.length === 0 ||
       cleanRole.length === 0 ||
       connection.state !== "connected" ||
-      !isPromptWithinByteLimit(prompt)
+      !isPromptWithinByteLimit(expandedPrompt)
     ) {
       return;
     }
@@ -2347,7 +2851,11 @@ export default function App() {
       return;
     }
 
-    const sessionId = continuationView?.run.sessionId;
+    const sessionId =
+      activeForkDraft === undefined
+        ? continuationView?.run.sessionId
+        : undefined;
+    if (sessionId) setThreadQueuePaused(route.targetId, sessionId, false);
     const effectiveMode: RunMode = planRevision === null ? mode : "plan";
     if (effectiveMode === "research" && researchSources.length === 0) {
       setComposerError({
@@ -2368,6 +2876,8 @@ export default function App() {
         ? [researchDepth, ...researchSources]
         : []),
       maxTurns,
+      activeForkDraft?.sourceRunId ?? "",
+      activeForkDraft?.id ?? "",
       planRevision?.sourceRunId ?? "",
       planRevision?.planId ?? "",
       planRevision?.revision ?? 0,
@@ -2394,11 +2904,42 @@ export default function App() {
         maxTurns,
         idempotencyKey: attempt.key,
         ...(sessionId === undefined ? {} : { sessionId }),
+        ...(activeForkDraft === undefined
+          ? {}
+          : { branch: threadForkBranch(activeForkDraft) }),
         ...(planRevision === null ? {} : { planRevision }),
       },
       route,
     );
     if (result.type === "accepted") {
+      if (activeForkDraft !== undefined) {
+        const forkTitle = resolveThreadTitle(
+          activeForkDraft.spaceId,
+          activeForkDraft.id,
+          activeForkDraft.title,
+        );
+        setStoredThreadNames((current) => {
+          const next = setThreadName(
+            current,
+            activeForkDraft.spaceId,
+            result.run.sessionId,
+            forkTitle,
+          );
+          storeThreadNames(next);
+          return next;
+        });
+        if (pinnedThreadSessionIds.has(activeForkDraft.id)) {
+          updateThreadPin(activeForkDraft.spaceId, activeForkDraft.id, false);
+          updateThreadPin(activeForkDraft.spaceId, result.run.sessionId, true);
+        }
+        updateForkDrafts((current) =>
+          current.map((draft) =>
+            draft.id === activeForkDraft.id
+              ? { ...draft, materializedSessionId: result.run.sessionId }
+              : draft,
+          ),
+        );
+      }
       createAttempt.current = null;
       setPrompt("");
       setPlanRevision(null);
@@ -2588,7 +3129,7 @@ export default function App() {
       return;
     }
     setConversationFollowRequest((current) => current + 1);
-    if (!(await cancelActiveRun())) {
+    if (!(await cancelActiveRun(true))) {
       setComposerError({
         ...FALLBACK_ACTION_ERROR,
         code: "redirect_not_started",
@@ -2883,8 +3424,8 @@ export default function App() {
     }
   }
 
-  async function cancelActiveRun(): Promise<boolean> {
-    if (connectingRef.current) {
+  async function cancelActiveRun(keepQueueRunning = false): Promise<boolean> {
+    if (connectingRef.current || cancelRequest.current !== null) {
       return false;
     }
     const activeView =
@@ -2895,6 +3436,21 @@ export default function App() {
       return false;
     }
     const runId = activeView.run.runId;
+    const route = targetRoutes.current?.routeForRun(runId) ?? null;
+    if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
+      setActionError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "disconnected",
+        message: "The active run is no longer bound to this target.",
+      });
+      return false;
+    }
+    // Pause synchronously before cancellation can publish a terminal event.
+    setThreadQueuePaused(
+      route.targetId,
+      activeView.run.sessionId,
+      !keepQueueRunning,
+    );
     if (FIXTURE_MODE) {
       const now = new Date().toISOString();
       dispatch({
@@ -2914,15 +3470,6 @@ export default function App() {
       return true;
     }
 
-    const route = targetRoutes.current?.routeForRun(runId) ?? null;
-    if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
-      setActionError({
-        ...FALLBACK_ACTION_ERROR,
-        code: "disconnected",
-        message: "The active run is no longer bound to this target.",
-      });
-      return false;
-    }
     const attemptKey = `${route.targetId}:${runId}`;
     const fingerprint = operationFingerprint([route.targetId, runId, "cancel"]);
     const attempt = stableIdempotentAttempt(
@@ -3414,7 +3961,7 @@ export default function App() {
       if (FIXTURE_MODE) {
         setDesktop((current) => ({
           ...current,
-          terminalEnabled: false,
+          terminalEnabled: true,
           provider: {
             configured: true,
             kind: request.providerKind,
@@ -3510,6 +4057,17 @@ export default function App() {
       setConnecting(false);
     }
   }
+
+  useEffect(() => {
+    const refreshSetup = () => {
+      void desktopStatus()
+        .then((status) => acceptDesktopStatus(status, true))
+        .catch((error: unknown) => setActionError(commandError(error)));
+    };
+    window.addEventListener("colossus-setup-refresh", refreshSetup);
+    return () =>
+      window.removeEventListener("colossus-setup-refresh", refreshSetup);
+  });
 
   async function handleCodexLogin() {
     if (connectingRef.current || submitInFlight.current) {
@@ -3968,6 +4526,25 @@ export default function App() {
   }
 
   async function handleArchiveThread(run: Run) {
+    const forkDraft = threadForkDrafts.find(
+      (draft) =>
+        draft.id === run.runId &&
+        draft.spaceId === desktopRef.current.selectedSpaceId,
+    );
+    if (forkDraft !== undefined) {
+      if (connectingRef.current || submitInFlight.current) return;
+      updateForkDrafts((current) =>
+        current.filter((draft) => draft.id !== forkDraft.id),
+      );
+      setForkPreviewViews((current) => {
+        const next = new Map(current);
+        next.delete(forkDraft.id);
+        return next;
+      });
+      if (chatRef.current.activeRunId === forkDraft.id) newWork();
+      updateThreadPin(forkDraft.spaceId, forkDraft.id, false);
+      return;
+    }
     if (
       connectingRef.current ||
       submitInFlight.current ||
@@ -4317,7 +4894,50 @@ export default function App() {
     }
   }
 
-  async function handleSetTerminalEnabled(enabled: boolean) {
+  async function handleImportClientIdentity() {
+    if (connectingRef.current || submitInFlight.current) return;
+    connectingRef.current = true;
+    setConnecting(true);
+    setActionError(null);
+    try {
+      if (FIXTURE_MODE) return;
+      invalidateTargetRoute();
+      const status = await importClientIdentity();
+      if (status !== null) await acceptDesktopStatus(status, true);
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      markConnectionFailure(failure);
+      setActionError(failure);
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
+  async function handleRemoveClientIdentity() {
+    if (connectingRef.current || submitInFlight.current) return;
+    connectingRef.current = true;
+    setConnecting(true);
+    setActionError(null);
+    try {
+      if (FIXTURE_MODE) return;
+      invalidateTargetRoute();
+      await acceptDesktopStatus(await removeClientIdentity(), true);
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      markConnectionFailure(failure);
+      setActionError(failure);
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
+  async function handleSetTerminalEnabled(
+    enabled: boolean,
+  ): Promise<DesktopStatus | null> {
     const status = desktopRef.current;
     const selectedTarget = status.targets.find(
       (target) => target.targetId === status.selectedTargetId,
@@ -4328,24 +4948,41 @@ export default function App() {
       !status.capabilities.shellTerminal
     ) {
       setSurface("settings");
-      return;
+      return null;
     }
     try {
       const status = FIXTURE_MODE
-        ? { ...desktopRef.current, terminalEnabled: enabled }
+        ? {
+            ...desktopRef.current,
+            terminalEnabled: enabled,
+            terminalConsentPending: false,
+          }
         : await setTerminalEnabled(enabled);
       desktopRef.current = status;
       setDesktop(status);
+      return status;
     } catch (error: unknown) {
       setActionError(commandError(error));
+      return null;
     }
   }
+
+  const [terminalDockRequest, setTerminalDockRequest] = useState<
+    import("./components/tools/TerminalDock").TerminalDockRequest | null
+  >(null);
+  const terminalRequestSequence = useRef(0);
+
+  useEffect(() => setTerminalDockRequest(null), [desktop.selectedTargetId]);
+  const currentTerminalRequest = terminalRequestForScope(
+    terminalDockRequest,
+    desktop.selectedTargetId,
+  );
 
   async function handleOpenTerminal(
     kind: TerminalKind,
     planContext?: { sessionId: string; planId: string },
   ) {
-    const status = desktopRef.current;
+    let status = desktopRef.current;
     const selectedTarget = status.targets.find(
       (target) => target.targetId === status.selectedTargetId,
     );
@@ -4353,22 +4990,42 @@ export default function App() {
       kind === "shell"
         ? status.capabilities.shellTerminal
         : selectedTarget?.terminalAvailable === true;
-    if (!status.terminalEnabled || !terminalAvailable) {
+    if (!terminalAvailable) {
       setSurface("settings");
       return;
     }
-    try {
-      if (!FIXTURE_MODE) {
-        await showTerminalWindow(kind, planContext);
-      }
-    } catch (error: unknown) {
-      setActionError(commandError(error));
+    if (status.terminalConsentPending) {
+      const confirmed = await handleSetTerminalEnabled(true);
+      if (confirmed?.terminalEnabled !== true) return;
+      status = confirmed;
     }
+    if (!status.terminalEnabled) {
+      setSettingsStartTab("terminal");
+      setSurface("settings");
+      return;
+    }
+    terminalRequestSequence.current = Math.max(
+      Date.now(),
+      terminalRequestSequence.current + 1,
+    );
+    setTerminalDockRequest({
+      scope: status.selectedTargetId,
+      kind,
+      planContext,
+      sequence: terminalRequestSequence.current,
+    });
+    setSurface("work");
   }
 
   const activeView =
     chat.activeRunId === null ? undefined : chat.views.get(chat.activeRunId);
   const activeRun = activeView?.run;
+  const activeForkOrigin = threadForkDrafts.find(
+    (draft) =>
+      draft.spaceId === desktop.selectedSpaceId &&
+      draft.materializedSessionId !== undefined &&
+      draft.materializedSessionId === activeRun?.sessionId,
+  );
   useEffect(() => {
     delegateRequest.current = null;
     dispatchDelegate({ type: "reset" });
@@ -4497,6 +5154,9 @@ export default function App() {
       connecting ||
       submitting ||
       queueDeliveryRef.current !== null ||
+      pausedQueuesRef.current.has(
+        JSON.stringify([activeRoute.targetId, activeRun.sessionId]),
+      ) ||
       targetRoutes.current?.isCurrent(activeRoute) !== true
     ) {
       return;
@@ -4515,11 +5175,15 @@ export default function App() {
     connecting,
     deliverQueuedMessage,
     queuedMessages,
+    pausedQueues,
     submitting,
   ]);
   const conversationViews = useMemo(
-    () => selectConversationViews(chat, activeRun?.sessionId ?? null),
-    [activeRun?.sessionId, chat],
+    () =>
+      activeForkDraft === undefined
+        ? selectConversationViews(chat, activeRun?.sessionId ?? null)
+        : (forkPreviewViews.get(activeForkDraft.id) ?? []),
+    [activeRun?.sessionId, activeForkDraft, forkPreviewViews, chat],
   );
   const asideView =
     asideChat.activeRunId === null
@@ -4550,7 +5214,7 @@ export default function App() {
     !approvalModeChanging;
   const continuation =
     activeRun !== undefined && isTerminalStatus(activeRun.status);
-  const promptBytes = utf8ByteLength(prompt);
+  const promptBytes = utf8ByteLength(expandedPrompt);
   const promptOverLimit = promptBytes > MAX_PROMPT_BYTES;
   const views = useMemo(() => Array.from(chat.views.values()), [chat.views]);
   const selectedArtifacts = useMemo(
@@ -4691,30 +5355,50 @@ export default function App() {
   const generatedTitle =
     openingRun?.title ?? conversationViews[0]?.run.title ?? activeRun?.title;
   const title =
-    activeRun === undefined || generatedTitle === undefined
-      ? "New work"
-      : safeDisplayLabel(
-          resolveThreadTitle(
-            desktop.selectedSpaceId,
-            activeRun.sessionId,
-            generatedTitle,
-          ),
-          agentRoleLabel(activeRun.role),
-          160,
-        );
+    activeForkDraft !== undefined
+      ? resolveThreadTitle(
+          activeForkDraft.spaceId,
+          activeForkDraft.id,
+          activeForkDraft.title,
+        )
+      : activeRun === undefined || generatedTitle === undefined
+        ? "New work"
+        : safeDisplayLabel(
+            resolveThreadTitle(
+              desktop.selectedSpaceId,
+              activeRun.sessionId,
+              generatedTitle,
+            ),
+            agentRoleLabel(activeRun.role),
+            160,
+          );
   const closeWorkNavigation = useCallback(
     () => setWorkNavigationOpen(false),
     [],
   );
   const openWorkNavigation = useCallback(() => setWorkNavigationOpen(true), []);
+  const [scheduleInspection, setScheduleInspection] = useState<{
+    targetId: string;
+    scheduleId: string;
+    showRun: boolean;
+  } | null>(null);
+
   const selectSurface = useCallback((nextSurface: WorkspaceSurface) => {
     setWorkNavigationOpen(false);
-    if (nextSurface === "settings") setSettingsStartTab("runtime");
+    if (nextSurface === "settings") {
+      setSettingsStartTab("runtime");
+      setSettingsSpaceId(undefined);
+    }
     setSurface(nextSurface);
   }, []);
 
   const composer = (contextActions: ReactNode) => (
     <WorkComposer
+      dictation={dictation ?? undefined}
+      onOpenDictationSettings={() => {
+        setSettingsStartTab("dictation");
+        setSurface("settings");
+      }}
       contextActions={contextActions}
       pluginSkills={completionSkills}
       pluginSelections={pluginSelections}
@@ -4752,12 +5436,12 @@ export default function App() {
         configuration: desktop.managedModelConfiguration,
       }}
       onOpenModelSettings={() => {
-        setSettingsStartTab("providers");
+        setSettingsStartTab("models");
         setWorkNavigationOpen(false);
         setSurface("settings");
       }}
       canCompose={canCompose}
-      submitting={submitting}
+      submitting={submitting || dictation?.state.sending === true}
       continuation={continuation}
       planRevision={
         planRevision === null
@@ -4778,15 +5462,46 @@ export default function App() {
       activeWorkRedirectable={
         activeRun !== undefined && isCancelable(activeRun.status) && !cancelling
       }
+      stopping={cancelling || activeRun?.status === "cancelling"}
+      queuePaused={
+        activeRun !== undefined &&
+        activeRoute !== null &&
+        pausedQueues.has(
+          JSON.stringify([activeRoute.targetId, activeRun.sessionId]),
+        )
+      }
+      onStop={() => void cancelActiveRun()}
+      onResumeQueue={() => {
+        if (
+          activeRun &&
+          activeRoute &&
+          !cancelling &&
+          isTerminalStatus(activeRun.status) &&
+          targetRoutes.current?.isCurrent(activeRoute)
+        ) {
+          setThreadQueuePaused(
+            activeRoute.targetId,
+            activeRun.sessionId,
+            false,
+          );
+        }
+      }}
       queuedMessages={activeQueuedMessages}
       attachmentsAvailable={desktop.capabilities.attachments}
       attachments={attachments}
       attachmentBusy={attachmentBusy}
       error={composerError}
-      onPromptChange={(nextPrompt) => {
-        setPrompt(nextPrompt);
+      onPromptChange={(nextPrompt, intent) => {
+        setDraft((current) => editComposerDraft(current, nextPrompt, intent));
         setComposerError(null);
       }}
+      onPromptPaste={(text, start, end) => {
+        const next = pasteIntoComposerDraft(draftRef.current, text, start, end);
+        setDraft(next.draft);
+        setComposerError(null);
+        return next.cursor;
+      }}
+      condensedPasteCount={draft.pastes.length}
       onRoleChange={setRole}
       onMaxTurnsChange={(turns) => setMaxTurns(clampMaxTurns(turns))}
       onModeChange={(nextMode) => {
@@ -4810,7 +5525,7 @@ export default function App() {
       onEditQueuedMessage={editQueuedMessage}
       onDeleteQueuedMessage={deleteQueuedMessage}
       onRetryQueuedMessage={retryQueuedMessage}
-      onRedirect={() => void redirectCurrentResponse()}
+      onRedirect={() => void withDictationSend(redirectCurrentResponse)}
       onSubmit={(event) => void submitRun(event)}
     />
   );
@@ -4824,6 +5539,25 @@ export default function App() {
       desktop.managedState,
       desktop.executionBoundary,
     );
+
+  // Placeholder settings are not evidence that this is a first-time install.
+  // Keep the neutral surface until initialization and the first work list settle.
+  if (startup !== "ready") {
+    return (
+      <DesktopStartup
+        error={
+          startup === "failed"
+            ? actionError?.message || "Your saved settings could not be loaded."
+            : undefined
+        }
+        onRetry={() => {
+          setActionError(null);
+          setStartup("loading");
+          setStartupAttempt((attempt) => attempt + 1);
+        }}
+      />
+    );
+  }
 
   return (
     <div
@@ -4864,15 +5598,25 @@ export default function App() {
 
       {onboardingActive || surface === "settings" ? null : (
         <WorkSidebar
-          runs={chat.recentRuns}
+          runs={[
+            ...threadForkDrafts
+              .filter(
+                (draft) =>
+                  draft.spaceId === desktop.selectedSpaceId &&
+                  draft.materializedSessionId === undefined,
+              )
+              .map(threadForkDraftRun),
+            ...chat.recentRuns,
+          ]}
           spaces={desktop.spaces}
           selectedSpaceId={desktop.selectedSpaceId}
           surface={surface}
           connectionState={connection.state}
           capabilities={desktop.capabilities}
           terminalEnabled={desktop.terminalEnabled}
+          terminalConsentPending={desktop.terminalConsentPending === true}
           terminalAvailable={terminalAvailable}
-          activeSessionId={activeRun?.sessionId ?? null}
+          activeSessionId={activeForkDraft?.id ?? activeRun?.sessionId ?? null}
           pinnedSessionIds={pinnedThreadSessionIds}
           resolveThreadTitle={resolveThreadTitle}
           query={workQuery}
@@ -4916,6 +5660,9 @@ export default function App() {
           onRestoreSpace={(spaceId) => void handleRestoreSpace(spaceId)}
           onArchiveThread={(run) => void handleArchiveThread(run)}
           onRenameThread={handleRenameThread}
+          onForkThread={
+            desktop.selectedSpaceId === null ? undefined : beginThreadFork
+          }
           onToggleThreadPinned={handleToggleThreadPinned}
           onRestoreThread={(result) => void handleRestoreThread(result)}
           onSelectSurface={selectSurface}
@@ -4950,8 +5697,12 @@ export default function App() {
               .join(" ")}
             onChooseWorkspace={handleChooseWorkspace}
             onImportCaBundle={handleImportCaBundle}
+            onImportClientIdentity={handleImportClientIdentity}
             onConfigure={handleConfigureManaged}
             onApplyConfiguration={handleApplyManagedModelConfiguration}
+            onSetupStatus={async (status) => {
+              await acceptDesktopStatus(status, true);
+            }}
             onCodexLogin={handleCodexLogin}
             onCodexLogout={handleCodexLogout}
             onRunSelfTest={handleManagedSelfTest}
@@ -4967,16 +5718,56 @@ export default function App() {
         </Suspense>
       ) : surface === "work" ? (
         <WorkSurface
+          onInspectSchedule={(scheduleId, showRun) => {
+            if (desktop.selectedTargetId) {
+              setScheduleInspection({
+                targetId: desktop.selectedTargetId,
+                scheduleId,
+                showRun,
+              });
+              selectSurface("schedules");
+            }
+          }}
           gitWorkspaceId={desktop.workspace?.workspaceId ?? null}
           gitAvailable={desktop.capabilities.files}
           browserScope={desktop.selectedTargetId}
+          processSessionsAvailable={
+            desktop.capabilities.processSessions === true
+          }
           browserFixture={FIXTURE_MODE}
+          terminalSupported={
+            desktop.capabilities.tui || desktop.capabilities.shellTerminal
+          }
+          shellTerminalAvailable={desktop.capabilities.shellTerminal}
+          terminalReady={
+            desktop.terminalEnabled &&
+            (currentTerminalRequest?.kind === "shell"
+              ? desktop.capabilities.shellTerminal
+              : currentTerminalRequest?.kind === "colossus_tui"
+                ? terminalAvailable
+                : terminalAvailable || desktop.capabilities.shellTerminal)
+          }
+          terminalRequest={currentTerminalRequest}
+          onOpenGenericTerminal={() => {
+            setTerminalDockRequest(null);
+            if (desktopRef.current.terminalConsentPending)
+              void handleSetTerminalEnabled(true);
+          }}
+          onTerminalSettings={() => {
+            setSettingsStartTab("terminal");
+            setSurface("settings");
+          }}
           title={title}
           view={activeView}
+          forkDraft={activeForkDraft !== undefined}
+          inheritedViews={
+            activeForkOrigin === undefined
+              ? []
+              : (forkPreviewViews.get(activeForkOrigin.id) ?? [])
+          }
           conversationViews={conversationViews}
           connection={connection}
           connecting={connecting}
-          cancelling={cancelling}
           runLoadError={runLoadError}
           actionError={actionError}
           participants={participants}
@@ -5082,7 +5873,6 @@ export default function App() {
           }
           workNavigationOpen={workNavigationOpen}
           onConnect={() => void connect(desktop.selectedTargetId ?? undefined)}
-          onCancel={() => void cancelActiveRun()}
           onRespond={handleInteraction}
           onResume={() => {
             if (activeView !== undefined) {
@@ -5120,59 +5910,102 @@ export default function App() {
           onCloseAside={closeAside}
         />
       ) : (
-        <OperationsSurface
-          initialSettingsTab={settingsStartTab}
-          onReturnToWork={() => selectSurface("work")}
-          pluginSelections={pluginSelections}
-          onUsePluginSkill={(id) => {
-            setConversationSkills((current) => ({
-              ...current,
-              [selectionKey]: [
-                ...new Set([...(current[selectionKey] ?? []), id]),
-              ],
-            }));
-            setSurface("work");
-            requestAnimationFrame(() => composerRef.current?.focus());
-          }}
-          surface={surface}
-          connection={connection}
-          desktop={desktop}
-          connecting={connecting}
-          updateChecking={updateChecking}
-          updateMessage={updateMessage}
-          runs={chat.recentRuns}
-          artifacts={allArtifacts}
-          demoParticipants={FIXTURE_MODE ? DEMO_PARTICIPANTS : null}
-          workNavigationOpen={workNavigationOpen}
-          onOpenWorkNavigation={openWorkNavigation}
-          onConnect={() => void connect(desktop.selectedTargetId ?? undefined)}
-          onOpenRun={(run) => void openRun(run)}
-          onSelectTarget={(targetId) => void handleSelectTarget(targetId)}
-          onAddExternalTarget={() => void handleAddExternalTarget()}
-          onRemoveExternalTarget={(targetId) =>
-            void handleRemoveExternalTarget(targetId)
+        <Suspense
+          fallback={
+            <main className="overview-surface">
+              <p role="status">Loading page…</p>
+            </main>
           }
-          onChooseWorkspace={() => void handleChooseWorkspace()}
-          onConfigureManaged={() => setShowOnboarding(true)}
-          onRestartManaged={() => void handleRestartManaged()}
-          onSetTerminalEnabled={(enabled) =>
-            void handleSetTerminalEnabled(enabled)
-          }
-          onOpenTerminal={(kind) => void handleOpenTerminal(kind)}
-          onExportDiagnostics={() => {
-            void exportDiagnostics().catch((error: unknown) => {
-              setActionError(
-                error instanceof CommandFailure
-                  ? error.detail
-                  : FALLBACK_ACTION_ERROR,
-              );
-            });
-          }}
-          onCheckForUpdates={() => void handleCheckDesktopUpdate()}
-          onInstallUpdate={() => void handleInstallDesktopUpdate()}
-          onImportCaBundle={() => void handleImportCaBundle()}
-          onRemoveCaBundle={() => void handleRemoveCaBundle()}
-        />
+        >
+          <OperationsSurface
+            scheduleRunAttempts={scheduleRunAttempts.current}
+            onCreateWithAgent={(prompt) =>
+              void createAutomationWithAgent(prompt)
+            }
+            agentStarting={submitting || connecting}
+            scheduleInspection={
+              scheduleInspection?.targetId === desktop.selectedTargetId
+                ? scheduleInspection
+                : null
+            }
+            initialSettingsTab={settingsStartTab}
+            initialSettingsSpaceId={settingsSpaceId}
+            onManageControlPlaneWorkspace={(spaceId) => {
+              if (
+                !desktopRef.current.spaces.some(
+                  (space) => space.spaceId === spaceId,
+                )
+              )
+                return;
+              setSettingsSpaceId(spaceId);
+              setSettingsStartTab("cloud");
+              setSurface("settings");
+            }}
+            onManageControlPlaneProfiles={() => {
+              setSettingsSpaceId(undefined);
+              setSettingsStartTab("control-plane");
+              setSurface("settings");
+            }}
+            onConfigurePluginConnection={() => {
+              setSettingsStartTab("plugins");
+              setSurface("settings");
+            }}
+            onReturnToWork={() => selectSurface("work")}
+            pluginSelections={pluginSelections}
+            onUsePluginSkill={(id) => {
+              setConversationSkills((current) => ({
+                ...current,
+                [selectionKey]: [
+                  ...new Set([...(current[selectionKey] ?? []), id]),
+                ],
+              }));
+              setSurface("work");
+              requestAnimationFrame(() => composerRef.current?.focus());
+            }}
+            surface={surface}
+            connection={connection}
+            desktop={desktop}
+            connecting={connecting}
+            updateChecking={updateChecking}
+            updateMessage={updateMessage}
+            runs={chat.recentRuns}
+            artifacts={allArtifacts}
+            demoParticipants={FIXTURE_MODE ? DEMO_PARTICIPANTS : null}
+            workNavigationOpen={workNavigationOpen}
+            onOpenWorkNavigation={openWorkNavigation}
+            onConnect={() =>
+              void connect(desktop.selectedTargetId ?? undefined)
+            }
+            onOpenRun={(run) => void openRun(run)}
+            onSelectTarget={(targetId) => void handleSelectTarget(targetId)}
+            onAddExternalTarget={() => void handleAddExternalTarget()}
+            onRemoveExternalTarget={(targetId) =>
+              void handleRemoveExternalTarget(targetId)
+            }
+            onChooseWorkspace={() => void handleChooseWorkspace()}
+            onConfigureManaged={() => setShowOnboarding(true)}
+            onRestartManaged={() => void handleRestartManaged()}
+            onSetTerminalEnabled={(enabled) =>
+              void handleSetTerminalEnabled(enabled)
+            }
+            onOpenTerminal={(kind) => void handleOpenTerminal(kind)}
+            onExportDiagnostics={() => {
+              void exportDiagnostics().catch((error: unknown) => {
+                setActionError(
+                  error instanceof CommandFailure
+                    ? error.detail
+                    : FALLBACK_ACTION_ERROR,
+                );
+              });
+            }}
+            onCheckForUpdates={() => void handleCheckDesktopUpdate()}
+            onInstallUpdate={() => void handleInstallDesktopUpdate()}
+            onImportCaBundle={() => void handleImportCaBundle()}
+            onRemoveCaBundle={() => void handleRemoveCaBundle()}
+            onImportClientIdentity={() => void handleImportClientIdentity()}
+            onRemoveClientIdentity={() => void handleRemoveClientIdentity()}
+          />
+        </Suspense>
       )}
     </div>
   );

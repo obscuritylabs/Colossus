@@ -24,7 +24,7 @@ use colossus_policy::{
     QuarantinedEffectObserver, StreamingEffectExecutor, http_transport_authority_match,
     non_public_network_address,
 };
-use colossus_ports::{CredentialResolutionError, RunInputMediaResolver};
+use colossus_ports::RunInputMediaResolver;
 use futures::StreamExt as _;
 use reqwest::{Client, Url, redirect::Policy as RedirectPolicy};
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::net::lookup_host;
 
@@ -45,11 +44,9 @@ const MAX_PROVIDER_ADDRESSES: usize = 16;
 const MAX_PROVIDER_DIAGNOSTIC_BODY_BYTES: usize = 16 * 1024;
 const MAX_CODEX_REFRESH_RESPONSE_BYTES: usize = 256 * 1024;
 
-impl From<CredentialResolutionError> for ProviderError {
-    fn from(error: CredentialResolutionError) -> Self {
-        Self::Credential(error.to_string())
-    }
-}
+mod error;
+pub use error::{ProviderError, classify_response_diagnostic};
+use error::{chat_finish_error, terminal_provider_error};
 
 mod normalization;
 use normalization::*;
@@ -68,9 +65,17 @@ pub use profile::*;
 
 mod executor;
 pub use executor::*;
+mod continuation;
+pub use continuation::{ProviderAdapterStreamItem, ProviderAdapterTurn};
+
+mod retry;
 
 mod registry;
 pub use registry::*;
+mod features;
+pub use features::{ProviderFeature, ProviderFeatureRejection};
 
+#[cfg(test)]
+mod feature_tests;
 #[cfg(test)]
 mod tests;

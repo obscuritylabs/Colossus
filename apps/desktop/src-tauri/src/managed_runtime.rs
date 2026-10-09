@@ -1,16 +1,18 @@
+use colossus_contracts::HostSecret;
 use colossus_sdk::{
     ApiMajor, ApiScope, AppPrivateInstanceDir, Colossus, CreateRunRequest, GetRunRequest,
     IdempotencyKey, InputContentPart, InstanceId, ListRunsRequest, ManagedAccessProfile,
     ManagedExecutionBoundary, ManagedFieldOverride, ManagedJournalPayloadMode,
     ManagedMcpCredentialHeader, ManagedMcpOAuthConfig, ManagedMcpResearchTool,
-    ManagedMcpServerConfig, ManagedMcpTransport, ManagedModelCapabilities, ManagedModelConfig,
-    ManagedOtlpProtocol, ManagedProviderConfig, ManagedProviderKind, ManagedReasoningEffort,
-    ManagedRuntimeConfig, ManagedSearchConfig, ManagedSearchKind, ManagedTelemetryConfig,
-    NativeSidecarLifecycle, PageRequest, PageResponse, RunMode, RunStatus, SdkError, Secret,
-    SidecarApplicationGrant, SidecarApprovalBrokerGrant, SidecarBootstrapConfig,
-    SidecarHostCredential, SidecarOptions, WorkspaceIdentity, scopes,
+    ManagedMcpServerConfig, ManagedMcpTransport, ManagedModelConfig, ManagedOtlpProtocol,
+    ManagedProviderConfig, ManagedProviderKind, ManagedReasoningEffort, ManagedRuntimeConfig,
+    ManagedSearchConfig, ManagedSearchKind, ManagedTelemetryConfig, NativeSidecarLifecycle,
+    PageRequest, PageResponse, RunMode, RunStatus, SdkError, Secret, SidecarApplicationGrant,
+    SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarHostCredential, SidecarOptions,
+    WorkspaceIdentity, scopes,
 };
 use colossus_worker_protocol::{WorkerControlClient, worker_ipc_endpoint};
+mod activity;
 mod provider_catalog;
 pub(crate) use provider_catalog::discover_provider_models;
 #[cfg(all(test, any(windows, target_os = "macos")))]
@@ -40,10 +42,9 @@ use crate::{
         JournalPayloadSetting, McpTransportSetting, OtlpProtocolSetting,
         ResolvedSpaceConfiguration, SearchProviderKindSetting, resolve_space_configuration,
     },
-    run_list,
     state::{
         AppState, MAX_LIVE_MANAGED_SPACES, ManagedConfigurationDrainGuard, ManagedHealth,
-        TargetConsentContext,
+        TargetConsentContext, TargetHandle,
     },
     terminal::{TerminalWorkerAuthentication, TerminalWorkspace},
 };
@@ -55,7 +56,16 @@ const ACTIVE_RUN_PAGE_SIZE: u32 = 100;
 const MAX_ACTIVE_RUN_PAGES: usize = 4_096;
 const CONFIGURATION_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CONFIGURATION_DRAIN_TIMEOUT: Duration = Duration::from_mins(5);
-const PRIMARY_SCOPES: [&str; 7] = [
+const OUTLOOK_SESSION_SERVER: &str = "outlook-session";
+const OUTLOOK_SESSION_CREDENTIAL: &str = "outlook-companion-session";
+const PRIMARY_SCOPES: [&str; 14] = [
+    scopes::WORKFLOWS_READ,
+    scopes::WORKFLOWS_REGISTER,
+    scopes::WORKFLOW_RUNS_READ,
+    scopes::WORKFLOW_RUNS_START,
+    scopes::SCHEDULES_READ,
+    scopes::SCHEDULES_CREATE,
+    scopes::SCHEDULES_CONTROL,
     scopes::EXTENSIONS_READ,
     scopes::RUNS_EXECUTE,
     scopes::RUNS_READ,
@@ -66,6 +76,14 @@ const PRIMARY_SCOPES: [&str; 7] = [
 ];
 
 const TRUSTED_BUILTIN_TOOL_GRANT: &[&str] = &[
+    "workflow.definition.list",
+    "workflow.definition.get",
+    "workflow.schedule.list",
+    "workflow.schedule.get",
+    "workflow.schedule.create",
+    "workflow.task.schedule",
+    "workflow.schedule.set_enabled",
+    "workflow.schedule.delete",
     "agent.delegate",
     "agent.list",
     "agent.result",
@@ -111,7 +129,12 @@ const TRUSTED_BUILTIN_TOOL_GRANT: &[&str] = &[
     "repo.map",
     "repo.references",
     "repo.symbol_search",
+    "session.set_title",
     "shell.run",
+    "shell.wait",
+    "shell.read",
+    "shell.list",
+    "shell.stop",
     "plugin.list",
     "plugin.inspect",
     "plugin.skill.read",
@@ -223,6 +246,8 @@ async fn start_after_operation_drain(
             Ok(())
         }
         Err((error, failure_code)) => {
+            #[cfg(windows)]
+            state.stop_outlook_companion_for(space_id).await;
             state
                 .clear_managed_lifecycle_for(space_id, lifecycle_generation)
                 .await;
@@ -259,10 +284,17 @@ async fn ensure_managed_capacity(
             state.remove_managed_space_runtime(&target_id).await;
             continue;
         };
-        let active = managed_target_has_active_work(&target.client).await?;
+        let active = managed_target_has_active_work(&target).await?;
         candidates.push((last_used, target_id, active));
     }
-    let Some(target_id) = idle_lru_candidate(&candidates)? else {
+    let Some(target_id) = activity::revalidated_idle_lru(candidates, |target_id| async move {
+        let Some(target) = state.target(&target_id).await else {
+            return Ok(false);
+        };
+        managed_target_has_active_work(&target).await
+    })
+    .await?
+    else {
         return Ok(());
     };
     if let Some(target) = state.remove_target(&target_id).await {
@@ -277,14 +309,62 @@ async fn ensure_managed_capacity(
 }
 
 pub(crate) async fn managed_target_has_active_work(
-    client: &Colossus,
+    target: &TargetHandle,
 ) -> Result<bool, CommandErrorDto> {
+    activity::has_active_work(
+        || managed_workflows_have_active_work(&target.client),
+        managed_target_has_active_chat_work(target),
+    )
+    .await
+}
+
+async fn managed_workflows_have_active_work(client: &Colossus) -> Result<bool, CommandErrorDto> {
+    if client.capabilities().contains("schedules.read") {
+        let workflows = client
+            .workflows()
+            .ok_or_else(|| CommandErrorDto::busy("Workflow activity could not be inspected."))?;
+        return workflows
+            .has_active_work()
+            .await
+            .map_err(CommandErrorDto::from_api);
+    }
+    Ok(false)
+}
+
+async fn managed_target_has_active_chat_work(
+    target: &TargetHandle,
+) -> Result<bool, CommandErrorDto> {
+    let client = &target.client;
+    if client.capabilities().contains("process_sessions.v1") {
+        let mut after = None;
+        for _ in 0..3 {
+            let page = client
+                .list_process_sessions(colossus_sdk::ListProcessSessionsRequest { after })
+                .await
+                .map_err(CommandErrorDto::from_api)?;
+            if page
+                .sessions
+                .iter()
+                .any(|session| session.status.is_active())
+            {
+                return Ok(true);
+            }
+            after = page.next_cursor;
+            if after.is_none() {
+                break;
+            }
+            // Respect the shell discovery admission rate while inspecting all pages.
+            tokio::time::sleep(std::time::Duration::from_millis(550)).await;
+        }
+        if after.is_some() {
+            return Ok(true);
+        }
+    }
     let mut page_token = String::new();
     let mut seen_tokens = BTreeSet::new();
     for _ in 0..MAX_ACTIVE_RUN_PAGES {
-        let response = run_list::list_runs(
-            client,
-            ListRunsRequest {
+        let response = target
+            .list_runs(ListRunsRequest {
                 session_id: None,
                 statuses: vec![
                     RunStatus::Queued,
@@ -297,10 +377,9 @@ pub(crate) async fn managed_target_has_active_work(
                     page_token,
                 }),
                 include_archived: false,
-            },
-        )
-        .await
-        .map_err(CommandErrorDto::from_api)?;
+            })
+            .await
+            .map_err(CommandErrorDto::from_api)?;
         if !response.runs.is_empty() {
             return Ok(true);
         }
@@ -345,7 +424,7 @@ pub(crate) async fn drain_active_runs_for_configuration(
 
     let drained = tokio::time::timeout(CONFIGURATION_DRAIN_TIMEOUT, async {
         loop {
-            if !managed_target_has_active_work(&target.client).await? {
+            if !managed_target_has_active_work(&target).await? {
                 return Ok::<(), CommandErrorDto>(());
             }
             tokio::time::sleep(CONFIGURATION_DRAIN_POLL_INTERVAL).await;
@@ -652,6 +731,7 @@ async fn start_inner(
         ApiMajor::new(1).map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Internal))?,
     )
     .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
+    let companion = start_outlook_companion(state, settings, space_id, &colossus_home).await?;
     let PreparedManagedBootstrap {
         bootstrap,
         worker_authentication,
@@ -663,6 +743,7 @@ async fn start_inner(
         settings,
         &DesktopCredentials::for_settings(state, store)
             .map_err(|error| (error, RuntimeFailureCodeDto::Provider))?,
+        companion,
     )
     .await?;
     let lifecycle = NativeSidecarLifecycle::new(bootstrap);
@@ -736,12 +817,55 @@ struct PreparedManagedBootstrap {
     terminal_enabled: bool,
 }
 
+struct CompanionBootstrap {
+    endpoint: String,
+    credential: HostSecret,
+}
+
+#[cfg(windows)]
+async fn start_outlook_companion(
+    state: &AppState,
+    settings: &DesktopSettings,
+    space_id: &str,
+    colossus_home: &Path,
+) -> Result<Option<CompanionBootstrap>, (CommandErrorDto, RuntimeFailureCodeDto)> {
+    if settings
+        .space(space_id)
+        .is_some_and(|space| space.outlook_companion_enabled)
+    {
+        let (process, credential) =
+            crate::outlook_companion::OutlookCompanion::start(colossus_home)
+                .await
+                .map_err(|error| (error, RuntimeFailureCodeDto::Configuration))?;
+        let registration = CompanionBootstrap {
+            endpoint: process.endpoint.clone(),
+            credential,
+        };
+        state.install_outlook_companion_for(space_id, process).await;
+        return Ok(Some(registration));
+    }
+    Ok(None)
+}
+
+#[cfg(not(windows))]
+fn start_outlook_companion(
+    state: &AppState,
+    settings: &DesktopSettings,
+    space_id: &str,
+    colossus_home: &Path,
+) -> std::future::Ready<Result<Option<CompanionBootstrap>, (CommandErrorDto, RuntimeFailureCodeDto)>>
+{
+    let _ = (state, settings, space_id, colossus_home);
+    std::future::ready(Ok(None))
+}
+
 async fn prepare_managed_bootstrap(
     workspace: &Path,
     workspace_identity: WorkspaceIdentity,
     store: &SettingsStore,
     settings: &DesktopSettings,
     credentials: &std::sync::Arc<DesktopCredentials>,
+    companion: Option<CompanionBootstrap>,
 ) -> Result<PreparedManagedBootstrap, (CommandErrorDto, RuntimeFailureCodeDto)> {
     let space = settings
         .selected_space_id
@@ -780,7 +904,7 @@ async fn prepare_managed_bootstrap(
             .home_root()
             .map_err(|error| (error, RuntimeFailureCodeDto::Permission))?,
     };
-    let bootstrap = managed_bootstrap(
+    let mut bootstrap = managed_bootstrap(
         workspace,
         workspace_identity,
         &resolved,
@@ -788,8 +912,16 @@ async fn prepare_managed_bootstrap(
         approval_broker_grant,
         worker_bootstrap_secret.as_ref(),
         &paths,
+        companion,
     )
     .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
+    if let Some(identity) = settings.client_identity.as_ref() {
+        let (certificate, key) = credentials
+            .read_client_identity(&identity.identity_id, &identity.leaf_fingerprint_sha256)
+            .await
+            .map_err(|error| (error, RuntimeFailureCodeDto::Permission))?;
+        bootstrap = bootstrap.with_client_identity(certificate, key);
+    }
     Ok(PreparedManagedBootstrap {
         bootstrap,
         worker_authentication,
@@ -812,8 +944,17 @@ fn managed_bootstrap(
     approval_broker_grant: SidecarApprovalBrokerGrant,
     worker_authentication: &[u8],
     paths: &ManagedBootstrapPaths<'_>,
+    companion: Option<CompanionBootstrap>,
 ) -> Result<SidecarBootstrapConfig, SdkError> {
-    let runtime = managed_runtime_config(resolved);
+    let mut runtime = managed_runtime_config(resolved);
+    let mut host_credentials = host_credentials;
+    if let Some(companion) = companion {
+        configure_outlook_companion(&mut runtime, &companion.endpoint)?;
+        host_credentials.push(SidecarHostCredential::new(
+            OUTLOOK_SESSION_CREDENTIAL,
+            companion.credential,
+        )?);
+    }
     let bootstrap = SidecarBootstrapConfig::new(
         workspace,
         runtime,
@@ -821,7 +962,9 @@ fn managed_bootstrap(
     )?
     .with_expected_workspace_identity(workspace_identity)?
     .with_colossus_home(paths.colossus_home)?
+    .with_risk_auto_approvals()
     .with_approval_broker_grant(approval_broker_grant)?
+    .with_connector_grant(connector_application_grant(resolved.access_profile)?)?
     .with_host_credentials(host_credentials)?
     .with_worker_ipc_authentication(Secret::new(worker_authentication.to_vec())?)?;
     #[cfg(debug_assertions)]
@@ -836,8 +979,120 @@ fn managed_bootstrap(
     }
 }
 
+fn configure_outlook_companion(
+    runtime: &mut ManagedRuntimeConfig,
+    endpoint: &str,
+) -> Result<(), SdkError> {
+    if runtime
+        .mcp_servers
+        .iter()
+        .any(|server| server.name == OUTLOOK_SESSION_SERVER)
+    {
+        return Err(SdkError::InvalidConfiguration(
+            "Outlook companion server name conflicts with another MCP server",
+        ));
+    }
+    // An enabled portable stdio declaration still runs inside windows_job. The
+    // companion replaces that one connection for this Workspace only.
+    if let Some(field) = runtime
+        .field_overrides
+        .iter_mut()
+        .find(|field| field.field_id == "plugins.mcpServers")
+        && let Some(overlay) = field.value.as_object_mut()
+        && let Some(mail) = overlay.get_mut("outlook-classic/mail")
+        && let Some(mail) = mail.as_object_mut()
+    {
+        mail.insert("enabled".into(), serde_json::Value::Bool(false));
+    }
+    runtime.mcp_servers.push(ManagedMcpServerConfig {
+        name: OUTLOOK_SESSION_SERVER.into(),
+        transport: ManagedMcpTransport::StreamableHttp,
+        command: None,
+        args: Vec::new(),
+        working_directory: None,
+        environment_credentials: BTreeMap::new(),
+        url: Some(endpoint.into()),
+        headers: BTreeMap::new(),
+        credential_headers: BTreeMap::from([(
+            "Authorization".into(),
+            ManagedMcpCredentialHeader {
+                scheme: Some("Bearer".into()),
+                credential_id: OUTLOOK_SESSION_CREDENTIAL.into(),
+            },
+        )]),
+        allow_stateless: true,
+        protocol_version: colossus_contracts::McpProtocolVersion::Auto,
+        oauth: None,
+        allowed_tools: [
+            "get_status",
+            "list_stores",
+            "list_folders",
+            "get_mail_folders",
+            "list_messages",
+            "search_messages",
+            "get_message",
+            "list_attachments",
+            "mark_message_read",
+            "move_message",
+            "archive_message",
+            "delete_message",
+            "create_draft",
+            "update_draft",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
+        research_tools: Vec::new(),
+        timeout_ms: Some(30_000),
+        max_output_bytes: Some(65_536),
+    });
+    Ok(())
+}
+
+#[cfg(test)]
+mod outlook_companion_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn companion_uses_exact_http_endpoint_and_disables_portable_stdio() {
+        let mut runtime = ManagedRuntimeConfig::echo(ManagedAccessProfile::Development);
+        runtime.field_overrides.push(ManagedFieldOverride {
+            field_id: "plugins.mcpServers".into(),
+            value: json!({
+                "outlook-classic/mail": {"enabled": true, "allowedTools": ["*"]},
+                "other/plugin": {"enabled": true}
+            }),
+        });
+        configure_outlook_companion(&mut runtime, "http://127.0.0.1:64123/mcp")
+            .expect("configure companion");
+        let server = runtime.mcp_servers.last().expect("companion server");
+        assert_eq!(server.name, OUTLOOK_SESSION_SERVER);
+        assert_eq!(server.url.as_deref(), Some("http://127.0.0.1:64123/mcp"));
+        assert_eq!(server.transport, ManagedMcpTransport::StreamableHttp);
+        assert!(server.allow_stateless);
+        assert_eq!(
+            server.credential_headers["Authorization"].scheme.as_deref(),
+            Some("Bearer")
+        );
+        assert_eq!(server.allowed_tools.len(), 14);
+        assert!(!server.allowed_tools.iter().any(|tool| tool == "*"));
+        assert_eq!(
+            runtime.field_overrides[0].value["outlook-classic/mail"]["enabled"],
+            false
+        );
+        assert_eq!(
+            runtime.field_overrides[0].value["other/plugin"]["enabled"],
+            true
+        );
+        runtime.validate().expect("valid managed transport");
+    }
+}
+
 #[allow(clippy::too_many_lines)]
-fn managed_runtime_config(resolved: &ResolvedSpaceConfiguration) -> ManagedRuntimeConfig {
+pub(crate) fn managed_runtime_config(
+    resolved: &ResolvedSpaceConfiguration,
+) -> ManagedRuntimeConfig {
     let (search_profiles, search_roles) = managed_search(resolved);
     ManagedRuntimeConfig {
         access_profile: access_profile(resolved.access_profile),
@@ -866,11 +1121,7 @@ fn managed_runtime_config(resolved: &ResolvedSpaceConfiguration) -> ManagedRunti
                 model: model.model.clone(),
                 context_window_tokens: model.context_window_tokens,
                 max_output_tokens: model.max_output_tokens,
-                capabilities: ManagedModelCapabilities {
-                    tool_calls: model.capabilities.tool_calls,
-                    streaming: model.capabilities.streaming,
-                    image_inputs: model.capabilities.image_inputs,
-                },
+                capabilities: model.capabilities.into(),
                 reasoning_effort: model.reasoning_effort.map(reasoning_effort),
             })
             .collect(),
@@ -906,6 +1157,7 @@ fn managed_runtime_config(resolved: &ResolvedSpaceConfiguration) -> ManagedRunti
                     })
                     .collect(),
                 allow_stateless: server.allow_stateless,
+                protocol_version: server.protocol_version,
                 oauth: server.oauth.as_ref().map(|oauth| ManagedMcpOAuthConfig {
                     client_id: oauth.client_id.clone(),
                     client_secret_credential_id: oauth.client_secret_credential_id.clone(),
@@ -1112,6 +1364,20 @@ fn managed_worker_endpoint(
 }
 
 fn application_grant(profile: AccessProfileSetting) -> Result<SidecarApplicationGrant, SdkError> {
+    application_grant_for(profile, APPLICATION_ID, false)
+}
+
+fn connector_application_grant(
+    profile: AccessProfileSetting,
+) -> Result<SidecarApplicationGrant, SdkError> {
+    application_grant_for(profile, "app:colossus-desktop-cloud", true)
+}
+
+fn application_grant_for(
+    profile: AccessProfileSetting,
+    application_id: &str,
+    cloud: bool,
+) -> Result<SidecarApplicationGrant, SdkError> {
     let scopes = PRIMARY_SCOPES
         .into_iter()
         .map(ApiScope::new)
@@ -1125,7 +1391,22 @@ fn application_grant(profile: AccessProfileSetting) -> Result<SidecarApplication
             .map(|tool| (*tool).to_owned())
             .collect()
     };
-    SidecarApplicationGrant::new(APPLICATION_ID, scopes, ["primary".to_owned()], tools)
+    let scopes = if cloud {
+        [
+            scopes::RUNS_EXECUTE,
+            scopes::RUNS_READ,
+            scopes::RUNS_CONTROL,
+            scopes::PROMPTS_RESPOND,
+            scopes::APPROVALS_RESPOND,
+        ]
+        .into_iter()
+        .map(ApiScope::new)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| SdkError::InvalidConfiguration("invalid cloud scope"))?
+    } else {
+        scopes
+    };
+    SidecarApplicationGrant::new(application_id, scopes, ["primary".to_owned()], tools)
 }
 
 fn approval_broker_grant() -> Result<SidecarApprovalBrokerGrant, SdkError> {
@@ -1360,18 +1641,23 @@ mod tests {
             "agent.delegate",
             "filesystem.read",
             "shell.run",
+            "shell.wait",
+            "shell.read",
+            "shell.list",
+            "shell.stop",
             "plugin.skill.read",
             "mcp.call",
             "mcp.search",
             "web.search",
             "network.http",
             "plan.approve_request",
+            "session.set_title",
         ] {
             assert!(debug.contains(required));
         }
         assert!(!debug.contains("worker.admin"));
         assert!(!debug.contains(scopes::APPROVALS_RESPOND));
-        assert_eq!(PRIMARY_SCOPES.len(), 7);
+        assert_eq!(PRIMARY_SCOPES.len(), 14);
         for required in PRIMARY_SCOPES {
             assert!(debug.contains(required));
         }
@@ -1384,6 +1670,13 @@ mod tests {
         assert!(debug.contains(APPLICATION_ID));
         assert!(debug.contains("primary"));
         assert!(!debug.contains("shell.run"));
+        for scope in [
+            scopes::SCHEDULES_CREATE,
+            scopes::SCHEDULES_CONTROL,
+            scopes::WORKFLOWS_REGISTER,
+        ] {
+            assert!(!debug.contains(scope));
+        }
     }
 
     #[test]

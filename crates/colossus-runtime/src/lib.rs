@@ -17,7 +17,10 @@ mod composition;
 mod config;
 mod context_tools;
 mod credential_vault;
+pub use credential_vault::{RuntimeOAuthVaultBinding, runtime_oauth_vault_binding};
+mod development_credentials;
 mod development_sandbox;
+pub use development_credentials::validate_development_credential_boundary;
 mod diagnostics;
 mod direct_effects;
 mod error;
@@ -32,6 +35,7 @@ mod mcp_diagnostics;
 mod mcp_search;
 mod memory;
 pub use mcp_diagnostics::McpHealthCheck;
+mod development_journal;
 mod memory_gateway;
 mod operations;
 mod plan_runs;
@@ -48,10 +52,15 @@ mod plugin_registry_effects;
 mod plugin_registry_tests;
 mod prelude;
 mod presentation_work_effects;
+mod process_sessions;
+mod provider_continuation;
+#[cfg(test)]
+mod provider_continuation_tests;
 mod provider_gateway;
 mod provider_setup;
 mod repository_tools;
 mod research_gateway;
+mod research_mcp;
 mod research_skill_effects;
 mod runtime_helpers;
 mod sandbox_boundary;
@@ -64,8 +73,14 @@ mod subagents;
 mod tool_arguments;
 mod trace_tools;
 mod work;
+mod workflow_tools;
 mod workflows_research;
 mod workspace;
+#[cfg(test)]
+mod workspace_plugin_tests;
+mod workspace_plugins;
+use process_sessions::ProcessSessions;
+
 mod workspace_binding;
 mod workspace_lease;
 
@@ -77,7 +92,7 @@ use adapter_composition::*;
 #[cfg(test)]
 mod test_support;
 
-pub use colossus_contracts::{ModelCapabilities, ReasoningEffort};
+pub use colossus_contracts::{ModelCapabilities, ModelFeatureSettings, ReasoningEffort};
 pub use colossus_observability::{
     JournalPayloadMode, LogSignalConfig, MetricSignalConfig, ObservabilityConfig, OtlpConfig,
     OtlpProtocol, TraceSignalConfig,

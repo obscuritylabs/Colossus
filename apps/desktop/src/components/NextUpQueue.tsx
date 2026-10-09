@@ -12,6 +12,9 @@ import type { QueuedMessage } from "../message-queue";
 
 interface NextUpQueueProps {
   messages: readonly QueuedMessage[];
+  paused?: boolean;
+  resumeDisabled?: boolean;
+  onResume?: () => void;
   onEdit: (messageId: string, prompt: string) => void;
   onDelete: (messageId: string) => void;
   onRetry: (messageId: string) => void;
@@ -19,6 +22,9 @@ interface NextUpQueueProps {
 
 export function NextUpQueue({
   messages,
+  paused = false,
+  resumeDisabled = false,
+  onResume,
   onEdit,
   onDelete,
   onRetry,
@@ -73,7 +79,21 @@ export function NextUpQueue({
           <strong>Next up</strong>
           <span className="next-up-count">{messages.length}</span>
         </span>
-        <span>Sent in order when this thread is ready.</span>
+        {paused ? (
+          <span className="next-up-paused" role="status">
+            Paused{" "}
+            <button
+              type="button"
+              className="text-button"
+              onClick={onResume}
+              disabled={resumeDisabled}
+            >
+              Resume queue
+            </button>
+          </span>
+        ) : (
+          <span>Sent in order when this thread is ready.</span>
+        )}
       </header>
       <ol>
         {messages.map((message, index) => {

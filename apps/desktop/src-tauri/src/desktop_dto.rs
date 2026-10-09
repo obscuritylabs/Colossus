@@ -278,7 +278,9 @@ pub(crate) struct DesktopStatusDto {
     pub(crate) execution_boundary: ExecutionBoundarySetting,
     pub(crate) approval_mode: DesktopApprovalModeDto,
     pub(crate) terminal_enabled: bool,
+    pub(crate) terminal_consent_pending: bool,
     pub(crate) additional_ca_bundle: CaBundleStatusDto,
+    pub(crate) client_identity: ClientIdentityStatusDto,
     pub(crate) capabilities: DesktopCapabilitiesDto,
 }
 
@@ -332,6 +334,26 @@ impl CaBundleStatusDto {
     }
 }
 
+/// Public certificate fingerprint and presence only; the key stays in native storage.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClientIdentityStatusDto {
+    pub(crate) configured: bool,
+    pub(crate) leaf_fingerprint_sha256: Option<String>,
+}
+
+impl ClientIdentityStatusDto {
+    pub(crate) fn from_settings(settings: &DesktopSettings) -> Self {
+        Self {
+            configured: settings.client_identity.is_some(),
+            leaf_fingerprint_sha256: settings
+                .client_identity
+                .as_ref()
+                .map(|identity| identity.leaf_fingerprint_sha256.clone()),
+        }
+    }
+}
+
 /// Renderer-safe features advertised for the selected authenticated runtime.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -343,6 +365,7 @@ pub(crate) struct DesktopCapabilitiesDto {
     pub(crate) plugin_skill_selection: bool,
     pub(crate) tui: bool,
     pub(crate) shell_terminal: bool,
+    pub(crate) process_sessions: bool,
     pub(crate) files: bool,
     pub(crate) artifacts: bool,
     pub(crate) plan_continuation: bool,
@@ -578,6 +601,7 @@ impl ApplyManagedModelConfigurationInput {
         self.providers
             .iter()
             .map(|provider| ProviderSetting {
+                credential_required: false,
                 profile: provider.profile.clone(),
                 kind: provider.provider_kind,
                 base_url: provider.base_url.clone(),
@@ -634,6 +658,7 @@ pub(crate) struct ConfigureManagedRuntimeInput {
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SetupModelMetadataInput {
+    pub(crate) capabilities: Option<ModelCapabilitiesSetting>,
     pub(crate) context_window_tokens: Option<u64>,
     pub(crate) max_output_tokens: Option<u64>,
     pub(crate) tool_calls: Option<bool>,
@@ -712,9 +737,10 @@ mod tests {
                 context_window_tokens: 32_768,
                 max_output_tokens: 4_096,
                 capabilities: ModelCapabilitiesSetting {
-                    tool_calls: false,
-                    streaming: true,
-                    image_inputs: false,
+                    tool_calls: false.into(),
+                    streaming: true.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
                 reasoning_effort: None,
             }],
@@ -945,6 +971,7 @@ mod tests {
         let credential_id = uuid::Uuid::now_v7().to_string();
         let settings = DesktopSettings {
             providers: vec![ProviderSetting {
+                credential_required: false,
                 profile: "provider".into(),
                 kind: ProviderKindSetting::Compatible,
                 base_url: "https://models.example.test/v1".into(),
@@ -958,9 +985,10 @@ mod tests {
                 context_window_tokens: 32_768,
                 max_output_tokens: 4_096,
                 capabilities: ModelCapabilitiesSetting {
-                    tool_calls: true,
-                    streaming: false,
-                    image_inputs: false,
+                    tool_calls: true.into(),
+                    streaming: false.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
                 reasoning_effort: Some(ReasoningEffortSetting::High),
             }],

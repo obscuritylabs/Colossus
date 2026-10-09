@@ -160,7 +160,7 @@ impl PublicInteractionRouter {
         self
     }
 
-    fn public_approval_mode(&self) -> PublicApprovalMode {
+    pub(crate) fn public_approval_mode(&self) -> PublicApprovalMode {
         self.public_approval_mode
             .as_ref()
             .map_or(PublicApprovalMode::Ask, |provider| {
@@ -295,7 +295,7 @@ impl ApprovalProvider for PublicInteractionRouter {
         let response = request_interaction(
             &active,
             InteractionKind::Approval,
-            PUBLIC_APPROVAL_PROMPT.into(),
+            public_approval_prompt(request),
             Vec::new(),
             false,
             Some(ApprovalContext {
@@ -499,7 +499,12 @@ fn public_approval_resource(request: &EffectRequest) -> String {
     }
 
     let action = request.action.as_str();
-    if action.starts_with("filesystem.")
+    if matches!(
+        action,
+        "workflow.schedule.create" | "workflow.schedule.set_enabled" | "workflow.schedule.delete"
+    ) {
+        "persistent schedule".into()
+    } else if action.starts_with("filesystem.")
         || action.starts_with("patch.")
         || action.starts_with("git.")
         || action.starts_with("repo.")
@@ -533,9 +538,77 @@ fn public_approval_resource(request: &EffectRequest) -> String {
     }
 }
 
+fn public_approval_prompt(request: &EffectRequest) -> String {
+    use colossus_contracts::WorkflowControlOperation as Operation;
+    if matches!(
+        request.action.as_str(),
+        "workflow.schedule.create" | "workflow.schedule.set_enabled" | "workflow.schedule.delete"
+    ) && let Ok(operation) = serde_json::from_value::<Operation>(request.content.clone())
+        && operation.action() == request.action
+        && operation.resource() == request.resource
+    {
+        let summary = match operation {
+            Operation::CreateSchedule {
+                schedule_id,
+                workflow_id,
+                expected_hash,
+                inputs,
+                cadence_seconds,
+                calendar,
+                task,
+                starts_at,
+                misfire_policy,
+                enabled,
+                ..
+            } => {
+                let input = serde_json::to_string(&inputs).unwrap_or_default();
+                let input = if input.len() <= 48 * 1024 {
+                    input
+                } else {
+                    "Input snapshot exceeds inline review size; deny and request a smaller reviewed schedule.".into()
+                };
+                let timing = calendar.map_or_else(|| format!("{cadence_seconds} seconds (fixed elapsed time)"), |calendar| format!("{} at {} in {} (ISO weekdays; empty means daily). Missing local times are skipped; repeated times run once.", serde_json::to_string(&calendar.weekdays).unwrap_or_default(), calendar.time, calendar.timezone));
+                let execution = if let Some(task) = task {
+                    let reviewed = serde_json::to_string(&task).unwrap_or_default();
+                    if reviewed.len() > 48 * 1024 {
+                        return "Task exceeds inline review size; deny and request smaller instructions.".into();
+                    }
+                    format!("One-step agent task (allocated atomically with schedule): {reviewed}")
+                } else {
+                    format!(
+                        "Workflow: {workflow_id}\nPinned definition: {expected_hash}\nImmutable inputs: {input}"
+                    )
+                };
+                format!(
+                    "Create persistent schedule {schedule_id}.\n{execution}\nRepeat: {timing}\nFirst UTC boundary: {starts_at}\nMultiple overdue occurrences: {misfire_policy:?}\nInitially enabled: {enabled}\nOne due occurrence queues a run under either policy. Multiple due occurrences fire the latest once or skip all. A running worker is required. Each occurrence starts an independent workflow run."
+                )
+            }
+            Operation::SetScheduleEnabled {
+                schedule_id,
+                enabled,
+                etag,
+            } => format!(
+                "{} persistent schedule {schedule_id}.\nReviewed canonical revision: {etag}\nPausing affects future ticks; already queued or running workflows continue. Enabling retains its next boundary and may reconcile missed occurrences. Inspect the schedule before approving.",
+                if enabled { "Enable" } else { "Pause" }
+            ),
+            Operation::DeleteSchedule { schedule_id, etag } => format!(
+                "Delete persistent schedule {schedule_id}.\nReviewed canonical revision: {etag}\nFuture ticks stop and the schedule leaves the active catalog. Existing runs and retained history remain. The identity cannot be reused. Inspect the schedule before approving."
+            ),
+            _ => return PUBLIC_APPROVAL_PROMPT.into(),
+        };
+        return summary;
+    }
+    PUBLIC_APPROVAL_PROMPT.into()
+}
+
 fn public_approval_action(request: &EffectRequest) -> String {
     let action = request.action.as_str();
-    if action.starts_with("filesystem.")
+    if matches!(
+        action,
+        "workflow.schedule.create" | "workflow.schedule.set_enabled" | "workflow.schedule.delete"
+    ) {
+        "workflow.schedule.control".into()
+    } else if action.starts_with("filesystem.")
         || action.starts_with("patch.")
         || action.starts_with("git.")
         || action.starts_with("repo.")
@@ -586,6 +659,54 @@ mod tests {
             resource,
             json!({}),
         )
+    }
+
+    #[test]
+    fn task_schedule_review_includes_exact_instructions_preferences_and_calendar() {
+        let operation = colossus_contracts::WorkflowControlOperation::CreateSchedule {
+            schedule_id: "monday-briefing".into(),
+            workflow_id: String::new(),
+            expected_hash: String::new(),
+            inputs: json!({}),
+            cadence_seconds: 0,
+            calendar: Some(colossus_contracts::WorkflowCalendar {
+                timezone: "America/New_York".into(),
+                time: "09:00".into(),
+                weekdays: vec![1],
+            }),
+            task: Some(Box::new(colossus_contracts::WorkflowTask {
+                name: "Briefing".into(),
+                instructions: "Review procurement and cite sources.".into(),
+                tools: vec!["web.search".into()],
+                options: colossus_contracts::WorkflowAgentOptions {
+                    model_profile: Some("configured-model".into()),
+                    reasoning_effort: Some(colossus_contracts::ReasoningEffort::High),
+                },
+            })),
+            starts_at: "2026-10-05T13:00:00Z".into(),
+            misfire_policy: colossus_contracts::WorkflowScheduleMisfirePolicy::FireOnce,
+            enabled: true,
+            idempotency_key: "task-review".into(),
+        };
+        let mut effect = request(operation.action(), &operation.resource());
+        effect.content = serde_json::to_value(operation).unwrap();
+        let prompt = public_approval_prompt(&effect);
+        for required in [
+            "Review procurement and cite sources.",
+            "configured-model",
+            "high",
+            "web.search",
+            "09:00",
+            "America/New_York",
+            "[1]",
+            "2026-10-05T13:00:00Z",
+        ] {
+            assert!(
+                prompt.contains(required),
+                "missing reviewed field: {required}"
+            );
+        }
+        assert!(!prompt.contains("0 seconds"));
     }
 
     #[test]

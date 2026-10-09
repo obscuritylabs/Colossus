@@ -4,16 +4,18 @@ import {
   IconCheck,
   IconCommand,
   IconCornerDownLeft,
+  IconFileText,
   IconFolder,
   IconPaperclip,
   IconPlaylistAdd,
+  IconPlayerStopFilled,
   IconPlugConnected,
   IconRouteAltLeft,
-  IconSend2,
   IconShieldCheck,
   IconWorld,
   IconX,
 } from "@tabler/icons-react";
+import { ConversationComposerFrame } from "@colossus/ui/conversation";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, ReactNode, RefObject } from "react";
 
@@ -34,7 +36,16 @@ import { DropdownSelect } from "./DropdownSelect";
 import { NextUpQueue } from "./NextUpQueue";
 import { PluginIcon } from "./PluginIcon";
 import type { ComposerModelContext } from "../composer-model";
-import { useComposerAutosize } from "./useComposerAutosize";
+import {
+  ComposerInput,
+  ComposerModeSwitch,
+  ComposerSendButton,
+  isComposerSendKey,
+} from "@colossus/ui";
+import type { ComposerEditIntent } from "../composer-paste";
+import type { DictationController, DictationSnapshot } from "../dictation";
+import { DictationControl } from "./DictationControl";
+import { DictationRecordingBar } from "./DictationRecordingBar";
 
 const ComposerModelChip = lazy(() =>
   import("./ComposerModelChip").then((module) => ({
@@ -63,13 +74,16 @@ const RESEARCH_SOURCE_OPTIONS = [
   },
   {
     value: "mcp",
-    label: "Connections",
-    description: "Search your connected apps",
+    label: "MCP connections",
+    description: "Search enabled MCP tools or research projections",
     Icon: IconPlugConnected,
   },
 ] as const;
 
 interface WorkComposerProps {
+  onOpenDictationSettings?: (() => void) | undefined;
+  dictation?:
+    { controller: DictationController; state: DictationSnapshot } | undefined;
   contextActions?: ReactNode;
   pluginSkills?: readonly PluginSkill[] | null;
   pluginSelections?: readonly string[];
@@ -101,12 +115,18 @@ interface WorkComposerProps {
   activeWorkRunning: boolean;
   activeWorkNeedsInput: boolean;
   activeWorkRedirectable: boolean;
+  stopping?: boolean;
+  queuePaused?: boolean;
+  onStop: () => void;
+  onResumeQueue: () => void;
   queuedMessages: readonly QueuedMessage[];
   attachmentsAvailable: boolean;
   attachments: readonly ArtifactReference[];
   attachmentBusy: boolean;
   error: CommandError | null;
-  onPromptChange: (prompt: string) => void;
+  onPromptChange: (prompt: string, intent?: ComposerEditIntent) => void;
+  onPromptPaste: (text: string, start: number, end: number) => number;
+  condensedPasteCount: number;
   onRoleChange: (role: string) => void;
   onMaxTurnsChange: (maxTurns: number) => void;
   onModeChange: (mode: RunMode) => void;
@@ -124,6 +144,8 @@ interface WorkComposerProps {
 }
 
 export function WorkComposer({
+  dictation: requestedDictation,
+  onOpenDictationSettings,
   contextActions,
   pluginSkills = null,
   pluginSelections = [],
@@ -155,12 +177,18 @@ export function WorkComposer({
   activeWorkRunning,
   activeWorkNeedsInput,
   activeWorkRedirectable,
+  stopping = false,
+  queuePaused = false,
+  onStop,
+  onResumeQueue,
   queuedMessages,
   attachmentsAvailable,
   attachments,
   attachmentBusy,
   error,
   onPromptChange,
+  onPromptPaste,
+  condensedPasteCount,
   onRoleChange,
   onMaxTurnsChange,
   onModeChange,
@@ -176,7 +204,12 @@ export function WorkComposer({
   onRedirect,
   onSubmit,
 }: WorkComposerProps) {
-  useComposerAutosize(textareaRef, prompt);
+  const dictation = requestedDictation;
+  const draftReadOnly = Boolean(
+    dictation?.state.phase === "recording" ||
+    dictation?.state.busy ||
+    dictation?.state.sending,
+  );
   const [selectedSlashCommand, setSelectedSlashCommand] = useState<
     string | null
   >(null);
@@ -196,7 +229,9 @@ export function WorkComposer({
           (id) => !pluginSkills.some((skill) => skill.id === id),
         );
   const slashMenuOpen =
-    slashCommandSuggestions.length > 0 && dismissedSlashDraft !== prompt;
+    !draftReadOnly &&
+    slashCommandSuggestions.length > 0 &&
+    dismissedSlashDraft !== prompt;
   const selectedSlashIndex = slashCommandSuggestions.findIndex(
     ({ command }) => command === selectedSlashCommand,
   );
@@ -205,13 +240,12 @@ export function WorkComposer({
       ? Math.max(0, selectedSlashIndex)
       : -1;
   const slashOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const editIntent = useRef<ComposerEditIntent | null>(null);
   const researchSourceSummary = researchSources
-    .map((source) =>
-      source === "repo"
-        ? "This Workspace"
-        : source === "web"
-          ? "Web"
-          : "Connections",
+    .map(
+      (source) =>
+        RESEARCH_SOURCE_OPTIONS.find((option) => option.value === source)
+          ?.label ?? source,
     )
     .join(", ");
 
@@ -225,6 +259,28 @@ export function WorkComposer({
   }, [activeSlashIndex, prompt, slashMenuOpen]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (draftReadOnly) {
+      if (
+        isComposerSendKey(
+          { ...event, isComposing: event.nativeEvent.isComposing },
+          "enter",
+        )
+      ) {
+        event.preventDefault();
+        formRef.current?.requestSubmit();
+      }
+      return;
+    }
+    if (event.key === "Backspace" || event.key === "Delete") {
+      editIntent.current = {
+        start: event.currentTarget.selectionStart,
+        end: event.currentTarget.selectionEnd,
+        inputType:
+          event.key === "Backspace"
+            ? "deleteContentBackward"
+            : "deleteContentForward",
+      };
+    }
     if (slashMenuOpen && event.key === "Escape") {
       event.preventDefault();
       setDismissedSlashDraft(prompt);
@@ -260,9 +316,10 @@ export function WorkComposer({
       return;
     }
     if (
-      event.key === "Enter" &&
-      !event.shiftKey &&
-      !event.nativeEvent.isComposing
+      isComposerSendKey(
+        { ...event, isComposing: event.nativeEvent.isComposing },
+        "enter",
+      )
     ) {
       event.preventDefault();
       if (
@@ -280,7 +337,7 @@ export function WorkComposer({
   }
 
   return (
-    <form
+    <ConversationComposerFrame
       ref={formRef}
       className={`work-composer${mode === "plan" ? " is-plan-mode" : ""}${mode === "research" ? " is-research-mode" : ""}`}
       id="work-composer"
@@ -509,6 +566,20 @@ export function WorkComposer({
         </div>
       </div>
       <div className="composer-body">
+        {dictation?.state.sessionId || dictation?.state.phase === "starting" ? (
+          <DictationRecordingBar {...dictation}>
+            <DictationControl
+              {...dictation}
+              onSettings={onOpenDictationSettings}
+              disabled={!canCompose || submitting}
+            />
+          </DictationRecordingBar>
+        ) : null}
+        {dictation?.state.error ? (
+          <p className="inline-error" role="alert">
+            {dictation.state.error}
+          </p>
+        ) : null}
         {pluginSelections.length > 0 && (
           <div className="plugin-selections" aria-label="Conversation skills">
             <span>Conversation skills:</span>
@@ -559,6 +630,9 @@ export function WorkComposer({
         )}
         <NextUpQueue
           messages={queuedMessages}
+          paused={queuePaused}
+          resumeDisabled={!canCompose || activeWorkRunning || stopping}
+          onResume={onResumeQueue}
           onEdit={onEditQueuedMessage}
           onDelete={onDeleteQueuedMessage}
           onRetry={onRetryQueuedMessage}
@@ -673,7 +747,7 @@ export function WorkComposer({
             </footer>
           </div>
         ) : null}
-        <textarea
+        <ComposerInput
           ref={textareaRef}
           value={prompt}
           rows={2}
@@ -707,10 +781,53 @@ export function WorkComposer({
               : undefined
           }
           aria-describedby={
-            promptOverLimit ? "prompt-byte-limit-error" : undefined
+            [
+              promptOverLimit ? "prompt-byte-limit-error" : null,
+              condensedPasteCount > 0 ? "composer-paste-summary" : null,
+            ]
+              .filter(Boolean)
+              .join(" ") || undefined
           }
           disabled={!canCompose || submitting}
+          readOnly={draftReadOnly}
           onKeyDown={handleKeyDown}
+          onBeforeInput={(event) => {
+            const textarea = event.currentTarget;
+            const inputType = (event.nativeEvent as InputEvent).inputType;
+            if (!inputType) return;
+            editIntent.current = {
+              start: textarea.selectionStart,
+              end: textarea.selectionEnd,
+              inputType,
+            };
+          }}
+          onCut={(event) => {
+            editIntent.current = {
+              start: event.currentTarget.selectionStart,
+              end: event.currentTarget.selectionEnd,
+              inputType: "deleteByCut",
+            };
+          }}
+          onPaste={(event) => {
+            if (event.currentTarget.readOnly || event.currentTarget.disabled) {
+              event.preventDefault();
+              return;
+            }
+            const text = event.clipboardData.getData("text/plain");
+            if (text.length === 0) return;
+            event.preventDefault();
+            editIntent.current = null;
+            const textarea = event.currentTarget;
+            const cursor = onPromptPaste(
+              text,
+              textarea.selectionStart,
+              textarea.selectionEnd,
+            );
+            requestAnimationFrame(() => {
+              textarea.focus();
+              textarea.setSelectionRange(cursor, cursor);
+            });
+          }}
           onBlur={(event) => {
             const nextTarget = event.relatedTarget as Node | null;
             if (
@@ -727,9 +844,24 @@ export function WorkComposer({
           onChange={(event) => {
             setSelectedSlashCommand(null);
             setDismissedSlashDraft(null);
-            onPromptChange(event.target.value);
+            onPromptChange(event.target.value, editIntent.current ?? undefined);
+            editIntent.current = null;
           }}
         />
+        {condensedPasteCount > 0 ? (
+          <div
+            className="composer-paste-summary"
+            id="composer-paste-summary"
+            role="status"
+          >
+            <IconFileText size={15} stroke={1.8} aria-hidden="true" />
+            <span>
+              {condensedPasteCount} large{" "}
+              {condensedPasteCount === 1 ? "paste" : "pastes"} condensed. Full
+              text is included when sent.
+            </span>
+          </div>
+        ) : null}
         {attachments.length > 0 ? (
           <div className="composer-attachments" aria-label="Run attachments">
             {attachments.map((attachment) => (
@@ -759,7 +891,9 @@ export function WorkComposer({
                     ? "Queued messages wait until the required response is resolved. Redirect stops this response and sends your guidance next."
                     : "Enter adds to Next up. Redirect stops this response and sends your guidance next."
                   : queueing
-                    ? "New messages join Next up. Resolve or remove a failed item to continue in order."
+                    ? queuePaused
+                      ? "Next up is paused. Resume when you are ready; your draft and queued messages are kept."
+                      : "New messages join Next up. Resolve or remove a failed item to continue in order."
                     : mode === "plan"
                       ? planRevision === null
                         ? "Create a plan before making changes."
@@ -778,6 +912,15 @@ export function WorkComposer({
           ) : null}
         </div>
         <div className="composer-action-row">
+          {dictation &&
+          !dictation.state.sessionId &&
+          dictation.state.phase !== "starting" ? (
+            <DictationControl
+              {...dictation}
+              onSettings={onOpenDictationSettings}
+              disabled={!canCompose || submitting}
+            />
+          ) : null}
           {attachmentsAvailable ? (
             <div className="composer-context-actions">
               <button
@@ -794,52 +937,23 @@ export function WorkComposer({
               </button>
             </div>
           ) : null}
-          <fieldset className="mode-switch">
-            <legend className="sr-only">Run mode</legend>
-            <label>
-              <input
-                type="radio"
-                name="mode"
-                value="plan"
-                checked={mode === "plan"}
-                disabled={submitting || planRevision !== null}
-                onChange={() => onModeChange("plan")}
-              />
-              <span>Plan</span>
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="mode"
-                value="execute"
-                checked={mode === "execute"}
-                disabled={submitting || planRevision !== null}
-                onChange={() => onModeChange("execute")}
-              />
-              <span>Execute</span>
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="mode"
-                value="research"
-                checked={mode === "research"}
-                disabled={
-                  submitting || planRevision !== null || !researchAvailable
-                }
-                onChange={() => onModeChange("research")}
-              />
-              <span
-                title={
-                  researchAvailable
-                    ? undefined
-                    : "Research is unavailable for this target"
-                }
-              >
-                Research
-              </span>
-            </label>
-          </fieldset>
+          <ComposerModeSwitch<RunMode>
+            value={mode}
+            onChange={onModeChange}
+            disabled={submitting || planRevision !== null}
+            options={[
+              { value: "plan", label: "Plan" },
+              { value: "execute", label: "Execute" },
+              {
+                value: "research",
+                label: "Research",
+                disabled: !researchAvailable,
+                ...(researchAvailable
+                  ? {}
+                  : { title: "Research is unavailable for this target" }),
+              },
+            ]}
+          />
           {activeWorkRunning && !slashCommandDraft ? (
             <button
               className="redirect-button"
@@ -859,38 +973,58 @@ export function WorkComposer({
               Redirect
             </button>
           ) : null}
-          <button
-            className={`send-button${queueing && !slashCommandDraft ? " is-queue" : ""}`}
-            type="submit"
-            aria-label={
-              submitting
-                ? "Sending prompt"
-                : slashCommandDraft
-                  ? "Run command"
-                  : queueing
-                    ? "Add message to Next up"
-                    : "Send prompt"
-            }
-            disabled={
-              !canCompose ||
-              prompt.trim().length === 0 ||
-              promptOverLimit ||
-              (!slashCommandDraft &&
-                (roleMissing ||
-                  (mode === "research" && researchSources.length === 0)))
-            }
-          >
-            {submitting ? (
-              <span className="spinner" aria-hidden="true" />
-            ) : queueing && !slashCommandDraft ? (
-              <>
-                <IconPlaylistAdd size={18} stroke={1.9} aria-hidden="true" />
-                <span>Queue</span>
-              </>
-            ) : (
-              <IconSend2 size={19} stroke={2} aria-hidden="true" />
-            )}
-          </button>
+          {!activeWorkRunning || prompt.trim().length > 0 ? (
+            <ComposerSendButton
+              className={`send-button${queueing && !slashCommandDraft ? " is-queue" : ""}`}
+              type="submit"
+              aria-label={
+                submitting
+                  ? "Sending prompt"
+                  : slashCommandDraft
+                    ? "Run command"
+                    : queueing
+                      ? "Add message to Next up"
+                      : "Send prompt"
+              }
+              disabled={
+                !canCompose ||
+                prompt.trim().length === 0 ||
+                promptOverLimit ||
+                (!slashCommandDraft &&
+                  (roleMissing ||
+                    (mode === "research" && researchSources.length === 0)))
+              }
+            >
+              {submitting ? (
+                <span className="spinner" aria-hidden="true" />
+              ) : queueing && !slashCommandDraft ? (
+                <>
+                  <IconPlaylistAdd size={18} stroke={1.9} aria-hidden="true" />
+                  <span>Queue</span>
+                </>
+              ) : undefined}
+            </ComposerSendButton>
+          ) : null}
+          {activeWorkRunning ? (
+            <button
+              className={`send-button is-stop${stopping ? " is-stopping" : ""}`}
+              type="button"
+              aria-label={stopping ? "Stopping response" : "Stop response"}
+              title={
+                stopping
+                  ? "Waiting for the response to stop"
+                  : "Stop response and pause queued messages"
+              }
+              disabled={!canCompose || !activeWorkRedirectable || stopping}
+              onClick={onStop}
+            >
+              {stopping ? (
+                <span className="spinner" aria-hidden="true" />
+              ) : (
+                <IconPlayerStopFilled size={16} aria-hidden="true" />
+              )}
+            </button>
+          ) : null}
         </div>
       </div>
       {promptOverLimit ? (
@@ -914,6 +1048,6 @@ export function WorkComposer({
           ) : null}
         </div>
       ) : null}
-    </form>
+    </ConversationComposerFrame>
   );
 }

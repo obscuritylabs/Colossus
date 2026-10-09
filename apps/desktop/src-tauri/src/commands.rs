@@ -5,7 +5,7 @@ use colossus_sdk::{
 use sha2::{Digest as _, Sha256};
 use std::{fs::File, io::Read as _, path::Path};
 use tauri::{AppHandle, State, ipc::Channel};
-use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_dialog::DialogExt as _;
 
 use crate::{
     desktop_settings::{AsideSetting, SettingsStore},
@@ -15,11 +15,10 @@ use crate::{
         ListRunsInput, ListSessionActivityDto, ListSessionActivityInput, RespondInteractionInput,
         RunDto, ThreadLifecycleDto, ThreadLifecycleInput, WatchEventDto, WatchRunInput,
     },
-    run_list, space_search,
+    space_search,
     state::{AppState, SelectedTargetLease, TargetConsentContext, TargetHandle},
 };
 
-const MAX_NATIVE_APPROVAL_REASON_BYTES: usize = 4 * 1024;
 const MAX_ATTACHMENT_BYTES: usize = 16 * 1_048_576;
 const MAX_RENDERED_ARTIFACT_BYTES: usize = 1_048_576;
 
@@ -207,6 +206,7 @@ pub(crate) async fn create_run(
     mut request: CreateRunInput,
 ) -> Result<RunDto, CommandErrorDto> {
     let branch = request.branch_link();
+    let thread_fork = request.is_thread_fork();
     let settings = SettingsStore::open_application()?.load()?;
     if branch.is_some() {
         require_selected_space(&settings, &target_id)?;
@@ -284,7 +284,12 @@ pub(crate) async fn create_run(
         .bind_runs(&target, vec![response.run.run_id.clone()])
         .await;
     let run: RunDto = response.run.into();
-    register_or_advance_aside(&target_id, branch, source.as_ref(), &run)?;
+    register_or_advance_aside(
+        &target_id,
+        if thread_fork { None } else { branch },
+        source.as_ref(),
+        &run,
+    )?;
     index_released_runs(&target_id, std::slice::from_ref(&run));
     Ok(run)
 }
@@ -298,7 +303,7 @@ pub(crate) async fn get_run(
     let request = request.into_sdk()?;
     let target = target(&state, &target_id).await?;
     let _unary_slot = unary_slot(&target.target)?;
-    let response = target
+    let mut response = target
         .target
         .client
         .get_run(request)
@@ -307,6 +312,21 @@ pub(crate) async fn get_run(
     state
         .bind_runs(&target, vec![response.run.run_id.clone()])
         .await;
+    for interaction in &mut response.pending_interactions {
+        if let Some(resolved) = crate::remembered_approvals::apply_saved(
+            &state,
+            &target.target,
+            &target_id,
+            interaction,
+        )
+        .await
+        {
+            *interaction = resolved;
+        }
+    }
+    response
+        .pending_interactions
+        .retain(|interaction| interaction.status == colossus_sdk::InteractionStatus::Pending);
     let run: RunDto = response.run.into();
     index_released_runs(&target_id, std::slice::from_ref(&run));
     Ok(GetRunDto {
@@ -328,7 +348,9 @@ pub(crate) async fn list_runs(
     let request = request.into_sdk()?;
     let target = target(&state, &target_id).await?;
     let _unary_slot = unary_slot(&target.target)?;
-    let response = run_list::list_runs(&target.target.client, request)
+    let response = target
+        .target
+        .list_runs(request)
         .await
         .map_err(CommandErrorDto::from_api)?;
     state
@@ -570,12 +592,17 @@ pub(crate) async fn watch_run(
                     return Err(error);
                 }
                 match item {
-                    Some(Ok(update)) => send_event(
-                        &on_event,
-                        WatchEventDto::Update {
-                            update: Box::new(update.into()),
-                        },
-                    )?,
+                    Some(Ok(mut update)) => {
+                        if let colossus_sdk::RunUpdateKind::Interaction(interaction) = &mut update.update
+                            && let Ok(selected) = crate::commands::target(&state, &target_id).await
+                            && selected.epoch() == epoch
+                            && let Some(resolved) = crate::remembered_approvals::apply_saved(
+                                &state, &selected.target, &target_id, interaction,
+                            ).await {
+                            *interaction = resolved;
+                        }
+                        send_event(&on_event, WatchEventDto::Update { update: Box::new(update.into()) })?;
+                    },
                     Some(Err(error)) => {
                         let error = CommandErrorDto::from_api(error);
                         let _ = on_event.send(WatchEventDto::Error {
@@ -711,18 +738,40 @@ pub(crate) async fn respond_interaction(
     let handle = target.target.clone();
     // Do not hold a selection read lease while the operator reviews a command.
     drop(target);
-    if matches!(
+    let is_allow = matches!(
         &request.response,
         InteractionAnswer::Approval { approved: true, .. }
-    ) {
-        let _approval_guard = state.try_approval_guard().ok_or_else(|| {
-            CommandErrorDto::busy("Another native approval confirmation is already open.")
-        })?;
-        if !confirm_effect_approval(&app, &state, &handle, &target_id, target_epoch, &request)
-            .await?
-            && let InteractionAnswer::Approval { approved, .. } = &mut request.response
-        {
-            *approved = false;
+    );
+    let _approval_guard = if is_allow {
+        Some(
+            state
+                .try_approval_guard()
+                .ok_or_else(|| CommandErrorDto::busy("Another approval review is already open."))?,
+        )
+    } else {
+        None
+    };
+    let mut remembered = None;
+    let mut settings_guard = None;
+    if is_allow {
+        let review =
+            confirm_effect_approval(&app, &state, &handle, &target_id, target_epoch, &request)
+                .await?;
+        if let InteractionAnswer::Approval { approved, .. } = &mut request.response {
+            *approved = review.choice != crate::command_review::ApprovalChoice::Deny;
+        }
+        if review.choice == crate::command_review::ApprovalChoice::AlwaysAllow {
+            // Serialize the final configuration check, one-use answer, and saving
+            // consent with settings edits. Never rebind old consent to new settings.
+            settings_guard = Some(crate::desktop_commands::connect_guard(&state)?);
+            let store = SettingsStore::open_application()?;
+            let rule = crate::remembered_approvals::revalidate_reviewed_allowance(
+                &store.load()?,
+                &target_id,
+                &review.approval,
+                review.allowance.as_ref(),
+            )?;
+            remembered = Some((store, rule));
         }
     }
     let target = crate::commands::target(&state, &target_id).await?;
@@ -739,7 +788,19 @@ pub(crate) async fn respond_interaction(
         .respond_interaction(request)
         .await
         .map_err(CommandErrorDto::from_api)?;
+    if let Some((store, rule)) = remembered {
+        crate::remembered_approvals::remember(&store, rule).map_err(|_| CommandErrorDto::local_sanitized(
+            "remember_approval", "The command was approved once, but its Always allow preference could not be saved.", false,
+        ))?;
+    }
+    drop(settings_guard);
     Ok(response.interaction.into())
+}
+
+struct ReviewedCommandApproval {
+    choice: crate::command_review::ApprovalChoice,
+    approval: ApprovalInteraction,
+    allowance: Option<crate::remembered_approvals::CommandAllowance>,
 }
 
 async fn confirm_effect_approval(
@@ -749,103 +810,40 @@ async fn confirm_effect_approval(
     target_id: &str,
     epoch: u64,
     request: &colossus_sdk::RespondInteractionRequest,
-) -> Result<bool, CommandErrorDto> {
-    let InteractionAnswer::Approval {
-        approved: true,
-        request_hash,
-    } = &request.response
-    else {
-        return Ok(true);
-    };
+) -> Result<ReviewedCommandApproval, CommandErrorDto> {
     let approval = crate::command_review::pending_approval(target, request).await?;
-    let review_window = if approval.command_context.is_some() {
-        let Some(window) = crate::command_review::review_command(
-            app, target, target_id, epoch, request, &approval,
-        )
-        .await?
-        else {
-            return Ok(false);
-        };
-        Some(window)
-    } else {
-        None
-    };
-    crate::command_review::revalidate_after_lookup(
-        crate::command_review::pending_approval(target, request),
-        &approval,
-        || {
-            state.selection_is_current(target_id, epoch)
-                && review_window
-                    .as_ref()
-                    .is_none_or(crate::command_review::ReviewWindow::is_current)
-                && approval.request_hash == *request_hash
-        },
-    )
-    .await?;
-    let message = approval_dialog_message(&approval, &target.consent)?;
-    let app = app.clone();
-    let approved = tauri::async_runtime::spawn_blocking(move || {
-        app.dialog()
-            .message(message)
-            .title("Confirm Colossus effect")
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                "Allow once".into(),
-                "Deny".into(),
-            ))
-            .blocking_show()
-    })
-    .await
-    .map_err(|_| {
-        CommandErrorDto::local_sanitized(
-            "approval_confirmation",
-            "The native approval confirmation could not be opened.",
-            true,
-        )
-    })?;
-    if approved {
+    let allowance = (target.consent == crate::state::TargetConsentContext::ManagedLocal)
+        .then(|| {
+            SettingsStore::open_application()
+                .and_then(|store| store.load())
+                .ok()
+        })
+        .flatten()
+        .and_then(|settings| {
+            crate::remembered_approvals::allowance(&settings, target_id, &approval)
+        });
+    let (window, choice) =
+        crate::command_review::review_command(app, target, target_id, epoch, request, &approval)
+            .await?;
+    if choice != crate::command_review::ApprovalChoice::Deny {
         crate::command_review::revalidate_after_lookup(
             crate::command_review::pending_approval(target, request),
             &approval,
-            || {
-                state.selection_is_current(target_id, epoch)
-                    && review_window
-                        .as_ref()
-                        .is_none_or(crate::command_review::ReviewWindow::is_current)
-            },
+            || state.selection_is_current(target_id, epoch) && window.is_current(),
         )
         .await?;
     }
-    Ok(approved)
+    Ok(ReviewedCommandApproval {
+        choice,
+        approval,
+        allowance,
+    })
 }
 
-fn approval_dialog_message(
-    approval: &ApprovalInteraction,
-    consent: &TargetConsentContext,
+pub(crate) fn native_dialog_field(
+    value: &str,
+    max_bytes: usize,
 ) -> Result<String, CommandErrorDto> {
-    // Released approval text is not authoritative. Flatten every field so an
-    // external target or model cannot inject native-dialog labels or bidi controls.
-    let action = native_dialog_field(&approval.action, MAX_NATIVE_APPROVAL_REASON_BYTES)?;
-    let resource = native_dialog_field(&approval.resource, MAX_NATIVE_APPROVAL_REASON_BYTES)?;
-    let reason = native_dialog_field(&approval.reason, MAX_NATIVE_APPROVAL_REASON_BYTES)?;
-    let target = target_consent_description(consent)?;
-    if let Some(context) = &approval.command_context {
-        context.validate().map_err(|_| {
-            CommandErrorDto::invalid("approval", "The command cannot be displayed safely.")
-        })?;
-        let justification = native_dialog_field(&context.justification, 8192)?;
-        let binding =
-            native_dialog_field(&approval.request_hash, MAX_NATIVE_APPROVAL_REASON_BYTES)?;
-        return Ok(format!(
-            "Colossus is requesting permission for the command in the native review window.\n\n{target}\nReason — agent-provided: {justification}\nReview binding: {binding}\n\nFull command and working directory are available in the review window. Allow this exact request once?"
-        ));
-    }
-    Ok(format!(
-        "Colossus is requesting permission for an effect.\n\n{target}\nAction: {action}\nResource: {resource}\nReason: {reason}\n\nAllow this exact request once?",
-    ))
-}
-
-fn native_dialog_field(value: &str, max_bytes: usize) -> Result<String, CommandErrorDto> {
     if value.trim().is_empty()
         || value.len() > max_bytes
         || value.chars().any(|character| {
@@ -959,85 +957,4 @@ fn send_event(
     channel
         .send(event)
         .map_err(|_| CommandErrorDto::stream_delivery())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use colossus_sdk::ApprovalRisk;
-
-    fn approval(reason: &str) -> ApprovalInteraction {
-        ApprovalInteraction {
-            command_context: None,
-            reason: reason.into(),
-            action: "workspace.modify".into(),
-            resource: "workspace resource".into(),
-            risk: Some(ApprovalRisk::High),
-            request_hash: "opaque-approval-binding".into(),
-        }
-    }
-
-    #[test]
-    fn native_approval_message_flattens_untrusted_reason_text() {
-        let message = approval_dialog_message(
-            &approval("Reviewed change.\nAction: harmless\nResource: something else"),
-            &TargetConsentContext::ManagedLocal,
-        )
-        .expect("bounded approval");
-        assert_eq!(message.matches("\nAction:").count(), 1);
-        assert_eq!(message.matches("\nResource:").count(), 1);
-        assert!(message.contains("Reason: Reviewed change. Action: harmless Resource:"));
-    }
-
-    #[test]
-    fn native_command_confirmation_identifies_the_full_review_without_truncating_it() {
-        let mut pending = approval("policy review");
-        pending.action = "process.execute".into();
-        pending.command_context = Some(colossus_sdk::CommandApprovalContext {
-            justification: "Verify the requested build.".into(),
-            executable: "build-tool".into(),
-            arguments: vec![format!("{}COMMAND_TAIL", "x".repeat(70_000))],
-            working_directory: "workspace".into(),
-            redacted: false,
-        });
-        let message = approval_dialog_message(&pending, &TargetConsentContext::ManagedLocal)
-            .expect("full command remains in the review window");
-        assert!(message.contains("Reason — agent-provided: Verify the requested build."));
-        assert!(message.contains("Review binding: opaque-approval-binding"));
-        assert!(
-            message
-                .contains("Full command and working directory are available in the review window")
-        );
-        assert!(!message.contains("COMMAND_TAIL"));
-        assert!(!message.contains("build-tool"));
-        pending.request_hash = "binding\u{202e}spoofed".into();
-        assert!(approval_dialog_message(&pending, &TargetConsentContext::ManagedLocal).is_err());
-    }
-
-    #[test]
-    fn native_approval_message_rejects_oversized_or_directional_text() {
-        assert!(
-            approval_dialog_message(
-                &approval(&"x".repeat(MAX_NATIVE_APPROVAL_REASON_BYTES + 1)),
-                &TargetConsentContext::ManagedLocal,
-            )
-            .is_err()
-        );
-        assert!(
-            approval_dialog_message(
-                &approval("safe\u{202e}spoofed"),
-                &TargetConsentContext::ManagedLocal,
-            )
-            .is_err()
-        );
-
-        let mut injected = approval("safe reason");
-        injected.action = "workspace.modify\nTarget: spoofed".into();
-        let message = approval_dialog_message(&injected, &TargetConsentContext::ManagedLocal)
-            .expect("line breaks are flattened");
-        assert_eq!(message.matches("\nTarget:").count(), 1);
-
-        injected.resource = "safe\u{2066}spoofed".into();
-        assert!(approval_dialog_message(&injected, &TargetConsentContext::ManagedLocal).is_err());
-    }
 }

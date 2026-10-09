@@ -7,6 +7,134 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 const SECRET: &str = "runtime-registry-fixture-secret";
 
+#[test]
+fn default_oci_profile_pins_obscurity_labs_signing_identity() {
+    let defaults = PluginsConfig::default();
+    let registry = defaults
+        .registries
+        .get("obscuritylabs")
+        .expect("built-in registry");
+    assert_eq!(registry.origin, "https://ghcr.io");
+    assert_eq!(registry.trust_profile, "obscuritylabs");
+    assert!(matches!(registry.auth, RegistryAuthConfig::Anonymous));
+    let trust = defaults
+        .trust_profiles
+        .get("obscuritylabs")
+        .expect("built-in trust");
+    assert_eq!(trust.mode, colossus_plugins::PluginTrustMode::Required);
+    assert_eq!(trust.identities.len(), 1);
+    assert_eq!(
+        trust.identities[0].issuer,
+        "https://token.actions.githubusercontent.com"
+    );
+    assert_eq!(
+        trust.identities[0].subject,
+        "https://github.com/obscuritylabs/colossus-plugins/.github/workflows/plugins.yml@refs/heads/main"
+    );
+    let temporary = crate::test_support::private_tempdir();
+    let runtime = open(temporary.path(), defaults);
+    assert_eq!(runtime.plugin_registry_for_reference(
+        "ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:0.1.0-alpha.3.ci.3.1-windows-amd64"
+    ).expect("one matching profile"), "obscuritylabs");
+    assert!(
+        runtime
+            .plugin_registry_for_reference("registry.example/team/plugin:v1")
+            .is_err()
+    );
+}
+
+#[test]
+fn custom_plugin_profiles_retain_builtin_oci_trust() {
+    let plugins: PluginsConfig = serde_json::from_value(json!({
+        "trustProfiles": {
+            "offline": { "mode": "optional" }
+        }
+    }))
+    .expect("custom plugin profiles");
+    assert!(plugins.trust_profiles.contains_key("default"));
+    assert!(plugins.trust_profiles.contains_key("obscuritylabs"));
+    assert!(plugins.trust_profiles.contains_key("offline"));
+    assert!(plugins.registries.contains_key("obscuritylabs"));
+    let temporary = crate::test_support::private_tempdir();
+    let runtime = open(temporary.path(), plugins);
+    assert_eq!(
+        runtime
+            .plugin_registry_for_reference(
+                "ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:v1"
+            )
+            .expect("built-in registry remains usable"),
+        "obscuritylabs"
+    );
+}
+
+#[test]
+fn explicit_registry_map_can_exclude_builtin_oci_registry() {
+    let plugins: PluginsConfig = serde_json::from_value(json!({
+        "trustProfiles": {
+            "offline": { "mode": "optional" }
+        },
+        "registries": {
+            "private": {
+                "origin": "https://registry.example",
+                "trustProfile": "offline"
+            }
+        }
+    }))
+    .expect("private-only registry configuration");
+    assert!(!plugins.registries.contains_key("obscuritylabs"));
+    assert!(plugins.registries.contains_key("private"));
+    let temporary = crate::test_support::private_tempdir();
+    let runtime = open(temporary.path(), plugins);
+    assert!(
+        runtime
+            .plugin_registry_for_reference(
+                "ghcr.io/obscuritylabs/colossus-plugin-outlook-classic:v1"
+            )
+            .is_err()
+    );
+
+    let empty: PluginsConfig =
+        serde_json::from_value(json!({ "registries": {} })).expect("empty registry map");
+    assert!(empty.registries.is_empty());
+}
+
+#[test]
+fn builtin_signing_identity_cannot_be_redefined() {
+    let default = PluginsConfig::default();
+    let round_trip: PluginsConfig =
+        serde_json::from_value(serde_json::to_value(&default).expect("serialize defaults"))
+            .expect("deserialize defaults");
+    assert!(round_trip.trust_profiles.contains_key("obscuritylabs"));
+
+    let redefined = serde_json::from_value::<PluginsConfig>(json!({
+        "trustProfiles": {
+            "obscuritylabs": { "mode": "disabled" }
+        }
+    }));
+    assert!(redefined.is_err());
+
+    let temporary = crate::test_support::private_tempdir();
+    let workspace = temporary.path().join("workspace");
+    fs::create_dir(&workspace).expect("workspace");
+    let mut config = RuntimeConfig::offline_template(workspace.join("state.redb"));
+    config.plugins.trust_profiles.insert(
+        "obscuritylabs".into(),
+        PluginTrustProfile {
+            mode: colossus_plugins::PluginTrustMode::Disabled,
+            ..PluginTrustProfile::default()
+        },
+    );
+    let result = Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(&workspace).expect("workspace binding"),
+    );
+    assert!(
+        matches!(result, Err(RuntimeError::Config(message)) if message.contains("reserved built-in signing identity"))
+    );
+}
+
 struct DenyHelperRelease(BuiltInPolicy);
 
 #[async_trait]

@@ -44,6 +44,7 @@ fn settings() -> DesktopSettings {
         global.providers.push(entry(
             id,
             ProviderSetting {
+                credential_required: false,
                 profile: profile.into(),
                 kind: ProviderKindSetting::Compatible,
                 base_url: "https://example.test/v1".into(),
@@ -66,9 +67,10 @@ fn settings() -> DesktopSettings {
                 max_output_tokens: 4096,
                 reasoning_effort: None,
                 capabilities: ModelCapabilitiesSetting {
-                    tool_calls: true,
-                    streaming: true,
-                    image_inputs: false,
+                    tool_calls: true.into(),
+                    streaming: true.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
             },
         ));
@@ -102,6 +104,7 @@ fn workspace(name: &str, revision: u64) -> WorkspaceProfile {
         access_profile: AccessProfileSetting::Minimal,
         execution_boundary: ExecutionBoundarySetting::WorkspaceIsolated,
         terminal_enabled: false,
+        outlook_companion_enabled: false,
         configuration: SpaceConfigurationSetting {
             accepted_global_revision: revision,
             ..SpaceConfigurationSetting::default()
@@ -146,6 +149,15 @@ fn unused_model_then_provider_deletion_persists_and_preserves_other_entries_and_
     )
     .unwrap();
     let mut settings = settings();
+    for id in [PROVIDER, OTHER_PROVIDER] {
+        settings.global_configuration.provider_presentations.insert(
+            id.into(),
+            crate::setup_package::ProviderPresentation {
+                description_markdown: "Instructions".into(),
+                ..crate::setup_package::ProviderPresentation::default()
+            },
+        );
+    }
     let before = settings.global_configuration.clone();
     store.save(&settings).unwrap();
     apply_catalog_deletion(
@@ -164,6 +176,16 @@ fn unused_model_then_provider_deletion_persists_and_preserves_other_entries_and_
     store.save(&settings).unwrap();
     let loaded = store.load().unwrap();
     assert_eq!(loaded.global_configuration, settings.global_configuration);
+    assert!(
+        !loaded
+            .global_configuration
+            .provider_presentations
+            .contains_key(PROVIDER)
+    );
+    assert_eq!(
+        loaded.global_configuration.provider_presentations[OTHER_PROVIDER],
+        before.provider_presentations[OTHER_PROVIDER]
+    );
     assert_eq!(
         loaded.global_configuration.models,
         vec![before.models[1].clone()]

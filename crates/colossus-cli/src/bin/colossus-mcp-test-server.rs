@@ -40,7 +40,13 @@ fn handle_request(request: &Value) -> Result<(), Box<dyn std::error::Error>> {
         "notifications/initialized" => {}
         "tools/list" => {
             let cursor = request.pointer("/params/cursor").and_then(Value::as_str);
-            let result = if cursor == Some("page-2") {
+            let session_cursor = format!("page-2-{}", std::process::id());
+            if cursor.is_some_and(|cursor| cursor != session_cursor) {
+                write_message(&json!({"jsonrpc":"2.0", "id":id,
+                    "error":{"code":-32602, "message":"cursor belongs to another process"}}))?;
+                return Ok(());
+            }
+            let result = if cursor == Some(session_cursor.as_str()) {
                 json!({
                     "tools": [{
                         "name": "secret",
@@ -50,6 +56,10 @@ fn handle_request(request: &Value) -> Result<(), Box<dyn std::error::Error>> {
                             "properties": {},
                             "additionalProperties": false
                         }
+                    }, {
+                        "name": "plugin_paths",
+                        "description": "Return runtime-bound plugin root and data paths.",
+                        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false}
                     }]
                 })
             } else {
@@ -82,7 +92,7 @@ fn handle_request(request: &Value) -> Result<(), Box<dyn std::error::Error>> {
                             "inputSchema": {"type": "object"}
                         }
                     ],
-                    "nextCursor": "page-2"
+                    "nextCursor": session_cursor
                 })
             };
             write_message(&json!({"jsonrpc": "2.0", "id": id, "result": result}))?;
@@ -102,6 +112,14 @@ fn handle_request(request: &Value) -> Result<(), Box<dyn std::error::Error>> {
                 }),
                 Some("secret") => json!({
                     "content": [{"type": "text", "text": secret}],
+                    "isError": false
+                }),
+                Some("plugin_paths") => json!({
+                    "content": [{"type": "text", "text": "plugin paths available"}],
+                    "structuredContent": {
+                        "root": std::env::var("PLUGIN_ROOT").unwrap_or_default(),
+                        "data": std::env::var("PLUGIN_DATA").unwrap_or_default()
+                    },
                     "isError": false
                 }),
                 _ => {

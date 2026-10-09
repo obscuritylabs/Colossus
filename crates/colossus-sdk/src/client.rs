@@ -19,6 +19,37 @@ pub struct Colossus {
 }
 
 impl Colossus {
+    /// List caller-owned managed shells.
+    pub async fn list_process_sessions(
+        &self,
+        request: crate::ListProcessSessionsRequest,
+    ) -> ApiResult<crate::ProcessSessionPage> {
+        self.backend
+            .agent_runs()
+            .list_process_sessions(request)
+            .await
+    }
+    /// Read or wait for released shell output.
+    pub async fn read_process_session(
+        &self,
+        request: crate::ReadProcessSessionRequest,
+    ) -> ApiResult<crate::ProcessSessionSnapshot> {
+        self.backend
+            .agent_runs()
+            .read_process_session(request)
+            .await
+    }
+    /// Idempotently request stop of one caller-owned shell.
+    pub async fn stop_process_session(
+        &self,
+        request: crate::StopProcessSessionRequest,
+    ) -> ApiResult<crate::ProcessSessionSnapshot> {
+        self.backend
+            .agent_runs()
+            .stop_process_session(request)
+            .await
+    }
+
     /// Construct a client around a transport or embedded backend.
     pub fn from_backend(backend: impl Backend + 'static) -> Self {
         Self {
@@ -41,6 +72,16 @@ impl Colossus {
         self.backend.agent_runs()
     }
 
+    /// Return the independently verified runtime instance without descriptor access.
+    pub fn instance_id(&self) -> Option<crate::InstanceId> {
+        self.backend.instance_id()
+    }
+
+    /// Return the independently granted native cloud run client, without exposing credentials.
+    pub fn connector_runs(&self) -> Option<Arc<dyn AgentRunClient>> {
+        self.backend.connector_runs()
+    }
+
     /// Return authenticated optional behaviors cached during connection setup.
     pub fn capabilities(&self) -> ServerCapabilities {
         self.backend.capabilities()
@@ -53,6 +94,10 @@ impl Colossus {
 
     pub(crate) fn plugin_client(&self) -> Option<Arc<dyn crate::PluginClient>> {
         self.backend.plugins()
+    }
+
+    pub(crate) fn workflow_client(&self) -> Option<Arc<dyn crate::WorkflowClient>> {
+        self.backend.workflows()
     }
 
     /// Upload one complete bounded artifact.

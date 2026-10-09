@@ -108,6 +108,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             RunUpdateKind::Interaction(interaction) if interaction.respondable_by_caller => {
                 respond_to_interaction(&client, interaction, &options).await?;
             }
+            RunUpdateKind::ProviderRetry(retry) => {
+                println!(
+                    "Provider recovery: {:?}, retry {} of {}",
+                    retry.state, retry.attempt, retry.max_retries
+                );
+            }
             RunUpdateKind::Notice { reason, message } => {
                 eprintln!("notice {reason}: {message}");
             }

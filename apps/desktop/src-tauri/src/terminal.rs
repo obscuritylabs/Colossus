@@ -303,6 +303,8 @@ pub(crate) enum TerminalError {
     InvalidWorkspace,
     InvalidConfiguration,
     ProgramUnavailable,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    ShellUnavailable,
     InvalidSize,
     InputTooLarge,
     InputBackpressure,
@@ -323,6 +325,8 @@ impl TerminalError {
             Self::InvalidWorkspace => "invalid_workspace",
             Self::InvalidConfiguration => "invalid_configuration",
             Self::ProgramUnavailable => "program_unavailable",
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            Self::ShellUnavailable => "shell_unavailable",
             Self::InvalidSize | Self::InputTooLarge => "invalid_argument",
             Self::InputBackpressure => "terminal_backpressure",
             Self::SessionLimit => "terminal_limit",
@@ -343,6 +347,10 @@ impl TerminalError {
             Self::InvalidWorkspace => "The selected local workspace is unavailable.",
             Self::InvalidConfiguration => "The managed Colossus configuration is unavailable.",
             Self::ProgramUnavailable => PROGRAM_UNAVAILABLE_MESSAGE,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            Self::ShellUnavailable => {
+                "The operating system shell is unavailable. Check that it is installed and accessible."
+            }
             Self::InvalidSize => "The requested terminal size is outside the allowed bounds.",
             Self::InputTooLarge => "The terminal input exceeds the per-request limit.",
             Self::InputBackpressure => {
@@ -812,8 +820,13 @@ impl TerminalManager {
         workspace_binding: &BoundTerminalWorkspace,
         colossus_home: &Path,
     ) -> Result<SpawnedTerminal, TerminalError> {
-        if kind != TerminalKind::ColossusTui {
-            return Err(TerminalError::ProgramUnavailable);
+        if kind == TerminalKind::Shell {
+            return crate::terminal_process::spawn_windows_shell(
+                workspace_binding.canonical_path(),
+                workspace_binding.binding.identity(),
+                size,
+                colossus_home,
+            );
         }
         let executable = self
             .inner
@@ -899,19 +912,28 @@ impl TerminalManager {
                 ))
             }
             TerminalKind::Shell => {
+                if terminal_workspace.config.is_some()
+                    || terminal_workspace.worker_authentication.is_some()
+                {
+                    return Err(TerminalError::InvalidConfiguration);
+                }
                 #[cfg(target_os = "macos")]
                 {
-                    if terminal_workspace.config.is_some()
-                        || terminal_workspace.worker_authentication.is_some()
-                    {
-                        return Err(TerminalError::InvalidConfiguration);
-                    }
                     Ok((
-                        validate_macos_system_shell(Path::new(MACOS_SYSTEM_SHELL))?,
+                        validate_macos_system_shell(Path::new(MACOS_SYSTEM_SHELL))
+                            .map_err(|_| TerminalError::ShellUnavailable)?,
                         vec![PathBuf::from("-l")],
                     ))
                 }
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(target_os = "windows")]
+                {
+                    Ok((
+                        colossus_windows_native::system_powershell()
+                            .map_err(|_| TerminalError::ShellUnavailable)?,
+                        vec![PathBuf::from("-NoLogo"), PathBuf::from("-NoProfile")],
+                    ))
+                }
+                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                 {
                     let _ = (terminal_workspace, workspace);
                     Err(TerminalError::ProgramUnavailable)

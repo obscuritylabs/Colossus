@@ -1,0 +1,113 @@
+.active-shells {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  padding: 14px;
+  color: var(--text);
+  font-size: 12px;
+}
+.shells-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.shells-toolbar button,
+.shells-list button {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-control);
+  color: var(--text);
+  padding: 6px 9px;
+  cursor: pointer;
+}
+.shells-toolbar button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.shells-hint {
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0;
+}
+.shells-list {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+  flex-shrink: 0;
+}
+.shells-list button {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  text-align: left;
+  min-width: 0;
+}
+.shells-list button[aria-pressed="true"] {
+  border-color: var(--accent);
+}
+.shells-list code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.shells-list span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.shells-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 240px;
+  flex: 1;
+}
+.shells-detail dl {
+  display: grid;
+  grid-template-columns: 65px minmax(0, 1fr);
+  gap: 5px 8px;
+  margin: 0;
+  font-size: 11px;
+}
+.shells-detail dt {
+  color: var(--muted);
+}
+.shells-detail dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.shells-toolbar input[type="text"],
+.shells-toolbar input:not([type]) {
+  min-width: 0;
+  flex: 1;
+  padding: 6px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.shells-toolbar label {
+  white-space: nowrap;
+}
+.shells-detail pre {
+  flex: 1;
+  min-height: 180px;
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  unicode-bidi: plaintext;
+}

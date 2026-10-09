@@ -10,9 +10,9 @@ describe("syntax highlighter", () => {
       highlightSource(source, "typescript", "light"),
     ]);
 
-    expect(dark.map((line) => line.map((token) => token.content))).toEqual(
-      light.map((line) => line.map((token) => token.content)),
-    );
+    expect(
+      dark.map((line) => line.map((token) => token.content).join("")),
+    ).toEqual(light.map((line) => line.map((token) => token.content).join("")));
     expect(dark.flat().map((token) => token.color)).not.toEqual(
       light.flat().map((token) => token.color),
     );

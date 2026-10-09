@@ -71,6 +71,8 @@ storage:
     kind: none
 network:
   caBundlePath: null
+  clientCertificatePath: null
+  clientKeyPath: null
 audit:
   exporter:
     kind: disabled
@@ -114,14 +116,20 @@ models:
       contextWindowTokens: 32768
       maxOutputTokens: 4096
       capabilities:
-        toolCalls: true
-        streaming: true
-        imageInputs: false
+        toolCalls: "on"
+        streaming: "on"
+        imageInputs: "off"
+        serverCompaction: auto
+        declared:
+          toolCalls: null
+          streaming: null
+          imageInputs: null
+          serverCompaction: null
   roles:
     primary: echo
 context:
   autoCompaction: true
-  compactAtPercent: 70
+  compactAtPercent: 85
   targetPercent: 45
   preserveRecentMessages: 8
   modelAssisted: true
@@ -142,6 +150,7 @@ mcp:
   servers: {}
 plugins:
   enabled: true
+  workspaceDiscovery: true
   include: []
   exclude: []
   trustProfiles:
@@ -150,7 +159,27 @@ plugins:
       publicKeys: []
       identities: []
       trustRootPath: null
-  registries: {}
+    obscuritylabs:
+      mode: required
+      publicKeys: []
+      identities:
+        - issuer: https://token.actions.githubusercontent.com
+          subject: https://github.com/obscuritylabs/colossus-plugins/.github/workflows/plugins.yml@refs/heads/main
+      trustRootPath: null
+  registries:
+    obscuritylabs:
+      origin: https://ghcr.io
+      trustProfile: obscuritylabs
+      auth:
+        kind: anonymous
+      tokenOrigins:
+        - https://ghcr.io
+      blobRedirectOrigins:
+        - https://pkg-containers.githubusercontent.com
+      caBundlePath: null
+      tokenCaBundlePaths: {}
+      blobRedirectCaBundlePaths: {}
+      allowNonPublic: false
   mcpServers: {}
 bundles:
   trustedPublishers: {}
@@ -168,7 +197,7 @@ sandbox:
   executables: []
   environment: []
   networkDestinations: []
-  timeoutMs: 30000
+  timeoutMs: 900000
   maxOutputBytes: 4194304
   maxProcesses: 16
   maxMemoryBytes: 1073741824

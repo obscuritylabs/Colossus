@@ -148,8 +148,10 @@ or transport-incompatible response body after exact configured-credential redact
 the current TUI process, including post-tool continuations, until the operator runs
 `/provider diagnostics off` or exits. These captures are represented as quarantined
 adapter output and must pass the ordinary post-effect decision before the authenticated
-local worker or direct TUI receives them. Default Doctor output, default run failures
-and events, and durable audit payloads remain status-only and never receive the body.
+local worker or direct TUI receives them. Default failures, events, and durable audit
+payloads may include numeric HTTP status, recognized provider failure categories with
+fixed guidance, and local context-budget counts. They never receive raw provider
+messages, request content, or response bodies.
 An in-run diagnostic request can contain user, session, and tool-result content, so the
 TUI warns the operator to review it before sharing.
 
@@ -276,6 +278,11 @@ effect's audit record. Strict descendant containment requires native or OCI isol
 a Windows Job Object, or an asserted external host boundary that owns the complete
 process namespace/job.
 
+Process output caps include transport framing, completion status, and recorded proxy
+origins. Local commands retain output at the 1,024-byte minimum. Network-enabled
+sandboxes reserve additional space for their allowed origins; wildcard destinations
+require room for the bounded maximum origin list. A cap that cannot retain this evidence
+is rejected before launch, rather than losing a confirmed completion after execution.
 Agent Plugin scripts run only through ordinary process tools, and plugin MCP servers
 require explicit runtime enablement. Their signatures, trust state, portable declarations,
 and selected-root grants remain necessary under every boundary and never grant ambient
@@ -445,6 +452,51 @@ existing IDs or sign in to MCP OAuth again. Old OS entries are left untouched.
 Automatic master-key rotation, portable export, and backup recovery are outside
 this version. Copying a database alone does not produce a portable credential vault.
 
+### Development credential authority
+
+The optional debug-only development authority is bound to the exact canonical
+`COLOSSUS_HOME/development-credentials` directory, outside the workspace. Its
+owner-private, single-link wrapping-key file protects the existing encrypted envelopes
+and vault records with the same authenticated encryption as the headless key store.
+Unix key mode must remain `0600`. This is explicit filesystem custody, with less
+same-user application isolation than an OS-protected store. Production composition
+continues to use the platform store and release builds reject the selector.
+
+Preparation creates an inactive marker. Metadata-only planning never opens a wrapping
+key or OS credential. Explicit offline apply binds the reviewed source fingerprints
+and selectors, holds source leases that exclude writers, copies and verifies only selected
+material, then atomically commits activation. Whole-vault rewrap preserves its original
+vault/key/owner identities; named enrollment copy decrypts only the selected record and
+creates an independent destination vault. Both retain the original platform entries
+and source ciphertext. Neither rotates an application bearer, expands a grant or
+re-enrolls a runtime. Incomplete, missing or mismatched sources fail without activation;
+runtime use has no platform fallback or regeneration.
+
+Vault planning and apply open the original database read-only and revalidate its
+confined identity and ciphertext hash. If redb requires allocator recovery, they recover
+only an encrypted in-memory snapshot, bounded to 64 MiB with bounded storage growth.
+No source lock file is created, no original database repair is performed, and no sibling
+record is decrypted during named copy. Corrupt, oversized, busy or owner-mismatched
+sources fail closed. Destination writes use the ordinary encrypted vault transaction.
+
+Native composition alone reads the wrapping key. Build processes receive no raw key;
+the renderer receives no selector or credential. The verified managed sidecar may
+inherit only the nonsecret authority path so its runtime can validate custody before
+storage acquisition. Ordinary tools strip or reject reserved authority/key variables.
+Supported isolated runtimes deny filesystem and search access to the authority root,
+including linked aliases. Startup rejects `danger_full_access`, external/broker and
+unsupported sandbox backends, and broker fallback, before storage-key or runtime
+acquisition. Approval modes do not rewrite that sandbox boundary or its grants.
+The protected process adapter separately rejects ambient resource authority and sandbox
+downgrade permits before launching a helper. These controls do not protect against
+compromised native code, arbitrary same-user applications or the OS.
+
+The SDK's platform-keyring provider permits one outstanding native read per provider.
+The guard stays with the blocking OS call after async timeout or cancellation, preventing
+repeated calls from opening concurrent consent dialogs. Subsequent completed reads are
+fresh; the SDK does not cache application bearers or relax authentication. See
+[isolated development setup](setup-testing.md#use-isolated-development-credential-custody).
+
 Codex/ChatGPT authentication is also operator-only. `colossus codex login` delegates the
 OAuth ceremony to the official Codex CLI and forces its supported file credential store;
 Colossus never handles the authorization code. The `open_ai_codex` adapter accepts only
@@ -479,6 +531,13 @@ outbound clients. It is loaded once at runtime startup and never sourced from am
 proxy or TLS environment variables. Adapter-specific OPA and PostgreSQL CA policies
 remain exclusive overrides, and public API clients continue to verify their separately
 provisioned leaf pin. Sandboxed and MCP child processes retain independent TLS stacks.
+One separately configured PEM client certificate and matching key may be offered by
+Colossus-owned outbound TLS clients when a permitted server requests mTLS. Desktop
+holds the imported pair in its native encrypted credential vault and transfers it
+through private sidecar bootstrap IPC; the renderer, model, runtime YAML, and normal
+diagnostics receive no private key. Remote OPA may override that identity explicitly.
+The Desktop updater uses CA trust but omits the client identity because its signed
+package downloads may redirect to another HTTPS origin.
 
 `risk-auto` is deliberately narrow: only model or child-agent `shell.run`, `web.search`,
 bodyless `network.http` GET, and configured top-level `mcp.call` effects without workflow
@@ -659,6 +718,28 @@ bounded durable child job, and a terminal update includes only the released chil
 bounded redacted error. Child provider deltas, hidden reasoning, and private transcript history
 are never copied into the parent interface event stream.
 See [Public API and application SDKs](application-sdk.md) for the complete topology.
+
+Desktop setup files are untrusted, bounded ZIP inputs, selected through a native
+picker and read into memory without filesystem extraction. The importer rejects
+traversal, duplicate/case-colliding names, links, unknown fields, unreferenced files,
+and unsupported versions. PNG icons are decoded under resource limits and re-encoded;
+Markdown uses the renderer's sanitized, image-free display. Rendering performs no
+remote fetch. HTTP(S) instruction links use the native system browser only after an
+operating-system confirmation displays the exact canonical destination. Saved Markdown,
+including renderer-authored provider descriptions, never authorizes that browser launch.
+The renderer receives bounded presentation DTOs, not raw YAML or PEM bytes.
+
+Provider/model YAML is inspected by the verified sidecar without constructing a
+provider connection. Temporary storage and network declarations exist only for
+validation. The package cannot configure tools, permissions, canonical state, host
+credentials, or runtime grants. Native import reviews bind the archive digest,
+previous package identity, and previous certificate fingerprints; replacement and
+CA trust require separate affirmative choices. API keys remain in the native vault
+and may be added later. Applying a packaged CA replaces the app-owned additional
+bundle through the existing guarded restart/rollback path; OS trust is unchanged.
+Model activation holds the connection guard, binds the selected workspace, and reuses
+native credential, origin, access, and runtime startup checks. Package removal does
+not implicitly revoke separate credential, workspace, or trust configuration.
 
 Desktop Workspaces are native-owned folder bindings, persisted as neutral
 `WorkspaceProfile` records. The renderer can add a Workspace only through the native folder
@@ -855,6 +936,21 @@ The owner-private `$COLOSSUS_HOME/plugins` store uses a dedicated redb writer le
 lifecycle changes and shared cross-process snapshot leases for immutable content. Disable,
 uninstall, and garbage collection cannot invalidate a running snapshot. Stable writable
 `PLUGIN_DATA` is separate from read-only content and is preserved unless purge is explicit.
+Workspace discovery adds no ambient authority: fixed `.agents` locations and registered
+directories are metadata-only until request-bound source acceptance. The host records
+acceptance outside the repository, scoped to workspace identity, relative source path,
+directory object identity, and manifest name. Accepted instruction edits are captured
+into immutable OCI snapshots in a separate workspace-owned store. Recovery retains
+`workspace:NAME` provenance keys and restores the original scoped cache rather than
+substituting global packages or live directories. Missing or replaced selected sources
+fail unavailable without silently falling back to a global name.
+
+Local MCP overlays require the exact `workspacePluginDigest` before credentials, tool
+allowlists, writable data, or process grants are compiled. Global overlays cannot bind
+local servers implicitly. Acceptance remains separate from Sigstore trust and cannot
+claim bundled ownership. The shared add workflow delegates to the existing authorized
+installation and exact-digest activation effects; signature failures leave activation
+unchanged, and untrusted OCI activation still requires its independent approval.
 Registry transfers validate exact origins, independently pin DNS and CA policy for registry,
 token, and blob redirect services, strip authorization on redirects, and verify every
 descriptor before extraction. Runtime pre/post identity checks still reject stable
@@ -903,8 +999,14 @@ tool. Enabling local terminals for the first time requires a fixed native operat
 system confirmation that states this authority. On macOS, native code revalidates the
 persisted object-bound Managed Local workspace, validates the root-owned non-writable
 system `/bin/zsh`, and launches exactly `/bin/zsh -l` with a native-constructed cleared
-environment and that workspace. It receives no worker authentication and its commands,
-input, output, and effects do not pass through the Safety Kernel, remote journal, or
+environment and that workspace. Windows resolves the OS-installed Windows PowerShell
+through `GetSystemDirectoryW` instead of environment or PATH lookup and starts it with
+fixed `-NoLogo -NoProfile` arguments. It revalidates the bound executable and workspace,
+starts suspended, assigns the verified image to a kill-on-close Job Object, then
+resumes it. The shell inherits no handles or TUI authentication pipes. Its explicitly
+constructed environment retains the command search path without passing through
+arbitrary environment credentials. Neither shell receives worker authentication.
+Shell commands, input, output, and effects do not pass through the Safety Kernel, remote journal, or
 Colossus audit path. It remains available while the managed runtime is unavailable so
 the operator can inspect or repair the workspace directly. Consent is versioned;
 settings created for the earlier TUI-only feature cannot silently enable shell
@@ -941,6 +1043,12 @@ may unlink only the fixed descriptor and certificate leaves after revalidating t
 type, owner, mode, link count, device, and inode immediately before removal. Unsafe or
 replaced state is preserved and reported rather than traversed or recursively deleted.
 
+Managed Desktop starts each owned runtime in Risk Auto through an explicit native
+bootstrap flag. The flag is retained for supervised restarts and never accepted in
+managed YAML or public run requests. Other SDK hosts default to Ask. Evaluator review
+can satisfy eligible low-risk approval obligations without changing policy denials,
+tool ceilings, or sandbox boundaries.
+
 Managed Desktop approval authority is isolated from its ordinary run client. The
 primary credential has the four run/read/control/prompt scopes and never
 `approvals:respond`. A second same-application native broker credential has only that
@@ -950,14 +1058,24 @@ the SDK routes only approval answers over the broker's separately authenticated 
 gRPC client. Unix and Windows share the same routing and read projection: only pending
 approval interactions with a response etag expose the native broker capability, reads
 stay on the primary client, and ordinary prompt answers never use the approval broker.
-Renderer approval input still requires the native operating-system
-confirmation before an allow response reaches this broker. Command approvals first use
-a separate native-owned read-only review window with a fixed local document and only
-two narrowly scoped review commands. The main renderer cannot supply its trusted text
-or acknowledge review through those commands. The native client fetches and revalidates
-the pending interaction before review, before OS confirmation, and after confirmation.
-Selection changes, stale bindings, cancellation, and expiry cannot submit an allow to
-the broker. Full command details remain available without weakening the OS confirmation.
+Approval decisions use a separate native-owned window with a fixed local document and
+only two narrowly scoped commands. That isolated WebView is the final consent surface;
+there is no additional OS effect-confirmation dialog. The main renderer can request a
+review but cannot supply trusted details or decide it. Native code fetches the pending
+interaction before review and revalidates after the decision. Selection changes, stale
+bindings, cancellation, closing the window during validation, and expiry cannot submit
+an allow to the broker. The isolated approval renderer is trusted to collect consent;
+this does not protect against compromise of that renderer or the native runtime.
+
+For unredacted Managed Local commands, **Always allow** stores a native-only fingerprint
+of the exact executable, argument vector, working directory, workspace directory identity,
+and configuration. It does not match prefixes or patterns. It remembers a command, not
+the contents of scripts/files it invokes or an immutable execution environment. The
+preference survives Desktop restarts, remains local to this computer, and is not included
+in setup exports. Workspace Access settings can clear it. Native watch/hydration rechecks
+each matching pending interaction and submits a fresh one-use answer through the same
+approval broker; normal policy re-evaluation, sandboxing, and audit still apply. Redacted,
+non-command, and External-target approvals remain one-time decisions.
 First-time non-Minimal access and every access-rank elevation, including
 Development-to-Allow-all, require a fixed native confirmation before the wider tool
 ceiling is persisted. Execution-boundary elevation is confirmed independently, including

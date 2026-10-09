@@ -4,8 +4,23 @@ set -euo pipefail
 readonly repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly manifest="${1:-"${repository_root}/documentation/legacy-routes.tsv"}"
 readonly site_dir="${2:-"${repository_root}/site"}"
-readonly canonical_root="https://obscuritylabs.github.io/Colossus"
-readonly published_root="/Colossus"
+canonical_root="https://obscuritylabs.github.io/Colossus"
+published_root="/Colossus"
+# An optional mount root selects portable URLs for the on-prem container only.
+# Default builds retain the canonical GitHub Pages publication unchanged.
+if (( $# > 3 )); then
+  echo "usage: generate-doc-redirects [MANIFEST [SITE_DIR [MOUNT_ROOT]]]" >&2
+  exit 2
+fi
+if (( $# == 3 )); then
+  if [[ ! "$3" =~ ^(/([a-zA-Z0-9_-]+/)*[a-zA-Z0-9_-]+/?|/)$ ]]; then
+    echo "documentation mount root must be a clean root-relative path" >&2
+    exit 2
+  fi
+  published_root="${3%/}"
+  canonical_root="${published_root}"
+fi
+readonly canonical_root published_root
 
 if [[ ! -f "${manifest}" ]]; then
   echo "legacy route manifest not found: ${manifest}" >&2

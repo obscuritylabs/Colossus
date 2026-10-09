@@ -8,7 +8,7 @@ use colossus_policy::{
     ReleasedEffectObserver, ReleasedEffectResult, SafetyKernel, SandboxBoundaryGate,
     effect_request, system_actor,
 };
-use colossus_ports::{EventJournal, PolicyDecisionPoint};
+use colossus_ports::{CredentialResolutionError, EventJournal, PolicyDecisionPoint};
 use colossus_testkit::InMemoryEventJournal;
 use rcgen::{
     BasicConstraints, CertificateParams, CertifiedIssuer, ExtendedKeyUsagePurpose, IsCa, KeyPair,
@@ -31,6 +31,11 @@ use tokio::{
     net::TcpListener,
 };
 use tokio_rustls::TlsAcceptor;
+
+#[path = "error/gateway_tests.rs"]
+mod failure_tests;
+#[path = "retry_tests.rs"]
+mod retry_tests;
 
 struct CountingCredentialResolver {
     calls: AtomicUsize,
@@ -611,6 +616,9 @@ fn provider_request(profile: &ProviderProfile) -> EffectRequest {
         profile.kind.generation_action(),
         profile.generation_endpoint().expect("generation endpoint"),
         serde_json::to_value(ProviderEffectInput {
+            stream_response: None,
+            server_compaction_threshold: None,
+            continuation: None,
             provider_profile: profile.name.clone(),
             model_profile: Some("unit-profile".into()),
             model: Some("unit-model".into()),

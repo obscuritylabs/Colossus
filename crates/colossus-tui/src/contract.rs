@@ -393,7 +393,8 @@ fn parse_detach_command(input: &str) -> InteractiveCommand {
 
 fn parse_permissions_command(input: &str) -> InteractiveCommand {
     let mut words = input.split_whitespace();
-    debug_assert_eq!(words.next(), Some("/permissions"));
+    let command = words.next();
+    debug_assert_eq!(command, Some("/permissions"));
     let mode = match words.next() {
         None => None,
         Some("deny") => Some(InteractiveApprovalMode::Deny),
@@ -437,7 +438,8 @@ const MAX_GOAL_ITERATIONS: u16 = 50;
 
 fn parse_plan_command(input: &str) -> InteractiveCommand {
     let mut words = input.split_whitespace();
-    debug_assert_eq!(words.next(), Some("/plan"));
+    let command = words.next();
+    debug_assert_eq!(command, Some("/plan"));
     let subcommand = words.next();
     let parsed = match subcommand {
         None => Some(PlanCommand::Toggle),
@@ -723,6 +725,17 @@ pub struct InteractivePrompt {
 
 /// Typed background event consumed by the sole terminal owner.
 pub enum HostEvent {
+    /// Device-local recording result, isolated by recording generation.
+    Dictation {
+        /// Identity of the local draft's recording generation.
+        generation: u64,
+        /// Control completion, or a periodic drain.
+        action: Option<crate::DictationAction>,
+        /// Bounded transcript and meter updates.
+        result: Result<Vec<crate::DictationUpdate>, String>,
+    },
+    /// An explicit device-local settings command completed.
+    DictationSettings(Result<String, String>),
     /// Ordered policy-released agent runtime event.
     Run(RunEventEnvelope),
     /// Policy-released informational notice that does not take focus.
@@ -757,6 +770,13 @@ pub enum HostEvent {
 pub trait BackgroundNoticeProvider: Send + Sync {
     /// Resolve one informational notice without delaying interactive startup.
     async fn notice(&self) -> Option<PresentationDocument>;
+}
+
+/// Optional observer of the active terminal session's user-facing lifecycle.
+pub trait InteractiveLifecycleObserver: Send + Sync {
+    /// Report the selected durable session and whether the terminal is working or
+    /// waiting for an operator decision. Neither state includes transcript content.
+    fn observe(&self, session_id: &str, working: bool, blocked: bool, approval_mode: &str);
 }
 
 /// Terminal result of one serialized background operation.
@@ -847,21 +867,25 @@ pub trait InteractiveHost: Send + Sync {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ScreenMode {
     /// Dynamic inline viewport with finalized output in native terminal scrollback.
-    #[default]
     Inline,
-    /// Full alternate screen with an application-owned transcript viewport.
+    /// Full alternate screen with an application-owned transcript viewport (default).
+    #[default]
     Alternate,
 }
 
 /// User-visible TUI startup options.
 #[derive(Clone, Default)]
 pub struct TuiOptions {
+    /// Optional microphone adapter for this terminal machine.
+    pub dictation: Option<Arc<dyn crate::LocalDictation>>,
     /// Durable session selection.
     pub bootstrap: BootstrapRequest,
     /// Explicit screen mode.
     pub screen_mode: ScreenMode,
     /// Optional one-shot notice resolved after terminal startup.
     pub background_notice: Option<Arc<dyn BackgroundNoticeProvider>>,
+    /// Optional integration with a terminal host's agent lifecycle.
+    pub lifecycle: Option<Arc<dyn InteractiveLifecycleObserver>>,
 }
 
 impl std::fmt::Debug for TuiOptions {
@@ -871,6 +895,8 @@ impl std::fmt::Debug for TuiOptions {
             .field("bootstrap", &self.bootstrap)
             .field("screen_mode", &self.screen_mode)
             .field("background_notice", &self.background_notice.is_some())
+            .field("lifecycle", &self.lifecycle.is_some())
+            .field("dictation", &self.dictation.is_some())
             .finish()
     }
 }

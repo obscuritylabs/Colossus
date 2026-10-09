@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { openWorkspaceWithPausedClock } from "./support/paused-workspace";
 
 test("Git shows the branch, grouped changes and history without losing a draft", async ({
   page,
@@ -46,7 +47,7 @@ test("Git shows the branch, grouped changes and history without losing a draft",
   await expect(
     pane.getByRole("region", { name: "Commit details" }),
   ).toContainText("Affected files");
-  await page.getByRole("button", { name: "Close Git panel" }).click();
+  await page.getByRole("button", { name: "Close tool pane" }).click();
   await expect(indicator).toBeFocused();
   await expect(
     page.getByRole("textbox", { name: "Prompt", exact: true }),
@@ -74,7 +75,7 @@ test("Git stays available on views without a message composer", async ({
         .getByRole("region", { name: "Workspace Git", exact: true })
         .getByRole("heading", { name: "Git", exact: true }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Close Git panel" }).click();
+    await page.getByRole("button", { name: "Close tool pane" }).click();
   }
   await views
     .getByRole("button", { name: "Conversation", exact: true })
@@ -97,7 +98,8 @@ test("Git has its own compact width and preserves a user resize", async ({
   await resize.press("ArrowLeft");
   const width = await resize.getAttribute("aria-valuenow");
   expect(Number(width)).toBeGreaterThan(360);
-  await page.getByRole("button", { name: "Open Aside", exact: true }).click();
+  await page.getByRole("button", { name: "Open tools", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: /^Aside/ }).click();
   const asideResize = page.getByRole("separator", {
     name: "Resize Aside conversation",
   });
@@ -226,7 +228,7 @@ test("a folder without Git keeps only an accessible icon in the composer", async
   await expect(
     page.getByRole("region", { name: "Workspace Git", exact: true }),
   ).toContainText("No Git repository");
-  await page.getByRole("button", { name: "Close Git panel" }).click();
+  await page.getByRole("button", { name: "Close tool pane" }).click();
   await expect(indicator).toBeFocused();
 });
 
@@ -234,10 +236,11 @@ test("slow refresh keeps the composer usable and shows progress", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 950 });
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  await page.goto("/?fixture=operations-studio&git=slow");
+  await openWorkspaceWithPausedClock(
+    page,
+    "/?fixture=operations-studio&git=slow",
+  );
   const indicator = page.getByRole("button", { name: /Open Git:/ });
   await expect(indicator.locator(".git-spinner")).toHaveCSS(
     "animation-name",
@@ -265,9 +268,10 @@ test("background refresh keeps the branch steady, then applies new status", asyn
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 950 });
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
-  await page.goto("/?fixture=operations-studio&git=slow");
+  await openWorkspaceWithPausedClock(
+    page,
+    "/?fixture=operations-studio&git=slow",
+  );
   await page.getByRole("button", { name: /Open Git:/ }).click();
   await page.clock.runFor(1500);
   const indicator = page.getByRole("button", { name: /Open Git:/ });
@@ -312,9 +316,10 @@ test("returning to a workspace restores its cached branch while refreshing", asy
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 950 });
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
-  await page.goto("/?fixture=operations-studio&git=slow");
+  await openWorkspaceWithPausedClock(
+    page,
+    "/?fixture=operations-studio&git=slow",
+  );
   const indicator = page.getByRole("button", { name: /Open Git:/ });
   await indicator.click();
   await expect(
@@ -341,9 +346,10 @@ test("returning to a workspace restores its cached branch while refreshing", asy
 test("failed background refresh retains the branch and reports the error", async ({
   page,
 }) => {
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
-  await page.goto("/?fixture=operations-studio&git=slow");
+  await openWorkspaceWithPausedClock(
+    page,
+    "/?fixture=operations-studio&git=slow",
+  );
   await page.getByRole("button", { name: /Open Git:/ }).click();
   await page.clock.runFor(1500);
   const indicator = page.getByRole("button", { name: /Open Git:/ });
@@ -393,7 +399,7 @@ test("Git is accessible at desktop and compact widths", async ({ page }) => {
       page.getByRole("button", { name: "Refresh Git", exact: true }),
     ).toBeInViewport();
     await expect(
-      page.getByRole("button", { name: "Close Git panel" }),
+      page.getByRole("button", { name: "Close tool pane" }),
     ).toBeInViewport();
     const results = await new AxeBuilder({ page })
       .include(".git-pane")
@@ -431,9 +437,10 @@ test("workspace switching discards an old pending Git refresh", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 950 });
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
-  await page.goto("/?fixture=operations-studio&git=switch");
+  await openWorkspaceWithPausedClock(
+    page,
+    "/?fixture=operations-studio&git=switch",
+  );
   await page.getByRole("button", { name: /Open Git:/ }).click();
   await expect(
     page.getByRole("region", { name: "Workspace Git", exact: true }),
@@ -470,7 +477,7 @@ for (const colorTheme of ["dark", "light"]) {
       name: "Workspace Git",
       exact: true,
     });
-    const close = pane.getByRole("button", { name: "Close Git panel" });
+    const close = page.getByRole("button", { name: "Close tool pane" });
     await expect(close).toBeFocused();
     const filter = pane.getByRole("searchbox", { name: "Filter files" });
     await filter.fill("missing-path");

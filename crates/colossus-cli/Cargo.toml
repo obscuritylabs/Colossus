@@ -10,7 +10,13 @@ license.workspace = true
 name = "colossus"
 path = "src/main.rs"
 
+[features]
+dictation = ["dep:colossus-native-dictation"]
+
 [dependencies]
+colossus-connector.workspace = true
+colossus-credentials.workspace = true
+colossus-native-dictation = { version = "=0.1.0", path = "../colossus-native-dictation", optional = true, features = ["download"] }
 agent-client-protocol.workspace = true
 shell-words.workspace = true
 async-trait.workspace = true
@@ -22,6 +28,7 @@ colossus-api.workspace = true
 colossus-contracts.workspace = true
 colossus-grpc.workspace = true
 colossus-home.workspace = true
+colossus-journal-redb.workspace = true
 colossus-observability = { workspace = true, features = ["host-exporters"] }
 colossus-policy.workspace = true
 colossus-plugins.workspace = true
@@ -58,6 +65,8 @@ colossus-windows-native.workspace = true
 rustix.workspace = true
 
 [dev-dependencies]
+rcgen.workspace = true
+rustls.workspace = true
 colossus-sdk.workspace = true
 ed25519-dalek.workspace = true
 hmac.workspace = true

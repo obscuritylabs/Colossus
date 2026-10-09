@@ -11,6 +11,7 @@ export type ProviderBrand =
   | "lmstudio";
 
 export interface ProviderConnectionIdentity {
+  profile?: string;
   kind: ProviderKind;
   baseUrl?: string | null;
 }

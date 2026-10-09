@@ -167,6 +167,52 @@ and enforce resource scope again inside each command. Do not add generic “run 
 “read path,” “call URL,” or “invoke SDK method” commands; those would turn the WebView
 into a capability-confused deputy.
 
+## Explicit workspace conversation sharing
+
+Cloud enrollment creates an independent application grant. It does not make existing
+Desktop or CLI application conversations visible. `SetWorkspaceSharing` lets the
+authenticated source application explicitly release its own sessions in that runtime
+workspace to a named recipient application. It requires `runs:read` and `runs:control`;
+enabling continuation also requires `runs:execute`. The source owner is derived from
+authentication and cannot be selected in the request.
+
+`ListVisibleRuns` provides bounded, source-stable discovery of owned and explicitly
+shared runs. Each item carries runtime-derived `controllable` and `continuable` flags.
+Shared source runs remain read-only: their cancellation and interaction responses still
+require the original owner. Reads and live watches use only released public projections;
+revocation closes ongoing shared watches and invalidates discovery cursors. Cloud
+continuations create new recipient-owned runs using that recipient's captured scopes,
+roles, and tools. They never borrow the source application's execution grant.
+
+Managed Local exposes this opt-in in Desktop's Cloud settings with native confirmation.
+For an installed daemon, the source application can use `colossus cloud share-workspace`
+with its protected local connection configuration and the exact recipient application
+ID. `--allow-continuation` permits new recipient-owned runs; `--disable` revokes future
+disclosure. Previously synchronized cloud history is retained under cloud project
+access and retention policy.
+
+## Managed shell inspection
+
+`AgentRunService` also exposes `ListProcessSessions`, `ReadProcessSession`, and
+`StopProcessSession`. Reads require `runs:read`; stop requires both `runs:control`
+and `runs:read` because its response includes retained logs, plus an exact caller-owned
+opaque process identity. Delegated shells retain the parent application owner. The same
+application cannot select another workspace through these requests. List/read/stop still pass through the runtime effect
+gateway. `ReadProcessSession` supports an exclusive output cursor and a wait bounded to
+30 seconds, allowing finite polling and reconnect without resetting process deadlines.
+The server request deadline is 35 seconds to leave transport and policy headroom.
+Discovery, log reads, and Stop use separate bounded admission pools, so a waiting read
+cannot consume Stop capacity. Clients must still respect pagination rate limits.
+The Rust SDK exposes corresponding methods for both embedded and gRPC backends;
+generated TypeScript, Python, and Go service bindings expose the same typed messages.
+
+Desktop uses the narrow `list_shell_sessions`, `read_shell_session`, and
+`stop_shell_session` commands. A native selected-target lease prevents target changes
+from racing an in-flight operation. Listing binds process identities to that selection;
+read and stop require the binding again. The renderer receives bounded released logs
+and safe metadata, never a PID, environment, or supervisor handle. A managed runtime
+with an active shell is busy for idle-eviction purposes even after its agent run ends.
+
 ## Managed Local bootstrap and lifecycle
 
 Managed hosts carry an explicit `ManagedExecutionBoundary` independently from access
@@ -215,6 +261,18 @@ bundle executable with the kernel's start-suspended flag, and requires its exact
 CodeDirectory identity to match before `SIGCONT`. On Linux, it executes the verified
 bytes from a sealed, non-writable `memfd`. Platforms without an equivalent mechanism
 fail Managed Local startup closed.
+
+Linux native startup retains only the host's local Unix D-Bus session locator after
+clearing the child's environment. The SDK accepts one filesystem or abstract Unix
+socket and verifies the bus peer's OS user before launch; it rejects remote transports,
+autolaunch, aliases, and ambiguous addresses. Without an explicit session locator it
+uses `/run/user/<uid>/bus`. This locator carries no secret. The native Secret Service
+remains required by default; missing session authority fails startup without a credential
+fallback. The explicit debug-only
+[development credential authority](security-architecture.md#development-credential-authority)
+instead forwards one validated nonsecret path to the verified child and uses its
+encrypted file custody. It does not require a Secret Service session, discover an
+alternative backend or change application grants. Release builds reject this opt-in.
 
 The selected macOS workspace is also persistent object authority rather than a saved
 path. Desktop hashes the device, inode, and birth timestamp obtained from a securely
@@ -466,7 +524,7 @@ directory. Never compute the expected pin by rereading `endpoint.json` or
 The initial server also bounds each TLS handshake to five seconds, accepts at most 128
 simultaneous connections, permits at most 80 concurrent request setups globally and
 per connection, permits 128 HTTP/2 streams per connection, expires connections after
-15 minutes, limits each request decode and handler setup to 30 seconds, limits HTTP/2
+15 minutes, limits each unary request and streaming-handler setup to 35 seconds, limits HTTP/2
 headers to 16 KiB, limits decoded request messages to 2 MiB, and limits encoded
 responses to 8 MiB. The response budget includes a sanitized command context of up to
 4 MiB plus its envelope; command, effect, and request limits remain unchanged. Only
@@ -529,6 +587,64 @@ do not shift that traversal, and per-request work stays bounded independently of
 unrelated journal growth.
 
 ## Durable run contract
+
+### Workflow resources
+
+The worker hosts authenticated `AutomationService` alongside chat services. The Rust
+SDK's optional `workflows()` client exposes canonical registered-definition metadata
+and schemas, validate/register of existing YAML, schedule list/detail/create/control,
+independent workflow-run start/state/history, and a bounded active-work fact for lifecycle
+supervision. Public workflow runs are separate from `AgentRunService` chat runs.
+Generated TypeScript, Python, and Go contracts expose the corresponding typed RPCs.
+
+Discovery advertises `workflows.read/register`, `schedules.read/create/control`, and
+`workflow_runs.read/start` only for hosted support and sufficient scopes. New runtimes
+also advertise `schedules.calendar`, `schedules.tasks`, and `workflow_runs.history`.
+Task creation additionally requires definition read/register scopes. Enroll their
+distinct colon-separated API scopes. Registration requires definition read; schedule
+mutations require schedule read; independent allocation requires workflow-run read.
+Managed Local's primary grant contains these scopes and six exact workflow tools;
+its separate native approval broker receives no scheduling scopes or tools.
+
+Operator mutations are authenticated application controls. Agent requests instead
+cross the ordinary effect gateway, exact ceilings, policy, approval, one-use permits,
+and quarantine. The host derives bounded owner/session/run provenance from trusted
+live run evidence and checks public scopes again immediately before committing.
+Renderer and model arguments cannot choose provenance or a runtime. Native Desktop
+commands hold the selected-target lease and validate its generation through each
+request; mutation guards reject configuration drain. SDK mutations attempt once and
+report lost/malformed responses as outcome-unknown rather than automatically retrying.
+
+Schedules pin a reviewed canonical definition hash, validated immutable inputs, fixed
+cadence or IANA calendar recurrence and UTC start. Calendar weekdays normalize before
+approval/retry hashing; missing times skip and repeated times run once. Plain-language
+tasks atomically allocate a hidden one-step definition with configured model/effort and
+an exact allowed-tool ceiling. Creation and its caller-scoped receipt share one transaction;
+equivalent UTC offsets normalize before approval/retry hashing. Matching retries return
+the original allocation; mismatches conflict. Enabled-state controls check the last
+canonical schedule record hash under the same writer lock as ticks. Legacy records
+without ownership expose only metadata and cannot be controlled or reveal inputs/runs.
+Future queued runs preserve their origin and undergo current policy and trust checks.
+
+Workflow pages are limited to 100 items and omit input schemas/snapshots until detail.
+Definition detail and validation also release bounded structural logic: at most 512
+steps and seven nested branch levels within 256 KiB, without prompts, tool arguments, child inputs,
+or emitted values. Catalog pages omit this projection; older or oversized definitions
+may omit it while keeping ordinary metadata available. Owned run snapshots release
+recorded step states and distinct completion counts, without inferring unvisited paths.
+Owned run detail can release the final schema-validated JSON object up to 64 KiB via
+`result_json`, preserving exact JSON integers. Desktop keeps this result as JSON text through the
+native-to-renderer boundary. History pages omit results and step
+states, isolate ownership, and sort by canonical allocation sequence rather than run ID.
+Their exclusive cursor is a previously allocated owned run ID for the same definition.
+Desktop renders the graph only when its definition hash matches the selected workflow,
+schedule, and run.
+Workflow requests are bounded to 256 KiB, responses to 2 MiB, and four concurrent domain
+operations. Workflow watches share the 64-stream server ceiling with chat watches,
+leaving existing unary headroom. Their exclusive sequence cursor yields coalesced
+canonical snapshots, ends on terminal state/disconnect, and is bounded to 15 minutes;
+reconnect or poll explicitly. Runtime active-work inspection fails closed when its
+bounded catalog cannot prove inactivity. Future schedules alone do not pin workers.
 
 `CreateRun` durably claims an idempotency key before execution. A caller can then fetch
 the run or call `WatchRun` with an exclusive `after_sequence` cursor. Watch delivery is

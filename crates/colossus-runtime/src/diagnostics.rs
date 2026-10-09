@@ -88,6 +88,21 @@ impl Runtime {
         &self.sandbox_profile
     }
 
+    /// Resolved tool/action selection, without resource paths or credentials.
+    pub fn access_resolution(&self) -> &colossus_access::AccessResolution {
+        &self.access
+    }
+
+    /// Configured execution boundary identifier, without resource configuration.
+    pub fn sandbox_backend(&self) -> &str {
+        &self.sandbox_backend
+    }
+
+    /// Global boundary acknowledgment; session-specific acknowledgments are separate.
+    pub fn policy_boundary_acknowledged(&self) -> bool {
+        self.sandbox_boundary_gate.globally_acknowledged()
+    }
+
     /// Credential- and content-free hashes for currently discoverable AGENTS.md inputs.
     pub fn instruction_source_diagnostics(&self) -> Result<Value, RuntimeError> {
         self._workspace_lease.identity().revalidate()?;
@@ -635,6 +650,9 @@ impl Runtime {
             "provider.models",
             endpoint,
             serde_json::to_value(ProviderEffectInput {
+                stream_response: None,
+                server_compaction_threshold: None,
+                continuation: None,
                 provider_profile: provider.profile().name.clone(),
                 model_profile: None,
                 model: None,
@@ -769,6 +787,9 @@ impl Runtime {
             provider.profile().kind.generation_action(),
             endpoint,
             serde_json::to_value(ProviderEffectInput {
+                stream_response: None,
+                server_compaction_threshold: None,
+                continuation: None,
                 provider_profile: route.provider_profile.clone(),
                 model_profile: Some(route.model_profile.clone()),
                 model: Some(route.model.clone()),
@@ -840,7 +861,9 @@ impl Runtime {
                 provider_response: None,
             },
         };
+        let feature_checks = self.providers.feature_checks(&resolved);
         Ok(json!({
+            "features": feature_checks,
             "ready": generation.status == "pass",
             "route": route,
             "checks": [

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { readPluginPreview } from "../api";
 import type { PluginEntry, PluginResource, PluginSkill } from "../plugins";
 import { PluginMcpControls } from "./PluginMcpControls";
+import { OutlookCompanionControls } from "./OutlookCompanionControls";
 import { PluginIcon } from "./PluginIcon";
 import type { PluginAction } from "./PluginOperationForm";
 
@@ -14,6 +15,9 @@ function failure(error: unknown): string {
 export function PluginDetail({
   plugin,
   targetId,
+  spaceId,
+  onConfigureConnection,
+  onConnectionChanged,
   managementAvailable,
   selections,
   onUseSkill,
@@ -22,6 +26,9 @@ export function PluginDetail({
 }: {
   plugin: PluginEntry;
   targetId: string;
+  spaceId: string | null;
+  onConfigureConnection?: (() => void) | undefined;
+  onConnectionChanged?: (() => void) | undefined;
   managementAvailable: boolean;
   selections: readonly string[];
   onUseSkill: ((id: string) => void) | undefined;
@@ -46,7 +53,9 @@ export function PluginDetail({
           <span className="plugin-eyebrow">
             {plugin.origin === "bundled"
               ? "Bundled with Colossus"
-              : "Installed plugin"}
+              : plugin.origin === "workspace"
+                ? "Workspace source"
+                : "Installed plugin"}
           </span>
           <h3>{plugin.manifest.name}</h3>
           <span className="plugin-version">
@@ -90,7 +99,11 @@ export function PluginDetail({
               >
                 {action === "enable"
                   ? "Activate this digest"
-                  : action[0]!.toUpperCase() + action.slice(1)}
+                  : action === "workspace_accept"
+                    ? "Use workspace source"
+                    : action === "workspace_disable"
+                      ? "Disable workspace source"
+                      : action[0]!.toUpperCase() + action.slice(1)}
               </button>
             ))}
         </div>
@@ -127,11 +140,20 @@ export function PluginDetail({
               <strong>{server.id}</strong> · {server.transport} ·{" "}
               {server.status}
             </p>
-            {managementAvailable && (
+            {managementAvailable && spaceId && (
               <PluginMcpControls
-                targetId={targetId}
+                spaceId={spaceId}
                 server={server.id}
-                enabled={plugin.available && server.enabled}
+                enabled={server.enabled}
+                pluginActive={plugin.available}
+                workspacePluginDigest={
+                  plugin.origin === "workspace" ? plugin.digest : undefined
+                }
+                sessionRequired={
+                  plugin.manifest.name === "outlook-classic" &&
+                  server.id === "outlook-classic/mail"
+                }
+                onChanged={onConnectionChanged}
                 http={
                   server.transport === "http" ||
                   server.transport === "streamable-http" ||
@@ -142,6 +164,26 @@ export function PluginDetail({
           </div>
         ))
       )}
+      {managementAvailable &&
+        spaceId &&
+        plugin.manifest.name === "outlook-classic" && (
+          <OutlookCompanionControls
+            spaceId={spaceId}
+            pluginActive={plugin.available && plugin.trust.trusted}
+            onChanged={onConnectionChanged}
+          />
+        )}
+      {managementAvailable &&
+        plugin.mcp_servers.length > 0 &&
+        onConfigureConnection && (
+          <button
+            type="button"
+            className="button secondary"
+            onClick={onConfigureConnection}
+          >
+            Configure plugin connections
+          </button>
+        )}
       <p>
         Enable individual MCP servers explicitly in plugin settings. Credential
         configuration does not enable them.
@@ -155,7 +197,9 @@ export function PluginDetail({
               ? "Bundled with Colossus"
               : plugin.source}
           </dd>
-          <dt>Global state</dt>
+          <dt>
+            {plugin.origin === "workspace" ? "Workspace state" : "Global state"}
+          </dt>
           <dd>{plugin.status}</dd>
           <dt>Trust</dt>
           <dd>
@@ -248,14 +292,20 @@ function SkillPreview({
       <div className="plugin-actions">
         <button
           className="button secondary"
-          disabled={loading}
+          disabled={
+            loading ||
+            (plugin.origin === "workspace" && plugin.status !== "enabled")
+          }
           onClick={() => void load("skill")}
         >
           Preview instructions
         </button>
         <button
           className="button secondary"
-          disabled={loading}
+          disabled={
+            loading ||
+            (plugin.origin === "workspace" && plugin.status !== "enabled")
+          }
           onClick={() => void load("resources")}
         >
           Browse resources

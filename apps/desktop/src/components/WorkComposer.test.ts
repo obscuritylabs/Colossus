@@ -45,6 +45,8 @@ function renderComposer(
       attachmentBusy: false,
       error: null,
       onPromptChange: vi.fn(),
+      onPromptPaste: vi.fn(() => 0),
+      condensedPasteCount: 0,
       onRoleChange: vi.fn(),
       onMaxTurnsChange: vi.fn(),
       onModeChange: vi.fn(),
@@ -58,6 +60,8 @@ function renderComposer(
       onDeleteQueuedMessage: vi.fn(),
       onRetryQueuedMessage: vi.fn(),
       onRedirect: vi.fn(),
+      onStop: vi.fn(),
+      onResumeQueue: vi.fn(),
       onSubmit: vi.fn(),
       ...overrides,
     }),
@@ -136,16 +140,18 @@ describe("WorkComposer capabilities", () => {
     expect(markup).toContain("Ask a source-backed question");
     expect(markup).toContain("Research depth");
     expect(markup).toContain("This Workspace");
-    expect(markup).toContain("Connections");
+    expect(markup).toContain("MCP connections");
     expect(markup).toContain("Research settings");
     expect(markup).toContain('aria-label="Close research settings"');
     expect(markup).toContain('name="research-depth"');
     expect(markup).toContain("Search across your workspace");
     expect(markup).toContain("Search the public web");
-    expect(markup).toContain("Search your connected apps");
-    expect(markup).toContain("Sources: This Workspace, Web, Connections");
     expect(markup).toContain(
-      'aria-label="Research controls, sources This Workspace, Web, Connections"',
+      "Search enabled MCP tools or research projections",
+    );
+    expect(markup).toContain("Sources: This Workspace, Web, MCP connections");
+    expect(markup).toContain(
+      'aria-label="Research controls, sources This Workspace, Web, MCP connections"',
     );
   });
 
@@ -266,6 +272,40 @@ describe("WorkComposer permission mode", () => {
 });
 
 describe("WorkComposer follow-ups", () => {
+  it("shows Stop with an empty draft and keeps it independent of prompt validation", () => {
+    const empty = renderComposer(false, {
+      activeWorkRunning: true,
+      activeWorkRedirectable: true,
+    });
+    expect(empty).toContain('aria-label="Stop response"');
+    expect(empty).not.toContain('aria-label="Send prompt"');
+    const invalid = renderComposer(false, {
+      activeWorkRunning: true,
+      activeWorkRedirectable: true,
+      prompt: "Too large",
+      promptOverLimit: true,
+    });
+    const start = invalid.indexOf('aria-label="Stop response"');
+    expect(invalid.slice(start, invalid.indexOf(">", start))).not.toContain(
+      "disabled",
+    );
+    expect(renderComposer(false)).not.toContain('aria-label="Stop response"');
+  });
+
+  it("shows cancellation progress and prevents repeated Stop requests", () => {
+    const markup = renderComposer(false, {
+      activeWorkRunning: true,
+      activeWorkRedirectable: false,
+      stopping: true,
+    });
+    const start = markup.indexOf('aria-label="Stopping response"');
+    expect(start).toBeGreaterThan(-1);
+    expect(markup.slice(start, markup.indexOf(">", start))).toContain(
+      "disabled",
+    );
+    expect(markup).toContain('class="send-button is-stop is-stopping"');
+  });
+
   it("keeps the composer available and names queue and redirect actions while work runs", () => {
     const markup = renderComposer(false, {
       mode: "execute",

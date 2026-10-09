@@ -3,6 +3,7 @@ title: MCP
 description: Configure stdio or Streamable HTTP MCP servers through Colossus's policy boundary.
 audience: operator
 type: how-to
+icon: lucide/network
 ---
 
 # MCP
@@ -11,10 +12,12 @@ type: how-to
 
 Configure a local stdio or remote Streamable HTTP MCP server, select explicit tools or
 opt into dynamic wildcard discovery, and invoke tools without bypassing Colossus policy.
-The native remote transport targets MCP `2025-11-25`. Stateful sessions are required
-by default; exact remote declarations may explicitly allow a server that omits
-`Mcp-Session-Id`. Legacy HTTP+SSE and `2026-07-28` release-candidate semantics are not
-enabled.
+Remote HTTP defaults to `protocolVersion: auto`: discover stable MCP `2026-07-28`,
+then fall back to `2025-11-25` initialization for older endpoints. Select either
+version explicitly in configuration or Desktop's Protocol version control. The
+2026 protocol is sessionless; 2025 requires a session ID unless `allowStateless: true`
+is explicitly configured. Stdio retains the 2025 initialization lifecycle.
+Legacy HTTP+SSE with separate endpoints is unsupported.
 
 ## Prerequisites
 
@@ -84,8 +87,10 @@ Permit-bound discovery and calls under acknowledged full access need neither dup
 grant; adding them does not constrain ambient authority. `allowedTools: ["*"]` is
 deliberately broad: every currently or subsequently published valid tool becomes
 eligible for normal schema validation, policy, approval, quarantine, and audit. An
-empty list, duplicate names, or a wildcard mixed with explicit names is rejected.
-Agent Plugin MCP declarations remain explicit-only. Set `allowStateless: true` only when
+empty list, duplicate selectors, or `"*"` mixed with other entries is rejected.
+Use patterns such as `"get_*"` or `"*_search"` to select a narrower set of current and
+future tools. See [tool name patterns](../reference/configuration/mcp.md#tool-name-patterns).
+Agent Plugin MCP declarations still require an explicit operator-owned overlay. Set `allowStateless: true` only when
 the reviewed remote server intentionally omits `Mcp-Session-Id`; omit it for stateful
 servers.
 
@@ -140,9 +145,10 @@ colossus --config .colossus/config.yaml mcp tools \
   --server local-docs
 ```
 
-Discovery launches the exact executable or creates a fresh initialized HTTP exchange
-and returns only selected, validated tool schemas. Stateful remote servers receive
-best-effort session cleanup; explicitly stateless servers have no session to close.
+Discovery launches the exact executable or negotiates a fresh HTTP exchange and
+collects all pages on that transport. It returns selected, validated tool schemas.
+Legacy stateful servers receive best-effort session cleanup; 2026 and explicitly
+stateless legacy servers have no session to close.
 
 ### 4. Invoke the exact tool
 

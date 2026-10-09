@@ -15,10 +15,10 @@ use colossus_provider::{
 };
 use colossus_runtime::{
     HostCredentialResolver, JournalPayloadMode, KeyConfig, LogSignalConfig, MetricSignalConfig,
-    ModelCapabilities, ModelProfileConfig, ModelsConfig, ObservabilityConfig, OtlpConfig,
-    OtlpProtocol, ProviderProfileConfig, ProvidersConfig, ReasoningEffort, RuntimeConfig,
-    RuntimeError, RuntimeOpenOptions, SearchConfig, SearchProfileConfig, StorageLocation,
-    TraceSignalConfig, WorkspaceIdentityToken,
+    ModelProfileConfig, ModelsConfig, ObservabilityConfig, OtlpConfig, OtlpProtocol,
+    ProviderProfileConfig, ProvidersConfig, ReasoningEffort, RuntimeConfig, RuntimeError,
+    RuntimeOpenOptions, SearchConfig, SearchProfileConfig, StorageLocation, TraceSignalConfig,
+    WorkspaceIdentityToken,
 };
 use colossus_sidecar_protocol::{
     AckRequest, ActivatedResponse, BootstrapGrant, BootstrapRequest, ChildFrame,
@@ -267,6 +267,17 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         runtime_options,
         request.suppress_automatic_agent_instructions,
     );
+    if let (Some(certificate), Some(key)) = (
+        request.client_certificate_pem.as_ref(),
+        request.client_key_pem.as_ref(),
+    ) {
+        let identity = colossus_network::ClientIdentity::from_pem_pair(
+            certificate.expose().as_bytes(),
+            key.expose().as_bytes(),
+        )
+        .map_err(|_| FailureCode::InvalidConfiguration)?;
+        runtime_options = runtime_options.with_client_identity(identity);
+    }
 
     let codex_auth = request
         .codex_auth_path
@@ -290,10 +301,15 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     // for the complete worker lifetime. This prevents inode reuse while the runtime's
     // own retained descriptor and per-effect identity checks are active.
     let _workspace_binding = workspace;
+    let approval_mode = if request.risk_auto_approvals {
+        WorkerApprovalMode::RiskAuto
+    } else {
+        WorkerApprovalMode::Ask
+    };
     let server = if let Some(authentication) = worker_authentication {
         WorkerServer::open_with_mode_at_workspace_provider_credentials_codex_auth_and_authentication(
             &config,
-            WorkerApprovalMode::Ask,
+            approval_mode,
             runtime_options,
             provider_credentials,
             codex_auth,
@@ -302,7 +318,7 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     } else {
         WorkerServer::open_with_mode_at_workspace_and_provider_credentials_and_codex_auth(
             &config,
-            WorkerApprovalMode::Ask,
+            approval_mode,
             runtime_options,
             provider_credentials,
             codex_auth,
@@ -323,6 +339,17 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         .approval_broker_grant
         .clone()
         .map(|grant| approval_broker_grant(&request.grant, grant))
+        .transpose()?;
+    let connector_grant = request
+        .connector_grant
+        .clone()
+        .map(|grant| {
+            connector_application_grant(
+                &request.grant,
+                request.approval_broker_grant.is_some(),
+                grant,
+            )
+        })
         .transpose()?;
     let public_directory = prepare_public_directory(&instance_dir)?;
     let tls =
@@ -349,19 +376,34 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         .map_err(|_| FailureCode::PublicApiSetup)?
         .to_owned();
     let grants = std::iter::once(primary_grant)
-        .chain(approval_broker_grant)
+        .chain(approval_broker_grant.clone())
+        .chain(connector_grant)
         .collect::<Vec<_>>();
     let mut issued = credentials
         .issue_pending_batch(&grants)
         .map_err(|_| FailureCode::PublicApiSetup)?;
     let primary_issued = issued.remove(0);
-    let approval_broker_issued = issued.pop();
+    let approval_broker_issued = if approval_broker_grant.is_some() {
+        Some(issued.remove(0))
+    } else {
+        None
+    };
+    let connector_issued = issued.pop();
+    let connector_credential_id = connector_issued
+        .as_ref()
+        .map(|credential| credential.credential_id().to_owned());
+    let connector_bearer = connector_issued
+        .as_ref()
+        .map(|credential| SecretString::new(credential.expose_token().to_owned()))
+        .transpose()
+        .map_err(|_| FailureCode::PublicApiSetup)?;
     let credential_id = primary_issued.credential_id().to_owned();
     let approval_broker_credential_id = approval_broker_issued
         .as_ref()
         .map(|credential| credential.credential_id().to_owned());
     let credential_ids = std::iter::once(credential_id.clone())
         .chain(approval_broker_credential_id.clone())
+        .chain(connector_credential_id.clone())
         .collect::<Vec<_>>();
     let bearer = match SecretString::new(primary_issued.expose_token().to_owned()) {
         Ok(bearer) => bearer,
@@ -393,7 +435,9 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         credential_id: credential_id.clone(),
         bearer,
         approval_broker_credential_id: approval_broker_credential_id.clone(),
+        connector_credential_id: connector_credential_id.clone(),
         approval_broker_bearer,
+        connector_bearer,
     };
     if ready.validate().is_err() {
         let _ = credentials.revoke_batch(&credential_ids);
@@ -409,6 +453,7 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     }
     drop(primary_issued);
     drop(approval_broker_issued);
+    drop(connector_issued);
 
     let ack = match read_frame::<_, ParentFrame>(input) {
         Ok(ParentFrame::Ack(ack)) => ack,
@@ -417,6 +462,10 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
             return Err(FailureCode::CredentialActivation);
         }
     };
+    if ack.connector_credential_id != connector_credential_id {
+        let _ = credentials.revoke_batch(&credential_ids);
+        return Err(FailureCode::CredentialActivation);
+    }
     if let Err(error) = validate_ack(
         &ack,
         &request.exchange_id,
@@ -466,6 +515,7 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
                 exchange_id: request.exchange_id,
                 credential_id: credential_id.clone(),
                 approval_broker_credential_id: approval_broker_credential_id.clone(),
+                connector_credential_id: connector_credential_id.clone(),
             }),
         )
     };
@@ -634,11 +684,7 @@ fn managed_runtime_config(
                         model: model.model.clone(),
                         context_window_tokens: model.context_window_tokens,
                         max_output_tokens: model.max_output_tokens,
-                        capabilities: ModelCapabilities {
-                            tool_calls: model.capabilities.tool_calls,
-                            streaming: model.capabilities.streaming,
-                            image_inputs: model.capabilities.image_inputs,
-                        },
+                        capabilities: model.capabilities.into(),
                         reasoning_effort: model.reasoning_effort.map(reasoning_effort),
                     },
                 )
@@ -718,6 +764,7 @@ fn managed_runtime_config(
                         })
                         .collect(),
                     allow_stateless: server.allow_stateless,
+                    protocol_version: server.protocol_version,
                     oauth: server.oauth.as_ref().map(|oauth| McpOAuthConfig {
                         client_id: oauth.client_id.clone(),
                         client_secret_reference: oauth
@@ -869,10 +916,12 @@ fn apply_managed_field_overrides(
     config: &mut RuntimeConfig,
     overrides: &[ManagedFieldOverride],
 ) -> Result<(), FailureCode> {
-    const LOCKED_FIELDS: [&str; 13] = [
+    const LOCKED_FIELDS: [&str; 15] = [
         "schemaVersion",
         "storage",
         "network.caBundlePath",
+        "network.clientCertificatePath",
+        "network.clientKeyPath",
         "providers",
         "models",
         "search",
@@ -1186,6 +1235,30 @@ fn approval_broker_grant(
         return Err(FailureCode::InvalidBootstrap);
     }
     application_grant(broker)
+}
+
+fn connector_application_grant(
+    primary: &BootstrapGrant,
+    has_broker: bool,
+    connector: BootstrapGrant,
+) -> Result<ApplicationGrant, FailureCode> {
+    if connector.application_id == primary.application_id
+        || connector
+            .allowed_roles
+            .iter()
+            .any(|role| !primary.allowed_roles.contains(role))
+        || connector
+            .allowed_tools
+            .iter()
+            .any(|tool| !primary.allowed_tools.contains(tool))
+        || connector.scopes.iter().any(|scope| {
+            !(primary.scopes.contains(scope)
+                || scope == colossus_api::scopes::APPROVALS_RESPOND && has_broker)
+        })
+    {
+        return Err(FailureCode::InvalidBootstrap);
+    }
+    application_grant(connector)
 }
 
 fn validate_ack(
@@ -1580,9 +1653,10 @@ mod tests {
                 context_window_tokens: 32_768,
                 max_output_tokens: 4_096,
                 capabilities: colossus_sidecar_protocol::ManagedModelCapabilities {
-                    tool_calls: true,
-                    streaming: true,
-                    image_inputs: false,
+                    tool_calls: true.into(),
+                    streaming: true.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
                 reasoning_effort: None,
             }],
@@ -1638,6 +1712,14 @@ mod tests {
         let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
             .expect("overridden config");
         assert_eq!(config.research.max_sources, 7);
+
+        managed.field_overrides[0] = ManagedFieldOverride {
+            field_id: "plugins.workspaceDiscovery".into(),
+            value: serde_json::json!(false),
+        };
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+            .expect("workspace discovery override");
+        assert!(!config.plugins.workspace_discovery);
 
         managed.providers[0].kind = ManagedProviderKind::OpenAiCompatible;
         managed.providers[0].base_url = Some("https://example.test/v1".into());
@@ -1737,14 +1819,20 @@ mod tests {
             headers: BTreeMap::new(),
             credential_headers: BTreeMap::new(),
             allow_stateless: true,
+            protocol_version: colossus_mcp::McpProtocolVersion::V2026,
             oauth: None,
             allowed_tools: vec!["*".into()],
             research_tools: Vec::new(),
             timeout_ms: Some(5_000),
             max_output_bytes: Some(1_048_576),
         });
-        managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
-            .expect("managed MCP configuration");
+        let compiled =
+            managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+                .expect("managed MCP configuration");
+        assert_eq!(
+            compiled.mcp.servers["docs"].protocol_version,
+            colossus_mcp::McpProtocolVersion::V2026
+        );
     }
 
     #[test]
@@ -1833,6 +1921,7 @@ mod tests {
                 headers: BTreeMap::new(),
                 credential_headers: BTreeMap::new(),
                 allow_stateless: true,
+                protocol_version: Default::default(),
                 oauth: None,
                 allowed_tools: vec!["*".into()],
                 research_tools: Vec::new(),
@@ -1926,11 +2015,13 @@ mod tests {
 
     fn managed_configuration_field_is_classified(field: &str) -> bool {
         const TYPED_CATALOGS: [&str; 5] = ["providers", "models", "search", "mcp", "observability"];
-        const LOCKED_INVARIANTS: [&str; 9] = [
+        const LOCKED_INVARIANTS: [&str; 11] = [
             "schemaVersion",
             "storage",
             "bundles.trustedPublishers",
             "network.caBundlePath",
+            "network.clientCertificatePath",
+            "network.clientKeyPath",
             "memory.indexPath",
             "plugins.trustProfiles",
             "plugins.registries",
@@ -1981,6 +2072,7 @@ mod tests {
                 },
             )]),
             allow_stateless: false,
+            protocol_version: Default::default(),
             oauth: None,
             allowed_tools: vec!["search".into()],
             research_tools: Vec::new(),
@@ -2186,6 +2278,7 @@ mod tests {
             exchange_id: exchange.clone(),
             credential_id: credential.clone(),
             approval_broker_credential_id: Some(broker.clone()),
+            connector_credential_id: None,
         };
         assert_eq!(
             validate_ack(&ack, &exchange, &credential, Some(&broker)),
@@ -2353,9 +2446,10 @@ mod tests {
                 context_window_tokens: 64_000,
                 max_output_tokens: 8_000,
                 capabilities: colossus_sidecar_protocol::ManagedModelCapabilities {
-                    tool_calls: true,
-                    streaming: true,
-                    image_inputs: false,
+                    tool_calls: true.into(),
+                    streaming: true.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
                 reasoning_effort: None,
             }],
@@ -2414,9 +2508,10 @@ mod tests {
                 context_window_tokens: 64_000,
                 max_output_tokens: 8_000,
                 capabilities: colossus_sidecar_protocol::ManagedModelCapabilities {
-                    tool_calls: true,
-                    streaming: true,
-                    image_inputs: false,
+                    tool_calls: true.into(),
+                    streaming: true.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
                 reasoning_effort: None,
             }],
@@ -2461,9 +2556,10 @@ mod tests {
                 context_window_tokens: 128_000,
                 max_output_tokens: 16_000,
                 capabilities: colossus_sidecar_protocol::ManagedModelCapabilities {
-                    tool_calls: true,
-                    streaming: true,
-                    image_inputs: false,
+                    tool_calls: true.into(),
+                    streaming: true.into(),
+                    image_inputs: false.into(),
+                    ..Default::default()
                 },
                 reasoning_effort: Some(ManagedReasoningEffort::High),
             }],

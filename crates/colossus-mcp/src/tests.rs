@@ -1,4 +1,5 @@
 use super::*;
+mod conformance;
 mod diagnostics;
 mod large_credentials;
 mod oauth_vault;
@@ -32,6 +33,7 @@ fn request_uses_official_protocol_models_and_no_secret_values() {
             "required": ["text"],
             "additionalProperties": false
         })),
+        output_schema: None,
         schema_sha256: "unused-by-protocol-projection".into(),
     };
     let bytes = protocol_input(&operation).expect("protocol");
@@ -42,9 +44,11 @@ fn request_uses_official_protocol_models_and_no_secret_values() {
         .collect::<Vec<_>>();
     assert_eq!(lines[0]["method"], "initialize");
     assert_eq!(lines[0]["params"]["protocolVersion"], "2025-11-25");
-    assert_eq!(lines[1]["method"], "notifications/initialized");
-    assert_eq!(lines[2]["method"], "tools/call");
-    assert_eq!(lines[2]["params"]["name"], "echo");
+    assert_eq!(
+        lines.len(),
+        1,
+        "tool requests wait for validated initialization"
+    );
 }
 
 #[test]
@@ -56,6 +60,7 @@ fn remote_call_timeout_certainty_follows_dispatch_stage() {
         annotations: None,
         arguments: json!({}),
         input_schema: Box::new(json!({"type": "object"})),
+        output_schema: None,
         schema_sha256: "unused-by-timeout-classification".into(),
     };
     assert!(matches!(
@@ -87,6 +92,7 @@ fn complete_json_rpc_tool_errors_are_confirmed_results() {
         annotations: None,
         arguments: json!({}),
         input_schema: Box::new(json!({"type": "object"})),
+        output_schema: None,
         schema_sha256: "unused-by-error-classification".into(),
     };
     let result = remote_call_failure(
@@ -123,6 +129,7 @@ fn confirmed_json_rpc_errors_fit_custom_output_caps() {
         annotations: None,
         arguments: json!({}),
         input_schema: Box::new(json!({"type": "object"})),
+        output_schema: None,
         schema_sha256: "unused-by-error-compaction".into(),
     };
     let result = remote_call_failure(
@@ -208,6 +215,7 @@ fn discovered_schema_is_enforced_before_call() {
         title: None,
         description: None,
         annotations: None,
+        output_schema: None,
         schema_sha256: test_schema_sha256(&input_schema),
         input_schema,
     };
@@ -234,6 +242,7 @@ fn discovery_pages_containing_configured_credentials_fail_before_release() {
             description: Some("accidentally echoed hard-secret".into()),
             annotations: None,
             input_schema: json!({"type": "object"}),
+            output_schema: None,
             schema_sha256: "hash".into(),
         }],
         next_cursor: None,
@@ -269,6 +278,10 @@ fn tool_wildcard_is_exclusive_and_empty_or_duplicate_lists_fail_closed() {
     assert_eq!(wildcard.summary(), vec!["*"]);
     assert!(ToolAllowlist::from_config("remote", &["*".into(), "search".into()]).is_err());
     assert!(ToolAllowlist::from_config("remote", &[]).is_err());
+    assert!(ToolAllowlist::from_config("remote", &["get_*".into(), "get_*".into()]).is_err());
+    for invalid in ["get_[ab]", "get_?", "get_**", "^get_.*$"] {
+        assert!(ToolAllowlist::from_config("remote", &[invalid.into()]).is_err());
+    }
     assert!(ToolAllowlist::from_config("remote", &["search".into(), "search".into()]).is_err());
 }
 
@@ -284,6 +297,7 @@ fn remote_server(endpoint: &str) -> McpServerConfig {
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
         allow_stateless: false,
+        protocol_version: McpProtocolVersion::V2025,
         oauth: None,
         allowed_tools: vec!["*".into()],
         research_tools: Vec::new(),
@@ -522,6 +536,7 @@ fn ambient_validation_keeps_exact_mcp_declarations_but_omits_duplicate_sandbox_g
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
         allow_stateless: false,
+        protocol_version: McpProtocolVersion::Auto,
         oauth: None,
         allowed_tools: vec!["*".into()],
         research_tools: Vec::new(),
@@ -559,6 +574,91 @@ fn ambient_validation_keeps_exact_mcp_declarations_but_omits_duplicate_sandbox_g
         )
         .is_err(),
         "ambient authority must not weaken exact server declarations"
+    );
+}
+
+#[test]
+fn plugin_stdio_accepts_only_runtime_bound_root_and_data_environment() {
+    let temporary = tempfile::tempdir().expect("plugin roots");
+    let root = temporary.path().join("content");
+    let data = temporary.path().join("data");
+    std::fs::create_dir_all(root.join("bin")).expect("content");
+    std::fs::create_dir_all(&data).expect("data");
+    let mut server = remote_server("http://127.0.0.1:8787/mcp");
+    server.transport = McpTransportKind::Stdio;
+    server.protocol_version = McpProtocolVersion::Auto;
+    server.url = None;
+    server.command = root.join("bin/server.exe");
+    server.working_directory = Some(root.clone());
+    server.effect_action_prefix = Some(colossus_contracts::plugin_mcp_action_prefix(
+        "fixture", "mail",
+    ));
+    server.provenance = Some(json!({"plugin":"fixture"}));
+    server.literal_environment = BTreeMap::from([
+        ("PLUGIN_ROOT".into(), root.display().to_string()),
+        ("PLUGIN_DATA".into(), data.display().to_string()),
+    ]);
+    let mut config = McpConfig {
+        oauth_credential_store: McpOAuthCredentialStoreKind::Auto,
+        servers: BTreeMap::from([("fixture/mail".into(), server)]),
+    };
+    let validate = |config: &McpConfig| {
+        validate_config(
+            config,
+            &root,
+            validation_context(ResourceAuthority::Ambient, &[]),
+        )
+    };
+    validate(&config).expect("runtime-owned plugin paths");
+
+    let server = config.servers.get_mut("fixture/mail").expect("server");
+    server
+        .environment
+        .insert("PLUGIN_ROOT".into(), "env:ATTACK".into());
+    assert!(
+        validate(&config).is_err(),
+        "credential overlay cannot replace a root"
+    );
+    config
+        .servers
+        .get_mut("fixture/mail")
+        .expect("server")
+        .environment
+        .clear();
+    config
+        .servers
+        .get_mut("fixture/mail")
+        .expect("server")
+        .literal_environment
+        .insert("plugin_data".into(), data.display().to_string());
+    assert!(
+        validate(&config).is_err(),
+        "Windows environment names are case insensitive"
+    );
+    config
+        .servers
+        .get_mut("fixture/mail")
+        .expect("server")
+        .literal_environment
+        .remove("plugin_data");
+    config
+        .servers
+        .get_mut("fixture/mail")
+        .expect("server")
+        .literal_environment
+        .insert("PLUGIN_ROOT".into(), data.display().to_string());
+    assert!(
+        validate(&config).is_err(),
+        "command must remain under the trusted root"
+    );
+    let server = config.servers.get_mut("fixture/mail").expect("server");
+    server
+        .literal_environment
+        .insert("PLUGIN_ROOT".into(), root.display().to_string());
+    server.effect_action_prefix = None;
+    assert!(
+        validate(&config).is_err(),
+        "unbound values cannot be accepted"
     );
 }
 
@@ -772,6 +872,7 @@ fn wildcard_releases_new_valid_tools_but_rejects_invalid_discovery_names() {
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
         allow_stateless: false,
+        protocol_version: McpProtocolVersion::V2025,
         oauth: None,
         allowed_tools: ToolAllowlist::All,
         research_tools: Vec::new(),
@@ -822,7 +923,37 @@ fn wildcard_releases_new_valid_tools_but_rejects_invalid_discovery_names() {
         }]
     }))
     .expect("tools");
-    assert!(parse_tools_result(oversized_description, &server).is_err());
+    assert!(parse_tools_result(oversized_description.clone(), &server).is_err());
+    let mut patterned = server;
+    patterned.allowed_tools = ToolAllowlist::from_config("remote", &["valid_*".into()]).unwrap();
+    assert!(parse_tools_result(oversized_description, &patterned).is_err());
+    patterned.allowed_tools = ToolAllowlist::from_config(
+        "remote",
+        &["get_*".into(), "*_search".into(), "echo".into()],
+    )
+    .unwrap();
+    let result = serde_json::from_value(json!({"tools": [
+        {"name": "get_user", "inputSchema": {"type": "object"}},
+        {"name": "get_future_tool", "inputSchema": {"type": "object"}},
+        {"name": "web_search", "inputSchema": {"type": "object"}},
+        {"name": "echo", "inputSchema": {"type": "object"}},
+        {"name": "delete_user", "inputSchema": {"type": "object"}},
+        {"name": "Get_user", "inputSchema": {"type": "object"}}
+    ]}))
+    .unwrap();
+    let page = parse_tools_result(result, &patterned).unwrap();
+    assert_eq!(
+        page.tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["echo", "get_future_tool", "get_user", "web_search"]
+    );
+    assert!(!patterned.allowed_tools.allows("delete_user"));
+    assert_eq!(
+        patterned.allowed_tools.summary(),
+        ["*_search", "echo", "get_*"]
+    );
 }
 
 #[test]
@@ -839,6 +970,7 @@ fn wildcard_and_explicit_discovery_preserve_bounded_risk_review_metadata() {
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
         allow_stateless: false,
+        protocol_version: McpProtocolVersion::V2025,
         oauth: None,
         allowed_tools: ToolAllowlist::All,
         research_tools: Vec::new(),
@@ -850,6 +982,7 @@ fn wildcard_and_explicit_discovery_preserve_bounded_risk_review_metadata() {
     for allowlist in [
         ToolAllowlist::All,
         ToolAllowlist::Explicit(BTreeSet::from(["echo".into()])),
+        ToolAllowlist::from_config("everything", &["ec*".into()]).expect("pattern"),
     ] {
         let mut server = base.clone();
         server.allowed_tools = allowlist;
@@ -1147,6 +1280,7 @@ fn configured_http_server(endpoint: String) -> ConfiguredServer {
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
         allow_stateless: false,
+        protocol_version: McpProtocolVersion::V2025,
         oauth: None,
         allowed_tools: ToolAllowlist::All,
         research_tools: Vec::new(),
@@ -1360,6 +1494,7 @@ async fn streamable_http_call_initialization_failure_has_a_known_outcome() {
             annotations: None,
             arguments: json!({}),
             input_schema: Box::new(json!({"type": "object"})),
+            output_schema: None,
             schema_sha256: "unused-before-dispatch".into(),
         },
         HashMap::new(),
@@ -1416,6 +1551,18 @@ async fn streamable_http_call_failure_after_dispatch_has_an_unknown_outcome() {
                 Some("notifications/initialized") => {
                     write_http_response(&mut stream, "202 Accepted", "", "").await;
                 }
+                Some("tools/list") => {
+                    let body = json!({"jsonrpc":"2.0", "id":message.as_ref().unwrap()["id"],
+                        "result":{"tools":[{"name":"echo", "inputSchema":{"type":"object"}}]}})
+                    .to_string();
+                    write_http_response(
+                        &mut stream,
+                        "200 OK",
+                        "Content-Type: application/json\r\n",
+                        &body,
+                    )
+                    .await;
+                }
                 Some("tools/call") => break,
                 None if first.starts_with("GET ") => {
                     write_http_response(&mut stream, "405 Method Not Allowed", "", "").await;
@@ -1445,6 +1592,7 @@ async fn streamable_http_call_failure_after_dispatch_has_an_unknown_outcome() {
             annotations: None,
             arguments: json!({}),
             input_schema: Box::new(json!({"type": "object"})),
+            output_schema: None,
             schema_sha256: "unused-after-dispatch".into(),
         },
         HashMap::new(),
@@ -1591,6 +1739,7 @@ async fn streamable_http_json_session_discovery_uses_fresh_stateful_transport() 
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
         allow_stateless: false,
+        protocol_version: McpProtocolVersion::V2025,
         oauth: None,
         allowed_tools: ToolAllowlist::All,
         research_tools: Vec::new(),
@@ -1649,6 +1798,7 @@ async fn live_splunk_streamable_http_discovery() {
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
         allow_stateless: true,
+        protocol_version: Default::default(),
         oauth: None,
         allowed_tools: ToolAllowlist::All,
         research_tools: Vec::new(),
@@ -1676,4 +1826,54 @@ async fn live_splunk_streamable_http_discovery() {
     .await
     .expect("Splunk discovery");
     assert!(matches!(result, RemoteOperationResult::Tools(_)));
+}
+
+#[test]
+fn pattern_allowlist_checks_invocations_and_preserves_schema_binding() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut server = remote_server("https://mcp.example.test/rpc");
+    server.allowed_tools = vec!["get_*".into()];
+    let executor = McpExecutor::new(
+        &McpConfig {
+            servers: BTreeMap::from([("remote".into(), server)]),
+            ..McpConfig::default()
+        },
+        workspace.path(),
+        "native",
+        Arc::new(McpEffectShapeExecutor {
+            reference: "unused",
+        }),
+    )
+    .unwrap();
+    let schema = json!({"type": "object", "properties": {"id": {"type": "string"}},
+        "required": ["id"], "additionalProperties": false});
+    let request = |tool: &str, arguments: Value, hash: String| {
+        executor.request(
+            Actor {
+                actor_type: ActorType::System,
+                id: "test".into(),
+            },
+            ExecutionContext::default(),
+            McpOperation::CallTool {
+                server: "remote".into(),
+                tool: tool.into(),
+                description: None,
+                annotations: None,
+                arguments,
+                input_schema: Box::new(schema.clone()),
+                output_schema: None,
+                schema_sha256: hash,
+            },
+        )
+    };
+    let hash = test_schema_sha256(&schema);
+    assert!(request("get_user", json!({"id":"1"}), hash.clone()).is_ok());
+    for denied in ["delete_user", "Get_user", "forget_user"] {
+        assert!(matches!(
+            request(denied, json!({"id":"1"}), hash.clone()),
+            Err(McpError::ToolDenied(_))
+        ));
+    }
+    assert!(request("get_user", json!({"id":1}), hash.clone()).is_err());
+    assert!(request("get_user", json!({"id":"1"}), "0".repeat(64)).is_err());
 }
