@@ -1,0 +1,273 @@
+syntax = "proto3";
+
+package colossus.api.v1alpha1;
+
+option csharp_namespace = "ObscurityLabs.Colossus.Api.V1Alpha1";
+option java_multiple_files = true;
+option java_package = "com.obscuritylabs.colossus.api.v1alpha1";
+
+// AgentCommunicationService is optional and independently scoped from run execution.
+service AgentCommunicationService {
+  // SubmitAgentTaskMessage atomically binds a peer input identity to new or live work.
+  rpc SubmitAgentTaskMessage(SubmitAgentTaskMessageRequest) returns (SubmitAgentTaskMessageResponse);
+  // GetAgentTask returns a curated caller-owned task and bounded released input history.
+  rpc GetAgentTask(GetAgentTaskRequest) returns (GetAgentTaskResponse);
+  // ListAgentTasks orders a complete bounded canonical snapshot by lifecycle update time.
+  rpc ListAgentTasks(ListAgentTasksRequest) returns (ListAgentTasksResponse);
+
+  // ListAgentParticipants discovers exact attempts in one caller-owned collaboration.
+  rpc ListAgentParticipants(ListAgentParticipantsRequest) returns (ListAgentParticipantsResponse);
+  // SendAgentMessage admits text only after the ordinary policy/disclosure boundary.
+  rpc SendAgentMessage(SendAgentMessageRequest) returns (SendAgentMessageResponse);
+  // GetAgentMessage inspects a caller-owned canonical message and receipt.
+  rpc GetAgentMessage(GetAgentMessageRequest) returns (GetAgentMessageResponse);
+  // ListAgentMessages inspects bounded recipient-ordered history including closed attempts.
+  rpc ListAgentMessages(ListAgentMessagesRequest) returns (ListAgentMessagesResponse);
+  // WatchAgentMessages replays an exclusive scope cursor, then tails independent updates.
+  rpc WatchAgentMessages(WatchAgentMessagesRequest) returns (stream WatchAgentMessagesResponse);
+}
+
+// AgentParticipant is an opaque address for one root or delegated attempt.
+message AgentParticipant {
+  // Server-assigned opaque identity.
+  string id = 1;
+  // Caller-owned root execution; the identifier does not grant access.
+  string root_run_id = 2;
+  // Application owner derived from authenticated execution provenance.
+  string owner_application_id = 3;
+  // Canonical conversation for this exact attempt.
+  string session_id = 4;
+  // Exact consuming execution, absent while an attempt is queued.
+  optional string run_id = 5;
+  // Parent participant address, absent for the root.
+  optional string parent_id = 6;
+  // Durable delegated job identity, independent of its execution attempt.
+  optional string subagent_id = 7;
+  // One-based attempt generation; requeue creates a new address.
+  uint64 generation = 8;
+  // Whether this exact attempt accepts new messages.
+  bool open = 9;
+  // Safe categorical closure reason, absent while open.
+  optional string closed_reason = 10;
+  // Number of admitted inputs waiting for a safe provider boundary.
+  uint32 pending_messages = 11;
+  // UTF-8 bytes of admitted input waiting for inclusion.
+  uint32 pending_bytes = 12;
+  // UTC RFC3339 participant admission time.
+  string created_at = 13;
+}
+
+// AgentMessageReceipt distinguishes acceptance from input inclusion and failed delivery.
+message AgentMessageReceipt {
+  // accepted, included_in_turn, or not_delivered; never evidence of model compliance.
+  string state = 1;
+  // Exact consuming execution, absent while an attempt is queued.
+  optional string run_id = 2;
+  // One-based provider turn associated with input inclusion.
+  optional uint32 turn = 3;
+  // SHA-256 of the prepared provider-neutral request.
+  optional string request_hash = 4;
+  // Safe categorical delivery failure without private diagnostics.
+  optional string reason = 5;
+}
+
+// AgentMessage contains only bounded released text and canonical provenance.
+message AgentMessage {
+  // Server-assigned opaque identity.
+  string id = 1;
+  // Caller-owned root execution; the identifier does not grant access.
+  string root_run_id = 2;
+  // Proven sender derived from execution context or authentication.
+  oneof sender {
+    // Exact sending execution address.
+    string sender_participant_id = 3;
+    // Authenticated controlling application identity.
+    string sender_application_id = 4;
+  }
+  // Exact receiving attempt address, never a session alias.
+  string recipient_id = 5;
+  // Committed one-based order in the selected inbox or feed.
+  uint64 sequence = 6;
+  // Released UTF-8 peer input, bounded to 16 KiB.
+  string text = 7;
+  // Optional same-collaboration message reference.
+  optional string reply_to = 8;
+  // UTC RFC3339 durable admission time.
+  string accepted_at = 9;
+  // Canonical acceptance, input inclusion, or terminal failure evidence.
+  AgentMessageReceipt receipt = 10;
+}
+
+// ListAgentParticipantsRequest selects a public root execution without asserting ownership.
+message ListAgentParticipantsRequest {
+  // Caller-owned root execution; the identifier does not grant access.
+  string root_run_id = 1;
+}
+// ListAgentParticipantsResponse is bounded to 128 admitted attempts.
+message ListAgentParticipantsResponse {
+  // At most 128 admitted attempt records, including terminal inboxes.
+  repeated AgentParticipant participants = 1;
+}
+// SendAgentMessageRequest cannot select sender, owner, workspace or execution authority.
+message SendAgentMessageRequest {
+  // Exact receiving attempt address, never a session alias.
+  string recipient_id = 1;
+  // Released UTF-8 peer input, bounded to 16 KiB.
+  string text = 2;
+  // Stable sender-scoped send identity; a changed retry conflicts.
+  string idempotency_key = 3;
+  // Optional same-collaboration message reference.
+  optional string reply_to = 4;
+}
+// SendAgentMessageResponse acknowledges durable admission, never completed agent work.
+message SendAgentMessageResponse {
+  // Admitted message with its exact canonical delivery receipt.
+  AgentMessage message = 1;
+}
+// GetAgentMessageRequest selects one canonical message.
+message GetAgentMessageRequest {
+  // Server-assigned canonical message identity.
+  string message_id = 1;
+}
+// GetAgentMessageResponse includes the latest canonical receipt.
+message GetAgentMessageResponse {
+  // Admitted message with its exact canonical delivery receipt.
+  AgentMessage message = 1;
+}
+// ListAgentMessagesRequest uses an exclusive committed recipient sequence.
+message ListAgentMessagesRequest {
+  // Opaque exact receiving attempt address.
+  string participant_id = 1;
+  // Exclusive committed cursor; zero starts at the beginning.
+  uint64 after_sequence = 2;
+  // Message page ceiling from one through sixteen.
+  uint32 limit = 3;
+}
+// ListAgentMessagesResponse returns at most 16 messages and a continuation cursor.
+message ListAgentMessagesResponse {
+  // Bounded released records in committed recipient order.
+  repeated AgentMessage messages = 1;
+  // Exclusive recipient cursor for the next page.
+  uint64 next_sequence = 2;
+  // Whether more admitted messages exist after this bounded page.
+  bool has_more = 3;
+}
+// WatchAgentMessagesRequest uses the independent scope feed's exclusive cursor.
+message WatchAgentMessagesRequest {
+  // Caller-owned root execution; the identifier does not grant access.
+  string root_run_id = 1;
+  // Exclusive committed cursor; zero starts at the beginning.
+  uint64 after_sequence = 2;
+}
+// WatchAgentMessagesResponse retains the exact committed message/receipt at this cursor.
+message WatchAgentMessagesResponse {
+  // Committed one-based order in the selected inbox or feed.
+  uint64 sequence = 1;
+  // Admitted message with its exact canonical delivery receipt.
+  AgentMessage message = 2;
+}
+
+// SubmitAgentTaskMessageRequest contains text and an operator-selected fixed profile.
+message SubmitAgentTaskMessageRequest {
+  // Stable authenticated-owner-scoped peer input identity.
+  string message_id = 1;
+  // Existing live task, absent for new work.
+  optional string task_id = 2;
+  // Existing caller-owned conversation, absent for new work.
+  optional string context_id = 3;
+  // UTF-8 peer input, bounded to 16 KiB.
+  string text = 4;
+  // Operator-selected role within the original application grant.
+  string role = 5;
+  // Initial turn ceiling; follow-ups never extend it.
+  uint32 max_turns = 6;
+}
+// GetAgentTaskRequest selects one caller-owned curated task.
+message GetAgentTaskRequest {
+  // Fixed public execution identity.
+  string task_id = 1;
+  // Recent released peer inputs from zero through sixteen.
+  uint32 history_length = 2;
+}
+// AgentTaskInput retains a peer message identity with released text.
+message AgentTaskInput {
+  // Original authenticated peer input identity.
+  string message_id = 1;
+  // Fixed public execution.
+  string task_id = 2;
+  // Fixed public conversation.
+  string context_id = 3;
+  // Policy-released peer text.
+  string text = 4;
+  // UTC RFC3339 admission time.
+  string accepted_at = 5;
+  // Canonical inbox message for a follow-up; absent for initial task admission.
+  optional string inbox_message_id = 6;
+}
+// AgentTaskFailure is released categorical failure evidence.
+message AgentTaskFailure {
+  // Stable released failure category.
+  string code = 1;
+  // Safe released detail without private diagnostics.
+  string message = 2;
+  // Whether external work may have occurred despite an uncertain terminal state.
+  bool outcome_unknown = 3;
+}
+// AgentTaskSnapshot excludes private session and tool transcripts.
+message AgentTaskSnapshot {
+  // Fixed public execution identity.
+  string task_id = 1;
+  // Fixed public conversation identity.
+  string context_id = 2;
+  // Canonical lowercase lifecycle state.
+  string status = 3;
+  // UTC RFC3339 last lifecycle update, independent of output/tool activity.
+  string status_updated_at = 4;
+  // Durable public run feed cursor.
+  uint64 last_sequence = 5;
+  // Complete policy-released final output when requested and available.
+  optional string output = 6;
+  // Safe released terminal failure evidence.
+  AgentTaskFailure failure = 7;
+  // Current prompt or approval category; no response authority is granted.
+  optional string waiting_kind = 8;
+  // At most sixteen released peer inputs.
+  repeated AgentTaskInput history = 9;
+}
+// ListAgentTasksRequest binds filters to a stable canonical snapshot cursor.
+message ListAgentTasksRequest {
+  // Optional exact caller-owned public conversation filter.
+  optional string context_id = 1;
+  // Distinct lowercase lifecycle filters; empty includes every state.
+  repeated string statuses = 2;
+  // Inclusive UTC RFC3339 lifecycle-update lower bound.
+  optional string status_updated_after = 3;
+  // Page size from one through twenty.
+  uint32 page_size = 4;
+  // Opaque owner/filter-bound canonical snapshot cursor.
+  optional string page_token = 5;
+  // Include complete released final output in the bounded response.
+  bool include_output = 6;
+  // At most sixteen recent released peer inputs per task.
+  uint32 history_length = 7;
+}
+// ListAgentTasksResponse returns descending lifecycle update order.
+message ListAgentTasksResponse {
+  // Bounded curated task snapshots; final output and history are omitted.
+  repeated AgentTaskSnapshot tasks = 1;
+  // Absent on the final page.
+  optional string next_page_token = 2;
+  // Matching tasks before pagination at the canonical snapshot.
+  uint32 total_size = 3;
+}
+
+// SubmitAgentTaskMessageResponse acknowledges canonical task input admission.
+message SubmitAgentTaskMessageResponse {
+  // Curated caller-owned task after durable admission.
+  AgentTaskSnapshot task = 1;
+}
+// GetAgentTaskResponse returns a curated caller-owned task.
+message GetAgentTaskResponse {
+  // Current canonical task projection.
+  AgentTaskSnapshot task = 1;
+}

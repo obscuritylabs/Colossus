@@ -547,6 +547,61 @@ struct WindowsAgentRuns {
 
 #[async_trait]
 impl AgentRunClient for WindowsAgentRuns {
+    async fn submit_agent_task_message(
+        &self,
+        request: crate::SubmitAgentTaskMessageRequest,
+    ) -> ApiResult<crate::AgentTaskSnapshot> {
+        self.transports
+            .primary
+            .submit_agent_task_message(request)
+            .await
+    }
+    async fn get_agent_task(
+        &self,
+        request: crate::GetAgentTaskRequest,
+    ) -> ApiResult<crate::AgentTaskSnapshot> {
+        self.transports.primary.get_agent_task(request).await
+    }
+    async fn list_agent_tasks(
+        &self,
+        request: crate::ListAgentTasksRequest,
+    ) -> ApiResult<crate::ListAgentTasksResponse> {
+        self.transports.primary.list_agent_tasks(request).await
+    }
+    async fn list_agent_participants(
+        &self,
+        request: crate::ListAgentParticipantsRequest,
+    ) -> ApiResult<Vec<crate::AgentParticipant>> {
+        self.transports
+            .primary
+            .list_agent_participants(request)
+            .await
+    }
+    async fn send_agent_message(
+        &self,
+        request: crate::SendAgentMessage,
+    ) -> ApiResult<crate::AgentMessage> {
+        self.transports.primary.send_agent_message(request).await
+    }
+    async fn get_agent_message(
+        &self,
+        request: crate::GetAgentMessageRequest,
+    ) -> ApiResult<crate::AgentMessage> {
+        self.transports.primary.get_agent_message(request).await
+    }
+    async fn list_agent_messages(
+        &self,
+        request: crate::ListAgentMessagesRequest,
+    ) -> ApiResult<crate::AgentMessagePage> {
+        self.transports.primary.list_agent_messages(request).await
+    }
+    async fn watch_agent_messages(
+        &self,
+        request: crate::WatchAgentMessagesRequest,
+    ) -> ApiResult<crate::AgentCommunicationStream> {
+        self.transports.primary.watch_agent_messages(request).await
+    }
+
     async fn get_runtime_policy_posture(&self) -> ApiResult<crate::RuntimePolicyPosture> {
         self.transports.primary.get_runtime_policy_posture().await
     }

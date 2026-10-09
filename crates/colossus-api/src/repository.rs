@@ -181,6 +181,16 @@ pub trait RunRepository: Send + Sync {
     /// Reconstruct one current run.
     fn get_run(&self, caller: &CallerContext, run_id: &str) -> ApiResult<Option<Run>>;
 
+    /// Reconstruct a caller-owned task at an immutable journal head, with its last lifecycle time.
+    fn task_snapshot(
+        &self,
+        _caller: &CallerContext,
+        _run_id: &str,
+        _head: u64,
+    ) -> ApiResult<Option<(Run, String)>> {
+        Err(crate::agent_communication_unavailable())
+    }
+
     /// Recover the encrypted accepted execution request for one caller-owned run.
     fn execution_request(
         &self,
@@ -1190,7 +1200,7 @@ impl RunRepository for EventSourcedRunRepository {
                     ));
                 }
             };
-            let append = self.journal.append_batch(vec![
+            let mut allocation = vec![
                 NewEvent {
                     event_version: 1,
                     stream_id: idempotency_stream.clone(),
@@ -1231,7 +1241,9 @@ impl RunRepository for EventSourcedRunRepository {
                     context: context.clone(),
                     payload: thread_payload.clone(),
                 },
-            ]);
+            ];
+            allocation.extend_from_slice(new_run.transaction_events());
+            let append = self.journal.append_batch(allocation);
             let envelopes = match append {
                 Ok(envelopes) => envelopes,
                 Err(StoreError::Conflict { stream_id, .. }) if stream_id == idempotency_stream => {
@@ -1267,7 +1279,7 @@ impl RunRepository for EventSourcedRunRepository {
                     "atomic run creation did not return its durable thread membership",
                 )
             })?;
-            if envelopes.len() != 4
+            if envelopes.len() != 4 + new_run.transaction_events().len()
                 || index_envelope.stream_id != index_stream
                 || index_envelope.stream_version != expected_index_version.saturating_add(1)
                 || thread_envelope.stream_id != thread_stream
@@ -1296,6 +1308,46 @@ impl RunRepository for EventSourcedRunRepository {
         token(run_id, "run_id", MAX_IDENTIFIER_BYTES)
             .map_err(|error| error.with_correlation_id(caller.request_id().clone()))?;
         self.load(caller, run_id)
+    }
+
+    fn task_snapshot(
+        &self,
+        caller: &CallerContext,
+        run_id: &str,
+        head: u64,
+    ) -> ApiResult<Option<(Run, String)>> {
+        caller.require_scope(scopes::RUNS_READ)?;
+        token(run_id, "run_id", MAX_IDENTIFIER_BYTES)?;
+        let events = self
+            .journal
+            .read_stream_from(&Self::run_stream(run_id), 0, MAX_RUN_STREAM_EVENTS + 1)
+            .map_err(|error| ApiError::from_store(&error, caller.request_id()))?;
+        if events.len() > MAX_RUN_STREAM_EVENTS {
+            return Err(invariant(caller, "task stream exceeds its durable bound"));
+        }
+        let events = events
+            .into_iter()
+            .filter(|event| event.global_sequence <= head)
+            .collect::<Vec<_>>();
+        if events.is_empty() || !visible_to(caller, &events)? {
+            return Ok(None);
+        }
+        let run = reconstruct(self.journal.as_ref(), caller, run_id, &events)?;
+        let mut status_at = run.created_at.clone();
+        for event in events.iter().skip(1) {
+            let stored = decode_stored_update(self.journal.as_ref(), caller, event)?;
+            if matches!(
+                stored.kind,
+                RunUpdateKind::State { .. }
+                    | RunUpdateKind::Interaction { .. }
+                    | RunUpdateKind::Result { .. }
+                    | RunUpdateKind::Failure { .. }
+                    | RunUpdateKind::Cancellation { .. }
+            ) {
+                status_at.clone_from(&event.occurred_at);
+            }
+        }
+        Ok(Some((run, status_at)))
     }
 
     fn execution_request(

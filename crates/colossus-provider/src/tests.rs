@@ -75,6 +75,7 @@ fn model_request_with_tools(names: &[&str]) -> ModelRequest {
     ModelRequest {
         instructions: "test".into(),
         messages: vec![ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::User,
             content: "use a tool".into(),
             tool_call_id: None,
@@ -114,6 +115,7 @@ fn multipart_model_request() -> (ModelRequest, ModelImageReference, ProviderReso
     let request = ModelRequest {
         instructions: "inspect the supplied image".into(),
         messages: vec![ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::User,
             content: ModelContent::Parts(vec![
                 ModelContentPart::Text {
@@ -564,6 +566,7 @@ fn model_request() -> ModelRequest {
     ModelRequest {
         instructions: "Be exact.".into(),
         messages: vec![ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::User,
             content: "hello".into(),
             tool_call_id: None,
@@ -1249,6 +1252,7 @@ fn provider_tool_names_alias_dots_and_reject_ambiguous_or_nonportable_names() {
     let mut mode_transition = model_request_with_tools(&["filesystem.write"]);
     mode_transition.messages = vec![
         ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Assistant,
             content: String::new().into(),
             tool_call_id: None,
@@ -1259,6 +1263,7 @@ fn provider_tool_names_alias_dots_and_reject_ambiguous_or_nonportable_names() {
             }],
         },
         ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Tool,
             content: "not available in the previous run mode".into(),
             tool_call_id: Some("restricted-call".into()),
@@ -1282,6 +1287,7 @@ fn provider_tool_names_alias_dots_and_reject_ambiguous_or_nonportable_names() {
 
     let mut ambiguous_history = model_request_with_tools(&[]);
     ambiguous_history.messages = vec![ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::Assistant,
         content: String::new().into(),
         tool_call_id: None,
@@ -1377,6 +1383,7 @@ fn continuation_payloads_preserve_assistant_call_and_tool_result_ids() {
         instructions: "test".into(),
         messages: vec![
             ModelMessage {
+                agent_message_origin: None,
                 role: ModelMessageRole::Assistant,
                 content: String::new().into(),
                 tool_call_id: None,
@@ -1387,6 +1394,7 @@ fn continuation_payloads_preserve_assistant_call_and_tool_result_ids() {
                 }],
             },
             ModelMessage {
+                agent_message_origin: None,
                 role: ModelMessageRole::Tool,
                 content: "result".into(),
                 tool_call_id: Some("call-1".into()),
@@ -1488,6 +1496,7 @@ fn provider_payloads_reject_dangling_tool_calls_before_dispatch() {
     let request = ModelRequest {
         instructions: "test".into(),
         messages: vec![ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Assistant,
             content: String::new().into(),
             tool_call_id: None,
@@ -1769,6 +1778,7 @@ fn openai_tool_projection_is_compatible_without_mutating_the_canonical_schema() 
     let request = ModelRequest {
         instructions: "test".into(),
         messages: vec![ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::User,
             content: "inspect".into(),
             tool_call_id: None,
@@ -1861,6 +1871,7 @@ fn representative_builtin_schemas_project_to_openai_compatible_roots() {
         let request = ModelRequest {
             instructions: "test".into(),
             messages: vec![ModelMessage {
+                agent_message_origin: None,
                 role: ModelMessageRole::User,
                 content: "use the tool".into(),
                 tool_call_id: None,

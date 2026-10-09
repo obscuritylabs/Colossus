@@ -26,6 +26,7 @@ and output bounds.
 | Plans | `plan.create`, `plan.update`, `plan.show`, `plan.approve_request` | Session-scoped, revision-aware lifecycle; the update target is bound by the runtime |
 | Goals | `goal.show`, `goal.update` | Active goal lineage only |
 | Subagents | `agent.delegate`, `agent.result`, `agent.list` | Durable child jobs; recursive delegation denied |
+| Agent messages | `agent.participants`, `agent.send_message`, `agent.inbox`, `agent.await_message` | Journal-backed exact attempts; parent/child edges, bounded peer text and waits, ordinary policy/disclosure release |
 | Memories | `memory.create`, `memory.update`, `memory.list`, `memory.search`, `memory.archive`, `memory.supersede` | Canonical lifecycle; retrieval post-gated |
 | Context | `context.show`, `context.compact`, `context.snapshots`, `context.restore` | Encrypted immutable snapshots |
 | Plugins | `plugin.list`, `plugin.inspect`, `plugin.skill.read`, `plugin.resource.list`, `plugin.resource.read` | Bounded metadata, selected Agent Skill instructions, and contained resources from the run snapshot |
@@ -225,6 +226,8 @@ exceptions operators need when writing action overrides:
 | `agent.delegate` | `subagent.create` |
 | `agent.result` | `subagent.read` |
 | `agent.list` | `subagent.list` |
+| `agent.participants`, `agent.inbox`, `agent.await_message` | `agent.message.read` |
+| `agent.send_message` | `agent.message.send` |
 | `web.fetch`, `docs.fetch`, `network.http` | `network.http` |
 | `mcp.search`, `mcp.tools` | `mcp.tools` |
 | `mcp.call` | `mcp.call` |

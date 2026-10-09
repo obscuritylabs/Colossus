@@ -1,0 +1,34 @@
+[package]
+name = "colossus-a2a-server"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Authenticated A2A application edge over the public Colossus SDK"
+
+[dependencies]
+axum.workspace = true
+colossus-sdk = { workspace = true, features = ["serialization"] }
+futures.workspace = true
+hex.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+time.workspace = true
+url.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true, features = ["fs", "user"] }
+
+[dev-dependencies]
+async-trait.workspace = true
+tower.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -19,7 +19,8 @@
     "./data-table": "./src/components/DataTable.tsx",
     "./conversation": "./src/conversation.ts",
     "./charts": "./src/charts.ts",
-    "./automations": "./src/automations.ts"
+    "./automations": "./src/automations.ts",
+    "./agent-inbox": "./src/agent-inbox.tsx"
   },
   "peerDependencies": {
     "react": "19.2.7",

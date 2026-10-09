@@ -88,6 +88,7 @@ pub struct SystemServiceAdapter {
     plugin_discovery: bool,
     workflows: bool,
     policy_posture: bool,
+    agent_communication: bool,
 }
 
 impl SystemServiceAdapter {
@@ -100,6 +101,7 @@ impl SystemServiceAdapter {
             plugin_discovery: false,
             workflows: false,
             policy_posture: false,
+            agent_communication: false,
         }
     }
 
@@ -121,6 +123,10 @@ impl SystemServiceAdapter {
         self.policy_posture = true;
         self
     }
+    pub(crate) fn with_agent_communication(mut self) -> Self {
+        self.agent_communication = true;
+        self
+    }
 }
 
 #[tonic::async_trait]
@@ -133,6 +139,14 @@ impl SystemService for SystemServiceAdapter {
         let capabilities = [
             ("agent_runs.create", scopes::RUNS_EXECUTE),
             ("agent_runs.read", scopes::RUNS_READ),
+            (
+                colossus_api::AGENT_COMMUNICATION_READ_CAPABILITY,
+                scopes::AGENT_MESSAGES_READ,
+            ),
+            (
+                colossus_api::AGENT_COMMUNICATION_SEND_CAPABILITY,
+                scopes::AGENT_MESSAGES_SEND,
+            ),
             ("runtime.policy_posture.v1", scopes::RUNS_READ),
             (SESSION_ACTIVITY_CAPABILITY, scopes::RUNS_READ),
             ("process_sessions.v1", scopes::RUNS_READ),
@@ -146,7 +160,14 @@ impl SystemService for SystemServiceAdapter {
         .map(|(name, scope)| Capability {
             name: name.into(),
             enabled: caller.principal().has_scope(scope)
-                && (name != "runtime.policy_posture.v1" || self.policy_posture),
+                && (name != "runtime.policy_posture.v1" || self.policy_posture)
+                && (!matches!(
+                    name,
+                    colossus_api::AGENT_COMMUNICATION_READ_CAPABILITY
+                        | colossus_api::AGENT_COMMUNICATION_SEND_CAPABILITY
+                ) || self.agent_communication)
+                && (name != colossus_api::AGENT_COMMUNICATION_READ_CAPABILITY
+                    || caller.principal().has_scope(scopes::RUNS_READ)),
             detail: String::new(),
         })
         .chain(

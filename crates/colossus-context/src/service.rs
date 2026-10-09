@@ -246,6 +246,7 @@ impl ContextService {
             content.push_str(&item);
         }
         Ok(Some(ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::System,
             content: content.into(),
             tool_call_id: None,
@@ -266,7 +267,7 @@ impl ContextService {
         let query = messages
             .iter()
             .rev()
-            .find(|message| message.role == ModelMessageRole::User)
+            .find(|message| message.begins_user_turn())
             .map(|message| message.content.plain_text())
             .unwrap_or_default();
         if !query.trim().is_empty()
@@ -320,6 +321,7 @@ fn bounded_summary_request(
     let request_for = |history: &str| ModelRequest {
         instructions: SUMMARY_INSTRUCTIONS.into(),
         messages: vec![ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::User,
             content: format!("{PREFIX}{history}").into(),
             tool_call_id: None,
@@ -513,7 +515,7 @@ impl ContextPreparer for ContextService {
         let preserve = self.config.preserve_recent_messages.min(messages.len());
         let mut source_end = messages.len().saturating_sub(preserve);
         if preserve > 0 {
-            while source_end > 0 && messages[source_end].role != ModelMessageRole::User {
+            while source_end > 0 && !messages[source_end].begins_user_turn() {
                 source_end = source_end.saturating_sub(1);
             }
         }

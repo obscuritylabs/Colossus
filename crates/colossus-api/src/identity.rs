@@ -13,6 +13,10 @@ const MAX_AUTHORIZATION_ITEMS: usize = 512;
 
 /// Exact public API scope names.
 pub mod scopes {
+    /// Inspect caller-owned participants, inboxes and delivery receipts.
+    pub const AGENT_MESSAGES_READ: &str = "agent_messages:read";
+    /// Send peer input to caller-owned execution attempts.
+    pub const AGENT_MESSAGES_SEND: &str = "agent_messages:send";
     /// Read canonical workflow definitions and schemas.
     pub const WORKFLOWS_READ: &str = "workflows:read";
     /// Import an existing reviewed versioned workflow definition.

@@ -99,6 +99,7 @@ fn explicit_workspace_sharing_preserves_source_and_recipient_authority() {
                 "sharing-session-0",
                 "sharing-run-0",
                 colossus_contracts::ModelMessage {
+                    agent_message_origin: None,
                     role,
                     content: ModelContent::from(text),
                     tool_call_id,

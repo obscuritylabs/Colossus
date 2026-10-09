@@ -8,6 +8,7 @@
 
 mod backend;
 mod client;
+mod communication;
 mod config;
 #[cfg(feature = "daemon")]
 mod daemon;
@@ -56,6 +57,15 @@ pub use workflows::*;
 pub use backend::ContextBoundAgentRunClient;
 pub use backend::{AgentRunClient, ArtifactClient, Backend, BackendKind};
 pub use client::Colossus;
+pub use colossus_api::{
+    AGENT_COMMUNICATION_READ_CAPABILITY, AGENT_COMMUNICATION_SEND_CAPABILITY,
+    AgentCommunicationStream, AgentCommunicationUpdate, AgentMessage, AgentMessageFailure,
+    AgentMessagePage, AgentMessageReceipt, AgentMessageSender, AgentParticipant, AgentTaskFailure,
+    AgentTaskInput, AgentTaskSnapshot, GetAgentMessageRequest, GetAgentTaskRequest,
+    ListAgentMessagesRequest, ListAgentParticipantsRequest, ListAgentTasksRequest,
+    ListAgentTasksResponse, RunStatus as AgentTaskStatus, SendAgentMessage,
+    SubmitAgentTaskMessageRequest, WatchAgentMessagesRequest,
+};
 pub use colossus_api::{
     ApiError, ApiErrorCode, ApiErrorReason, ApiResult, ApiScope, FieldViolation, IdempotencyKey,
     PLAN_CONTINUATION_CAPABILITY, PolicyApprovalMode, PolicyFinding, PolicyFindingSeverity,

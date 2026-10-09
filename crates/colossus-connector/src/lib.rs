@@ -8,6 +8,7 @@ mod cli_control;
 mod discovery;
 mod headless;
 mod history;
+mod inboxes;
 mod inventory;
 mod outbound;
 mod released;

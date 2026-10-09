@@ -370,6 +370,7 @@ pub(crate) struct DesktopCapabilitiesDto {
     pub(crate) artifacts: bool,
     pub(crate) plan_continuation: bool,
     pub(crate) session_activity: bool,
+    pub(crate) agent_inboxes: bool,
     pub(crate) update_available: bool,
     pub(crate) agent_workflows: bool,
     pub(crate) attachments: bool,

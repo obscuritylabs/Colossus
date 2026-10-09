@@ -78,6 +78,8 @@ impl AgentService {
         if let Some(subagent_id) = scope.subagent_id {
             span.record("colossus.subagent.id", subagent_id);
         }
+        let default_control = RunControl::default();
+        let control = Some(control.unwrap_or(&default_control));
         let owned_run_id = scope
             .requested_run_id
             .map(str::to_owned)
@@ -87,6 +89,7 @@ impl AgentService {
         let guard = RunOwnershipGuard {
             owns_run: &owns_run,
             lifecycle: self.lifecycle.as_deref(),
+            inbox: self.inbox.as_deref(),
             run_id: &owned_run_id,
         };
         let result = self
@@ -104,6 +107,21 @@ impl AgentService {
             )
             .instrument(span)
             .await;
+        if owns_run.load(Ordering::Acquire)
+            && let Some(inbox) = &self.inbox
+        {
+            let reason = match &result {
+                Ok(_) => colossus_contracts::AgentMessageFailure::Completed,
+                Err(AgentError::Cancelled { .. }) => {
+                    colossus_contracts::AgentMessageFailure::Cancelled
+                }
+                Err(AgentError::MaxTurns { .. }) => {
+                    colossus_contracts::AgentMessageFailure::BudgetExhausted
+                }
+                Err(_) => colossus_contracts::AgentMessageFailure::Failed,
+            };
+            inbox.close_run(&owned_run_id, reason)?;
+        }
         if owns_run.load(Ordering::Acquire)
             && let Some(lifecycle) = &self.lifecycle
         {
@@ -134,6 +152,7 @@ impl AgentService {
             )));
         }
         validate_model_message_content(&ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::User,
             content: prompt.clone(),
             tool_call_id: None,
@@ -258,6 +277,10 @@ impl AgentService {
             lifecycle.begin_run(&context, &initiator, control.cloned().unwrap_or_default())?;
             owns_run.store(true, Ordering::Release);
         }
+        if let Some(inbox) = &self.inbox {
+            inbox.begin_run(&context, &initiator, control.cloned().unwrap_or_default())?;
+            owns_run.store(true, Ordering::Release);
+        }
         if let Some(pending) = self.sessions.pending_tool_turn(&session_id)? {
             return Err(AgentError::SessionIntegrity {
                 session_id: session_id.clone(),
@@ -292,12 +315,39 @@ impl AgentService {
                 route.model_profile
             )));
         }
-        let user_message = ModelMessage {
+        let mut user_message = ModelMessage {
+            agent_message_origin: self
+                .inbox
+                .as_ref()
+                .map(|inbox| inbox.initial_origin(&context))
+                .transpose()?
+                .flatten(),
             role: ModelMessageRole::User,
             content: prompt.clone(),
             tool_call_id: None,
             tool_calls: Vec::new(),
         };
+        if let Some(origin) = &user_message.agent_message_origin {
+            let sender = match &origin.sender {
+                colossus_contracts::AgentMessageSender::Participant { participant_id } => {
+                    participant_id
+                }
+                colossus_contracts::AgentMessageSender::Application { application_id } => {
+                    application_id
+                }
+            };
+            let prefix = format!(
+                "[Peer task input; message {}; sender {}; recipient {}]\n",
+                origin.message_id, sender, origin.recipient_id
+            );
+            match &mut user_message.content {
+                ModelContent::Text(text) => text.insert_str(0, &prefix),
+                ModelContent::Parts(parts) => parts.insert(
+                    0,
+                    colossus_contracts::ModelContentPart::Text { text: prefix },
+                ),
+            }
+        }
         self.sessions.append_message(
             &session_id,
             &run_id,
@@ -426,132 +476,170 @@ impl AgentService {
                 )
                 .await?;
             }
-            let mut continuation_plan =
-                if scope.agent_options == colossus_contracts::WorkflowAgentOptions::default() {
-                    self.provider.continuation_plan(
-                        role,
-                        &ModelRequest {
+            let mut preparation_attempts = 0;
+            let (request, continuation_plan) = loop {
+                preparation_attempts += 1;
+                if preparation_attempts > 8 {
+                    return Err(StoreError::Adapter(
+                        "agent input preparation remained contended".into(),
+                    )
+                    .into());
+                }
+                let previous_message_count = messages.len();
+                let inbox_batch = self
+                    .inbox
+                    .as_ref()
+                    .map(|inbox| inbox.prepare(&context))
+                    .transpose()?
+                    .flatten();
+                if let Some(batch) = &inbox_batch {
+                    messages.extend(colossus_ports::agent_input_messages(batch));
+                }
+                let mut continuation_plan =
+                    if scope.agent_options == colossus_contracts::WorkflowAgentOptions::default() {
+                        self.provider.continuation_plan(
+                            role,
+                            &ModelRequest {
+                                instructions: instructions.clone(),
+                                messages: messages.clone(),
+                                tools: turn_definitions.clone(),
+                                max_output_tokens: None,
+                            },
+                            &context,
+                        )?
+                    } else {
+                        None
+                    };
+                let prepared = if let Some(preparer) = &self.context_preparer {
+                    let prepared = preparer
+                        .prepare(ContextPreparationRequest {
+                            continuation: continuation_plan
+                                .as_ref()
+                                .and_then(|plan| plan.selected.clone()),
+                            session_id: session_id.clone(),
                             instructions: instructions.clone(),
                             messages: messages.clone(),
                             tools: turn_definitions.clone(),
-                            max_output_tokens: None,
-                        },
-                        &context,
-                    )?
-                } else {
-                    None
-                };
-            let prepared = if let Some(preparer) = &self.context_preparer {
-                let prepared = preparer
-                    .prepare(ContextPreparationRequest {
-                        continuation: continuation_plan
-                            .as_ref()
-                            .and_then(|plan| plan.selected.clone()),
-                        session_id: session_id.clone(),
-                        instructions: instructions.clone(),
-                        messages: messages.clone(),
-                        tools: turn_definitions.clone(),
-                        route: route.clone(),
-                        context: context.clone(),
-                        force: false,
-                    })
-                    .await;
-                let prepared = match prepared {
-                    Ok(prepared) => prepared,
-                    Err(error) => {
-                        if let ContextError::BudgetExceeded(budget) = &error {
-                            self.append(
-                                &stream_id,
-                                &mut stream_version,
-                                "error.v1",
-                                system_actor(),
-                                &context,
-                                json!({
-                                    "code": budget.code(),
-                                    "message": budget.to_string(),
-                                    "required": budget.required,
-                                    "limit": budget.limit,
-                                    "resource": budget.resource.to_string(),
-                                    "scope": budget.scope.to_string(),
-                                    "recoverable": false,
-                                }),
-                            )?;
-                            emit_run_event(
-                                &mut released_observer,
-                                &run_id,
-                                &session_id,
-                                RunEvent::Error {
-                                    code: budget.code().into(),
-                                    message: budget.to_string(),
-                                    recoverable: false,
-                                    http_status: None,
-                                    retry_after_ms: None,
-                                    turn: Some(turn),
-                                    elapsed_seconds: started.elapsed().as_secs_f64(),
-                                },
-                            )
-                            .await?;
+                            route: route.clone(),
+                            context: context.clone(),
+                            force: false,
+                        })
+                        .await;
+                    let prepared = match prepared {
+                        Ok(prepared) => prepared,
+                        Err(error) => {
+                            if let ContextError::BudgetExceeded(budget) = &error {
+                                self.append(
+                                    &stream_id,
+                                    &mut stream_version,
+                                    "error.v1",
+                                    system_actor(),
+                                    &context,
+                                    json!({
+                                        "code": budget.code(),
+                                        "message": budget.to_string(),
+                                        "required": budget.required,
+                                        "limit": budget.limit,
+                                        "resource": budget.resource.to_string(),
+                                        "scope": budget.scope.to_string(),
+                                        "recoverable": false,
+                                    }),
+                                )?;
+                                emit_run_event(
+                                    &mut released_observer,
+                                    &run_id,
+                                    &session_id,
+                                    RunEvent::Error {
+                                        code: budget.code().into(),
+                                        message: budget.to_string(),
+                                        recoverable: false,
+                                        http_status: None,
+                                        retry_after_ms: None,
+                                        turn: Some(turn),
+                                        elapsed_seconds: started.elapsed().as_secs_f64(),
+                                    },
+                                )
+                                .await?;
+                            }
+                            return Err(error.into());
                         }
-                        return Err(error.into());
-                    }
-                };
-                self.append(
-                    &stream_id,
-                    &mut stream_version,
-                    "context.prepared.v1",
-                    system_actor(),
-                    &context,
-                    json!({
-                        "turn": turn,
-                        "original_token_estimate": prepared.original_token_estimate,
-                        "token_estimate": prepared.token_estimate,
-                        "context_window_tokens": prepared.context_window_tokens,
-                        "model_profile": prepared.model_profile,
-                        "max_output_tokens": prepared.max_output_tokens,
-                        "safety_margin_tokens": prepared.safety_margin_tokens,
-                        "input_budget_tokens": prepared.input_budget_tokens,
-                        "threshold_tokens": prepared.threshold_tokens,
-                        "target_tokens": prepared.target_tokens,
-                        "snapshot_id": prepared.snapshot_id,
-                        "compacted": prepared.compacted,
-                        "snapshot_created": prepared.snapshot_created,
-                        "strategy": prepared.strategy,
-                        "message_count": prepared.messages.len(),
-                    }),
-                )?;
-                if let Some(plan) = &mut continuation_plan {
-                    plan.context_binding_hash = prepared.context_binding_hash;
-                    if prepared.continuation_id.is_none() {
-                        plan.selected = None;
-                    }
-                }
-                prepared.messages
-            } else {
-                if let Some(plan) = &mut continuation_plan {
-                    plan.selected = None;
-                }
-                messages.clone()
-            };
-            if control.is_some_and(RunControl::is_cancelled) {
-                return self
-                    .finish_cancelled_run(
+                    };
+                    self.append(
                         &stream_id,
                         &mut stream_version,
+                        "context.prepared.v1",
+                        system_actor(),
                         &context,
-                        &mut released_observer,
-                        &run_id,
-                        &session_id,
-                        turn,
-                        written_plan.as_ref(),
-                        &started,
-                    )
-                    .await;
-            }
-            let request = ModelRequest {
-                instructions: instructions.clone(),
-                messages: prepared,
-                tools: turn_definitions.clone(),
-                max_output_tokens: None,
+                        json!({
+                            "turn": turn,
+                            "original_token_estimate": prepared.original_token_estimate,
+                            "token_estimate": prepared.token_estimate,
+                            "context_window_tokens": prepared.context_window_tokens,
+                            "model_profile": prepared.model_profile,
+                            "max_output_tokens": prepared.max_output_tokens,
+                            "safety_margin_tokens": prepared.safety_margin_tokens,
+                            "input_budget_tokens": prepared.input_budget_tokens,
+                            "threshold_tokens": prepared.threshold_tokens,
+                            "target_tokens": prepared.target_tokens,
+                            "snapshot_id": prepared.snapshot_id,
+                            "compacted": prepared.compacted,
+                            "snapshot_created": prepared.snapshot_created,
+                            "strategy": prepared.strategy,
+                            "message_count": prepared.messages.len(),
+                        }),
+                    )?;
+                    if let Some(plan) = &mut continuation_plan {
+                        plan.context_binding_hash = prepared.context_binding_hash;
+                        if prepared.continuation_id.is_none() {
+                            plan.selected = None;
+                        }
+                    }
+                    prepared.messages
+                } else {
+                    if let Some(plan) = &mut continuation_plan {
+                        plan.selected = None;
+                    }
+                    messages.clone()
+                };
+                if control.is_some_and(RunControl::is_cancelled) {
+                    return self
+                        .finish_cancelled_run(
+                            &stream_id,
+                            &mut stream_version,
+                            &context,
+                            &mut released_observer,
+                            &run_id,
+                            &session_id,
+                            turn,
+                            written_plan.as_ref(),
+                            &started,
+                        )
+                        .await;
+                }
+                let request = ModelRequest {
+                    instructions: instructions.clone(),
+                    messages: prepared,
+                    tools: turn_definitions.clone(),
+                    max_output_tokens: None,
+                };
+                if let Some(batch) = &inbox_batch
+                    && let Some(inbox) = &self.inbox
+                {
+                    use sha2::Digest as _;
+                    let request_hash =
+                        hex::encode(sha2::Sha256::digest(serde_json::to_vec(&request).map_err(
+                            |_| StoreError::Adapter("prepared agent input encoding failed".into()),
+                        )?));
+                    match inbox.include(batch, &context, turn, &request_hash) {
+                        Ok(()) => {}
+                        Err(StoreError::Conflict { .. }) => {
+                            messages.truncate(previous_message_count);
+                            continue;
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+                break (request, continuation_plan);
             };
             self.append(
                 &stream_id,
@@ -779,6 +867,7 @@ impl AgentService {
                         });
                     }
                     messages.push(ModelMessage {
+                        agent_message_origin: None,
                         role: ModelMessageRole::User,
                         content: recovery_prompt(recovery_attempts, &turn_definitions).into(),
                         tool_call_id: None,
@@ -911,6 +1000,7 @@ impl AgentService {
                             return Err(AgentError::PlanWriteRequired);
                         }
                         let assistant_message = ModelMessage {
+                            agent_message_origin: None,
                             role: ModelMessageRole::Assistant,
                             content: output.into(),
                             tool_call_id: None,
@@ -927,6 +1017,7 @@ impl AgentService {
                         )?;
                         messages.push(assistant_message);
                         let correction = ModelMessage {
+            agent_message_origin: None,
                             role: ModelMessageRole::System,
                             content: format!(
                                 "{message}. Call the required tool now; do not provide final output first."
@@ -939,10 +1030,42 @@ impl AgentService {
                         plan_write_recovery_attempted = true;
                         continue;
                     }
+                    let has_pending_input = if let Some(inbox) = &self.inbox {
+                        !inbox.try_complete(&context)?
+                    } else {
+                        false
+                    };
+                    if has_pending_input && turn < max_turns {
+                        let intermediate = ModelMessage {
+                            agent_message_origin: None,
+                            role: ModelMessageRole::Assistant,
+                            content: output.clone().into(),
+                            tool_call_id: None,
+                            tool_calls: Vec::new(),
+                        };
+                        self.sessions.append_message(
+                            &session_id,
+                            &run_id,
+                            intermediate.clone(),
+                            Actor {
+                                actor_type: ActorType::Model,
+                                id: route.model_profile.clone(),
+                            },
+                        )?;
+                        messages.push(intermediate);
+                        continue;
+                    }
+                    if has_pending_input && let Some(inbox) = &self.inbox {
+                        inbox.close_run(
+                            &run_id,
+                            colossus_contracts::AgentMessageFailure::BudgetExhausted,
+                        )?;
+                    }
                     self.sessions.append_message(
                         &session_id,
                         &run_id,
                         ModelMessage {
+                            agent_message_origin: None,
                             role: ModelMessageRole::Assistant,
                             content: output.clone().into(),
                             tool_call_id: None,
@@ -1025,6 +1148,7 @@ impl AgentService {
             }
 
             let assistant_message = ModelMessage {
+                agent_message_origin: None,
                 role: ModelMessageRole::Assistant,
                 content: visible_text.into(),
                 tool_call_id: None,
@@ -1800,10 +1924,19 @@ async fn emit_run_event(
 struct RunOwnershipGuard<'a> {
     owns_run: &'a AtomicBool,
     lifecycle: Option<&'a dyn colossus_ports::AgentRunLifecycle>,
+    inbox: Option<&'a dyn colossus_ports::AgentInbox>,
     run_id: &'a str,
 }
 impl Drop for RunOwnershipGuard<'_> {
     fn drop(&mut self) {
+        if self.owns_run.load(Ordering::Acquire)
+            && let Some(inbox) = self.inbox
+        {
+            let _ = inbox.close_run(
+                self.run_id,
+                colossus_contracts::AgentMessageFailure::Cancelled,
+            );
+        }
         if self.owns_run.load(Ordering::Acquire)
             && let Some(lifecycle) = self.lifecycle
         {

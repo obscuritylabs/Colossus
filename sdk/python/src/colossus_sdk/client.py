@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from types import ModuleType
 from typing import Any
 
+from .communication import AgentCommunication
 from .credential import StaticBearerCredential
 from .endpoint import EndpointDescriptor, assert_pinned_leaf_certificate
 from .posture import RuntimePolicyPosture, decode_runtime_policy_posture
@@ -153,6 +154,7 @@ class ColossusClient:
     __slots__ = (
         "_channel",
         "agent_runs",
+        "agent_communication",
         "artifacts",
         "automations",
         "distribution",
@@ -167,6 +169,8 @@ class ColossusClient:
     def __init__(self, channel: Any) -> None:
         agent_pb2 = importlib.import_module("colossus.api.v1alpha1.agent_run_pb2")
         agent_grpc = importlib.import_module("colossus.api.v1alpha1.agent_run_pb2_grpc")
+        communication_pb2 = importlib.import_module("colossus.api.v1alpha1.communication_pb2")
+        communication_grpc = importlib.import_module("colossus.api.v1alpha1.communication_pb2_grpc")
         artifact_grpc = importlib.import_module("colossus.api.v1alpha1.artifact_pb2_grpc")
         product_grpc = importlib.import_module("colossus.api.v1alpha1.product_pb2_grpc")
         session_grpc = importlib.import_module("colossus.api.v1alpha1.session_pb2_grpc")
@@ -176,6 +180,9 @@ class ColossusClient:
         self.agent_runs = AgentRuns(
             agent_grpc.AgentRunServiceStub(channel),
             agent_pb2,
+        )
+        self.agent_communication = AgentCommunication(
+            communication_grpc.AgentCommunicationServiceStub(channel), communication_pb2
         )
         self.artifacts = artifact_grpc.ArtifactServiceStub(channel)
         self.automations = product_grpc.AutomationServiceStub(channel)

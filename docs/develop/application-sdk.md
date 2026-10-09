@@ -87,6 +87,43 @@ backend may use the TypeScript, Python, or Go SDK, but the browser must not rece
 local daemon descriptor or application bearer credential. The worker does not expose
 gRPC-Web or permissive cross-origin transport.
 
+## Agent communication
+
+The optional `AgentCommunicationService` exposes caller-owned participant discovery,
+message send, receipt lookup, paginated inbox reads, and a durable message update feed.
+`agent_messages.read.v1` requires `agent_messages:read` and `runs:read`;
+`agent_messages.send.v1` requires `agent_messages:send`. New peer task allocation also
+requires `runs:execute` and the selected role. Existing application enrollments must be
+explicitly updated for these scopes. Conversation sharing does not grant inbox access.
+
+Rust callers use `client.agent_runs()` with `list_agent_participants`,
+`send_agent_message`, `get_agent_message`, `list_agent_messages`, and
+`watch_agent_messages`. TypeScript exports `AgentCommunication` over the generated
+communication client; Python exposes `client.agent_communication`; Go provides the
+generated `NewAgentCommunicationServiceClient` over the enrolled SDK connection. All
+use the existing authenticated transport. Renderer code receives released records
+through a narrow host command and never selects credentials or ownership.
+
+Message text is bounded to 16 KiB. An inbox admits at most 64 pending messages and
+256 KiB of pending text; a root collaboration admits at most 128 participant attempts,
+4,096 messages and 1 MiB of pending text. Reads return up to 16 messages. Provider
+input batches contain at most eight messages and 32 KiB of text. Stable sender-scoped
+idempotency keys preserve the original admission; changed retries conflict, and lost
+responses do not trigger automatic mutation retries.
+
+`accepted`, `included_in_turn`, and `not_delivered` receipts come from canonical
+journal events. Inclusion records the actual prepared request's SHA-256 with its
+execution and turn. Peer input retains trusted provenance and does not reset a human
+turn's budgets, change the tool ceiling, or grant approval authority. Watches use an
+exclusive collaboration-feed cursor; inbox pages have their own recipient cursor.
+Ending a watch releases only that subscription.
+
+The same service provides `SubmitAgentTaskMessage`, `GetAgentTask`, and
+`ListAgentTasks` for the [A2A application edge](agent-communication.md). These expose
+curated released input history and final output, with owner-bound snapshot pagination;
+they do not expose private session or tool transcripts. See
+[ADR 0007](adr/0007-agent-communication.md) for ownership and lifecycle decisions.
+
 ## Tauri integration
 
 Tauri can call Rust directly, so a Tauri application does not need a separate
@@ -449,7 +486,8 @@ Trusted enrollment code creates an exact application grant:
 
 - application ID and placement;
 - `runs:execute`, `runs:read`, `runs:control`, `prompts:respond`,
-  `approvals:respond`, `artifacts:read`, and/or `artifacts:write`;
+  `approvals:respond`, `artifacts:read`, `artifacts:write`,
+  `agent_messages:read`, and/or `agent_messages:send`;
 - allowed logical roles; and
 - allowed tools.
 

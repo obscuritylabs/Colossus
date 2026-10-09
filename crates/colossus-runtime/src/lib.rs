@@ -13,6 +13,7 @@ mod access_policy;
 mod adapter_composition;
 mod agent_runs;
 mod agent_tools;
+mod communication;
 mod composition;
 mod config;
 mod context_tools;

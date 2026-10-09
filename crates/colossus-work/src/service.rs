@@ -22,6 +22,7 @@ pub struct CreateSubagentRequest {
 pub struct WorkService {
     repository: Arc<dyn WorkRepository>,
     sessions: Arc<dyn SessionRepository>,
+    communication: Option<Arc<dyn colossus_ports::ChildCommunication>>,
 }
 
 impl WorkService {
@@ -30,7 +31,62 @@ impl WorkService {
         Self {
             repository,
             sessions,
+            communication: None,
         }
+    }
+
+    /// Attach atomic attempt registration and inbox closure for delegated work.
+    #[must_use]
+    pub fn with_communication(
+        mut self,
+        communication: Arc<dyn colossus_ports::ChildCommunication>,
+    ) -> Self {
+        self.communication = Some(communication);
+        self
+    }
+
+    fn commit_subagent(&self, job: SubagentJob, actor: Actor) -> Result<SubagentJob, StoreError> {
+        for _ in 0..8 {
+            let events = if let Some(communication) = &self.communication {
+                if job.status == SubagentStatus::Queued {
+                    communication.register_child(&job)?
+                } else if job.status != SubagentStatus::Running {
+                    let reason = match job.status {
+                        SubagentStatus::Cancelled => {
+                            colossus_contracts::AgentMessageFailure::Cancelled
+                        }
+                        SubagentStatus::Interrupted => {
+                            colossus_contracts::AgentMessageFailure::Interrupted
+                        }
+                        SubagentStatus::Completed => {
+                            colossus_contracts::AgentMessageFailure::Completed
+                        }
+                        _ => colossus_contracts::AgentMessageFailure::Failed,
+                    };
+                    communication.close_child(&job, reason)?
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+            match self
+                .repository
+                .update_subagent_with_events(job.clone(), actor.clone(), events)
+            {
+                Ok(job) => {
+                    if let Some(communication) = &self.communication {
+                        communication.child_committed(&job);
+                    }
+                    return Ok(job);
+                }
+                Err(StoreError::Conflict { .. }) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(StoreError::Adapter(
+            "child communication transition remained contended".into(),
+        ))
     }
 
     fn require_session(&self, session_id: &str) -> Result<(), StoreError> {
@@ -562,28 +618,50 @@ impl WorkService {
             actor.clone(),
         )?;
         let timestamp = now()?;
-        self.repository.create_subagent_with_instruction_snapshot(
-            SubagentJob {
-                id,
-                session_id: request.session_id,
-                parent_run_id: request.parent_run_id,
-                parent_call_id: request.parent_call_id,
-                task: request.task.trim().into(),
-                role: request.role,
-                allowed_tools: request.allowed_tools,
-                status: SubagentStatus::Queued,
-                child_session_id,
-                child_run_id: None,
-                final_output: String::new(),
-                error: String::new(),
-                created_at: timestamp.clone(),
-                updated_at: timestamp,
-                started_at: None,
-                completed_at: None,
-            },
-            request.instruction_snapshot_id,
-            actor,
-        )
+        let job = SubagentJob {
+            id,
+            session_id: request.session_id,
+            parent_run_id: request.parent_run_id,
+            parent_call_id: request.parent_call_id,
+            task: request.task.trim().into(),
+            role: request.role,
+            allowed_tools: request.allowed_tools,
+            status: SubagentStatus::Queued,
+            child_session_id,
+            child_run_id: None,
+            final_output: String::new(),
+            error: String::new(),
+            created_at: timestamp.clone(),
+            updated_at: timestamp,
+            started_at: None,
+            completed_at: None,
+        };
+        for _ in 0..8 {
+            let events = self
+                .communication
+                .as_ref()
+                .map(|communication| communication.register_child(&job))
+                .transpose()?
+                .unwrap_or_default();
+            match self.repository.create_subagent_with_events(
+                job.clone(),
+                request.instruction_snapshot_id.clone(),
+                actor.clone(),
+                events,
+            ) {
+                Ok(job) => {
+                    if let Some(communication) = &self.communication {
+                        communication.child_committed(&job);
+                    }
+                    return Ok(job);
+                }
+                Err(StoreError::Conflict { .. }) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(StoreError::Adapter(
+            "child registration remained contended".into(),
+        ))
     }
 
     /// Move a queued job to running.
@@ -598,7 +676,7 @@ impl WorkService {
         job.status = SubagentStatus::Running;
         job.started_at = Some(timestamp.clone());
         job.updated_at = timestamp;
-        self.repository.update_subagent(job, actor)
+        self.commit_subagent(job, actor)
     }
 
     /// Store one released child result.
@@ -622,7 +700,7 @@ impl WorkService {
         job.error.clear();
         job.completed_at = Some(timestamp.clone());
         job.updated_at = timestamp;
-        self.repository.update_subagent(job, actor)
+        self.commit_subagent(job, actor)
     }
 
     /// Store a bounded failed, cancelled, or interrupted terminal outcome.
@@ -653,7 +731,7 @@ impl WorkService {
         job.error = error.into();
         job.completed_at = Some(timestamp.clone());
         job.updated_at = timestamp;
-        self.repository.update_subagent(job, actor)
+        self.commit_subagent(job, actor)
     }
 
     /// Requeue a failed, cancelled, or interrupted job without losing lineage.
@@ -674,7 +752,7 @@ impl WorkService {
         job.started_at = None;
         job.completed_at = None;
         job.updated_at = now()?;
-        self.repository.update_subagent(job, actor)
+        self.commit_subagent(job, actor)
     }
 
     fn require_subagent(&self, id: &str) -> Result<SubagentJob, StoreError> {

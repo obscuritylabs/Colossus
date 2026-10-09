@@ -9,6 +9,7 @@ pub struct AgentService {
     pub(super) sessions: Arc<dyn SessionRepository>,
     pub(super) context_preparer: Option<Arc<dyn ContextPreparer>>,
     pub(super) lifecycle: Option<Arc<dyn colossus_ports::AgentRunLifecycle>>,
+    pub(super) inbox: Option<Arc<dyn colossus_ports::AgentInbox>>,
     pub(super) provenance: Option<Arc<dyn colossus_ports::RunProvenanceProvider>>,
 }
 
@@ -30,6 +31,7 @@ impl AgentService {
             context_preparer: None,
             provenance: None,
             lifecycle: None,
+            inbox: None,
         }
     }
 
@@ -56,6 +58,13 @@ impl AgentService {
         lifecycle: Arc<dyn colossus_ports::AgentRunLifecycle>,
     ) -> Self {
         self.lifecycle = Some(lifecycle);
+        self
+    }
+
+    /// Attach journal-backed peer input consumed only at settled provider boundaries.
+    #[must_use]
+    pub fn with_inbox(mut self, inbox: Arc<dyn colossus_ports::AgentInbox>) -> Self {
+        self.inbox = Some(inbox);
         self
     }
 

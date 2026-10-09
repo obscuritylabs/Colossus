@@ -958,3 +958,73 @@ fn send_event(
         .send(event)
         .map_err(|_| CommandErrorDto::stream_delivery())
 }
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn list_agent_participants(
+    state: State<'_, AppState>,
+    target_id: String,
+    root_run_id: String,
+) -> Result<Vec<colossus_sdk::AgentParticipant>, CommandErrorDto> {
+    let target = target(&state, &target_id).await?;
+    let _unary_slot = unary_slot(&target.target)?;
+    inbox_read(|| {
+        target
+            .target
+            .client
+            .list_agent_participants(colossus_sdk::ListAgentParticipantsRequest {
+                root_run_id: root_run_id.clone(),
+            })
+    })
+    .await
+    .map_err(CommandErrorDto::from_api)
+}
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn list_agent_messages(
+    state: State<'_, AppState>,
+    target_id: String,
+    participant_id: String,
+    after_sequence: u64,
+) -> Result<colossus_sdk::AgentMessagePage, CommandErrorDto> {
+    let target = target(&state, &target_id).await?;
+    let _unary_slot = unary_slot(&target.target)?;
+    inbox_read(|| {
+        target
+            .target
+            .client
+            .list_agent_messages(colossus_sdk::ListAgentMessagesRequest {
+                participant_id: participant_id.clone(),
+                after_sequence,
+                limit: 16,
+            })
+    })
+    .await
+    .map_err(CommandErrorDto::from_api)
+}
+
+async fn inbox_read<T: Send, F, Fut>(read: F) -> colossus_sdk::ApiResult<T>
+where
+    F: Fn() -> Fut + Send,
+    Fut: std::future::Future<Output = colossus_sdk::ApiResult<T>> + Send,
+{
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match read().await {
+                Err(error)
+                    if error.code == colossus_sdk::ApiErrorCode::ResourceExhausted
+                        && error.reason == colossus_sdk::ApiErrorReason::CapacityExceeded
+                        && error.retryable =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+                result => return result,
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(colossus_sdk::ApiError::resource_exhausted(
+            colossus_sdk::ApiErrorReason::CapacityExceeded,
+            "Inbox read admission timed out",
+        ))
+    })
+}

@@ -1,3 +1,4 @@
+import { ThreadAgentInboxes } from "./ThreadAgentInboxes";
 import { WebLink } from "./WebLink";
 import {
   ConversationEntry,
@@ -677,6 +678,15 @@ export function ThreadDetail({
                       task={task}
                       updates={turn.updates}
                       label={`Run activity for turn ${index + 1}`}
+                    />
+                    <ThreadAgentInboxes
+                      project={project}
+                      task={task}
+                      available={
+                        target?.presence?.capabilities.includes(
+                          "agent_messages.read.v1",
+                        ) ?? false
+                      }
                     />
                     <Interactions
                       interactions={task.snapshot?.pending_interactions ?? []}

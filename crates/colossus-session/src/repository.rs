@@ -162,6 +162,16 @@ impl SessionRepository for EventSourcedSessionRepository {
         run_id: &str,
         messages: Vec<SessionMessageAppend>,
     ) -> Result<Vec<SessionMessage>, StoreError> {
+        self.append_messages_with_events(session_id, run_id, messages, Vec::new())
+    }
+
+    fn append_messages_with_events(
+        &self,
+        session_id: &str,
+        run_id: &str,
+        messages: Vec<SessionMessageAppend>,
+        additional_events: Vec<NewEvent>,
+    ) -> Result<Vec<SessionMessage>, StoreError> {
         validate_session_id(session_id)?;
         if run_id.is_empty() {
             return Err(StoreError::Adapter("message run id is required".into()));
@@ -193,7 +203,7 @@ impl SessionRepository for EventSourcedSessionRepository {
         let first_sequence = u64::try_from(first_sequence)
             .map_err(|error| StoreError::Adapter(error.to_string()))?;
         let first_stream_version = events.last().map_or(0, |event| event.stream_version);
-        let pending = messages
+        let mut pending = messages
             .iter()
             .enumerate()
             .map(|(index, append)| {
@@ -221,8 +231,10 @@ impl SessionRepository for EventSourcedSessionRepository {
                 })
             })
             .collect::<Result<Vec<_>, StoreError>>()?;
+        let expected_envelopes = messages.len() + additional_events.len();
+        pending.extend(additional_events);
         let envelopes = self.journal.append_batch(pending)?;
-        if envelopes.len() != messages.len() {
+        if envelopes.len() != expected_envelopes {
             return Err(StoreError::Adapter(
                 "session batch append returned an unexpected event count".into(),
             ));

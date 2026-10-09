@@ -83,12 +83,13 @@ impl CloudRepository {
         if let Some(existing) = &command.reply {
             // A replayed read may observe a newer projection watermark. Keep the
             // first durably retained read receipt; mutations still require exact replies.
-            if matches!(command.command, Command::History { .. })
-                && matches!(
-                    reply,
-                    CloudReply::History { .. } | CloudReply::Failed { .. }
-                )
-            {
+            if matches!(
+                command.command,
+                Command::History { .. } | Command::InspectInboxes { .. }
+            ) && matches!(
+                reply,
+                CloudReply::History { .. } | CloudReply::Inboxes { .. } | CloudReply::Failed { .. }
+            ) {
                 return Ok(());
             }
             return if existing == &reply {
@@ -226,6 +227,36 @@ impl CloudRepository {
                     "cloud.task.history-synchronized.v2",
                     &task,
                 )?);
+            }
+            (
+                Command::InspectInboxes {
+                    root_run_id,
+                    participant_id,
+                    after_sequence,
+                },
+                CloudReply::Inboxes { participants, page },
+            ) => {
+                if task.run_id.as_deref() != Some(root_run_id)
+                    || participants.len() > 128
+                    || participants
+                        .iter()
+                        .any(|participant| participant.root_run_id != *root_run_id)
+                    || participant_id.is_some() != page.is_some()
+                    || participant_id.as_ref().is_some_and(|id| {
+                        !participants.iter().any(|participant| &participant.id == id)
+                    })
+                    || page.as_ref().is_some_and(|page| {
+                        page.messages.len() > 16
+                            || page.next_sequence < *after_sequence
+                            || page.messages.iter().any(|message| {
+                                message.root_run_id != *root_run_id
+                                    || Some(&message.recipient_id) != participant_id.as_ref()
+                                    || message.text.len() > 16 * 1024
+                            })
+                    })
+                {
+                    return Err(CloudError::InvalidArgument);
+                }
             }
             (_, CloudReply::Failed { .. }) => {}
             _ => return Err(CloudError::InvalidArgument),

@@ -286,6 +286,7 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             || request.action.starts_with("plan.")
             || request.action.starts_with("goal.")
             || request.action.starts_with("subagent.")
+            || request.action.starts_with("agent.message.")
             || request.action.starts_with("memory.")
             || request.action.starts_with("plugin.")
             || request.action.starts_with("research.")

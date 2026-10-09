@@ -41,6 +41,7 @@ use std::{
 use tempfile::TempDir;
 use uuid::Uuid;
 
+mod communication;
 mod context_failures;
 mod plan_interaction;
 mod process_sessions;
@@ -1558,6 +1559,10 @@ fn runtime_service_conformance() {
         .build()
         .expect("test runtime")
         .block_on(async {
+            communication::owner_scopes_replay_and_frozen_task_queries(Arc::clone(
+                &fixture.runtime,
+            ))
+            .await;
             context_failures::oversized_context_reaches_public_failure(Arc::clone(
                 &fixture.runtime,
             ))

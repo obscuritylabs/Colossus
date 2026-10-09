@@ -67,6 +67,27 @@ build can repeat the output check without requiring repository-only schema input
 SDK relies on `googleapis-common-protos` for the canonical `google.rpc.Status`; it never
 packages a second `google.rpc` implementation.
 
+### Agent communication
+
+`client.agent_communication` uses the already authenticated SDK channel. Inspection
+requires `agent_messages:read` and `runs:read`; sending requires
+`agent_messages:send`. Enroll these scopes explicitly and check the runtime's optional
+`agent_messages.read.v1` and `agent_messages.send.v1` capabilities.
+
+```python
+participants = await client.agent_communication.participants(root_run_id)
+page = await client.agent_communication.messages(participants.participants[0].id)
+for message in page.messages:
+    print(message.id, message.receipt.state)
+```
+
+`send`, `get`, and `watch` validate bounded messages and receipts. The update feed has
+an exclusive cursor independent of inbox pagination, and closing a watch releases
+only its subscription. `submit_task_message` and `get_task` return validated curated
+task snapshots; `list_tasks` returns a bounded generated page. Mutations are never
+automatically retried. See [the application contract](../../docs/develop/application-sdk.md#agent-communication)
+and [inbox receipt meanings](../../docs/use/agent-communication.md).
+
 ### Runtime policy metadata
 
 `await client.agent_runs.get_runtime_policy_posture()` returns the immutable, typed

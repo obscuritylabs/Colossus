@@ -1719,3 +1719,8 @@ export function buildPlanWorkflowFixture(): ChatState {
     nextPageToken: "",
   };
 }
+
+export {
+  buildAgentInboxParticipants,
+  buildAgentInboxMessages,
+} from "./agent-inbox-fixture";

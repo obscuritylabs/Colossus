@@ -173,6 +173,7 @@ fn responses_continuation_preserves_tool_ids_without_duplicate_assistant_calls()
         },
         settled_hash: "settled".into(),
         assistant: ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Assistant,
             content: "".into(),
             tool_call_id: None,
@@ -186,6 +187,7 @@ fn responses_continuation_preserves_tool_ids_without_duplicate_assistant_calls()
     let request = ModelRequest {
         instructions: "test".into(),
         messages: vec![ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Tool,
             content: "result".into(),
             tool_call_id: Some("exact-call-1".into()),

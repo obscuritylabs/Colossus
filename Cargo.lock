@@ -1041,6 +1041,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
+name = "colossus-a2a-server"
+version = "0.11.7"
+dependencies = [
+ "async-trait",
+ "axum",
+ "colossus-sdk",
+ "futures",
+ "hex",
+ "nix 0.31.3",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "time",
+ "tokio",
+ "tokio-rustls",
+ "tower",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "colossus-access"
 version = "0.11.7"
 dependencies = [
@@ -1055,15 +1078,18 @@ name = "colossus-agent"
 version = "0.11.7"
 dependencies = [
  "async-trait",
+ "colossus-communication",
  "colossus-contracts",
  "colossus-observability",
  "colossus-ports",
  "colossus-session",
  "colossus-testkit",
  "colossus-tools",
+ "hex",
  "opentelemetry",
  "opentelemetry_sdk",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -1112,6 +1138,7 @@ dependencies = [
  "base64 0.22.1",
  "colossus-agent",
  "colossus-api",
+ "colossus-communication",
  "colossus-contracts",
  "colossus-policy",
  "colossus-ports",
@@ -1378,6 +1405,27 @@ dependencies = [
  "time",
  "tokio",
  "zeroize",
+]
+
+[[package]]
+name = "colossus-communication"
+version = "0.11.7"
+dependencies = [
+ "colossus-contracts",
+ "colossus-journal-redb",
+ "colossus-ports",
+ "colossus-session",
+ "colossus-testkit",
+ "colossus-work",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -1935,6 +1983,7 @@ dependencies = [
  "colossus-audit",
  "colossus-bundled-plugins",
  "colossus-bundles",
+ "colossus-communication",
  "colossus-context",
  "colossus-contracts",
  "colossus-credentials",

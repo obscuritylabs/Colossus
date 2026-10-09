@@ -798,6 +798,7 @@ impl Runtime {
                 request: Some(ModelRequest {
                     instructions: "This is a model readiness probe. Reply with exactly: ok".into(),
                     messages: vec![ModelMessage {
+                        agent_message_origin: None,
                         role: ModelMessageRole::User,
                         content: "Reply with exactly: ok".into(),
                         tool_call_id: None,

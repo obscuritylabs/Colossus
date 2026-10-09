@@ -360,6 +360,7 @@ fn conversation_message(sequence: u64) -> SessionMessage {
         run_id: "run".into(),
         sequence,
         message: colossus_contracts::ModelMessage {
+            agent_message_origin: None,
             role: if sequence.is_multiple_of(2) {
                 ModelMessageRole::User
             } else {
@@ -379,6 +380,7 @@ fn tool_message(sequence: u64) -> SessionMessage {
         run_id: "run".into(),
         sequence,
         message: colossus_contracts::ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Tool,
             content: format!("tool result {sequence}").into(),
             tool_call_id: Some(format!("call-{sequence}")),

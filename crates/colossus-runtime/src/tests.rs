@@ -109,6 +109,7 @@ fn image_capability_echo_and_bounds_fail_at_the_pre_effect_route_gate() {
     let request = ModelRequest {
         instructions: "test".into(),
         messages: vec![ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::User,
             content: ModelContent::Parts(vec![ModelContentPart::Image {
                 image: image.clone(),
@@ -2598,6 +2599,7 @@ fn canonical_session_branch_is_bounded_idempotent_and_detects_drift() {
             vec![
                 SessionMessageAppend {
                     message: ModelMessage {
+                        agent_message_origin: None,
                         role: ModelMessageRole::User,
                         content: "first".into(),
                         tool_call_id: None,
@@ -2607,6 +2609,7 @@ fn canonical_session_branch_is_bounded_idempotent_and_detects_drift() {
                 },
                 SessionMessageAppend {
                     message: ModelMessage {
+                        agent_message_origin: None,
                         role: ModelMessageRole::Assistant,
                         content: "second".into(),
                         tool_call_id: None,
@@ -2691,6 +2694,7 @@ fn conversation_session_branch_keeps_visible_messages_without_tool_traffic() {
             vec![
                 SessionMessageAppend {
                     message: ModelMessage {
+                        agent_message_origin: None,
                         role: ModelMessageRole::User,
                         content: "Inspect the workspace.".into(),
                         tool_call_id: None,
@@ -2700,6 +2704,7 @@ fn conversation_session_branch_keeps_visible_messages_without_tool_traffic() {
                 },
                 SessionMessageAppend {
                     message: ModelMessage {
+                        agent_message_origin: None,
                         role: ModelMessageRole::Assistant,
                         content: String::new().into(),
                         tool_call_id: None,
@@ -2713,6 +2718,7 @@ fn conversation_session_branch_keeps_visible_messages_without_tool_traffic() {
                 },
                 SessionMessageAppend {
                     message: ModelMessage {
+                        agent_message_origin: None,
                         role: ModelMessageRole::Tool,
                         content: "private tool payload".into(),
                         tool_call_id: Some("call-1".into()),
@@ -2722,6 +2728,7 @@ fn conversation_session_branch_keeps_visible_messages_without_tool_traffic() {
                 },
                 SessionMessageAppend {
                     message: ModelMessage {
+                        agent_message_origin: None,
                         role: ModelMessageRole::Assistant,
                         content: "The workspace contains one project.".into(),
                         tool_call_id: None,
@@ -6287,6 +6294,7 @@ async fn context_tools_authorize_reads_and_mutations_with_session_bound_provenan
                 "session-context",
                 "run-context",
                 ModelMessage {
+                    agent_message_origin: None,
                     role,
                     content: content.into(),
                     tool_call_id: None,

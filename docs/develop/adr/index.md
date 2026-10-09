@@ -16,6 +16,7 @@ not duplicate current configuration or operator procedures.
 - [ADR 0004: Desktop Git inspection](0004-desktop-git-inspection.md)
 - [ADR 0005: Desktop file search and diffs](0005-desktop-file-diffs.md)
 - [ADR 0006: Cloud control plane and outbound connections](0006-cloud-control-plane.md)
+- [ADR 0007: Agent communication and A2A boundary](0007-agent-communication.md)
 
 Use the next sequential number. Record context, decision, consequences, status, and the
 date; link to canonical current documentation rather than copying it.

@@ -317,6 +317,7 @@ async fn server_continuation_reserves_budget_and_falls_back_at_local_threshold()
 
 fn message(role: ModelMessageRole, content: impl Into<String>) -> ModelMessage {
     ModelMessage {
+        agent_message_origin: None,
         role,
         content: ModelContent::from(content.into()),
         tool_call_id: None,
@@ -343,6 +344,7 @@ fn sequential_knowledge_messages(count: usize, result_bytes: usize) -> Vec<Model
         });
         messages.push(assistant);
         messages.push(ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Tool,
             content: json!({
                 "audit_id": format!("audit-{index}"),
@@ -375,6 +377,7 @@ fn image(index: usize, size_bytes: u64) -> ModelImageReference {
 
 fn image_message(images: impl IntoIterator<Item = ModelImageReference>) -> ModelMessage {
     ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::User,
         content: ModelContent::Parts(
             images
@@ -531,6 +534,7 @@ async fn bounded_recent_tool_result_allows_automatic_compaction() {
         arguments: json!({"path": "generated.rs", "max_lines": 500}),
     });
     let tool_result = ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::Tool,
         content: "x".repeat(60 * 1024).into(),
         tool_call_id: Some("call-summary".into()),
@@ -582,6 +586,7 @@ async fn oversized_legacy_tool_result_is_projected_without_rewriting_canonical_h
         arguments: json!({"server": "jira", "tool": "jira_get_issue", "arguments": {}}),
     });
     let legacy_tool = ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::Tool,
         content: "x".repeat(900_000).into(),
         tool_call_id: Some("call-legacy-mcp".into()),
@@ -810,6 +815,7 @@ async fn projected_tool_arguments_exceeding_provider_budget_fail_before_dispatch
         message(ModelMessageRole::User, "run the tool"),
         tool_call,
         ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Tool,
             content: "done".into(),
             tool_call_id: Some("call-large-arguments".into()),

@@ -69,6 +69,41 @@ directory. The gate verifies both the schema/tool input digest and the exact gen
 TypeScript tree recorded in `generated-output.sha256`, so a stale ignored binding tree
 cannot be published accidentally.
 
+### Agent communication
+
+The optional service requires `agent_messages:read` with `runs:read` for inspection
+and `agent_messages:send` for sending. Enroll these scopes explicitly and check the
+runtime's `agent_messages.read.v1` and `agent_messages.send.v1` capabilities.
+
+Create an `AgentCommunicationServiceClient` with `createSecureGrpcClient` using the
+same independently enrolled identity, pin, and protected credential as your run client,
+then wrap it with the exported `AgentCommunication` helper:
+
+```ts
+import { AgentCommunication } from "@obscuritylabs/colossus-sdk";
+import { AgentCommunicationServiceClient } from "@obscuritylabs/colossus-sdk/gen/colossus/api/v1alpha1/communication";
+
+const communicationClient = await createSecureGrpcClient(
+  AgentCommunicationServiceClient,
+  descriptor,
+  leafCertificatePem,
+  instanceIdFromTrustedEnrollment,
+  certificateSha256FromTrustedEnrollment,
+  DeploymentMode.DEPLOYMENT_MODE_SHARED_DAEMON,
+  credential,
+);
+const inboxes = new AgentCommunication(communicationClient);
+const participants = await inboxes.participants(rootRunId);
+const page = await inboxes.messages(participants[0]!.id, 0n, 16);
+```
+
+`send`, `get`, and `watch` retain bounded messages and typed receipts. Participant
+and feed cursors use `bigint`; the feed's cursor is independent of a recipient's
+inbox cursor. `submitTaskMessage`, `getTask`, and `listTasks` expose curated peer task
+operations. Stable send identities reconcile a lost response; mutations are never
+automatically retried. See [the application contract](../../docs/develop/application-sdk.md#agent-communication)
+and [inbox receipt meanings](../../docs/use/agent-communication.md).
+
 ### Runtime policy metadata
 
 `getRuntimePolicyPosture(agentRunClient)` returns a validated `RuntimePolicyPosture`

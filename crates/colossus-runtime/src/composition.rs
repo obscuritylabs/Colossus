@@ -122,6 +122,7 @@ pub struct Runtime {
     pub(super) integration_executor: Arc<IntegrationExecutor>,
     pub(super) integration_effect_executor: Arc<dyn EffectExecutor>,
     pub(super) sessions: Arc<dyn SessionRepository>,
+    pub(super) communication: Arc<colossus_communication::CommunicationService>,
     pub(super) context_executor: Arc<ContextEffectExecutor>,
     pub(super) presentation: Arc<dyn PresentationRepository>,
     pub(super) presentation_executor: Arc<PresentationEffectExecutor>,
@@ -450,13 +451,22 @@ impl Runtime {
         let presentation: Arc<dyn PresentationRepository> = Arc::new(
             EventSourcedPresentationRepository::new(Arc::clone(&journal)),
         );
-        let work_service = Arc::new(WorkService::new(Arc::clone(&work), Arc::clone(&sessions)));
+        let communication = Arc::new(colossus_communication::CommunicationService::new(
+            Arc::clone(&journal),
+            Arc::clone(&sessions),
+        ));
+        let work_service = Arc::new(
+            WorkService::new(Arc::clone(&work), Arc::clone(&sessions)).with_communication(
+                Arc::clone(&communication) as Arc<dyn colossus_ports::ChildCommunication>,
+            ),
+        );
         if !journal.is_recovery_mode() {
             observe_startup_phase(
                 "colossus.runtime.projections.catch_up",
                 "projection_catch_up",
                 || -> Result<(), RuntimeError> {
                     recover_interrupted_subagents(work.as_ref(), work_service.as_ref())?;
+                    communication.recover()?;
                     let report = projections.drain(256, 16_384)?;
                     if report.projections.iter().any(|status| !status.ready) {
                         return Err(StoreError::Adapter(
@@ -912,12 +922,18 @@ impl Runtime {
                 .flatten()
                 .collect(),
         });
+        let communication_tool_executor: Arc<dyn ToolExecutor> =
+            Arc::new(super::communication::CommunicationToolExecutor {
+                service: Arc::clone(&communication),
+                gateway: Arc::clone(&gateway),
+                inner: gateway_tool_executor,
+            });
         let trace_tool_executor: Arc<dyn ToolExecutor> = Arc::new(TraceToolExecutor {
             journal: Arc::clone(&journal),
             gateway: Arc::clone(&gateway),
             filesystem: Arc::clone(&filesystem_executor),
             workspace: workspace.clone(),
-            inner: gateway_tool_executor,
+            inner: communication_tool_executor,
         });
         let context_tool_executor: Arc<dyn ToolExecutor> = Arc::new(ContextToolExecutor {
             gateway: Arc::clone(&gateway),
@@ -956,6 +972,7 @@ impl Runtime {
                 Arc::clone(&sessions),
             )
             .with_context_preparer(Arc::clone(&context) as Arc<dyn ContextPreparer>)
+            .with_inbox(Arc::clone(&communication) as Arc<dyn colossus_ports::AgentInbox>)
             .with_run_provenance(Arc::new(CatalogRunProvenance))
             .with_run_lifecycle(
                 Arc::clone(&process_sessions) as Arc<dyn colossus_ports::AgentRunLifecycle>
@@ -1017,6 +1034,7 @@ impl Runtime {
             integration_executor,
             integration_effect_executor,
             sessions,
+            communication,
             context_executor,
             presentation,
             presentation_executor,
