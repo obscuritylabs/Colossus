@@ -20,22 +20,13 @@ export function useRunModeCapabilities(
   const advertisedGoal = Boolean(
     target?.presence?.capabilities.includes("goal.create"),
   );
-  const resources = Boolean(
-    target?.presence?.capabilities.includes("runtime.resources.v1"),
-  );
   const [state, setState] = useState({
     scope: "",
     research: false,
     goal: false,
   });
   useEffect(() => {
-    if (
-      !target ||
-      !ready ||
-      disabled ||
-      !resources ||
-      (advertisedResearch && advertisedGoal)
-    )
+    if (!target || !ready || disabled || (advertisedResearch && advertisedGoal))
       return;
     const abort = new AbortController();
     void request<{ kind: string; value?: { capabilities?: unknown } }>(
@@ -66,9 +57,9 @@ export function useRunModeCapabilities(
           setState({ scope, research: false, goal: false });
       });
     return () => abort.abort();
-  }, [scope, ready, disabled, resources, advertisedResearch, advertisedGoal]);
+  }, [scope, ready, disabled, advertisedResearch, advertisedGoal]);
   const current = ready && !disabled;
-  const resolved = resources && state.scope === scope;
+  const resolved = state.scope === scope;
   return {
     research: current && (advertisedResearch || (resolved && state.research)),
     goal: current && (advertisedGoal || (resolved && state.goal)),

@@ -332,6 +332,8 @@ describe("human cloud conversation authority", () => {
       vi.stubGlobal(
         "fetch",
         vi.fn(async (_path: string, options: RequestInit) => {
+          if (_path.endsWith("/resources"))
+            return response({ kind: "unsupported" });
           if (_path.endsWith("/nodes/node-a")) return response(node);
           if (options.method === "POST") {
             attempts.push(JSON.parse(options.body as string));
@@ -461,6 +463,8 @@ describe("human cloud conversation authority", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (_path: string, options: RequestInit) => {
+        if (_path.endsWith("/resources"))
+          return response({ kind: "unsupported" });
         if (options.method === "POST") {
           attempts.push(JSON.parse(options.body as string));
           return attempts.length === 1

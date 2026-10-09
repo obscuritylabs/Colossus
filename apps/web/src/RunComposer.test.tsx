@@ -228,7 +228,10 @@ it("discards capability replies from an earlier runtime connection", async () =>
 it("starts Goal without a Plan and binds retries to the reviewed iteration budget", async () => {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => reply(["goal.create"])),
+    vi
+      .fn()
+      .mockResolvedValueOnce(reply(["goal.create"]))
+      .mockResolvedValueOnce(reply([])),
   );
   const f = await fixture();
   f.onSubmit.mockResolvedValue(false);
@@ -299,6 +302,45 @@ it("starts Goal without a Plan and binds retries to the reviewed iteration budge
     expect(f.container.textContent).toContain(
       "Goal requires an available runtime",
     );
+  } finally {
+    await f.close();
+  }
+});
+
+it("probes a connected replica with no local advertisements and respects unsupported replies", async () => {
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(reply(["research.create", "goal.create"]))
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ kind: "unsupported" })),
+    );
+  vi.stubGlobal("fetch", fetch);
+  const target = node("replica");
+  target.presence!.capabilities = [];
+  const f = await fixture(target);
+  try {
+    expect(fetch).toHaveBeenCalledTimes(1);
+    for (const mode of ["research", "goal"]) {
+      expect(
+        f.container.querySelector<HTMLInputElement>(`input[value="${mode}"]`)!
+          .disabled,
+      ).toBe(false);
+    }
+    const older = node("older");
+    older.presence!.capabilities = [];
+    await f.render(older);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    for (const mode of ["research", "goal"]) {
+      expect(
+        f.container.querySelector<HTMLInputElement>(`input[value="${mode}"]`)!
+          .disabled,
+      ).toBe(true);
+    }
+    const offline = node("offline");
+    offline.presence!.capabilities = [];
+    offline.presence!.ready = false;
+    await f.render(offline);
+    expect(fetch).toHaveBeenCalledTimes(2);
   } finally {
     await f.close();
   }

@@ -1,33 +1,94 @@
 //! Read-only reconciliation of Desktop and Control Plane runs in one selected runtime.
 use crate::run_list::RunList;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use colossus_sdk::{AgentRunClient, ApiError, ApiErrorReason, Colossus, ListRunsRequest, Run};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use std::{
-    collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    collections::{HashMap, HashSet, VecDeque},
+    io::{self, Write},
+    sync::{Arc, Mutex, PoisonError},
 };
 
-const PREFIX: &str = "desktop-conversations-v1:";
+const PREFIX: &str = "desktop-conversations-v2:";
+// Match the public run discovery ceiling; each owner returns at most three runs.
+const MAX_PAGE_SIZE: u32 = 3;
+const MAX_CURSORS: usize = 32;
+const MAX_CURSOR_BYTES: usize = 8 * 1024 * 1024;
 const MAX_BINDINGS: usize = 4096;
 #[derive(Clone, Default)]
 pub(crate) struct ConversationRuns {
     sources: Arc<Mutex<HashMap<String, bool>>>,
     desktop_sessions: Arc<Mutex<HashSet<String>>>,
+    cursors: Arc<Mutex<CursorCache>>,
 }
 pub(crate) struct ConversationPage {
     pub(crate) runs: Vec<Run>,
     pub(crate) next_page_token: Option<String>,
 }
-#[derive(Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Default, PartialEq, Serialize)]
+struct SourcePage {
+    token: Option<String>,
+    done: bool,
+    pending: VecDeque<Run>,
+}
+#[derive(Clone, Default, PartialEq, Serialize)]
 struct Cursor {
     scope: String,
-    primary: Option<String>,
-    cloud: Option<String>,
-    primary_done: bool,
-    cloud_done: bool,
+    primary: SourcePage,
+    cloud: SourcePage,
+}
+#[derive(Default)]
+struct CursorCache {
+    entries: HashMap<String, (Cursor, usize)>,
+    order: VecDeque<String>,
+    bytes: usize,
+}
+struct CursorSize(usize);
+impl Write for CursorSize {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 = self
+            .0
+            .checked_add(bytes.len())
+            .filter(|size| *size <= MAX_CURSOR_BYTES)
+            .ok_or_else(|| io::Error::other("conversation cursor capacity exceeded"))?;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+impl CursorCache {
+    fn insert(&mut self, cursor: Cursor) -> Result<String, ApiError> {
+        // Periodic first-page reconciliation must not evict an unchanged
+        // foreground continuation just by issuing the same discovery read.
+        if let Some(token) = self
+            .entries
+            .iter()
+            .find_map(|(token, entry)| (entry.0 == cursor).then(|| token.clone()))
+        {
+            self.order.retain(|key| key != &token);
+            self.order.push_back(token.clone());
+            return Ok(token);
+        }
+        let mut size = CursorSize(0);
+        serde_json::to_writer(&mut size, &cursor).map_err(|_| {
+            ApiError::resource_exhausted(
+                ApiErrorReason::CapacityExceeded,
+                "Reload conversations before loading more history.",
+            )
+        })?;
+        while self.entries.len() >= MAX_CURSORS || self.bytes + size.0 > MAX_CURSOR_BYTES {
+            let key = self.order.pop_front().ok_or_else(invalid)?;
+            if let Some((_, bytes)) = self.entries.remove(&key) {
+                self.bytes -= bytes;
+            }
+        }
+        let token = format!("{PREFIX}{}", uuid::Uuid::new_v4());
+        self.bytes += size.0;
+        self.order.push_back(token.clone());
+        self.entries.insert(token.clone(), (cursor, size.0));
+        Ok(token)
+    }
 }
 fn set_token(request: &mut ListRunsRequest, token: Option<String>) {
     request
@@ -49,7 +110,7 @@ impl ConversationRuns {
     pub(crate) fn is_cloud(&self, run_id: &str) -> bool {
         self.sources
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .get(run_id)
             .copied()
             .unwrap_or(false)
@@ -57,11 +118,11 @@ impl ConversationRuns {
     pub(crate) fn can_continue(&self, session_id: &str) -> bool {
         self.desktop_sessions
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .contains(session_id)
     }
     fn remember(&self, runs: &[Run], cloud: bool) -> Result<(), ApiError> {
-        let mut sources = self.sources.lock().unwrap_or_else(|e| e.into_inner());
+        let mut sources = self.sources.lock().unwrap_or_else(PoisonError::into_inner);
         if runs.iter().any(|run| {
             sources
                 .get(&run.run_id)
@@ -87,7 +148,7 @@ impl ConversationRuns {
         let mut sessions = self
             .desktop_sessions
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
+            .unwrap_or_else(PoisonError::into_inner);
         for run in runs {
             sources.insert(run.run_id.clone(), cloud);
             if !cloud {
@@ -139,78 +200,128 @@ impl ConversationRuns {
         list: &RunList,
         mut request: ListRunsRequest,
     ) -> Result<ConversationPage, ApiError> {
-        let mut query = request.clone();
-        query.page = Some(colossus_sdk::PageRequest {
-            page_size: query.page.as_ref().map_or(0, |page| page.page_size),
-            page_token: String::new(),
+        let page_size = request.page.as_ref().map_or(MAX_PAGE_SIZE, |page| {
+            if page.page_size == 0 {
+                MAX_PAGE_SIZE
+            } else {
+                page.page_size.min(MAX_PAGE_SIZE)
+            }
         });
-        let scope = hex::encode(Sha256::digest(
-            serde_json::to_vec(&(instance, query)).map_err(|_| invalid())?,
-        ));
-        let mut cursor = match request
+        let token = request
             .page
             .as_mut()
             .map(|page| std::mem::take(&mut page.page_token))
-            .filter(|token| !token.is_empty())
-        {
-            Some(token) => {
-                let encoded = token.strip_prefix(PREFIX).ok_or_else(invalid)?;
-                let bytes = URL_SAFE_NO_PAD.decode(encoded).map_err(|_| invalid())?;
-                let cursor: Cursor = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-                if cursor.scope != scope {
-                    return Err(invalid());
-                }
-                cursor
-            }
-            None => Cursor {
-                scope,
-                ..Cursor::default()
-            },
-        };
-        let mut runs = Vec::new();
-        if !cursor.primary_done {
-            set_token(&mut request, cursor.primary.take());
-            let page = list.list_client(primary.as_ref(), request.clone()).await?;
-            self.remember(&page.runs, false)?;
-            runs.extend(page.runs);
-            cursor.primary = page
-                .page
-                .map(|page| page.next_page_token)
-                .filter(|token| !token.is_empty());
-            cursor.primary_done = cursor.primary.is_none();
-        }
-        if !cursor.cloud_done {
-            if let Some(cloud) = cloud_reader {
-                set_token(&mut request, cursor.cloud.take());
-                let page = list.list_client(cloud.as_ref(), request).await?;
-                self.remember(&page.runs, true)?;
-                runs.extend(page.runs);
-                cursor.cloud = page
-                    .page
-                    .map(|page| page.next_page_token)
-                    .filter(|token| !token.is_empty());
-                cursor.cloud_done = cursor.cloud.is_none();
-            } else {
-                cursor.cloud_done = true;
-            }
-        }
-        runs.sort_by(|a, b| {
-            b.updated_at
-                .cmp(&a.updated_at)
-                .then_with(|| a.run_id.cmp(&b.run_id))
+            .filter(|token| !token.is_empty());
+        request.page = Some(colossus_sdk::PageRequest {
+            page_size,
+            page_token: String::new(),
         });
-        let next_page_token = if cursor.primary_done && cursor.cloud_done {
-            None
+        let scope = hex::encode(Sha256::digest(
+            serde_json::to_vec(&(instance, &request, cloud_reader.is_some()))
+                .map_err(|_| invalid())?,
+        ));
+        // Pending rows stay in native custody. A renderer cannot forge a row or
+        // source binding by editing a serialized continuation token.
+        let mut cursor = if let Some(token) = token {
+            let cache = self.cursors.lock().unwrap_or_else(PoisonError::into_inner);
+            let cursor = cache
+                .entries
+                .get(&token)
+                .map(|entry| entry.0.clone())
+                .ok_or_else(invalid)?;
+            if cursor.scope != scope {
+                return Err(invalid());
+            }
+            cursor
         } else {
-            Some(format!(
-                "{PREFIX}{}",
-                URL_SAFE_NO_PAD.encode(serde_json::to_vec(&cursor).map_err(|_| invalid())?)
-            ))
+            Cursor {
+                scope,
+                cloud: SourcePage {
+                    done: cloud_reader.is_none(),
+                    ..SourcePage::default()
+                },
+                ..Cursor::default()
+            }
+        };
+        let mut runs = Vec::with_capacity(page_size as usize);
+        for _ in 0..page_size {
+            if !self
+                .refill(&mut cursor.primary, primary.as_ref(), list, &request, false)
+                .await?
+            {
+                break;
+            }
+            if let Some(cloud) = cloud_reader.as_ref()
+                && !self
+                    .refill(&mut cursor.cloud, cloud.as_ref(), list, &request, true)
+                    .await?
+            {
+                break;
+            }
+            // Upstream cursors preserve run creation/discovery order, not live
+            // update order. Keep that order and prefer Desktop for equal times.
+            let source = match (cursor.primary.pending.front(), cursor.cloud.pending.front()) {
+                (Some(left), Some(right)) if left.created_at >= right.created_at => {
+                    &mut cursor.primary
+                }
+                (_, Some(_)) => &mut cursor.cloud,
+                (Some(_), None) => &mut cursor.primary,
+                (None, None) => break,
+            };
+            if let Some(run) = source.pending.pop_front() {
+                runs.push(run);
+            }
+        }
+        let more = !cursor.primary.done
+            || !cursor.cloud.done
+            || !cursor.primary.pending.is_empty()
+            || !cursor.cloud.pending.is_empty();
+        let next_page_token = if more {
+            Some(
+                self.cursors
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(cursor)?,
+            )
+        } else {
+            None
         };
         Ok(ConversationPage {
             runs,
             next_page_token,
         })
+    }
+
+    async fn refill(
+        &self,
+        source: &mut SourcePage,
+        reader: &dyn AgentRunClient,
+        list: &RunList,
+        request: &ListRunsRequest,
+        cloud: bool,
+    ) -> Result<bool, ApiError> {
+        // Filtered upstream scans can legitimately produce empty pages. Bound
+        // admission work and return a continuation without guessing their order.
+        for _ in 0..4 {
+            if !source.pending.is_empty() || source.done {
+                return Ok(true);
+            }
+            let mut request = request.clone();
+            set_token(&mut request, source.token.clone());
+            let page = list.list_client(reader, request).await?;
+            let next = page
+                .page
+                .map(|page| page.next_page_token)
+                .filter(|token| !token.is_empty());
+            if next.is_some() && next == source.token {
+                return Err(invalid());
+            }
+            self.remember(&page.runs, cloud)?;
+            source.pending.extend(page.runs);
+            source.token = next;
+            source.done = source.token.is_none();
+        }
+        Ok(!source.pending.is_empty() || source.done)
     }
 }
 
@@ -260,6 +371,7 @@ mod tests {
     struct Reader {
         id: &'static str,
         calls: Arc<Mutex<Vec<String>>>,
+        rows: Option<Vec<Run>>,
     }
     fn run(id: &str, session: &str) -> Run {
         Run {
@@ -292,6 +404,21 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(format!("{}:{token}", self.id));
+            if let Some(rows) = &self.rows {
+                let start = if token.is_empty() {
+                    0
+                } else {
+                    token.parse::<usize>().unwrap()
+                };
+                let size = request.page.as_ref().unwrap().page_size as usize;
+                let end = (start + size).min(rows.len());
+                return Ok(ListRunsResponse {
+                    runs: rows[start..end].to_vec(),
+                    page: (end < rows.len()).then(|| PageResponse {
+                        next_page_token: end.to_string(),
+                    }),
+                });
+            }
             Ok(ListRunsResponse {
                 runs: vec![run(&format!("{}{}", self.id, token), "same-session")],
                 page: (self.id == "cloud" && token.is_empty()).then(|| PageResponse {
@@ -324,7 +451,7 @@ mod tests {
             statuses: vec![],
             include_archived: false,
             page: Some(PageRequest {
-                page_size: 50,
+                page_size: 2,
                 page_token: token.unwrap_or_default(),
             }),
         }
@@ -336,10 +463,12 @@ mod tests {
         let primary: Arc<dyn AgentRunClient> = Arc::new(Reader {
             id: "desktop",
             calls: calls.clone(),
+            rows: None,
         });
         let cloud: Arc<dyn AgentRunClient> = Arc::new(Reader {
             id: "cloud",
             calls: calls.clone(),
+            rows: None,
         });
         let list = RunList::default();
         let first = broker
@@ -404,5 +533,136 @@ mod tests {
         assert!(!broker.can_continue("cloud-only"));
         assert!(broker.remember(&[run("web", "cloud-only")], false).is_err());
         assert!(broker.is_cloud("web"));
+    }
+    fn rows(prefix: &str, newest: u32) -> Vec<Run> {
+        (0..4)
+            .map(|offset| {
+                let mut run = run(&format!("{prefix}{offset}"), prefix);
+                run.created_at = format!("2026-10-09T00:00:{:02}Z", newest - offset);
+                run.updated_at = run.created_at.clone();
+                run
+            })
+            .collect()
+    }
+    #[tokio::test]
+    async fn merged_pages_emit_only_the_global_boundary_and_keep_unconsumed_rows_native() {
+        let broker = ConversationRuns::default();
+        let calls = Arc::new(Mutex::new(vec![]));
+        let primary: Arc<dyn AgentRunClient> = Arc::new(Reader {
+            id: "desktop",
+            calls: calls.clone(),
+            rows: Some(rows("local", 20)),
+        });
+        let cloud: Arc<dyn AgentRunClient> = Arc::new(Reader {
+            id: "cloud",
+            calls: calls.clone(),
+            rows: Some(rows("remote", 10)),
+        });
+        let list = RunList::default();
+        let mut query = request(None);
+        query.page.as_mut().unwrap().page_size = 3;
+        let first = broker
+            .list_readers(
+                "runtime".into(),
+                primary.clone(),
+                Some(cloud.clone()),
+                &list,
+                query.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            first
+                .runs
+                .iter()
+                .map(|run| run.run_id.as_str())
+                .collect::<Vec<_>>(),
+            ["local0", "local1", "local2"]
+        );
+        let token = first.next_page_token.unwrap();
+        assert!(!token.contains("local") && !token.contains("remote"));
+        let mut forged = query.clone();
+        forged.page.as_mut().unwrap().page_token = format!("{PREFIX}forged-rows");
+        assert!(
+            broker
+                .list_readers(
+                    "runtime".into(),
+                    primary.clone(),
+                    Some(cloud.clone()),
+                    &list,
+                    forged
+                )
+                .await
+                .is_err()
+        );
+        let mut second_query = query.clone();
+        second_query.page.as_mut().unwrap().page_token = token;
+        let second = broker
+            .list_readers(
+                "runtime".into(),
+                primary.clone(),
+                Some(cloud.clone()),
+                &list,
+                second_query.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            second
+                .runs
+                .iter()
+                .map(|run| run.run_id.as_str())
+                .collect::<Vec<_>>(),
+            ["local3", "remote0", "remote1"]
+        );
+        let replay = broker
+            .list_readers(
+                "runtime".into(),
+                primary.clone(),
+                Some(cloud.clone()),
+                &list,
+                second_query,
+            )
+            .await
+            .unwrap();
+        assert_eq!(replay.runs, second.runs);
+        query.page.as_mut().unwrap().page_token = second.next_page_token.unwrap();
+        let final_page = broker
+            .list_readers("runtime".into(), primary, Some(cloud), &list, query)
+            .await
+            .unwrap();
+        assert_eq!(
+            final_page
+                .runs
+                .iter()
+                .map(|run| run.run_id.as_str())
+                .collect::<Vec<_>>(),
+            ["remote2", "remote3"]
+        );
+        assert!(final_page.next_page_token.is_none());
+        assert!(broker.is_cloud("remote3"));
+        assert!(!broker.can_continue("remote"));
+    }
+
+    #[test]
+    fn native_cursor_custody_is_bounded_and_expired_handles_are_removed() {
+        let mut cache = CursorCache::default();
+        let first = cache.insert(Cursor::default()).unwrap();
+        assert_eq!(cache.insert(Cursor::default()).unwrap(), first);
+        for index in 0..MAX_CURSORS {
+            cache
+                .insert(Cursor {
+                    scope: index.to_string(),
+                    ..Cursor::default()
+                })
+                .unwrap();
+        }
+        assert_eq!(cache.entries.len(), MAX_CURSORS);
+        assert!(!cache.entries.contains_key(&first));
+        let mut oversized = Cursor::default();
+        let mut run = run("large", "session");
+        run.title = "x".repeat(MAX_CURSOR_BYTES + 1);
+        oversized.primary.pending.push_back(run);
+        assert!(cache.insert(oversized).is_err());
     }
 }

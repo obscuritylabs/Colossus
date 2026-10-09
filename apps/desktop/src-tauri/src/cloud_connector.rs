@@ -280,10 +280,39 @@ fn spawn_connector(
         }
     })
 }
+async fn refresh_inventory(
+    state: &AppState,
+    target: &str,
+    mut config: ConnectionConfig,
+) -> Result<ConnectionConfig, CommandErrorDto> {
+    if let Some(inventory) = config.inventory.as_mut() {
+        // Refresh presentation only. Existing host/workspace identities and sharing
+        // authority stay bound to this enrollment.
+        inventory.host_label = colossus_connector::native_host_label();
+        let inventory = inventory.clone();
+        config = store(state, target)?
+            .set_inventory(inventory)
+            .await
+            .map_err(failure)?;
+    } else {
+        let inventory = colossus_connector::native_inventory(
+            format!("workspace:{}", config.instance_id),
+            "Desktop workspace".into(),
+            colossus_connector::DeploymentKind::Desktop,
+        )
+        .map_err(failure)?;
+        config = store(state, target)?
+            .set_inventory(inventory)
+            .await
+            .map_err(failure)?;
+    }
+    Ok(config)
+}
+
 async fn start(
     state: &AppState,
     target: String,
-    mut config: ConnectionConfig,
+    config: ConnectionConfig,
     key: Zeroizing<String>,
     runs: Arc<dyn AgentRunClient>,
 ) -> Result<CloudStatus, CommandErrorDto> {
@@ -302,27 +331,7 @@ async fn start(
     {
         return Err(failure("The enrolled local runtime identity has changed."));
     }
-    if let Some(inventory) = config.inventory.as_mut() {
-        // Refresh presentation only. Existing host/workspace identities and sharing
-        // authority stay bound to this enrollment.
-        inventory.host_label = colossus_connector::native_host_label();
-        let inventory = inventory.clone();
-        config = store(state, &target)?
-            .set_inventory(inventory)
-            .await
-            .map_err(failure)?;
-    } else {
-        let inventory = colossus_connector::native_inventory(
-            format!("workspace:{}", config.instance_id),
-            "Desktop workspace".into(),
-            colossus_connector::DeploymentKind::Desktop,
-        )
-        .map_err(failure)?;
-        config = store(state, &target)?
-            .set_inventory(inventory)
-            .await
-            .map_err(failure)?;
-    }
+    let config = refresh_inventory(state, &target, config).await?;
     let connector = RuntimeConnector::new(config.clone(), key, runs)
         .map_err(failure)?
         .with_resources(colossus_connector::ConnectorResources {
