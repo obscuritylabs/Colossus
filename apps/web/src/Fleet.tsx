@@ -206,7 +206,7 @@ export function Fleet({
       },
       {
         id: "actions",
-        label: "Actions",
+        label: "Open",
         className: "fleet-table-actions-cell",
         sortable: false,
         hideable: false,
