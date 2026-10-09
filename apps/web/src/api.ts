@@ -80,6 +80,7 @@ export interface ThreadDetailResponse {
   thread: Thread;
   tasks: Task[];
   messages: ThreadMessage[];
+  message_authors?: Record<string, { user_id: string; display_name: string }>;
   next_task_cursor?: string | null;
   next_message_cursor?: string | null;
 }

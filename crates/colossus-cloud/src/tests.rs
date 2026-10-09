@@ -6,6 +6,8 @@ use std::{collections::BTreeSet, sync::Arc};
 
 #[path = "tests/inventory.rs"]
 mod inventory;
+#[path = "tests/message_authors.rs"]
+mod message_authors;
 #[path = "tests/resources.rs"]
 mod resources;
 
@@ -769,6 +771,7 @@ async fn discovery_is_idempotent_and_source_controls_follow_runtime_authority() 
     assert_eq!(detail.thread.revision, before);
     assert!(detail.thread.can_continue);
     assert!(detail.tasks[0].source_read_only);
+    assert!(detail.message_authors.is_empty());
     assert_eq!(
         repo.cancel_task(&caller, &detail.tasks[0].task_id, "cancel-shared")
             .await

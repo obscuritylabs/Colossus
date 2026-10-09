@@ -149,6 +149,10 @@ export function ThreadDetail({
           setDetail((current) => ({
             ...value,
             messages: mergeMessages(current.messages, value.messages),
+            message_authors: {
+              ...current.message_authors,
+              ...value.message_authors,
+            },
             tasks: mergeTasks(current.tasks, value.tasks),
             next_message_cursor:
               (historyLoaded.current
@@ -272,6 +276,10 @@ export function ThreadDetail({
       setDetail((current) => ({
         ...current,
         messages: mergeMessages(current.messages, value.messages),
+        message_authors: {
+          ...current.message_authors,
+          ...value.message_authors,
+        },
         tasks: mergeTasks(current.tasks, value.tasks),
         next_message_cursor: value.next_message_cursor ?? null,
         next_task_cursor: value.next_task_cursor ?? null,
@@ -654,7 +662,8 @@ export function ThreadDetail({
                   }
                   author={
                     message.role === "user"
-                      ? "Human"
+                      ? detail.message_authors?.[message.message_id]
+                          ?.display_name || "User"
                       : message.role === "assistant"
                         ? "Colossus"
                         : statusLabel(message.role)

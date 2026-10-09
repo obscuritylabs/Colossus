@@ -139,6 +139,34 @@ async function conversationMenuItem(label: string) {
 }
 
 describe("human cloud conversation authority", () => {
+  it("renders recorded account names and leaves imported authors neutral", async () => {
+    const messages = ["own", "other", "imported"].map((id, index) => ({
+      message_id: id,
+      role: "user",
+      text: `${id} message`,
+      created_at: `2026-10-05T10:0${index}:00Z`,
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        response({
+          ...history,
+          messages,
+          message_authors: {
+            own: { user_id: "alice", display_name: "Alice Example" },
+            other: { user_id: "bob", display_name: "Bob Example" },
+          },
+        }),
+      ),
+    );
+    await render(thread, [node], ["read"]);
+    expect(
+      [...container.querySelectorAll(".shared-feed-heading strong")].map(
+        (entry) => entry.textContent,
+      ),
+    ).toEqual(["Alice Example", "Bob Example", "User"]);
+    expect(container.textContent).not.toContain("Human");
+  });
   it("exposes a real Back permalink while plain clicks preserve the host callback and modified clicks remain native", async () => {
     vi.stubGlobal(
       "fetch",
@@ -504,6 +532,9 @@ describe("human cloud conversation authority", () => {
         if (path.includes("message_after="))
           return response({
             ...history,
+            message_authors: {
+              "message-a": { user_id: "bob", display_name: "Bob Example" },
+            },
             messages: [
               {
                 message_id: "message-a",
@@ -525,6 +556,9 @@ describe("human cloud conversation authority", () => {
         (item) => item.textContent,
       ),
     ).toEqual(["Earlier human request", "Saved assistant reply"]);
+    expect(
+      container.querySelector(".shared-feed-heading strong")?.textContent,
+    ).toBe("Bob Example");
     const archive = await conversationMenuItem("Archive");
     await act(async () => archive.click());
     const mutation = calls.find((item) => item.options.method === "PATCH")!;

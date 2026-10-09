@@ -14,6 +14,7 @@ mod delivery;
 mod enrollment;
 mod history;
 mod inventory;
+mod message_authors;
 mod nodes;
 mod projects;
 mod renewal;

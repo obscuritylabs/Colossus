@@ -278,11 +278,13 @@ impl CloudRepository {
                 .cmp(&b.created_at)
                 .then_with(|| a.message_id.cmp(&b.message_id))
         });
+        let message_authors = self.message_authors(&thread, &tasks, &messages).await?;
 
         Ok(CloudThreadDetail {
             thread,
             tasks,
             messages,
+            message_authors,
             next_task_cursor,
             next_message_cursor,
         })
