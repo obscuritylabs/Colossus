@@ -87,10 +87,39 @@ class ComponentTests(unittest.TestCase):
         destination = self.root / "source"
         component.extract_archive(archive, destination, "cef")
         original = component.source_archive_inventory(archive, "cef")
-        self.assertEqual(original, component.inventory_files(destination, component.SOURCE_MANIFEST))
+        self.assertTrue(component.source_inventory_matches(
+            original, component.inventory_files(destination, component.SOURCE_MANIFEST)))
         (destination / "resources/file").write_text("changed")
         forged_receipt = component.inventory_files(destination, component.SOURCE_MANIFEST)
-        self.assertNotEqual(original, forged_receipt)
+        self.assertFalse(component.source_inventory_matches(original, forged_receipt))
+
+    def test_windows_source_comparison_ignores_only_unrepresentable_posix_modes(self):
+        expected = [
+            {"path": "Release", "kind": "directory", "mode": 0o755},
+            {"path": "Release/libcef.dll", "kind": "file", "size": 42,
+             "sha256": "a" * 64, "mode": 0o644},
+            {"path": "alias", "kind": "symlink", "target": "Release",
+             "sha256": "b" * 64},
+        ]
+        windows = [{**record, "mode": 0o777 if record["kind"] == "directory" else 0o666}
+                   if "mode" in record else record.copy() for record in expected]
+        with patch.object(component.os, "name", "nt"):
+            self.assertTrue(component.source_inventory_matches(expected, windows))
+            for field, changed in (("size", 43), ("sha256", "0" * 64),
+                                   ("path", "Release/foreign.dll"), ("kind", "symlink"),
+                                   ("mode", 0o444), ("mode", "writable")):
+                tampered = [record.copy() for record in windows]
+                tampered[1][field] = changed
+                self.assertFalse(component.source_inventory_matches(expected, tampered))
+            tampered = [record.copy() for record in windows]
+            tampered[2]["target"] = "foreign"
+            self.assertFalse(component.source_inventory_matches(expected, tampered))
+            self.assertFalse(component.source_inventory_matches(expected, windows[:-1]))
+            self.assertFalse(component.source_inventory_matches(expected, windows + [windows[-1]]))
+            self.assertFalse(component.source_inventory_matches(expected, [None]))
+            self.assertFalse(component.source_inventory_matches(expected, None))
+        with patch.object(component.os, "name", "posix"):
+            self.assertFalse(component.source_inventory_matches(expected, windows))
 
     def test_portable_path_rejections(self):
         for path in ("/root", "../escape", "cef/../escape", "cef/./file", "cef//file",

@@ -267,6 +267,84 @@ async fn granting_control_waits_for_native_quiescence() {
 }
 
 #[tokio::test]
+async fn terminal_native_cancellation_never_offers_a_destroyed_page_for_takeover_or_resume() {
+    for takeover in [false, true] {
+        let driver = Arc::new(TestDriver::default());
+        driver.terminal_cancel.store(true, Ordering::SeqCst);
+        let (coordinator, actor, session, lease) = setup(driver.clone()).await;
+        let result = if takeover {
+            coordinator
+                .takeover(&actor.binding, &session.session_id)
+                .await
+        } else {
+            coordinator.pause(&actor.binding, &session.session_id).await
+        }
+        .unwrap();
+        assert_eq!(result.lifecycle, BrowserLifecycle::Interrupted);
+        assert_eq!(result.control, BrowserControlState::Unavailable);
+        assert_eq!(driver.active_tabs(), 0);
+        assert!(matches!(
+            coordinator.grant_control(&actor, &session.session_id, 30_000),
+            Err(BrowserError::Unavailable)
+        ));
+        assert!(matches!(
+            coordinator.lease(&actor, &session.session_id, lease.control_generation),
+            Err(BrowserError::StaleControl)
+        ));
+        assert!(matches!(
+            coordinator.invalidate_document(
+                &actor.binding,
+                &session.session_id,
+                &session.tabs[0].tab_id
+            ),
+            Err(BrowserError::Unavailable)
+        ));
+        coordinator
+            .close(&actor.binding, &session.session_id)
+            .await
+            .unwrap();
+        assert!(coordinator.list(&actor.binding).unwrap().is_empty());
+        assert_eq!(driver.closes.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn terminal_native_lease_expiry_retains_only_an_unavailable_cleanup_obligation() {
+    let driver = Arc::new(TestDriver::default());
+    driver.terminal_cancel.store(true, Ordering::SeqCst);
+    let coordinator = BrowserCoordinator::new(driver.clone(), BrowserLimits::default());
+    let actor = actor();
+    let session = coordinator
+        .open_for_run(&actor, options(), &RunControl::default())
+        .await
+        .unwrap();
+    coordinator
+        .grant_control(&actor, &session.session_id, 1)
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let status = coordinator
+                .get(&actor.binding, &session.session_id)
+                .unwrap();
+            if status.lifecycle == BrowserLifecycle::Interrupted {
+                assert_eq!(status.control, BrowserControlState::Unavailable);
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(driver.active_tabs(), 0);
+    assert!(matches!(
+        coordinator.grant_control(&actor, &session.session_id, 30_000),
+        Err(BrowserError::Unavailable)
+    ));
+    coordinator.finish_run(&actor).await.unwrap();
+    assert!(coordinator.list(&actor.binding).unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn lease_expiry_quiesces_background_activity_without_another_tool_call() {
     let driver = Arc::new(TestDriver::default());
     let coordinator = BrowserCoordinator::new(driver.clone(), BrowserLimits::default());

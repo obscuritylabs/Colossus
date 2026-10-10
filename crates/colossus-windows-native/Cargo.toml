@@ -13,10 +13,13 @@ thiserror.workspace = true
 tokio.workspace = true
 windows-sys = { workspace = true, features = [
     "Wdk_Storage_FileSystem",
+    "Wdk_Foundation",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_Security_Authorization",
+    "Win32_Security_Isolation",
+    "Win32_NetworkManagement_WindowsFirewall",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_Diagnostics_ToolHelp",

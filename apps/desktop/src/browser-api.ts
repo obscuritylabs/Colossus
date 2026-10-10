@@ -11,6 +11,7 @@ export interface BrowserTab {
   notice: string | null;
   popupUrl: string | null;
   sessionId?: string;
+  conversationId?: string | null;
   control?: "human" | "agent" | "paused" | "unavailable";
 }
 
@@ -26,6 +27,7 @@ export interface BrowserCertificateStatus {
   scope: "operating_system_user" | "unsupported";
   caImportAvailable: boolean;
   pfxImportAvailable: boolean;
+  clientIdentityReviewAvailable?: boolean;
   clientIdentitySelectionReady: boolean;
   acceptancePending: boolean;
   message: string;
@@ -33,7 +35,7 @@ export interface BrowserCertificateStatus {
 }
 
 export type BrowserCertificateAction =
-  "status" | "import_ca" | "import_client_identity";
+  "status" | "import_ca" | "import_client_identity" | "review_client_identity";
 
 export interface BrowserSnapshot {
   available: boolean;
@@ -44,7 +46,8 @@ export interface BrowserSnapshot {
 }
 
 export type BrowserAction =
-  | { type: "new"; url: string }
+  | { type: "new"; url: string; conversationId?: string }
+  | { type: "handoff"; tabId: string; runId: string }
   | { type: "navigate"; tabId: string; url: string }
   | {
       type:
@@ -78,6 +81,7 @@ export interface BrowserApi {
       colorScheme: "system" | "dark" | "light";
       textSize: "compact" | "comfortable" | "large";
     },
+    tabId?: string,
   ): Promise<BrowserCertificateStatus>;
 }
 
@@ -86,9 +90,9 @@ export const nativeBrowserApi: BrowserApi = {
   command: (generation, action) =>
     invoke("browser_command", { request: { generation, action } }),
   viewport: (request) => invoke("browser_viewport", { request }),
-  certificates: (generation, action, appearance) =>
+  certificates: (generation, action, appearance, tabId) =>
     invoke("browser_certificates", {
-      request: { generation, action, appearance },
+      request: { generation, action, appearance, tabId },
     }),
 };
 

@@ -1,6 +1,19 @@
 use crate::Runtime;
 
 impl Runtime {
+    /// Bind the released browser artifact adapter from trusted native composition.
+    /// Repeated composition preserves the original adapter; renderer/model code cannot call this port.
+    pub fn install_browser_artifact_publisher(
+        &self,
+        publisher: std::sync::Arc<dyn colossus_ports::BrowserArtifactPublisher>,
+    ) {
+        if let Some(browser) = &self.browser
+            && let Ok(mut installed) = browser.artifacts.lock()
+            && installed.is_none()
+        {
+            *installed = Some(publisher);
+        }
+    }
     /// Credential-free installed browser capability evidence. Missing native components
     /// never fall back to a personal browser or an unverified engine.
     pub fn browser_capabilities(&self) -> colossus_contracts::BrowserCapabilities {
@@ -17,6 +30,9 @@ impl Runtime {
         let Some(browser) = &self.browser else {
             return false;
         };
+        if browser.native.active() {
+            return true;
+        }
         let Ok(runs) = browser.runs.lock() else {
             return true;
         };

@@ -1,5 +1,6 @@
 [workspace]
 resolver = "3"
+exclude = ["native/browser/driver", "native/browser/pki"]
 members = [
     "crates/colossus-cloud",
     "crates/colossus-cloud-postgres",
@@ -11,6 +12,8 @@ members = [
     "crates/colossus-domain",
     "crates/colossus-contracts",
     "crates/colossus-browser",
+    "crates/colossus-browser-bridge",
+    "crates/colossus-browser-presentation",
     "crates/colossus-credentials",
     "crates/colossus-api-proto",
     "crates/colossus-api",
@@ -78,6 +81,8 @@ publish-sdks = false
 
 [workspace.dependencies]
 colossus-browser = { version = "=0.11.8", path = "crates/colossus-browser" }
+colossus-browser-bridge = { version = "=0.11.8", path = "crates/colossus-browser-bridge" }
+colossus-browser-presentation = { version = "=0.11.8", path = "crates/colossus-browser-presentation" }
 colossus-communication = { version = "=0.11.8", path = "crates/colossus-communication" }
 chrono = "0.4.44"
 openidconnect = { version = "4.0.1", default-features = false, features = ["reqwest", "rustls-tls"] }

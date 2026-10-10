@@ -9,6 +9,17 @@ use colossus_ports::{
 };
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+#[cfg(all(target_os = "linux", debug_assertions))]
+mod native;
+#[cfg(all(target_os = "linux", debug_assertions))]
+mod native_pki;
+#[cfg(all(target_os = "linux", debug_assertions))]
+mod native_presentation;
+#[cfg(all(target_os = "linux", debug_assertions))]
+mod native_profiles;
+mod screenshot;
+mod transfer;
+
 struct Driver {
     capabilities: BrowserCapabilities,
     opened: AtomicUsize,
@@ -17,6 +28,10 @@ struct Driver {
     close_started: AtomicUsize,
     blocked_close: StdMutex<Option<(BrowserSessionId, Arc<tokio::sync::Notify>)>>,
     unknown: AtomicBool,
+    captured: AtomicUsize,
+    capture_command: StdMutex<Option<BrowserDriverCommand>>,
+    transfers: AtomicUsize,
+    transfer: StdMutex<Option<transfer::Pending>>,
 }
 
 impl Driver {
@@ -43,6 +58,10 @@ impl Driver {
             close_started: AtomicUsize::new(0),
             blocked_close: StdMutex::new(None),
             unknown: AtomicBool::new(false),
+            captured: AtomicUsize::new(0),
+            capture_command: StdMutex::new(None),
+            transfers: AtomicUsize::new(0),
+            transfer: StdMutex::new(None),
         }
     }
 }
@@ -51,6 +70,55 @@ impl Driver {
 impl BrowserDriver for Driver {
     fn capabilities(&self) -> BrowserCapabilities {
         self.capabilities.clone()
+    }
+    async fn capture(
+        &self,
+        command: BrowserDriverCommand,
+        control: &BrowserDriverControl,
+    ) -> Result<colossus_ports::BrowserScreenshotDescriptor, BrowserDriverError> {
+        if control.is_cancelled() {
+            return Err(BrowserDriverError::Cancelled);
+        }
+        self.captured.fetch_add(1, Ordering::SeqCst);
+        let bytes = BASE64.decode(screenshot::PNG).unwrap();
+        let descriptor = colossus_ports::BrowserScreenshotDescriptor {
+            session_id: command.session_id.clone(),
+            target: command.target.clone(),
+            control_generation: command.control_generation,
+            transfer_id: "d".repeat(32),
+            size_bytes: bytes.len() as u32,
+            sha256: hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes)),
+            width: 1,
+            height: 1,
+        };
+        *self.capture_command.lock().unwrap() = Some(command);
+        Ok(descriptor)
+    }
+    async fn read_screenshot_chunk(
+        &self,
+        request: colossus_ports::BrowserScreenshotReadRequest,
+        control: &BrowserDriverControl,
+    ) -> Result<colossus_ports::BrowserScreenshotChunk, BrowserDriverError> {
+        let command = self
+            .capture_command
+            .lock()
+            .unwrap()
+            .take()
+            .ok_or(BrowserDriverError::Stale)?;
+        if control.is_cancelled()
+            || request.offset != 0
+            || request.binding != command.binding
+            || request.run_id != command.run_id
+            || request.session_id != command.session_id
+            || request.target != command.target
+            || request.control_generation != command.control_generation
+        {
+            return Err(BrowserDriverError::Stale);
+        }
+        Ok(colossus_ports::BrowserScreenshotChunk {
+            offset: 0,
+            data_base64: screenshot::PNG.into(),
+        })
     }
 
     async fn open_session(
@@ -68,6 +136,42 @@ impl BrowserDriver for Driver {
             origin: request.options.initial_url.map(|url| url.origin()),
             title: "fixture".into(),
         })
+    }
+
+    async fn prepare_upload(
+        &self,
+        request: colossus_ports::BrowserUploadPrepareRequest,
+        _: &BrowserDriverControl,
+    ) -> Result<colossus_ports::BrowserUploadReceipt, BrowserDriverError> {
+        self.transfer_prepare(request)
+    }
+    async fn write_upload_chunk(
+        &self,
+        request: colossus_ports::BrowserUploadWriteRequest,
+        _: &BrowserDriverControl,
+    ) -> Result<colossus_ports::BrowserUploadReceipt, BrowserDriverError> {
+        self.transfer_write(request)
+    }
+    async fn commit_upload(
+        &self,
+        request: colossus_ports::BrowserUploadCommitRequest,
+        _: &BrowserDriverControl,
+    ) -> Result<BrowserObservation, BrowserDriverError> {
+        self.transfer_commit(request)
+    }
+    async fn download(
+        &self,
+        command: BrowserDriverCommand,
+        _: &BrowserDriverControl,
+    ) -> Result<colossus_ports::BrowserDownloadDescriptor, BrowserDriverError> {
+        self.transfer_download(command)
+    }
+    async fn read_download_chunk(
+        &self,
+        request: colossus_ports::BrowserDownloadReadRequest,
+        _: &BrowserDriverControl,
+    ) -> Result<colossus_ports::BrowserDownloadChunk, BrowserDriverError> {
+        self.transfer_read(request)
     }
 
     async fn execute(
@@ -165,6 +269,7 @@ fn executor(runtime: &Runtime) -> BrowserToolExecutor {
         gateway: Arc::clone(&runtime.gateway),
         registry: Arc::clone(&runtime.tools),
         browser: Arc::clone(runtime.browser.as_ref().unwrap()),
+        journal: runtime.journal(),
         inner: Arc::new(NoFallback),
     }
 }

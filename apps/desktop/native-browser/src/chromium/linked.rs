@@ -39,27 +39,15 @@ pub fn bootstrap(root: &Path, helper: &Path) -> Bootstrap {
     if READY.get().is_some() {
         return Bootstrap::Unavailable(BrowserError::BootstrapRequired);
     }
-    // Ordinary Tauri Windows entry does not possess supported CEF sandbox info.
-    // Never set no_sandbox=true just to make this topology start.
-    #[cfg(windows)]
-    {
-        let _ = (root, helper);
-        let _ = READY.set(Err(BrowserError::BootstrapRequired));
-        return Bootstrap::Unavailable(BrowserError::BootstrapRequired);
-    }
-    #[cfg(not(windows))]
-    {
-        let result = bootstrap_inner(root, helper);
-        let _ = READY.set(match result {
-            Bootstrap::Ready => Ok(()),
-            Bootstrap::Unavailable(error) => Err(error),
-            Bootstrap::SubprocessExit(_) => Err(BrowserError::Closed),
-        });
-        result
-    }
+    let result = bootstrap_inner(root, helper);
+    let _ = READY.set(match result {
+        Bootstrap::Ready => Ok(()),
+        Bootstrap::Unavailable(error) => Err(error),
+        Bootstrap::SubprocessExit(_) => Err(BrowserError::Closed),
+    });
+    result
 }
 
-#[cfg(not(windows))]
 fn bootstrap_inner(root: &Path, helper: &Path) -> Bootstrap {
     if !helper.is_file() {
         return Bootstrap::Unavailable(BrowserError::ComponentMissing);
@@ -81,16 +69,24 @@ fn bootstrap_inner(root: &Path, helper: &Path) -> Bootstrap {
     let Ok((root, helper, args)) = build() else {
         return Bootstrap::Unavailable(BrowserError::Unavailable);
     };
+    let Ok(argument_count) = i32::try_from(args.len()) else {
+        return Bootstrap::Unavailable(BrowserError::Unavailable);
+    };
     let mut pointers = args
         .iter()
         .map(|arg| arg.as_ptr().cast_mut())
+        .chain(std::iter::once(std::ptr::null_mut()))
         .collect::<Vec<_>>();
+    let (platform_instance, sandbox_info) = match platform_bootstrap() {
+        Ok(context) => context,
+        Err(error) => return Bootstrap::Unavailable(error),
+    };
     let options = ffi::Options {
-        abi_version: 1,
-        argc: i32::try_from(pointers.len()).unwrap_or(0),
+        abi_version: ffi::ABI_VERSION,
+        argc: argument_count,
         argv: pointers.as_mut_ptr(),
-        platform_instance: 0,
-        sandbox_info: std::ptr::null_mut(),
+        platform_instance,
+        sandbox_info,
         root_cache_path: root.as_ptr(),
         browser_subprocess_path: helper.as_ptr(),
         headless: 0,
@@ -108,6 +104,48 @@ fn bootstrap_inner(root: &Path, helper: &Path) -> Bootstrap {
     } else {
         Bootstrap::Ready
     }
+}
+
+#[cfg_attr(
+    not(windows),
+    allow(
+        clippy::unnecessary_wraps,
+        reason = "Shared bootstrap API can fail when Windows has no CEF-owned entry."
+    )
+)]
+fn platform_bootstrap() -> Result<(usize, *mut std::ffi::c_void), BrowserError> {
+    #[cfg(windows)]
+    {
+        let mut instance = 0;
+        let mut sandbox = std::ptr::null_mut();
+        // SAFETY: Pointers refer to live local output slots. The native entry
+        // returns a context only while its bootstrap-owned main-thread call lives.
+        let code =
+            unsafe { ffi::colossus_cef_windows_context(&raw mut instance, &raw mut sandbox) };
+        if code != 0 {
+            return Err(BrowserError::BootstrapRequired);
+        }
+        Ok((instance, sandbox))
+    }
+    #[cfg(not(windows))]
+    Ok((0, std::ptr::null_mut()))
+}
+
+/// Run the Windows client DLL under CEF's bootstrap-owned loader and sandbox.
+///
+/// # Safety
+/// Call only from the pinned bootstrap's `RunWinMain` export. The instance,
+/// sandbox, version and callback must remain valid for the complete invocation.
+#[cfg(windows)]
+pub unsafe fn run_windows_client(
+    instance: usize,
+    sandbox: *mut std::ffi::c_void,
+    version: *mut std::ffi::c_void,
+    run: unsafe extern "C" fn() -> i32,
+) -> i32 {
+    // SAFETY: Forward the caller's bootstrap lifetime contract without retaining
+    // any borrowed pointer beyond the native, synchronous callback invocation.
+    unsafe { ffi::colossus_cef_windows_run(instance, sandbox, version, run) }
 }
 
 /// Called only from Tauri's main-thread scheduler.
@@ -173,6 +211,100 @@ impl Drop for PendingCreation {
 }
 
 impl Surface {
+    /// Return bounded public metadata for the live, exact native handshake.
+    ///
+    /// # Errors
+    /// Fails if the tab is closing, revoked, or its native generation changed.
+    pub fn pending_client_identity(
+        &self,
+    ) -> Result<Option<crate::pki::IdentityRequest>, BrowserError> {
+        let entries = callbacks::entries()
+            .lock()
+            .map_err(|_| BrowserError::Closed)?;
+        let entry = entries
+            .get(&self.tab)
+            .filter(|entry| {
+                entry.generation == self.generation && !entry.abandoned && entry.closed.is_none()
+            })
+            .ok_or(BrowserError::Closed)?;
+        Ok(entry
+            .identity_request
+            .as_ref()
+            .filter(|request| !request.is_expired())
+            .cloned())
+    }
+
+    /// Revoke native review before controller/workspace ownership changes.
+    /// Queued native cancellation does not block the controller registry lock.
+    pub fn revoke_client_identity(&self) {
+        self.cancel_identity_request(None);
+    }
+
+    /// Cancel only this review when its native dialog/future is dismissed.
+    pub fn cancel_client_identity(&self, review: &crate::pki::IdentityRequest) {
+        self.cancel_identity_request(Some(review.id));
+    }
+
+    fn cancel_identity_request(&self, expected: Option<u64>) {
+        let request = if let Ok(mut entries) = callbacks::entries().lock() {
+            entries
+                .get_mut(&self.tab)
+                .filter(|entry| entry.generation == self.generation)
+                .and_then(|entry| {
+                    if expected.is_some_and(|expected| {
+                        entry
+                            .identity_request
+                            .as_ref()
+                            .is_none_or(|request| request.id != expected)
+                    }) {
+                        return None;
+                    }
+                    entry.identity_epoch = entry.identity_epoch.wrapping_add(1);
+                    entry.identity_request.take().map(|request| request.id)
+                })
+        } else {
+            None
+        };
+        if let Some(request) = request {
+            let (tab, generation) = (self.tab, self.generation);
+            let _ = self.window.run_on_main_thread(move || {
+                // SAFETY: Cancel only the exact pending native request on UI.
+                let _ = unsafe { ffi::colossus_cef_select_identity(tab, generation, request, -1) };
+            });
+        }
+    }
+
+    /// Complete one native-reviewed origin/fingerprint selection on this guest.
+    /// The native callback uses the OS private key; no key is read by Rust.
+    ///
+    /// # Errors
+    /// Rejects stale/replaced/expired requests, unknown fingerprints, or closing
+    /// tabs. A consumed selection is never retried after a lost acknowledgement.
+    pub async fn select_client_identity(
+        &self,
+        review: &crate::pki::IdentityRequest,
+        fingerprint: Option<&str>,
+    ) -> Result<(), BrowserError> {
+        let review = review.clone();
+        let fingerprint = fingerprint.map(str::to_owned);
+        let (tab, generation) = (self.tab, self.generation);
+        self.dispatch(move || {
+            let index = {
+                let mut entries = callbacks::entries()
+                    .lock()
+                    .map_err(|_| BrowserError::Closed)?;
+                let entry = entries.get_mut(&tab).ok_or(BrowserError::Closed)?;
+                // This consumption is the dispatch linearization point. Scope
+                // revocation clears requests under this same registry lock.
+                callbacks::consume_identity(entry, generation, &review, fingerprint.as_deref())?
+            };
+            // SAFETY: Native checks request ID, tab generation, deadline and
+            // candidate index again immediately before platform key use.
+            status(unsafe { ffi::colossus_cef_select_identity(tab, generation, review.id, index) })
+        })
+        .await
+    }
+
     /// Create one hidden child CEF view after pre-application initialization.
     ///
     /// # Errors
@@ -203,6 +335,8 @@ impl Surface {
                     closed: None,
                     inspection: None,
                     abandoned: false,
+                    identity_epoch: 0,
+                    identity_request: None,
                     #[cfg(feature = "native-test-driver")]
                     acceptance: None,
                 },
@@ -494,6 +628,21 @@ impl Surface {
         self.dispatch(move || {
             // SAFETY: Exact native identity and owning UI thread, test-only API.
             status(unsafe { ffi::colossus_cef_acceptance_terminate(tab, generation) })
+        })
+        .await
+    }
+
+    /// Exercise fixed native OS mouse and keyboard input in the test fixture.
+    ///
+    /// # Errors
+    /// Requires a visible, foreground Windows guest and accepted OS input.
+    #[cfg(all(windows, feature = "native-test-driver"))]
+    pub async fn acceptance_input(&self) -> Result<(), BrowserError> {
+        let (tab, generation) = (self.tab, self.generation);
+        self.dispatch(move || {
+            // SAFETY: The callback runs on the guest's owning UI thread. Native
+            // code validates the HWND/foreground and sends only fixed fixture input.
+            status(unsafe { ffi::colossus_cef_acceptance_input(tab, generation) })
         })
         .await
     }

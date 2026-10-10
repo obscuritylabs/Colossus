@@ -166,10 +166,13 @@ pub(super) fn validate_model_request(
             ));
         }
         if matches!(message.content, ModelContent::Parts(_))
-            && message.role != ModelMessageRole::User
+            && !matches!(
+                message.role,
+                ModelMessageRole::User | ModelMessageRole::ToolObservation
+            )
         {
             return Err(ProviderError::Configuration(
-                "multipart content is accepted only for user messages".into(),
+                "multipart content requires user or released tool provenance".into(),
             ));
         }
         for image in message.content.images() {
@@ -341,7 +344,7 @@ fn responses_messages_with_images(
             "role": "developer",
             "content": scalar_content(message)?,
         })]),
-        ModelMessageRole::User => Ok(vec![json!({
+        ModelMessageRole::User | ModelMessageRole::ToolObservation => Ok(vec![json!({
             "role": "user",
             "content": responses_user_content(&message.content, images)?,
         })]),
@@ -502,11 +505,14 @@ fn chat_message_with_images(
 ) -> Result<Value, ProviderError> {
     let role = match message.role {
         ModelMessageRole::System => "system",
-        ModelMessageRole::User => "user",
+        ModelMessageRole::User | ModelMessageRole::ToolObservation => "user",
         ModelMessageRole::Assistant => "assistant",
         ModelMessageRole::Tool => "tool",
     };
-    let content = if message.role == ModelMessageRole::User {
+    let content = if matches!(
+        message.role,
+        ModelMessageRole::User | ModelMessageRole::ToolObservation
+    ) {
         chat_user_content(&message.content, images)?
     } else {
         Value::String(scalar_content(message)?.to_owned())
@@ -560,7 +566,7 @@ fn scalar_content(message: &ModelMessage) -> Result<&str, ProviderError> {
             "{} messages require scalar text content",
             match message.role {
                 ModelMessageRole::System => "system",
-                ModelMessageRole::User => "user",
+                ModelMessageRole::User | ModelMessageRole::ToolObservation => "user",
                 ModelMessageRole::Assistant => "assistant",
                 ModelMessageRole::Tool => "tool",
             }

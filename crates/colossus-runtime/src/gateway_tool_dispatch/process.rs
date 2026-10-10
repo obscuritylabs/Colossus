@@ -122,6 +122,7 @@ impl GatewayToolExecutor {
                         )
                         .await?;
                     return Ok(ToolResult {
+                        images: Vec::new(),
                         call_id: call.call_id,
                         name: call.name,
                         exit_code: match snapshot.session.status {
@@ -178,6 +179,7 @@ impl GatewayToolExecutor {
             name => return Err(ToolError::Unknown(name.into())),
         };
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output,

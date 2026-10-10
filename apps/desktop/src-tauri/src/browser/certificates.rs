@@ -1,5 +1,8 @@
 //! Native PKI setup. Renderer requests actions/preferences, never secret material.
 
+#[cfg(feature = "embedded-chromium-preview")]
+mod review;
+
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State, Webview};
 
@@ -12,6 +15,7 @@ pub(crate) enum CertificateAction {
     Status,
     ImportCa,
     ImportClientIdentity,
+    ReviewClientIdentity,
 }
 
 #[derive(Deserialize)]
@@ -19,6 +23,7 @@ pub(crate) enum CertificateAction {
 pub(crate) struct CertificateRequest {
     generation: u64,
     action: CertificateAction,
+    tab_id: Option<String>,
     appearance: Option<DialogAppearanceInput>,
 }
 
@@ -29,6 +34,7 @@ pub(crate) struct CertificateStatusDto {
     scope: &'static str,
     ca_import_available: bool,
     pfx_import_available: bool,
+    client_identity_review_available: bool,
     client_identity_selection_ready: bool,
     acceptance_pending: bool,
     message: String,
@@ -44,6 +50,7 @@ impl CertificateStatusDto {
                 scope: status.scope,
                 ca_import_available: status.ca_import_available,
                 pfx_import_available: status.pfx_import_available,
+                client_identity_review_available: status.client_identity_review_available,
                 client_identity_selection_ready: status.client_identity_selection_ready,
                 acceptance_pending: status.acceptance_pending,
                 message: status.message.into(),
@@ -51,7 +58,7 @@ impl CertificateStatusDto {
             }
         }
         #[cfg(not(feature = "embedded-chromium-preview"))]
-        Self { scope: "operating_system_user", ca_import_available: false, pfx_import_available: false, client_identity_selection_ready: false, acceptance_pending: false, message: "The current browser uses native operating-system trust. Browser certificate import is available only in the embedded Chromium preview. Colossus network CA bundles and client identities do not configure this browser.".into(), fingerprints_sha256: Vec::new() }
+        Self { scope: "operating_system_user", ca_import_available: false, pfx_import_available: false, client_identity_review_available: false, client_identity_selection_ready: false, acceptance_pending: false, message: "The current browser uses native operating-system trust. Browser certificate import is available only in the embedded Chromium preview. Colossus network CA bundles and client identities do not configure this browser.".into(), fingerprints_sha256: Vec::new() }
     }
 }
 
@@ -64,6 +71,13 @@ pub(crate) async fn browser_certificates(
 ) -> Result<CertificateStatusDto, CommandErrorDto> {
     require_controller(&caller)?;
     let scope = state.browser.validate(request.generation)?;
+    if !matches!(request.action, CertificateAction::ReviewClientIdentity)
+        && request.tab_id.is_some()
+    {
+        return Err(error(
+            "A tab can be selected only for native identity review.",
+        ));
+    }
     if matches!(request.action, CertificateAction::Status) {
         return Ok(CertificateStatusDto::current());
     }
@@ -75,7 +89,13 @@ pub(crate) async fn browser_certificates(
         ))
     }
     #[cfg(feature = "embedded-chromium-preview")]
-    import(app, &caller, &state, request, &scope).await
+    {
+        if matches!(request.action, CertificateAction::ReviewClientIdentity) {
+            review::review(app, &caller, &state, request, &scope).await
+        } else {
+            import(app, &caller, &state, request, &scope).await
+        }
+    }
 }
 
 #[cfg(feature = "embedded-chromium-preview")]
@@ -150,7 +170,7 @@ async fn import(
     } else {
         "CA certificate DER SHA-256"
     };
-    let agreed = app.dialog().message(format!("Import this selected native certificate input?\n\n{description}: {fingerprint}\n\nThis changes the operating-system user's certificate store and can affect other applications. Browser profiles do not isolate this trust. All Colossus browser tabs will close before import. Chromium client-certificate selection is unavailable until native acceptance passes. Manage removal through the operating system's certificate manager.")).title("Review browser certificate import (preview)").kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancel).blocking_show();
+    let agreed = app.dialog().message(format!("Import this selected native certificate input?\n\n{description}: {fingerprint}\n\nThis changes the operating-system user's certificate store and can affect other applications. Browser profiles do not isolate this trust. All Colossus browser tabs will close before import. Native Chromium client identity requests require a separate exact-origin fingerprint review. Installed key-use acceptance remains pending. Manage removal through the operating system's certificate manager.")).title("Review browser certificate import (preview)").kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancel).blocking_show();
     if !agreed {
         return Ok(CertificateStatusDto::current());
     }
@@ -185,7 +205,7 @@ async fn import(
     drop(operation);
     let mut status = CertificateStatusDto::current();
     status.fingerprints_sha256 = receipt.fingerprints_sha256;
-    status.message = "Imported into the operating-system user store. Native Chromium trust/key-use acceptance is pending; importing an identity does not enable mTLS selection. Manage removal through the operating system's certificate manager.".into();
+    status.message = "Imported into the operating-system user store. Review the exact origin and certificate fingerprint when Chromium requests a client identity. Installed trust/key-use acceptance remains pending. Manage removal through the operating system's certificate manager.".into();
     Ok(status)
 }
 
@@ -194,7 +214,14 @@ mod tests {
     use super::*;
     #[test]
     fn certificate_requests_have_no_path_password_or_key_fields() {
-        for secret in ["path", "password", "privateKey", "keyBytes"] {
+        for secret in [
+            "path",
+            "password",
+            "privateKey",
+            "keyBytes",
+            "origin",
+            "fingerprint",
+        ] {
             let value = serde_json::json!({"generation": 1, "action": "import_client_identity", "appearance": null, (secret): "must not cross IPC"});
             assert!(serde_json::from_value::<CertificateRequest>(value).is_err());
         }

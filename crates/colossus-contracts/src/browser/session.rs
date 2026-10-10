@@ -61,6 +61,35 @@ pub struct BrowserOpenOptions {
     /// Optional initial navigation in that envelope.
     #[serde(default)]
     pub initial_url: Option<BrowserUrl>,
+    /// Temporary by default; an opaque profile requires separate native owner validation.
+    #[serde(default)]
+    pub profile: BrowserProfileSelection,
+}
+
+/// Closed persistence choice; native filesystem paths and personal profiles are forbidden.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BrowserProfileSelection {
+    /// Fresh ephemeral browser state, removed after verified native cleanup.
+    #[default]
+    Temporary,
+    /// Existing explicit profile belonging to this authenticated workspace/application.
+    Workspace {
+        /// Opaque native-created identifier; never an engine path or directory name.
+        id: BrowserProfileId,
+    },
+}
+
+/// Credential-free profile management metadata; no cache path or stored site data.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserProfileSummary {
+    /// Opaque profile, independently checked against native ownership on every use.
+    pub id: BrowserProfileId,
+    /// Bounded user label, treated as untrusted text.
+    pub name: String,
+    /// A positively reaped abnormal shutdown requires explicit reset before reuse.
+    pub reset_required: bool,
 }
 
 /// Engine lifecycle, independent from human/agent control.

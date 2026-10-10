@@ -12,6 +12,13 @@ use thiserror::Error;
 
 mod api;
 pub use api::*;
+mod channels;
+pub use channels::{PrivateProcessChannel, SupervisedChild, spawn_with_private_channels};
+
+#[cfg(windows)]
+mod private_io;
+#[cfg(windows)]
+pub use private_io::{PrivateIoLease, PrivatePipe, PrivatePipeError, PrivateReader, PrivateWriter};
 
 #[cfg(windows)]
 mod windows_impl;

@@ -31,7 +31,7 @@ and output bounds.
 | Context | `context.show`, `context.compact`, `context.snapshots`, `context.restore` | Encrypted immutable snapshots |
 | Plugins | `plugin.list`, `plugin.inspect`, `plugin.skill.read`, `plugin.resource.list`, `plugin.resource.read` | Bounded metadata, selected Agent Skill instructions, and contained resources from the run snapshot |
 | Search and fetch | `web.search`, `web.fetch`, `docs.fetch`, `network.http` | Search needs an explicit route; generic fetch needs host activation plus declared or ambient HTTP(S) authority; quarantined output |
-| Browser | `browser.open`, `browser.status`, `browser.tabs`, `browser.tab.open`, `browser.tab.select`, `browser.tab.close`, `browser.navigate`, `browser.back`, `browser.forward`, `browser.reload`, `browser.stop`, `browser.snapshot`, `browser.click`, `browser.fill`, `browser.select`, `browser.press`, `browser.scroll`, `browser.wait`, `browser.close` | Owned run-scoped sessions; exact origin ceilings, generation-bound control and fresh document/element handles; unavailable without an accepted host backend |
+| Browser | `browser.open`, `browser.status`, `browser.tabs`, `browser.tab.open`, `browser.tab.select`, `browser.tab.close`, `browser.navigate`, `browser.back`, `browser.forward`, `browser.reload`, `browser.stop`, `browser.snapshot`, `browser.screenshot`, `browser.click`, `browser.upload`, `browser.download`, `browser.fill`, `browser.select`, `browser.press`, `browser.scroll`, `browser.wait`, `browser.close` | Owned run-scoped sessions; exact origin ceilings, generation-bound control and fresh document/element handles; unavailable without an accepted host backend |
 | MCP | `mcp.servers`, `mcp.search`, `mcp.tools`, `mcp.call` | Configured stdio or Streamable HTTP servers and exact-name or star-pattern tool allowlists |
 | Integrations | Connected operation names | Configured, trusted, and selected only |
 | Workflows | `workflow.definition.list`, `workflow.definition.get`, `workflow.schedule.list`, `workflow.schedule.get`, `workflow.schedule.create`, `workflow.task.schedule`, `workflow.schedule.set_enabled`, `workflow.schedule.delete` | Registered hash-pinned definitions; caller-owned calendar/interval workflow schedules and plain-language tasks; persistent mutations use policy, review, one-use permits, and quarantined results |
@@ -75,11 +75,12 @@ tools. The remaining native integration and release gates are recorded in the
 [owned Chromium browser ADR](../develop/adr/0008-owned-chromium-browser.md).
 
 Each browser tool uses its exact tool name as both effect action and capability.
-`browser.status`, `browser.tabs`, `browser.snapshot`, and `browser.wait` are Read
-actions. `browser.tab.select`, `browser.tab.close`, `browser.stop`, and `browser.close`
+`browser.status`, `browser.tabs`, `browser.snapshot`, `browser.screenshot`, and
+`browser.wait` are Read actions. `browser.tab.select`, `browser.tab.close`, `browser.stop`, and `browser.close`
 are Local state actions. All remaining browser tools are External network actions,
-including key input and scrolling, which can invoke page handlers. All results are
-bounded to 64 KiB and pass through quarantine and post-effect release.
+including key input and scrolling, which can invoke page handlers. All outputs pass
+through quarantine and post-effect release. Ordinary observations have a 64 KiB
+ceiling; screenshot and download tool output ceilings are 4 MiB.
 
 `browser.open` takes `mode` (`embedded` or `headless`), `allowed_origins` (one to 32
 unique HTTP(S) origins), and an optional `initial_url`. Requested origins narrow the
@@ -87,19 +88,27 @@ configured sandbox and run authority; they grant no additional network access.
 URLs are limited to 4096 UTF-8 bytes and reject user information. Origins contain
 no path other than an optional trailing slash, query, or fragment.
 
+The optional `profile` is a closed selector: `{"kind":"temporary"}` (the default)
+or `{"kind":"workspace","id":"bp_…"}` for an existing opaque native profile.
+The ID has 32 lowercase hexadecimal digits after `bp_`; native admission checks its
+authenticated workspace/application ownership and exclusive lease. It never accepts
+a cache path or personal browser profile. Workspace persistence is diagnostic-only
+and rejected by production composition until encrypted storage and disk quota are
+accepted. Profile creation, listing and reset have no model or native SDK command.
+
 The host derives actor, application, conversation, workspace, and run ownership.
 Model arguments carry only opaque returned browser handles. `session_id`, `tab_id`,
 `document_id`, `snapshot_id`, and `element_id` use the respective prefixes `bs_`,
 `bt_`, `bd_`, `bn_`, and `be_`, followed by 32 lowercase hexadecimal digits.
 `control_generation` is a positive integer returned by the host. It must be current;
-human takeover, cancellation, expiry, and uncertain effects invalidate old control.
+control transfer, cancellation, expiry, and uncertain effects invalidate old control.
 
 | Tools | Required arguments beyond the action-specific fields |
 | --- | --- |
 | `browser.status`, `browser.tabs` | `session_id` |
 | `browser.close`, `browser.tab.open`, `browser.tab.select`, `browser.tab.close` | `session_id`, `control_generation`; tab select/close also require `tab_id` |
-| `browser.navigate`, `browser.back`, `browser.forward`, `browser.reload`, `browser.stop`, `browser.snapshot`, `browser.press`, `browser.scroll`, `browser.wait` | `session_id`, `control_generation`, `tab_id`, `document_id` |
-| `browser.click`, `browser.fill`, `browser.select` | The document arguments plus fresh `snapshot_id` and `element_id` |
+| `browser.navigate`, `browser.back`, `browser.forward`, `browser.reload`, `browser.stop`, `browser.snapshot`, `browser.screenshot`, `browser.press`, `browser.scroll`, `browser.wait` | `session_id`, `control_generation`, `tab_id`, `document_id` |
+| `browser.click`, `browser.upload`, `browser.download`, `browser.fill`, `browser.select` | The document arguments plus fresh `snapshot_id` and `element_id` |
 
 `browser.tab.open` accepts an optional `url`; `browser.navigate` requires `url`.
 `browser.snapshot` requires `max_nodes` from one to 1024. `browser.fill` requires
@@ -115,10 +124,33 @@ other secret fields; protected native entry is a separate host concern.
 `{"kind":"element_visible","element":{"document_id":"…","snapshot_id":"…","element_id":"…"}}`.
 Element references must belong to the current tab, document, and snapshot.
 
+`browser.screenshot` captures the current viewport into a PNG of at most 4 MiB.
+Actual PNG bytes remain private until mandatory post-effect policy permits release.
+The result contains verified owner-only artifact metadata, and supported model
+continuations consume a typed image reference. No path or encoded bytes appear in
+its arguments or JSON result; private transfer chunks never exceed 64 KiB. Screenshot
+availability requires installed native capture evidence and a trusted artifact publisher.
+
+`browser.upload` requires an `artifact_id` of `artifact-` followed by 64 lowercase
+hexadecimal digits, plus a fresh ordinary file-input element. Trusted composition
+resolves an authorized nonempty RunInput or RunOutput artifact of at most 4 MiB
+and checks its complete bytes before policy permits website input. Private-key and
+certificate-store formats are refused. There is no path or encoded payload argument.
+
+`browser.download` requires a fresh link element and accepts no URL, save path or
+destination argument. Native code owns the current link URL and private staging;
+redirects remain within the immutable origin envelope. The complete file of at most
+4 MiB enters post-effect policy before an owner-bound RunOutput artifact is released.
+Empty downloads are supported. Unsolicited page downloads and save dialogs remain
+blocked. Released download artifacts can be upload inputs under fresh authorization;
+private ordered transfer chunks never exceed 64 KiB.
+
 Browser schemas reject unknown fields and expose no JavaScript execution, raw CDP,
-engine endpoint, certificate/key material, or password input. Screenshots, downloads,
-uploads, persistent profiles, and cross-run attachment have no model tool in this
-catalog. An unknown effect is not retried automatically; use released status and the
+engine endpoint, certificate/key material, or password input. Profile management
+and cross-run attachment have no model tool in this catalog. Same-page return from
+agent to human control is not implemented; terminal cancellation and run completion
+close the owned native context.
+An unknown effect is not retried automatically; use released status and the
 current generation to recover or close an owned session. Run completion supervises
 native cleanup.
 

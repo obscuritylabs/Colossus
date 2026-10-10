@@ -174,6 +174,13 @@ fn main() {
     // including library tests and examples that use TaskDialogIndirect. Disable
     // Tauri's binary-only copy below to avoid two MANIFEST resources in the app.
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        if env::var_os("CARGO_FEATURE_EMBEDDED_CHROMIUM_PREVIEW").is_some()
+            && env::var_os("COLOSSUS_CEF_NATIVE_LIB_DIR").is_some()
+        {
+            // The bootstrap establishes sandbox services before libcef loads.
+            // Eager imports would load it before the client DLL's RunWinMain.
+            println!("cargo:rustc-link-arg=/DELAYLOAD:libcef.dll");
+        }
         println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
         println!(
             "cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"

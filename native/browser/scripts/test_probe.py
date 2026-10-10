@@ -61,6 +61,7 @@ class ProbeTests(unittest.TestCase):
             "print('devtools_command=1 success=1 bounded_bytes=20')\n"
             "print('native_fixture=passed png_bytes=40')\n"
             "print('native_negative_controls=passed')\n"
+            "print('native_offscreen_pixels=passed native_presentation_input=passed native_presentation_revocation=passed')\n"
         )
         with patch.dict(os.environ, {"DISPLAY": ":99", "WAYLAND_DISPLAY": "wayland-test"}):
             result = run_probe.run_probe(root, fixture=self.fixture)

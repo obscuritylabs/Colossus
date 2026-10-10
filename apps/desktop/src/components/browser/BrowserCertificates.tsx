@@ -74,8 +74,8 @@ export function BrowserCertificates({
           {status.scope === "operating_system_user"
             ? "Operating-system user store"
             : "Unavailable"}
-          . Client selection:{" "}
-          {status.clientIdentitySelectionReady ? "Available" : "Unavailable"}.{" "}
+          . Installed key-use acceptance:{" "}
+          {status.clientIdentitySelectionReady ? "Complete" : "Pending"}.{" "}
           {status.acceptancePending ? "Native acceptance pending." : ""}
         </p>
       ) : null}
@@ -93,6 +93,12 @@ export function BrowserCertificates({
               "import_client_identity",
               "Import PKCS#12 identity",
               status?.pfxImportAvailable,
+            ],
+            [
+              "review_client_identity",
+              "Review tab client identity",
+              status?.clientIdentityReviewAvailable &&
+                controller.snapshot.selectedTabId,
             ],
           ] as const
         ).map(([action, label, available]) => (

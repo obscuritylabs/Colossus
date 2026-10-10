@@ -268,6 +268,7 @@ pub(super) fn provider_event_payload(event: &ProviderEvent) -> (&'static str, Va
 
 pub(super) fn tool_error_result(call: &ToolCall, category: &str, message: &str) -> ToolResult {
     ToolResult {
+        images: Vec::new(),
         call_id: call.call_id.clone(),
         name: call.name.clone(),
         output: json!({
@@ -292,6 +293,7 @@ pub(super) fn terminal_tool_error_result(call: &ToolCall, error: &ToolError) -> 
         }
     };
     ToolResult {
+        images: Vec::new(),
         call_id: call.call_id.clone(),
         name: call.name.clone(),
         output: json!({
@@ -315,6 +317,7 @@ pub(super) fn unexecuted_tool_result(
     cause_code: &str,
 ) -> ToolResult {
     ToolResult {
+        images: Vec::new(),
         call_id: call.call_id.clone(),
         name: call.name.clone(),
         output: json!({
@@ -336,6 +339,7 @@ pub(super) fn unexecuted_tool_result(
 
 pub(super) fn blocked_tool_result(call: &ToolCall, code: &str, message: &str) -> ToolResult {
     ToolResult {
+        images: Vec::new(),
         call_id: call.call_id.clone(),
         name: call.name.clone(),
         output: json!({
@@ -355,6 +359,7 @@ pub(super) fn blocked_tool_result(call: &ToolCall, code: &str, message: &str) ->
 
 pub(super) fn cancelled_tool_result(call: &ToolCall) -> ToolResult {
     ToolResult {
+        images: Vec::new(),
         call_id: call.call_id.clone(),
         name: call.name.clone(),
         output: json!({

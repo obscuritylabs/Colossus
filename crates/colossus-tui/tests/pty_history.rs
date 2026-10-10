@@ -312,6 +312,7 @@ impl InteractiveHost for FixtureHost {
                 event: RunEvent::ToolCompleted {
                     turn: 1,
                     result: ToolResult {
+                        images: Vec::new(),
                         call_id: call.call_id,
                         name: call.name,
                         output: serde_json::json!({"matches": ["runtime.rs"]}).to_string(),

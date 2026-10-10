@@ -39,6 +39,12 @@ fn main() {
     let installed_wrapper = directory.join(wrapper_name);
     let wrapper = if installed_wrapper.is_file() {
         installed_wrapper
+    } else if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        directory
+            .parent()
+            .expect("native Release directory needs a build root")
+            .join("libcef_dll_wrapper/Release")
+            .join(wrapper_name)
     } else {
         directory.join("libcef_dll_wrapper").join(wrapper_name)
     };
@@ -56,16 +62,21 @@ fn main() {
     );
     println!(
         "cargo:rustc-link-search=native={}",
-        directory.join("libcef_dll_wrapper").display()
+        wrapper.parent().unwrap().display()
     );
     println!(
         "cargo:rustc-link-search=native={}",
         cef.join("Release").display()
     );
     println!("cargo:rustc-link-lib=static=colossus_cef");
-    println!("cargo:rustc-link-lib=static=cef_dll_wrapper");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rustc-link-lib=static=libcef_dll_wrapper");
+    } else {
+        println!("cargo:rustc-link-lib=static=cef_dll_wrapper");
+    }
     match env::var("CARGO_CFG_TARGET_OS").as_deref() {
         Ok("macos") => {
+            println!("cargo:rustc-link-lib=static=colossus_browser_presenter");
             // CEF's supported scoped loader loads the framework at entry. Do
             // not directly link the CEF framework before sandbox helper setup.
             for framework in ["Cocoa", "IOSurface"] {
@@ -73,7 +84,16 @@ fn main() {
             }
             println!("cargo:rustc-link-lib=c++");
         }
-        Ok("windows") => println!("cargo:rustc-link-lib=libcef"),
+        Ok("windows") => {
+            println!("cargo:rustc-link-lib=static=colossus_browser_presenter");
+            println!("cargo:rustc-link-lib=libcef");
+            for library in [
+                "delayimp", "comctl32", "crypt32", "gdi32", "imm32", "rpcrt4", "shlwapi",
+                "wintrust", "ws2_32",
+            ] {
+                println!("cargo:rustc-link-lib={library}");
+            }
+        }
         Ok("linux") => {
             for library in ["cef", "stdc++", "dl", "pthread", "rt"] {
                 println!("cargo:rustc-link-lib={library}");

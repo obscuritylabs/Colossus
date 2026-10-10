@@ -309,9 +309,15 @@ impl AgentService {
             ),
         })?;
         messages = project_model_tool_observations(&messages);
+        if !route.capabilities.image_inputs {
+            messages.retain(|message| message.role != ModelMessageRole::ToolObservation);
+        }
         if !route.capabilities.tool_calls
             && messages.iter().any(|message| {
-                message.role == ModelMessageRole::Tool || !message.tool_calls.is_empty()
+                matches!(
+                    message.role,
+                    ModelMessageRole::Tool | ModelMessageRole::ToolObservation
+                ) || !message.tool_calls.is_empty()
             })
         {
             return Err(AgentError::Configuration(format!(
@@ -1670,6 +1676,7 @@ impl AgentService {
                             "name": result.name,
                             "output": result.output,
                             "exit_code": result.exit_code,
+                            "images": result.images,
                         }),
                     )
                 })?;
@@ -1678,7 +1685,15 @@ impl AgentService {
             }
 
             let tool_messages = tool_result_observation_messages(&tool_results);
-            next_messages.extend(tool_messages.iter().cloned());
+            next_messages.extend(
+                tool_messages
+                    .iter()
+                    .filter(|message| {
+                        route.capabilities.image_inputs
+                            || message.role != ModelMessageRole::ToolObservation
+                    })
+                    .cloned(),
+            );
             validate_model_transcript(&next_messages).map_err(|error| {
                 AgentError::Configuration(format!(
                     "provider returned an invalid tool transcript: {error}"

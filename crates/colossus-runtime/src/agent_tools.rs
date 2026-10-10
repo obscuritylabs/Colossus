@@ -99,6 +99,7 @@ impl ToolExecutor for DiscoverableToolExecutor {
         }))
         .map_err(|error| ToolError::Failed(error.to_string()))?;
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: bounded_tool_text(&output, 256 * 1024),
@@ -152,6 +153,7 @@ impl ToolExecutor for InteractiveToolExecutor {
         let output = serde_json::to_string(&response)
             .map_err(|error| ToolError::Failed(error.to_string()))?;
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: bounded_tool_text(&output, 64 * 1024),
@@ -174,6 +176,7 @@ mod subagent_scheduling_tests {
             _context: ExecutionContext,
         ) -> Result<ToolResult, ToolError> {
             Ok(ToolResult {
+                images: Vec::new(),
                 call_id: call.call_id,
                 name: call.name,
                 output: "queued".into(),

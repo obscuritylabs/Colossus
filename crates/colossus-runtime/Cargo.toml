@@ -7,6 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+zeroize.workspace = true
 colossus-communication.workspace = true
 futures.workspace = true
 async-trait.workspace = true
@@ -15,6 +16,8 @@ colossus-access.workspace = true
 colossus-audit.workspace = true
 colossus-agent.workspace = true
 colossus-browser.workspace = true
+colossus-browser-bridge.workspace = true
+colossus-browser-presentation.workspace = true
 colossus-contracts.workspace = true
 colossus-credentials.workspace = true
 colossus-context.workspace = true

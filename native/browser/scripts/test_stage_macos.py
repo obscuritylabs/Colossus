@@ -61,6 +61,35 @@ class MacosStageTests(unittest.TestCase):
         return stage_macos.stage_app(self.source, self.build, self.executable, self.app,
                                      "macosarm64", "com.colossus.acceptance", self.dictation)
 
+    def test_dedicated_host_has_fixed_helper_layout_and_no_desktop_privileges(self):
+        host = self.root / "colossus-native-browser-host"
+        host.write_bytes(b"native host fixture")
+        host.chmod(0o755)
+        with patch.object(stage_macos, "run") as run:
+            binary = stage_macos.stage_app(
+                self.source, self.build, host, self.app,
+                "macosarm64", "com.colossus.nativehost", host=True,
+            )
+        self.assertEqual(binary.name, "colossus-native-browser-host")
+        with (self.app / "Contents/Info.plist").open("rb") as source:
+            info = plistlib.load(source)
+        self.assertTrue(info["LSUIElement"])
+        self.assertEqual(info["CFBundleName"], "Colossus Browser Host")
+        self.assertNotIn("NSMicrophoneUsageDescription", info)
+        self.assertFalse((self.app / "Contents/Resources/dictation").exists())
+        signatures = [call.args[0] for call in run.call_args_list if "--entitlements" in call.args[0]]
+        self.assertEqual(len(signatures), 6)
+        self.assertTrue(all(command[command.index("--entitlements") + 1] == str(stage_macos.ENTITLEMENTS)
+                            for command in signatures))
+        manifest = component.verify_installed(self.app, self.app.with_name(self.app.name + ".browser-component.json"))
+        self.assertEqual(manifest["modes"], {"desktop": False, "headless": False})
+
+    def test_host_staging_rejects_arbitrary_executable_or_desktop_assets(self):
+        with self.assertRaises(component.ComponentError), patch.object(stage_macos, "run") as run:
+            stage_macos.stage_app(self.source, self.build, self.executable, self.app,
+                                  "macosarm64", host=True)
+        run.assert_not_called()
+
     def test_complete_loader_layout_and_distinct_helper_identities(self):
         with patch.object(stage_macos, "run") as run:
             binary = self.stage()

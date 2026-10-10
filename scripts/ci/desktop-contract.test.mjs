@@ -667,7 +667,10 @@ test("Aside context stays canonical, selected-Space scoped, and out of metadata 
   const runtime = read("crates/colossus-runtime/src/sessions_context.rs");
   assert.match(runtime, /RunBranchContextMode::Conversation/u);
   assert.match(runtime, /RunBranchContextMode::SourceRunConversation/u);
-  assert.match(runtime, /ModelMessageRole::Tool => None/u);
+  assert.match(
+    runtime,
+    /ModelMessageRole::Tool\s*\| ModelMessageRole::ToolObservation => None/u,
+  );
 
   const service = read("crates/colossus-api-runtime/src/service.rs");
   assert.match(service, /let \(source_message_count, context_mode\)/u);

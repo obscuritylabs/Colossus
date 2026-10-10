@@ -196,6 +196,8 @@ pub fn run() {
             status_bar::setup(app)?;
             browser::start_watchdog(app.handle().clone());
             browser::bootstrap::start_pump(app.handle())?;
+            #[cfg(feature = "embedded-chromium-preview")]
+            browser::contained::install(app.handle())?;
             #[cfg(windows)]
             outlook_companion::start_watchdog(app.handle().clone());
             terminal_commands::pane::start_watchdog(app.handle().clone());

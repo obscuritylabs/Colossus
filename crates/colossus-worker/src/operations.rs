@@ -82,6 +82,9 @@ pub(super) struct ServerHello {
 /// Local worker transport or strict-contract failure.
 #[derive(Debug, Error)]
 pub enum WorkerError {
+    /// Exact native browser cleanup is still unresolved; success cannot be reported.
+    #[error("worker browser cleanup outcome unknown")]
+    BrowserCleanupUnknown,
     /// Public application API configuration or transport failed safely.
     #[error("public API failed: {0}")]
     PublicApi(String),

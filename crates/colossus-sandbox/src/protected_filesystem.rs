@@ -9,19 +9,42 @@ const MAX_PROTECTED_ENTRIES: usize = 100_000;
 #[derive(Clone, Default)]
 pub struct ProtectedFilesystem {
     roots: Vec<ConfinedRoot>,
+    #[cfg(target_os = "linux")]
+    native_profiles: Vec<ConfinedRoot>,
 }
 
 impl ProtectedFilesystem {
     /// Bind already validated private roots. This reads metadata, never contents,
     /// and neither creates paths nor grants access to them.
     pub fn new(roots: Vec<ConfinedRoot>) -> Result<Self, ExecutionError> {
-        let protection = Self { roots };
+        let protection = Self {
+            roots,
+            #[cfg(target_os = "linux")]
+            native_profiles: Vec::new(),
+        };
         protection.snapshot()?;
         Ok(protection)
     }
 
     pub(super) fn is_empty(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        if !self.native_profiles.is_empty() {
+            return false;
+        }
         self.roots.is_empty()
+    }
+
+    /// Add native browser cache roots independently of caller policy and grants.
+    /// Chromium's child sockets/symlinks are never followed; bounded metadata-only
+    /// traversal retains regular inode aliases. Strict credential roots are unchanged.
+    #[cfg(target_os = "linux")]
+    pub fn with_native_profile_roots(
+        mut self,
+        roots: Vec<ConfinedRoot>,
+    ) -> Result<Self, ExecutionError> {
+        self.native_profiles.extend(roots);
+        self.snapshot()?.revalidate()?;
+        Ok(self)
     }
 
     pub(super) fn snapshot(&self) -> Result<ProtectedFilesystemSnapshot, ExecutionError> {
@@ -59,9 +82,20 @@ impl ProtectedFilesystem {
             }
             root.revalidate().map_err(protected_failure)?;
         }
+        #[cfg(target_os = "linux")]
+        let roots = self
+            .roots
+            .iter()
+            .chain(&self.native_profiles)
+            .cloned()
+            .collect();
+        #[cfg(not(target_os = "linux"))]
+        let roots = self.roots.clone();
         Ok(ProtectedFilesystemSnapshot {
-            roots: self.roots.clone(),
+            roots,
             files,
+            #[cfg(target_os = "linux")]
+            native_profiles: native_profiles::Snapshot::capture(&self.native_profiles)?,
         })
     }
 
@@ -80,8 +114,9 @@ impl ProtectedFilesystem {
                 "development credential custody requires an isolating sandbox",
             ));
         }
-        self.snapshot()?.revalidate()?;
-        for root in &self.roots {
+        let snapshot = self.snapshot()?;
+        snapshot.revalidate()?;
+        for root in snapshot.roots {
             let path = root
                 .path()
                 .to_str()
@@ -101,6 +136,8 @@ impl ProtectedFilesystem {
 pub(super) struct ProtectedFilesystemSnapshot {
     roots: Vec<ConfinedRoot>,
     files: Vec<(ConfinedRoot, ConfinedFile)>,
+    #[cfg(target_os = "linux")]
+    native_profiles: native_profiles::Snapshot,
 }
 
 impl ProtectedFilesystemSnapshot {
@@ -133,6 +170,8 @@ impl ProtectedFilesystemSnapshot {
                 ));
             }
         }
+        #[cfg(target_os = "linux")]
+        self.native_profiles.check_file(file)?;
         Ok(())
     }
 
@@ -143,6 +182,8 @@ impl ProtectedFilesystemSnapshot {
         for (root, file) in &self.files {
             file.revalidate(root).map_err(protected_failure)?;
         }
+        #[cfg(target_os = "linux")]
+        self.native_profiles.revalidate()?;
         Ok(())
     }
 }
@@ -160,5 +201,7 @@ fn protected_failure(_: impl std::fmt::Display) -> ExecutionError {
     adapter_failure("native credential authority confinement is invalid")
 }
 
+#[cfg(target_os = "linux")]
+mod native_profiles;
 #[cfg(test)]
 mod tests;

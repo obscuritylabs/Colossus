@@ -261,8 +261,157 @@ up to one minute to activate the observed test window; the foreground check stil
 must pass.
 
 These development results do not promote component modes or enable production
-automation. Authenticated Core host enrollment and complete browser network
-containment remain required by [ADR 0008](adr/0008-owned-chromium-browser.md).
+automation. macOS preview rendering and lifecycle evidence cover the in-process
+human surface. Accepted separate-host Core composition, certificate custody and
+complete browser containment remain distinct requirements in
+[ADR 0008](adr/0008-owned-chromium-browser.md#current-enablement-and-remaining-work).
+
+### Desktop Chromium development acceptance on Windows
+
+Use an interactive Windows x64 session with Visual Studio C++ desktop tools,
+PowerShell 7, Python, CMake, Node.js and the repository Rust toolchain. Prepare
+the pinned component in the same PowerShell terminal:
+
+```powershell
+./scripts/desktop-chromium-preview-windows.ps1 -BuildOnly
+npm --prefix apps/desktop run test:browser-chromium-native
+```
+
+The launcher sets the verified CEF source and native shim paths for that terminal.
+The acceptance runner stages a fresh unsigned bootstrap/client component and
+isolated home. It requires actual Windows compositor pixels, OS mouse and keyboard
+input, native HWND attachment, browser/controller lifecycle checks, acknowledged
+CEF shutdown and no remaining owned helpers.
+
+Renderer isolation evidence uses a retained native process handle and checks its
+executable and creation time. The live renderer's restricted token must receive
+an access denial when opening an operator-private file. The runner rejects
+sandbox-disabling and remote-debugging flags. Failed runs preserve their home and
+categorical cleanup evidence. The repository's `native/browser/README.md` explains
+bootstrap and staging details. This developer tier does not establish signed
+installed support or the browser process's complete network containment.
+
+The existing premerge `windows-desktop` lane also runs
+`scripts/ci/browser-windows-native.ps1` as a required owned-Chromium factory check.
+Its eligibility is unchanged: a non-draft PR, an authorized `ci:full` request, and
+a successful current-head Colossus PR gate. The script builds pinned sandboxed
+CEF and runs the ignored native factory fixture for Low-integrity token and
+private profile-label readback, actual multipart upload/download bytes, native
+presentation/input and complete owned cleanup. This is a separate browser path
+from the lane's WebView2 Desktop checks.
+
+The `windows-owned-chromium-source-acceptance` CI artifact contains only a bounded
+log, component inventory and diagnostic report; it excludes profiles, transferred
+content and keys. The report and component keep accepted modes and production
+containment false. This job is wired into the required aggregate but has not yet
+produced execution evidence; a future pass still does not establish signed
+installed or whole-host broker/network acceptance.
+
+### Native Chromium certificate acceptance
+
+After preparing the pinned macOS or Windows preview, run:
+
+```sh
+npm --prefix apps/desktop run test:browser-pki-native
+```
+
+This interactive tier creates private, temporary CA and client-identity fixtures
+and asks the operator to provision them through the native certificate controls.
+It verifies server trust, an actual server-observed client leaf fingerprint,
+identity choice, dismissal, stale review, and negative TLS cases. Private keys and
+passwords remain outside the Desktop renderer and runtime tool arguments.
+
+Remove only the generated fixture certificates and private keys using the native
+store controls after the run. The evidence distinguishes operator-reported removal
+from verified key custody and does not claim signed installed PKI acceptance.
+Linux unattended provisioning uses a separate owned NSS store; real CEF acceptance
+of that path is independent of this operator-driven OS-store tier.
+
+### Owned browser control conformance
+
+The shared coordinator, bridge and presentation suites exercise private authority,
+stale references, admitted document generations, caller loss and cleanup ownership.
+Focused native-admission and profile tests can be run from the repository root:
+
+```sh
+cargo test --locked -p colossus-browser
+cargo test --locked -p colossus-browser-bridge
+cargo test --locked -p colossus-browser-presentation
+cargo test --locked -p colossus-worker native_browser::tests
+cargo test --locked -p colossus-sidecar-protocol native_browser_bootstrap
+cargo test --locked -p colossus-sandbox browser_profiles
+cargo test --locked -p colossus-sandbox protected_filesystem::native_profiles
+```
+
+The profile tests include restart ownership, exclusive lease/reset rejection,
+unknown cleanup, version compatibility, replaced inode handling, and real granted
+filesystem operations against Chromium-shaped caches and aliases. They establish
+source contracts and private filesystem denial; they do not establish encrypted
+storage or a persistent disk quota.
+
+Actual CEF/Core conformance is an explicit ignored native tier. Select a fresh
+inventoried host component, locally installed immutable OCI image and native Docker
+executable using `COLOSSUS_BROWSER_OCI_ACCEPTANCE_COMPONENT`,
+`COLOSSUS_BROWSER_OCI_ACCEPTANCE_IMAGE_ID` and
+`COLOSSUS_BROWSER_OCI_ACCEPTANCE_DOCKER`. The compatible host lane must support
+CEF's sandbox without disabling it and positively reap every owned helper.
+The native component README documents staging and startup prerequisites.
+
+The three-channel Core fixture exercises a policy rejection before native
+allocation, actual page accessibility observations, protected-value redaction and
+run-finish draining through graceful CEF shutdown and physical state removal:
+
+```sh
+cargo test --locked -p colossus-runtime --lib \
+  browser_tools::tests::native::contained_chromium_runs_through_runtime_policy_and_drains_before_run_finish \
+  -- --ignored --exact --nocapture
+```
+
+The four-channel fixture additionally requires authenticated 801×601 BGRA page
+pixels, denied human input/focus and invented human generation, and continued agent
+observation after detaching the independent read-only viewer. The PKI fixture
+enrolls exact Core owners through the policy gateway and verifies server-observed
+identities, CA/redirect failures and mixed-origin consent denial before allocation:
+
+```sh
+cargo test --locked -p colossus-runtime --lib \
+  browser_tools::tests::native_presentation::contained_readonly_frames_share_runtime_page_without_human_input_authority \
+  -- --ignored --exact --nocapture
+cargo test --locked -p colossus-runtime --lib \
+  browser_tools::tests::native_pki::contained_chromium_enrolls_native_pki_for_the_actual_core_owner_after_policy \
+  -- --ignored --exact --nocapture
+```
+
+The persistent-cookie fixture runs five sequential native contexts, requires
+server-observed cookies across restart, absence after reset and in new temporary
+sessions, same-profile lease exclusion and graceful shutdown of every context:
+
+```sh
+cargo test --locked -p colossus-runtime --lib \
+  browser_tools::tests::native_profiles::persistent_profile_restarts_cookie_state_and_reset_clears_it_while_temporary_does_not \
+  -- --ignored --exact --nocapture
+```
+
+This remains a diagnostic fixture; ordinary profile configuration is rejected
+pending encryption and quota acceptance. A restricted startup diagnostic completed
+CEF initialization with the identical component after the curated seccomp policy
+added its missing `sysinfo` allowance. The actual three-channel Core fixture then
+passed with real page observations and redaction. Four-channel read-only
+presentation, five-host persistent cookie restart/reset/temporary isolation and
+per-request PKI fixtures also passed. The PKI result checked seven exact owner
+enrollments and six immediate allocated-host graceful shutdowns. Every allocated
+host completed graceful CEF shutdown and physical state cleanup, and the component
+remained unchanged. These scoped results do not accept production containment or
+a signed installed package.
+The latest opt-in Linux renderer-custody experiment completed mTLS, page loading,
+shutdown and physical cleanup. Its bounded live-receipt attempt reached a native
+challenge, but reported `rejected` with `process_not_found` because the parent
+could not authenticate a matching live renderer. No valid direct-key-denial
+evidence was accepted. Renderer and broker key custody remain unaccepted.
+Native Windows/macOS compositor, broker,
+certificate custody and signed installed tests require their respective operating
+systems. See [current browser readiness](adr/0008-owned-chromium-browser.md#current-enablement-and-remaining-work)
+for missing functionality as well as acceptance gates.
 
 ### Plan Mode acceptance
 

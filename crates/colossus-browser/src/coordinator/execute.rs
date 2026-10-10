@@ -1,7 +1,7 @@
 use super::*;
 use crate::state::{DispatchGuard, Pending};
 use colossus_ports::{BrowserDriverCommand, RunControl};
-use std::{collections::BTreeSet, time::Instant};
+use std::time::Instant;
 
 impl BrowserCoordinator {
     /// Dispatch exactly one typed action after runtime permit consumption.
@@ -16,6 +16,34 @@ impl BrowserCoordinator {
         action: BrowserAction,
         request_control: &RunControl,
     ) -> Result<BrowserObservation, BrowserError> {
+        if matches!(
+            action,
+            BrowserAction::Screenshot { .. }
+                | BrowserAction::Upload { .. }
+                | BrowserAction::Download { .. }
+        ) {
+            return Err(BrowserError::InvalidArguments);
+        }
+        match self
+            .execute_inner(actor, lease, target, action, None, request_control)
+            .await?
+        {
+            capture::Evidence::Observation(value) => Ok(value),
+            capture::Evidence::Screenshot(_) | capture::Evidence::Download(_) => {
+                Err(BrowserError::InvalidEvidence)
+            }
+        }
+    }
+
+    pub(super) async fn execute_inner(
+        &self,
+        actor: &BrowserActor,
+        lease: &BrowserControlLease,
+        target: &BrowserTarget,
+        action: BrowserAction,
+        upload: Option<colossus_ports::BrowserUploadArtifact>,
+        request_control: &RunControl,
+    ) -> Result<capture::Evidence, BrowserError> {
         validation::actor(actor)?;
         if request_control.is_cancelled() {
             return Err(BrowserError::Cancelled);
@@ -110,6 +138,7 @@ impl BrowserCoordinator {
                 && !matches!(
                     action,
                     BrowserAction::Snapshot { .. }
+                        | BrowserAction::Screenshot { .. }
                         | BrowserAction::Wait { .. }
                         | BrowserAction::Stop {}
                         | BrowserAction::TabOpen { .. }
@@ -148,6 +177,8 @@ impl BrowserCoordinator {
         );
         let control = BrowserDriverControl::new(request_control.clone(), authority);
         let command = BrowserDriverCommand {
+            binding: actor.binding.clone(),
+            run_id: actor.run_id.clone(),
             session_id: lease.session_id.clone(),
             target: target.clone(),
             control_generation: lease.control_generation,
@@ -168,22 +199,48 @@ impl BrowserCoordinator {
         } else {
             self.capabilities.limits.action_timeout_ms
         };
-        let result = self
-            .await_driver(self.driver.execute(command, &control), &control, timeout)
-            .await;
-        let accepted = match result {
-            Ok(value) => self.accept(
-                actor,
-                lease,
-                target,
-                &action,
-                &next_document_id,
-                snapshot_id.as_ref(),
-                new_tab.as_ref(),
-                &guard,
+        let result = if let Some(upload) = upload {
+            self.await_driver(
+                self.collect_upload(command, upload, &control),
                 &control,
-                value,
-            ),
+                timeout,
+            )
+            .await
+            .map(capture::Evidence::Observation)
+        } else if matches!(action, BrowserAction::Download { .. }) {
+            self.await_driver(self.collect_download(command, &control), &control, timeout)
+                .await
+                .map(capture::Evidence::Download)
+        } else if matches!(action, BrowserAction::Screenshot { .. }) {
+            self.await_driver(self.collect_capture(command, &control), &control, timeout)
+                .await
+                .map(capture::Evidence::Screenshot)
+        } else {
+            self.await_driver(self.driver.execute(command, &control), &control, timeout)
+                .await
+                .map(capture::Evidence::Observation)
+        };
+        let accepted = match result {
+            Ok(capture::Evidence::Download(value)) => self
+                .accept_download(actor, lease, target, &guard, &control, value)
+                .map(capture::Evidence::Download),
+            Ok(capture::Evidence::Screenshot(value)) => self
+                .accept_capture(actor, lease, target, &guard, &control, value)
+                .map(capture::Evidence::Screenshot),
+            Ok(capture::Evidence::Observation(value)) => self
+                .accept(
+                    actor,
+                    lease,
+                    target,
+                    &action,
+                    &next_document_id,
+                    snapshot_id.as_ref(),
+                    new_tab.as_ref(),
+                    &guard,
+                    &control,
+                    value,
+                )
+                .map(capture::Evidence::Observation),
             Err(error) => Err(error),
         };
         match accepted {
@@ -226,103 +283,5 @@ impl BrowserCoordinator {
                 Err(error)
             }
         }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn accept(
-        &self,
-        actor: &BrowserActor,
-        lease: &BrowserControlLease,
-        target: &BrowserTarget,
-        action: &BrowserAction,
-        next_document: &BrowserDocumentId,
-        snapshot_id: Option<&BrowserSnapshotId>,
-        new_tab: Option<&BrowserTabSummary>,
-        guard: &DispatchGuard,
-        control: &BrowserDriverControl,
-        value: BrowserObservation,
-    ) -> Result<BrowserObservation, BrowserError> {
-        if control.is_cancelled() {
-            return Err(BrowserError::OutcomeUnknown);
-        }
-        validation::observation(&value, &self.capabilities.limits)?;
-        let mut state = lock(&self.state)?;
-        let session = owned(&mut state, &actor.binding, &lease.session_id)
-            .map_err(|_| BrowserError::OutcomeUnknown)?;
-        if session
-            .lease
-            .as_ref()
-            .is_none_or(|l| &l.public != lease || l.deadline <= Instant::now())
-            || session.summary.lifecycle != BrowserLifecycle::Ready
-            || session
-                .pending
-                .as_ref()
-                .is_none_or(|p| p.id != guard.dispatch_id)
-        {
-            return Err(BrowserError::OutcomeUnknown);
-        }
-        validation::tab(&value.tab, &session.options)?;
-        let expected_tab = new_tab.map_or(&target.tab_id, |tab| &tab.tab_id);
-        if value.session_id != lease.session_id
-            || &value.tab.tab_id != expected_tab
-            || (&value.tab.document_id != next_document
-                && value.tab.document_id != target.document_id)
-            || new_tab.is_some_and(|tab| value.tab.document_id != tab.document_id)
-            || value
-                .snapshot
-                .as_ref()
-                .is_some_and(|s| Some(&s.snapshot_id) != snapshot_id)
-            || (snapshot_id.is_some() && value.snapshot.is_none())
-        {
-            return Err(BrowserError::InvalidEvidence);
-        }
-        if let (BrowserAction::Snapshot { max_nodes }, Some(snapshot)) = (action, &value.snapshot)
-            && snapshot.nodes.len() > usize::from(*max_nodes)
-        {
-            return Err(BrowserError::InvalidEvidence);
-        }
-        session.pending = None;
-        if matches!(action, BrowserAction::TabClose { .. }) {
-            session
-                .summary
-                .tabs
-                .retain(|tab| tab.tab_id != target.tab_id);
-            session.snapshots.remove(&target.tab_id);
-            if session.summary.selected_tab_id.as_ref() == Some(&target.tab_id) {
-                session.summary.selected_tab_id =
-                    session.summary.tabs.first().map(|tab| tab.tab_id.clone());
-            }
-        } else if new_tab.is_some() {
-            session.summary.tabs.push(value.tab.clone());
-            session.summary.selected_tab_id = Some(value.tab.tab_id.clone());
-        } else if let Some(tab) = session
-            .summary
-            .tabs
-            .iter_mut()
-            .find(|tab| tab.tab_id == target.tab_id)
-        {
-            *tab = value.tab.clone();
-            if matches!(action, BrowserAction::TabSelect { .. }) {
-                session.summary.selected_tab_id = Some(target.tab_id.clone());
-            }
-        }
-        if let Some(snapshot) = &value.snapshot {
-            session.snapshots.insert(
-                value.tab.tab_id.clone(),
-                (
-                    snapshot.snapshot_id.clone(),
-                    snapshot
-                        .nodes
-                        .iter()
-                        .map(|n| n.element.element_id.clone())
-                        .collect::<BTreeSet<_>>(),
-                ),
-            );
-            session.needs_snapshot = false;
-        } else if !matches!(action, BrowserAction::Wait { .. } | BrowserAction::Stop {}) {
-            session.snapshots.remove(&target.tab_id);
-            session.needs_snapshot = true;
-        }
-        Ok(value)
     }
 }

@@ -381,6 +381,31 @@ def source_archive_inventory(archive: Path, expected_root: str) -> list[dict]:
     return sorted(records, key=lambda record: record["path"])
 
 
+def source_inventory_matches(expected: list[dict], actual: object) -> bool:
+    """Compare archived bytes/tree, using POSIX modes only where representable.
+
+    Windows chmod/stat preserve only the read-only attribute of archive modes. DACL
+    enforcement is a separate native requirement, never proven by these modes.
+    Digests, sizes, paths, kinds and link destinations remain exact on all hosts.
+    """
+    if not isinstance(actual, list) or any(not isinstance(record, dict) for record in actual):
+        return False
+    if os.name != "nt":
+        return expected == actual
+
+    def comparable(record: dict) -> dict | None:
+        normalized = record.copy()
+        if record.get("kind") in ("file", "directory"):
+            mode = record.get("mode")
+            if not isinstance(mode, int) or isinstance(mode, bool):
+                return None
+            normalized["mode"] = bool(mode & stat.S_IWRITE)
+        return normalized
+
+    normalized_actual = [comparable(record) for record in actual]
+    return None not in normalized_actual and [comparable(record) for record in expected] == normalized_actual
+
+
 def write_manifest(root: Path, name: str, document: dict) -> Path:
     destination = root / name
     if destination.exists() or destination.is_symlink():
@@ -406,9 +431,9 @@ def provision(cache: Path, platform: str) -> Path:
         expected_files = source_archive_inventory(archive, source_root.name)
         if (
             receipt.get("schema_version") != 1
-            or receipt.get("files") != expected_files
+            or not source_inventory_matches(expected_files, receipt.get("files"))
             or receipt.get("archive_sha256") != pin["sha256"]
-            or expected_files != inventory_files(root, SOURCE_MANIFEST)
+            or not source_inventory_matches(expected_files, inventory_files(root, SOURCE_MANIFEST))
         ):
             raise ComponentError("previous CEF extraction no longer matches its verified inventory")
         return root
@@ -436,6 +461,7 @@ def installed_inventory(root: Path, platform: str, executable: str,
     if manifest_path is not None:
         manifest_path = external_manifest_path(root, manifest_path)
     records = inventory_files(root, MANIFEST if manifest_path is None else None)
+    verify_linux_host_link_order(root, platform, records)
     program = next((record for record in records if record["path"] == executable), None)
     if program is None or program["kind"] != "file":
         raise ComponentError("component executable must be an inventoried regular file")
@@ -454,6 +480,28 @@ def installed_inventory(root: Path, platform: str, executable: str,
 
 
 def verify_installed(root: Path, manifest_path: Path | None = None) -> dict:
+    """Verify a developer component without granting either production mode."""
+    return _verify_installed(root, manifest_path, {"desktop": False, "headless": False})
+
+
+def verify_publisher_accepted_inventory(root: Path, native_proof: dict) -> dict:
+    """Recheck an accepted Linux inventory after compiler-sealed native verification.
+
+    The package builder must obtain this proof by executing its exact sealed CLI.
+    This does not change developer verification or promote a component manifest.
+    """
+    root = directory(root)
+    if native_proof.get("publisher_acceptance_verified") is not True \
+            or native_proof.get("payload_verified") is not True \
+            or native_proof.get("component_manifest_sha256") != digest_file(root / MANIFEST):
+        raise ComponentError("accepted inventory lacks its exact native publisher proof")
+    document = _verify_installed(root, None, {"desktop": False, "headless": True})
+    if document["platform"] != "linux64":
+        raise ComponentError("accepted offline inventory requires the fixed Linux target")
+    return document
+
+
+def _verify_installed(root: Path, manifest_path: Path | None, expected_modes: dict) -> dict:
     root = directory(root)
     if manifest_path is not None:
         manifest_path = external_manifest_path(root, manifest_path)
@@ -464,7 +512,7 @@ def verify_installed(root: Path, manifest_path: Path | None = None) -> dict:
         or document.get("cef_version") != CEF_VERSION
         or document.get("chromium_version") != CHROMIUM_VERSION
         or document.get("platform") not in PLATFORMS
-        or document.get("modes") != {"desktop": False, "headless": False}
+        or document.get("modes") != expected_modes
     ):
         raise ComponentError("unsupported or unvalidated browser component manifest")
     pin = load_lock()["archives"][document["platform"]]
@@ -473,6 +521,7 @@ def verify_installed(root: Path, manifest_path: Path | None = None) -> dict:
     files = inventory_files(root, MANIFEST if manifest_path is None else None)
     if document.get("files") != files:
         raise ComponentError("installed browser component inventory differs: missing, added, or modified entry")
+    verify_linux_host_link_order(root, document["platform"], files)
     executable = safe_path(document.get("executable"))
     program = next((record for record in files if record["path"] == executable), None)
     if program is None or program["kind"] != "file":
@@ -480,6 +529,22 @@ def verify_installed(root: Path, manifest_path: Path | None = None) -> dict:
     if document["platform"] != "windows64" and not program["mode"] & 0o111:
         raise ComponentError("installed browser executable lacks executable permission")
     return document
+
+
+def verify_linux_host_link_order(root: Path, platform: str, records: list[dict]) -> None:
+    """Require working libc interposition whenever the dedicated Linux host ships."""
+    if platform != "linux64":
+        return
+    host = next((record for record in records if record["path"] == "colossus-native-browser-host"), None)
+    if host is None:
+        return
+    if host["kind"] != "file" or not host["mode"] & 0o111:
+        raise ComponentError("dedicated Linux browser host must be a regular executable")
+    from elf_order import ElfOrderError, verify_chromium_link_order
+    try:
+        verify_chromium_link_order(root / "colossus-native-browser-host")
+    except ElfOrderError as error:
+        raise ComponentError(str(error)) from error
 
 
 def main() -> int:

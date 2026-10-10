@@ -272,6 +272,7 @@ impl Runtime {
         let automatic_agent_instructions = options.automatic_agent_instructions;
         let model_network_tools = options.model_network_tools;
         let browser_host = options.browser_host.clone();
+        let browser_artifacts = options.browser_artifacts.clone();
         match (&colossus_home, &colossus_home_root) {
             (None, None) => {}
             (Some(home), Some(root)) if home == root.path() => {
@@ -298,6 +299,25 @@ impl Runtime {
                 colossus_home_root.as_ref(),
                 &workspace,
             )?;
+        #[cfg(target_os = "linux")]
+        let development_protection = development_protection
+            .with_native_profile_roots(
+                browser_host
+                    .as_ref()
+                    .map_or_else(Vec::new, |host| host.protected_profile_roots().to_vec()),
+            )
+            .map_err(|_| {
+                RuntimeError::Config("native browser profile confinement is invalid".into())
+            })?;
+        #[cfg(not(target_os = "linux"))]
+        if browser_host
+            .as_ref()
+            .is_some_and(|host| !host.protected_profile_roots().is_empty())
+        {
+            return Err(RuntimeError::Config(
+                "native browser profile confinement is unavailable on this platform".into(),
+            ));
+        }
         let mut tls_roots = config
             .network
             .ca_bundle_path
@@ -526,6 +546,7 @@ impl Runtime {
                 workspace_identity.clone(),
                 repository_id.clone(),
                 colossus_contracts::BrowserLimits::default(),
+                browser_artifacts.clone(),
             ))
         });
         let browser_capabilities = browser
@@ -946,6 +967,7 @@ impl Runtime {
                 gateway: Arc::clone(&gateway),
                 registry: Arc::clone(&tool_registry),
                 browser: Arc::clone(browser),
+                journal: Arc::clone(&journal),
                 inner: gateway_tool_executor,
             })
         } else {

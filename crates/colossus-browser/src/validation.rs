@@ -110,6 +110,26 @@ pub(crate) fn action(
             Err(BrowserError::LimitExceeded)
         }
         BrowserAction::Fill { text, .. } if text.len() > 8192 => Err(BrowserError::LimitExceeded),
+        BrowserAction::Upload {
+            max_bytes,
+            artifact_id,
+            ..
+        } if *max_bytes == 0
+            || *max_bytes > colossus_ports::MAX_BROWSER_TRANSFER_BYTES
+            || !artifact_id.strip_prefix("artifact-").is_some_and(|value| {
+                value.len() == 64
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            }) =>
+        {
+            Err(BrowserError::InvalidArguments)
+        }
+        BrowserAction::Download { max_bytes, .. }
+            if *max_bytes == 0 || *max_bytes > colossus_ports::MAX_BROWSER_TRANSFER_BYTES =>
+        {
+            Err(BrowserError::LimitExceeded)
+        }
         BrowserAction::Select { values, .. }
             if values.is_empty()
                 || values.len() > 32

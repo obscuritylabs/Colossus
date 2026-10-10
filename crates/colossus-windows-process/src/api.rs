@@ -43,6 +43,30 @@ pub struct SandboxedChild {
     _network: Option<crate::windows_impl::NetworkGuard>,
 }
 
+impl Drop for SandboxedChild {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        {
+            // Kill-on-close is asynchronous. Keep the WFP egress fence until
+            // the entire retained Job has positively reached zero processes.
+            // Explicit supervisors must retain/retry this owner on Unknown;
+            // Drop cannot acknowledge cleanup. A failed fallback deliberately
+            // leaks the dynamic-session guard until parent-process exit rather
+            // than silently granting surviving descendants new network access.
+            let terminated = crate::windows_impl::terminate(&self.job, 1).is_ok();
+            let drained = matches!(
+                crate::windows_impl::wait_tree_timeout(&self.job, Duration::from_secs(5)),
+                Ok(true)
+            );
+            if (!terminated || !drained)
+                && let Some(network) = self._network.take()
+            {
+                std::mem::forget(network);
+            }
+        }
+    }
+}
+
 #[cfg(windows)]
 pub(crate) struct SandboxedChildParts {
     pub(crate) pid: u32,
@@ -85,6 +109,35 @@ pub enum WindowsProcessError {
 }
 
 impl SandboxedChild {
+    /// Explicitly retire the exact dynamic WFP session only after the whole Job
+    /// reaches zero processes. Failure retains the same guard for an idempotent
+    /// retry; Drop never substitutes for this acknowledged network cleanup.
+    pub fn retire_network(&mut self) -> Result<(), WindowsProcessError> {
+        #[cfg(windows)]
+        {
+            if !crate::windows_impl::wait_tree_timeout(&self.job, Duration::ZERO)? {
+                return Err(WindowsProcessError::Invalid(
+                    "cannot retire egress beneath a live Job".into(),
+                ));
+            }
+            if let Some(network) = self._network.as_mut() {
+                network.retire()?;
+            }
+            self._network.take();
+            Ok(())
+        }
+        #[cfg(not(windows))]
+        {
+            Err(WindowsProcessError::UnsupportedPlatform)
+        }
+    }
+    /// Borrow the exact retained process object for native token/path attestation.
+    /// No PID lookup or handle ownership transfer occurs. This handle must never
+    /// enter renderer/model IPC or an ordinary application DTO.
+    #[cfg(windows)]
+    pub fn process_handle(&self) -> std::os::windows::io::BorrowedHandle<'_> {
+        self.process.borrow()
+    }
     #[cfg(windows)]
     pub(crate) fn from_parts(parts: SandboxedChildParts) -> Self {
         Self {
@@ -125,6 +178,24 @@ impl SandboxedChild {
         }
     }
 
+    /// Wait until every process in the atomically attached Job has exited.
+    ///
+    /// `false` retains the process, Job and WFP obligations. The direct child's
+    /// process exit alone cannot prove renderer, network, worker or helper exit.
+    /// Keep this owner and network filters alive through successful acknowledgement
+    /// and through a separately completed private-channel I/O drain.
+    pub fn wait_tree_timeout(&self, timeout: Duration) -> Result<bool, WindowsProcessError> {
+        #[cfg(windows)]
+        {
+            crate::windows_impl::wait_tree_timeout(&self.job, timeout)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = timeout;
+            Err(WindowsProcessError::UnsupportedPlatform)
+        }
+    }
+
     /// Return a hard Job Object limit violation, if Windows recorded one.
     pub fn resource_limit_violation(
         &self,
@@ -153,7 +224,7 @@ pub fn spawn(request: &SpawnRequest) -> Result<SandboxedChild, WindowsProcessErr
     }
 }
 
-fn validate_request(request: &SpawnRequest) -> Result<(), WindowsProcessError> {
+pub(super) fn validate_request(request: &SpawnRequest) -> Result<(), WindowsProcessError> {
     if !request.executable.is_absolute() || !request.cwd.is_absolute() {
         return Err(WindowsProcessError::Invalid(
             "executable and cwd must be absolute".into(),

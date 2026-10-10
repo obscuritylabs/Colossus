@@ -45,8 +45,9 @@ def verify_source(root: Path, platform: str) -> Path:
     receipt = component.load_json(root / component.SOURCE_MANIFEST)
     expected = component.source_archive_inventory(archive, root.name)
     if (receipt.get("schema_version") != 1 or receipt.get("archive_sha256") != pin["sha256"]
-            or receipt.get("files") != expected
-            or component.inventory_files(root, component.SOURCE_MANIFEST) != expected):
+            or not component.source_inventory_matches(expected, receipt.get("files"))
+            or not component.source_inventory_matches(
+                expected, component.inventory_files(root, component.SOURCE_MANIFEST))):
         raise component.ComponentError("CEF source bytes differ from the pinned archive")
     return root
 
@@ -132,7 +133,7 @@ def publish_artifacts(artifacts: list[tuple[Path, Path]]) -> None:
         raise
 
 
-def sign_app(app: Path, helpers: list[Path], platform: str) -> None:
+def sign_app(app: Path, helpers: list[Path], platform: str, *, host: bool = False) -> None:
     arch = "arm64" if platform == "macosarm64" else "x86_64"
     framework = app / "Contents/Frameworks" / FRAMEWORK
     # A copied pinned framework includes libcef_sandbox.dylib: helpers load it
@@ -148,7 +149,7 @@ def sign_app(app: Path, helpers: list[Path], platform: str) -> None:
         run(["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none", str(library)])
     run(["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none", str(framework)])
     for target in [*helpers, app]:
-        entitlements = MAIN_ENTITLEMENTS if target == app else ENTITLEMENTS
+        entitlements = MAIN_ENTITLEMENTS if target == app and not host else ENTITLEMENTS
         run(["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none",
              "--options", "runtime", "--entitlements", str(entitlements), str(target)])
     # Verify recursively, but never use --deep signing to choose entitlements.
@@ -157,7 +158,7 @@ def sign_app(app: Path, helpers: list[Path], platform: str) -> None:
 
 def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
               platform: str, identifier: str = IDENTIFIER,
-              dictation_resources: Path | None = None) -> Path:
+              dictation_resources: Path | None = None, *, host: bool = False) -> Path:
     if platform not in ("macosarm64", "macosx64"):
         raise component.ComponentError("development app staging requires a macOS platform")
     if not re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", identifier):
@@ -165,6 +166,8 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
     cef_root = verify_source(cef_root, platform)
     native_build = component.directory(native_build)
     executable = regular_executable(executable.absolute())
+    if host and (executable.name != "colossus-native-browser-host" or dictation_resources is not None):
+        raise component.ComponentError("native host staging requires the fixed host executable and no Desktop assets")
     if dictation_resources is not None:
         dictation_resources = component.directory(dictation_resources)
         for name in DICTATION_RESOURCES:
@@ -225,15 +228,18 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
             with plist.open("wb") as output:
                 plistlib.dump(info, output)
             helpers.append(helper)
-        with DESKTOP_INFO_PLIST.open("rb") as source:
-            main_info = plistlib.load(source)
+        if host:
+            main_info = {"LSUIElement": True}
+        else:
+            with DESKTOP_INFO_PLIST.open("rb") as source:
+                main_info = plistlib.load(source)
         # Preserve Desktop's microphone privacy description for its default
         # offline dictation feature. Helpers receive neither description nor
         # the main process's microphone entitlement.
         main_info.update({
                 "CFBundleExecutable": executable_name,
                 "CFBundleIdentifier": identifier,
-                "CFBundleName": "Colossus Chromium Preview",
+                "CFBundleName": "Colossus Browser Host" if host else "Colossus Chromium Preview",
                 "CFBundlePackageType": "APPL",
                 "CFBundleInfoDictionaryVersion": "6.0",
                 "CFBundleVersion": "0.1.0", "CFBundleShortVersionString": "0.1.0",
@@ -248,7 +254,7 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
         for name in ("LICENSE.txt", "CREDITS.html"):
             shutil.copy2(cef_root / name, notices / name)
         component.inventory_files(staged, component.MANIFEST)
-        sign_app(staged, helpers, platform)
+        sign_app(staged, helpers, platform, host=host)
         # This developer consistency receipt lives beside the signed app.
         # It does not establish publisher identity or promote release modes.
         temporary_manifest = Path(temporary) / component.MANIFEST

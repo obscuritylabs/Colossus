@@ -78,6 +78,12 @@ pub enum BrowserActionKind {
     Navigate,
     /// Read a semantic snapshot.
     Snapshot,
+    /// Capture a bounded PNG for mandatory post-effect artifact release.
+    Screenshot,
+    /// Upload a pre-authorized owner-bound artifact into a current ordinary file input.
+    Upload,
+    /// Download one current linked resource into private custody before release.
+    Download,
     /// Activate an element.
     Click,
     /// Fill an ordinary noncredential field.
@@ -119,6 +125,27 @@ pub enum BrowserAction {
     Snapshot {
         /// Requested node ceiling, from one to 1,024.
         max_nodes: u16,
+    },
+    /// Capture the current viewport; bytes stay on a private bounded transfer.
+    Screenshot {
+        /// Complete PNG ceiling, at most four MiB.
+        max_bytes: u32,
+    },
+    /// Upload only an existing owned artifact; actual bytes pass pre-effect policy.
+    Upload {
+        /// Exact current file input from the latest accepted snapshot.
+        element: BrowserElementRef,
+        /// Existing opaque application-owned RunInput artifact.
+        artifact_id: String,
+        /// Complete private byte ceiling.
+        max_bytes: u32,
+    },
+    /// Download one current link; no caller-selected native path or URL.
+    Download {
+        /// Exact current download link from the latest accepted snapshot.
+        element: BrowserElementRef,
+        /// Complete private byte ceiling.
+        max_bytes: u32,
     },
     /// Click one current element.
     Click {
@@ -189,6 +216,9 @@ impl BrowserAction {
         match self {
             Self::Navigate { .. } => BrowserActionKind::Navigate,
             Self::Snapshot { .. } => BrowserActionKind::Snapshot,
+            Self::Screenshot { .. } => BrowserActionKind::Screenshot,
+            Self::Upload { .. } => BrowserActionKind::Upload,
+            Self::Download { .. } => BrowserActionKind::Download,
             Self::Click { .. } => BrowserActionKind::Click,
             Self::Fill { .. } => BrowserActionKind::Fill,
             Self::Select { .. } => BrowserActionKind::Select,
@@ -209,6 +239,8 @@ impl BrowserAction {
     pub fn element(&self) -> Option<&BrowserElementRef> {
         match self {
             Self::Click { element }
+            | Self::Upload { element, .. }
+            | Self::Download { element, .. }
             | Self::Fill { element, .. }
             | Self::Select { element, .. }
             | Self::Wait {

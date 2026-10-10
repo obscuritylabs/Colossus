@@ -69,11 +69,20 @@ fn browser_tools_accept_typed_operations_and_have_exact_effect_identity() {
         ("browser.forward", document()),
         ("browser.reload", document()),
         ("browser.stop", document()),
+        ("browser.screenshot", document()),
         (
             "browser.snapshot",
             extend(document(), json!({"max_nodes": 1024})),
         ),
         ("browser.click", element()),
+        (
+            "browser.upload",
+            extend(
+                element(),
+                json!({"artifact_id":format!("artifact-{}", "a".repeat(64))}),
+            ),
+        ),
+        ("browser.download", element()),
         (
             "browser.fill",
             extend(element(), json!({"text": "ordinary text"})),
@@ -99,7 +108,14 @@ fn browser_tools_accept_typed_operations_and_have_exact_effect_identity() {
         let spec = validate(name, arguments).unwrap_or_else(|error| panic!("{name}: {error}"));
         assert_eq!(spec.effect_action.as_deref(), Some(name));
         assert_eq!(spec.capability.as_deref(), Some(name));
-        assert_eq!(spec.max_output_bytes, 64 * 1024);
+        assert_eq!(
+            spec.max_output_bytes,
+            if matches!(name, "browser.screenshot" | "browser.download") {
+                4 * 1024 * 1024
+            } else {
+                64 * 1024
+            }
+        );
     }
     assert!(
         validate(
@@ -118,6 +134,18 @@ fn browser_tools_accept_typed_operations_and_have_exact_effect_identity() {
 
 #[test]
 fn browser_schemas_reject_protocol_escape_credentials_and_unowned_handle_shapes() {
+    for profile in [
+        json!({"kind":"temporary"}),
+        json!({"kind":"workspace", "id":opaque("bp")}),
+    ] {
+        assert!(validate("browser.open", json!({"mode":"headless", "allowed_origins":["https://example.test"], "profile":profile})).is_ok());
+    }
+    for profile in [
+        json!({"kind":"workspace", "id":"/tmp/personal"}),
+        json!({"kind":"workspace", "id":opaque("bp"),"path":"/tmp/profile"}),
+    ] {
+        assert!(validate("browser.open", json!({"mode":"headless", "allowed_origins":["https://example.test"], "profile":profile})).is_err());
+    }
     for (name, arguments) in [
         (
             "browser.open",
@@ -214,17 +242,41 @@ fn browser_schemas_reject_protocol_escape_credentials_and_unowned_handle_shapes(
             "reject {name}"
         );
     }
-    for name in [
-        "browser.evaluate",
-        "browser.cdp",
-        "browser.screenshot",
-        "browser.upload",
-    ] {
+    for name in ["browser.evaluate", "browser.cdp"] {
         assert!(
             StaticToolRegistry::builtins(&[name.into()]).is_err(),
             "unsupported {name}"
         );
     }
+    for field in ["path", "data", "transfer_id", "method", "endpoint"] {
+        assert!(
+            validate(
+                "browser.screenshot",
+                extend(document(), json!({(field): "private"}))
+            )
+            .is_err()
+        );
+        assert!(
+            validate(
+                "browser.download",
+                extend(element(), json!({(field):"private"}))
+            )
+            .is_err()
+        );
+        let mut upload = extend(
+            element(),
+            json!({"artifact_id":format!("artifact-{}","a".repeat(64))}),
+        );
+        upload[field] = json!("private");
+        assert!(validate("browser.upload", upload).is_err());
+    }
+    assert!(
+        validate(
+            "browser.upload",
+            extend(element(), json!({"artifact_id":"/tmp/private.key"}))
+        )
+        .is_err()
+    );
 }
 
 #[test]

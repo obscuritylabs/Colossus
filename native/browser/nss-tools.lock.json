@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "platform": "linux64-debian13",
+  "nss_package_version": "2:3.110-1+deb13u4",
+  "nspr_package_version": "2:4.36-1",
+  "acquisition_authority": "explicit_installer_or_builder",
+  "artifacts": {
+    "certutil": {
+      "sha256": "815d8be06440a4dea3735ac102c7fedbcdb3b72d6ec32349431ac2cba55c19da",
+      "source": "/usr/bin/certutil"
+    },
+    "pk12util": {
+      "sha256": "d9ac90cf005146352caee21cfcd9860ce8ced328f0e42b6bd07a1fc362ddc860",
+      "source": "/usr/bin/pk12util"
+    },
+    "libnss3.so": {
+      "sha256": "b13e6eedabfe3d1cc2aa6d3d75da9cbfe894902d22a8012fff7f1ada25b7d0ed",
+      "source": "/usr/lib/x86_64-linux-gnu/libnss3.so"
+    },
+    "libnssutil3.so": {
+      "sha256": "17048afceb6088836f42049dfbda80d2f096fb69a65786d51af8864fe783506e",
+      "source": "/usr/lib/x86_64-linux-gnu/libnssutil3.so"
+    },
+    "libsmime3.so": {
+      "sha256": "959dc25a7396f70eefdccff49b246cb91224b52e5b1b4f7ab8a4879b5e070aee",
+      "source": "/usr/lib/x86_64-linux-gnu/libsmime3.so"
+    },
+    "libssl3.so": {
+      "sha256": "317a996db709043b44ffab0b1a7627c426233569acfffb7db10c732703e30fa5",
+      "source": "/usr/lib/x86_64-linux-gnu/libssl3.so"
+    },
+    "libnspr4.so": {
+      "sha256": "bd0acf4c8a3e08970b0a187d4e2cbb52fefe2b5ccb9761d86b21d18d5f109830",
+      "source": "/usr/lib/x86_64-linux-gnu/libnspr4.so"
+    },
+    "libplc4.so": {
+      "sha256": "6236e9a36b61830d671668d0db7311042b5b48a226702c29523a12c25906798f",
+      "source": "/usr/lib/x86_64-linux-gnu/libplc4.so"
+    },
+    "libplds4.so": {
+      "sha256": "cb1c194a3c6c7e8e16fcc99d2b3bf1f71e35c599179bda43fa883ec23a195aef",
+      "source": "/usr/lib/x86_64-linux-gnu/libplds4.so"
+    }
+  }
+}

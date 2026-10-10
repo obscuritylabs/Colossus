@@ -48,12 +48,16 @@ function IconButton({
 
 export function BrowserPane({
   controller,
+  run,
+  onUseConversation,
   docked = false,
   expanded,
   onExpand,
   onClose,
 }: {
   controller: BrowserController;
+  run?: { runId: string; sessionId: string } | undefined;
+  onUseConversation?: ((sessionId: string) => void) | undefined;
   docked?: boolean;
   expanded: boolean;
   onExpand: () => void;
@@ -76,7 +80,9 @@ export function BrowserPane({
     : !snapshot.engine
       ? "Browser"
       : {
-          embedded_chromium: "Chromium preview",
+          embedded_chromium: snapshot.engine.preview
+            ? "Chromium preview"
+            : "Chromium",
           webview2: "WebView2",
           webkit: "WebKit",
           unavailable: "Browser unavailable",
@@ -87,6 +93,7 @@ export function BrowserPane({
     paused: "Paused",
     unavailable: "Control unavailable",
   }[ready ? (active?.control ?? "human") : "unavailable"];
+  const readOnly = active?.control === "agent" || active?.control === "paused";
 
   useEffect(() => {
     setAddress(active?.url ?? "");
@@ -253,9 +260,9 @@ export function BrowserPane({
         className="browser-address-bar"
         onSubmit={(event) => {
           event.preventDefault();
-          if (snapshot.available && address.trim())
+          if (snapshot.available && address.trim() && !readOnly)
             void command(
-              active
+              active?.url
                 ? { type: "navigate", tabId: active.id, url: address }
                 : { type: "new", url: address },
             );
@@ -277,7 +284,7 @@ export function BrowserPane({
             key={index}
             label={label}
             icon={icon}
-            disabled={disabled}
+            disabled={disabled || readOnly}
             onClick={() => active && void command({ type, tabId: active.id })}
           />
         ))}
@@ -288,6 +295,7 @@ export function BrowserPane({
           autoComplete="off"
           spellCheck={false}
           value={address}
+          readOnly={readOnly}
           placeholder="Enter a URL or localhost:port"
           onChange={(event) => setAddress(event.target.value)}
         />
@@ -408,6 +416,39 @@ export function BrowserPane({
             </>
           )}
         </span>
+        {snapshot.engine?.agentControlAvailable &&
+        !snapshot.engine.preview &&
+        active?.control === "human" &&
+        run &&
+        active.conversationId === run.sessionId ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              void command({
+                type: "handoff",
+                tabId: active.id,
+                runId: run.runId,
+              })
+            }
+          >
+            Give agent control
+          </button>
+        ) : null}
+        {snapshot.engine?.agentControlAvailable &&
+        !snapshot.engine.preview &&
+        active?.control === "human" &&
+        active.conversationId &&
+        active.conversationId !== run?.sessionId &&
+        onUseConversation ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onUseConversation(active.conversationId!)}
+          >
+            Use in a new conversation
+          </button>
+        ) : null}
         <button
           type="button"
           disabled={!ready}

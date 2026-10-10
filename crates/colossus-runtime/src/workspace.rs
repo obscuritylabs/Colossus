@@ -26,6 +26,7 @@ pub struct RuntimeOpenOptions {
     pub(super) client_identity: Option<colossus_network::ClientIdentity>,
     /// Browser host selected only by trusted native composition; never deserialized.
     pub(super) browser_host: Option<RuntimeBrowserHost>,
+    pub(super) browser_artifacts: Option<Arc<dyn colossus_ports::BrowserArtifactPublisher>>,
 }
 
 impl RuntimeOpenOptions {
@@ -40,6 +41,7 @@ impl RuntimeOpenOptions {
             expected_workspace_identity: None,
             client_identity: None,
             browser_host: None,
+            browser_artifacts: None,
         }
         .canonicalized()
     }
@@ -117,6 +119,16 @@ impl RuntimeOpenOptions {
     #[must_use]
     pub fn with_browser_host(mut self, host: RuntimeBrowserHost) -> Self {
         self.browser_host = Some(host);
+        self
+    }
+
+    /// Supply the trusted publisher for post-authorized browser PNG artifacts.
+    #[must_use]
+    pub fn with_browser_artifact_publisher(
+        mut self,
+        publisher: Arc<dyn colossus_ports::BrowserArtifactPublisher>,
+    ) -> Self {
+        self.browser_artifacts = Some(publisher);
         self
     }
 

@@ -35,6 +35,14 @@ pub(super) struct Registry {
 impl Registry {
     pub(super) fn snapshot(&self) -> BrowserSnapshotDto {
         let mut engine = BrowserEngineDto::current();
+        if self.tabs.iter().any(|tab| {
+            Some(&tab.scope) == self.scope.as_ref() && tab.view.contained_session_id().is_some()
+        }) {
+            engine.preview = false;
+            engine.ready = true;
+            engine.agent_control_available = true;
+            engine.message = None;
+        }
         if self.draining {
             engine.ready = false;
             engine.message = Some(DRAINING_MESSAGE.into());
@@ -47,7 +55,13 @@ impl Registry {
                 .tabs
                 .iter()
                 .filter(|t| Some(&t.scope) == self.scope.as_ref())
-                .map(|t| t.dto.clone())
+                .map(|t| {
+                    let mut dto = t.dto.clone();
+                    if !t.view.human_control_available() && dto.control == "human" {
+                        dto.control = "paused";
+                    }
+                    dto
+                })
                 .collect(),
             selected_tab_id: self
                 .scope

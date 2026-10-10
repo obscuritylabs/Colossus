@@ -16,13 +16,26 @@ extern "C" int32_t colossus_cef_create(colossus_cef_tab tab, uint64_t generation
   if (!headless && !parent) return COLOSSUS_CEF_INVALID;
   if (headless && parent) return COLOSSUS_CEF_INVALID;
 #if defined(OS_WIN)
-  DWORD parent_process = 0;
-  if (!GetWindowThreadProcessId(reinterpret_cast<HWND>(parent), &parent_process) ||
-      parent_process != GetCurrentProcessId()) return COLOSSUS_CEF_DENIED;
+  if (!headless) {
+    DWORD parent_process = 0;
+    if (!GetWindowThreadProcessId(reinterpret_cast<HWND>(parent), &parent_process) ||
+        parent_process != GetCurrentProcessId()) return COLOSSUS_CEF_DENIED;
+  }
 #endif
   auto& context = contexts[context_id];
-  if (!context) { CefRequestContextSettings settings;
-    context = CefRequestContext::CreateContext(settings, MakeContextBoundary()); }
+  if (!context) {
+    std::string cache_path;
+    const auto profile_status = ProfileContext(context_id, &cache_path);
+    if (profile_status) { contexts.erase(context_id); return profile_status; }
+    CefRequestContextSettings settings;
+    if (!cache_path.empty()) {
+      CefString(&settings.cache_path) = cache_path;
+      settings.persist_session_cookies = true;
+    }
+    context = CefRequestContext::CreateContext(settings, MakeContextBoundary());
+    // A null context must never silently fall back to the global browser store.
+    if (!context) { contexts.erase(context_id); return COLOSSUS_CEF_UNAVAILABLE; }
+  }
   auto client = MakeClient(tab, generation, bounds);
   tabs.emplace(tab, Tab{generation, context_id, nullptr, client, nullptr, false});
   CefWindowInfo window;
@@ -55,11 +68,14 @@ extern "C" int32_t colossus_cef_navigate(colossus_cef_tab tab, uint64_t generati
   if (status) return status;
   if (!url || strnlen(url, 8193) > 8192) return COLOSSUS_CEF_INVALID;
   if (!colossus::Allow(tab, generation, url, true)) return COLOSSUS_CEF_DENIED;
+  colossus::CancelIdentity(tab, *t);
   t->browser->GetMainFrame()->LoadURL(url); return COLOSSUS_CEF_OK;
 }
 extern "C" int32_t colossus_cef_control(colossus_cef_tab tab, uint64_t generation, uint32_t action) {
   colossus::Tab* t; auto status = colossus::Resolve(tab, generation, &t);
   if (status) return status;
+  if (action >= COLOSSUS_CEF_BACK && action <= COLOSSUS_CEF_STOP)
+    colossus::CancelIdentity(tab, *t);
   switch (action) {
     case COLOSSUS_CEF_BACK: t->browser->GoBack(); break;
     case COLOSSUS_CEF_FORWARD: t->browser->GoForward(); break;
@@ -103,8 +119,27 @@ extern "C" int32_t colossus_cef_close(colossus_cef_tab tab, uint64_t generation)
   auto it = tabs.find(tab);
   if (it == tabs.end() || it->second.generation != generation) return COLOSSUS_CEF_CLOSED;
   it->second.closing = true;
+  CancelIdentity(tab, it->second);
   if (it->second.browser) it->second.browser->GetHost()->CloseBrowser(true);
   // Pending CreateBrowser is cancelled in OnAfterCreated and acknowledged closed.
+  return COLOSSUS_CEF_OK;
+}
+extern "C" int32_t colossus_cef_select_identity(colossus_cef_tab tab,
+  uint64_t generation, uint64_t request_id, int32_t candidate_index) {
+  colossus::Tab* t; auto status = colossus::Resolve(tab, generation, &t);
+  if (status) return status;
+  if (!request_id || t->identity_request != request_id || !t->identity_callback)
+    return COLOSSUS_CEF_CLOSED;
+  if (std::chrono::steady_clock::now() >= t->identity_deadline) {
+    colossus::CancelIdentity(tab, *t); return COLOSSUS_CEF_CLOSED;
+  }
+  if (candidate_index < -1 || (candidate_index >= 0 &&
+      size_t(candidate_index) >= t->identity_candidates.size())) return COLOSSUS_CEF_INVALID;
+  auto callback = t->identity_callback;
+  auto certificate = candidate_index >= 0 ? t->identity_candidates[candidate_index] : nullptr;
+  t->identity_callback = nullptr; t->identity_candidates.clear(); t->identity_request = 0;
+  // Consume the exact pending review before invoking Chromium's native key use.
+  callback->Select(certificate);
   return COLOSSUS_CEF_OK;
 }
 extern "C" int32_t colossus_cef_devtools(colossus_cef_tab tab, uint64_t generation,
@@ -124,7 +159,7 @@ extern "C" int32_t colossus_cef_devtools(colossus_cef_tab tab, uint64_t generati
 extern "C" int32_t colossus_cef_acceptance_probe(colossus_cef_tab tab, uint64_t generation) {
   colossus::Tab* t; auto status = colossus::Resolve(tab, generation, &t);
   if (status) return status;
-#if !defined(OS_MAC)
+#if !defined(OS_MAC) && !defined(OS_WIN)
   return COLOSSUS_CEF_UNAVAILABLE;
 #else
   if (t->acceptance_probe_pending) return COLOSSUS_CEF_BUSY;
@@ -144,7 +179,7 @@ extern "C" int32_t colossus_cef_acceptance_probe(colossus_cef_tab tab, uint64_t 
 extern "C" int32_t colossus_cef_acceptance_activate(colossus_cef_tab tab, uint64_t generation) {
   colossus::Tab* t; auto status = colossus::Resolve(tab, generation, &t);
   if (status) return status;
-#if defined(OS_MAC)
+#if defined(OS_MAC) || defined(OS_WIN)
   return colossus::PlatformAcceptanceActivate(t->browser->GetHost()->GetWindowHandle());
 #else
   return COLOSSUS_CEF_UNAVAILABLE;
@@ -154,9 +189,17 @@ extern "C" int32_t colossus_cef_acceptance_activate(colossus_cef_tab tab, uint64
 extern "C" int32_t colossus_cef_acceptance_terminate(colossus_cef_tab tab, uint64_t generation) {
   colossus::Tab* t; auto status = colossus::Resolve(tab, generation, &t);
   if (status) return status;
-#if defined(OS_MAC)
+#if defined(OS_MAC) || defined(OS_WIN)
   return colossus::PlatformAcceptanceTerminate(t->browser->GetHost()->GetWindowHandle());
 #else
   return COLOSSUS_CEF_UNAVAILABLE;
 #endif
 }
+
+#if defined(OS_WIN)
+extern "C" int32_t colossus_cef_acceptance_input(colossus_cef_tab tab, uint64_t generation) {
+  colossus::Tab* t; auto status = colossus::Resolve(tab, generation, &t);
+  if (status) return status;
+  return colossus::PlatformAcceptanceInput(t->browser->GetHost()->GetWindowHandle());
+}
+#endif

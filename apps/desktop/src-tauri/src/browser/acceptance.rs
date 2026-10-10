@@ -14,6 +14,8 @@ use tauri::Webview;
 
 #[cfg(feature = "embedded-chromium-preview")]
 mod chromium;
+#[cfg(feature = "embedded-chromium-preview")]
+mod pki;
 
 pub(crate) fn run() -> i32 {
     println!("NATIVE_BROWSER_HOST_PID {}", std::process::id());
@@ -80,7 +82,7 @@ pub(crate) fn run() -> i32 {
                         #[cfg(feature = "embedded-chromium-preview")]
                         if let Err(error) = chromium::terminate(&app).await {
                             completion.store(false, Ordering::SeqCst);
-                            eprintln!("native AppKit quit regression failed: {error:#}");
+                            eprintln!("native application quit regression failed: {error:#}");
                             app.exit(1);
                         } else {
                             println!("native browser acceptance passed");
@@ -184,7 +186,7 @@ fn run_lifecycle(application: tauri::App, completed: &AtomicBool) -> i32 {
                                 closed.store(true, Ordering::Release);
                                 #[cfg(feature = "embedded-chromium-preview")]
                                 if live > 0 {
-                                    println!("PASS AppKit quit acknowledged live CEF tab close");
+                                    println!("PASS native application quit acknowledged live CEF tab close");
                                 }
                             }
                             Err(error) => {
@@ -282,6 +284,7 @@ async fn exercise(app: &tauri::AppHandle, address: &str) -> anyhow::Result<()> {
     let first = action(
         app,
         BrowserAction::New {
+            conversation_id: None,
             url: format!("{address}/first"),
         },
     )
@@ -373,6 +376,7 @@ async fn sessions(app: &tauri::AppHandle, address: &str, generation: u64) -> any
     let second = action(
         app,
         BrowserAction::New {
+            conversation_id: None,
             url: format!("{address}/first"),
         },
     )
@@ -398,6 +402,7 @@ async fn sessions(app: &tauri::AppHandle, address: &str, generation: u64) -> any
     let second_scope = action(
         app,
         BrowserAction::New {
+            conversation_id: None,
             url: format!("{address}/first"),
         },
     )
@@ -641,6 +646,7 @@ async fn cleanup(app: &tauri::AppHandle, address: &str) -> anyhow::Result<()> {
     let reset = action(
         app,
         BrowserAction::New {
+            conversation_id: None,
             url: format!("{address}/first"),
         },
     )

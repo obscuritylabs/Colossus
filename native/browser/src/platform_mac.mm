@@ -55,6 +55,36 @@ bool TaoEventLoopInstalled() {
 }
 @end
 
+extern "C" int32_t colossus_cef_standalone_platform_pump() {
+  if (!colossus::initialized) return COLOSSUS_CEF_UNAVAILABLE;
+  if (![NSThread isMainThread] ||
+      std::this_thread::get_id() != colossus::owning_thread)
+    return COLOSSUS_CEF_WRONG_THREAD;
+  if (!NSApp || ![NSApp conformsToProtocol:@protocol(CefAppProtocol)] ||
+      TaoEventLoopInstalled())
+    return COLOSSUS_CEF_UNAVAILABLE;
+  @autoreleasepool {
+    static bool launched = false;
+    if (!launched) {
+      // This dedicated OSR process has no window or desktop delegate. Its
+      // authenticated presenter lives in the Desktop process. Do not register
+      // an additional Dock application or replace a Tauri application delegate.
+      [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
+      [NSApp finishLaunching];
+      launched = true;
+    }
+    for (unsigned int count = 0; count < 32; ++count) {
+      NSEvent* event = [NSApp nextEventMatchingMask:NSEventMaskAny
+                         untilDate:[NSDate distantPast]
+                            inMode:NSDefaultRunLoopMode dequeue:YES];
+      if (!event) break;
+      [NSApp sendEvent:event];
+    }
+    [NSApp updateWindows];
+  }
+  return COLOSSUS_CEF_OK;
+}
+
 namespace colossus {
 bool PlatformLoadLibrary() {
   // Main-process framework must be loaded dynamically for macOS sandboxing.

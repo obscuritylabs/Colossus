@@ -439,6 +439,7 @@ fn comfortable_semantics_render_specialized_tool_and_error_cards() {
         .run_event(&RunEvent::ToolCompleted {
             turn: 1,
             result: ToolResult {
+                images: Vec::new(),
                 call_id: "call-search".into(),
                 name: "filesystem.search".into(),
                 output: serde_json::json!({
@@ -463,6 +464,7 @@ fn comfortable_semantics_render_specialized_tool_and_error_cards() {
         .run_event(&RunEvent::ToolCompleted {
             turn: 1,
             result: ToolResult {
+                images: Vec::new(),
                 call_id: "call-agent-result".into(),
                 name: "agent.result".into(),
                 output: serde_json::json!({
@@ -486,6 +488,7 @@ fn comfortable_semantics_render_specialized_tool_and_error_cards() {
         .run_event(&RunEvent::ToolCompleted {
             turn: 1,
             result: ToolResult {
+                images: Vec::new(),
                 call_id: "call-shell".into(),
                 name: "shell.run".into(),
                 output: serde_json::json!({"stdout": "ok\n", "stderr": "warning\n"}).to_string(),
@@ -504,6 +507,7 @@ fn comfortable_semantics_render_specialized_tool_and_error_cards() {
         .tool_completed_with_call(
             1,
             &ToolResult {
+                images: Vec::new(),
                 call_id: "call-read".into(),
                 name: "filesystem.read".into(),
                 output: "fn main() {}\nprintln!(\"ready\");".into(),
@@ -527,6 +531,7 @@ fn comfortable_semantics_render_specialized_tool_and_error_cards() {
         .run_event(&RunEvent::ToolCompleted {
             turn: 1,
             result: ToolResult {
+                images: Vec::new(),
                 call_id: "call-edit".into(),
                 name: "patch.apply".into(),
                 output: serde_json::json!({
@@ -621,6 +626,7 @@ fn compact_web_fetch_cards_bound_response_bodies_while_verbose_cards_show_them()
         arguments: serde_json::json!({"url": "https://example.com/page"}),
     };
     let result = ToolResult {
+        images: Vec::new(),
         call_id: call.call_id.clone(),
         name: call.name.clone(),
         output: response.clone(),
@@ -684,6 +690,7 @@ fn verbose_run_errors_show_structured_http_status() {
 #[test]
 fn compact_raw_network_json_responses_do_not_expand_structured_bodies() {
     let result = ToolResult {
+        images: Vec::new(),
         call_id: "call-http".into(),
         name: "network.http".into(),
         output: serde_json::json!({
@@ -861,6 +868,7 @@ fn mcp_identity_remains_visible_in_terminal_lifecycle_and_result_cards() {
         }),
     };
     let result = ToolResult {
+        images: Vec::new(),
         call_id: call.call_id.clone(),
         name: call.name.clone(),
         output: serde_json::json!({"error": {"message": "Connection failed"}}).to_string(),
@@ -914,6 +922,7 @@ fn mcp_identity_remains_visible_in_terminal_lifecycle_and_result_cards() {
         PresentationBlock::Card { title, .. } if title == "Failed mcp.call · GitLab · list_issues"
     ));
     let successful = ToolResult {
+        images: Vec::new(),
         output: serde_json::json!({"server": "Splunk", "tool": "search", "result": {}}).to_string(),
         exit_code: 0,
         ..result
@@ -976,6 +985,7 @@ fn semantic_tool_families_errors_and_elapsed_phases_are_distinct() {
         .run_event(&RunEvent::ToolCompleted {
             turn: 1,
             result: ToolResult {
+                images: Vec::new(),
                 call_id: "call-file".into(),
                 name: "filesystem.read".into(),
                 output: serde_json::json!({"path": "README.md", "bytes": 42}).to_string(),
@@ -999,6 +1009,7 @@ fn semantic_tool_families_errors_and_elapsed_phases_are_distinct() {
             .run_event(&RunEvent::ToolCompleted {
                 turn: 1,
                 result: ToolResult {
+                    images: Vec::new(),
                     call_id: "call-ok".into(),
                     name: "echo".into(),
                     output: "ok".into(),
@@ -1014,6 +1025,7 @@ fn semantic_tool_families_errors_and_elapsed_phases_are_distinct() {
         .run_event(&RunEvent::ToolCompleted {
             turn: 1,
             result: ToolResult {
+                images: Vec::new(),
                 call_id: "call-error".into(),
                 name: "filesystem.read".into(),
                 output: serde_json::json!({
@@ -1161,6 +1173,7 @@ fn every_run_event_variant_and_builtin_tool_has_compact_and_verbose_semantics() 
                 .run_event(&RunEvent::ToolCompleted {
                     turn: 1,
                     result: ToolResult {
+                        images: Vec::new(),
                         call_id,
                         name: spec.name.clone(),
                         output: serde_json::json!({"name": &spec.name, "status": "ok"}).to_string(),

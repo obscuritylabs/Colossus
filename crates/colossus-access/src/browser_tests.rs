@@ -14,6 +14,7 @@ const BROWSER_ACTIONS: &[(&str, ActionClass)] = &[
     ("browser.reload", ActionClass::ExternalNetwork),
     ("browser.stop", ActionClass::LocalState),
     ("browser.snapshot", ActionClass::Read),
+    ("browser.screenshot", ActionClass::Read),
     ("browser.click", ActionClass::ExternalNetwork),
     ("browser.fill", ActionClass::ExternalNetwork),
     ("browser.select", ActionClass::ExternalNetwork),

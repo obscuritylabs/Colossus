@@ -8,10 +8,13 @@ license = "Apache-2.0"
 workspace = "../src-tauri"
 
 [features]
-cef-preview = ["dep:serde_json", "dep:sha2", "dep:rustls-pki-types", "dep:x509-parser", "dep:zeroize"]
+cef-preview = ["dep:serde_json", "dep:sha2", "dep:rustls-pki-types", "dep:x509-parser", "dep:zeroize", "dep:colossus-native-browser-pki", "dep:colossus-browser-presentation", "dep:async-trait"]
 native-test-driver = ["objc2-foundation/NSData", "objc2-foundation/NSJSONSerialization"]
 
 [dependencies]
+async-trait = { version = "0.1.89", optional = true }
+colossus-native-browser-pki = { version = "=0.1.0", path = "../../../native/browser/pki", optional = true }
+colossus-browser-presentation = { version = "=0.11.8", path = "../../../crates/colossus-browser-presentation", optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", optional = true }
 sha2 = { version = "0.10.9", optional = true }
@@ -37,3 +40,6 @@ objc2-web-kit = { version = "0.3.2", features = ["WKNavigation", "WKNavigationAc
 [lints.clippy]
 all = "warn"
 pedantic = "warn"
+
+[dev-dependencies]
+rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "pem", "ring", "zeroize"] }

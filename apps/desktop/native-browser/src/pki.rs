@@ -3,10 +3,10 @@
 //! This API receives only native inputs. Password/key bytes have no serialization
 //! or diagnostic surface. Imports do not establish Chromium identity-use proof.
 
-use rustls_pki_types::{CertificateDer, pem::PemObject as _};
 use serde::Serialize;
-use sha2::{Digest as _, Sha256};
-use x509_parser::prelude::{FromDer as _, X509Certificate};
+
+pub(crate) mod selection;
+pub use selection::{IdentityCandidate, IdentityRequest};
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -21,6 +21,7 @@ pub struct PkiStatus {
     pub scope: &'static str,
     pub ca_import_available: bool,
     pub pfx_import_available: bool,
+    pub client_identity_review_available: bool,
     pub client_identity_selection_ready: bool,
     pub acceptance_pending: bool,
     pub message: &'static str,
@@ -70,10 +71,11 @@ pub fn status() -> PkiStatus {
         },
         ca_import_available: supported,
         pfx_import_available: supported,
+        client_identity_review_available: supported,
         client_identity_selection_ready: false,
         acceptance_pending: true,
         message: if supported {
-            "Imports affect this operating-system user's certificate store and can affect other applications. Browser profiles do not isolate this trust. Native import and Chromium key-use acceptance are pending."
+            "Imports affect this operating-system user's certificate store and can affect other applications. Browser profiles do not isolate this trust. The Chromium preview supports native review for each pending identity request; installed native key-use acceptance is pending."
         } else {
             "This Desktop build has no native browser certificate importer. Colossus network credentials do not provision Chromium trust or client identities."
         },
@@ -138,46 +140,11 @@ fn receipt(fingerprints: Vec<String>) -> ImportReceipt {
 }
 
 fn fingerprint(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    Sha256::digest(bytes)
-        .iter()
-        .fold(String::with_capacity(64), |mut result, byte| {
-            let _ = write!(result, "{byte:02x}");
-            result
-        })
+    colossus_native_browser_pki::fingerprint(bytes)
 }
 
 fn validate_ca(bytes: &[u8]) -> Result<Vec<u8>, PkiError> {
-    if bytes.is_empty() || bytes.len() > 1024 * 1024 {
-        return Err(PkiError::InvalidCertificate);
-    }
-    let certificates = if bytes.starts_with(b"-----BEGIN") {
-        CertificateDer::pem_slice_iter(bytes)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| PkiError::InvalidCertificate)?
-    } else {
-        vec![CertificateDer::from(bytes)]
-    };
-    if certificates.len() != 1 {
-        return Err(PkiError::InvalidCertificate);
-    }
-    let der = certificates[0].as_ref();
-    let (remaining, certificate) =
-        X509Certificate::from_der(der).map_err(|_| PkiError::InvalidCertificate)?;
-    if !remaining.is_empty()
-        || !certificate.validity().is_valid()
-        || !certificate
-            .basic_constraints()
-            .map_err(|_| PkiError::InvalidCertificate)?
-            .is_some_and(|value| value.value.ca)
-        || certificate
-            .key_usage()
-            .map_err(|_| PkiError::InvalidCertificate)?
-            .is_some_and(|usage| !usage.value.key_cert_sign())
-    {
-        return Err(PkiError::InvalidCertificate);
-    }
-    Ok(der.to_vec())
+    colossus_native_browser_pki::ca_der(bytes).map_err(|_| PkiError::InvalidCertificate)
 }
 
 #[cfg(test)]

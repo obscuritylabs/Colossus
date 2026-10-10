@@ -4,6 +4,7 @@ use super::*;
 struct DeferredRunResponse {
     value: Value,
     response: String,
+    json_only: bool,
 }
 
 impl DeferredRunResponse {
@@ -11,11 +12,24 @@ impl DeferredRunResponse {
         Ok(Self {
             value: serde_json::to_value(value)?,
             response: response.into(),
+            json_only: false,
         })
     }
 
+    fn json(value: Value) -> Self {
+        Self {
+            value,
+            response: String::new(),
+            json_only: true,
+        }
+    }
+
     fn render(self) -> Result<(), Box<dyn Error>> {
-        print_run_response(&self.value, &self.response)
+        if self.json_only {
+            print_json(&self.value)
+        } else {
+            print_run_response(&self.value, &self.response)
+        }
     }
 }
 
@@ -59,6 +73,30 @@ pub(super) fn finalize_runtime_command<T>(
 
 #[tokio::main]
 pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut browser = None;
+        let result = runtime_command(&mut browser).await;
+        if let Some(browser) = browser
+            && let Err(cleanup) = browser.shutdown().await
+        {
+            return Err(match result {
+                Ok(()) => cleanup.into(),
+                Err(command) => {
+                    format!("{command}; bundled browser cleanup remains unacknowledged: {cleanup}")
+                        .into()
+                }
+            });
+        }
+        result
+    }
+    #[cfg(not(target_os = "linux"))]
+    runtime_command().await
+}
+
+async fn runtime_command(
+    #[cfg(target_os = "linux")] browser: &mut Option<browser_bundle::BrowserOwner>,
+) -> Result<(), Box<dyn Error>> {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) if error.kind() == ErrorKind::MissingSubcommand => {
@@ -111,8 +149,9 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         colossus_sandbox::run_helper_stdio()?;
         return Ok(());
     }
-    let mut runtime_options =
-        RuntimeOpenOptions::for_workspace(&cli.workspace)?.with_colossus_home(home.root())?;
+    let mut runtime_options = RuntimeOpenOptions::for_workspace(&cli.workspace)?
+        .with_colossus_home(home.root())?
+        .with_browser_artifact_publisher(Arc::new(colossus_api::ReleasedBrowserArtifactPublisher));
     let workspace_identity = detect_workspace_identity(&runtime_options.workspace)?;
     if workspace_identity.canonical_path() != runtime_options.workspace {
         return Err("workspace identity canonicalization changed unexpectedly".into());
@@ -229,6 +268,11 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 && worker.enroll_application.is_none()
                 && worker.revoke_credential.is_none() =>
         {
+            #[cfg(target_os = "linux")]
+            if let Some(owner) = browser_bundle::discover(&home_workspace).await? {
+                runtime_options = runtime_options.with_browser_host(owner.host());
+                *browser = Some(owner);
+            }
             let observability =
                 colossus_observability::ObservabilityGuard::install(&config.observability)?;
             let observability_diagnostics = observability
@@ -241,29 +285,32 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 ApprovalMode::RiskAuto => WorkerApprovalMode::RiskAuto,
                 ApprovalMode::FullAccess => WorkerApprovalMode::FullAccess,
             };
-            let server =
-                WorkerServer::open_with_mode_at_workspace_and_provider_credentials_and_codex_auth(
-                    &config,
-                    mode,
-                    worker_codex_auth::runtime_options(worker, runtime_options.clone()),
-                    Arc::new(colossus_runtime::EnvironmentCredentialResolver),
-                    worker_codex_auth,
-                )
-                .map_err(worker_open_error)?
-                .with_observability_diagnostics(move || {
-                    serde_json::to_value(observability_diagnostics.force_flush()).unwrap_or_else(
-                        |_| {
-                            serde_json::json!({
-                                "ready": false,
-                                "checks": [{
-                                    "name": "host",
-                                    "status": "fail",
-                                    "detail": "The exporter diagnostic failed safely."
-                                }]
-                            })
-                        },
-                    )
-                });
+            #[cfg(target_os = "linux")]
+            let browser_owner = browser.clone();
+            #[cfg(not(target_os = "linux"))]
+            let browser_owner = None;
+            let server = WorkerServer::open_with_verified_browser(
+                &config,
+                mode,
+                worker_codex_auth::runtime_options(worker, runtime_options.clone()),
+                Arc::new(colossus_runtime::EnvironmentCredentialResolver),
+                worker_codex_auth,
+                None,
+                browser_owner,
+            )
+            .map_err(worker_open_error)?
+            .with_observability_diagnostics(move || {
+                serde_json::to_value(observability_diagnostics.force_flush()).unwrap_or_else(|_| {
+                    serde_json::json!({
+                        "ready": false,
+                        "checks": [{
+                            "name": "host",
+                            "status": "fail",
+                            "detail": "The exporter diagnostic failed safely."
+                        }]
+                    })
+                })
+            });
             let (server, public_environment) = if let Some(directory) =
                 worker.public_api_dir.as_deref()
             {
@@ -406,6 +453,11 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             "interactive --output json is not supported; omit it for the TUI or redirect line-mode input"
                 .into(),
         );
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(owner) = browser_bundle::discover(&home_workspace).await? {
+        runtime_options = runtime_options.with_browser_host(owner.host());
+        *browser = Some(owner);
     }
     let prompt_router = interactive_tui.then(|| Arc::new(tui_host::TuiPromptRouter::default()));
     let configured_approval = cli.approval_mode.unwrap_or(ApprovalMode::Ask);
@@ -1284,13 +1336,13 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             let drained = runtime.workflows().drain().await?;
             let projections = runtime.drain_projections()?;
             let subagents = runtime.drain_subagents().await?;
-            print_json(&json!({
+            deferred_run_response = Some(DeferredRunResponse::json(json!({
                 "once": once,
                 "recovered": recovered,
                 "projections": projections,
                 "drained": drained,
                 "subagents": subagents,
-            }))?;
+            })));
         }
         Command::Worker(WorkerCommand { shutdown: true, .. }) => {
             unreachable!("handled before runtime construction")
@@ -1303,6 +1355,22 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             Ok::<_, Box<dyn Error>>(deferred_run_response)
         })
         .await;
+    // A final run/worker result is rendered only after the dedicated browser's
+    // retained process, egress and installation obligations are acknowledged.
+    #[cfg(target_os = "linux")]
+    let command_result = if let Some(owner) = browser.as_ref()
+        && let Err(cleanup) = owner.shutdown().await
+    {
+        Err(match command_result {
+            Ok(_) => Box::new(cleanup) as Box<dyn Error>,
+            Err(command) => {
+                format!("{command}; bundled browser cleanup remains unacknowledged: {cleanup}")
+                    .into()
+            }
+        })
+    } else {
+        command_result
+    };
     finalize_runtime_command(
         command_result,
         || runtime.checkpoint(),

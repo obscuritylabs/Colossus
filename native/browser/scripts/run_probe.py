@@ -78,6 +78,14 @@ def bounded_process(command: list[str], cwd: Path, *, timeout: float) -> ProbeRe
     environment = os.environ.copy()
     environment.pop("DISPLAY", None)
     environment.pop("WAYLAND_DISPLAY", None)
+    # The fixture owns this fresh directory; CEF helpers and Fontconfig must
+    # not discover an ambient user's browser state or cache directories.
+    environment.update({
+        "HOME": str(cwd),
+        "XDG_CONFIG_HOME": str(cwd / ".config"),
+        "XDG_DATA_HOME": str(cwd / ".local/share"),
+        "XDG_CACHE_HOME": str(cwd / ".cache"),
+    })
     process = subprocess.Popen(
         command, cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
@@ -132,11 +140,12 @@ def bounded_process(command: list[str], cwd: Path, *, timeout: float) -> ProbeRe
     )
 
 
-def run_probe(root: Path, *, fixture: Path = FIXTURE, timeout: float = PROBE_TIMEOUT_SECONDS) -> ProbeResult:
+def run_probe(root: Path, *, fixture: Path = FIXTURE, timeout: float = PROBE_TIMEOUT_SECONDS,
+              manifest_path: Path | None = None) -> ProbeResult:
     if sys.platform != "linux":
         raise ProbeError("this initial no-display native probe requires a Linux host")
     root = component.directory(root)
-    manifest = component.verify_installed(root)
+    manifest = component.verify_installed(root, manifest_path)
     if manifest["platform"] != "linux64" or manifest["executable"] != PROBE_EXECUTABLE:
         raise ProbeError("the component does not inventory the Linux x64 native probe executable")
     executable = root / PROBE_EXECUTABLE
@@ -163,6 +172,9 @@ def run_probe(root: Path, *, fixture: Path = FIXTURE, timeout: float = PROBE_TIM
     if (
         "native_fixture=passed" not in result.stdout
         or "native_negative_controls=passed" not in result.stdout
+        or "native_offscreen_pixels=passed" not in result.stdout
+        or "native_presentation_input=passed" not in result.stdout
+        or "native_presentation_revocation=passed" not in result.stdout
         or re.search(r"^devtools_command=1 success=1 bounded_bytes=\d+$", result.stdout, re.MULTILINE) is None
     ):
         raise ProbeError("native probe exited without all fixture, negative-control, and DevTools success evidence")
@@ -172,9 +184,10 @@ def run_probe(root: Path, *, fixture: Path = FIXTURE, timeout: float = PROBE_TIM
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--component", type=Path, required=True, help="explicit inventoried component directory")
+    parser.add_argument("--manifest", type=Path, help="external developer consistency inventory for the fixture executable")
     arguments = parser.parse_args()
     try:
-        result = run_probe(arguments.component)
+        result = run_probe(arguments.component, manifest_path=arguments.manifest)
         print(result.stdout, end="")
         if result.stderr:
             print(result.stderr, end="", file=sys.stderr)

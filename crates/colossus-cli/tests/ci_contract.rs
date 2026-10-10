@@ -1668,3 +1668,73 @@ fn pull_request_decisions_use_base_revision_contracts() {
     assert!(classify.contains(".ci-trusted/scripts/ci/classify-changes.sh"));
     assert!(!classify.contains("./scripts/ci/classify-changes.sh"));
 }
+
+#[test]
+fn owned_windows_chromium_is_real_required_native_acceptance_with_bounded_evidence() {
+    let workflow = workflow("premerge.yml");
+    let desktop = job(jobs(&workflow), "windows-desktop");
+    let native = named_step(
+        desktop,
+        "Build pinned CEF and accept the supervised owned Windows browser",
+    );
+    assert_eq!(field(native, "id").as_str(), Some("owned_chromium"));
+    assert_eq!(field(native, "timeout-minutes").as_u64(), Some(45));
+    assert_eq!(field(native, "continue-on-error").as_bool(), Some(true));
+    assert_eq!(
+        field(native, "run").as_str(),
+        Some("./scripts/ci/browser-windows-native.ps1")
+    );
+    let aggregate = named_step(desktop, "Require every Windows Desktop acceptance check");
+    assert_eq!(
+        field(
+            mapping(field(aggregate, "env"), "Windows aggregate outcomes"),
+            "OWNED_CHROMIUM_OUTCOME"
+        )
+        .as_str(),
+        Some("${{ steps.owned_chromium.outcome }}"),
+    );
+    assert!(
+        field(aggregate, "run")
+            .as_str()
+            .unwrap()
+            .contains("owned-chromium=$OWNED_CHROMIUM_OUTCOME")
+    );
+    let evidence = named_step(desktop, "Retain bounded owned Windows browser evidence");
+    assert_eq!(field(evidence, "if").as_str(), Some("always()"));
+    assert_eq!(
+        field(
+            mapping(field(evidence, "with"), "native evidence upload"),
+            "path"
+        )
+        .as_str(),
+        Some(
+            ".local/windows-owned-browser-evidence/native-factory.json\n.local/windows-owned-browser-evidence/native-factory.log\n.local/windows-owned-browser-evidence/browser-component.json\n"
+        ),
+    );
+    let helper =
+        fs::read_to_string(repository_root().join("scripts/ci/browser-windows-native.ps1"))
+            .unwrap();
+    for required in [
+        "scripts/browser-native-host-windows.ps1",
+        "cargo test --locked -p colossus-sandbox --test browser_windows_native",
+        "owned_windows_chromium_frames_input_viewer_and_full_cleanup",
+        "-- --ignored --exact --nocapture",
+        "low_appcontainer_token",
+        "low_package_profile_label",
+        "native_upload_actual_http_bytes",
+        "native_download_actual_http_bytes",
+        "$Bytes -gt 256KB",
+        "acceptedDesktop = $false",
+        "acceptedHeadless = $false",
+        "[IO.Directory]::Delete($Parent)",
+    ] {
+        assert!(
+            helper.contains(required),
+            "native CI helper must preserve {required}"
+        );
+    }
+    assert!(
+        !helper.contains("Remove-Item"),
+        "native CI cleanup cannot recurse into uncertain private state"
+    );
+}

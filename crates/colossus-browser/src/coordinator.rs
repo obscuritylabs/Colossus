@@ -12,9 +12,17 @@ use std::{
 };
 use uuid::Uuid;
 
+mod capture;
 mod control;
 mod execute;
+mod execute_accept;
 mod lifecycle;
+mod native_handoff;
+mod transfer;
+
+pub use capture::CapturedBrowserScreenshot;
+pub use native_handoff::NativeBrowserHandoff;
+pub use transfer::CapturedBrowserDownload;
 
 /// Bounded caller-owned session manager, independent of MCP transport lifetime.
 ///

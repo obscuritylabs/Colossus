@@ -1,15 +1,24 @@
 //! Runtime-only browser dispatch, ownership, and permit-bearing effect adapter.
 
 mod arguments;
+mod download;
+mod effect;
 mod execution;
 mod host;
 mod lifecycle;
+mod native;
 mod public;
+mod screenshot;
 mod service;
+mod transfer;
 
 pub(super) use execution::BrowserToolExecutor;
 pub use host::RuntimeBrowserHost;
 pub(super) use lifecycle::RuntimeRunLifecycle;
+pub use native::{
+    NativeBrowserOpenRequest, RuntimeBrowserPresenter, RuntimeNativeBrowserAuthority,
+    RuntimeNativeBrowserError, RuntimeNativeBrowserGranted, RuntimeNativeBrowserSession,
+};
 pub(super) use service::RuntimeBrowserTools;
 
 pub(super) fn supports_tool(
@@ -31,6 +40,9 @@ pub(super) fn supports_tool(
         "browser.open" | "browser.close" | "browser.status" | "browser.tabs" => return true,
         "browser.navigate" => Kind::Navigate,
         "browser.snapshot" => Kind::Snapshot,
+        "browser.screenshot" => Kind::Screenshot,
+        "browser.upload" => Kind::Upload,
+        "browser.download" => Kind::Download,
         "browser.click" => Kind::Click,
         "browser.fill" => Kind::Fill,
         "browser.select" => Kind::Select,

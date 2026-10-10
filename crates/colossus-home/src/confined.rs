@@ -53,6 +53,20 @@ impl ConfinedRoot {
         &self.path
     }
 
+    /// Clone the retained Unix directory authority without reopening its pathname.
+    /// Native descriptor-relative metadata walkers must still revalidate this root
+    /// before and after an operation; the clone does not grant model/tool access.
+    #[cfg(unix)]
+    pub fn directory_handle(&self) -> Result<File, HomeError> {
+        self.revalidate()?;
+        let handle = self
+            .directory
+            .try_clone()
+            .map_err(|error| HomeError::io(&self.path, error))?;
+        self.revalidate()?;
+        Ok(handle)
+    }
+
     /// Resolve a confined relative file path, creating only missing private parents.
     ///
     /// An existing leaf is opened without following links and must be an owner-private,

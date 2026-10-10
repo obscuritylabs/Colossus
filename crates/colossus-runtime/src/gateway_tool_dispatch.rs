@@ -38,6 +38,7 @@ impl ToolExecutor for GatewayToolExecutor {
             | "workflow.schedule.delete" => {
                 let output = Box::pin(self.execute_workflow_tool(&call, context)).await?;
                 Ok(ToolResult {
+                    images: Vec::new(),
                     call_id: call.call_id,
                     name: call.name,
                     output,
@@ -86,6 +87,7 @@ impl ToolExecutor for GatewayToolExecutor {
                     .await?
                     .ok_or_else(|| ToolError::Unknown(call.name.clone()))?;
                 Ok(ToolResult {
+                    images: Vec::new(),
                     call_id: call.call_id,
                     name: call.name,
                     output,

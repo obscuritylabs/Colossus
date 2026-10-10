@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
@@ -11,8 +17,10 @@ function verifySources(t, files) {
   const bin = join(root, "bin");
   mkdirSync(bin);
   mkdirSync(join(root, "release"));
-  copyFileSync(new URL("../../release/verify-release-readiness.sh", import.meta.url),
-    join(root, "release/verify-release-readiness.sh"));
+  copyFileSync(
+    new URL("../../release/verify-release-readiness.sh", import.meta.url),
+    join(root, "release/verify-release-readiness.sh"),
+  );
   // The source inventory guard uses real Git. Only unrelated compiler/scanner
   // prerequisites are stubbed so these cases cannot invoke full release builds.
   for (const [tool, version] of [
@@ -21,9 +29,11 @@ function verifySources(t, files) {
     ["cargo-audit", "cargo-audit 0.22.2"],
     ["cargo", ""],
   ]) {
-    writeFileSync(join(bin, tool),
+    writeFileSync(
+      join(bin, tool),
       `#!/bin/sh\nif [ "$1" = --version ]; then printf '%s\\n' '${version}'; fi\nexit 0\n`,
-      { mode: 0o755 });
+      { mode: 0o755 },
+    );
   }
   for (const file of files) {
     const path = join(root, file);
@@ -53,9 +63,34 @@ test("release readiness permits maintained SDK, build, and plugin Python sources
     "native/browser/scripts/test_component.py",
     "native/browser/scripts/run_probe.py",
     "native/browser/scripts/test_probe.py",
+    "native/browser/scripts/run_host_probe.py",
+    "native/browser/scripts/test_host_probe.py",
+    "native/browser/scripts/host_capture_probe.py",
+    "native/browser/scripts/test_host_capture_probe.py",
+    "native/browser/scripts/host_transfer_probe.py",
+    "native/browser/scripts/test_host_transfer_probe.py",
+    "native/browser/scripts/elf_order.py",
+    "native/browser/scripts/test_elf_order.py",
+    "native/browser/scripts/run_host_pki_probe.py",
+    "native/browser/scripts/run_renderer_custody_probe.py",
+    "native/browser/scripts/test_renderer_custody_probe.py",
+    "native/browser/scripts/pki_fixture_proxy.py",
     "native/browser/scripts/stage_macos.py",
+    "native/browser/scripts/stage_host_macos.py",
     "native/browser/scripts/test_stage_macos.py",
     "native/browser/scripts/test_launcher_macos.py",
+    "native/browser/scripts/stage_windows.py",
+    "native/browser/scripts/test_stage_windows.py",
+    "native/browser/scripts/pki_fixture.py",
+    "native/browser/scripts/pki_fixture_material.py",
+    "native/browser/scripts/pki_fixture_private.py",
+    "native/browser/scripts/pki_fixture_retirement.py",
+    "native/browser/scripts/test_pki_fixture_retirement.py",
+    "native/browser/scripts/test_pki_fixture.py",
+    "native/browser/scripts/stage_nss_tools.py",
+    "native/browser/scripts/test_stage_nss_tools.py",
+    "native/browser/scripts/stage_cli_browser_bundle.py",
+    "native/browser/scripts/test_stage_cli_browser_bundle.py",
     "examples/sdk/integration/server.py",
     "examples/sdk/provider-failure/server.py",
     "bundled-plugins/colossus/skills/security-review/scripts/init_review.py",
@@ -76,6 +111,9 @@ for (const file of [
     const result = verifySources(t, [file]);
     assert.equal(result.status, 1, result.stderr);
     assert.match(result.stderr, /retired root Python package/u);
-    assert.doesNotMatch(result.stdout, /local release-readiness verification passed/u);
+    assert.doesNotMatch(
+      result.stdout,
+      /local release-readiness verification passed/u,
+    );
   });
 }

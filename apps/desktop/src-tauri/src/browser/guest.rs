@@ -15,29 +15,73 @@ use tauri::{
 use super::manager::error;
 use crate::dto::CommandErrorDto;
 
+pub(super) struct GuestRequest {
+    pub id: String,
+    pub generation: u64,
+    pub scope: String,
+    pub conversation_id: Option<String>,
+    pub initial_url: Option<url::Url>,
+    pub directory: PathBuf,
+    pub source: Option<Webview>,
+    pub policy: NavigationPolicy,
+    pub sink: EventSink,
+}
+
 pub(super) async fn create(
     app: &AppHandle,
-    id: &str,
-    generation: u64,
-    directory: PathBuf,
-    source: Option<Webview>,
-    policy: NavigationPolicy,
-    sink: EventSink,
+    request: GuestRequest,
 ) -> Result<BrowserView, CommandErrorDto> {
+    let GuestRequest {
+        id,
+        generation,
+        scope,
+        conversation_id,
+        initial_url,
+        directory,
+        source,
+        policy,
+        sink,
+    } = request;
     let window = app
         .get_window("main")
         .ok_or_else(|| error("The Desktop window has closed."))?;
     #[cfg(feature = "embedded-chromium-preview")]
     {
+        if let Some(composition) = app.try_state::<engine::contained::ContainedBrowserComposition>()
+        {
+            let request = engine::contained::ContainedGuestRequest {
+                id: id.clone(),
+                generation,
+                scope,
+                conversation_id,
+                initial_url: initial_url.clone(),
+                policy: policy.clone(),
+                sink: sink.clone(),
+            };
+            if composition
+                .0
+                .available(&window, &request)
+                .await
+                .map_err(|failure| error(&failure.to_string()))?
+            {
+                return composition
+                    .0
+                    .create(&window, request)
+                    .await
+                    .map_err(|failure| error(&failure.to_string()));
+            }
+        }
         let _ = source;
-        return engine::chromium::Surface::create(&window, id, generation, directory, policy, sink)
-            .await
-            .map(BrowserView::Chromium)
-            .map_err(|failure| error(&failure.to_string()));
+        return engine::chromium::Surface::create(
+            &window, &id, generation, directory, policy, sink,
+        )
+        .await
+        .map(BrowserView::Chromium)
+        .map_err(|failure| error(&failure.to_string()));
     }
     #[cfg(not(feature = "embedded-chromium-preview"))]
     {
-        let _ = generation;
+        let _ = (generation, scope, initial_url, conversation_id);
         let popup_sink = sink.clone();
         let download_sink = sink.clone();
         let navigation = policy.clone();

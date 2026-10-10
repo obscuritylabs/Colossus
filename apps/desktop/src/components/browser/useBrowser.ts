@@ -20,6 +20,7 @@ export function useBrowser(
   scope: string | null,
   visible: boolean,
   fixture = false,
+  conversationId?: string,
 ) {
   const appearance = useAppearance();
   const appearanceRef = useRef(appearance);
@@ -33,6 +34,8 @@ export function useBrowser(
   const [loading, setLoading] = useState(!fixture);
   const [busy, setBusy] = useState(false);
   const api = useRef<BrowserApi>(nativeBrowserApi);
+  const conversation = useRef(conversationId);
+  conversation.current = conversationId;
   const sequence = useRef(0);
   const currentScope = useRef(scope);
   currentScope.current = scope;
@@ -102,7 +105,9 @@ export function useBrowser(
     try {
       const result = await api.current.command(
         snapshotRef.current.generation,
-        action,
+        action.type === "new" && !action.conversationId && conversation.current
+          ? { ...action, conversationId: conversation.current }
+          : action,
       );
       if (current()) setSnapshot(result);
     } catch (cause) {
@@ -121,10 +126,17 @@ export function useBrowser(
     const capturedScope = currentScope.current;
     const handler = api.current.certificates;
     if (!handler) throw new Error("Certificate setup is unavailable.");
-    const status = await handler(generation, action, {
-      colorScheme: appearanceRef.current.resolvedColorTheme,
-      textSize: appearanceRef.current.textSize,
-    });
+    const status = await handler(
+      generation,
+      action,
+      {
+        colorScheme: appearanceRef.current.resolvedColorTheme,
+        textSize: appearanceRef.current.textSize,
+      },
+      action === "review_client_identity"
+        ? (snapshotRef.current.selectedTabId ?? undefined)
+        : undefined,
+    );
     if (capturedScope !== currentScope.current)
       throw new Error("The selected workspace changed.");
     const value = await api.current.context();

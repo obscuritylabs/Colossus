@@ -968,6 +968,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "colossus-contracts",
+ "colossus-media",
  "colossus-ports",
  "futures",
  "hex",
@@ -977,6 +978,7 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -989,6 +991,21 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+]
+
+[[package]]
+name = "colossus-browser-presentation"
+version = "0.11.8"
+dependencies = [
+ "async-trait",
+ "colossus-contracts",
+ "getrandom 0.4.3",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -1262,11 +1279,15 @@ dependencies = [
 name = "colossus-native-browser"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "block2",
+ "colossus-browser-presentation",
+ "colossus-native-browser-pki",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
  "objc2-web-kit",
+ "rcgen",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -1279,6 +1300,15 @@ dependencies = [
  "windows-sys 0.61.2",
  "x509-parser",
  "zeroize",
+]
+
+[[package]]
+name = "colossus-native-browser-pki"
+version = "0.1.0"
+dependencies = [
+ "rustls-pki-types",
+ "sha2",
+ "x509-parser",
 ]
 
 [[package]]
@@ -1386,6 +1416,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.19",
+ "zeroize",
 ]
 
 [[package]]
@@ -1396,6 +1427,7 @@ dependencies = [
  "base64 0.22.1",
  "colossus-api",
  "colossus-api-proto",
+ "colossus-browser-presentation",
  "colossus-contracts",
  "colossus-darwin-process",
  "colossus-grpc",

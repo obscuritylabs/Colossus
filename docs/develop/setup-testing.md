@@ -210,9 +210,17 @@ for manual build and staging commands.
 
 The preview preserves Chromium's process sandbox and uses Tauri's AppKit event
 loop to pump CEF on the main thread. It remains a human browsing development
-surface. Production browser automation stays unavailable until the authenticated
-Core bridge and complete network containment described in
-[ADR 0008](adr/0008-owned-chromium-browser.md) are implemented and accepted.
+surface. The separate authenticated Core bridge and native presentation adapter
+are implemented in source. Production browser automation stays unavailable until
+the installed supervisor, complete network containment, and shared-page Desktop
+behavior described in [ADR 0008](adr/0008-owned-chromium-browser.md) pass native
+platform acceptance.
+
+macOS native preview rendering and lifecycle acceptance cover this in-process human
+surface. They do not establish the separate host's certificate custody, Core-to-host
+automation or signed installed support. Ordinary CLI and managed-sidecar builds also
+have no accepted browser package by default. See [current browser readiness](adr/0008-owned-chromium-browser.md#current-enablement-and-remaining-work)
+before interpreting a successful preview as feature completion.
 
 To exercise the actual embedded native surfaces with disposable loopback pages,
 use the source and build paths printed by the launcher:

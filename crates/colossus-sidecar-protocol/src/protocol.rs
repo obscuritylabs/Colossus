@@ -21,7 +21,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 /// Exact bootstrap protocol version.
-pub const PROTOCOL_VERSION: u16 = 12;
+pub const PROTOCOL_VERSION: u16 = 13;
 /// Exact desktop-to-TUI inherited-channel protocol version.
 pub const DESKTOP_TUI_PROTOCOL_VERSION: u16 = 3;
 /// Fixed child descriptor from which the bundled TUI reads native authentication.
@@ -1474,6 +1474,9 @@ pub struct BootstrapRequest {
     /// The encoded key is accepted only through the inherited sidecar bootstrap
     /// channel and is never written into the generated managed configuration.
     pub worker_ipc_authentication: Option<SecretString>,
+    /// Independent native Desktop browser authority, never ordinary worker/TUI authentication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_browser: Option<crate::NativeBrowserBootstrap>,
 }
 
 // Preserve the wire shape for hosts retaining Ask; an older child must reject
@@ -1584,6 +1587,16 @@ impl BootstrapRequest {
         if let Some(authentication) = &self.worker_ipc_authentication {
             decode_worker_authentication(authentication)?;
         }
+        if let Some(browser) = &self.native_browser {
+            browser.validate()?;
+            if self
+                .worker_ipc_authentication
+                .as_ref()
+                .is_some_and(|worker| worker.expose() == browser.authentication.expose())
+            {
+                return Err(ProtocolError::InvalidFrame);
+            }
+        }
         Ok(())
     }
 }
@@ -1616,6 +1629,7 @@ impl fmt::Debug for BootstrapRequest {
             .field("grant", &self.grant)
             .field("host_credentials", &"[REDACTED]")
             .field("worker_ipc_authentication", &"[REDACTED]")
+            .field("native_browser", &self.native_browser.is_some())
             .finish()
     }
 }
@@ -2135,7 +2149,44 @@ mod tests {
             worker_ipc_authentication: Some(
                 encode_worker_authentication(&[0x5a; 32]).expect("worker authentication"),
             ),
+            native_browser: None,
         }
+    }
+
+    #[test]
+    fn native_browser_bootstrap_requires_independent_nonzero_canonical_authority() {
+        let mut input = request();
+        input.native_browser = Some(crate::NativeBrowserBootstrap {
+            generation: Uuid::now_v7().to_string(),
+            parent_process_id: 42,
+            authentication: encode_worker_authentication(&[0x5a; 32]).unwrap(),
+        });
+        assert_eq!(input.validate(), Err(ProtocolError::InvalidFrame));
+        input.native_browser.as_mut().unwrap().authentication =
+            encode_worker_authentication(&[0x6b; 32]).unwrap();
+        input.validate().unwrap();
+        let encoded = serde_json::to_vec(&input).unwrap();
+        let decoded: BootstrapRequest = serde_json::from_slice(&encoded).unwrap();
+        decoded.validate().unwrap();
+        assert!(
+            !format!("{decoded:?}").contains(
+                decoded
+                    .native_browser
+                    .as_ref()
+                    .unwrap()
+                    .authentication
+                    .expose()
+            )
+        );
+        input.native_browser.as_mut().unwrap().parent_process_id = 0;
+        assert_eq!(input.validate(), Err(ProtocolError::InvalidFrame));
+        input.native_browser.as_mut().unwrap().parent_process_id = 42;
+        input.native_browser.as_mut().unwrap().generation = Uuid::nil().to_string();
+        assert_eq!(input.validate(), Err(ProtocolError::InvalidFrame));
+        input.native_browser.as_mut().unwrap().generation = Uuid::now_v7().to_string();
+        input.native_browser.as_mut().unwrap().authentication =
+            encode_worker_authentication(&[0; 32]).unwrap();
+        assert_eq!(input.validate(), Err(ProtocolError::InvalidFrame));
     }
 
     #[test]

@@ -9,5 +9,7 @@ mod error;
 mod state;
 mod validation;
 
-pub use coordinator::BrowserCoordinator;
+pub use coordinator::{
+    BrowserCoordinator, CapturedBrowserDownload, CapturedBrowserScreenshot, NativeBrowserHandoff,
+};
 pub use error::BrowserError;

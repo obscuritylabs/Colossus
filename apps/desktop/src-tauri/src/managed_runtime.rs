@@ -903,6 +903,14 @@ async fn prepare_managed_bootstrap(
         )
     })?;
     let worker_bootstrap_secret = worker_authentication.copy_secret();
+    let mut native_browser_key = zeroize::Zeroizing::new(vec![0_u8; 32]);
+    getrandom::fill(&mut native_browser_key).map_err(|_| {
+        classified(
+            "runtime_authentication",
+            "Managed Local browser authentication could not be created.",
+            RuntimeFailureCodeDto::Authentication,
+        )
+    })?;
     let paths = ManagedBootstrapPaths {
         ca_bundle: ca_bundle_path.as_deref(),
         codex_auth: codex_auth_path.as_deref(),
@@ -920,7 +928,12 @@ async fn prepare_managed_bootstrap(
         &paths,
         companion,
     )
-    .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
+    .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?
+    .with_native_browser_authentication(
+        Secret::new(native_browser_key.to_vec())
+            .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Authentication))?,
+    )
+    .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Authentication))?;
     if let Some(identity) = settings.client_identity.as_ref() {
         let (certificate, key) = credentials
             .read_client_identity(&identity.identity_id, &identity.leaf_fingerprint_sha256)
@@ -1323,6 +1336,9 @@ async fn install_managed_target(
             )
         })?
         .copy_secret();
+    let native_browser = lifecycle
+        .native_browser_client(&options)
+        .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Authentication))?;
     let client = Colossus::start_sidecar(&lifecycle, options)
         .await
         .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Internal))?;
@@ -1349,6 +1365,9 @@ async fn install_managed_target(
         .await;
     debug_assert!(previous.is_none());
     state.configure_managed_worker_for(space_id, worker).await;
+    state
+        .configure_managed_browser_for(space_id, native_browser)
+        .await;
     state
         .configure_managed_terminal_for(space_id, terminal_workspace, terminal_enabled)
         .await;

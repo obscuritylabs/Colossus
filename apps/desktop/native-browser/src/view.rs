@@ -14,9 +14,90 @@ pub enum BrowserView {
     /// Explicitly enabled embedded Chromium preview.
     #[cfg(feature = "cef-preview")]
     Chromium(crate::chromium::Surface),
+    /// Trusted attachment to a separately contained Chromium host.
+    #[cfg(all(
+        feature = "cef-preview",
+        colossus_cef_linked,
+        any(windows, target_os = "macos")
+    ))]
+    Remote(crate::remote::RemoteSurface),
 }
 
 impl BrowserView {
+    /// Exact canonical conversation of an independently admitted browser context.
+    #[must_use]
+    pub fn conversation_id(&self) -> Option<&str> {
+        #[cfg(all(
+            feature = "cef-preview",
+            colossus_cef_linked,
+            any(windows, target_os = "macos")
+        ))]
+        if let Self::Remote(view) = self {
+            return Some(view.conversation_id());
+        }
+        None
+    }
+
+    /// Exact independently contained runtime session, when admitted.
+    #[must_use]
+    pub fn contained_session_id(&self) -> Option<&str> {
+        #[cfg(all(
+            feature = "cef-preview",
+            colossus_cef_linked,
+            any(windows, target_os = "macos")
+        ))]
+        if let Self::Remote(view) = self {
+            return Some(view.session_id());
+        }
+        None
+    }
+
+    /// Transfer an independently admitted human page to a registered run.
+    ///
+    /// # Errors
+    /// UI preview pages and unverified runtime contexts cannot grant automation.
+    #[cfg_attr(
+        not(all(
+            feature = "cef-preview",
+            colossus_cef_linked,
+            any(windows, target_os = "macos")
+        )),
+        allow(clippy::unused_async)
+    )]
+    pub async fn handoff(&self, run_id: &str) -> Result<(), BrowserError> {
+        #[cfg(all(
+            feature = "cef-preview",
+            colossus_cef_linked,
+            any(windows, target_os = "macos")
+        ))]
+        if let Self::Remote(view) = self {
+            return view.handoff(run_id).await;
+        }
+        let _ = run_id;
+        Err(BrowserError::Unavailable)
+    }
+
+    /// Whether the native attachment admits human navigation and keyboard input.
+    #[must_use]
+    pub fn human_control_available(&self) -> bool {
+        #[cfg(all(
+            feature = "cef-preview",
+            colossus_cef_linked,
+            any(windows, target_os = "macos")
+        ))]
+        if let Self::Remote(view) = self {
+            return view.human_control_available();
+        }
+        true
+    }
+    /// Cancel native identity review before controller ownership changes.
+    pub fn revoke_client_identity(&self) {
+        #[cfg(feature = "cef-preview")]
+        if let Self::Chromium(view) = self {
+            view.revoke_client_identity();
+        }
+    }
+
     /// Navigate through the native guest's closed human interface.
     ///
     /// # Errors
@@ -26,6 +107,12 @@ impl BrowserView {
             Self::System(view) => view.navigate(url).map_err(|_| BrowserError::Closed),
             #[cfg(feature = "cef-preview")]
             Self::Chromium(view) => view.navigate(&url),
+            #[cfg(all(
+                feature = "cef-preview",
+                colossus_cef_linked,
+                any(windows, target_os = "macos")
+            ))]
+            Self::Remote(view) => view.navigate(&url),
         }
     }
 
@@ -38,6 +125,12 @@ impl BrowserView {
             Self::System(view) => view.hide().map_err(|_| BrowserError::Closed),
             #[cfg(feature = "cef-preview")]
             Self::Chromium(view) => view.hide(),
+            #[cfg(all(
+                feature = "cef-preview",
+                colossus_cef_linked,
+                any(windows, target_os = "macos")
+            ))]
+            Self::Remote(view) => view.hide(),
         }
     }
 
@@ -50,6 +143,12 @@ impl BrowserView {
             Self::System(view) => view.show().map_err(|_| BrowserError::Closed),
             #[cfg(feature = "cef-preview")]
             Self::Chromium(view) => view.show(),
+            #[cfg(all(
+                feature = "cef-preview",
+                colossus_cef_linked,
+                any(windows, target_os = "macos")
+            ))]
+            Self::Remote(view) => view.show(),
         }
     }
 
@@ -62,6 +161,12 @@ impl BrowserView {
             Self::System(view) => view.set_bounds(bounds).map_err(|_| BrowserError::Closed),
             #[cfg(feature = "cef-preview")]
             Self::Chromium(view) => view.set_bounds(bounds),
+            #[cfg(all(
+                feature = "cef-preview",
+                colossus_cef_linked,
+                any(windows, target_os = "macos")
+            ))]
+            Self::Remote(view) => view.set_bounds(bounds),
         }
     }
 
@@ -77,6 +182,12 @@ impl BrowserView {
             }
             #[cfg(feature = "cef-preview")]
             Self::Chromium(view) => view.close().await,
+            #[cfg(all(
+                feature = "cef-preview",
+                colossus_cef_linked,
+                any(windows, target_os = "macos")
+            ))]
+            Self::Remote(view) => view.close().await,
         }
     }
 
@@ -89,6 +200,12 @@ impl BrowserView {
             Self::System(view) => crate::inspect(view).await,
             #[cfg(feature = "cef-preview")]
             Self::Chromium(view) => view.inspect().await,
+            #[cfg(all(
+                feature = "cef-preview",
+                colossus_cef_linked,
+                any(windows, target_os = "macos")
+            ))]
+            Self::Remote(view) => view.inspect().await,
         }
     }
 
@@ -101,6 +218,12 @@ impl BrowserView {
             Self::System(view) => crate::control(view, action).await,
             #[cfg(feature = "cef-preview")]
             Self::Chromium(view) => view.control(action).await,
+            #[cfg(all(
+                feature = "cef-preview",
+                colossus_cef_linked,
+                any(windows, target_os = "macos")
+            ))]
+            Self::Remote(view) => view.control(action).await,
         }
     }
 
@@ -111,6 +234,12 @@ impl BrowserView {
             Self::System(view) => Some(view),
             #[cfg(feature = "cef-preview")]
             Self::Chromium(_) => None,
+            #[cfg(all(
+                feature = "cef-preview",
+                colossus_cef_linked,
+                any(windows, target_os = "macos")
+            ))]
+            Self::Remote(_) => None,
         }
     }
 }

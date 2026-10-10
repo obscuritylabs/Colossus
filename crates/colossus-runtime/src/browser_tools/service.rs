@@ -31,6 +31,8 @@ pub(crate) struct RuntimeBrowserTools {
     pub(super) runtime_id: String,
     pub(super) workspace_id: String,
     pub(super) runs: Arc<StdMutex<BTreeMap<String, BrowserRun>>>,
+    pub(super) artifacts: StdMutex<Option<Arc<dyn colossus_ports::BrowserArtifactPublisher>>>,
+    pub(super) native: Arc<super::native::NativeState>,
 }
 
 impl RuntimeBrowserTools {
@@ -39,13 +41,21 @@ impl RuntimeBrowserTools {
         identity: WorkspaceIdentity,
         workspace_id: String,
         limits: BrowserLimits,
+        artifacts: Option<Arc<dyn colossus_ports::BrowserArtifactPublisher>>,
     ) -> Self {
+        let native =
+            super::native::NativeState::new(Arc::clone(&host.driver), host.presenter.clone());
         Self {
-            coordinator: Arc::new(BrowserCoordinator::new(Arc::clone(&host.driver), limits)),
+            coordinator: Arc::new(BrowserCoordinator::new(
+                Arc::new(super::native::driver::Registrar(Arc::clone(&native))),
+                limits,
+            )),
             identity,
             runtime_id: Uuid::now_v7().to_string(),
             workspace_id,
             runs: Arc::new(StdMutex::new(BTreeMap::new())),
+            artifacts: StdMutex::new(artifacts),
+            native,
         }
     }
 
@@ -115,6 +125,7 @@ impl RuntimeBrowserTools {
     }
 
     pub(super) fn cancel_all(&self) {
+        self.native.stop();
         let run_ids = self
             .runs
             .lock()
@@ -139,6 +150,7 @@ impl RuntimeBrowserTools {
         for run in runs {
             self.finish_run(&run.actor.run_id).await;
         }
+        super::native::lifecycle::drain(self).await;
     }
 }
 

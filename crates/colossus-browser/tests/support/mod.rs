@@ -20,6 +20,7 @@ pub struct TestDriver {
     pub block_action: AtomicBool,
     pub block_cancel: AtomicBool,
     pub block_close: AtomicBool,
+    pub terminal_cancel: AtomicBool,
     pub oversized: AtomicBool,
     pub open_entered: Notify,
     pub action_entered: Notify,
@@ -35,10 +36,23 @@ impl TestDriver {
     pub fn active_tabs(&self) -> usize {
         self.tabs.lock().unwrap().len()
     }
+
+    pub fn commit_human_document(&self, id: &BrowserSessionId, tab: BrowserTabSummary) {
+        let key = (id.clone(), tab.tab_id.clone());
+        self.tabs.lock().unwrap().insert(key, tab);
+    }
 }
 
 #[async_trait]
 impl BrowserDriver for TestDriver {
+    fn cancellation_disposition(&self) -> BrowserCancelDisposition {
+        if self.terminal_cancel.load(Ordering::SeqCst) {
+            BrowserCancelDisposition::ClosesContext
+        } else {
+            BrowserCancelDisposition::RetainsContext
+        }
+    }
+
     fn capabilities(&self) -> BrowserCapabilities {
         BrowserCapabilities {
             available: true,
@@ -146,7 +160,7 @@ impl BrowserDriver for TestDriver {
         if matches!(command.action, BrowserAction::TabClose { .. }) {
             self.tabs.lock().unwrap().remove(&key);
         } else {
-            self.tabs.lock().unwrap().insert(key, tab.clone());
+            self.commit_human_document(&command.session_id, tab.clone());
         }
         Ok(BrowserObservation {
             session_id: command.session_id,
@@ -156,11 +170,17 @@ impl BrowserDriver for TestDriver {
         })
     }
 
-    async fn cancel_session(&self, _: &BrowserSessionId) -> Result<(), BrowserDriverError> {
+    async fn cancel_session(&self, id: &BrowserSessionId) -> Result<(), BrowserDriverError> {
         self.cancellations.fetch_add(1, Ordering::SeqCst);
         if self.block_cancel.load(Ordering::SeqCst) {
             self.cancel_entered.notify_one();
             self.release_cancel.notified().await;
+        }
+        if self.terminal_cancel.load(Ordering::SeqCst) {
+            self.tabs
+                .lock()
+                .unwrap()
+                .retain(|(session, _), _| session != id);
         }
         Ok(())
     }
@@ -195,6 +215,7 @@ pub fn actor() -> BrowserActor {
 
 pub fn options() -> BrowserOpenOptions {
     BrowserOpenOptions {
+        profile: Default::default(),
         mode: BrowserMode::Headless,
         allowed_origins: vec![BrowserOrigin::parse("https://fixture.test").unwrap()],
         initial_url: Some(BrowserUrl::parse("https://fixture.test/start").unwrap()),

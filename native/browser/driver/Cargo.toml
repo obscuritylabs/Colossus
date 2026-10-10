@@ -1,0 +1,47 @@
+[package]
+name = "colossus-native-browser-host"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+license = "Apache-2.0"
+
+[lib]
+path = "src/windows_lib.rs"
+crate-type = ["cdylib"]
+
+[features]
+native-custody-test = []
+
+[workspace]
+resolver = "3"
+members = ["../pki"]
+
+[dependencies]
+colossus-native-browser-pki = { version = "=0.1.0", path = "../pki" }
+async-trait = "0.1.89"
+base64 = "0.22.1"
+colossus-browser-bridge = { version = "=0.11.8", path = "../../../crates/colossus-browser-bridge" }
+colossus-browser-presentation = { version = "=0.11.8", path = "../../../crates/colossus-browser-presentation" }
+colossus-contracts = { version = "=0.11.8", path = "../../../crates/colossus-contracts" }
+colossus-ports = { version = "=0.11.8", path = "../../../crates/colossus-ports" }
+getrandom = "0.4.3"
+libc = "0.2.186"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.10.9"
+tokio = { version = "1.49.0", features = ["io-util", "net", "rt-multi-thread", "sync", "time"] }
+zeroize = "1.8.2"
+url = "2.5.8"
+
+[target.'cfg(windows)'.dependencies]
+colossus-windows-native = { version = "=0.11.8", path = "../../../crates/colossus-windows-native" }
+colossus-windows-process = { version = "=0.11.8", path = "../../../crates/colossus-windows-process" }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Threading"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+undocumented_unsafe_blocks = "deny"

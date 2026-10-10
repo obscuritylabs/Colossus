@@ -48,3 +48,19 @@ fn closed_browser_contracts_reject_raw_protocol_and_invalid_handles() {
             .is_err()
     );
 }
+
+#[test]
+fn persistent_profile_choice_is_opaque_and_temporary_by_default() {
+    let open: BrowserOpenOptions = serde_json::from_value(json!({
+        "mode":"headless", "allowed_origins":["https://example.test"]
+    }))
+    .unwrap();
+    assert_eq!(open.profile, BrowserProfileSelection::Temporary);
+    for profile in [
+        json!({"kind":"workspace","id":"/tmp/personal-chrome"}),
+        json!({"kind":"workspace","id":"bp_01234567890123456789012345678901","path":"/tmp/cache"}),
+        json!({"kind":"temporary","cache_path":"/tmp/cache"}),
+    ] {
+        assert!(serde_json::from_value::<BrowserProfileSelection>(profile).is_err());
+    }
+}

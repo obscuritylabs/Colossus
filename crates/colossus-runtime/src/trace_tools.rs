@@ -66,6 +66,7 @@ impl ToolExecutor for TraceToolExecutor {
                 .map_err(|_| ToolError::Failed("trace export result is non-UTF-8".into()))?
         };
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: bounded_tool_text(&output, 1024 * 1024),

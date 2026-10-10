@@ -119,6 +119,8 @@ impl BrowserCoordinator {
             .await_driver(
                 self.driver.open_session(
                     BrowserDriverOpenRequest {
+                        binding: binding.clone(),
+                        run_id: run_id.map(str::to_owned),
                         session_id: id.clone(),
                         tab_id: tab.tab_id.clone(),
                         document_id: tab.document_id.clone(),

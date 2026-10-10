@@ -2582,6 +2582,7 @@ fn live_web_fetch_result_rebuilds_when_event_mode_changes() {
         envelope(RunEvent::ToolCompleted {
             turn: 1,
             result: ToolResult {
+                images: Vec::new(),
                 call_id: call.call_id,
                 name: call.name,
                 output: format!("preview-start\n{}FULL-BODY-TAIL", "line\n".repeat(100)),
@@ -2817,6 +2818,7 @@ fn tool_boundary_releases_intermediate_commentary_and_tool_result_to_native_hist
         envelope(RunEvent::ToolCompleted {
             turn: 1,
             result: ToolResult {
+                images: Vec::new(),
                 call_id: call.call_id,
                 name: call.name,
                 output: serde_json::json!({"matches": ["runtime.rs"]}).to_string(),

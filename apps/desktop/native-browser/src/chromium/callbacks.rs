@@ -78,6 +78,8 @@ pub(super) struct Entry {
     pub closed: Option<oneshot::Sender<()>>,
     pub inspection: Option<oneshot::Sender<PageState>>,
     pub abandoned: bool,
+    pub identity_epoch: u64,
+    pub identity_request: Option<crate::pki::IdentityRequest>,
     #[cfg(feature = "native-test-driver")]
     pub acceptance: Option<oneshot::Sender<Result<super::AcceptanceProbe, crate::BrowserError>>>,
 }
@@ -87,6 +89,36 @@ pub(super) fn entries() -> &'static Mutex<HashMap<u64, Entry>> {
     ENTRIES.get_or_init(Mutex::default)
 }
 
+/// Consuming this exact review is the dispatch point shared with revocation.
+pub(super) fn consume_identity(
+    entry: &mut Entry,
+    generation: u64,
+    review: &crate::pki::IdentityRequest,
+    fingerprint: Option<&str>,
+) -> Result<i32, BrowserError> {
+    if entry.generation != generation || entry.abandoned || entry.closed.is_some() {
+        return Err(BrowserError::Closed);
+    }
+    let pending = entry
+        .identity_request
+        .as_ref()
+        .filter(|pending| {
+            pending.id == review.id
+                && pending.epoch == review.epoch
+                && pending.epoch == entry.identity_epoch
+                && pending.origin == review.origin
+                && !pending.is_expired()
+        })
+        .ok_or(BrowserError::Closed)?;
+    let index = fingerprint.map_or(Ok(-1), |fingerprint| {
+        pending
+            .candidate_index(fingerprint)
+            .ok_or(BrowserError::Unavailable)
+    })?;
+    entry.identity_request = None;
+    Ok(index)
+}
+
 pub(super) fn callbacks() -> ffi::Callbacks {
     ffi::Callbacks {
         owner: std::ptr::null_mut(),
@@ -94,6 +126,22 @@ pub(super) fn callbacks() -> ffi::Callbacks {
         allow_url,
         select_identity,
         schedule_pump: None,
+    }
+}
+
+fn cancel_identity(entry: &mut Entry, payload: *const u8, length: usize) {
+    if payload.is_null() || length != std::mem::size_of::<u64>() {
+        return;
+    }
+    let mut request = [0; 8];
+    // SAFETY: Native ABI passes the exact bounded borrowed request ID.
+    request.copy_from_slice(unsafe { std::slice::from_raw_parts(payload, length) });
+    if entry
+        .identity_request
+        .as_ref()
+        .is_some_and(|pending| pending.id == u64::from_ne_bytes(request))
+    {
+        entry.identity_request = None;
     }
 }
 
@@ -206,6 +254,7 @@ unsafe extern "C" fn event(
                 return;
             }
             14 => emit = Some(BrowserEvent::AuthenticationRequired),
+            18 => cancel_identity(entry, payload, length),
             #[cfg(feature = "native-test-driver")]
             16 => {
                 let evidence = if !payload.is_null() && length <= MAX_STATE_BYTES {
@@ -262,21 +311,180 @@ unsafe extern "C" fn allow_url(
 
 unsafe extern "C" fn select_identity(
     _: *mut c_void,
-    _: u64,
-    _: u64,
-    _: *const c_char,
-    _: usize,
-    _: *const ffi::Certificate,
-    _: usize,
+    tab: u64,
+    generation: u64,
+    request_id: u64,
+    origin: *const c_char,
+    origin_length: usize,
+    candidates: *const ffi::Certificate,
+    candidate_count: usize,
 ) -> i32 {
-    // Native origin-bound selection must be proven before enabling mTLS. Never
-    // fall through to an unrestricted Chromium or platform identity chooser.
-    -1
+    std::panic::catch_unwind(|| {
+        use crate::pki::{
+            IdentityRequest,
+            selection::{MAX_CANDIDATES, MAX_CERTIFICATE_BYTES},
+        };
+        if origin.is_null()
+            || origin_length > 8192
+            || candidates.is_null()
+            || candidate_count == 0
+            || candidate_count > MAX_CANDIDATES
+        {
+            return -1;
+        }
+        // SAFETY: CEF owns these bounded borrowed origin/certificate buffers for
+        // the callback lifetime; only validated public metadata is retained.
+        let Ok(origin) = std::str::from_utf8(unsafe {
+            std::slice::from_raw_parts(origin.cast(), origin_length)
+        }) else {
+            return -1;
+        };
+        let (policy, epoch) = {
+            let Ok(entries) = entries().lock() else {
+                return -1;
+            };
+            let Some(entry) = entries.get(&tab).filter(|entry| {
+                entry.generation == generation && !entry.abandoned && entry.closed.is_none()
+            }) else {
+                return -1;
+            };
+            (entry.policy.clone(), entry.identity_epoch)
+        };
+        if !policy.allows(origin) {
+            return -1;
+        }
+        let mut certificates = Vec::with_capacity(candidate_count);
+        // SAFETY: Native shim supplies candidate_count valid certificate entries.
+        for candidate in unsafe { std::slice::from_raw_parts(candidates, candidate_count) } {
+            if candidate.der.is_null()
+                || candidate.der_len == 0
+                || candidate.der_len > MAX_CERTIFICATE_BYTES
+            {
+                return -1;
+            }
+            // SAFETY: The validated bounded public DER remains native-owned.
+            certificates
+                .push(unsafe { std::slice::from_raw_parts(candidate.der, candidate.der_len) });
+        }
+        let Ok(review) = IdentityRequest::new(request_id, epoch, origin, &certificates) else {
+            return -1;
+        };
+        let Ok(mut entries) = entries().lock() else {
+            return -1;
+        };
+        let Some(entry) = entries.get_mut(&tab).filter(|entry| {
+            entry.generation == generation
+                && !entry.abandoned
+                && entry.closed.is_none()
+                && entry.identity_epoch == epoch
+        }) else {
+            return -1;
+        };
+        entry.identity_request = Some(review);
+        // Defer the native callback. No first-candidate or OS chooser fallback.
+        -2
+    })
+    .unwrap_or(-1)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn review_entry() -> (Entry, crate::pki::IdentityRequest, String) {
+        let mut parameters = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        parameters.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ClientAuth];
+        parameters.key_usages = vec![rcgen::KeyUsagePurpose::DigitalSignature];
+        let certificate = parameters
+            .self_signed(&rcgen::KeyPair::generate().unwrap())
+            .unwrap();
+        let review = crate::pki::IdentityRequest::new(
+            41,
+            9,
+            "https://example.com",
+            &[certificate.der().as_ref()],
+        )
+        .unwrap();
+        let fingerprint = review.candidates[0].fingerprint_sha256.clone();
+        (
+            Entry {
+                generation: 17,
+                policy: NavigationPolicy::default(),
+                sink: std::sync::Arc::new(|_| {}),
+                page: PageState::default(),
+                created: None,
+                closed: None,
+                inspection: None,
+                abandoned: false,
+                identity_epoch: 9,
+                identity_request: Some(review.clone()),
+                #[cfg(feature = "native-test-driver")]
+                acceptance: None,
+            },
+            review,
+            fingerprint,
+        )
+    }
+
+    #[test]
+    fn identity_review_is_single_use_and_bound_to_generation_epoch_origin_and_fingerprint() {
+        let (mut entry, review, fingerprint) = review_entry();
+        assert_eq!(
+            consume_identity(&mut entry, 18, &review, Some(&fingerprint)),
+            Err(BrowserError::Closed)
+        );
+        assert_eq!(
+            consume_identity(&mut entry, 17, &review, Some(&"a".repeat(64))),
+            Err(BrowserError::Unavailable)
+        );
+        let mut different_origin = review.clone();
+        different_origin.origin = "https://other.example.com".into();
+        assert_eq!(
+            consume_identity(&mut entry, 17, &different_origin, Some(&fingerprint)),
+            Err(BrowserError::Closed)
+        );
+        let mut replaced = review.clone();
+        replaced.id += 1;
+        assert_eq!(
+            consume_identity(&mut entry, 17, &replaced, Some(&fingerprint)),
+            Err(BrowserError::Closed)
+        );
+        entry.identity_epoch += 1;
+        assert_eq!(
+            consume_identity(&mut entry, 17, &review, Some(&fingerprint)),
+            Err(BrowserError::Closed)
+        );
+        entry.identity_epoch -= 1;
+        assert_eq!(
+            consume_identity(&mut entry, 17, &review, Some(&fingerprint)),
+            Ok(0)
+        );
+        assert!(entry.identity_request.is_none());
+        assert_eq!(
+            consume_identity(&mut entry, 17, &review, Some(&fingerprint)),
+            Err(BrowserError::Closed)
+        );
+    }
+
+    #[test]
+    fn closing_or_abandoned_tabs_cannot_finish_a_dialog_and_dismissal_selects_none() {
+        let (mut entry, review, fingerprint) = review_entry();
+        entry.abandoned = true;
+        assert_eq!(
+            consume_identity(&mut entry, 17, &review, Some(&fingerprint)),
+            Err(BrowserError::Closed)
+        );
+        entry.abandoned = false;
+        let (send, _) = oneshot::channel();
+        entry.closed = Some(send);
+        assert_eq!(
+            consume_identity(&mut entry, 17, &review, Some(&fingerprint)),
+            Err(BrowserError::Closed)
+        );
+        entry.closed = None;
+        assert_eq!(consume_identity(&mut entry, 17, &review, None), Ok(-1));
+        assert!(entry.identity_request.is_none());
+    }
 
     #[test]
     fn delayed_close_reconciles_after_waiter_cancellation_and_fences_generation() {
@@ -293,6 +501,8 @@ mod tests {
                 created: None,
                 closed: Some(sender),
                 inspection: None,
+                identity_epoch: 0,
+                identity_request: None,
                 abandoned: false,
                 #[cfg(feature = "native-test-driver")]
                 acceptance: None,

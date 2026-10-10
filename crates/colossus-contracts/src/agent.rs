@@ -68,6 +68,10 @@ pub struct ToolResult {
     pub output: String,
     /// Conventional zero-success exit code.
     pub exit_code: i32,
+    /// Verified, policy-released image artifacts created by the trusted tool executor.
+    /// These references never come from tool output text or model arguments.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ModelImageReference>,
 }
 
 /// Stable phase of one application-level agent run.

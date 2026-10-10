@@ -10,6 +10,16 @@ impl BrowserCoordinator {
         id: &BrowserSessionId,
         lease_ms: u32,
     ) -> Result<BrowserControlLease, BrowserError> {
+        self.grant_control_inner(actor, id, lease_ms, None)
+    }
+
+    pub(super) fn grant_control_inner(
+        &self,
+        actor: &BrowserActor,
+        id: &BrowserSessionId,
+        lease_ms: u32,
+        native_handoff: Option<&super::NativeBrowserHandoff>,
+    ) -> Result<BrowserControlLease, BrowserError> {
         validation::actor(actor)?;
         let runtime =
             tokio::runtime::Handle::try_current().map_err(|_| BrowserError::Unavailable)?;
@@ -24,6 +34,13 @@ impl BrowserCoordinator {
         if session.pending.is_some() || session.quiescing {
             return Err(BrowserError::Busy);
         }
+        if let Some(handoff) = native_handoff {
+            handoff.validate(session)?;
+        } else if session.last_run.is_none() {
+            // Human allocations require a native input fence and document receipt.
+            // Merely possessing the opaque session cannot take over a live human page.
+            return Err(BrowserError::StaleControl);
+        }
         if let Some(lease) = &session.lease {
             if lease.deadline > Instant::now() {
                 return if lease.public.run_id == actor.run_id {
@@ -36,21 +53,31 @@ impl BrowserCoordinator {
             // The deadline task must finish quiescence before a new run can attach.
             return Err(BrowserError::Busy);
         }
-        session.summary.control_generation = session
+        let control_generation = session
             .summary
             .control_generation
             .checked_add(1)
             .ok_or(BrowserError::OutcomeUnknown)?;
-        session.summary.control = BrowserControlState::Agent;
-        session.needs_snapshot = true;
-        session.snapshots.clear();
         let public = BrowserControlLease {
             lease_id: lease_id()?,
             session_id: id.clone(),
             run_id: actor.run_id.clone(),
-            control_generation: session.summary.control_generation,
+            control_generation,
             expires_at_ms: now_ms().saturating_add(u64::from(lease_ms)),
         };
+        if let Some(handoff) = native_handoff {
+            let tab = session
+                .summary
+                .tabs
+                .iter_mut()
+                .find(|tab| tab.tab_id == handoff.confirmed_tab.tab_id)
+                .ok_or(BrowserError::StaleDocument)?;
+            *tab = handoff.confirmed_tab.clone();
+        }
+        session.summary.control_generation = control_generation;
+        session.summary.control = BrowserControlState::Agent;
+        session.needs_snapshot = true;
+        session.snapshots.clear();
         session.last_run = Some(actor.run_id.clone());
         let state = Arc::downgrade(&self.state);
         let driver = Arc::clone(&self.driver);
@@ -92,7 +119,10 @@ impl BrowserCoordinator {
                 && session.summary.control_generation == generation
             {
                 session.quiescing = false;
-                if failed {
+                if failed
+                    || driver.cancellation_disposition()
+                        == colossus_ports::BrowserCancelDisposition::ClosesContext
+                {
                     session.summary.lifecycle = BrowserLifecycle::Interrupted;
                     session.summary.control = BrowserControlState::Unavailable;
                 }
@@ -259,6 +289,14 @@ impl BrowserCoordinator {
             }
             session.quiescing = false;
             session.pending = None;
+            if self.driver.cancellation_disposition()
+                == colossus_ports::BrowserCancelDisposition::ClosesContext
+            {
+                // Keep the explicit close obligation, but never offer a destroyed page
+                // as ready for takeover, a fresh lease, or a document refresh.
+                session.summary.lifecycle = BrowserLifecycle::Interrupted;
+                session.summary.control = BrowserControlState::Unavailable;
+            }
         }
         guard.finish();
         self.get(binding, id)
@@ -274,6 +312,9 @@ impl BrowserCoordinator {
         validation::binding(binding)?;
         let mut state = lock(&self.state)?;
         let session = owned(&mut state, binding, id)?;
+        if session.summary.lifecycle != BrowserLifecycle::Ready {
+            return Err(BrowserError::Unavailable);
+        }
         // Human input cannot coexist with a run writer; native controller takes over first.
         if session.summary.control == BrowserControlState::Agent || session.pending.is_some() {
             return Err(BrowserError::Busy);

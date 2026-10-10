@@ -1,4 +1,4 @@
-//! Real CEF child views inside the Desktop Tauri/AppKit application.
+//! Real CEF child views inside the Desktop Tauri native application.
 
 use std::time::Duration;
 
@@ -20,6 +20,7 @@ pub(super) async fn exercise(app: &tauri::AppHandle, address: &str) -> anyhow::R
     let first = action(
         app,
         BrowserAction::New {
+            conversation_id: None,
             url: format!("{address}/first"),
         },
     )
@@ -51,7 +52,34 @@ pub(super) async fn exercise(app: &tauri::AppHandle, address: &str) -> anyhow::R
     viewport(app, Some(&a), Some(rect)).await?;
     checkpoint(app, "presented-native-child", Some(&a), Some(rect)).await?;
     pixels(app, &first_view, true, Some(rect)).await?;
+    #[cfg(target_os = "macos")]
     println!("PASS CEF page rendering inside Desktop Tauri/AppKit with sandbox preserved");
+    #[cfg(windows)]
+    {
+        println!("PASS CEF page rendering inside Desktop Tauri/Win32 with sandbox preserved");
+        // Hold this exact rendered guest while the operator-owned runner proves
+        // its actual renderer token denies opening a private fixture file. The
+        // isolated acceptance home is created by native owner-only DACL code.
+        let proof = std::path::PathBuf::from(
+            std::env::var_os("COLOSSUS_HOME")
+                .ok_or_else(|| anyhow::anyhow!("acceptance home missing"))?,
+        )
+        .join("windows-sandbox-evidence.ready");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        while !proof.try_exists()? {
+            anyhow::ensure!(
+                tokio::time::Instant::now() < deadline,
+                "Windows sandbox evidence runner did not acknowledge actual renderer resource denial"
+            );
+            viewport(app, Some(&a), Some(rect)).await?;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        first_view.acceptance_input().await?;
+        wait_title(&first_view, "Native input accepted").await?;
+        println!("PASS Windows native OS mouse and keyboard reach Chromium guest");
+        action(app, BrowserAction::Reload { tab_id: a.clone() }).await?;
+        wait_title(&first_view, "First page").await?;
+    }
     checkpoint(app, "rendered-first-page", Some(&a), Some(rect)).await?;
 
     history(app, address, &a, &first_view).await?;
@@ -79,6 +107,7 @@ pub(super) async fn exercise(app: &tauri::AppHandle, address: &str) -> anyhow::R
         "CEF created an unmanaged Tauri WebView"
     );
     println!("PASS CEF tab close acknowledgements and temporary profile teardown");
+    super::pki::exercise_if_configured(app).await?;
     retain_live_for_quit(app, address).await
 }
 
@@ -87,6 +116,7 @@ async fn retain_live_for_quit(app: &tauri::AppHandle, address: &str) -> anyhow::
     let final_snapshot = action(
         app,
         BrowserAction::New {
+            conversation_id: None,
             url: format!("{address}/first"),
         },
     )
@@ -109,7 +139,7 @@ async fn retain_live_for_quit(app: &tauri::AppHandle, address: &str) -> anyhow::
             == 1,
         "application quit must begin with one live native browser tab"
     );
-    println!("PASS live CEF tab retained for AppKit quit");
+    println!("PASS live CEF tab retained for native application quit");
     Ok(())
 }
 
@@ -124,7 +154,7 @@ pub(super) async fn terminate(app: &tauri::AppHandle) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("application quit scope missing"))?;
     let view = surface(app, &selected(app)?, &scope)?;
     view.acceptance_terminate_application().await?;
-    println!("PASS AppKit terminate requested with a live CEF tab");
+    println!("PASS native application terminate requested with a live CEF tab");
     Ok(())
 }
 
@@ -166,7 +196,7 @@ fn surface(app: &tauri::AppHandle, id: &str, scope: &str) -> anyhow::Result<Surf
         .map_err(|error| anyhow::anyhow!(error.message))?;
     match view {
         BrowserView::Chromium(surface) => Ok(surface),
-        BrowserView::System(_) => anyhow::bail!("CEF preview fell back to a platform WebView"),
+        _ => anyhow::bail!("CEF child-view acceptance requires the native fixture surface"),
     }
 }
 
@@ -243,9 +273,17 @@ async fn pixels(
             );
             first_probe = false;
         }
+        #[cfg(target_os = "macos")]
         anyhow::ensure!(
             probe.cef_application && probe.tauri_event_loop && probe.parent_attached,
             "CEF and Tauri do not share the supported AppKit application/parent: {probe:?}"
+        );
+        #[cfg(windows)]
+        anyhow::ensure!(
+            probe.windows_owning_thread
+                && (!visible || probe.os_compositor_capture)
+                && probe.parent_attached,
+            "CEF HWND is not attached on the owning thread with Windows compositor evidence: {probe:?}"
         );
         let correct_bounds = rect.is_none_or(|rect| {
             (probe.x - rect.x).abs() <= 1.0
@@ -391,6 +429,7 @@ async fn tabs(
     let second = action(
         app,
         BrowserAction::New {
+            conversation_id: None,
             url: format!("{address}/first"),
         },
     )
@@ -523,6 +562,7 @@ async fn workspace_boundary(
     let snapshot = action(
         app,
         BrowserAction::New {
+            conversation_id: None,
             url: format!("{address}/first"),
         },
     )

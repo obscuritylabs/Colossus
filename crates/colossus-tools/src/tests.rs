@@ -889,11 +889,179 @@ fn subagent_tools_inject_lineage_and_keep_strict_bounded_arguments() {
 
 fn result(name: &str, call_id: &str, output: String) -> ToolResult {
     ToolResult {
+        images: Vec::new(),
         call_id: call_id.into(),
         name: name.into(),
         output,
         exit_code: 0,
     }
+}
+
+fn screenshot_image() -> colossus_contracts::ModelImageReference {
+    colossus_contracts::ModelImageReference {
+        artifact_id: format!("artifact-{}", "a".repeat(64)),
+        file_name: "browser-screenshot.png".into(),
+        media_type: "image/png".into(),
+        size_bytes: 1024,
+        sha256: "b".repeat(64),
+        width_pixels: 32,
+        height_pixels: 24,
+        detail: colossus_contracts::ModelImageDetail::Auto,
+    }
+}
+
+#[test]
+fn released_screenshot_images_keep_tool_provenance_and_exact_call_pairing() {
+    let image = screenshot_image();
+    let mut screenshot = result("browser.screenshot", "capture", "{}".into());
+    screenshot.images.push(image.clone());
+    let ordinary = result("browser.snapshot", "semantic", "{}".into());
+    let messages = tool_result_observation_messages(&[screenshot, ordinary]);
+    assert_eq!(messages.len(), 3);
+    assert!(
+        messages[..2]
+            .iter()
+            .all(|m| m.role == ModelMessageRole::Tool)
+    );
+    assert_eq!(messages[2].role, ModelMessageRole::ToolObservation);
+    assert!(!messages[2].begins_user_turn());
+    assert_eq!(
+        messages[2].content.images().collect::<Vec<_>>(),
+        vec![&image]
+    );
+    let assistant = ModelMessage {
+        agent_message_origin: None,
+        role: ModelMessageRole::Assistant,
+        content: "".into(),
+        tool_call_id: None,
+        tool_calls: vec![
+            ModelToolCall {
+                call_id: "capture".into(),
+                name: "browser.screenshot".into(),
+                arguments: json!({}),
+            },
+            ModelToolCall {
+                call_id: "semantic".into(),
+                name: "browser.snapshot".into(),
+                arguments: json!({}),
+            },
+        ],
+    };
+    let mut transcript = vec![assistant];
+    transcript.extend(messages);
+    colossus_contracts::validate_model_transcript(&transcript)
+        .expect("settled screenshot observation");
+    let mut replayed = transcript.clone();
+    replayed.push(transcript[3].clone());
+    assert!(colossus_contracts::validate_model_transcript(&replayed).is_err());
+    let mut foreign = transcript.clone();
+    foreign[3].tool_call_id = Some("foreign-call".into());
+    assert!(colossus_contracts::validate_model_transcript(&foreign).is_err());
+    let mut stale = transcript.clone();
+    stale.insert(
+        3,
+        ModelMessage {
+            agent_message_origin: None,
+            role: ModelMessageRole::User,
+            content: "new human turn".into(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        },
+    );
+    assert!(colossus_contracts::validate_model_transcript(&stale).is_err());
+}
+
+#[test]
+fn tool_text_failed_effects_and_other_tools_cannot_mint_image_observations() {
+    let image = screenshot_image();
+    let text_only = result(
+        "browser.screenshot",
+        "text",
+        serde_json::to_string(&image).unwrap(),
+    );
+    assert_eq!(tool_result_observation_messages(&[text_only]).len(), 1);
+    let mut wrong_tool = result("mcp.call", "foreign", "{}".into());
+    wrong_tool.images.push(image.clone());
+    assert_eq!(tool_result_observation_messages(&[wrong_tool]).len(), 1);
+    let mut failed = result("browser.screenshot", "failed", "{}".into());
+    failed.exit_code = 1;
+    failed.images.push(image.clone());
+    assert_eq!(tool_result_observation_messages(&[failed]).len(), 1);
+    for invalid in [
+        colossus_contracts::ModelImageReference {
+            size_bytes: 4 * 1_048_576 + 1,
+            ..image.clone()
+        },
+        colossus_contracts::ModelImageReference {
+            media_type: "image/jpeg".into(),
+            ..image.clone()
+        },
+        colossus_contracts::ModelImageReference {
+            sha256: "invalid".into(),
+            ..image
+        },
+    ] {
+        let mut result = result("browser.screenshot", "invalid", "{}".into());
+        result.images.push(invalid);
+        assert_eq!(tool_result_observation_messages(&[result]).len(), 1);
+    }
+}
+
+#[test]
+fn screenshot_projection_keeps_newest_images_without_resetting_human_budgets() {
+    let results = (0..17)
+        .map(|index| {
+            let mut result = result(
+                "browser.screenshot",
+                &format!("capture-{index}"),
+                "{}".into(),
+            );
+            result.images.push(colossus_contracts::ModelImageReference {
+                size_bytes: 4 * 1_048_576,
+                ..screenshot_image()
+            });
+            result
+        })
+        .collect::<Vec<_>>();
+    let messages = tool_result_observation_messages(&results);
+    let images = messages
+        .iter()
+        .filter(|m| m.role == ModelMessageRole::ToolObservation)
+        .collect::<Vec<_>>();
+    assert_eq!(images.len(), 8);
+    assert_eq!(
+        images.first().unwrap().tool_call_id.as_deref(),
+        Some("capture-9")
+    );
+    assert_eq!(
+        images.last().unwrap().tool_call_id.as_deref(),
+        Some("capture-16")
+    );
+    assert!(!messages.iter().any(ModelMessage::begins_user_turn));
+    let user = ModelMessage {
+        agent_message_origin: None,
+        role: ModelMessageRole::User,
+        content: ModelContent::Parts(
+            (0..16)
+                .map(|_| ModelContentPart::Image {
+                    image: screenshot_image(),
+                })
+                .collect(),
+        ),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+    };
+    let mut source = vec![user.clone()];
+    source.extend(messages);
+    let canonical = source.clone();
+    let projected = project_model_tool_observations(&source);
+    assert_eq!(source, canonical);
+    assert_eq!(projected[0], user);
+    assert!(
+        !projected
+            .iter()
+            .any(|m| m.role == ModelMessageRole::ToolObservation)
+    );
 }
 
 #[test]

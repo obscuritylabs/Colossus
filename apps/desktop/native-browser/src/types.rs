@@ -47,6 +47,8 @@ pub enum BrowserError {
     InvalidAddress,
     Unavailable,
     Closed,
+    /// The native owner is changing the document; hide pixels until a fresh target is admitted.
+    Stale,
     TimedOut,
     ComponentMissing,
     BootstrapRequired,
@@ -59,6 +61,7 @@ impl std::fmt::Display for BrowserError {
             Self::InvalidAddress => "Enter an HTTP or HTTPS address without embedded credentials.",
             Self::Unavailable => "The embedded browser is unavailable on this device.",
             Self::Closed => "This browser tab is no longer available.",
+            Self::Stale => "The browser page is changing. Waiting for its current document.",
             Self::TimedOut => "The browser did not respond. Close the tab and try again.",
             Self::ComponentMissing => "The verified Chromium component is not included in this build.",
             Self::BootstrapRequired => "Embedded Chromium requires the supported sandboxed native bootstrap on this platform.",

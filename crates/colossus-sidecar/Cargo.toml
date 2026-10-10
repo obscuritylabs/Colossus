@@ -9,6 +9,7 @@ repository.workspace = true
 description = "Minimal application-bundled Colossus managed runtime host"
 
 [dependencies]
+colossus-browser-presentation.workspace = true
 colossus-access.workspace = true
 colossus-api.workspace = true
 colossus-grpc.workspace = true
@@ -23,6 +24,7 @@ colossus-sandbox.workspace = true
 colossus-sidecar-protocol.workspace = true
 colossus-worker.workspace = true
 getrandom.workspace = true
+hex.workspace = true
 serde_json.workspace = true
 serde-saphyr.workspace = true
 tokio.workspace = true
@@ -42,6 +44,12 @@ colossus-worker-protocol.workspace = true
 keyring.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
+
+[build-dependencies]
+colossus-bundles.workspace = true
+colossus-contracts.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

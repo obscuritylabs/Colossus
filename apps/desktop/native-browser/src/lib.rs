@@ -6,10 +6,24 @@
 
 #[cfg(feature = "cef-preview")]
 pub mod chromium;
+#[cfg(feature = "cef-preview")]
+pub mod contained;
 mod engine;
 mod navigation;
 #[cfg(feature = "cef-preview")]
 pub mod pki;
+#[cfg(all(
+    feature = "cef-preview",
+    colossus_cef_linked,
+    any(windows, target_os = "macos")
+))]
+pub mod presentation;
+#[cfg(all(
+    feature = "cef-preview",
+    colossus_cef_linked,
+    any(windows, target_os = "macos")
+))]
+pub mod remote;
 #[cfg(any(target_os = "macos", test))]
 mod response;
 mod types;

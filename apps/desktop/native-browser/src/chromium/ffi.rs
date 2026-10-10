@@ -2,6 +2,8 @@
 
 use std::ffi::{c_char, c_void};
 
+pub(super) const ABI_VERSION: u32 = 2;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(super) struct Bounds {
@@ -26,6 +28,7 @@ pub(super) struct Callbacks {
         *mut c_void,
         u64,
         u64,
+        u64,
         *const c_char,
         usize,
         *const Certificate,
@@ -48,6 +51,18 @@ pub(super) struct Options {
 }
 
 unsafe extern "C" {
+    #[cfg(windows)]
+    pub(super) fn colossus_cef_windows_run(
+        instance: usize,
+        sandbox: *mut c_void,
+        version: *mut c_void,
+        run: unsafe extern "C" fn() -> i32,
+    ) -> i32;
+    #[cfg(windows)]
+    pub(super) fn colossus_cef_windows_context(
+        instance: *mut usize,
+        sandbox: *mut *mut c_void,
+    ) -> i32;
     pub(super) fn colossus_cef_bootstrap(options: *const Options, subprocess_exit: *mut i32)
     -> i32;
     pub(super) fn colossus_cef_pump() -> i32;
@@ -66,6 +81,14 @@ unsafe extern "C" {
     pub(super) fn colossus_cef_bounds_set(tab: u64, generation: u64, bounds: Bounds) -> i32;
     pub(super) fn colossus_cef_visible(tab: u64, generation: u64, visible: i32) -> i32;
     pub(super) fn colossus_cef_close(tab: u64, generation: u64) -> i32;
+    #[cfg(all(windows, feature = "native-test-driver"))]
+    pub(super) fn colossus_cef_acceptance_input(tab: u64, generation: u64) -> i32;
+    pub(super) fn colossus_cef_select_identity(
+        tab: u64,
+        generation: u64,
+        request_id: u64,
+        candidate_index: i32,
+    ) -> i32;
     #[cfg(feature = "native-test-driver")]
     pub(super) fn colossus_cef_acceptance_probe(tab: u64, generation: u64) -> i32;
     #[cfg(feature = "native-test-driver")]

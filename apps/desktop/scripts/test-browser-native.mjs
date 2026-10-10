@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acceptanceTargets } from "./acceptance-targets.mjs";
+import { runNativePresenterProbe } from "./native-presenter-probe.mjs";
 
 const desktop = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(desktop, "../..");
@@ -14,6 +15,10 @@ if (
   process.argv.slice(2).some((argument) => argument !== "--embedded-chromium")
 )
   throw new Error("Usage: test-browser-native.mjs [--embedded-chromium]");
+if (chromium && process.platform === "win32") {
+  await import("./test-browser-chromium-windows.mjs");
+  process.exit(process.exitCode ?? 0);
+}
 if (chromium && process.platform !== "darwin")
   throw new Error(
     "Native embedded Chromium acceptance currently requires macOS",
@@ -69,6 +74,10 @@ if (chromium) {
       join(repository, ".local", `chromium-acceptance-${randomUUID()}`),
   );
   await mkdir(evidenceDirectory, { recursive: true, mode: 0o700 });
+  await runNativePresenterProbe(
+    evidenceDirectory,
+    process.env.COLOSSUS_CEF_NATIVE_LIB_DIR,
+  );
   stagedApp = join(evidenceDirectory, "Colossus Chromium Acceptance.app");
   const stage = spawnSync(
     "python3",
@@ -185,6 +194,12 @@ try {
       `COLOSSUS_BROWSER_ACCEPTANCE_PAUSE_MS=${pause}`,
       "--env",
       `COLOSSUS_BROWSER_ACCEPTANCE_FOREGROUND_WAIT_MS=${foregroundWait}`,
+      ...(process.env.COLOSSUS_BROWSER_PKI_FIXTURE
+        ? [
+            "--env",
+            `COLOSSUS_BROWSER_PKI_FIXTURE=${resolve(process.env.COLOSSUS_BROWSER_PKI_FIXTURE)}`,
+          ]
+        : []),
       stagedApp,
       "--args",
       address,
@@ -393,13 +408,16 @@ try {
       "PASS stale viewport heartbeat hides CEF and fresh lease restores it",
       "PASS CEF workspace generation, foreign tab, app-origin denial, and disabled production automation",
       "PASS CEF tab close acknowledgements and temporary profile teardown",
-      "PASS live CEF tab retained for AppKit quit",
-      "PASS AppKit terminate requested with a live CEF tab",
-      "PASS AppKit quit acknowledged live CEF tab close",
+      "PASS live CEF tab retained for native application quit",
+      "PASS native application terminate requested with a live CEF tab",
+      "PASS native application quit acknowledged live CEF tab close",
       "PASS native CefShutdown acknowledged after all browser close callbacks",
       "PASS native clean shutdown after close acknowledgements",
       "PASS CEF private application cache removed after shutdown",
       "native browser acceptance passed",
+      ...(process.env.COLOSSUS_BROWSER_PKI_FIXTURE
+        ? ["PKI_NATIVE_TLS_CONFORMANCE_PASSED", "PKI_OS_STORE_CUSTODY_PENDING"]
+        : []),
     ];
     if (
       !nativeHostPid ||
@@ -479,6 +497,10 @@ try {
           chromiumSandboxRequired: true,
           sandboxEvidence: sandboxEvidence ?? null,
           productionAutomationEnabled: false,
+          pkiTlsConformanceRequested: Boolean(
+            process.env.COLOSSUS_BROWSER_PKI_FIXTURE,
+          ),
+          pkiOsStoreCustodyVerified: false,
           fixtureOrigin: address,
           fixtureRequests,
           checkedAt: new Date().toISOString(),

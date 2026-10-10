@@ -91,6 +91,7 @@ mod tests {
         ) -> Result<ToolResult, ToolError> {
             self.0.store(true, Ordering::SeqCst);
             Ok(ToolResult {
+                images: Vec::new(),
                 call_id: call.call_id,
                 name: call.name,
                 output: "unexpected invocation".into(),

@@ -440,7 +440,12 @@ impl ContextPreparer for ContextService {
             let mut suffix = messages[view.covered_count..].to_vec();
             let after_results = suffix
                 .iter()
-                .take_while(|message| message.role == ModelMessageRole::Tool)
+                .take_while(|message| {
+                    matches!(
+                        message.role,
+                        ModelMessageRole::Tool | ModelMessageRole::ToolObservation
+                    )
+                })
                 .count();
             suffix.splice(after_results..after_results, bindings.clone());
             let estimate = estimate_tokens_for_model(&budget.model, &instructions, &suffix, &tools)

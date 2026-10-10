@@ -54,6 +54,7 @@ fn helper_path(executable: &std::path::Path) -> Option<std::path::PathBuf> {
     }
     #[cfg(not(target_os = "macos"))]
     Some(directory.join(if cfg!(windows) {
+        // Sandboxed children use a minimal CEF-only DLL, not the Tauri client.
         "colossus-browser-helper.exe"
     } else {
         "colossus-browser-helper"

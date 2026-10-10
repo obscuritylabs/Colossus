@@ -62,6 +62,11 @@ handle!(
 );
 handle!(BrowserTabId, "bt_", "Opaque browser tab identifier.");
 handle!(
+    BrowserProfileId,
+    "bp_",
+    "Opaque workspace profile identifier; possession never establishes ownership."
+);
+handle!(
     BrowserDocumentId,
     "bd_",
     "Opaque document identity, replaced after navigation."

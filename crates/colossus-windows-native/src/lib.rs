@@ -26,6 +26,12 @@ mod conpty;
 mod process;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+pub use windows::AppContainerPrincipal;
+#[cfg(windows)]
+pub use windows::{
+    ExclusiveAppContainerProfile, PrivateDirectoryCreation, system_windows_directory,
+};
 
 #[cfg(windows)]
 pub use conpty::{

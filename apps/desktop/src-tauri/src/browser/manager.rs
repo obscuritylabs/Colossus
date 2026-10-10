@@ -19,6 +19,8 @@ use crate::{desktop_settings::SettingsStore, dto::CommandErrorDto};
 pub(crate) struct BrowserManager {
     pub(super) data: Arc<Mutex<Registry>>,
     pub(crate) operation: tokio::sync::Mutex<()>,
+    #[cfg(feature = "embedded-chromium-preview")]
+    pub(super) identity_review: tokio::sync::Mutex<()>,
 }
 
 pub(super) fn error(message: &str) -> CommandErrorDto {
@@ -56,6 +58,7 @@ impl BrowserManager {
             && state.scope != scope
         {
             for tab in &mut state.tabs {
+                tab.view.revoke_client_identity();
                 tab.presentation_epoch.fetch_add(1, Ordering::AcqRel);
                 tab.heartbeat = None;
             }
@@ -95,11 +98,12 @@ impl BrowserManager {
 
     pub(crate) fn controller_loading(&self) {
         let views = if let Ok(mut state) = self.data.lock() {
-            state.generation = state.generation.wrapping_add(1);
             for tab in &mut state.tabs {
+                tab.view.revoke_client_identity();
                 tab.presentation_epoch.fetch_add(1, Ordering::AcqRel);
                 tab.heartbeat = None;
             }
+            state.generation = state.generation.wrapping_add(1);
             state
                 .tabs
                 .iter()
@@ -182,7 +186,13 @@ impl BrowserManager {
     /// may reconcile delayed close acknowledgements while ordinary controls stay revoked.
     pub(crate) async fn drain_for_shutdown(&self) -> Result<u64, CommandErrorDto> {
         let operation = self.operation.lock().await;
-        self.lock()?.draining = true;
+        {
+            let mut state = self.lock()?;
+            for tab in &state.tabs {
+                tab.view.revoke_client_identity();
+            }
+            state.draining = true;
+        }
         self.close_all_locked(&operation, None).await
     }
 
@@ -218,11 +228,12 @@ impl BrowserManager {
                     "The selected workspace changed before browser teardown.",
                 ));
             }
-            state.generation = state.generation.wrapping_add(1);
             for tab in &mut state.tabs {
+                tab.view.revoke_client_identity();
                 tab.presentation_epoch.fetch_add(1, Ordering::AcqRel);
                 tab.heartbeat = None;
             }
+            state.generation = state.generation.wrapping_add(1);
             (
                 state.generation,
                 state
@@ -293,7 +304,22 @@ impl BrowserManager {
     ) -> Result<(), CommandErrorDto> {
         let scope = self.validate(generation)?;
         match action {
-            BrowserAction::New { url } => self.create(app, &scope, &url).await?,
+            BrowserAction::New {
+                url,
+                conversation_id,
+            } => self.create(app, &scope, &url, conversation_id).await?,
+            BrowserAction::Handoff { tab_id, run_id } => {
+                let (view, _) = self.tab(&tab_id, &scope)?;
+                view.handoff(&run_id).await.map_err(engine_error)?;
+                if let Some(tab) = self
+                    .lock()?
+                    .tabs
+                    .iter_mut()
+                    .find(|tab| tab.dto.id == tab_id)
+                {
+                    tab.dto.control = "agent";
+                }
+            }
             BrowserAction::Clear => {
                 let ids: Vec<_> = self
                     .lock()?
@@ -346,7 +372,7 @@ impl BrowserManager {
                     .find(|t| t.dto.id == tab_id)
                     .and_then(|t| t.dto.popup_url.clone())
                     .ok_or_else(|| error("This page has no pending popup."))?;
-                self.create(app, &scope, &url).await?;
+                self.create(app, &scope, &url, None).await?;
                 self.dismiss(&tab_id)?;
             }
             BrowserAction::DismissNotice { tab_id } => {
@@ -439,6 +465,7 @@ impl BrowserManager {
         app: &AppHandle,
         scope: &str,
         address: &str,
+        conversation_id: Option<String>,
     ) -> Result<(), CommandErrorDto> {
         let url = if address.trim().is_empty() {
             None
@@ -475,12 +502,17 @@ impl BrowserManager {
         let generation = self.lock()?.generation;
         let view = super::guest::create(
             app,
-            &id,
-            generation,
-            directory,
-            source,
-            policy.clone(),
-            sink,
+            super::guest::GuestRequest {
+                id: id.clone(),
+                generation,
+                scope: scope.to_owned(),
+                conversation_id,
+                initial_url: url.clone(),
+                directory,
+                source,
+                policy: policy.clone(),
+                sink,
+            },
         )
         .await?;
         self.hide_all();
@@ -500,8 +532,15 @@ impl BrowserManager {
                 presentation_epoch: Arc::new(AtomicU64::new(0)),
                 dto: BrowserTabDto {
                     id: id.clone(),
-                    session_id,
-                    control: "human",
+                    session_id: view
+                        .contained_session_id()
+                        .map_or(session_id, str::to_owned),
+                    conversation_id: view.conversation_id().map(str::to_owned),
+                    control: if view.human_control_available() {
+                        "human"
+                    } else {
+                        "agent"
+                    },
                     page: PageState {
                         url: url.as_ref().map(ToString::to_string).unwrap_or_default(),
                         title: "New tab".into(),

@@ -257,7 +257,7 @@ impl AllowlistProxy {
     }
 }
 
-async fn bind_proxy_loopbacks(
+pub(super) async fn bind_proxy_loopbacks(
     dual_stack: bool,
 ) -> Result<(TcpListener, Option<TcpListener>), ExecutionError> {
     for _ in 0..8 {

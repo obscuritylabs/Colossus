@@ -19,7 +19,11 @@ pub(super) fn browser_specs() -> Vec<ToolSpec> {
                         },
                         "description": "Exact canonical HTTP(S) origins, without credentials, paths, queries, or fragments."
                     },
-                    "initial_url": url_schema()
+                    "initial_url": url_schema(),
+                    "profile": {"oneOf": [
+                        object_schema(json!({"kind":{"const":"temporary"}}), &["kind"]),
+                        object_schema(json!({"kind":{"const":"workspace"},"id":id_schema("bp")}), &["kind", "id"])
+                    ], "description":"Temporary by default. An existing explicit workspace profile is checked against authenticated native ownership; its opaque ID grants no access."}
                 }),
                 &["mode", "allowed_origins"],
             ),
@@ -68,8 +72,26 @@ pub(super) fn browser_specs() -> Vec<ToolSpec> {
             ),
         ),
         tool(
+            "browser.screenshot",
+            "Capture the current viewport into an owner-only PNG artifact after output policy permits release. Returns verified artifact metadata; accepts no file path, raw protocol, or image bytes.",
+            document_schema(json!({}), &[]),
+        ),
+        tool(
             "browser.click",
             "Click one fresh element from the current snapshot. A click is a website mutation and may submit data.",
+            element_schema(json!({}), &[]),
+        ),
+        tool(
+            "browser.upload",
+            "Upload one existing owned RunInput artifact into a fresh ordinary file input. Policy inspects the actual bytes before website input. Accepts an opaque artifact ID, never a file path or encoded payload.",
+            element_schema(
+                json!({"artifact_id":{"type":"string","pattern":"^artifact-[0-9a-f]{64}$"}}),
+                &["artifact_id"],
+            ),
+        ),
+        tool(
+            "browser.download",
+            "Download one fresh link into an owner-only artifact after policy inspects the actual complete bytes. The browser selects private storage; unsolicited downloads and save dialogs remain blocked.",
             element_schema(json!({}), &[]),
         ),
         tool(
@@ -166,7 +188,11 @@ fn tool(name: &str, description: &str, input_schema: Value) -> ToolSpec {
         input_schema,
         effect_action: Some(name.into()),
         capability: Some(name.into()),
-        max_output_bytes: 64 * 1024,
+        max_output_bytes: if matches!(name, "browser.screenshot" | "browser.download") {
+            4 * 1024 * 1024
+        } else {
+            64 * 1024
+        },
     }
 }
 

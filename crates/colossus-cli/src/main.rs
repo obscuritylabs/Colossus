@@ -65,6 +65,8 @@ use uuid::Uuid;
 mod acp;
 mod artifact_args;
 mod artifact_commands;
+#[cfg(target_os = "linux")]
+mod browser_bundle;
 mod cli;
 mod codex_commands;
 mod commands;
@@ -148,6 +150,10 @@ fn sandbox_protection_probe_requested(
 
 #[cfg(not(windows))]
 fn main() -> Result<(), Box<dyn Error>> {
+    #[cfg(target_os = "linux")]
+    if browser_bundle::packaging_command()? {
+        return Ok(());
+    }
     if sandbox_helper_requested(std::env::args_os()) {
         colossus_sandbox::run_helper_stdio()?;
         return Ok(());

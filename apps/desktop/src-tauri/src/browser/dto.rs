@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) struct BrowserTabDto {
     pub(crate) id: String,
     pub(crate) session_id: String,
+    pub(crate) conversation_id: Option<String>,
     pub(crate) control: &'static str,
     #[serde(flatten)]
     pub(crate) page: PageState,
@@ -79,17 +80,46 @@ pub(crate) struct BrowserRequest {
     deny_unknown_fields
 )]
 pub(crate) enum BrowserAction {
-    New { url: String },
-    Navigate { tab_id: String, url: String },
-    Select { tab_id: String },
-    Close { tab_id: String },
-    Back { tab_id: String },
-    Forward { tab_id: String },
-    Reload { tab_id: String },
-    Stop { tab_id: String },
-    OpenExternal { tab_id: String },
-    OpenPopup { tab_id: String },
-    DismissNotice { tab_id: String },
+    New {
+        url: String,
+        #[serde(default)]
+        conversation_id: Option<String>,
+    },
+    Handoff {
+        tab_id: String,
+        run_id: String,
+    },
+    Navigate {
+        tab_id: String,
+        url: String,
+    },
+    Select {
+        tab_id: String,
+    },
+    Close {
+        tab_id: String,
+    },
+    Back {
+        tab_id: String,
+    },
+    Forward {
+        tab_id: String,
+    },
+    Reload {
+        tab_id: String,
+    },
+    Stop {
+        tab_id: String,
+    },
+    OpenExternal {
+        tab_id: String,
+    },
+    OpenPopup {
+        tab_id: String,
+    },
+    DismissNotice {
+        tab_id: String,
+    },
     Clear,
 }
 

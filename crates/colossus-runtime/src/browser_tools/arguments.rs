@@ -73,6 +73,18 @@ impl BrowserInvocation {
             "browser.snapshot" => BrowserAction::Snapshot {
                 max_nodes: field(call, "max_nodes")?,
             },
+            "browser.screenshot" => BrowserAction::Screenshot {
+                max_bytes: colossus_ports::MAX_BROWSER_SCREENSHOT_BYTES,
+            },
+            "browser.upload" => BrowserAction::Upload {
+                element: element()?,
+                artifact_id: field(call, "artifact_id")?,
+                max_bytes: colossus_ports::MAX_BROWSER_TRANSFER_BYTES,
+            },
+            "browser.download" => BrowserAction::Download {
+                element: element()?,
+                max_bytes: colossus_ports::MAX_BROWSER_TRANSFER_BYTES,
+            },
             "browser.click" => BrowserAction::Click {
                 element: element()?,
             },
@@ -146,6 +158,9 @@ impl BrowserInvocation {
             Self::Action { action, .. } => match action {
                 BrowserAction::Navigate { .. } => "browser.navigate",
                 BrowserAction::Snapshot { .. } => "browser.snapshot",
+                BrowserAction::Screenshot { .. } => "browser.screenshot",
+                BrowserAction::Upload { .. } => "browser.upload",
+                BrowserAction::Download { .. } => "browser.download",
                 BrowserAction::Click { .. } => "browser.click",
                 BrowserAction::Fill { .. } => "browser.fill",
                 BrowserAction::Select { .. } => "browser.select",

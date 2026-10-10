@@ -181,6 +181,7 @@ impl GatewayToolExecutor {
             name => return Err(ToolError::Unknown(name.into())),
         };
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output,

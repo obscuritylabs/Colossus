@@ -196,3 +196,72 @@ async fn artifact_ownership_is_rechecked_after_resolver_restart() {
     assert_eq!(resolved.bytes, bytes);
     assert_eq!(resolved.reference, reference);
 }
+
+#[tokio::test]
+async fn released_output_images_require_owner_authorization_and_exact_late_resolution() {
+    let bytes = encoded(ImageFormat::Png);
+    let digest = hex::encode(Sha256::digest(&bytes));
+    let artifact_id = format!("artifact-{}", "d".repeat(64));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    journal
+        .append(NewEvent {
+            event_version: 1,
+            stream_id: format!("artifact:{artifact_id}"),
+            expected_stream_version: 0,
+            classification: EventClassification::Domain,
+            event_type: AVAILABLE_EVENT.into(),
+            actor: Actor {
+                actor_type: ActorType::Application,
+                id: "app:browser-owner".into(),
+            },
+            context: ExecutionContext::default(),
+            payload: json!({
+                "artifact": {
+                    "artifact_id": artifact_id,
+                    "file_name": "browser-screenshot.png",
+                    "media_type": "image/png",
+                    "size_bytes": bytes.len(),
+                    "sha256": digest,
+                    "purpose": "run_output",
+                    "state": "available",
+                    "created_at": "2026-10-10T00:00:00Z"
+                },
+                "content_base64": BASE64.encode(&bytes)
+            }),
+        })
+        .unwrap();
+    let resolver = JournalRunInputMediaResolver::new(Arc::clone(&journal));
+    assert!(
+        resolver
+            .image_reference("app:browser-owner", &artifact_id)
+            .is_err()
+    );
+    assert!(
+        resolver
+            .released_image_reference("app:foreign", &artifact_id)
+            .is_err()
+    );
+    let reference = resolver
+        .released_image_reference("app:browser-owner", &artifact_id)
+        .unwrap();
+    let restarted = JournalRunInputMediaResolver::new(journal);
+    let resolved = restarted.resolve_image(&reference).await.unwrap();
+    assert_eq!(resolved.bytes, bytes);
+    assert_eq!(resolved.reference, reference);
+    for changed in [
+        ModelImageReference {
+            size_bytes: reference.size_bytes + 1,
+            ..reference.clone()
+        },
+        ModelImageReference {
+            width_pixels: reference.width_pixels + 1,
+            ..reference.clone()
+        },
+        ModelImageReference {
+            sha256: "a".repeat(64),
+            ..reference
+        },
+    ] {
+        assert!(restarted.resolve_image(&changed).await.is_err());
+    }
+}

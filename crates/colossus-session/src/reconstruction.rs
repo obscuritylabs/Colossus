@@ -146,7 +146,9 @@ pub(super) fn validate_message(message: &ModelMessage) -> Result<(), StoreError>
         )));
     }
     match message.role {
-        ModelMessageRole::Tool if message.tool_call_id.as_deref().is_none_or(str::is_empty) => {
+        ModelMessageRole::Tool | ModelMessageRole::ToolObservation
+            if message.tool_call_id.as_deref().is_none_or(str::is_empty) =>
+        {
             return Err(StoreError::Adapter(
                 "tool result messages require a call id".into(),
             ));
@@ -161,7 +163,9 @@ pub(super) fn validate_message(message: &ModelMessage) -> Result<(), StoreError>
                 "only tool result messages can contain a tool_call_id".into(),
             ));
         }
-        ModelMessageRole::Tool if !message.tool_calls.is_empty() => {
+        ModelMessageRole::Tool | ModelMessageRole::ToolObservation
+            if !message.tool_calls.is_empty() =>
+        {
             return Err(StoreError::Adapter(
                 "tool result messages cannot request tools".into(),
             ));
