@@ -1,5 +1,6 @@
-#![cfg(target_os = "macos")]
 //! Native fixed-channel bootstrap evidence; direct-child ownership only.
+
+#![cfg(target_os = "macos")]
 
 use colossus_darwin_process::{
     DarwinProcessIdentity, DarwinProcessSignal, SpawnedPrivateChannels,
