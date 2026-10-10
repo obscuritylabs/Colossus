@@ -212,7 +212,7 @@ The preview preserves Chromium's process sandbox and uses Tauri's AppKit event
 loop to pump CEF on the main thread. It remains a human browsing development
 surface. Production browser automation stays unavailable until the authenticated
 Core bridge and complete network containment described in
-[ADR 0007](adr/0007-owned-chromium-browser.md) are implemented and accepted.
+[ADR 0008](adr/0008-owned-chromium-browser.md) are implemented and accepted.
 
 To exercise the actual embedded native surfaces with disposable loopback pages,
 use the source and build paths printed by the launcher:

@@ -262,7 +262,7 @@ must pass.
 
 These development results do not promote component modes or enable production
 automation. Authenticated Core host enrollment and complete browser network
-containment remain required by [ADR 0007](adr/0007-owned-chromium-browser.md).
+containment remain required by [ADR 0008](adr/0008-owned-chromium-browser.md).
 
 ### Plan Mode acceptance
 

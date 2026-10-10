@@ -1,3 +1,4 @@
+import { ThreadAgentInboxes } from "./ThreadAgentInboxes";
 import { WebLink } from "./WebLink";
 import {
   WorkSurfaceHeader,
@@ -739,6 +740,15 @@ export function ThreadDetail({
                         updates={turn.updates}
                         label={`Run activity for turn ${index + 1}`}
                       />
+                      <ThreadAgentInboxes
+                        project={project}
+                        task={task}
+                        available={
+                          target?.presence?.capabilities.includes(
+                            "agent_messages.read.v1",
+                          ) ?? false
+                        }
+                      />
                       <Interactions
                         interactions={task.snapshot?.pending_interactions ?? []}
                         project={project}
@@ -759,6 +769,24 @@ export function ThreadDetail({
             })}
           </ConversationTimeline>
         </div>
+      ) : view === "inboxes" ? (
+        <section aria-label="Session inboxes">
+          {tasks.map((task) => (
+            <ThreadAgentInboxes
+              key={task.task_id}
+              project={project}
+              task={task}
+              available={
+                target?.presence?.capabilities.includes(
+                  "agent_messages.read.v1",
+                ) ?? false
+              }
+            />
+          ))}
+          {!tasks.length ? (
+            <p>No runs have been saved in this session.</p>
+          ) : null}
+        </section>
       ) : (
         <ThreadSessionViews
           view={view}

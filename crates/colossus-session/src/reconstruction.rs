@@ -35,7 +35,7 @@ pub(super) fn reconstruct_summary(
         let record = message_from_event(journal, id, event)?;
         message_count = message_count.saturating_add(1);
         last_run_id = Some(record.run_id);
-        if record.message.role == ModelMessageRole::User {
+        if record.message.begins_user_turn() {
             last_user_preview = Some(preview(&record.message.content.plain_text()));
         }
     }

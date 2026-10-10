@@ -1,3 +1,5 @@
+import { AgentCommunication } from "@obscuritylabs/colossus-sdk";
+import { AgentCommunicationServiceClient } from "@obscuritylabs/colossus-sdk/gen/colossus/api/v1alpha1/communication";
 import { constants } from "node:fs";
 import { open, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
@@ -350,7 +352,12 @@ export async function connectWorker(
     );
     if (!metadata.serverInfo)
       throw new UserError("Missing authenticated server information.");
-    return new WorkerClient(runs, system, metadata.serverInfo);
+    const communication = new AgentCommunicationServiceClient(
+      descriptor.target,
+      grpc.credentials.createInsecure(),
+      options,
+    );
+    return new WorkerClient(runs, system, metadata.serverInfo, communication);
   } catch (error) {
     runs.close();
     throw error;
@@ -394,7 +401,21 @@ export class WorkerClient {
     readonly runs: AgentRunServiceClient,
     private readonly system: SystemServiceClient,
     readonly info: ServerInfo,
+    readonly communicationClient?: AgentCommunicationServiceClient,
   ) {}
+  communication(): AgentCommunication {
+    if (
+      !this.communicationClient ||
+      !this.info.capabilities.some(
+        (capability) =>
+          capability.name === "agent_messages.read.v1" && capability.enabled,
+      )
+    )
+      throw new UserError(
+        "Agent inbox inspection is unavailable for this enrollment.",
+      );
+    return new AgentCommunication(this.communicationClient);
+  }
   create(request: CreateRunRequest) {
     return rpc<CreateRunResponse>((cb) =>
       this.runs.createRun(
@@ -415,7 +436,34 @@ export class WorkerClient {
       ),
     );
   }
+  inboxParticipants(rootRunId: string) {
+    return this.admittedRead(() =>
+      this.communication().participants(rootRunId),
+    );
+  }
+  inboxMessages(participantId: string, afterSequence: bigint) {
+    return this.admittedRead(() =>
+      this.communication().messages(participantId, afterSequence),
+    );
+  }
   listRuns(sessionId = "", pageToken = "") {
+    return this.admittedRead(() => {
+      return rpc<ListRunsResponse>((cb) =>
+        this.runs.listRuns(
+          {
+            sessionId: sessionId || undefined,
+            statuses: [],
+            includeArchived: false,
+            page: { pageSize: 50, pageToken },
+          },
+          new grpc.Metadata(),
+          { deadline: Date.now() + 30_000 },
+          cb,
+        ),
+      );
+    });
+  }
+  private admittedRead<T>(read: () => Promise<T>): Promise<T> {
     // Public list admission permits one concurrent read per application and a small
     // burst. Serialize reads and use Desktop's bounded admission-refill schedule.
     // CreateRun, cancellation, and interaction responses are never retried here.
@@ -423,19 +471,7 @@ export class WorkerClient {
       for (const delay of [100, 400, 500, undefined]) {
         if (this.closed) throw new UserError("Worker connection is closed.");
         try {
-          return await rpc<ListRunsResponse>((cb) =>
-            this.runs.listRuns(
-              {
-                sessionId: sessionId || undefined,
-                statuses: [],
-                includeArchived: false,
-                page: { pageSize: 50, pageToken },
-              },
-              new grpc.Metadata(),
-              { deadline: Date.now() + 30_000 },
-              cb,
-            ),
-          );
+          return await read();
         } catch (error) {
           const detail =
             error &&
@@ -454,7 +490,7 @@ export class WorkerClient {
           await new Promise((resolve) => setTimeout(resolve, delay));
         }
       }
-      throw new UserError("Run history could not be read.");
+      throw new UserError("The worker read could not be completed.");
     });
     this.listTail = operation.then(
       () => {},
@@ -549,6 +585,7 @@ export class WorkerClient {
   }
   close() {
     this.closed = true;
+    this.communicationClient?.close();
     this.system.close();
     this.runs.close();
   }

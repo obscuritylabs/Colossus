@@ -1,3 +1,4 @@
+import { listAgentParticipants, listAgentMessages } from "./api";
 import {
   lazy,
   Suspense,
@@ -465,6 +466,7 @@ const INITIAL_DESKTOP: DesktopStatus = {
     artifacts: FIXTURE_MODE,
     planContinuation: FIXTURE_MODE,
     sessionActivity: FIXTURE_MODE,
+    agentInboxes: FIXTURE_MODE && FIXTURE_QUERY.get("inboxUnavailable") !== "1",
     updateAvailable: false,
     agentWorkflows: false,
     attachments: false,
@@ -5958,6 +5960,27 @@ export default function App() {
           planContinuationAvailable={desktop.capabilities.planContinuation}
           initialSessionWorkspaceView={activeSessionWorkspaceView}
           onSessionWorkspaceViewChange={setActiveSessionWorkspaceView}
+          agentInbox={{
+            available: desktop.capabilities.agentInboxes === true,
+            loadParticipants: async (rootRunId) =>
+              FIXTURE_MODE
+                ? developmentFixtures().buildAgentInboxParticipants(rootRunId)
+                : listAgentParticipants(
+                    desktop.selectedTargetId ?? "",
+                    rootRunId,
+                  ),
+            loadMessages: async (participantId, afterSequence) =>
+              FIXTURE_MODE
+                ? developmentFixtures().buildAgentInboxMessages(
+                    participantId,
+                    afterSequence,
+                  )
+                : listAgentMessages(
+                    desktop.selectedTargetId ?? "",
+                    participantId,
+                    afterSequence,
+                  ),
+          }}
           sessionActivityAvailable={
             desktop.capabilities.sessionActivity === true
           }

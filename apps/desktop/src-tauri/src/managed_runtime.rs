@@ -58,7 +58,7 @@ const CONFIGURATION_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CONFIGURATION_DRAIN_TIMEOUT: Duration = Duration::from_mins(5);
 const OUTLOOK_SESSION_SERVER: &str = "outlook-session";
 const OUTLOOK_SESSION_CREDENTIAL: &str = "outlook-companion-session";
-const PRIMARY_SCOPES: [&str; 14] = [
+const PRIMARY_SCOPES: [&str; 15] = [
     scopes::WORKFLOWS_READ,
     scopes::WORKFLOWS_REGISTER,
     scopes::WORKFLOW_RUNS_READ,
@@ -69,6 +69,7 @@ const PRIMARY_SCOPES: [&str; 14] = [
     scopes::EXTENSIONS_READ,
     scopes::RUNS_EXECUTE,
     scopes::RUNS_READ,
+    scopes::AGENT_MESSAGES_READ,
     scopes::RUNS_CONTROL,
     scopes::PROMPTS_RESPOND,
     scopes::ARTIFACTS_READ,
@@ -87,6 +88,10 @@ const TRUSTED_BUILTIN_TOOL_GRANT: &[&str] = &[
     "agent.delegate",
     "agent.list",
     "agent.result",
+    "agent.participants",
+    "agent.send_message",
+    "agent.inbox",
+    "agent.await_message",
     "context.compact",
     "context.restore",
     "context.show",
@@ -1396,6 +1401,7 @@ fn application_grant_for(
         [
             scopes::RUNS_EXECUTE,
             scopes::RUNS_READ,
+            scopes::AGENT_MESSAGES_READ,
             scopes::RUNS_CONTROL,
             scopes::PROMPTS_RESPOND,
             scopes::APPROVALS_RESPOND,
@@ -1658,7 +1664,7 @@ mod tests {
         }
         assert!(!debug.contains("worker.admin"));
         assert!(!debug.contains(scopes::APPROVALS_RESPOND));
-        assert_eq!(PRIMARY_SCOPES.len(), 14);
+        assert_eq!(PRIMARY_SCOPES.len(), 15);
         for required in PRIMARY_SCOPES {
             assert!(debug.contains(required));
         }

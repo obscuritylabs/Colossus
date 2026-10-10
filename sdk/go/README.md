@@ -74,6 +74,28 @@ sequence gaps. For a generated run-update watcher, set `RunWatchOptions.IsTermin
 and `cancellation` variants stop the feed; a lifecycle `state` notification does not.
 No effectful RPC is automatically retried.
 
+### Agent communication
+
+Use the optional generated service over the same enrolled SDK connection:
+
+```go
+communication := v1alpha1.NewAgentCommunicationServiceClient(conn)
+participants, err := communication.ListAgentParticipants(ctx,
+    &v1alpha1.ListAgentParticipantsRequest{RootRunId: rootRunID})
+if err != nil {
+    return err
+}
+```
+
+Inspection requires `agent_messages:read` and `runs:read`; sending requires
+`agent_messages:send`. Enroll these scopes explicitly and check the runtime's optional
+`agent_messages.read.v1` and `agent_messages.send.v1` capabilities. The generated service
+includes send/get/list/watch operations and curated peer task submission and queries.
+Inbox and update-feed cursors are independent exclusive sequences. Retain a stable
+message identity to reconcile a lost response; effectful calls are never automatically
+retried. See [the application contract](../../docs/develop/application-sdk.md#agent-communication)
+and [inbox receipt meanings](../../docs/use/agent-communication.md).
+
 ### Runtime policy metadata
 
 `colossus.GetRuntimePolicyPosture(ctx, agentRunClient)` reads validated, typed

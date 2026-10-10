@@ -79,8 +79,9 @@ use browser::commands::{browser_command, browser_context, browser_viewport};
 use codex_auth::{codex_auth_login, codex_auth_logout, codex_auth_status};
 use command_review::{command_review_context, finish_command_review};
 use commands::{
-    archive_thread, cancel_run, choose_run_attachment, create_run, get_run, list_asides, list_runs,
-    list_session_activity, read_artifact_content, respond_interaction, restore_thread, watch_run,
+    archive_thread, cancel_run, choose_run_attachment, create_run, get_run, list_agent_messages,
+    list_agent_participants, list_asides, list_runs, list_session_activity, read_artifact_content,
+    respond_interaction, restore_thread, watch_run,
 };
 use configuration_import::{apply_repository_configuration, inspect_repository_configuration};
 use desktop_commands::{
@@ -355,6 +356,8 @@ pub fn run() {
             start_workflow_run,
             read_shell_session,
             stop_shell_session,
+            list_agent_participants,
+            list_agent_messages,
             list_session_activity,
             list_asides,
             watch_run,

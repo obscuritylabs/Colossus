@@ -6,6 +6,7 @@ from .client import (
     assert_compatible_server_info,
     is_terminal_run_update,
 )
+from .communication import AgentCommunication, validate_agent_message
 from .credential import StaticBearerCredential
 from .endpoint import (
     EndpointDescriptor,
@@ -40,6 +41,8 @@ from .watch import (
 )
 
 __all__ = [
+    "AgentCommunication",
+    "validate_agent_message",
     "PolicyApprovalMode",
     "PolicyFinding",
     "PolicyFindingCode",

@@ -53,6 +53,23 @@ pub trait SessionRepository: Send + Sync {
         messages: Vec<SessionMessageAppend>,
     ) -> Result<Vec<SessionMessage>, StoreError>;
 
+    /// Append input and application-owned receipt events in one transaction.
+    /// Adapters without this guarantee fail closed when auxiliary events are present.
+    fn append_messages_with_events(
+        &self,
+        session_id: &str,
+        run_id: &str,
+        messages: Vec<SessionMessageAppend>,
+        events: Vec<NewEvent>,
+    ) -> Result<Vec<SessionMessage>, StoreError> {
+        if !events.is_empty() {
+            return Err(StoreError::Adapter(
+                "atomic session input transactions unavailable".into(),
+            ));
+        }
+        self.append_messages(session_id, run_id, messages)
+    }
+
     /// Return an unsettled provider tool turn that blocks safe session continuation.
     fn pending_tool_turn(
         &self,
@@ -330,6 +347,37 @@ pub trait WorkRepository: Send + Sync {
 
     /// Append one validated child-agent lifecycle transition.
     fn update_subagent(&self, job: SubagentJob, actor: Actor) -> Result<SubagentJob, StoreError>;
+
+    /// Commit queued job creation and application-owned participant registration atomically.
+    fn create_subagent_with_events(
+        &self,
+        job: SubagentJob,
+        instruction_snapshot_id: Option<String>,
+        actor: Actor,
+        events: Vec<NewEvent>,
+    ) -> Result<SubagentJob, StoreError> {
+        if !events.is_empty() {
+            return Err(StoreError::Adapter(
+                "atomic child registration unavailable".into(),
+            ));
+        }
+        self.create_subagent_with_instruction_snapshot(job, instruction_snapshot_id, actor)
+    }
+
+    /// Commit a job transition and application-owned inbox closure or new attempt atomically.
+    fn update_subagent_with_events(
+        &self,
+        job: SubagentJob,
+        actor: Actor,
+        events: Vec<NewEvent>,
+    ) -> Result<SubagentJob, StoreError> {
+        if !events.is_empty() {
+            return Err(StoreError::Adapter(
+                "atomic child transition unavailable".into(),
+            ));
+        }
+        self.update_subagent(job, actor)
+    }
 
     /// Reconstruct one child-agent job.
     fn get_subagent(&self, id: &str) -> Result<Option<SubagentJob>, StoreError>;

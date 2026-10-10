@@ -1096,6 +1096,7 @@ fn parallel_tool_observations_share_one_turn_budget_and_preserve_small_results()
 
 fn sequential_tool_transcript(outputs: &[String]) -> Vec<ModelMessage> {
     let mut messages = vec![ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::User,
         content: "investigate the incident".into(),
         tool_call_id: None,
@@ -1104,6 +1105,7 @@ fn sequential_tool_transcript(outputs: &[String]) -> Vec<ModelMessage> {
     for (index, output) in outputs.iter().enumerate() {
         let call_id = format!("knowledge-{index}");
         messages.push(ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Assistant,
             content: ModelContent::default(),
             tool_call_id: None,
@@ -1118,6 +1120,7 @@ fn sequential_tool_transcript(outputs: &[String]) -> Vec<ModelMessage> {
             }],
         });
         messages.push(ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Tool,
             content: output.clone().into(),
             tool_call_id: Some(call_id),
@@ -1360,12 +1363,14 @@ fn oversized_provider_tool_name_cannot_bypass_tool_observation_bounds() {
 fn legacy_projection_is_derived_and_does_not_mutate_source_messages() {
     let source = vec![
         ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Assistant,
             content: ModelContent::default(),
             tool_call_id: None,
             tool_calls: Vec::new(),
         },
         ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Tool,
             content: ModelContent::Parts(vec![
                 ModelContentPart::Text {

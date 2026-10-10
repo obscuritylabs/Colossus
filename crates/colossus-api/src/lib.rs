@@ -6,7 +6,11 @@
 
 #![allow(clippy::missing_errors_doc)]
 
+mod agent_tasks;
 mod artifacts;
+mod communication;
+pub use agent_tasks::*;
+pub use communication::*;
 mod error;
 mod identity;
 mod plugins;

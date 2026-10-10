@@ -1156,3 +1156,21 @@ export function startWorkflowRun(
 ): Promise<WorkflowRun> {
   return call("start_workflow_run", { targetId, selectionEpoch, request });
 }
+
+export function listAgentParticipants(
+  targetId: string,
+  rootRunId: string,
+): Promise<import("@colossus/ui/agent-inbox").InboxParticipant[]> {
+  return call("list_agent_participants", { targetId, rootRunId });
+}
+export function listAgentMessages(
+  targetId: string,
+  participantId: string,
+  afterSequence: number,
+): Promise<import("@colossus/ui/agent-inbox").InboxPage> {
+  return call("list_agent_messages", {
+    targetId,
+    participantId,
+    afterSequence,
+  });
+}

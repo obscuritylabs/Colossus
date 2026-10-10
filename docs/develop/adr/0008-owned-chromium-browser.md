@@ -1,11 +1,11 @@
 ---
-title: "ADR 0007: Owned Chromium browser"
+title: "ADR 0008: Owned Chromium browser"
 description: Shared browser authority and the boundary between Core automation and native Desktop presentation.
 audience: developer
 type: concept
 ---
 
-# ADR 0007: Owned Chromium browser
+# ADR 0008: Owned Chromium browser
 
 - Status: foundation implemented; native production enablement requires acceptance
 - Date: 2026-10-09

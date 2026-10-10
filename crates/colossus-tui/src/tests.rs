@@ -94,6 +94,7 @@ pub(super) fn snapshot() -> InteractiveSnapshot {
                 run_id: "run".into(),
                 sequence: 1,
                 message: ModelMessage {
+                    agent_message_origin: None,
                     role: ModelMessageRole::Assistant,
                     content: "durable row marker".into(),
                     tool_call_id: None,
@@ -850,6 +851,7 @@ fn resumed_multipart_images_render_accessible_metadata_and_pending_overflow() {
         run_id: "run-image".into(),
         sequence: 1,
         message: ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::User,
             content: ModelContent::Parts(vec![
                 ModelContentPart::Text {
@@ -2391,6 +2393,7 @@ fn canonical_system_messages_are_excluded() {
             run_id: "run".into(),
             sequence: 0,
             message: ModelMessage {
+                agent_message_origin: None,
                 role: ModelMessageRole::System,
                 content: "hidden instructions".into(),
                 tool_call_id: None,
@@ -2429,6 +2432,7 @@ fn historical_tool_results_are_correlated_with_assistant_calls() {
                 run_id: "run".into(),
                 sequence: 1,
                 message: ModelMessage {
+                    agent_message_origin: None,
                     role: ModelMessageRole::Assistant,
                     content: String::new().into(),
                     tool_call_id: None,
@@ -2445,6 +2449,7 @@ fn historical_tool_results_are_correlated_with_assistant_calls() {
                 run_id: "run".into(),
                 sequence: 2,
                 message: ModelMessage {
+                    agent_message_origin: None,
                     role: ModelMessageRole::Tool,
                     content: "found".into(),
                     tool_call_id: Some("call-1".into()),
@@ -2480,6 +2485,7 @@ fn historical_web_fetch_results_keep_compact_preview_semantics() {
             run_id: "run".into(),
             sequence: 1,
             message: ModelMessage {
+                agent_message_origin: None,
                 role: ModelMessageRole::Assistant,
                 content: String::new().into(),
                 tool_call_id: None,
@@ -2496,6 +2502,7 @@ fn historical_web_fetch_results_keep_compact_preview_semantics() {
             run_id: "run".into(),
             sequence: 2,
             message: ModelMessage {
+                agent_message_origin: None,
                 role: ModelMessageRole::Tool,
                 content: body.clone().into(),
                 tool_call_id: Some("call-fetch".into()),
@@ -2626,6 +2633,7 @@ fn page_boundary_tool_results_remain_bounded_before_their_call_is_loaded() {
         run_id: "run".into(),
         sequence: 101,
         message: ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Tool,
             content: body.clone().into(),
             tool_call_id: Some("call-from-older-page".into()),
@@ -2674,6 +2682,7 @@ fn session_switch_replaces_transcript_and_resets_live_scroll_state() {
                         run_id: "other-run".into(),
                         sequence: 1,
                         message: ModelMessage {
+                            agent_message_origin: None,
                             role: ModelMessageRole::Assistant,
                             content: "other transcript".into(),
                             tool_call_id: None,
@@ -4054,6 +4063,7 @@ fn labeled_transcript_content_reserves_its_indent_within_the_viewport() {
         run_id: "run".into(),
         sequence: 1,
         message: ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Assistant,
             content: String::new().into(),
             tool_call_id: None,

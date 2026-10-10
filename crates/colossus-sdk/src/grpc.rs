@@ -15,6 +15,7 @@ use crate::{
     SessionMessage, ThreadLifecycle, TlsFingerprint, TokenUsage, ToolActivity, ToolActivityState,
     UploadArtifactRequest, WatchRunRequest,
 };
+mod communication;
 use async_trait::async_trait;
 use colossus_api::{RequestId, validate_public_approval_display};
 use colossus_api_proto::{
@@ -561,6 +562,55 @@ fn cancel_watch_on_close(
 
 #[async_trait]
 impl AgentRunClient for GrpcAgentRunClient {
+    async fn submit_agent_task_message(
+        &self,
+        request: crate::SubmitAgentTaskMessageRequest,
+    ) -> ApiResult<crate::AgentTaskSnapshot> {
+        communication::submit_task(self, request).await
+    }
+    async fn get_agent_task(
+        &self,
+        request: crate::GetAgentTaskRequest,
+    ) -> ApiResult<crate::AgentTaskSnapshot> {
+        communication::get_task(self, request).await
+    }
+    async fn list_agent_tasks(
+        &self,
+        request: crate::ListAgentTasksRequest,
+    ) -> ApiResult<crate::ListAgentTasksResponse> {
+        communication::list_tasks(self, request).await
+    }
+
+    async fn list_agent_participants(
+        &self,
+        request: crate::ListAgentParticipantsRequest,
+    ) -> ApiResult<Vec<crate::AgentParticipant>> {
+        communication::participants(self, request).await
+    }
+    async fn send_agent_message(
+        &self,
+        request: crate::SendAgentMessage,
+    ) -> ApiResult<crate::AgentMessage> {
+        communication::send(self, request).await
+    }
+    async fn get_agent_message(
+        &self,
+        request: crate::GetAgentMessageRequest,
+    ) -> ApiResult<crate::AgentMessage> {
+        communication::get(self, request).await
+    }
+    async fn list_agent_messages(
+        &self,
+        request: crate::ListAgentMessagesRequest,
+    ) -> ApiResult<crate::AgentMessagePage> {
+        communication::messages(self, request).await
+    }
+    async fn watch_agent_messages(
+        &self,
+        request: crate::WatchAgentMessagesRequest,
+    ) -> ApiResult<crate::AgentCommunicationStream> {
+        communication::watch(self, request).await
+    }
     async fn get_runtime_policy_posture(&self) -> ApiResult<crate::RuntimePolicyPosture> {
         let response = self
             .client()

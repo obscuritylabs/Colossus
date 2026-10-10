@@ -169,7 +169,7 @@ commands dispatch it without receiving secret values from the renderer.
   uses the shared runtime port, owned coordinator, and mandatory policy release;
   native Chromium preview and shipping human browsing retain separate acceptance
   gates. See [ADR 0003](adr/0003-desktop-browser-boundary.md) and
-  [ADR 0007](adr/0007-owned-chromium-browser.md).
+  [ADR 0008](adr/0008-owned-chromium-browser.md).
 - Desktop's native Managed Local permission selector uses the narrow authenticated
   `colossus-worker-protocol` control client. The Desktop process does not link runtime,
   model, tool, policy, or worker-host implementation crates.

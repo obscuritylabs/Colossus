@@ -58,6 +58,9 @@ pub use command_approval::command_approval_context;
 mod opa;
 pub use opa::*;
 
+mod remote_agent;
+pub use remote_agent::*;
+
 mod request;
 pub use request::*;
 

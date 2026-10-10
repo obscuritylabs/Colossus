@@ -27,6 +27,8 @@ use thiserror::Error;
 
 mod control;
 pub use control::*;
+mod communication;
+pub use communication::*;
 
 mod browser;
 pub use browser::*;

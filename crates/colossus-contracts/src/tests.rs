@@ -32,6 +32,7 @@ fn image_reference() -> ModelImageReference {
 #[test]
 fn legacy_model_content_keeps_the_scalar_json_shape() {
     let message = ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::User,
         content: "hello".into(),
         tool_call_id: None,
@@ -75,6 +76,7 @@ fn multipart_model_content_preserves_order_and_restricts_images_to_users() {
         },
     ]);
     let user = ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::User,
         content: content.clone(),
         tool_call_id: None,
@@ -93,6 +95,7 @@ fn multipart_model_content_preserves_order_and_restricts_images_to_users() {
     );
 
     let assistant = ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::Assistant,
         content,
         tool_call_id: None,
@@ -267,6 +270,7 @@ fn theme_names_are_stable_and_plain_migrates_to_mono() {
 #[test]
 fn model_transcript_requires_exact_tool_call_settlement() {
     let call = ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::Assistant,
         content: String::new().into(),
         tool_call_id: None,
@@ -284,12 +288,14 @@ fn model_transcript_requires_exact_tool_call_settlement() {
         ],
     };
     let result = |call_id: &str| ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::Tool,
         content: "done".into(),
         tool_call_id: Some(call_id.into()),
         tool_calls: Vec::new(),
     };
     let user = ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::User,
         content: "continue".into(),
         tool_call_id: None,
@@ -339,6 +345,7 @@ fn model_transcript_requires_exact_tool_call_settlement() {
 #[test]
 fn assistant_tool_call_turn_rejects_reused_ids_before_execution() {
     let assistant = |call_ids: &[&str]| ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::Assistant,
         content: String::new().into(),
         tool_call_id: None,
@@ -352,6 +359,7 @@ fn assistant_tool_call_turn_rejects_reused_ids_before_execution() {
             .collect(),
     };
     let result = |call_id: &str| ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::Tool,
         content: "done".into(),
         tool_call_id: Some(call_id.into()),

@@ -34,6 +34,63 @@ pub enum BackendKind {
 /// context before exposing this interface.
 #[async_trait]
 pub trait AgentRunClient: Send + Sync {
+    /// Optional globally idempotent peer text task admission.
+    async fn submit_agent_task_message(
+        &self,
+        _request: crate::SubmitAgentTaskMessageRequest,
+    ) -> ApiResult<crate::AgentTaskSnapshot> {
+        Err(colossus_api::agent_communication_unavailable())
+    }
+    /// Optional curated caller-owned task history.
+    async fn get_agent_task(
+        &self,
+        _request: crate::GetAgentTaskRequest,
+    ) -> ApiResult<crate::AgentTaskSnapshot> {
+        Err(colossus_api::agent_communication_unavailable())
+    }
+    /// Optional canonical last-status-update ordered task query.
+    async fn list_agent_tasks(
+        &self,
+        _request: crate::ListAgentTasksRequest,
+    ) -> ApiResult<crate::ListAgentTasksResponse> {
+        Err(colossus_api::agent_communication_unavailable())
+    }
+
+    /// Optional participant discovery without granting control.
+    async fn list_agent_participants(
+        &self,
+        _request: crate::ListAgentParticipantsRequest,
+    ) -> ApiResult<Vec<crate::AgentParticipant>> {
+        Err(colossus_api::agent_communication_unavailable())
+    }
+    /// Optional durable peer input. Sender is always bound by authentication.
+    async fn send_agent_message(
+        &self,
+        _request: crate::SendAgentMessage,
+    ) -> ApiResult<crate::AgentMessage> {
+        Err(colossus_api::agent_communication_unavailable())
+    }
+    /// Optional inspection of one canonical message/receipt.
+    async fn get_agent_message(
+        &self,
+        _request: crate::GetAgentMessageRequest,
+    ) -> ApiResult<crate::AgentMessage> {
+        Err(colossus_api::agent_communication_unavailable())
+    }
+    /// Optional bounded inspection of a caller-owned inbox.
+    async fn list_agent_messages(
+        &self,
+        _request: crate::ListAgentMessagesRequest,
+    ) -> ApiResult<crate::AgentMessagePage> {
+        Err(colossus_api::agent_communication_unavailable())
+    }
+    /// Optional independent durable communication feed.
+    async fn watch_agent_messages(
+        &self,
+        _request: crate::WatchAgentMessagesRequest,
+    ) -> ApiResult<crate::AgentCommunicationStream> {
+        Err(colossus_api::agent_communication_unavailable())
+    }
     /// Read metadata-only current policy posture beneath this application's authority.
     async fn get_runtime_policy_posture(&self) -> ApiResult<crate::RuntimePolicyPosture> {
         Err(crate::ApiError::failed_precondition(
@@ -212,6 +269,87 @@ impl fmt::Debug for ContextBoundAgentRunClient {
 #[async_trait]
 #[cfg(feature = "embedded")]
 impl AgentRunClient for ContextBoundAgentRunClient {
+    async fn submit_agent_task_message(
+        &self,
+        request: crate::SubmitAgentTaskMessageRequest,
+    ) -> ApiResult<crate::AgentTaskSnapshot> {
+        self.api
+            .communication()
+            .ok_or_else(colossus_api::agent_communication_unavailable)?
+            .submit_task_message(&self.caller, request)
+            .await
+    }
+    async fn get_agent_task(
+        &self,
+        request: crate::GetAgentTaskRequest,
+    ) -> ApiResult<crate::AgentTaskSnapshot> {
+        self.api
+            .communication()
+            .ok_or_else(colossus_api::agent_communication_unavailable)?
+            .get_task(&self.caller, request)
+            .await
+    }
+    async fn list_agent_tasks(
+        &self,
+        request: crate::ListAgentTasksRequest,
+    ) -> ApiResult<crate::ListAgentTasksResponse> {
+        self.api
+            .communication()
+            .ok_or_else(colossus_api::agent_communication_unavailable)?
+            .list_tasks(&self.caller, request)
+            .await
+    }
+
+    async fn list_agent_participants(
+        &self,
+        request: crate::ListAgentParticipantsRequest,
+    ) -> ApiResult<Vec<crate::AgentParticipant>> {
+        self.api
+            .communication()
+            .ok_or_else(colossus_api::agent_communication_unavailable)?
+            .list_participants(&self.caller, request)
+            .await
+    }
+    async fn send_agent_message(
+        &self,
+        request: crate::SendAgentMessage,
+    ) -> ApiResult<crate::AgentMessage> {
+        self.api
+            .communication()
+            .ok_or_else(colossus_api::agent_communication_unavailable)?
+            .send_message(&self.caller, request)
+            .await
+    }
+    async fn get_agent_message(
+        &self,
+        request: crate::GetAgentMessageRequest,
+    ) -> ApiResult<crate::AgentMessage> {
+        self.api
+            .communication()
+            .ok_or_else(colossus_api::agent_communication_unavailable)?
+            .get_message(&self.caller, request)
+            .await
+    }
+    async fn list_agent_messages(
+        &self,
+        request: crate::ListAgentMessagesRequest,
+    ) -> ApiResult<crate::AgentMessagePage> {
+        self.api
+            .communication()
+            .ok_or_else(colossus_api::agent_communication_unavailable)?
+            .list_messages(&self.caller, request)
+            .await
+    }
+    async fn watch_agent_messages(
+        &self,
+        request: crate::WatchAgentMessagesRequest,
+    ) -> ApiResult<crate::AgentCommunicationStream> {
+        self.api
+            .communication()
+            .ok_or_else(colossus_api::agent_communication_unavailable)?
+            .watch_messages(&self.caller, request)
+            .await
+    }
     async fn get_runtime_policy_posture(&self) -> ApiResult<crate::RuntimePolicyPosture> {
         self.api.get_runtime_policy_posture(&self.caller).await
     }

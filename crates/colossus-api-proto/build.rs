@@ -16,6 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "colossus/api/v1alpha1/system.proto",
         "colossus/api/v1alpha1/session.proto",
         "colossus/api/v1alpha1/agent_run.proto",
+        "colossus/api/v1alpha1/communication.proto",
         "colossus/api/v1alpha1/product.proto",
     ];
     let protos = relative_protos

@@ -131,6 +131,7 @@ impl GatewayResearchModel {
                 ModelRequest {
                     instructions,
                     messages: vec![ModelMessage {
+                        agent_message_origin: None,
                         role: ModelMessageRole::User,
                         content: prompt.into(),
                         tool_call_id: None,

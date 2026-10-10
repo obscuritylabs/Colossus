@@ -650,7 +650,26 @@ impl RuntimeAgentRunApi {
             .check_new(application_id, now)
             .map_err(|AdmissionLimitReached| capacity_error(caller))?;
 
-        let created = self.repository.create_run(caller, request, new_run)?;
+        let context = colossus_contracts::ExecutionContext {
+            correlation_id: caller.request_id().as_str().into(),
+            run_id: Some(new_run.id().into()),
+            session_id: Some(new_run.session_id().into()),
+            ..Default::default()
+        };
+        let mut staged_run = new_run.clone();
+        if request.mode == RunMode::Execute {
+            staged_run = staged_run.with_transaction_events(
+                self.runtime
+                    .communication()
+                    .stage_root_with_peer_input(
+                        &context,
+                        &caller.actor(),
+                        new_run.peer_message_id(),
+                    )
+                    .map_err(|error| ApiError::from_store(&error, caller.request_id()))?,
+            );
+        }
+        let created = self.repository.create_run(caller, request, &staged_run)?;
         if created.replayed {
             return Ok(CreateDecision::Replay(created.value));
         }
@@ -827,6 +846,11 @@ impl RuntimeAgentRunApi {
                     Err(_) => false,
                 };
             }
+            if let Ok(Some(current)) = writer.current_execution_run()
+                && service.settle_communication(&current).is_err()
+            {
+                service.feeds.close(&run_id);
+            }
             service.interactions.cancel_run(&run_id);
             let mut registry = lock(&service.execution);
             let matching = registry
@@ -889,6 +913,7 @@ impl RuntimeAgentRunApi {
             };
             let (run, execution) = current;
             if run.status.is_terminal() {
+                let _ = self.settle_communication(&run);
                 self.remove_pending_recovery(&run_id);
                 continue;
             }
@@ -900,6 +925,7 @@ impl RuntimeAgentRunApi {
                     &run,
                 );
                 if writer.append(cancelled_before_start()).is_ok() {
+                    let _ = self.current_recovered(&caller, &run_id, &caller);
                     self.remove_pending_recovery(&run_id);
                 }
                 continue;
@@ -923,7 +949,11 @@ impl RuntimeAgentRunApi {
     }
 
     fn recover_orphan(&self, caller: &CallerContext, run: Run) -> ApiResult<Run> {
-        if run.status.is_terminal() || lock(&self.execution).active.contains_key(&run.id) {
+        if run.status.is_terminal() {
+            self.settle_communication(&run)?;
+            return Ok(run);
+        }
+        if lock(&self.execution).active.contains_key(&run.id) {
             return Ok(run);
         }
         let _recovery = lock(&self.recovery);
@@ -938,6 +968,7 @@ impl RuntimeAgentRunApi {
             return Err(missing_run(caller));
         };
         if current.status.is_terminal() {
+            self.settle_communication(&current)?;
             return Ok(current);
         }
         let recovered = recovered_caller(&execution, &current.id, caller)?;
@@ -1008,10 +1039,35 @@ impl RuntimeAgentRunApi {
         run_id: &str,
         external: &CallerContext,
     ) -> ApiResult<Run> {
-        self.repository
+        let current = self
+            .repository
             .recoverable_run(recovered, run_id)?
             .map(|(run, _)| run)
-            .ok_or_else(|| missing_run(external))
+            .ok_or_else(|| missing_run(external))?;
+        self.settle_communication(&current)?;
+        Ok(current)
+    }
+
+    fn settle_communication(&self, run: &Run) -> ApiResult<()> {
+        use colossus_contracts::AgentMessageFailure as Reason;
+        let reason = match run.status {
+            RunStatus::Completed => Reason::Completed,
+            RunStatus::Cancelled => Reason::Cancelled,
+            RunStatus::Interrupted | RunStatus::OutcomeUnknown => Reason::Interrupted,
+            RunStatus::Failed => Reason::Failed,
+            _ => return Ok(()),
+        };
+        colossus_ports::AgentInbox::close_run(
+            self.runtime.communication().as_ref(),
+            &run.id,
+            reason,
+        )
+        .map_err(|error| {
+            ApiError::from_store(
+                &error,
+                &RequestId::new(run.id.clone()).expect("validated run identifier"),
+            )
+        })
     }
 
     fn cancel_orphan(&self, caller: &CallerContext, request: &CancelRunRequest) -> ApiResult<Run> {
@@ -1040,6 +1096,7 @@ impl RuntimeAgentRunApi {
             result.value.status.is_terminal(),
         );
         if result.value.status.is_terminal() {
+            self.settle_communication(&result.value)?;
             return Ok(result.value);
         }
         let recovered = recovered_caller(&execution, &request.run_id, caller)?;
@@ -1199,6 +1256,7 @@ impl RuntimeAgentRunApi {
                     &run.session_id,
                     &run.id,
                     colossus_contracts::ModelMessage {
+                        agent_message_origin: None,
                         role: colossus_contracts::ModelMessageRole::User,
                         content: prompt.clone(),
                         tool_call_id: None,
@@ -1485,6 +1543,17 @@ impl RuntimeAgentRunApi {
 
 #[async_trait]
 impl AgentRunApi for RuntimeAgentRunApi {
+    fn communication(&self) -> Option<Arc<dyn colossus_api::AgentCommunicationApi>> {
+        Some(Arc::new(
+            crate::communication::RuntimeCommunicationApi::new(
+                self.runtime.clone(),
+                self.repository.clone(),
+                self.lists.clone(),
+                self.watches.clone(),
+                self.clone(),
+            ),
+        ))
+    }
     fn supports_runtime_policy_posture(&self) -> bool {
         true
     }
@@ -1605,40 +1674,7 @@ impl AgentRunApi for RuntimeAgentRunApi {
         caller: &CallerContext,
         request: CreateRunRequest,
     ) -> ApiResult<CreateRunResponse> {
-        caller.require_scope(scopes::RUNS_EXECUTE)?;
-        request
-            .validate()
-            .map_err(|error| error.with_correlation_id(caller.request_id().clone()))?;
-        if let Some(replay) = self.repository.resolve_create_run(caller, &request)? {
-            return Ok(CreateRunResponse {
-                run: self.recover_orphan(caller, replay)?,
-            });
-        }
-        Self::require_research_tools(caller, &request)?;
-        if request.mode == RunMode::Goal {
-            caller.require_tool("goal.show")?;
-            caller.require_tool("goal.update")?;
-        }
-        self.plan_selection(caller, &request)?;
-        self.branch_source_session(caller, &request)?;
-        self.rendered_input(caller, &request).await?;
-        let role = request
-            .role
-            .clone()
-            .unwrap_or_else(|| self.default_role.clone());
-        caller.require_role(&role)?;
-        let (session_id, create_session) =
-            self.session_id(caller, request.session_id.as_deref())?;
-        let new_run = NewRun::from_request(Uuid::now_v7().to_string(), session_id, role, &request)
-            .map_err(|error| error.with_correlation_id(caller.request_id().clone()))?;
-        let run = match self.create_admitted(caller, &request, &new_run, create_session)? {
-            CreateDecision::Fresh { run, pending } => {
-                self.spawn_execution(*pending);
-                run
-            }
-            CreateDecision::Replay(run) => self.recover_orphan(caller, run)?,
-        };
-        Ok(CreateRunResponse { run })
+        self.allocate_run(caller, request, None).await
     }
 
     async fn get_run(&self, caller: &CallerContext, request: GetRunRequest) -> ApiResult<Run> {
@@ -2927,6 +2963,64 @@ fn process_session_error() -> ApiError {
         ApiErrorReason::InvalidRunTransition,
         "The shell session request is invalid, unavailable, or not authorized.",
     )
+}
+
+impl RuntimeAgentRunApi {
+    pub(crate) async fn allocate_run(
+        &self,
+        caller: &CallerContext,
+        request: CreateRunRequest,
+        task_input: Option<crate::task_inputs::InitialTaskInput>,
+    ) -> ApiResult<CreateRunResponse> {
+        caller.require_scope(scopes::RUNS_EXECUTE)?;
+        request
+            .validate()
+            .map_err(|error| error.with_correlation_id(caller.request_id().clone()))?;
+        if let Some(replay) = self.repository.resolve_create_run(caller, &request)? {
+            return Ok(CreateRunResponse {
+                run: self.recover_orphan(caller, replay)?,
+            });
+        }
+        Self::require_research_tools(caller, &request)?;
+        if request.mode == RunMode::Goal {
+            caller.require_tool("goal.show")?;
+            caller.require_tool("goal.update")?;
+        }
+        self.plan_selection(caller, &request)?;
+        self.branch_source_session(caller, &request)?;
+        self.rendered_input(caller, &request).await?;
+        let role = request
+            .role
+            .clone()
+            .unwrap_or_else(|| self.default_role.clone());
+        caller.require_role(&role)?;
+        let (session_id, create_session) =
+            self.session_id(caller, request.session_id.as_deref())?;
+        let new_run = NewRun::from_request(Uuid::now_v7().to_string(), session_id, role, &request)
+            .map_err(|error| error.with_correlation_id(caller.request_id().clone()))?;
+        let new_run = if let Some(input) = task_input {
+            let message_id = input.request.message_id.clone();
+            new_run
+                .clone()
+                .with_transaction_events(crate::task_inputs::stage_initial(
+                    self.runtime.journal().as_ref(),
+                    caller,
+                    &new_run,
+                    input,
+                )?)
+                .with_peer_message_id(message_id)
+        } else {
+            new_run
+        };
+        let run = match self.create_admitted(caller, &request, &new_run, create_session)? {
+            CreateDecision::Fresh { run, pending } => {
+                self.spawn_execution(*pending);
+                run
+            }
+            CreateDecision::Replay(run) => self.recover_orphan(caller, run)?,
+        };
+        Ok(CreateRunResponse { run })
+    }
 }
 
 #[cfg(test)]
