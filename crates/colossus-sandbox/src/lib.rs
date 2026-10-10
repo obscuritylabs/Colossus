@@ -127,6 +127,8 @@ pub use browser_windows::{
 };
 
 #[cfg(target_os = "macos")]
+pub use browser_macos::{MacosBrowserProcessClearance, MacosBrowserProcessKeeper};
+#[cfg(target_os = "macos")]
 pub use browser_macos::{MacosBrowserReadiness, MacosBrowserRequirement, MacosBrowserSupervisor};
 
 #[cfg(target_os = "linux")]
