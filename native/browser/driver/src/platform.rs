@@ -1,7 +1,11 @@
 //! Native Unix process entry; helpers and descriptors never come from model input.
 use std::ffi::CString;
 #[cfg(target_os = "macos")]
+use std::ffi::{OsStr, OsString};
+#[cfg(target_os = "macos")]
 use std::os::unix::ffi::OsStrExt as _;
+#[cfg(target_os = "macos")]
+use std::os::unix::net::UnixStream;
 
 use colossus_contracts::{BrowserCapabilities, BrowserMode};
 use colossus_ports::BrowserDriverError;
@@ -12,6 +16,134 @@ pub use crate::container::Relay;
 pub struct Entry {
     pub helper: Option<CString>,
     pub native_mode: i32,
+}
+
+/// Require the argument shape used by the signed front and active sandbox membership
+/// before reading enrollment. The front's signature and exact applied policy
+/// still require independent supervisor verification.
+#[cfg(target_os = "macos")]
+pub fn verify_main_entry(startup: &[OsString]) -> Result<(), BrowserDriverError> {
+    if !fixed_main_arguments(startup) {
+        return Err(BrowserDriverError::Denied);
+    }
+    // SAFETY: read-only process credentials and sandbox state, with no pointer
+    // output. The front's exact policy/signature remains the launch authority.
+    let (real_uid, effective_uid, sandboxed) = unsafe {
+        (
+            libc::getuid(),
+            libc::geteuid(),
+            sandbox_check(libc::getpid(), std::ptr::null(), 0),
+        )
+    };
+    if real_uid == 0 || real_uid != effective_uid || sandboxed != 1 {
+        return Err(BrowserDriverError::Denied);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn fixed_main_arguments(startup: &[OsString]) -> bool {
+    startup.len() == 4
+        && startup
+            .iter()
+            .zip(["3", "4", "5", "6"])
+            .all(|(observed, expected)| observed == OsStr::new(expected))
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "sandbox")]
+unsafe extern "C" {
+    fn sandbox_check(
+        pid: libc::pid_t,
+        operation: *const libc::c_char,
+        filter: libc::c_int,
+        ...
+    ) -> libc::c_int;
+}
+
+/// All four private streams must have one OS peer identity. This checks the
+/// transport's provenance shape; enrollment authentication remains in the
+/// browser bridge and the supervisor must prove the peer is its exact child.
+#[cfg(target_os = "macos")]
+pub fn verify_channel_peers(streams: &[UnixStream]) -> Result<(), BrowserDriverError> {
+    if streams.len() != 4 {
+        return Err(BrowserDriverError::Denied);
+    }
+    let mut expected = None;
+    for stream in streams {
+        let mut pid: libc::pid_t = 0;
+        let mut length = std::mem::size_of_val(&pid) as libc::socklen_t;
+        // SAFETY: getsockopt writes a peer PID into bounded stack storage.
+        if unsafe {
+            libc::getsockopt(
+                std::os::fd::AsRawFd::as_raw_fd(stream),
+                libc::SOL_LOCAL,
+                libc::LOCAL_PEEREPID,
+                std::ptr::from_mut(&mut pid).cast(),
+                &mut length,
+            )
+        } != 0
+            || length as usize != std::mem::size_of_val(&pid)
+            || pid <= 1
+        {
+            return Err(BrowserDriverError::Denied);
+        }
+        let mut uid: libc::uid_t = 0;
+        let mut gid: libc::gid_t = 0;
+        // SAFETY: getpeereid writes two fixed-size peer credentials to valid
+        // stack pointers. No caller-controlled identity is accepted as policy.
+        if unsafe { libc::getpeereid(std::os::fd::AsRawFd::as_raw_fd(stream), &mut uid, &mut gid) }
+            != 0
+        {
+            return Err(BrowserDriverError::Denied);
+        }
+        let peer = (pid, uid, gid);
+        if expected.is_some_and(|expected| expected != peer) {
+            return Err(BrowserDriverError::Denied);
+        }
+        expected = Some(peer);
+    }
+    Ok(())
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signed_main_entry_accepts_only_four_fixed_private_fds() {
+        assert!(fixed_main_arguments(
+            &["3", "4", "5", "6"].map(OsString::from)
+        ));
+        for rejected in [
+            vec!["3", "4", "5"],
+            vec!["3", "4", "5", "6", "7"],
+            vec!["3", "4", "5", "5"],
+            vec!["6", "5", "4", "3"],
+            vec!["--oci-presentation-sockets"],
+        ] {
+            assert!(!fixed_main_arguments(
+                &rejected.into_iter().map(OsString::from).collect::<Vec<_>>()
+            ));
+        }
+    }
+
+    #[test]
+    fn private_streams_have_one_os_peer_identity() {
+        let pairs = (0..4)
+            .map(|_| UnixStream::pair().expect("private pair"))
+            .collect::<Vec<_>>();
+        let streams = pairs
+            .iter()
+            .map(|(_, child)| child.try_clone().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(verify_channel_peers(&streams), Ok(()));
+        assert_eq!(verify_channel_peers(&[]), Err(BrowserDriverError::Denied));
+        assert_eq!(
+            verify_channel_peers(&streams[..3]),
+            Err(BrowserDriverError::Denied)
+        );
+    }
 }
 
 impl Entry {

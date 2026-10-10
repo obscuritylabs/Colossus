@@ -178,6 +178,27 @@ fn inherited(descriptor: i32) -> Result<UnixStream, BrowserDriverError> {
     {
         return Err(BrowserDriverError::Denied);
     }
+    let mut peer: libc::sockaddr_storage = unsafe {
+        // SAFETY: all-zero sockaddr storage is a valid output buffer for getpeername.
+        std::mem::zeroed()
+    };
+    let mut peer_length = std::mem::size_of_val(&peer) as libc::socklen_t;
+    // SAFETY: the live stream descriptor and bounded output storage are valid.
+    // An unconnected AF_UNIX socket must never stand in for a private channel.
+    if unsafe {
+        libc::getpeername(
+            descriptor,
+            std::ptr::from_mut(&mut peer).cast(),
+            &mut peer_length,
+        )
+    } != 0
+        || (peer_length as usize)
+            < std::mem::offset_of!(libc::sockaddr_storage, ss_family)
+                + std::mem::size_of::<libc::sa_family_t>()
+        || i32::from(peer.ss_family) != libc::AF_UNIX
+    {
+        return Err(BrowserDriverError::Denied);
+    }
     // SAFETY: descriptors are uniquely nominated by the supervisor and taken exactly once.
     let stream = unsafe { UnixStream::from_raw_fd(descriptor) };
     // Helpers must not inherit authentication/control channels across exec.
@@ -271,6 +292,8 @@ pub fn run() -> Result<(), BrowserDriverError> {
         }
     }
     let startup = std::env::args_os().skip(1).collect::<Vec<_>>();
+    #[cfg(target_os = "macos")]
+    platform::verify_main_entry(&startup)?;
     let container_presentation =
         startup == [std::ffi::OsString::from("--oci-presentation-sockets")];
     let is_container =
@@ -278,8 +301,8 @@ pub fn run() -> Result<(), BrowserDriverError> {
     let streams = if is_container {
         platform::container_channels(container_presentation)?
     } else {
-        let descriptors: Vec<i32> = std::env::args_os()
-            .skip(1)
+        let descriptors: Vec<i32> = startup
+            .iter()
             .map(|argument| {
                 argument
                     .to_str()
@@ -288,6 +311,10 @@ pub fn run() -> Result<(), BrowserDriverError> {
                     .map_err(|_| BrowserDriverError::Denied)
             })
             .collect::<Result<_, _>>()?;
+        #[cfg(target_os = "macos")]
+        if descriptors != [3, 4, 5, 6] {
+            return Err(BrowserDriverError::Denied);
+        }
         if !(3..=4).contains(&descriptors.len())
             || descriptors
                 .iter()
@@ -302,6 +329,8 @@ pub fn run() -> Result<(), BrowserDriverError> {
             .map(inherited)
             .collect::<Result<Vec<_>, _>>()?
     };
+    #[cfg(target_os = "macos")]
+    platform::verify_channel_peers(&streams)?;
     let mut streams = streams.into_iter();
     let bootstrap = streams.next().ok_or(BrowserDriverError::Denied)?;
     let data = streams.next().ok_or(BrowserDriverError::Denied)?;
@@ -564,4 +593,29 @@ pub fn run() -> Result<(), BrowserDriverError> {
         .map_err(|_| BrowserDriverError::OutcomeUnknown)??;
     _native_home.finish()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inherited_channel_requires_connected_unix_stream() {
+        let (parent, child) = UnixStream::pair().expect("private pair");
+        let accepted = inherited(child.into_raw_fd()).expect("connected private channel");
+        let flags = unsafe { libc::fcntl(accepted.as_raw_fd(), libc::F_GETFD) };
+        assert_ne!(flags & libc::FD_CLOEXEC, 0);
+        drop(accepted);
+        drop(parent);
+
+        // SAFETY: socket creates one owned descriptor; this test closes it once.
+        let unconnected = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+        assert!(unconnected >= 3);
+        assert!(matches!(
+            inherited(unconnected),
+            Err(BrowserDriverError::Denied)
+        ));
+        // SAFETY: inherited rejected the descriptor before taking ownership.
+        assert_eq!(unsafe { libc::close(unconnected) }, 0);
+    }
 }
