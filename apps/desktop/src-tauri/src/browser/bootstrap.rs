@@ -2,6 +2,11 @@
 
 #[cfg(feature = "embedded-chromium-preview")]
 use colossus_native_browser::chromium;
+#[cfg(any(feature = "embedded-chromium-preview", test))]
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(feature = "embedded-chromium-preview")]
+static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Own the preview's private cache for the entire native application lifecycle.
 pub(crate) fn initialize() -> Option<tempfile::TempDir> {
@@ -16,7 +21,10 @@ pub(crate) fn initialize() -> Option<tempfile::TempDir> {
         let helper = helper_path(&executable)?;
         match chromium::bootstrap(cache.path(), &helper) {
             chromium::Bootstrap::SubprocessExit(code) => std::process::exit(code),
-            chromium::Bootstrap::Ready => Some(cache),
+            chromium::Bootstrap::Ready => {
+                INITIALIZED.store(true, Ordering::Release);
+                Some(cache)
+            }
             chromium::Bootstrap::Unavailable(_) => None,
         }
     }
@@ -52,6 +60,13 @@ fn helper_path(executable: &std::path::Path) -> Option<std::path::PathBuf> {
     }))
 }
 
+#[cfg_attr(
+    not(feature = "embedded-chromium-preview"),
+    allow(
+        clippy::unnecessary_wraps,
+        reason = "Ordinary builds preserve the fallible preview lifecycle API."
+    )
+)]
 pub(crate) fn start_pump(
     app: &tauri::AppHandle,
 ) -> Result<(), colossus_native_browser::BrowserError> {
@@ -99,18 +114,71 @@ pub(crate) fn start_pump(
     Ok(())
 }
 
+#[cfg_attr(
+    not(feature = "embedded-chromium-preview"),
+    allow(
+        clippy::unnecessary_wraps,
+        reason = "Ordinary builds preserve the fallible preview lifecycle API."
+    )
+)]
 pub(crate) fn shutdown() -> Result<(), colossus_native_browser::BrowserError> {
     #[cfg(feature = "embedded-chromium-preview")]
-    return chromium::shutdown();
+    return shutdown_initialized(&INITIALIZED, chromium::shutdown);
     #[cfg(not(feature = "embedded-chromium-preview"))]
     Ok(())
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(any(feature = "embedded-chromium-preview", test))]
+fn shutdown_initialized(
+    initialized: &AtomicBool,
+    shutdown: impl FnOnce() -> Result<(), colossus_native_browser::BrowserError>,
+) -> Result<(), colossus_native_browser::BrowserError> {
+    if !initialized.load(Ordering::Acquire) {
+        // An unavailable preview owns no initialized engine or native cache.
+        return Ok(());
+    }
+    // Preserve the obligation on any failure: an initialized engine must never
+    // be reclassified as a no-op merely because its teardown was rejected.
+    shutdown()?;
+    initialized.store(false, Ordering::Release);
+    Ok(())
+}
+
+#[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
     use super::helper_path;
+    use super::{AtomicBool, Ordering, shutdown_initialized};
+    use colossus_native_browser::BrowserError;
+    #[cfg(target_os = "macos")]
     use std::path::Path;
 
+    #[test]
+    fn absent_browser_bootstrap_requires_no_native_shutdown() {
+        let initialized = AtomicBool::new(false);
+        assert_eq!(
+            shutdown_initialized(&initialized, || panic!("no engine exists")),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn failed_native_shutdown_preserves_the_acknowledgement_obligation() {
+        let initialized = AtomicBool::new(true);
+        assert_eq!(
+            shutdown_initialized(&initialized, || Err(BrowserError::Unavailable)),
+            Err(BrowserError::Unavailable)
+        );
+        assert!(initialized.load(Ordering::Acquire));
+        assert_eq!(shutdown_initialized(&initialized, || Ok(())), Ok(()));
+        assert!(!initialized.load(Ordering::Acquire));
+        assert_eq!(
+            shutdown_initialized(&initialized, || panic!("already shut down")),
+            Ok(())
+        );
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
     fn helper_is_discovered_in_the_signed_frameworks_bundle() {
         assert_eq!(

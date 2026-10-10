@@ -1347,7 +1347,7 @@ impl AppState {
     }
 
     pub(crate) async fn close_all_settled(&self) -> Result<(), crate::dto::CommandErrorDto> {
-        self.browser.close_all_settled().await?;
+        self.browser.drain_for_shutdown().await?;
         #[cfg(windows)]
         self.stop_all_outlook_companions().await;
         {

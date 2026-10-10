@@ -66,12 +66,12 @@ pub(crate) fn callback() -> (
             }
         } else if matches!(event, tauri::RunEvent::Exit) {
             #[cfg(feature = "embedded-chromium-preview")]
-            eprintln!("Desktop Exit received; requesting native CefShutdown");
+            eprintln!("Desktop Exit received; settling native browser lifecycle");
             match crate::browser::bootstrap::shutdown() {
                 Ok(()) => {
                     shutdown_result.store(true, Ordering::Release);
                     #[cfg(feature = "embedded-chromium-preview")]
-                    println!("PASS Desktop CefShutdown acknowledged after browser close callbacks");
+                    println!("Desktop native browser lifecycle settled");
                 }
                 Err(error) => eprintln!("native browser shutdown failed: {error}"),
             }

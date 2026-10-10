@@ -175,9 +175,11 @@ fn run_lifecycle(application: tauri::App, completed: &AtomicBool) -> i32 {
                             .browser
                             .lock()
                             .map_or(0, |registry| registry.tabs.len());
-                        // Match Desktop's shutdown ownership: keep Tauri/AppKit
-                        // pumping until CEF confirms every native tab has closed.
-                        match app.state::<AppState>().browser.close_all_settled().await {
+                        // Exercise Desktop's browser admission/teardown path while
+                        // keeping Tauri/AppKit pumping for native acknowledgements.
+                        // This harness does not exercise the full production callback's
+                        // retry behavior or runtime/client teardown.
+                        match app.state::<AppState>().browser.drain_for_shutdown().await {
                             Ok(_) => {
                                 closed.store(true, Ordering::Release);
                                 #[cfg(feature = "embedded-chromium-preview")]
@@ -223,6 +225,7 @@ async fn action(
     action: BrowserAction,
 ) -> anyhow::Result<super::dto::BrowserSnapshotDto> {
     let state = app.state::<AppState>();
+    let _operation = state.browser.operation.lock().await;
     let generation = state
         .browser
         .snapshot()

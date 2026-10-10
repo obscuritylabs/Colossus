@@ -42,6 +42,7 @@ pub(crate) async fn browser_context(
 ) -> Result<BrowserSnapshotDto, CommandErrorDto> {
     require_controller(&caller)?;
     let _operation = state.browser.operation.lock().await;
+    state.browser.require_open()?;
     let selected = state.browser_selection().await;
     state.browser.selection_changed(selected.clone());
     state.browser.snapshot().await

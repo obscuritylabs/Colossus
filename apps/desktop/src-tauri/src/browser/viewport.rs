@@ -47,6 +47,9 @@ impl BrowserManager {
             .to_logical::<f64>(scale);
         let operations = {
             let mut state = self.lock()?;
+            if state.draining {
+                return Err(error(super::registry::DRAINING_MESSAGE));
+            }
             if state.generation != request.generation
                 || state.scope.as_deref() != Some(scope.as_str())
             {

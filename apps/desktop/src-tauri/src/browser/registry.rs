@@ -10,6 +10,7 @@ use std::{
 };
 
 pub(super) const MAX_TABS: usize = 8;
+pub(super) const DRAINING_MESSAGE: &str = "The browser is closing for application shutdown.";
 
 pub(super) struct Tab {
     pub(super) scope: String,
@@ -22,6 +23,7 @@ pub(super) struct Tab {
 
 #[derive(Default)]
 pub(super) struct Registry {
+    pub(super) draining: bool,
     pub(super) generation: u64,
     pub(super) scope: Option<String>,
     pub(super) tabs: Vec<Tab>,
@@ -32,7 +34,11 @@ pub(super) struct Registry {
 
 impl Registry {
     pub(super) fn snapshot(&self) -> BrowserSnapshotDto {
-        let engine = BrowserEngineDto::current();
+        let mut engine = BrowserEngineDto::current();
+        if self.draining {
+            engine.ready = false;
+            engine.message = Some(DRAINING_MESSAGE.into());
+        }
         BrowserSnapshotDto {
             available: engine.ready,
             engine,
