@@ -1,5 +1,6 @@
 """Development staging layout and failure contracts; no CEF or macOS required."""
 
+import errno
 import os
 from pathlib import Path
 import plistlib
@@ -157,6 +158,172 @@ class MacosStageTests(unittest.TestCase):
         self.app.symlink_to(self.root / "absent.app")
         with self.assertRaises(component.ComponentError):
             self.stage()
+
+    def test_receipt_created_during_signing_is_preserved_and_app_is_rolled_back(self):
+        receipt = self.app.with_name(self.app.name + ".browser-component.json")
+        for kind in ("file", "directory"):
+            with self.subTest(kind=kind):
+                def introduce_receipt(command):
+                    if "--sign" in command and not receipt.exists():
+                        if kind == "file":
+                            receipt.write_text("unrelated receipt")
+                        else:
+                            receipt.mkdir()
+                            (receipt / "keep").write_text("unrelated directory")
+
+                with patch.object(stage_macos, "run", side_effect=introduce_receipt):
+                    with self.assertRaises(FileExistsError):
+                        self.stage()
+                self.assertFalse(self.app.exists())
+                preserved = receipt if kind == "file" else receipt / "keep"
+                self.assertEqual(preserved.read_text(), "unrelated receipt" if kind == "file"
+                                 else "unrelated directory")
+                if kind == "directory":
+                    (receipt / "keep").unlink()
+                    receipt.rmdir()
+                else:
+                    receipt.unlink()
+                self.assertEqual(list(self.root.glob(".cef-app-stage-*")), [])
+                self.assertEqual(list(self.root.glob(".cef-app-rollback-*")), [])
+
+    def test_app_created_at_publication_is_never_replaced(self):
+        receipt = self.app.with_name(self.app.name + ".browser-component.json")
+        rename = stage_macos.rename_exclusive
+        for kind in ("directory", "file", "symlink"):
+            with self.subTest(kind=kind):
+                def introduce_app(source, destination):
+                    if destination == self.app:
+                        if kind == "directory":
+                            self.app.mkdir()
+                        elif kind == "file":
+                            self.app.write_text("unrelated app file")
+                        else:
+                            self.app.symlink_to(self.root / "absent.app")
+                        identity = stage_macos.object_identity(self.app)
+                        with self.assertRaises(FileExistsError):
+                            rename(source, destination)
+                        self.assertEqual(stage_macos.object_identity(self.app), identity)
+                        raise FileExistsError(errno.EEXIST, "raced destination", str(destination))
+                    rename(source, destination)
+
+                with patch.object(stage_macos, "run"), \
+                        patch.object(stage_macos, "rename_exclusive", side_effect=introduce_app):
+                    with self.assertRaises(FileExistsError):
+                        self.stage()
+                self.assertFalse(receipt.exists())
+                if kind == "directory":
+                    self.assertEqual(list(self.app.iterdir()), [])
+                    self.app.rmdir()
+                elif kind == "file":
+                    self.assertEqual(self.app.read_text(), "unrelated app file")
+                    self.app.unlink()
+                else:
+                    self.assertTrue(self.app.is_symlink())
+                    self.assertEqual(os.readlink(self.app), str(self.root / "absent.app"))
+                    self.app.unlink()
+
+    def test_receipt_publication_io_failure_removes_only_the_owned_app(self):
+        receipt = self.app.with_name(self.app.name + ".browser-component.json")
+        rename = stage_macos.rename_exclusive
+
+        def fail_receipt(source, destination):
+            if destination == receipt:
+                self.assertTrue(self.app.is_dir())
+                raise OSError(errno.EIO, "fixture publication failure")
+            rename(source, destination)
+
+        with patch.object(stage_macos, "run"), \
+                patch.object(stage_macos, "rename_exclusive", side_effect=fail_receipt):
+            with self.assertRaises(OSError) as failure:
+                self.stage()
+        self.assertEqual(failure.exception.errno, errno.EIO)
+        self.assertFalse(self.app.exists())
+        self.assertFalse(receipt.exists())
+        self.assertEqual(list(self.root.glob(".cef-app-stage-*")), [])
+        self.assertEqual(list(self.root.glob(".cef-app-rollback-*")), [])
+
+    def test_rollback_preserves_an_app_replaced_before_cleanup(self):
+        receipt = self.app.with_name(self.app.name + ".browser-component.json")
+        moved_app = self.root / "moved-owned.app"
+        rename = stage_macos.rename_exclusive
+
+        def replace_app(source, destination):
+            if destination == receipt:
+                self.app.rename(moved_app)
+                self.app.mkdir()
+                (self.app / "keep").write_text("unrelated replacement")
+                raise OSError(errno.EIO, "fixture publication failure")
+            rename(source, destination)
+
+        with patch.object(stage_macos, "run"), \
+                patch.object(stage_macos, "rename_exclusive", side_effect=replace_app):
+            with self.assertRaises(OSError):
+                self.stage()
+        self.assertEqual((self.app / "keep").read_text(), "unrelated replacement")
+        self.assertTrue((moved_app / "Contents/MacOS/browser-acceptance").is_file())
+        self.assertFalse(receipt.exists())
+
+    def test_rollback_rechecks_a_destination_swapped_during_reclaim(self):
+        receipt = self.app.with_name(self.app.name + ".browser-component.json")
+        moved_app = self.root / "moved-owned.app"
+        rename = stage_macos.rename_exclusive
+
+        def swap_on_reclaim(source, destination):
+            if destination == receipt:
+                raise OSError(errno.EIO, "fixture publication failure")
+            if source == self.app:
+                self.app.rename(moved_app)
+                self.app.mkdir()
+                (self.app / "keep").write_text("unrelated replacement")
+            rename(source, destination)
+
+        with patch.object(stage_macos, "run"), \
+                patch.object(stage_macos, "rename_exclusive", side_effect=swap_on_reclaim):
+            with self.assertRaises(OSError):
+                self.stage()
+        self.assertEqual((self.app / "keep").read_text(), "unrelated replacement")
+        self.assertEqual(list(self.root.glob(".cef-app-rollback-*")), [])
+
+    def test_rollback_preserves_unrelated_reclaimed_object_if_restore_collides(self):
+        receipt = self.app.with_name(self.app.name + ".browser-component.json")
+        moved_app = self.root / "moved-owned.app"
+        rename = stage_macos.rename_exclusive
+
+        def collide_on_restore(source, destination):
+            if destination == receipt:
+                raise OSError(errno.EIO, "fixture publication failure")
+            if source == self.app:
+                self.app.rename(moved_app)
+                self.app.mkdir()
+                (self.app / "keep").write_text("reclaimed unrelated app")
+            elif destination == self.app and source.parent.name.startswith(".cef-app-rollback-"):
+                self.app.mkdir()
+                (self.app / "keep").write_text("latest unrelated app")
+            rename(source, destination)
+
+        with patch.object(stage_macos, "run"), \
+                patch.object(stage_macos, "rename_exclusive", side_effect=collide_on_restore):
+            with self.assertRaises(component.ComponentError) as failure:
+                self.stage()
+        self.assertEqual((self.app / "keep").read_text(), "latest unrelated app")
+        quarantine, = self.root.glob(".cef-app-rollback-*")
+        recovered = quarantine / self.app.name
+        self.assertEqual((recovered / "keep").read_text(), "reclaimed unrelated app")
+        self.assertIn(str(recovered), str(failure.exception))
+        self.assertEqual(list(self.root.glob(".cef-app-stage-*")), [])
+
+    def test_failed_later_publication_rolls_back_an_owned_receipt(self):
+        source_receipt = self.root / "temporary-receipt.json"
+        source_receipt.write_text("owned receipt")
+        receipt = self.app.with_name(self.app.name + ".browser-component.json")
+        self.app.mkdir()
+        identity = stage_macos.object_identity(self.app)
+        with self.assertRaises(FileExistsError):
+            stage_macos.publish_artifacts([(source_receipt, receipt), (self.source, self.app)])
+        self.assertEqual(stage_macos.object_identity(self.app), identity)
+        self.assertFalse(receipt.exists())
+        self.assertTrue(self.source.is_dir())
+        self.assertEqual(list(self.root.glob(".cef-app-rollback-*")), [])
 
     def test_modified_source_is_rejected_before_copying_or_signing(self):
         self.verifier.stop()

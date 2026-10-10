@@ -11,7 +11,7 @@ use tauri::{AppHandle, Manager as _, Webview};
 use super::{
     dto::{BrowserAction, BrowserSnapshotDto, BrowserTabDto},
     inspection::{SNAPSHOT_BUDGET, collect_pages},
-    registry::{MAX_TABS, Registry, Tab},
+    registry::{DRAINING_MESSAGE, MAX_TABS, Registry, Tab},
 };
 use crate::{desktop_settings::SettingsStore, dto::CommandErrorDto};
 
@@ -28,7 +28,23 @@ fn engine_error(value: engine::BrowserError) -> CommandErrorDto {
     error(&value.to_string())
 }
 
+fn teardown_hide_result(result: Result<(), engine::BrowserError>) -> Result<(), CommandErrorDto> {
+    match result {
+        // A timed-out close may have completed after the caller retained its tab.
+        // Still require close() below to reconcile actual native ownership.
+        Ok(()) | Err(engine::BrowserError::Closed) => Ok(()),
+        Err(error) => Err(engine_error(error)),
+    }
+}
+
 impl BrowserManager {
+    pub(super) fn require_open(&self) -> Result<(), CommandErrorDto> {
+        if self.lock()?.draining {
+            return Err(error(DRAINING_MESSAGE));
+        }
+        Ok(())
+    }
+
     pub(super) fn lock(&self) -> Result<MutexGuard<'_, Registry>, CommandErrorDto> {
         self.data
             .lock()
@@ -99,6 +115,9 @@ impl BrowserManager {
 
     pub(crate) fn validate(&self, generation: u64) -> Result<String, CommandErrorDto> {
         let state = self.lock()?;
+        if state.draining {
+            return Err(error(DRAINING_MESSAGE));
+        }
         if !state.snapshot().available {
             return Err(error(
                 state
@@ -152,8 +171,18 @@ impl BrowserManager {
 
     /// Revoke controller generations, hide, then settle native teardown before
     /// temporary profiles are dropped. Failed cleanup keeps profile ownership.
+    #[cfg(any(test, feature = "browser-test-bridge"))]
     pub(crate) async fn close_all_settled(&self) -> Result<u64, CommandErrorDto> {
         let operation = self.operation.lock().await;
+        self.close_all_locked(&operation, None).await
+    }
+
+    /// Stop admitting work before teardown, without retaining the operation lock
+    /// through the application's later runtime/client cleanup. Trusted Quit retries
+    /// may reconcile delayed close acknowledgements while ordinary controls stay revoked.
+    pub(crate) async fn drain_for_shutdown(&self) -> Result<u64, CommandErrorDto> {
+        let operation = self.operation.lock().await;
+        self.lock()?.draining = true;
         self.close_all_locked(&operation, None).await
     }
 
@@ -179,6 +208,9 @@ impl BrowserManager {
     ) -> Result<u64, CommandErrorDto> {
         let (generation, tabs, views) = {
             let mut state = self.lock()?;
+            if expected.is_some() && state.draining {
+                return Err(error(DRAINING_MESSAGE));
+            }
             if let Some((generation, scope)) = expected
                 && (state.generation != generation || state.scope.as_deref() != Some(scope))
             {
@@ -206,7 +238,7 @@ impl BrowserManager {
             )
         };
         for view in views {
-            view.hide().map_err(engine_error)?;
+            teardown_hide_result(view.hide())?;
         }
         for (scope, id) in tabs {
             self.close(&scope, &id).await?;
@@ -220,6 +252,9 @@ impl BrowserManager {
     pub(crate) async fn snapshot(&self) -> Result<BrowserSnapshotDto, CommandErrorDto> {
         let views: Vec<_> = {
             let state = self.lock()?;
+            if state.draining {
+                return Ok(state.snapshot());
+            }
             state
                 .tabs
                 .iter()
@@ -364,6 +399,9 @@ impl BrowserManager {
         scope: &str,
     ) -> Result<(std::path::PathBuf, Option<Webview>), CommandErrorDto> {
         let mut state = self.lock()?;
+        if state.draining {
+            return Err(error(DRAINING_MESSAGE));
+        }
         if state.tabs.len() >= MAX_TABS {
             return Err(error(
                 "Eight browser tabs are already open. Close a tab before opening another.",
@@ -518,6 +556,57 @@ impl BrowserManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delayed_close_can_reach_reconciliation_but_other_hide_errors_block_teardown() {
+        assert!(teardown_hide_result(Err(engine::BrowserError::Closed)).is_ok());
+        for failure in [
+            engine::BrowserError::TimedOut,
+            engine::BrowserError::Unavailable,
+        ] {
+            assert!(teardown_hide_result(Err(failure)).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn ordinary_tab_teardown_does_not_enter_application_shutdown() {
+        let manager = BrowserManager::default();
+        manager.close_all_settled().await.unwrap();
+        assert!(manager.require_open().is_ok());
+        assert!(!manager.lock().unwrap().draining);
+    }
+
+    #[tokio::test]
+    async fn browser_admission_stays_revoked_during_remaining_application_cleanup() {
+        let manager = BrowserManager::default();
+        manager.lock().unwrap().scope = Some("workspace".into());
+        let generation = manager.drain_for_shutdown().await.unwrap();
+        // AppState still has asynchronous runtime/client cleanup ahead of it.
+        // No operation guard is held, but even a refreshed generation is rejected.
+        assert!(manager.operation.try_lock().is_ok());
+        assert_eq!(
+            manager.require_open().unwrap_err().message,
+            DRAINING_MESSAGE
+        );
+        assert_eq!(
+            manager.validate(generation).unwrap_err().message,
+            DRAINING_MESSAGE
+        );
+        let snapshot = manager.snapshot().await.unwrap();
+        assert!(!snapshot.available && !snapshot.engine.ready);
+        assert_eq!(snapshot.engine.message.as_deref(), Some(DRAINING_MESSAGE));
+        assert!(!snapshot.engine.agent_control_available);
+        assert!(
+            manager
+                .close_all_authorized(generation, "workspace")
+                .await
+                .is_err()
+        );
+        assert_eq!(manager.lock().unwrap().generation, generation);
+        // Only a trusted Quit retry can resume reconciliation.
+        assert_eq!(manager.drain_for_shutdown().await.unwrap(), generation + 1);
+        assert!(manager.require_open().is_err());
+    }
 
     #[tokio::test]
     async fn stale_certificate_teardown_is_rejected_after_waiting_for_operation_ownership() {

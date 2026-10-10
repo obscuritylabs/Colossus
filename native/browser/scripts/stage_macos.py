@@ -8,10 +8,13 @@ must be an unchanged extraction of the pinned archive produced by component.py.
 from __future__ import annotations
 
 import argparse
+import ctypes
+import os
 from pathlib import Path
 import plistlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -57,6 +60,76 @@ def regular_executable(path: Path) -> Path:
 
 def run(command: list[str]) -> None:
     subprocess.run(command, check=True)
+
+
+def rename_exclusive(source: Path, destination: Path) -> None:
+    """Publish one object atomically without replacing any destination entry."""
+    library = ctypes.CDLL(None, use_errno=True)
+    try:
+        if sys.platform == "darwin":
+            rename = library.renamex_np
+            rename.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint)
+            arguments = (os.fsencode(source), os.fsencode(destination), 0x00000004)  # RENAME_EXCL
+        elif sys.platform.startswith("linux"):
+            # The POSIX fixture suite uses Linux's equivalent no-replace API.
+            rename = library.renameat2
+            rename.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
+                               ctypes.c_char_p, ctypes.c_uint)
+            arguments = (-100, os.fsencode(source), -100, os.fsencode(destination), 1)
+        else:
+            raise component.ComponentError("exclusive app publication is unavailable on this host")
+    except AttributeError as error:
+        raise component.ComponentError("exclusive app publication is unavailable on this host") from error
+    rename.restype = ctypes.c_int
+    if rename(*arguments) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), os.fspath(destination))
+
+
+def object_identity(path: Path) -> tuple[int, int, int]:
+    info = path.lstat()
+    return info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode)
+
+
+def rollback_published(path: Path, identity: tuple[int, int, int]) -> None:
+    try:
+        if object_identity(path) != identity:
+            return
+    except FileNotFoundError:
+        return
+    # Reclaim into an owner-private directory before recursive cleanup. A
+    # replacement at the public pathname must never become the deletion target.
+    quarantine = Path(tempfile.mkdtemp(prefix=".cef-app-rollback-", dir=path.parent))
+    reclaimed = quarantine / path.name
+    try:
+        rename_exclusive(path, reclaimed)
+    except OSError:
+        quarantine.rmdir()
+        raise
+    if object_identity(reclaimed) != identity:
+        try:
+            rename_exclusive(reclaimed, path)
+        except OSError as error:
+            # This directory is deliberately outside TemporaryDirectory cleanup.
+            raise component.ComponentError(
+                f"a raced unrelated staging destination was preserved at {reclaimed}"
+            ) from error
+        quarantine.rmdir()
+        return
+    shutil.rmtree(quarantine)
+
+
+def publish_artifacts(artifacts: list[tuple[Path, Path]]) -> None:
+    published = []
+    try:
+        for source, destination in artifacts:
+            identity = object_identity(source)
+            rename_exclusive(source, destination)
+            published.append((destination, identity))
+    except BaseException:
+        for destination, identity in reversed(published):
+            rollback_published(destination, identity)
+        raise
 
 
 def sign_app(app: Path, helpers: list[Path], platform: str) -> None:
@@ -183,10 +256,7 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
                                        temporary_manifest)
         component.verify_installed(staged, temporary_manifest)
         run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(staged)])
-        if app.exists() or app.is_symlink():
-            raise component.ComponentError("app destination appeared during staging")
-        staged.rename(app)
-        temporary_manifest.rename(manifest)
+        publish_artifacts([(staged, app), (temporary_manifest, manifest)])
     return app / "Contents/MacOS" / executable_name
 
 
