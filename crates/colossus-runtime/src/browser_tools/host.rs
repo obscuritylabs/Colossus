@@ -199,13 +199,20 @@ mod macos_acceptance_tests {
     use colossus_browser_presentation::PresentationClient;
     use colossus_contracts::BrowserCapabilities;
     use colossus_ports::{BrowserDriverControl, BrowserDriverError, BrowserDriverOpenRequest};
+    use std::sync::Mutex;
 
-    struct AcceptanceSupervisor;
+    #[derive(Default)]
+    struct AcceptanceSupervisor {
+        cleanup_keeper: Arc<Mutex<Option<Arc<AcceptanceSupervisor>>>>,
+        reject_binding: bool,
+    }
 
     #[async_trait]
     impl BrowserHostFactory for AcceptanceSupervisor {
         fn capabilities(&self) -> BrowserCapabilities {
-            BrowserCapabilities::unavailable()
+            let mut capabilities = BrowserCapabilities::unavailable();
+            capabilities.available = self.reject_binding;
+            capabilities
         }
 
         async fn launch(
@@ -239,11 +246,16 @@ mod macos_acceptance_tests {
         async fn shutdown(&self) -> Result<(), BrowserDriverError> {
             Ok(())
         }
+
+        fn retain_cleanup(self: Arc<Self>) {
+            let keeper = Arc::clone(&self.cleanup_keeper);
+            *keeper.lock().unwrap() = Some(self);
+        }
     }
 
     #[test]
     fn macos_acceptance_composition_retains_one_factory_and_presenter_owner() {
-        let supervisor = Arc::new(AcceptanceSupervisor);
+        let supervisor = Arc::new(AcceptanceSupervisor::default());
         let (host, retained) =
             RuntimeBrowserHost::macos_supervised_for_acceptance(supervisor.clone()).unwrap();
 
@@ -268,7 +280,7 @@ mod macos_acceptance_tests {
 
     #[tokio::test]
     async fn macos_managed_owner_retains_one_host_presenter_and_cleanup_domain() {
-        let supervisor = Arc::new(AcceptanceSupervisor);
+        let supervisor = Arc::new(AcceptanceSupervisor::default());
         let owner =
             crate::browser_package::InstalledBrowserOwner::macos_for_acceptance(supervisor.clone())
                 .unwrap();
@@ -276,5 +288,45 @@ mod macos_acceptance_tests {
         assert!(owner.host().presenter.is_some());
         assert!(Arc::strong_count(&supervisor) >= 4);
         owner.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn macos_managed_owner_drop_hands_cleanup_to_keeper_without_runtime() {
+        let supervisor = Arc::new(AcceptanceSupervisor::default());
+        let keeper = Arc::clone(&supervisor.cleanup_keeper);
+        let weak = Arc::downgrade(&supervisor);
+        let owner =
+            crate::browser_package::InstalledBrowserOwner::macos_for_acceptance(supervisor.clone())
+                .unwrap();
+
+        drop(owner);
+        let retained = keeper.lock().unwrap().take().unwrap();
+
+        assert!(Arc::ptr_eq(&supervisor, &retained));
+        drop(supervisor);
+        assert!(weak.upgrade().is_some());
+        drop(retained);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn macos_failed_binding_hands_startup_owner_to_cleanup_keeper() {
+        let supervisor = Arc::new(AcceptanceSupervisor {
+            cleanup_keeper: Arc::default(),
+            reject_binding: true,
+        });
+        let keeper = Arc::clone(&supervisor.cleanup_keeper);
+        let weak = Arc::downgrade(&supervisor);
+
+        let result =
+            crate::browser_package::InstalledBrowserOwner::macos_for_acceptance(supervisor.clone());
+
+        assert!(matches!(result, Err(BrowserDriverError::Unavailable)));
+        let retained = keeper.lock().unwrap().take().unwrap();
+        assert!(Arc::ptr_eq(&supervisor, &retained));
+        drop(supervisor);
+        assert!(weak.upgrade().is_some());
+        drop(retained);
+        assert!(weak.upgrade().is_none());
     }
 }

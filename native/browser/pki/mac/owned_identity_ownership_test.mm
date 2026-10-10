@@ -173,12 +173,29 @@ struct FileOnlyFixture {
   static void CancellationAndRevoke() {
     auto owner = Setup(true);
     owner->state_->ready = true;
+    const Generation generation = owner->state_->bootstrap.generation;
+    Generation stale = generation;
+    stale[0] ^= 1;
     owner->state_->handshake = std::pair{std::uint64_t{1}, std::chrono::steady_clock::now()};
-    owner->CancelHandshake({2}); assert(owner->state_->handshake);
-    owner->CancelHandshake({1}); assert(!owner->state_->handshake);
+    owner->CancelHandshake({1, stale}); assert(owner->state_->handshake);
+    owner->CancelHandshake({2, generation}); assert(owner->state_->handshake);
+    owner->CancelHandshake({1, generation}); assert(!owner->state_->handshake);
     owner->state_->handshake = std::pair{std::uint64_t{2}, std::chrono::steady_clock::now()};
     owner->Revoke(); assert(!owner->state_->ready && !owner->state_->handshake);
+    assert(std::all_of(owner->state_->bootstrap.generation.begin(),
+                       owner->state_->bootstrap.generation.end(),
+                       [](auto byte) { return byte == 0; }));
     RemoveFixture(std::move(owner));
+  }
+  static void FinishRetiresGeneration() {
+    auto owner = Setup(true);
+    const std::string parent = owner->state_->bootstrap.canonical_parent;
+    assert(owner->Finish() == Status::Ready);
+    assert(std::all_of(owner->state_->bootstrap.generation.begin(),
+                       owner->state_->bootstrap.generation.end(),
+                       [](auto byte) { return byte == 0; }));
+    owner.reset();
+    assert(rmdir(parent.c_str()) == 0);
   }
   static void LoginNamespaceRejected() {
     assert(forbidden_parent("/private/tmp/login.keychain-owned"));
@@ -211,11 +228,12 @@ int main() {
                     Fixture::DerivedLockRejected, Fixture::StoreAliasRejected,
                     Fixture::RetryFlush, Fixture::EarlyDrop, Fixture::ParentAclChange,
                     Fixture::PasswordDeniedWipes, Fixture::CancellationAndRevoke,
-                    Fixture::LoginNamespaceRejected, Fixture::GenerationAndOriginBinding}) {
+                    Fixture::LoginNamespaceRejected, Fixture::GenerationAndOriginBinding,
+                    Fixture::FinishRetiresGeneration}) {
     const pid_t child = fork(); assert(child >= 0);
     if (child == 0) { test(); _exit(0); }
     int status = 0;
     assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
   }
-  puts("PASS twelve file-only owned PKI custody regressions; no Security API, audit-port, or browser calls");
+  puts("PASS thirteen file-only owned PKI custody regressions; no Security API, audit-port, or browser calls");
 }

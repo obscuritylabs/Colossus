@@ -66,12 +66,14 @@ node scripts/development-launch.mjs -- \
   .local/mac-owned-pki-source/colossus-mac-owned-pki-file-test
 ```
 
-The twelve file-only regressions exercise the real cleanup state machine with plain
+The thirteen file-only regressions exercise the real cleanup state machine with plain
 owned files, plus password wiping and memory revocation. They also prove that a
 plausible derived Keychain lock basename and a later database inode generation are
 rejected and preserved rather than adopted, and that stale enrollment generations,
-foreign origins and other leaf fingerprints fail the binding check. They construct
-no native key/item/code references and invoke no Security, browser or audit-port APIs.
+foreign origins and other leaf fingerprints fail the binding check. Stale-generation
+handshake cancellation is rejected, and revocation or cleanup erases the retained
+generation. They construct no native key/item/code references and invoke no Security,
+browser or audit-port APIs.
 This target does not run a real store or TLS acceptance fixture. Accepting native
 output still requires an independently enforced creator-only mutation window and
 exact generation receipt; the library intentionally has neither.

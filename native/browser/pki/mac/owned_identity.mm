@@ -151,6 +151,7 @@ struct OwnedIdentity::State {
   ~State() {
     // No destructor/atexit store mutation. Unknown physical state is retained
     // for the supervising owner; an early broker drop cannot certify cleanup.
+    RetireGeneration();
     ReleaseItems();
     if (keychain) CFRelease(keychain);
     if (code) CFRelease(code);
@@ -270,6 +271,9 @@ struct OwnedIdentity::State {
                     [&origin, &leaf](const auto& binding) {
                       return binding.origin == origin && binding.leaf_sha256 == leaf;
                     });
+  }
+  void RetireGeneration() {
+    wipe(bootstrap.generation);
   }
   bool SameStore(SecKeychainItemRef item) const {
     Ref<SecKeychainRef> store;
@@ -546,11 +550,13 @@ void OwnedIdentity::Revoke() {
   std::lock_guard lock(state_->mutex);
   state_->ready = false;
   state_->handshake.reset();
+  state_->RetireGeneration();
 }
 
 void OwnedIdentity::CancelHandshake(Handshake handshake) {
   std::lock_guard lock(state_->mutex);
-  if (state_->handshake && state_->handshake->first == handshake.sequence) state_->handshake.reset();
+  if (handshake.generation == state_->bootstrap.generation && state_->handshake &&
+      state_->handshake->first == handshake.sequence) state_->handshake.reset();
 }
 
 Status OwnedIdentity::Finish() {
@@ -558,6 +564,7 @@ Status OwnedIdentity::Finish() {
   State& owner = *state_;
   owner.ready = false;
   owner.handshake.reset();
+  owner.RetireGeneration();
   using Cleanup = State::Cleanup;
   if (owner.cleanup == Cleanup::Finished) return Status::Ready;
   if (owner.creation_unknown || owner.changed) return Status::OutcomeUnknown;

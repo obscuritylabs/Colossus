@@ -34,6 +34,32 @@ use std::{path::Path, sync::Arc};
 pub trait MacosBrowserCleanupOwner: Send + Sync {
     /// Revoke the network envelope and reap the browser and every helper process.
     async fn shutdown(&self) -> Result<(), BrowserDriverError>;
+
+    /// Synchronously transfer this exact owner to an independent cleanup keeper.
+    ///
+    /// This must retain the `Arc` before returning and must not depend on the caller's
+    /// Tokio runtime. The keeper retries until full cleanup is positively acknowledged.
+    fn retain_cleanup(self: Arc<Self>);
+}
+
+#[cfg(all(
+    target_os = "macos",
+    debug_assertions,
+    feature = "macos-browser-host-acceptance"
+))]
+struct MacosStartupOwner<F: MacosBrowserCleanupOwner + 'static>(Option<Arc<F>>);
+
+#[cfg(all(
+    target_os = "macos",
+    debug_assertions,
+    feature = "macos-browser-host-acceptance"
+))]
+impl<F: MacosBrowserCleanupOwner + 'static> Drop for MacosStartupOwner<F> {
+    fn drop(&mut self) {
+        if let Some(owner) = self.0.take() {
+            owner.retain_cleanup();
+        }
+    }
 }
 
 /// Categorical installation failure; component paths and credentials are unreleased.
@@ -91,7 +117,14 @@ impl InstalledBrowserOwner {
             + MacosBrowserCleanupOwner
             + 'static,
     {
-        let (host, retained) = RuntimeBrowserHost::macos_supervised_for_acceptance(supervisor)?;
+        let mut startup_owner = MacosStartupOwner(Some(supervisor));
+        let candidate = startup_owner
+            .0
+            .as_ref()
+            .expect("startup owner is present")
+            .clone();
+        let (host, retained) = RuntimeBrowserHost::macos_supervised_for_acceptance(candidate)?;
+        let _ = startup_owner.0.take();
         let macos_owner: Arc<dyn MacosBrowserCleanupOwner> = retained;
         Ok(Arc::new(Self {
             host,
@@ -143,13 +176,8 @@ impl Drop for InstalledBrowserOwner {
         ))]
         if !self.shutdown_confirmed.load(Ordering::Acquire)
             && let Some(owner) = self.macos_owner.take()
-            && let Ok(runtime) = tokio::runtime::Handle::try_current()
         {
-            runtime.spawn(async move {
-                while owner.shutdown().await.is_err() {
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                }
-            });
+            owner.retain_cleanup();
         }
     }
 }
