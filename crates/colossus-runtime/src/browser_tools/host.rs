@@ -56,6 +56,29 @@ impl RuntimeBrowserHost {
         Ok(Self::new(Arc::new(BrowserHostPool::new(factory)?)))
     }
 
+    /// Compose the separate macOS host for explicit native acceptance only.
+    ///
+    /// The caller constructs and retains the exact platform supervisor; this seam does
+    /// not discover an executable, promote a package, or acknowledge native cleanup.
+    /// Requiring one object to implement both factory and presenter prevents Core and
+    /// Desktop from being accidentally wired to different native ownership domains.
+    #[cfg(all(
+        target_os = "macos",
+        debug_assertions,
+        feature = "macos-browser-host-acceptance"
+    ))]
+    pub fn macos_supervised_for_acceptance<F>(
+        supervisor: Arc<F>,
+    ) -> Result<(Self, Arc<F>), colossus_ports::BrowserDriverError>
+    where
+        F: BrowserHostFactory + super::RuntimeBrowserPresenter + 'static,
+    {
+        let factory: Arc<dyn BrowserHostFactory> = supervisor.clone();
+        let presenter: Arc<dyn super::RuntimeBrowserPresenter> = supervisor.clone();
+        let host = Self::from_supervised_factory(factory)?.with_presenter(presenter);
+        Ok((host, supervisor))
+    }
+
     /// Verify an installed Linux OCI browser and compose it with the shared runtime tools.
     /// The inventory digest and image identity must come from trusted native release
     /// verification. This does not discover a personal browser or accept runtime YAML.
@@ -161,5 +184,64 @@ impl fmt::Debug for RuntimeBrowserHost {
         formatter
             .debug_struct("RuntimeBrowserHost")
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(all(
+    test,
+    target_os = "macos",
+    debug_assertions,
+    feature = "macos-browser-host-acceptance"
+))]
+mod macos_acceptance_tests {
+    use super::*;
+    use async_trait::async_trait;
+    use colossus_browser_presentation::PresentationClient;
+    use colossus_contracts::BrowserCapabilities;
+    use colossus_ports::{BrowserDriverControl, BrowserDriverError, BrowserDriverOpenRequest};
+
+    struct AcceptanceSupervisor;
+
+    #[async_trait]
+    impl BrowserHostFactory for AcceptanceSupervisor {
+        fn capabilities(&self) -> BrowserCapabilities {
+            BrowserCapabilities::unavailable()
+        }
+
+        async fn launch(
+            &self,
+            _: &BrowserDriverOpenRequest,
+            _: &BrowserDriverControl,
+        ) -> Result<Arc<dyn BrowserDriver>, BrowserDriverError> {
+            Err(BrowserDriverError::Unavailable)
+        }
+
+        async fn reap_failed_launch(
+            &self,
+            _: &BrowserDriverOpenRequest,
+        ) -> Result<(), BrowserDriverError> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl super::super::RuntimeBrowserPresenter for AcceptanceSupervisor {
+        async fn acquire(
+            &self,
+            _: &BrowserDriverOpenRequest,
+        ) -> Result<(PresentationClient, [u8; 32]), BrowserDriverError> {
+            Err(BrowserDriverError::Unavailable)
+        }
+    }
+
+    #[test]
+    fn macos_acceptance_composition_retains_one_factory_and_presenter_owner() {
+        let supervisor = Arc::new(AcceptanceSupervisor);
+        let (host, retained) =
+            RuntimeBrowserHost::macos_supervised_for_acceptance(supervisor.clone()).unwrap();
+
+        assert!(host.presenter.is_some());
+        assert!(Arc::ptr_eq(&supervisor, &retained));
+        assert!(Arc::strong_count(&supervisor) >= 4);
     }
 }

@@ -6,6 +6,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# Source-only macOS composition seam for the separate-host acceptance harness. This
+# feature does not participate in installed-package discovery or release builds.
+macos-browser-host-acceptance = []
+
 [dependencies]
 zeroize.workspace = true
 colossus-communication.workspace = true

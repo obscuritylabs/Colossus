@@ -1,4 +1,3 @@
-#![cfg(target_os = "macos")]
 //! Native, nonbrowser launchd and atomic session/fileport transfer proofs.
 //!
 //! Requires a logged-in GUI launchd domain, native SDK compiler and permission to
@@ -8,6 +7,8 @@
 //! The deliberate wrong-port cases were removed. Do not run this target until
 //! the remaining incoming-right provenance design has been reviewed independently.
 //! This fixture proves primitives; it does not accept a production receiver or browser containment.
+
+#![cfg(target_os = "macos")]
 
 mod session_ports;
 

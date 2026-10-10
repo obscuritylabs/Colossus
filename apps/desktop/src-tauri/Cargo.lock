@@ -1111,7 +1111,9 @@ dependencies = [
 name = "colossus-darwin-process"
 version = "0.11.8"
 dependencies = [
+ "core-foundation",
  "libc",
+ "security-framework",
 ]
 
 [[package]]

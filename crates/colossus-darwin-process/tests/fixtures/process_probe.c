@@ -4,6 +4,7 @@
 #include <mach/mach.h>
 #include <mach/task_info.h>
 #include <stdio.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
@@ -58,6 +59,10 @@ int main(int argc, char **argv) {
   if (!realpath(argv[0], self)) return 2;
   if (!strcmp(argv[1], "control") || !strcmp(argv[1], "after-exec"))
     return controlled(self, 0, !strcmp(argv[1], "after-exec"));
+  if (!strcmp(argv[1], "ignore-term")) {
+    if (signal(SIGTERM, SIG_IGN) == SIG_ERR) return 11;
+    return controlled(self, 0, 0);
+  }
   if (!strcmp(argv[1], "spawn-identify")) { identity("SPAWNED"); return 0; }
   if (!strcmp(argv[1], "descriptors")) { descriptors(); return 0; }
   if (!strcmp(argv[1], "syscalls")) { syscall_boundary_probe(self); return 0; }

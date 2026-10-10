@@ -36,6 +36,29 @@ pub struct DarwinChild {
     resumed: bool,
 }
 
+/// Confirmed cleanup of the exact direct child retained by [`DarwinChild`].
+///
+/// This receipt says nothing about descendants that forked, changed process group,
+/// reparented, or otherwise escaped the direct child's lifetime. It must not be used
+/// as whole-browser or whole-tree cleanup evidence.
+#[derive(Clone, Copy, Debug)]
+pub struct DarwinDirectChildCleanup {
+    status: ExitStatus,
+    forced: bool,
+}
+
+impl DarwinDirectChildCleanup {
+    /// Terminal status returned by `waitpid` for the exact direct child.
+    pub fn status(&self) -> ExitStatus {
+        self.status
+    }
+
+    /// Whether cleanup required `SIGKILL` after the orderly deadline elapsed.
+    pub fn forced(&self) -> bool {
+        self.forced
+    }
+}
+
 impl DarwinChild {
     /// Direct child process identifier.
     pub fn pid(&self) -> u32 {
@@ -98,6 +121,57 @@ impl DarwinChild {
     pub fn kill_and_reap(&mut self) -> io::Result<ExitStatus> {
         self.start_kill()?;
         self.wait()
+    }
+
+    /// Request orderly termination, then force and reap the exact direct child.
+    ///
+    /// An unreaped direct child cannot have its PID reused, so the PID-directed
+    /// signals remain bound to the process owned by this value even after an exec.
+    /// Errors retain this value's Drop cleanup obligation. Success acknowledges
+    /// only the direct child, never descendants or a complete browser process tree.
+    pub fn terminate_and_reap(
+        &mut self,
+        orderly_timeout: Duration,
+    ) -> io::Result<DarwinDirectChildCleanup> {
+        let deadline = Instant::now().checked_add(orderly_timeout).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Darwin orderly cleanup timeout exceeds the monotonic clock range",
+            )
+        })?;
+        if let Some(status) = self.try_wait()? {
+            return Ok(DarwinDirectChildCleanup {
+                status,
+                forced: false,
+            });
+        }
+        // SAFETY: `pid` remains an unreaped direct child owned by this value. PID
+        // reuse is impossible until waitpid reaps it. ESRCH is an idempotent race
+        // with terminal state, which the following wait observes.
+        let terminated = unsafe { libc::kill(self.pid, libc::SIGTERM) };
+        if terminated == -1 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                return Err(error);
+            }
+        }
+        loop {
+            if let Some(status) = self.try_wait()? {
+                return Ok(DarwinDirectChildCleanup {
+                    status,
+                    forced: false,
+                });
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        self.start_kill()?;
+        Ok(DarwinDirectChildCleanup {
+            status: self.wait()?,
+            forced: true,
+        })
     }
 
     fn wait_with_flags(&mut self, flags: libc::c_int) -> io::Result<Option<ExitStatus>> {

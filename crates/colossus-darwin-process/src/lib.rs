@@ -57,7 +57,7 @@ pub use snapshot::{DarwinProcessSnapshot, EmptyProcessDomainEvidence};
 
 #[cfg(target_os = "macos")]
 pub use macos::{
-    DESKTOP_TUI_AUTH_INPUT_FD, DESKTOP_TUI_AUTH_OUTPUT_FD, DarwinChild,
+    DESKTOP_TUI_AUTH_INPUT_FD, DESKTOP_TUI_AUTH_OUTPUT_FD, DarwinChild, DarwinDirectChildCleanup,
     DesktopTuiAuthenticationChannels, SpawnedPipes, SpawnedTty, spawn_suspended_pipes,
     spawn_suspended_tty, take_desktop_tui_authentication_channels,
 };

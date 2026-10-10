@@ -85,6 +85,29 @@ fn self_exec_makes_the_old_genuine_token_stale_without_exposing_raw_tokens() {
 }
 
 #[test]
+fn direct_child_cleanup_reports_orderly_and_forced_reaping_without_tree_claims() {
+    let program = Program::compile();
+
+    let mut orderly = program.spawn("control");
+    assert!(orderly.line().starts_with("READY "));
+    let cleanup = orderly
+        .child
+        .terminate_and_reap(Duration::from_secs(1))
+        .expect("terminate and reap direct child");
+    assert!(!cleanup.forced());
+    assert_eq!(cleanup.status().signal(), Some(libc::SIGTERM));
+
+    let mut forced = program.spawn("ignore-term");
+    assert!(forced.line().starts_with("READY "));
+    let cleanup = forced
+        .child
+        .terminate_and_reap(Duration::from_millis(20))
+        .expect("force and reap direct child after deadline");
+    assert!(cleanup.forced());
+    assert_eq!(cleanup.status().signal(), Some(libc::SIGKILL));
+}
+
+#[test]
 fn detached_sets_id_changes_the_group_but_preserves_the_genuine_audit_session() {
     let program = Program::compile();
     let mut probe = program.spawn("detached");

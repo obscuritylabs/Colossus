@@ -89,6 +89,35 @@ struct FileOnlyFixture {
     assert(fstatat(state.directory, "keep-original", &value, AT_SYMLINK_NOFOLLOW) == 0 && state.file_id.Same(value));
     RemoveFixture(std::move(owner));
   }
+  static void DerivedLockRejected() {
+    auto owner = Setup(true);
+    auto& state = *owner->state_;
+    // This resembles the auxiliary file created by Apple's file-Keychain
+    // provider. A recognized native basename is not an ownership receipt.
+    const int lock = openat(state.directory, ".fl9F52894F",
+                            O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0444);
+    assert(lock >= 0); close(lock);
+    assert(!state.ExactEntries(true));
+    assert(owner->Finish() == Status::OutcomeUnknown);
+    assert(state.cleanup == OwnedIdentity::State::Cleanup::Released);
+    assert(unlinkat(state.directory, ".fl9F52894F", 0) == 0);
+    RemoveFixture(std::move(owner));
+  }
+  static void StoreAliasRejected() {
+    auto owner = Setup(true);
+    auto& state = *owner->state_;
+    // An alias changes the retained store's link count and adds another deletion
+    // target. The cleanup owner cannot infer who created it or remove either name.
+    assert(linkat(state.directory, kStore, state.directory, "extra", 0) == 0);
+    struct stat value{};
+    assert(!state.FileBound());
+    assert(owner->Finish() == Status::OutcomeUnknown);
+    assert(fstatat(state.directory, kStore, &value, AT_SYMLINK_NOFOLLOW) == 0 &&
+           state.file_id.Same(value));
+    assert(fstatat(state.directory, "extra", &value, AT_SYMLINK_NOFOLLOW) == 0 &&
+           state.file_id.Same(value));
+    RemoveFixture(std::move(owner));
+  }
   static void RetryFlush() {
     auto owner = Setup(true);
     const std::string parent = owner->state_->bootstrap.canonical_parent;
@@ -155,6 +184,7 @@ struct FileOnlyFixture {
 int main() {
   using Fixture = colossus::browser::pki::mac::FileOnlyFixture;
   for (auto test : {Fixture::UnknownCreation, Fixture::ExtraEntry, Fixture::ReplacedStore,
+                    Fixture::DerivedLockRejected, Fixture::StoreAliasRejected,
                     Fixture::RetryFlush, Fixture::EarlyDrop, Fixture::ParentAclChange,
                     Fixture::PasswordDeniedWipes, Fixture::CancellationAndRevoke,
                     Fixture::LoginNamespaceRejected}) {
@@ -163,5 +193,5 @@ int main() {
     int status = 0;
     assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
   }
-  puts("PASS nine file-only owned PKI custody regressions; no Security API, audit-port, or browser calls");
+  puts("PASS eleven file-only owned PKI custody regressions; no Security API, audit-port, or browser calls");
 }
