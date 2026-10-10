@@ -1,28 +1,63 @@
+/** @jsxRuntime classic */
+/** @jsx element */
+/** @jsxFrag Fragment */
+// The classic JSX transform keeps this bounded browser surface compact.
+import { element, Fragment } from "./browser-jsx";
 import { useEffect, useRef, useState } from "react";
+import type { TablerIcon } from "@tabler/icons-react";
 import {
   IconArrowLeft,
   IconArrowRight,
   IconArrowsMaximize,
   IconArrowsMinimize,
   IconExternalLink,
-  IconGlobe,
+  IconWorld,
   IconLoader2,
   IconPlus,
   IconRefresh,
   IconX,
 } from "@tabler/icons-react";
 import type { BrowserController } from "./useBrowser";
+import { BrowserCertificates } from "./BrowserCertificates";
 import { useDesktopPreferences } from "../../DesktopPreferencesProvider";
 import "./browser.css";
 
+function IconButton({
+  label,
+  icon: Icon,
+  disabled,
+  onClick,
+}: {
+  label: string;
+  icon: TablerIcon;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className="icon-button"
+      type="button"
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <Icon size={17} />
+    </button>
+  );
+}
+
 export function BrowserPane({
   controller,
+  run,
+  onUseConversation,
   docked = false,
   expanded,
   onExpand,
   onClose,
 }: {
   controller: BrowserController;
+  run?: { runId: string; sessionId: string } | undefined;
+  onUseConversation?: ((sessionId: string) => void) | undefined;
   docked?: boolean;
   expanded: boolean;
   onExpand: () => void;
@@ -32,13 +67,41 @@ export function BrowserPane({
   const { snapshot, command, error, busy, fixture, viewport } = controller;
   const active = snapshot.tabs.find((tab) => tab.id === snapshot.selectedTabId);
   const [address, setAddress] = useState(active?.url ?? "");
+  const [showCertificates, setShowCertificates] = useState(false);
   const addressRef = useRef<HTMLInputElement>(null);
   const selectedTabRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const ready =
+    snapshot.available &&
+    snapshot.engine?.ready !== false &&
+    snapshot.engine?.kind !== "unavailable";
+  const engineLabel = !ready
+    ? "Browser unavailable"
+    : !snapshot.engine
+      ? "Browser"
+      : {
+          embedded_chromium: snapshot.engine.preview
+            ? "Chromium preview"
+            : "Chromium",
+          webview2: "WebView2",
+          webkit: "WebKit",
+          unavailable: "Browser unavailable",
+        }[snapshot.engine?.kind ?? "unavailable"];
+  const controlLabel = {
+    human: "Human control",
+    agent: "Agent control",
+    paused: "Paused",
+    unavailable: "Control unavailable",
+  }[ready ? (active?.control ?? "human") : "unavailable"];
+  const readOnly = active?.control === "agent" || active?.control === "paused";
 
   useEffect(() => {
     setAddress(active?.url ?? "");
   }, [active?.id, active?.url]);
+
+  useEffect(() => {
+    if (!snapshot.available) setShowCertificates(false);
+  }, [snapshot.available]);
 
   useEffect(() => {
     selectedTabRef.current?.scrollIntoView({
@@ -49,31 +112,26 @@ export function BrowserPane({
 
   useEffect(() => {
     const element = viewportRef.current;
-    if (
-      element === null ||
-      active === undefined ||
-      active.url === "" ||
-      active.error !== null
-    )
-      return;
+    if (!element || !active || !active.url || active.error !== null) return;
     let disposed = false;
     let sending = false;
     const generation = snapshot.generation;
     const tabId = active.id;
+    const hide = () => viewport({ generation, tabId: null, rect: null });
     async function update() {
-      if (disposed || sending || element === null) return;
-      const overlays = Array.from(
-        document.querySelectorAll<HTMLElement>(
+      if (disposed || sending) return;
+      const overlays = [
+        ...document.querySelectorAll<HTMLElement>(
           '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [data-browser-occluded]',
         ),
-      );
+      ];
       const occluded =
         document.hidden ||
         overlays.some(
           (overlay) =>
             !overlay.contains(element) && overlay.getClientRects().length > 0,
         );
-      const bounds = element.getBoundingClientRect();
+      const bounds = element!.getBoundingClientRect();
       sending = true;
       await viewport({
         generation,
@@ -89,7 +147,7 @@ export function BrowserPane({
               },
       });
       sending = false;
-      if (disposed) await viewport({ generation, tabId: null, rect: null });
+      if (disposed) await hide();
     }
     const observer = new ResizeObserver(() => void update());
     const mutations = new MutationObserver(() => void update());
@@ -106,17 +164,21 @@ export function BrowserPane({
       ],
     });
     const timer = window.setInterval(() => void update(), 400);
-    window.addEventListener("resize", update);
-    document.addEventListener("visibilitychange", update);
+    const listeners = [
+      [window, "resize"],
+      [document, "visibilitychange"],
+    ] as const;
+    for (const [target, event] of listeners)
+      target.addEventListener(event, update);
     void update();
     return () => {
       disposed = true;
       observer.disconnect();
       mutations.disconnect();
       window.clearInterval(timer);
-      window.removeEventListener("resize", update);
-      document.removeEventListener("visibilitychange", update);
-      void viewport({ generation, tabId: null, rect: null });
+      for (const [target, event] of listeners)
+        target.removeEventListener(event, update);
+      void hide();
     };
   }, [active?.id, active?.url, active?.error, snapshot.generation, viewport]);
 
@@ -138,7 +200,7 @@ export function BrowserPane({
         <div className="browser-tabs" role="group" aria-label="Browser tabs">
           {snapshot.tabs.length === 0 ? (
             <span className="browser-tab-placeholder">
-              <IconGlobe size={15} aria-hidden="true" />
+              <IconWorld size={15} aria-hidden="true" />
               Browser
             </span>
           ) : null}
@@ -161,7 +223,7 @@ export function BrowserPane({
                     aria-hidden="true"
                   />
                 ) : (
-                  <IconGlobe size={14} aria-hidden="true" />
+                  <IconWorld size={14} aria-hidden="true" />
                 )}
                 <span>{tab.title || "New tab"}</span>
               </button>
@@ -175,89 +237,57 @@ export function BrowserPane({
             </div>
           ))}
         </div>
-        <button
-          className="icon-button"
-          type="button"
-          aria-label="New browser tab"
-          disabled={busy}
+        <IconButton
+          label="New browser tab"
+          icon={IconPlus}
+          disabled={busy || !snapshot.available}
           onClick={() => void command({ type: "new", url: browserNewTabUrl })}
-        >
-          <IconPlus size={17} />
-        </button>
+        />
         <div className="browser-pane-actions" hidden={docked}>
-          <button
-            className="icon-button"
-            type="button"
-            aria-label={
-              expanded ? "Restore browser pane" : "Expand browser pane"
-            }
+          <IconButton
+            label={expanded ? "Restore browser pane" : "Expand browser pane"}
+            icon={expanded ? IconArrowsMinimize : IconArrowsMaximize}
             onClick={onExpand}
-          >
-            {expanded ? (
-              <IconArrowsMinimize size={16} />
-            ) : (
-              <IconArrowsMaximize size={16} />
-            )}
-          </button>
-          <button
-            className="icon-button"
-            type="button"
-            aria-label="Close browser pane"
+          />
+          <IconButton
+            label="Close browser pane"
+            icon={IconX}
             onClick={onClose}
-          >
-            <IconX size={17} />
-          </button>
+          />
         </div>
       </header>
       <form
         className="browser-address-bar"
         onSubmit={(event) => {
           event.preventDefault();
-          if (address.trim())
+          if (snapshot.available && address.trim() && !readOnly)
             void command(
-              active
+              active?.url
                 ? { type: "navigate", tabId: active.id, url: address }
                 : { type: "new", url: address },
             );
         }}
       >
-        <button
-          className="icon-button"
-          type="button"
-          aria-label="Go back"
-          disabled={!active?.canGoBack}
-          onClick={() =>
-            active && void command({ type: "back", tabId: active.id })
-          }
-        >
-          <IconArrowLeft size={17} />
-        </button>
-        <button
-          className="icon-button"
-          type="button"
-          aria-label="Go forward"
-          disabled={!active?.canGoForward}
-          onClick={() =>
-            active && void command({ type: "forward", tabId: active.id })
-          }
-        >
-          <IconArrowRight size={17} />
-        </button>
-        <button
-          className="icon-button"
-          type="button"
-          aria-label={active?.loading ? "Stop loading" : "Reload page"}
-          disabled={!active?.url}
-          onClick={() =>
-            active &&
-            void command({
-              type: active.loading ? "stop" : "reload",
-              tabId: active.id,
-            })
-          }
-        >
-          {active?.loading ? <IconX size={17} /> : <IconRefresh size={17} />}
-        </button>
+        {(
+          [
+            ["back", "Go back", IconArrowLeft, !active?.canGoBack],
+            ["forward", "Go forward", IconArrowRight, !active?.canGoForward],
+            [
+              active?.loading ? "stop" : "reload",
+              active?.loading ? "Stop loading" : "Reload page",
+              active?.loading ? IconX : IconRefresh,
+              !active?.url,
+            ],
+          ] as const
+        ).map(([type, label, icon, disabled], index) => (
+          <IconButton
+            key={index}
+            label={label}
+            icon={icon}
+            disabled={disabled || readOnly}
+            onClick={() => active && void command({ type, tabId: active.id })}
+          />
+        ))}
         <input
           ref={addressRef}
           type="text"
@@ -265,20 +295,18 @@ export function BrowserPane({
           autoComplete="off"
           spellCheck={false}
           value={address}
+          readOnly={readOnly}
           placeholder="Enter a URL or localhost:port"
           onChange={(event) => setAddress(event.target.value)}
         />
-        <button
-          className="icon-button"
-          type="button"
-          aria-label="Open in system browser"
+        <IconButton
+          label="Open in system browser"
+          icon={IconExternalLink}
           disabled={!active?.url}
           onClick={() =>
             active && void command({ type: "open_external", tabId: active.id })
           }
-        >
-          <IconExternalLink size={17} />
-        </button>
+        />
       </form>
       {active?.url.startsWith("http:") ? (
         <p className="browser-http-note">HTTP connection · Not encrypted</p>
@@ -286,6 +314,11 @@ export function BrowserPane({
       {error ? (
         <div className="browser-notice" role="alert">
           {error}
+        </div>
+      ) : null}
+      {snapshot.engine?.message ? (
+        <div className="browser-notice" role="status">
+          {snapshot.engine.message}
         </div>
       ) : null}
       {active?.notice ? (
@@ -305,54 +338,70 @@ export function BrowserPane({
               </button>
             </>
           ) : null}
-          <button
-            className="icon-button"
-            type="button"
-            aria-label="Dismiss browser notice"
+          <IconButton
+            label="Dismiss browser notice"
+            icon={IconX}
             onClick={() =>
               void command({ type: "dismiss_notice", tabId: active.id })
             }
-          >
-            <IconX size={14} />
-          </button>
+          />
         </div>
       ) : null}
       <div className="browser-viewport" ref={viewportRef} aria-label="Web page">
-        {active?.error ? (
-          <div className="browser-empty" role="alert">
-            <IconGlobe size={32} />
-            <h3>Unable to display this page</h3>
-            <p>{active.error}</p>
-            <button
-              className="button secondary"
-              type="button"
-              onClick={() => void command({ type: "reload", tabId: active.id })}
-            >
-              Retry
-            </button>
-          </div>
-        ) : !active?.url ? (
-          <div className="browser-empty">
-            <IconGlobe size={34} />
-            <h3>Browse beside your work</h3>
-            <p>Open a website or local preview using the address bar.</p>
-            <span>
-              Your browsing session ends when you close its last tab or exit
-              Colossus.
-            </span>
-          </div>
-        ) : fixture ? (
-          <div className="browser-empty browser-fixture-page">
-            <IconGlobe size={32} />
-            <h3>{active.title}</h3>
-            <p>{active.url}</p>
-            <span>Native page content appears here in the Desktop app.</span>
+        {showCertificates ? (
+          <BrowserCertificates
+            controller={controller}
+            onClose={() => setShowCertificates(false)}
+          />
+        ) : null}
+        {active?.error || !active?.url || (import.meta.env.DEV && fixture) ? (
+          <div
+            className={`browser-empty${import.meta.env.DEV && fixture && active?.url && !active.error ? " browser-fixture-page" : ""}`}
+            role={active?.error ? "alert" : undefined}
+          >
+            <IconWorld size={32} />
+            <h3>
+              {active?.error
+                ? "Unable to display this page"
+                : !active?.url
+                  ? "Browse beside your work"
+                  : import.meta.env.DEV
+                    ? active.title
+                    : ""}
+            </h3>
+            <p>
+              {active?.error ||
+                (!active?.url
+                  ? "Open a website or local preview in the address bar."
+                  : import.meta.env.DEV
+                    ? active.url
+                    : "")}
+            </p>
+            {active?.error ? (
+              <button
+                className="button secondary"
+                type="button"
+                onClick={() =>
+                  void command({ type: "reload", tabId: active.id })
+                }
+              >
+                Retry
+              </button>
+            ) : (
+              <span>
+                {!active?.url
+                  ? "This session ends when you close its last tab or exit Colossus."
+                  : import.meta.env.DEV
+                    ? "Native page content appears here in the Desktop app."
+                    : ""}
+              </span>
+            )}
           </div>
         ) : null}
       </div>
       <footer className="browser-footer">
         <span role="status">
-          {active?.loading ? (
+          {ready && active?.loading ? (
             <>
               <IconLoader2
                 size={13}
@@ -362,9 +411,52 @@ export function BrowserPane({
               Loading page…
             </>
           ) : (
-            "Temporary session · Separate from your conversation"
+            <>
+              {engineLabel} · {controlLabel} · Temporary session
+            </>
           )}
         </span>
+        {snapshot.engine?.agentControlAvailable &&
+        !snapshot.engine.preview &&
+        active?.control === "human" &&
+        run &&
+        active.conversationId === run.sessionId ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              void command({
+                type: "handoff",
+                tabId: active.id,
+                runId: run.runId,
+              })
+            }
+          >
+            Give agent control
+          </button>
+        ) : null}
+        {snapshot.engine?.agentControlAvailable &&
+        !snapshot.engine.preview &&
+        active?.control === "human" &&
+        active.conversationId &&
+        active.conversationId !== run?.sessionId &&
+        onUseConversation ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onUseConversation(active.conversationId!)}
+          >
+            Use in a new conversation
+          </button>
+        ) : null}
+        <button
+          type="button"
+          disabled={!ready}
+          onClick={() => setShowCertificates((visible) => !visible)}
+          aria-expanded={showCertificates}
+        >
+          Certificates
+        </button>
         <button
           type="button"
           disabled={snapshot.tabs.length === 0 || busy}

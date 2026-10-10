@@ -71,9 +71,9 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 | --- | --- | --- |
 | Domain and contracts | `colossus-domain`, `colossus-contracts` | Dependency-free domain and stable typed contracts |
 | Ports | `colossus-ports` | Application-owned interfaces for providers, state, tools, policy-adjacent services, and adapters |
-| Application services | `colossus-agent`, `colossus-session`, `colossus-context`, `colossus-work`, `colossus-memory`, `colossus-workflow`, `colossus-research`, `colossus-telemetry` | Use cases and durable behavior |
+| Application services | `colossus-agent`, `colossus-session`, `colossus-context`, `colossus-work`, `colossus-memory`, `colossus-workflow`, `colossus-research`, `colossus-telemetry`, `colossus-browser` | Use cases and durable behavior |
 | Security and catalog | `colossus-access`, `colossus-policy`, `colossus-tools` | Capability metadata, decisions, permits, and strict tool schemas |
-| Infrastructure | `colossus-provider`, `colossus-codex-auth`, `colossus-credentials`, journal/projection crates, `colossus-sandbox`, `colossus-integrations`, `colossus-mcp`, `colossus-plugins`, `colossus-bundles`, `colossus-search` | External systems, authentication, plugin OCI/lifecycle, release bundles, and storage adapters |
+| Infrastructure | `colossus-provider`, `colossus-codex-auth`, `colossus-credentials`, journal/projection crates, `colossus-sandbox`, `colossus-browser-bridge`, `colossus-browser-presentation`, `colossus-integrations`, `colossus-mcp`, `colossus-plugins`, `colossus-bundles`, `colossus-search` | External systems, authentication, private browser transport and presentation, plugin OCI/lifecycle, release bundles, and storage adapters |
 | Public API and SDK | `colossus-api-proto`, `colossus-api`, `colossus-api-runtime`, `colossus-grpc`, `colossus-sdk` | Version public resources, authenticate applications, host durable runs, and provide transport-neutral clients |
 | Control Plane application | `colossus-cloud`, `colossus-cloud-protocol`, `colossus-cloud-server`, `colossus-connector` | Project authority, durable fixed-node placement, OIDC browser access, and native outbound connections through the public SDK |
 | Composition and interfaces | `colossus-runtime`, `colossus-worker-protocol`, `colossus-worker`, `colossus-cli`, `colossus-tui`, `colossus-presentation` | Narrow private transport contracts, wire services, host application contracts, and released-data rendering |
@@ -165,9 +165,26 @@ commands dispatch it without receiving secret values from the renderer.
   [ADR 0005](adr/0005-desktop-file-diffs.md).
 - Desktop's opt-in browser preview is a separate human browsing surface. Native
   session/tab state and engine integration stay in the Desktop browser manager and
-  private native adapter. Guests receive no application capability. Future browser
-  automation requires a runtime port with policy and audit; see
-  [ADR 0003](adr/0003-desktop-browser-boundary.md).
+  private native adapter. Guests receive no application capability. Browser automation
+  uses the shared runtime port, owned coordinator, and mandatory policy release;
+  native Chromium preview and shipping human browsing retain separate acceptance
+  gates. See [ADR 0003](adr/0003-desktop-browser-boundary.md) and
+  [ADR 0008](adr/0008-owned-chromium-browser.md).
+- `colossus-browser-bridge` authenticates independently supervised action and
+  cancellation channels and retains per-session host obligations. Its admission
+  pool does not prove process or network containment. Linux's OCI browser factory
+  in `colossus-sandbox` owns those boundaries and the private egress lease;
+  `RuntimeBrowserHost` composes it with the existing runtime effect gateway.
+  Native CEF FFI lives in the separate `native/browser/driver` workspace.
+  `colossus-browser-presentation` validates bounded native frames and input leases;
+  native parent handles and frame-channel keys never become web IPC authority.
+- Managed Desktop browser admission uses an independent native parent/sidecar key and
+  rechecks the primary application grant on every private request. The worker owns
+  canonical conversation/session attachment and cleanup; the renderer supplies no
+  host identity, native lease or input-fence receipt. Native human-to-agent transfer
+  passes through the runtime gateway and atomic coordinator handoff. Platform
+  availability remains disabled until accepted supervision and packaging; same-page
+  agent-to-human transfer is still absent. See [current browser readiness](adr/0008-owned-chromium-browser.md#current-enablement-and-remaining-work).
 - Desktop's native Managed Local permission selector uses the narrow authenticated
   `colossus-worker-protocol` control client. The Desktop process does not link runtime,
   model, tool, policy, or worker-host implementation crates.

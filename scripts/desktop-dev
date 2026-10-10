@@ -12,12 +12,14 @@ desktop="$repository/apps/desktop"
 development_custody=false
 dictation=false
 browser_preview=false
+embedded_chromium=false
 for argument in "$@"; do
     case "$argument" in
         --dev-credentials) [ "$development_custody" = false ] || fail "duplicate --dev-credentials"; development_custody=true ;;
         --browser-preview) [ "$browser_preview" = false ] || fail "duplicate --browser-preview"; browser_preview=true ;;
+        --embedded-chromium-preview) [ "$embedded_chromium" = false ] || fail "duplicate --embedded-chromium-preview"; embedded_chromium=true ;;
         --dictation) [ "$dictation" = false ] || fail "duplicate --dictation"; dictation=true ;;
-        *) fail "usage: scripts/desktop-dev [--dev-credentials] [--dictation] [--browser-preview]" ;;
+        *) fail "usage: scripts/desktop-dev [--dev-credentials] [--dictation] [--browser-preview | --embedded-chromium-preview]" ;;
     esac
 done
 if [ "$development_custody" = true ]; then
@@ -45,6 +47,13 @@ try {
   process.exitCode = 1;
 }
 ' "$connection" || fail "connection.local.json has invalid External target trust values; remove it to use Managed Local only, or map enrollment instance_id and certificate_sha256 into it"
+fi
+
+if [ "$embedded_chromium" = true ]; then
+    [ "$browser_preview" = false ] || fail "select either --browser-preview or --embedded-chromium-preview"
+    set --
+    if [ "$development_custody" = true ]; then set -- "$@" --dev-credentials; fi
+    exec "$script_dir/desktop-chromium-preview" "$@"
 fi
 
 cd "$desktop"

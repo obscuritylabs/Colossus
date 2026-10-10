@@ -1,6 +1,6 @@
 use colossus_sdk::{
-    ApiError, Colossus, ListRunsRequest, ListRunsResponse, NativeSidecarFailure,
-    NativeSidecarStatus,
+    ApiError, Colossus, ListRunsRequest, ListRunsResponse, NativeBrowserClient,
+    NativeSidecarFailure, NativeSidecarStatus,
 };
 use colossus_worker_protocol::WorkerControlClient;
 use std::{
@@ -351,6 +351,7 @@ struct ManagedSpaceRuntime {
     lifecycle_generation: AtomicU64,
     lifecycle: StdMutex<Option<ManagedLifecycleObservation>>,
     worker: RwLock<Option<WorkerControlClient>>,
+    native_browser: RwLock<Option<NativeBrowserClient>>,
     approval_mode: AtomicU8,
     approval_mode_synchronized: AtomicBool,
     approval_mode_run_guard: Arc<RwLock<()>>,
@@ -379,6 +380,7 @@ impl Default for ManagedSpaceRuntime {
             lifecycle_generation: AtomicU64::new(0),
             lifecycle: StdMutex::new(None),
             worker: RwLock::new(None),
+            native_browser: RwLock::new(None),
             approval_mode: AtomicU8::new(DesktopApprovalModeDto::Ask as u8),
             approval_mode_synchronized: AtomicBool::new(false),
             approval_mode_run_guard: Arc::new(RwLock::new(())),
@@ -910,7 +912,31 @@ impl AppState {
     pub(crate) async fn clear_managed_worker_for(&self, space_id: &str) {
         let runtime = self.managed_space_runtime(space_id).await;
         runtime.worker.write().await.take();
+        runtime.native_browser.write().await.take();
         reset_space_approval_mode(&runtime);
+    }
+
+    pub(crate) async fn configure_managed_browser_for(
+        &self,
+        space_id: &str,
+        client: Option<NativeBrowserClient>,
+    ) {
+        self.managed_space_runtime(space_id)
+            .await
+            .native_browser
+            .write()
+            .await
+            .clone_from(&client);
+    }
+
+    #[cfg(feature = "embedded-chromium-preview")]
+    pub(crate) async fn managed_browser_for(&self, space_id: &str) -> Option<NativeBrowserClient> {
+        self.existing_managed_space_runtime(space_id)
+            .await?
+            .native_browser
+            .read()
+            .await
+            .clone()
     }
 
     pub(crate) async fn managed_worker_for(&self, space_id: &str) -> Option<WorkerControlClient> {
@@ -1341,7 +1367,13 @@ impl AppState {
         self.approval_guard.try_lock().ok()
     }
 
+    #[cfg(test)]
     pub(crate) async fn close_all(&self) {
+        let _ = self.close_all_settled().await;
+    }
+
+    pub(crate) async fn close_all_settled(&self) -> Result<(), crate::dto::CommandErrorDto> {
+        self.browser.drain_for_shutdown().await?;
         #[cfg(windows)]
         self.stop_all_outlook_companions().await;
         {
@@ -1390,6 +1422,7 @@ impl AppState {
         for client in clients {
             let _ = client.close().await;
         }
+        Ok(())
     }
 
     pub(crate) fn terminal_manager(&self) -> TerminalManager {

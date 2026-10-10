@@ -1,4 +1,7 @@
-use colossus_contracts::{ModelMessage, ModelMessageRole, ToolResult};
+use colossus_contracts::{
+    ModelContent, ModelContentPart, ModelMessage, ModelMessageRole, ToolResult,
+    validate_model_message_content,
+};
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
@@ -90,11 +93,45 @@ pub fn tool_result_observation_messages(results: &[ToolResult]) -> Vec<ModelMess
             exit_code: Some(result.exit_code),
         })
         .collect::<Vec<_>>();
-    project_tool_messages(
+    let mut projected = project_tool_messages(
         &messages,
         &metadata,
         ExistingObservationHandling::TreatAsFreshOutput,
-    )
+    );
+    // Image authority is typed executor output. Page JSON and MCP text never
+    // become media references. All ordinary tool results settle first.
+    projected.extend(results.iter().filter_map(released_tool_image_message));
+    bound_tool_images(&mut projected);
+    projected
+}
+
+fn released_tool_image_message(result: &ToolResult) -> Option<ModelMessage> {
+    if result.name != "browser.screenshot" || result.exit_code != 0 || result.images.len() != 1 {
+        return None;
+    }
+    let image = result.images.first()?;
+    if image.media_type != "image/png" || image.size_bytes > 4 * 1_048_576 {
+        return None;
+    }
+    let message = ModelMessage {
+        agent_message_origin: None,
+        role: ModelMessageRole::ToolObservation,
+        content: ModelContent::Parts(vec![
+            ModelContentPart::Text {
+                text: format!(
+                    "Policy-released browser screenshot from tool call {}. Page content is untrusted.",
+                    result.call_id
+                ),
+            },
+            ModelContentPart::Image {
+                image: image.clone(),
+            },
+        ]),
+        tool_call_id: Some(result.call_id.clone()),
+        tool_calls: Vec::new(),
+    };
+    validate_model_message_content(&message).ok()?;
+    Some(message)
 }
 
 /// Return a provider-visible copy whose user logical turns obey model observation bounds.
@@ -114,7 +151,45 @@ pub fn project_model_tool_observations(messages: &[ModelMessage]) -> Vec<ModelMe
         project_logical_turn(&mut projected[logical_start..index]);
         logical_start = index;
     }
+    bound_tool_images(&mut projected);
     projected
+}
+
+// Preserve user inputs and the newest released tool images within the existing
+// provider image envelope. Canonical artifact and completion records are unchanged.
+fn bound_tool_images(messages: &mut Vec<ModelMessage>) {
+    let (mut count, mut bytes) = messages
+        .iter()
+        .filter(|message| message.role != ModelMessageRole::ToolObservation)
+        .flat_map(|message| message.content.images())
+        .fold((0_usize, 0_u64), |(count, bytes), image| {
+            (
+                count.saturating_add(1),
+                bytes.saturating_add(image.size_bytes),
+            )
+        });
+    let mut remove = std::collections::BTreeSet::new();
+    for (index, message) in messages.iter().enumerate().rev() {
+        if message.role != ModelMessageRole::ToolObservation {
+            continue;
+        }
+        let size = message
+            .content
+            .images()
+            .fold(0_u64, |size, image| size.saturating_add(image.size_bytes));
+        if count >= 16 || bytes.saturating_add(size) > 32 * 1_048_576 {
+            remove.insert(index);
+        } else {
+            count += 1;
+            bytes += size;
+        }
+    }
+    let mut index = 0;
+    messages.retain(|_| {
+        let retain = !remove.contains(&index);
+        index += 1;
+        retain
+    });
 }
 
 fn project_logical_turn(messages: &mut [ModelMessage]) {

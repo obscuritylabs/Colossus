@@ -18,6 +18,8 @@ pub enum ModelMessageRole {
     Assistant,
     /// Result of an explicitly authorized tool call.
     Tool,
+    /// Verified released tool image observation; this never begins a human turn.
+    ToolObservation,
 }
 
 /// Projection used when a canonical session prefix starts a child conversation.
@@ -191,7 +193,7 @@ pub enum ModelImageDetail {
     Auto,
 }
 
-/// Verified metadata for one encrypted run-input image artifact.
+/// Verified metadata for an encrypted input or policy-released tool image artifact.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelImageReference {
@@ -241,8 +243,13 @@ pub fn validate_model_message_content(message: &ModelMessage) -> Result<(), Mode
         let ModelContentPart::Image { image } = part else {
             continue;
         };
-        if message.role != ModelMessageRole::User {
-            return Err(content_error("only user messages may contain image parts"));
+        if !matches!(
+            message.role,
+            ModelMessageRole::User | ModelMessageRole::ToolObservation
+        ) {
+            return Err(content_error(
+                "image parts require user or released tool provenance",
+            ));
         }
         if image.artifact_id.is_empty()
             || image.file_name.is_empty()
@@ -344,6 +351,8 @@ pub fn validate_model_transcript(
 ) -> Result<(), ModelTranscriptIntegrityError> {
     let mut pending = BTreeSet::<String>::new();
     let mut seen = BTreeSet::<String>::new();
+    let mut settled = BTreeSet::<String>::new();
+    let mut observed = BTreeSet::<String>::new();
 
     for (message_index, message) in messages.iter().enumerate() {
         validate_model_message_content(message).map_err(|error| {
@@ -361,11 +370,32 @@ pub fn validate_model_transcript(
                         format!("tool result references non-pending call {call_id}"),
                     ));
                 }
+                settled.insert(call_id.to_owned());
+            }
+            ModelMessageRole::ToolObservation => {
+                if !pending.is_empty() {
+                    return Err(unsettled_error(message_index, &pending));
+                }
+                let call_id = message.tool_call_id.as_deref().ok_or_else(|| {
+                    transcript_error(message_index, "tool image observation has no call id")
+                })?;
+                if !settled.contains(call_id)
+                    || !observed.insert(call_id.to_owned())
+                    || !message.tool_calls.is_empty()
+                    || message.agent_message_origin.is_some()
+                    || message.content.images().count() != 1
+                {
+                    return Err(transcript_error(
+                        message_index,
+                        "tool image observation must follow its settled result exactly once",
+                    ));
+                }
             }
             ModelMessageRole::Assistant => {
                 if !pending.is_empty() {
                     return Err(unsettled_error(message_index, &pending));
                 }
+                settled.clear();
                 validate_model_tool_call_count(message_index, message.tool_calls.len())?;
                 for call in &message.tool_calls {
                     validate_model_tool_call_id(message_index, &call.call_id)?;
@@ -381,6 +411,9 @@ pub fn validate_model_transcript(
             ModelMessageRole::System | ModelMessageRole::User => {
                 if !pending.is_empty() {
                     return Err(unsettled_error(message_index, &pending));
+                }
+                if message.role == ModelMessageRole::User {
+                    settled.clear();
                 }
             }
         }

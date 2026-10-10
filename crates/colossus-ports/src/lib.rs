@@ -30,6 +30,17 @@ pub use control::*;
 mod communication;
 pub use communication::*;
 
+mod browser;
+pub use browser::*;
+mod browser_capture;
+pub use browser_capture::*;
+mod browser_transfer;
+pub use browser_transfer::*;
+mod browser_artifact;
+pub use browser_artifact::*;
+mod browser_handoff;
+pub use browser_handoff::*;
+
 mod context_error;
 pub use context_error::*;
 

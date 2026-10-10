@@ -138,7 +138,7 @@ pub async fn inspect_sidecar_configuration(
 
 /// Authenticated Windows lifecycle for one app-owned Managed Local runtime.
 pub struct NativeSidecarLifecycle {
-    bootstrap: Arc<SidecarBootstrapConfig>,
+    pub(crate) bootstrap: Arc<SidecarBootstrapConfig>,
     status: watch::Sender<NativeSidecarStatus>,
 }
 
@@ -469,6 +469,9 @@ async fn launch(
         },
         closed: agent_runs_closed,
     });
+    bootstrap
+        .native_browser_child
+        .store(process_id, Ordering::Release);
     Ok(WindowsSidecarBackend {
         connector,
         connector_runs,

@@ -64,6 +64,7 @@ fn plan_mode_allowlist_blocks_implementation_and_external_mutation() {
 }
 
 mod communication;
+mod image_continuation;
 
 struct ScriptedProvider {
     turns: Mutex<VecDeque<Result<ProviderTurn, ModelProviderError>>>,
@@ -366,6 +367,7 @@ impl ToolExecutor for EchoTools {
         _context: ExecutionContext,
     ) -> Result<ToolResult, ToolError> {
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: call.arguments["text"].as_str().unwrap_or_default().into(),
@@ -384,6 +386,7 @@ impl ToolExecutor for ReportedErrorTools {
         _context: ExecutionContext,
     ) -> Result<ToolResult, ToolError> {
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: json!({
@@ -427,6 +430,7 @@ impl ToolExecutor for LargeOutputTools {
         _context: ExecutionContext,
     ) -> Result<ToolResult, ToolError> {
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: self.output.clone(),
@@ -606,6 +610,7 @@ impl ToolExecutor for RecordingPlanTools {
             control.cancel();
         }
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: serde_json::to_string(&plan).expect("plan JSON"),
@@ -698,6 +703,7 @@ impl ToolExecutor for CountingTools {
     ) -> Result<ToolResult, ToolError> {
         self.calls.fetch_add(1, Ordering::AcqRel);
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: "unexpected".into(),
@@ -748,6 +754,7 @@ impl ToolExecutor for CancellingTools {
         self.calls.fetch_add(1, Ordering::AcqRel);
         self.control.cancel();
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: "first completed".into(),

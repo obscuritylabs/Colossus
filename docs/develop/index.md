@@ -30,6 +30,8 @@ operation stay in [Get started](../get-started/index.md) and
   documentation, and acceptance evidence.
 - [Architecture decisions](adr/index.md) retain the context behind durable boundary and
   migration choices.
+- [Owned Chromium browser](adr/0008-owned-chromium-browser.md) records shared control,
+  native Desktop composition, and the remaining functional and platform release work.
 - [Runtime and ports](runtime-ports.md) maps application responsibilities.
 - [Public API and application SDKs](application-sdk.md) defines the gRPC, SDK, and
   Tauri integration boundary.

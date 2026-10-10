@@ -183,6 +183,60 @@ executables for the host target, and opens the Tauri development app. An Externa
 daemon `connection.local.json` is optional. If the file exists, its instance identity
 and certificate pin must be valid; remove it to test Managed Local only.
 
+### Run the embedded Chromium preview on macOS
+
+On a native macOS ARM64 or x64 development machine with Xcode command-line tools,
+CMake, Python 3.11+, Node.js, and the pinned Rust toolchain, run:
+
+```sh
+./scripts/desktop-dev --embedded-chromium-preview
+```
+
+This explicit debug lane acquires and verifies the pinned CEF distribution, builds
+the native shim and sandbox helpers, builds Desktop with `embedded-chromium-preview`,
+and stages a development `.app` under `.local/`. The app contains the renderer, CEF
+framework and its resources, typed helper bundles, and development ad-hoc signatures.
+It uses the prepared checkout sidecars and CLI through their existing debug manifest
+bindings. Keep that checkout available while running this preview. It opens the
+staged bundle through macOS LaunchServices using `open -n -W` for foreground
+activation, so CEF discovers its framework and helpers relative to the app bundle.
+Native stdout and stderr logs remain beside the app at the paths printed by the
+launcher. An explicitly selected `COLOSSUS_HOME` and validated development
+credential authority are forwarded to the launched application.
+A flat `cargo run` or ordinary `tauri dev`
+executable is insufficient for this macOS layout. See the
+[native component instructions](https://github.com/obscuritylabs/Colossus/blob/main/native/browser/README.md)
+for manual build and staging commands.
+
+The preview preserves Chromium's process sandbox and uses Tauri's AppKit event
+loop to pump CEF on the main thread. It remains a human browsing development
+surface. The separate authenticated Core bridge and native presentation adapter
+are implemented in source. Production browser automation stays unavailable until
+the installed supervisor, complete network containment, and shared-page Desktop
+behavior described in [ADR 0008](adr/0008-owned-chromium-browser.md) pass native
+platform acceptance.
+
+macOS native preview rendering and lifecycle acceptance cover this in-process human
+surface. They do not establish the separate host's certificate custody, Core-to-host
+automation or signed installed support. Ordinary CLI and managed-sidecar builds also
+have no accepted browser package by default. See [current browser readiness](adr/0008-owned-chromium-browser.md#current-enablement-and-remaining-work)
+before interpreting a successful preview as feature completion.
+
+To exercise the actual embedded native surfaces with disposable loopback pages,
+use the source and build paths printed by the launcher:
+
+```sh
+COLOSSUS_CEF_ROOT=/absolute/path/to/verified/cef/source \
+COLOSSUS_CEF_NATIVE_LIB_DIR=/absolute/path/to/native/build \
+  npm --prefix apps/desktop run test:browser-chromium-native
+```
+
+This acceptance command uses the native Desktop browser manager and Tauri main
+window to verify rendering, navigation, tabs, resizing, overlay hiding/restoration,
+and acknowledged shutdown. It requires an interactive macOS login session; browser
+mocks and cross-compilation do not establish this result. See
+[Test strategy](testing.md) for evidence controls and prerequisites.
+
 Debug Desktop uses a keyless plaintext journal in a separate
 `development-plaintext/` Managed Local state partition, so local iteration does not
 prompt for journal keys in the platform keychain. This mode retains the journal hash

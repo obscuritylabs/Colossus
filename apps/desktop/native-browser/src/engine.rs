@@ -108,7 +108,7 @@ async fn dispatch<T: Send + 'static>(
 
 #[cfg(not(any(windows, target_os = "macos")))]
 mod platform {
-    use super::*;
+    use super::{BrowserError, EventSink, NavigationAction, NavigationPolicy, PageState};
     pub fn harden(
         _: &tauri::webview::PlatformWebview,
         _: NavigationPolicy,

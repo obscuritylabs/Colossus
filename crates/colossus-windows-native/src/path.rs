@@ -87,6 +87,58 @@ impl std::fmt::Debug for BoundPath {
 }
 
 impl BoundPath {
+    #[cfg(windows)]
+    pub(crate) fn from_inner(inner: crate::windows::BoundPathInner) -> Self {
+        Self { inner }
+    }
+    /// Bind this host's protected profile using its actual AppContainer identity.
+    /// Ancestors are retained with zero requested access and checked for reparse
+    /// points/identity without opening the user's storage for read or mutation.
+    /// The leaf requires an exact protected current-package DACL. Parent-side
+    /// strict ownership validation remains a separate supervision obligation.
+    pub fn open_appcontainer_directory(path: &Path) -> Result<Self, WindowsNativeError> {
+        #[cfg(windows)]
+        {
+            crate::windows::open_bound_appcontainer_directory(path).map(|inner| Self { inner })
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = path;
+            Err(WindowsNativeError::UnsupportedPlatform)
+        }
+    }
+
+    /// Read one native-produced single-link file under the current AppContainer.
+    /// Zero-access retained ancestors reject reparse points; the file's inherited
+    /// ACL may grant only current user/System/Admin and this exact kernel package.
+    /// It accepts no supplied SID and does not replace parent profile supervision.
+    pub fn open_appcontainer_file(path: &Path) -> Result<Self, WindowsNativeError> {
+        #[cfg(windows)]
+        {
+            crate::windows::open_bound_appcontainer_file(path).map(|inner| Self { inner })
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = path;
+            Err(WindowsNativeError::UnsupportedPlatform)
+        }
+    }
+
+    /// Unlink only this retained native-produced file in the current AppContainer.
+    /// The kernel package, DACL, single-link policy and exact file identity are
+    /// checked before a DELETE-enabled handle marks the object for POSIX deletion.
+    /// Success proves no filename links remain; release retained bindings before
+    /// retiring the containing directory. A replacement is never deleted.
+    pub fn remove_appcontainer_file(&self) -> Result<(), WindowsNativeError> {
+        #[cfg(windows)]
+        {
+            crate::windows::remove_bound_appcontainer_file(&self.inner)
+        }
+        #[cfg(not(windows))]
+        {
+            Err(WindowsNativeError::UnsupportedPlatform)
+        }
+    }
     /// Open and retain one directory while rejecting every reparse-point component.
     pub fn open_directory(path: &Path) -> Result<Self, WindowsNativeError> {
         #[cfg(windows)]
@@ -107,6 +159,22 @@ impl BoundPath {
         {
             crate::windows::open_bound(path, crate::windows::BoundKind::File)
                 .map(|inner| Self { inner })
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = path;
+            Err(WindowsNativeError::UnsupportedPlatform)
+        }
+    }
+
+    /// Retain a regular file while denying writes/deletion and ancestor replacement.
+    /// Use for digest-verified executable/DLL bytes that must remain frozen until
+    /// the entire supervised process tree exits. All components reject reparse
+    /// points; ancestor handles deny deletion, and the leaf shares read access only.
+    pub fn open_immutable_file(path: &Path) -> Result<Self, WindowsNativeError> {
+        #[cfg(windows)]
+        {
+            crate::windows::open_bound_immutable_file(path).map(|inner| Self { inner })
         }
         #[cfg(not(windows))]
         {
@@ -204,6 +272,51 @@ impl BoundPath {
         #[cfg(windows)]
         {
             self.inner.validate_private_owner_dacl()
+        }
+        #[cfg(not(windows))]
+        {
+            Err(WindowsNativeError::UnsupportedPlatform)
+        }
+    }
+
+    /// Reject untrusted byte/namespace mutation on the directory and every ancestor.
+    /// Read/execute access is permitted, but adding an unlisted DLL/file or child
+    /// directory, changing metadata, deletion and DACL/owner mutation are denied.
+    /// This supplements frozen executable handles; it does not grant trust to an
+    /// inventory or prove a publisher signature.
+    pub fn validate_immutable_directory_dacl(&self) -> Result<(), WindowsNativeError> {
+        #[cfg(windows)]
+        {
+            self.inner.validate_immutable_directory_dacl()
+        }
+        #[cfg(not(windows))]
+        {
+            Err(WindowsNativeError::UnsupportedPlatform)
+        }
+    }
+
+    /// Require a protected profile DACL for this process's actual AppContainer.
+    /// Only its current user, System/Admin and kernel-derived package may access
+    /// the profile. The package cannot change DACL/ownership. No SID input is used.
+    /// An ordinary process cannot substitute this for owner-private validation.
+    pub fn validate_private_appcontainer_dacl(&self) -> Result<(), WindowsNativeError> {
+        #[cfg(windows)]
+        {
+            crate::windows::validate_private_appcontainer_dacl(&self.inner.file)
+        }
+        #[cfg(not(windows))]
+        {
+            Err(WindowsNativeError::UnsupportedPlatform)
+        }
+    }
+
+    /// Positively query this retained object's effective Low integrity label and
+    /// NO_WRITE_UP policy. This grants no filesystem access and accepts no caller
+    /// supplied SID. Package-specific DACL validation also requires this check.
+    pub fn validate_low_integrity_label(&self) -> Result<(), WindowsNativeError> {
+        #[cfg(windows)]
+        {
+            crate::windows::validate_low_integrity_label(&self.inner.file)
         }
         #[cfg(not(windows))]
         {

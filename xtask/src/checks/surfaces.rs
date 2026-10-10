@@ -29,6 +29,7 @@ pub(super) fn sidecar(repository: &Repository) -> Result<(), String> {
 }
 
 pub(super) fn desktop(repository: &Repository) -> Result<(), String> {
+    browser_driver(repository)?;
     web(repository)?;
     repository
         .task("node")
@@ -74,6 +75,53 @@ pub(super) fn desktop(repository: &Repository) -> Result<(), String> {
         .args(["run", "build"])
         .current_dir("apps/desktop")
         .run()
+}
+
+// The native browser driver has a separate workspace so its private FFI does
+// not relax the safe runtime workspace. Its portable tier never downloads or
+// links CEF; linked native acceptance remains a separate platform operation.
+fn browser_driver(repository: &Repository) -> Result<(), String> {
+    const MANIFEST: &str = "native/browser/driver/Cargo.toml";
+    cargo(
+        repository,
+        ["fmt", "--manifest-path", MANIFEST, "--all", "--", "--check"],
+    )?;
+    repository
+        .task(cargo_program())
+        .args([
+            "metadata",
+            "--locked",
+            "--manifest-path",
+            MANIFEST,
+            "--no-deps",
+            "--format-version",
+            "1",
+        ])
+        .quiet_stdout()
+        .run()?;
+    cargo(
+        repository,
+        [
+            "test",
+            "--locked",
+            "--manifest-path",
+            MANIFEST,
+            "--all-targets",
+        ],
+    )?;
+    cargo(
+        repository,
+        [
+            "clippy",
+            "--locked",
+            "--manifest-path",
+            MANIFEST,
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ],
+    )
 }
 
 pub(super) fn web(repository: &Repository) -> Result<(), String> {
@@ -222,6 +270,51 @@ pub(super) fn dependencies(repository: &Repository) -> Result<(), String> {
             "--no-fetch",
             "--file",
             "apps/desktop/src-tauri/Cargo.lock",
+        ],
+    )?;
+    cargo(
+        repository,
+        [
+            "deny",
+            "--manifest-path",
+            "native/browser/driver/Cargo.toml",
+            "--config",
+            "deny.toml",
+            "--locked",
+            "check",
+            "-A",
+            "license-not-encountered",
+            "licenses",
+            "sources",
+            "bans",
+        ],
+    )?;
+    cargo(
+        repository,
+        [
+            "deny",
+            "--manifest-path",
+            "native/browser/driver/Cargo.toml",
+            "--config",
+            "deny.toml",
+            "--locked",
+            "check",
+            "-D",
+            "warnings",
+            "-A",
+            "advisory-not-detected",
+            "advisories",
+        ],
+    )?;
+    cargo(
+        repository,
+        [
+            "audit",
+            "--no-fetch",
+            "-D",
+            "warnings",
+            "--file",
+            "native/browser/driver/Cargo.lock",
         ],
     )
 }

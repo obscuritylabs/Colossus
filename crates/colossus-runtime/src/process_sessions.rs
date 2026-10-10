@@ -833,6 +833,7 @@ impl GatewayToolExecutor {
             .await
             .map_err(tool_gateway_error)?;
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: String::from_utf8(result.bytes).map_err(process_failure)?,

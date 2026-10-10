@@ -172,6 +172,7 @@ nav = [
       { "ADR 0005: Desktop file search and diffs" = "develop/adr/0005-desktop-file-diffs.md" },
       { "ADR 0006: Cloud control plane" = "develop/adr/0006-cloud-control-plane.md" },
       { "ADR 0007: Agent communication" = "develop/adr/0007-agent-communication.md" },
+      { "ADR 0008: Owned Chromium browser" = "develop/adr/0008-owned-chromium-browser.md" },
     ] },
     { "Runtime and ports" = "develop/runtime-ports.md" },
     { "OpenTelemetry implementation" = "develop/observability.md" },

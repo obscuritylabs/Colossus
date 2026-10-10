@@ -106,5 +106,40 @@ use http_proxy::*;
 mod proxy_tls;
 use proxy_tls::*;
 
+mod browser_egress;
+#[cfg(target_os = "linux")]
+mod browser_profiles;
+#[cfg(target_os = "linux")]
+pub use browser_profiles::{
+    BrowserProfileEngine, BrowserProfileError, BrowserProfileLease, BrowserProfileStore,
+};
+#[cfg(target_os = "macos")]
+mod browser_macos;
+#[cfg(windows)]
+mod browser_windows;
+pub use browser_egress::{
+    BrowserEgressError, BrowserEgressLease, BrowserEgressLimits, BrowserEgressState,
+};
+#[cfg(windows)]
+pub use browser_windows::{
+    WindowsBrowserConfig, WindowsBrowserPresentation, WindowsBrowserShutdownReceipt,
+    WindowsBrowserSupervisor,
+};
+
+#[cfg(target_os = "macos")]
+pub use browser_macos::{MacosBrowserProcessClearance, MacosBrowserProcessKeeper};
+#[cfg(target_os = "macos")]
+pub use browser_macos::{MacosBrowserReadiness, MacosBrowserRequirement, MacosBrowserSupervisor};
+
+#[cfg(target_os = "linux")]
+mod browser_oci;
+#[cfg(target_os = "linux")]
+pub use browser_oci::{
+    OciBrowserConfig, OciBrowserIdentity, OciBrowserLimits, OciBrowserPki,
+    OciBrowserPkiAuthorization, OciBrowserPkiEnrollmentProvider, OciBrowserPkiRegistration,
+    OciBrowserPkiRegistry, OciBrowserPkiScopeAuthorization, OciBrowserShutdownReceipt,
+    OciBrowserSupervisor, OciClientIdentityBinding,
+};
+
 #[cfg(test)]
 mod tests;

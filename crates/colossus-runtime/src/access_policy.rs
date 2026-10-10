@@ -21,6 +21,7 @@ pub(super) struct AccessPolicyInputs<'a> {
     pub(super) tls_roots: &'a AdditionalRootCertificates,
     pub(super) model_network_tools: bool,
     pub(super) interactive: bool,
+    pub(super) browser_capabilities: Option<&'a colossus_contracts::BrowserCapabilities>,
 }
 
 /// An absent configured MCP command is an unavailable source, not a usable
@@ -62,6 +63,7 @@ pub(super) fn compose_access_policy(
         tls_roots,
         model_network_tools,
         interactive,
+        browser_capabilities,
     } = inputs;
     let mut candidate_tool_specs = colossus_tools::with_process_limits(
         builtin_specs(),
@@ -147,6 +149,11 @@ pub(super) fn compose_access_policy(
         model_network_tools,
         agent_search_route: searches.resolve("agent").is_ok(),
         interactive,
+        browser_available: browser_capabilities.is_some_and(|capabilities| {
+            capabilities.available
+                && capabilities.restrictive_egress
+                && !capabilities.modes.is_empty()
+        }),
         mcp_configured: !active_plugin_extensions.mcp.servers.is_empty()
             || config
                 .plugins
@@ -154,7 +161,7 @@ pub(super) fn compose_access_policy(
                 .values()
                 .any(|overlay| overlay.enabled),
     };
-    let access = resolve_access(
+    let mut access = resolve_access(
         &config.access,
         &candidate_tool_specs,
         action_descriptors,
@@ -163,6 +170,16 @@ pub(super) fn compose_access_policy(
         matches!(&config.policy, PolicyConfig::Opa { .. }),
     )
     .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    for tool in &mut access.tools {
+        if tool.name.starts_with("browser.")
+            && tool.availability == colossus_access::ToolAvailability::Active
+            && !crate::browser_tools::supports_tool(browser_capabilities, &tool.name)
+        {
+            tool.availability = colossus_access::ToolAvailability::Hidden;
+            tool.reason = "installed browser component does not support this operation".into();
+            tool.unmet_prerequisite = Some("verified browser operation".into());
+        }
+    }
     let policy: Arc<dyn PolicyDecisionPoint> = match &config.policy {
         PolicyConfig::BuiltIn {
             require_post_effect,

@@ -76,6 +76,12 @@ pub fn builtin_tool_descriptor(name: &str) -> Result<ToolDescriptor, AccessError
         "mcp.servers" | "mcp.search" | "mcp.tools" | "mcp.call" => {
             ("mcp", vec![ToolPrerequisite::McpConfigured])
         }
+        "browser.open" | "browser.status" | "browser.tabs" | "browser.tab.open"
+        | "browser.tab.select" | "browser.tab.close" | "browser.navigate" | "browser.back"
+        | "browser.forward" | "browser.reload" | "browser.stop" | "browser.snapshot"
+        | "browser.screenshot" | "browser.click" | "browser.fill" | "browser.select"
+        | "browser.upload" | "browser.download" | "browser.press" | "browser.scroll"
+        | "browser.wait" | "browser.close" => ("browser", vec![ToolPrerequisite::BrowserAvailable]),
         _ => return Err(AccessError::Unclassified(format!("tool {name}"))),
     };
     let source = if family == "mcp" {
@@ -149,6 +155,11 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "plugin.verify",
             "bundle.verify",
             "bundle.key.inspect",
+            "browser.status",
+            "browser.tabs",
+            "browser.snapshot",
+            "browser.screenshot",
+            "browser.wait",
         ],
     );
     push_actions(
@@ -189,6 +200,10 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "memory.index.rebuild",
             "workflow.webhook.ingest",
             "workflow.subscription.dispatch",
+            "browser.tab.select",
+            "browser.tab.close",
+            "browser.stop",
+            "browser.close",
         ],
     );
     push_actions(
@@ -232,6 +247,19 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "integration.connect",
             "integration.disconnect",
             "integration.invoke",
+            "browser.open",
+            "browser.tab.open",
+            "browser.navigate",
+            "browser.back",
+            "browser.forward",
+            "browser.reload",
+            "browser.click",
+            "browser.upload",
+            "browser.download",
+            "browser.fill",
+            "browser.select",
+            "browser.press",
+            "browser.scroll",
         ],
     );
     push_sourced_actions(

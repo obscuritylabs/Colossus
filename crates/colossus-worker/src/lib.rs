@@ -71,6 +71,7 @@ mod frames;
 mod handshake;
 mod interactive;
 mod local_artifacts;
+mod native_browser;
 mod observers;
 mod operation_names;
 mod operations;
@@ -84,6 +85,7 @@ pub use authentication_key::WorkerAuthenticationKey;
 pub use client::{WorkerClient, WorkerPromptHandler};
 pub use colossus_worker_protocol::WorkerApprovalMode;
 pub use frames::{WorkerPrompt, WorkerPromptKind};
+pub use native_browser::NativeBrowserServerConfig;
 pub use operations::{
     InteractiveWorkerRequest, SandboxBoundaryAcknowledgement, WorkerError, WorkerOperation,
 };

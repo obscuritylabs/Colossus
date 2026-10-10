@@ -59,6 +59,38 @@ esac
 legacy_python_sources=$(git ls-files -- '*.py' ':(exclude)sdk/python/**' \
     ':(exclude)deploy/documentation/build-config.py' \
     ':(exclude)scripts/ci/normalize_python_sdist.py' \
+    ':(exclude)native/browser/scripts/component.py' \
+    ':(exclude)native/browser/scripts/test_component.py' \
+    ':(exclude)native/browser/scripts/run_probe.py' \
+    ':(exclude)native/browser/scripts/test_probe.py' \
+    ':(exclude)native/browser/scripts/run_host_probe.py' \
+    ':(exclude)native/browser/scripts/test_host_probe.py' \
+    ':(exclude)native/browser/scripts/host_capture_probe.py' \
+    ':(exclude)native/browser/scripts/test_host_capture_probe.py' \
+    ':(exclude)native/browser/scripts/host_transfer_probe.py' \
+    ':(exclude)native/browser/scripts/test_host_transfer_probe.py' \
+    ':(exclude)native/browser/scripts/elf_order.py' \
+    ':(exclude)native/browser/scripts/test_elf_order.py' \
+    ':(exclude)native/browser/scripts/run_host_pki_probe.py' \
+    ':(exclude)native/browser/scripts/run_renderer_custody_probe.py' \
+    ':(exclude)native/browser/scripts/test_renderer_custody_probe.py' \
+    ':(exclude)native/browser/scripts/pki_fixture_proxy.py' \
+    ':(exclude)native/browser/scripts/stage_macos.py' \
+    ':(exclude)native/browser/scripts/stage_host_macos.py' \
+    ':(exclude)native/browser/scripts/test_stage_macos.py' \
+    ':(exclude)native/browser/scripts/test_launcher_macos.py' \
+    ':(exclude)native/browser/scripts/stage_windows.py' \
+    ':(exclude)native/browser/scripts/test_stage_windows.py' \
+    ':(exclude)native/browser/scripts/pki_fixture.py' \
+    ':(exclude)native/browser/scripts/pki_fixture_material.py' \
+    ':(exclude)native/browser/scripts/pki_fixture_private.py' \
+    ':(exclude)native/browser/scripts/pki_fixture_retirement.py' \
+    ':(exclude)native/browser/scripts/test_pki_fixture_retirement.py' \
+    ':(exclude)native/browser/scripts/test_pki_fixture.py' \
+    ':(exclude)native/browser/scripts/stage_nss_tools.py' \
+    ':(exclude)native/browser/scripts/test_stage_nss_tools.py' \
+    ':(exclude)native/browser/scripts/stage_cli_browser_bundle.py' \
+    ':(exclude)native/browser/scripts/test_stage_cli_browser_bundle.py' \
     ':(exclude)bundled-plugins/colossus/skills/security-review/scripts/init_review.py' \
     ':(exclude)scripts/tests/test_security_review_workspace.py' \
     ':(exclude)examples/sdk/integration/server.py' \

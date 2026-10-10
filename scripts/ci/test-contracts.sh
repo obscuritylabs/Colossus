@@ -90,12 +90,83 @@ expect_classification 'rust_required=true
 docs_required=false
 dependency_required=false
 sdk_required=false
+desktop_required=true' scripts/desktop-chromium-preview
+expect_classification 'rust_required=true
+docs_required=false
+dependency_required=false
+sdk_required=false
+desktop_required=true' scripts/open-desktop-chromium-preview
+expect_classification 'rust_required=true
+docs_required=false
+dependency_required=false
+sdk_required=false
+desktop_required=true' scripts/desktop-chromium-preview-windows.ps1
+expect_classification 'rust_required=true
+docs_required=false
+dependency_required=false
+sdk_required=false
+desktop_required=true' scripts/browser-native-host-windows.ps1
+expect_classification 'rust_required=true
+docs_required=false
+dependency_required=false
+sdk_required=false
 desktop_required=true' apps/web/src/App.tsx
 expect_classification 'rust_required=true
 docs_required=false
 dependency_required=false
 sdk_required=false
 desktop_required=true' crates/colossus-darwin-process/src/lib.rs
+
+# Check each native browser owner independently; a Desktop file in the same
+# change set must not conceal missing native shim, component, or harness coverage.
+for native_browser_path in \
+    native/browser/CMakeLists.txt native/browser/README.md \
+    native/browser/include/colossus_cef.h native/browser/src/client.cc \
+    native/browser/src/platform_mac.mm native/browser/component/cef.lock.json \
+    native/browser/scripts/component.py native/browser/scripts/run_probe.py \
+    native/browser/scripts/test_component.py native/browser/scripts/test_probe.py \
+    native/browser/tests/fixture.html \
+    native/browser/src/windows_entry.cc native/browser/src/platform_win.cc \
+    native/browser/scripts/stage_windows.py native/browser/scripts/test_stage_windows.py \
+    native/browser/scripts/windows_process_evidence.ps1 \
+    native/browser/scripts/run_host_probe.py native/browser/scripts/test_host_probe.py \
+    native/browser/scripts/host_capture_probe.py native/browser/scripts/test_host_capture_probe.py \
+    native/browser/scripts/host_transfer_probe.py native/browser/scripts/test_host_transfer_probe.py \
+    native/browser/scripts/elf_order.py native/browser/scripts/test_elf_order.py \
+    native/browser/scripts/run_host_pki_probe.py native/browser/scripts/pki_fixture_proxy.py \
+    native/browser/scripts/pki_fixture.py native/browser/scripts/pki_fixture_material.py \
+    native/browser/scripts/pki_fixture_private.py native/browser/scripts/test_pki_fixture.py \
+    native/browser/scripts/pki_fixture_retirement.py native/browser/scripts/test_pki_fixture_retirement.py \
+    native/browser/scripts/run_renderer_custody_probe.py native/browser/scripts/test_renderer_custody_probe.py \
+    native/browser/scripts/stage_nss_tools.py native/browser/nss-tools.lock.json \
+    native/browser/scripts/test_stage_nss_tools.py \
+    native/browser/driver/src/main.rs native/browser/pki/src/lib.rs
+do
+    expect_classification 'rust_required=true
+docs_required=false
+dependency_required=false
+sdk_required=false
+desktop_required=true' "$native_browser_path"
+done
+
+for presentation_path in crates/colossus-browser-presentation/src/frame.rs \
+    crates/colossus-browser-presentation/src/lease.rs \
+    crates/colossus-windows-native/src/windows/appcontainer_principal.rs \
+    crates/colossus-windows-process/src/private_io.rs
+do
+    expect_classification 'rust_required=true
+docs_required=false
+dependency_required=false
+sdk_required=false
+desktop_required=true' "$presentation_path"
+done
+
+expect_classification 'rust_required=true
+docs_required=false
+dependency_required=false
+sdk_required=false
+desktop_required=false' native/browser-other/component.py
+
 expect_classification 'rust_required=true
 docs_required=false
 dependency_required=false
@@ -223,5 +294,11 @@ trap - EXIT HUP INT TERM
 "${NODE:-node}" --test "$script_dir/documentation-candidate.test.mjs"
 "${NODE:-node}" --test "$script_dir/release-source-version.test.mjs"
 "${NODE:-node}" --test "$script_dir/release-readiness.test.mjs"
+"${NODE:-node}" --test "$script_dir/browser-pki-evidence.test.mjs"
 "${NODE:-node}" --test "$script_dir/release-notes.test.mjs"
 "${NODE:-node}" --test "$script_dir/../development-launch.test.mjs"
+
+# These stdlib-only integrity and harness tests use synthetic archives and
+# executable fixtures. Ordinary CI never downloads CEF or launches Chromium.
+"${PYTHON:-python3}" -B -m unittest discover \
+    -s "$script_dir/../../native/browser/scripts" -p 'test_*.py'

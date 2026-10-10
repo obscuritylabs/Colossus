@@ -24,8 +24,12 @@ fn trusted_document(url: &tauri::Url, development: bool) -> bool {
         && url.scheme() == "http"
         && url.host_str() == Some("127.0.0.1")
         && url.port() == Some(1420);
+    // URL preserves an empty path for the bundled custom-scheme root that
+    // Tauri loads on macOS. HTTP(S) roots are normalized to "/" instead.
+    let document = matches!(url.path(), "/" | "/index.html")
+        || (url.scheme() == "tauri" && url.path().is_empty());
     (release && url.port().is_none() || dev)
-        && matches!(url.path(), "/" | "/index.html")
+        && document
         && url.username().is_empty()
         && url.password().is_none()
         && !url.query_pairs().any(|(key, _)| key == "surface")
@@ -38,6 +42,7 @@ pub(crate) async fn browser_context(
 ) -> Result<BrowserSnapshotDto, CommandErrorDto> {
     require_controller(&caller)?;
     let _operation = state.browser.operation.lock().await;
+    state.browser.require_open()?;
     let selected = state.browser_selection().await;
     state.browser.selection_changed(selected.clone());
     state.browser.snapshot().await
@@ -98,5 +103,28 @@ mod tests {
             &"http://127.0.0.1:1420/".parse().unwrap(),
             false
         ));
+    }
+
+    #[test]
+    fn bundled_tauri_root_without_a_slash_retains_all_origin_checks() {
+        let root = "tauri://localhost".parse::<tauri::Url>().unwrap();
+        assert_eq!(root.path(), "");
+        assert!(trusted_document(&root, false));
+        for denied in [
+            "tauri://other-host",
+            "tauri://localhost:444",
+            "tauri://user@localhost",
+            "tauri://user:password@localhost",
+            "tauri://localhost?surface=terminal",
+            "tauri://localhost?surface=browser",
+            "tauri://localhost/other.html",
+            "tauri://localhost/terminal",
+            "other://localhost",
+        ] {
+            assert!(
+                !trusted_document(&denied.parse().unwrap(), false),
+                "{denied}"
+            );
+        }
     }
 }

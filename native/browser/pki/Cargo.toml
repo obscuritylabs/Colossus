@@ -1,0 +1,22 @@
+[package]
+name = "colossus-native-browser-pki"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+license = "Apache-2.0"
+workspace = "../driver"
+
+[dependencies]
+rustls-pki-types = "1.14.0"
+sha2 = "0.10.9"
+x509-parser = "0.18.1"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+
+[dev-dependencies]
+rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "pem", "ring", "zeroize"] }

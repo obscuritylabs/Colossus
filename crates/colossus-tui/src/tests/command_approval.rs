@@ -65,6 +65,7 @@ fn restored_shell_calls_withhold_unprepared_command_and_credentials() {
 #[test]
 fn oversized_shell_observations_remain_private_without_the_assistant_history_page() {
     let result = colossus_contracts::ToolResult {
+        images: Vec::new(),
         name: "shell.run".into(),
         call_id: "call".into(),
         exit_code: 0,

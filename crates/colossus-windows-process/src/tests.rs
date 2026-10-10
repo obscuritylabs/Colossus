@@ -1,4 +1,4 @@
-use super::{SpawnRequest, WindowsProcessError, spawn};
+use super::{SpawnRequest, WindowsProcessError, spawn, spawn_with_private_channels};
 use std::{collections::BTreeMap, path::PathBuf};
 
 #[test]
@@ -23,6 +23,37 @@ fn rejects_relative_and_unbounded_launch_contracts_before_platform_dispatch() {
     request.proxy_port = Some(42);
     assert!(matches!(
         spawn(&request),
+        Err(WindowsProcessError::Invalid(_))
+    ));
+}
+
+#[test]
+fn rejects_private_channel_count_and_reused_enrollment_before_os_allocation() {
+    let mut request = SpawnRequest {
+        executable: PathBuf::from("/absolute.exe"),
+        arguments: Vec::new(),
+        cwd: PathBuf::from("/"),
+        environment: BTreeMap::new(),
+        appcontainer_sid: "S-1-15-2-1".into(),
+        max_processes: 8,
+        max_memory_bytes: 1024,
+        proxy_port: None,
+        network_filter_id: None,
+    };
+    for count in [0, 1, 2, 5, usize::MAX] {
+        assert!(matches!(
+            spawn_with_private_channels(&request, count),
+            Err(WindowsProcessError::Invalid(_))
+        ));
+    }
+    request.arguments.push("--inherited-browser-pipes".into());
+    assert!(matches!(
+        spawn_with_private_channels(&request, 3),
+        Err(WindowsProcessError::Invalid(_))
+    ));
+    request.arguments = vec!["argument".into(); 250];
+    assert!(matches!(
+        spawn_with_private_channels(&request, 3),
         Err(WindowsProcessError::Invalid(_))
     ));
 }

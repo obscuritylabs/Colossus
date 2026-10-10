@@ -7,8 +7,9 @@
 mod appearance;
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 mod lifecycle;
+mod password;
 mod prompt;
-#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+mod purpose;
 mod validation;
 
 #[cfg(target_os = "linux")]
@@ -20,7 +21,8 @@ mod macos;
 mod windows;
 
 pub use appearance::{ColorScheme, DialogAppearance, TextSize};
-pub use prompt::{PromptError, prompt};
+pub use password::NativePassword;
+pub use prompt::{PromptError, prompt, prompt_password};
 
 /// Run isolated, synthetic `AppKit` control acceptance on the process main thread.
 /// This entry point exists only in explicitly enabled native test builds.

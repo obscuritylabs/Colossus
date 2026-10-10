@@ -6,8 +6,8 @@ mod appearance;
 mod isolation;
 
 use super::{CANCEL_ID, INPUT_ID, SAVE_ID, Session, create, wide};
+use crate::NativePassword;
 use crate::{DialogAppearance, PromptError, lifecycle::Completion, validation};
-use colossus_contracts::HostSecret;
 use isolation::{InputIsolation, set_clipboard};
 use std::{
     ptr::{null, null_mut},
@@ -54,7 +54,7 @@ struct Dialog {
     error: HWND,
     save: HWND,
     cancel: HWND,
-    result: oneshot::Receiver<Result<HostSecret, PromptError>>,
+    result: oneshot::Receiver<Result<NativePassword, PromptError>>,
 }
 
 impl Dialog {

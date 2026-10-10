@@ -1153,6 +1153,10 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [approvalModeChanging, setApprovalModeChanging] = useState(false);
   const [composerError, setComposerError] = useState<CommandError | null>(null);
+  const [browserConversation, setBrowserConversation] = useState<{
+    targetId: string;
+    sessionId: string;
+  } | null>(null);
   const { dismissToast, pushToast, toasts } = useToastQueue();
   const [conversationFollowRequest, setConversationFollowRequest] = useState(0);
   const [queuedMessages, setQueuedMessages] = useState<
@@ -2387,6 +2391,7 @@ export default function App() {
       return;
     }
     setWorkNavigationOpen(false);
+    setBrowserConversation(null);
     setConversationSkills((current) => ({
       ...current,
       [pluginSelectionKey(desktop.selectedTargetId, undefined)]: [],
@@ -2965,7 +2970,10 @@ export default function App() {
 
     const sessionId =
       activeForkDraft === undefined
-        ? continuationView?.run.sessionId
+        ? (continuationView?.run.sessionId ??
+          (browserConversation?.targetId === route.targetId
+            ? browserConversation.sessionId
+            : undefined))
         : undefined;
     if (sessionId) setThreadQueuePaused(route.targetId, sessionId, false);
     const effectiveMode: RunMode = planRevision === null ? mode : "plan";
@@ -5877,6 +5885,19 @@ export default function App() {
           gitWorkspaceId={desktop.workspace?.workspaceId ?? null}
           gitAvailable={desktop.capabilities.files}
           browserScope={desktop.selectedTargetId}
+          browserConversationId={
+            browserConversation?.targetId === desktop.selectedTargetId
+              ? browserConversation.sessionId
+              : undefined
+          }
+          onUseBrowserConversation={(sessionId) => {
+            if (!desktop.selectedTargetId || submitInFlight.current) return;
+            newWork();
+            setBrowserConversation({
+              targetId: desktop.selectedTargetId,
+              sessionId,
+            });
+          }}
           processSessionsAvailable={
             desktop.capabilities.processSessions === true
           }

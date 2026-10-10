@@ -1,4 +1,4 @@
-//! Bounded validation and late resolution for encrypted run-input images.
+//! Bounded validation and late resolution for encrypted inputs and released tool images.
 
 mod resolver;
 mod validation;

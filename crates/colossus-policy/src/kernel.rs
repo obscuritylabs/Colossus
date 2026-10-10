@@ -507,6 +507,7 @@ pub struct SafetyKernel {
     known_capabilities: BTreeSet<String>,
     policy_input_limit: usize,
     post_effect_policy_input_limit: usize,
+    browser_upload_policy_input_limit: usize,
     sandbox_boundary_gate: Option<Arc<SandboxBoundaryGate>>,
 }
 
@@ -517,6 +518,7 @@ impl SafetyKernel {
             known_capabilities: known_capabilities.into_iter().collect(),
             policy_input_limit: DEFAULT_POLICY_INPUT_LIMIT,
             post_effect_policy_input_limit: DEFAULT_POST_EFFECT_POLICY_INPUT_LIMIT,
+            browser_upload_policy_input_limit: DEFAULT_POST_EFFECT_POLICY_INPUT_LIMIT,
             sandbox_boundary_gate: None,
         }
     }
@@ -525,6 +527,7 @@ impl SafetyKernel {
     pub fn with_policy_input_limit(mut self, bytes: usize) -> Self {
         self.policy_input_limit = bytes;
         self.post_effect_policy_input_limit = bytes;
+        self.browser_upload_policy_input_limit = bytes;
         self
     }
 
@@ -598,6 +601,11 @@ impl SafetyKernel {
         let size = canonical_bytes(request)?.len();
         let limit = if request.phase == EffectPhase::PostEffect {
             self.post_effect_policy_input_limit
+        } else if request.action == "browser.upload" {
+            // The trusted artifact adapter supplies at most four MiB of actual
+            // owned bytes. Their base64 policy projection exceeds the ordinary
+            // request cap; public tool arguments retain their separate ceiling.
+            self.browser_upload_policy_input_limit
         } else {
             self.policy_input_limit
         };
@@ -779,11 +787,11 @@ impl SafetyKernel {
         }
         if decision.outcome == DecisionOutcome::Allow
             && request.phase == EffectPhase::PreEffect
-            && request.action == "web.search"
+            && (request.action == "web.search" || request.action.starts_with("browser."))
             && !obligations.require_post_effect
         {
             return Err(GatewayError::Safety(
-                "web.search requires mandatory post-effect authorization".into(),
+                "browser and search effects require mandatory post-effect authorization".into(),
             ));
         }
         if decision.outcome == DecisionOutcome::Allow

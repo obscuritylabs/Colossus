@@ -39,14 +39,16 @@ impl Runtime {
         serde_json::from_value(value).map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
-    /// Signal every managed process during trusted runtime shutdown.
+    /// Signal managed processes and revoke browser writers during trusted shutdown.
     pub fn stop_process_sessions(&self) {
+        self.stop_browser_sessions();
         self.process_sessions.stop_all();
     }
 
-    /// Wait until supervisors have returned for every managed invocation.
+    /// Await managed process supervisors and run-owned browser context cleanup.
     pub async fn drain_process_sessions(&self) {
         self.stop_process_sessions();
+        self.drain_browser_sessions().await;
         let sessions = self
             .process_sessions
             .registry()

@@ -21,15 +21,10 @@ const SS_RIGHT: u32 = 2;
 pub(super) unsafe fn create(window: HWND, pointer: *mut Session) -> bool {
     // Populate handles before fonts/layout can cause synchronous paint messages.
     unsafe {
-        (*pointer).heading = control(window, "STATIC", "Save credential", 0, 0);
-        (*pointer).description = control(
-            window,
-            "STATIC",
-            "Your token is saved in the encrypted credential vault.",
-            0,
-            0,
-        );
-        (*pointer).label = control(window, "STATIC", "&Token", 0, 0);
+        let purpose = (*pointer).purpose;
+        (*pointer).heading = control(window, "STATIC", purpose.heading(), 0, 0);
+        (*pointer).description = control(window, "STATIC", purpose.description(), 0, 0);
+        (*pointer).label = control(window, "STATIC", &format!("&{}", purpose.label()), 0, 0);
         (*pointer).input = control(
             window,
             "EDIT",
@@ -42,7 +37,11 @@ pub(super) unsafe fn create(window: HWND, pointer: *mut Session) -> bool {
         (*pointer).save = control(
             window,
             "BUTTON",
-            "&Save",
+            if purpose == crate::purpose::Purpose::Token {
+                "&Save"
+            } else {
+                "C&ontinue"
+            },
             WS_TABSTOP | BS_OWNERDRAW as u32,
             SAVE_ID,
         );
@@ -78,7 +77,7 @@ pub(super) unsafe fn create(window: HWND, pointer: *mut Session) -> bool {
             session.input,
             EM_SETCUEBANNER,
             0,
-            wide("Paste your token").as_ptr() as isize,
+            wide(session.purpose.placeholder()).as_ptr() as isize,
         );
     }
     for handle in [session.input, session.save, session.cancel] {
@@ -89,7 +88,10 @@ pub(super) unsafe fn create(window: HWND, pointer: *mut Session) -> bool {
     }
     unsafe {
         layout(window, pointer);
-        EnableWindow(session.save, 0);
+        EnableWindow(
+            session.save,
+            i32::from(session.purpose == crate::purpose::Purpose::Pkcs12Password),
+        );
     }
     true
 }

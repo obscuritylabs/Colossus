@@ -179,6 +179,7 @@ dependencies = [
  "colossus-domain",
  "serde",
  "serde_json",
+ "url",
  "zeroize",
 ]
 
@@ -229,6 +230,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]

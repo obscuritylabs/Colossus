@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "cef_version": "154.0.34+g14c5a08+chromium-154.0.8037.98",
+  "chromium_version": "154.0.8037.98",
+  "source_origin": "https://cef-builds.spotifycdn.com",
+  "archives": {
+    "linux64": {
+      "filename": "cef_binary_154.0.34+g14c5a08+chromium-154.0.8037.98_linux64_minimal.tar.bz2",
+      "size": 326489962,
+      "sha256": "e87e2c76304372dd28b899ceb6efa4b353f52700594ddc358a8237ec07ec6492",
+      "upstream_sha1": "15c91ad767097217b2e82ba8b933fe30b134be69",
+      "sandbox_compat": "265fca9293e6b6ef",
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    "windows64": {
+      "filename": "cef_binary_154.0.34+g14c5a08+chromium-154.0.8037.98_windows64_minimal.tar.bz2",
+      "size": 172752666,
+      "sha256": "c81c34d048d87276f4a18f0b000206710a1709bb67dd658948b87100e1a538da",
+      "upstream_sha1": "be54bbaf3222191dec59ffd9c9ec7e8a7f44a26d",
+      "sandbox_compat": "265fca9293e6b6ef",
+      "target": "x86_64-pc-windows-msvc"
+    },
+    "macosx64": {
+      "filename": "cef_binary_154.0.34+g14c5a08+chromium-154.0.8037.98_macosx64_minimal.tar.bz2",
+      "size": 138623289,
+      "sha256": "ebcb691252c9ccde63488a913e2381bce4e275acbbb96ce4763b318b7f0b781a",
+      "upstream_sha1": "51d90349e24360b8e0daecc2d026ad150c620db5",
+      "sandbox_compat": "265fca9293e6b6ef",
+      "target": "x86_64-apple-darwin"
+    },
+    "macosarm64": {
+      "filename": "cef_binary_154.0.34+g14c5a08+chromium-154.0.8037.98_macosarm64_minimal.tar.bz2",
+      "size": 132210884,
+      "sha256": "b7efb24bcce34b94e836a9f545005aea210e08abdf4ee1483ea03b8daf93f080",
+      "upstream_sha1": "b7081f6609e5edccf07be96b5d7977329fbe1bdf",
+      "sandbox_compat": "265fca9293e6b6ef",
+      "target": "aarch64-apple-darwin"
+    }
+  }
+}

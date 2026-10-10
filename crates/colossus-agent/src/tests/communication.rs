@@ -175,3 +175,119 @@ async fn accepted_input_at_completion_uses_the_next_turn_and_exact_prepared_requ
 async fn peer_input_does_not_extend_an_exhausted_turn_budget() {
     run_late_input(1).await;
 }
+
+struct FailingCloseInbox;
+
+impl AgentInbox for FailingCloseInbox {
+    fn begin_run(
+        &self,
+        _context: &ExecutionContext,
+        _owner: &Actor,
+        _control: RunControl,
+    ) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    fn prepare(
+        &self,
+        _context: &ExecutionContext,
+    ) -> Result<Option<colossus_ports::AgentInboxBatch>, StoreError> {
+        Ok(None)
+    }
+
+    fn include(
+        &self,
+        _batch: &colossus_ports::AgentInboxBatch,
+        _context: &ExecutionContext,
+        _turn: u16,
+        _request_hash: &str,
+    ) -> Result<(), StoreError> {
+        Err(StoreError::Adapter("unexpected test inbox batch".into()))
+    }
+
+    fn try_complete(&self, _context: &ExecutionContext) -> Result<bool, StoreError> {
+        Ok(true)
+    }
+
+    fn close_run(
+        &self,
+        _run_id: &str,
+        _reason: colossus_contracts::AgentMessageFailure,
+    ) -> Result<(), StoreError> {
+        Err(StoreError::Adapter("injected inbox close failure".into()))
+    }
+}
+
+#[derive(Default)]
+struct SettlingRunResource {
+    active: std::sync::atomic::AtomicBool,
+    finishing: tokio::sync::Notify,
+    acknowledge_close: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl colossus_ports::AgentRunLifecycle for SettlingRunResource {
+    fn begin_run(
+        &self,
+        _context: &ExecutionContext,
+        _initiator: &Actor,
+        _control: RunControl,
+    ) -> Result<(), ToolError> {
+        self.active.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    fn cancel_run(&self, _run_id: &str) {}
+
+    async fn finish_run(&self, _run_id: &str) {
+        self.finishing.notify_one();
+        self.acknowledge_close.notified().await;
+        self.active.store(false, Ordering::Release);
+    }
+}
+
+#[tokio::test]
+async fn inbox_close_failure_waits_for_owned_resource_shutdown_acknowledgement() {
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(journal.clone()));
+    let resource = Arc::new(SettlingRunResource::default());
+    let service = AgentService::new(
+        journal,
+        Arc::new(ScriptedProvider::new(vec![turn(vec![
+            ProviderEvent::FinalOutput {
+                text: "done".into(),
+            },
+        ])])),
+        Arc::new(StaticToolRegistry::builtins(&[]).unwrap()),
+        Arc::new(EchoTools),
+        sessions,
+    )
+    .with_inbox(Arc::new(FailingCloseInbox))
+    .with_run_lifecycle(resource.clone());
+    let running = tokio::spawn(async move {
+        service
+            .run("primary", "base instructions", "Close owned resources", 1)
+            .await
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        resource.finishing.notified(),
+    )
+    .await
+    .expect("inbox failure must still initiate owned-resource shutdown");
+    assert!(resource.active.load(Ordering::Acquire));
+    assert!(
+        !running.is_finished(),
+        "failure cannot bypass native close acknowledgement"
+    );
+    resource.acknowledge_close.notify_one();
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), running)
+        .await
+        .expect("acknowledged resource close must settle the run")
+        .unwrap();
+    assert!(!resource.active.load(Ordering::Acquire));
+    assert!(
+        matches!(outcome, Err(AgentError::Store(StoreError::Adapter(message)))
+        if message == "injected inbox close failure")
+    );
+}

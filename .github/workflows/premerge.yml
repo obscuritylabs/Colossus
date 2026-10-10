@@ -638,6 +638,23 @@ jobs:
         continue-on-error: true
         working-directory: apps/desktop
         run: npm run test:approval-runtime
+      - name: Build pinned CEF and accept the supervised owned Windows browser
+        id: owned_chromium
+        continue-on-error: true
+        timeout-minutes: 45
+        shell: pwsh
+        run: ./scripts/ci/browser-windows-native.ps1
+      - name: Retain bounded owned Windows browser evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-owned-chromium-source-acceptance
+          path: |
+            .local/windows-owned-browser-evidence/native-factory.json
+            .local/windows-owned-browser-evidence/native-factory.log
+            .local/windows-owned-browser-evidence/browser-component.json
+          if-no-files-found: warn
+          retention-days: 7
       - name: Retain Windows plugin acceptance evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -660,6 +677,7 @@ jobs:
           PLUGIN_RUNTIME_OUTCOME: ${{ steps.plugin_runtime.outcome }}
           APPROVAL_RUNTIME_OUTCOME: ${{ steps.approval_runtime.outcome }}
           CLOUD_NATIVE_OUTCOME: ${{ steps.cloud_native.outcome }}
+          OWNED_CHROMIUM_OUTCOME: ${{ steps.owned_chromium.outcome }}
         run: |
           set -eu
           failed=
@@ -669,7 +687,8 @@ jobs:
             "desktop-tests=$NATIVE_TEST_OUTCOME" \
             "desktop-plugin-runtime=$PLUGIN_RUNTIME_OUTCOME" \
             "desktop-approval-runtime=$APPROVAL_RUNTIME_OUTCOME" \
-            "desktop-cloud-native=$CLOUD_NATIVE_OUTCOME"
+            "desktop-cloud-native=$CLOUD_NATIVE_OUTCOME" \
+            "owned-chromium=$OWNED_CHROMIUM_OUTCOME"
           do
             if test "${result#*=}" != success; then
               failed="$failed ${result%%=*}"

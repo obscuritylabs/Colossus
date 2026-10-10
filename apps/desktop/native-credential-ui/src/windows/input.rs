@@ -1,4 +1,5 @@
 use super::{CANCEL_ID, SAVE_ID, Session, painting, wide};
+use crate::purpose::Purpose;
 use crate::validation::{InputError, validate_units};
 use colossus_contracts::MAX_HOST_SECRET_BYTES;
 use std::slice;
@@ -13,8 +14,9 @@ use windows_sys::Win32::{
         Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_CONTROL, VK_SHIFT},
         Shell::{DefSubclassProc, RemoveWindowSubclass},
         WindowsAndMessaging::{
-            GetParent, GetWindowTextLengthW, PostMessageW, SendMessageW, SetWindowTextW, WM_CHAR,
-            WM_CLOSE, WM_COMMAND, WM_KEYDOWN, WM_NCDESTROY, WM_PASTE, WM_SETTEXT, WM_SYSCHAR,
+            GetParent, GetWindowTextLengthW, GetWindowTextW, PostMessageW, SendMessageW,
+            SetWindowTextW, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_KEYDOWN, WM_NCDESTROY, WM_PASTE,
+            WM_SETTEXT, WM_SYSCHAR,
         },
     },
 };
@@ -43,6 +45,72 @@ unsafe fn replacement_length(window: HWND, inserted: usize) -> usize {
     existing
         .saturating_sub(end.saturating_sub(start) as usize)
         .saturating_add(inserted)
+}
+
+unsafe fn current_units(window: HWND) -> Result<Zeroizing<Vec<u16>>, InputError> {
+    let length = usize::try_from(unsafe { GetWindowTextLengthW(window) })
+        .map_err(|_| InputError::InvalidPasswordCharacter)?;
+    if length > MAX_HOST_SECRET_BYTES {
+        return Err(InputError::PasswordTooLong);
+    }
+    let mut units = Zeroizing::new(vec![0; length + 1]);
+    let capacity = i32::try_from(units.len()).map_err(|_| InputError::PasswordTooLong)?;
+    let copied = unsafe { GetWindowTextW(window, units.as_mut_ptr(), capacity) };
+    if usize::try_from(copied).ok() != Some(length) {
+        return Err(InputError::InvalidPasswordCharacter);
+    }
+    units.truncate(length);
+    Ok(units)
+}
+
+pub(super) unsafe fn current_password_bytes(window: HWND) -> Result<usize, InputError> {
+    let units = unsafe { current_units(window) }?;
+    crate::validation::password_units_bytes(units.iter().copied(), units.len(), false)
+}
+
+unsafe fn validate_edit(
+    window: HWND,
+    pointer: *const Session,
+    inserted: &[u16],
+    replace_all: bool,
+    partial: bool,
+) -> Result<(), InputError> {
+    if unsafe { (*pointer).purpose } == Purpose::Token {
+        let length = if replace_all {
+            inserted.len()
+        } else {
+            unsafe { replacement_length(window, inserted.len()) }
+        };
+        return validate_units(inserted.iter().copied(), length);
+    }
+    let mut existing = unsafe { current_units(window) }?;
+    let (start, end) = if replace_all {
+        (0, existing.len())
+    } else {
+        let (mut start, mut end) = (0_u32, 0_u32);
+        unsafe {
+            SendMessageW(
+                window,
+                EM_GETSEL,
+                &raw mut start as usize,
+                &raw mut end as isize,
+            );
+        }
+        (
+            (start as usize).min(existing.len()),
+            (end as usize).min(existing.len()),
+        )
+    };
+    let length = existing
+        .len()
+        .saturating_sub(end.saturating_sub(start))
+        .saturating_add(inserted.len());
+    if length > MAX_HOST_SECRET_BYTES {
+        return Err(InputError::PasswordTooLong);
+    }
+    existing.splice(start..end, inserted.iter().copied());
+    crate::validation::password_units_bytes(existing.iter().copied(), existing.len(), partial)
+        .map(|_| ())
 }
 
 pub(super) unsafe extern "system" fn control_proc(
@@ -87,10 +155,9 @@ pub(super) unsafe extern "system" fn control_proc(
             if wparam == 8 {
                 return unsafe { DefSubclassProc(window, message, wparam, lparam) };
             }
-            let length = unsafe { replacement_length(window, 1) };
             match u16::try_from(wparam)
                 .map_err(|_| InputError::InvalidCharacter)
-                .and_then(|unit| validate_units([unit], length))
+                .and_then(|unit| unsafe { validate_edit(window, pointer, &[unit], false, true) })
             {
                 Ok(()) => unsafe { DefSubclassProc(window, message, wparam, lparam) },
                 Err(reason) => {
@@ -112,13 +179,8 @@ pub(super) unsafe extern "system" fn control_proc(
                     (0..=MAX_HOST_SECRET_BYTES).find(|index| unsafe { *raw.add(*index) } == 0);
                 end.map(|length| unsafe { slice::from_raw_parts(raw, length) })
             };
-            let result = units.ok_or(InputError::TooLong).and_then(|units| {
-                let length = if message == WM_SETTEXT {
-                    units.len()
-                } else {
-                    unsafe { replacement_length(window, units.len()) }
-                };
-                validate_units(units.iter().copied(), length)
+            let result = units.ok_or(InputError::TooLong).and_then(|units| unsafe {
+                validate_edit(window, pointer, units, message == WM_SETTEXT, false)
             });
             match result {
                 Ok(()) => unsafe { DefSubclassProc(window, message, wparam, lparam) },
@@ -160,9 +222,7 @@ unsafe fn paste(window: HWND, pointer: *const Session) {
         .position(|unit| *unit == 0)
         .ok_or(InputError::TooLong)
         .and_then(|end| {
-            validate_units(units[..end].iter().copied(), unsafe {
-                replacement_length(window, end)
-            })?;
+            unsafe { validate_edit(window, pointer, &units[..end], false, false) }?;
             Ok(Zeroizing::new(units[..=end].to_vec()))
         });
     unsafe {
@@ -245,15 +305,19 @@ pub(super) unsafe fn mnemonic(character: WPARAM, pointer: *const Session) -> boo
         return false;
     };
     let session = unsafe { &*pointer };
+    let (input_key, confirm_key) = match session.purpose {
+        Purpose::Token => (b't', b's'),
+        Purpose::Pkcs12Password => (b'p', b'o'),
+    };
     match character.to_ascii_lowercase() {
-        b't' => unsafe {
+        character if character == input_key => unsafe {
             SetFocus(session.input);
         },
-        b's' | b'c' => {
-            let command = if character.eq_ignore_ascii_case(&b's') {
-                SAVE_ID
-            } else {
+        character if character == b'c' || character == confirm_key => {
+            let command = if character.eq_ignore_ascii_case(&b'c') {
                 CANCEL_ID
+            } else {
+                SAVE_ID
             };
             unsafe {
                 PostMessageW(GetParent(session.input), WM_COMMAND, command, 0);

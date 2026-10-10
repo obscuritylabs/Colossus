@@ -819,6 +819,24 @@ independent of agent tool permissions; navigation checks do not constitute a gen
 private-network firewall. It remains disabled in normal builds pending the platform
 permission, lifecycle, and cleanup gates in [ADR 0003](adr/0003-desktop-browser-boundary.md).
 
+Owned Chromium automation has a separate typed effect boundary described in
+[ADR 0008](adr/0008-owned-chromium-browser.md). Core derives the application,
+workspace, scope and run from authenticated state; each effect consumes its permit
+before native dispatch, and observations require post-effect release. Private
+authenticated action, cancellation and presentation channels carry no generic CDP
+or JavaScript command. Each allocation retains an independently supervised process
+and egress obligation before launch. Context-destroying cancellation interrupts the
+session and requires a fresh allocation rather than renewing control of a closed page.
+
+The Linux OCI adapter runs the entire host tree in a networkless namespace, with
+read-only verified component bytes, bounded cgroups and a private exact-origin
+egress relay. Its supervisor verifies native process identity before delivering
+bootstrap secrets and retains uncertain cleanup. The standalone CEF preview does
+not establish whole-host containment. Production availability requires an accepted
+publisher-bound installed component; source fixtures cannot enable an ordinary
+distribution. Certificate import remains native, discloses its actual store scope,
+and never disables server verification or supplies private keys through tool input.
+
 A managed desktop sidecar is a separate signed process, not an in-process extension of
 renderer authority. Its exact signed executable and the bundled TUI CLI are named in a
 SHA-256 manifest whose exact byte digest is patched into, and then sealed by, the signed

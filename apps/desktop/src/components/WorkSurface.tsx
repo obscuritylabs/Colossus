@@ -109,6 +109,8 @@ interface WorkSurfaceProps {
   gitWorkspaceId?: string | null;
   gitAvailable?: boolean;
   browserScope?: string | null;
+  browserConversationId?: string | undefined;
+  onUseBrowserConversation?: ((sessionId: string) => void) | undefined;
   processSessionsAvailable?: boolean;
   browserFixture?: boolean;
   terminalSupported?: boolean;
@@ -228,6 +230,8 @@ export function WorkSurface({
   filesPanel,
   filesAvailable,
   browserScope = null,
+  browserConversationId,
+  onUseBrowserConversation,
   processSessionsAvailable = false,
   browserFixture = false,
   terminalSupported = false,
@@ -310,6 +314,7 @@ export function WorkSurface({
     browserScope,
     activeDrawer === "browser",
     browserFixture,
+    view?.run.sessionId ?? browserConversationId,
   );
   const browserTriggerRef = useRef<HTMLButtonElement>(null);
   const [selectionLauncher, setSelectionLauncher] = useState<
@@ -1686,6 +1691,12 @@ export function WorkSurface({
               >
                 <BrowserPane
                   controller={browser}
+                  run={
+                    run
+                      ? { runId: run.runId, sessionId: run.sessionId }
+                      : undefined
+                  }
+                  onUseConversation={onUseBrowserConversation}
                   docked
                   expanded={browserExpanded}
                   onExpand={() => setBrowserExpanded((expanded) => !expanded)}

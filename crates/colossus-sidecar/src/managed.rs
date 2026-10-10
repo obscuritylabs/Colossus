@@ -49,6 +49,8 @@ use zeroize::Zeroizing;
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
 
+mod native_browser;
+
 const MANAGED_SIDECAR_ARGUMENT: &str = "__managed-sidecar-v1";
 const CONFIGURATION_INSPECTION_ARGUMENT: &str = "__managed-config-inspection-v1";
 const SANDBOX_HELPER_ARGUMENT: &str = "__sandbox-helper";
@@ -210,6 +212,22 @@ fn managed_session_is_established() -> bool {
 }
 
 async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<(), FailureCode> {
+    let mut browser = None;
+    let result = run_with_browser_owner(request, input, &mut browser).await;
+    if let Some(owner) = browser {
+        owner
+            .shutdown()
+            .await
+            .map_err(|_| FailureCode::RuntimeFailed)?;
+    }
+    result
+}
+
+async fn run_with_browser_owner(
+    request: BootstrapRequest,
+    input: &mut std::io::Stdin,
+    browser: &mut Option<Arc<colossus_runtime::browser_package::InstalledBrowserOwner>>,
+) -> Result<(), FailureCode> {
     let instance_id =
         Uuid::parse_str(&request.instance_id).map_err(|_| FailureCode::InvalidBootstrap)?;
     let instance_dir = private_directory(Path::new(&request.instance_dir))?;
@@ -223,6 +241,14 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         .map_err(|_| FailureCode::InvalidBootstrap)?;
     let workspace =
         BoundWorkspace::open(Path::new(&request.workspace), &request.workspace_identity)?;
+    // Independent executable seal and fixed adjacent inventory; inherited app
+    // configuration cannot select a browser, image, transport or private profile.
+    *browser = colossus_runtime::browser_package::discover(
+        include_bytes!(concat!(env!("OUT_DIR"), "/browser-manifest.json")),
+        &instance_dir,
+    )
+    .await
+    .map_err(|_| FailureCode::InvalidConfiguration)?;
     // Bind process-relative operations to the descriptor that reproduced the native
     // parent's opaque identity. The runtime separately reopens the pathname and checks
     // the same device/inode token as part of workspace lease acquisition.
@@ -306,24 +332,15 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     } else {
         WorkerApprovalMode::Ask
     };
-    let server = if let Some(authentication) = worker_authentication {
-        WorkerServer::open_with_mode_at_workspace_provider_credentials_codex_auth_and_authentication(
-            &config,
-            approval_mode,
-            runtime_options,
-            provider_credentials,
-            codex_auth,
-            WorkerAuthenticationKey::from_zeroizing(authentication),
-        )
-    } else {
-        WorkerServer::open_with_mode_at_workspace_and_provider_credentials_and_codex_auth(
-            &config,
-            approval_mode,
-            runtime_options,
-            provider_credentials,
-            codex_auth,
-        )
-    }
+    let server = WorkerServer::open_with_verified_browser(
+        &config,
+        approval_mode,
+        runtime_options,
+        provider_credentials,
+        codex_auth,
+        worker_authentication.map(WorkerAuthenticationKey::from_zeroizing),
+        browser.clone(),
+    )
     .map_err(map_worker_open_failure)?
     .prepare_worker_ipc()
     .await
@@ -371,6 +388,7 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         .map_err(|_| FailureCode::PublicApiSetup)?;
     let metadata = server
         .public_api_ready_metadata()
+        .cloned()
         .ok_or(FailureCode::PublicApiSetup)?;
     let certificate_pem = std::str::from_utf8(metadata.certificate_pem())
         .map_err(|_| FailureCode::PublicApiSetup)?
@@ -421,6 +439,23 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         Err(_) => {
             let _ = credentials.revoke_batch(&credential_ids);
             return Err(FailureCode::PublicApiSetup);
+        }
+    };
+    let server = match native_browser::prepare(
+        server,
+        request.native_browser.as_ref(),
+        &request.grant.application_id,
+        &request.workspace_identity,
+        (&instance_dir, instance_id),
+        &credential_id,
+        &credentials,
+    )
+    .await
+    {
+        Ok(server) => server,
+        Err(error) => {
+            let _ = credentials.revoke_batch(&credential_ids);
+            return Err(error);
         }
     };
     let ready = ReadyResponse {

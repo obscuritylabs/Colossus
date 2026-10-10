@@ -214,6 +214,8 @@ impl Runtime {
             "storage": self.storage_diagnostic,
             "instruction_sources": self.instruction_source_diagnostics()?,
             "security_posture": self.security_posture,
+            "browser": self.browser_capabilities(),
+            "browser_active_work": self.browser_active_work(),
             "writer_lease": writer_lease,
             "projection_store": {
                 "adapter": projection_adapter,

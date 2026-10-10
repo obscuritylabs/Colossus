@@ -210,7 +210,7 @@ const RESTART_DELAYS: [Duration; 3] = [
 /// the delivered certificate pin, and supervises at most three restart attempts after an
 /// unexpected exit. Individual operations are never replayed across a restart.
 pub struct NativeSidecarLifecycle {
-    bootstrap: Arc<SidecarBootstrapConfig>,
+    pub(crate) bootstrap: Arc<SidecarBootstrapConfig>,
     status: watch::Sender<NativeSidecarStatus>,
 }
 
@@ -1868,7 +1868,11 @@ async fn launch_child(
             return Err(SdkError::SidecarFailed);
         }
     }
+    let child_pid = provisional.child().id().ok_or(SdkError::SidecarFailed)?;
     let (child, process_tree, discovery) = provisional.into_running_parts();
+    bootstrap
+        .native_browser_child
+        .store(child_pid, Ordering::Release);
     Ok(RunningChild {
         child,
         process_tree,

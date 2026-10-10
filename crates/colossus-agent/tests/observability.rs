@@ -80,6 +80,7 @@ impl ToolExecutor for NoopTools {
         _context: ExecutionContext,
     ) -> Result<ToolResult, ToolError> {
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: String::new(),
@@ -173,6 +174,7 @@ impl ToolExecutor for PlanTools {
             executed_run_id: None,
         };
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: serde_json::to_string(&plan).expect("plan JSON"),

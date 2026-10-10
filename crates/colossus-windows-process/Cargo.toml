@@ -8,6 +8,8 @@ license.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "sync"] }
+zeroize.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [

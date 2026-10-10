@@ -1,0 +1,11 @@
+# Explicit offline diagnostic composition. Build context contains only artifacts
+# produced by stage_nss_tools.py. The installer verifies BASE_IMAGE's immutable
+# image ID before/after build and records the output immutable ID for launch.
+# The base must already contain the exact NSS/NSPR library pins in nss-tools.lock.json.
+# This image never establishes publisher acceptance or changes browser release modes.
+ARG BASE_IMAGE=colossus-browser-build-cef:local
+FROM ${BASE_IMAGE}
+COPY --chmod=0555 certutil /usr/bin/certutil
+COPY --chmod=0555 pk12util /usr/bin/pk12util
+LABEL org.colossus.browser.nss.diagnostic="true"
+LABEL org.colossus.browser.production.accepted="false"

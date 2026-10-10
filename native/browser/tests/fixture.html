@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Colossus native browser fixture</title>
+<style>body{margin:0;background:white;color:black}.magenta,.green{position:fixed;top:260px;width:300px;height:200px}.magenta{left:24px;background:#f0f}.green{left:360px;background:#0f0}#native-input{position:fixed;left:24px;top:160px;width:200px;height:32px}</style></head>
+<body>
+  <h1>Colossus native browser fixture</h1>
+  <button id="continue" type="button">Continue</button>
+  <output id="result">Waiting</output>
+  <input id="native-input" aria-label="Native typed input">
+  <output id="typed-result"></output><div class="magenta"></div><div class="green"></div>
+  <script>
+    document.querySelector('#continue').addEventListener('click', () => {
+      document.querySelector('#result').textContent = 'Native click received';
+    });
+    document.querySelector('#native-input').addEventListener('input', (event) => {
+      if (event.target.value === 'colossus') document.querySelector('#typed-result').textContent = 'Native typed input received';
+    });
+  </script>
+</body>
+</html>

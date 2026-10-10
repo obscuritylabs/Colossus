@@ -500,3 +500,75 @@ fn non_windows_calls_fail_closed() {
         Err(WindowsNativeError::UnsupportedPlatform)
     ));
 }
+#[cfg(windows)]
+#[test]
+fn immutable_component_binding_blocks_byte_and_namespace_replacement_until_release() {
+    let temporary = tempfile::tempdir().expect("owned temporary root");
+    let component = temporary.path().join("component");
+    crate::create_private_directory(&component).expect("private component");
+    let executable = component.join("host.dll");
+    crate::create_private_file(&executable, b"verified publisher bytes").expect("private file");
+    let binding = crate::BoundPath::open_immutable_file(&executable).expect("immutable binding");
+    assert!(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&executable)
+            .is_err()
+    );
+    assert!(std::fs::rename(&executable, component.join("replaced.dll")).is_err());
+    let moved = temporary.path().join("moved-component");
+    assert!(std::fs::rename(&component, &moved).is_err());
+    binding
+        .revalidate()
+        .expect("same immutable inode and hierarchy");
+    drop(binding);
+    std::fs::rename(&component, &moved).expect("namespace unlocked after release");
+    std::fs::write(moved.join("host.dll"), b"new bytes").expect("file unlocked after release");
+}
+
+#[cfg(windows)]
+#[test]
+fn allocation_owner_survives_failed_binding_and_retires_only_its_original_object() {
+    let temporary = tempfile::tempdir().expect("temporary parent");
+    let parent = temporary.path().join("owned-parent");
+    create_private_directory(&parent).unwrap();
+    let path = parent.join("new-context");
+    let mut creation = PrivateDirectoryCreation::create(&path).unwrap();
+    assert!(PrivateDirectoryCreation::create(&path).is_err());
+    let bound = creation.bind().unwrap();
+    let moved = parent.join("original-object");
+    std::fs::rename(&path, &moved).unwrap();
+    create_private_directory(&path).unwrap();
+    let marker = path.join("replacement-must-survive");
+    std::fs::write(&marker, b"different native owner").unwrap();
+    assert!(matches!(
+        creation.bind(),
+        Err(WindowsNativeError::IdentityChanged)
+    ));
+    drop(bound);
+    creation.remove_empty().unwrap();
+    assert!(
+        !moved.exists(),
+        "the exact allocation is physically retired"
+    );
+    assert_eq!(std::fs::read(&marker).unwrap(), b"different native owner");
+    creation.remove_empty().unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn package_allocation_rejects_adopting_an_existing_profile() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let name = format!("colossus.browser.{nonce:032x}");
+    let mut profile = ExclusiveAppContainerProfile::create(&name).unwrap();
+    let sid = profile.sid_string().unwrap();
+    assert!(sid.starts_with("S-1-15-2-"));
+    assert!(ExclusiveAppContainerProfile::create(&name).is_err());
+    assert_eq!(profile.sid_string().unwrap(), sid);
+    profile.close().unwrap();
+    profile.close().unwrap();
+    assert!(profile.sid_string().is_err());
+}

@@ -205,6 +205,7 @@ impl ToolExecutor for CommunicationToolExecutor {
             _ => return self.inner.execute(call, context).await,
         };
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output,

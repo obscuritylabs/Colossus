@@ -6,6 +6,7 @@ use cloud_connector::{
 };
 use control_plane_profiles::{control_plane_profiles, save_control_plane_profiles};
 mod app_context;
+mod application_lifecycle;
 mod approval_adapter;
 mod browser;
 mod bundle;
@@ -73,6 +74,7 @@ pub fn run_browser_acceptance() -> i32 {
     browser::acceptance::run()
 }
 
+use browser::certificates::browser_certificates;
 use browser::commands::{browser_command, browser_context, browser_viewport};
 use codex_auth::{codex_auth_login, codex_auth_logout, codex_auth_status};
 use command_review::{command_review_context, finish_command_review};
@@ -155,6 +157,9 @@ pub fn run() {
     if let Some(code) = uninstall::run_if_requested() {
         std::process::exit(code);
     }
+    // Non-browser workers never create CEF/AppKit. Browser helpers have their
+    // own sandbox entry; install CEF before Tauri or late-loaded UI plugins.
+    let browser_cache = browser::bootstrap::initialize();
     let context = app_context::create();
     #[cfg(windows)]
     let launch_guard =
@@ -190,6 +195,9 @@ pub fn run() {
         .setup(|app| {
             status_bar::setup(app)?;
             browser::start_watchdog(app.handle().clone());
+            browser::bootstrap::start_pump(app.handle())?;
+            #[cfg(feature = "embedded-chromium-preview")]
+            browser::contained::install(app.handle())?;
             #[cfg(windows)]
             outlook_companion::start_watchdog(app.handle().clone());
             terminal_commands::pane::start_watchdog(app.handle().clone());
@@ -233,6 +241,7 @@ pub fn run() {
             browser_context,
             browser_command,
             browser_viewport,
+            browser_certificates,
             command_review_context,
             finish_command_review,
             remembered_command_count,
@@ -379,22 +388,26 @@ pub fn run() {
         .expect("failed to build the Colossus desktop application");
     #[cfg(windows)]
     drop(launch_guard);
-    application.run(|app, event| {
-        #[cfg(target_os = "macos")]
-        if matches!(
-            event,
-            tauri::RunEvent::Reopen {
-                has_visible_windows: false,
-                ..
-            }
-        ) {
-            status_bar::show_main_window(app);
+    #[cfg(desktop)]
+    {
+        // App::run exits the process inside Tao, skipping Rust local drops.
+        // Return from the native loop so the private Chromium cache is removed
+        // after CefShutdown and before the desktop process terminates.
+        let (callback, native_shutdown) = application_lifecycle::callback();
+        let code = application.run_return(callback);
+        if native_shutdown.load(std::sync::atomic::Ordering::Acquire) {
+            drop(browser_cache);
+            std::process::exit(code);
         }
-        if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
-            use tauri::Manager as _;
-            app.state::<dictation::DictationState>().cancel();
-
-            tauri::async_runtime::block_on(app.state::<state::AppState>().close_all());
-        }
-    });
+        // Preserve native ownership evidence when shutdown was not acknowledged.
+        // Process exit does not authorize deleting a possibly live CEF cache.
+        std::mem::forget(browser_cache);
+        std::process::exit(if code == 0 { 1 } else { code });
+    }
+    #[cfg(mobile)]
+    {
+        let _ = &browser_cache;
+        let (callback, _) = application_lifecycle::callback();
+        application.run(callback);
+    }
 }
