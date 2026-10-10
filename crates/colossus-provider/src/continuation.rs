@@ -75,6 +75,11 @@ impl ProviderExecutor {
         if self.profile.kind != ProviderKind::OpenAiResponses {
             return Ok(None);
         }
+        // Remote file IDs have a request-scoped lifetime and must never enter
+        // reusable Responses state after their cleanup.
+        if contains_file_input(payload) {
+            return Ok(None);
+        }
         let (Some(repository), Some(plan)) = (&self.continuations, plan) else {
             return Ok(None);
         };
@@ -159,6 +164,19 @@ impl ProviderExecutor {
             ProviderError::Configuration("unable to stage bounded Responses state".into())
         })?;
         Ok(Some(id.into()))
+    }
+}
+
+fn contains_file_input(value: &Value) -> bool {
+    match value {
+        Value::Object(values) => {
+            values
+                .get("type")
+                .is_some_and(|value| value == "input_file")
+                || values.values().any(contains_file_input)
+        }
+        Value::Array(values) => values.iter().any(contains_file_input),
+        _ => false,
     }
 }
 

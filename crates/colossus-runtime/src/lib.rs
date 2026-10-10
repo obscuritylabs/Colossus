@@ -1,6 +1,7 @@
 //! Runtime composition root. Interfaces call this layer and own no product logic.
 
 pub use colossus_media::ValidatedImage;
+pub use colossus_media::validate_pdf_bytes;
 
 const SESSION_MESSAGE_PAGE_LIMIT: usize = 100;
 const SESSION_MESSAGE_PAGE_MAX_BYTES: usize = 2 * 1024 * 1024;

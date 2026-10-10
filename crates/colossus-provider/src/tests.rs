@@ -34,6 +34,8 @@ use tokio_rustls::TlsAcceptor;
 
 #[path = "error/gateway_tests.rs"]
 mod failure_tests;
+#[path = "pdf_tests.rs"]
+mod pdf_tests;
 #[path = "retry_tests.rs"]
 mod retry_tests;
 
@@ -110,7 +112,7 @@ fn image_reference() -> ModelImageReference {
     }
 }
 
-fn multipart_model_request() -> (ModelRequest, ModelImageReference, ProviderResolvedImages) {
+fn multipart_model_request() -> (ModelRequest, ModelImageReference, ProviderResolvedMedia) {
     let image = image_reference();
     let request = ModelRequest {
         instructions: "inspect the supplied image".into(),
@@ -134,7 +136,7 @@ fn multipart_model_request() -> (ModelRequest, ModelImageReference, ProviderReso
         tools: Vec::new(),
         max_output_tokens: None,
     };
-    let mut images = ProviderResolvedImages::default();
+    let mut images = ProviderResolvedMedia::default();
     images
         .insert(&image, "data:image/png;base64,cG5n".into())
         .expect("resolved image");

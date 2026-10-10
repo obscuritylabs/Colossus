@@ -95,7 +95,7 @@ impl ModelContent {
                     .iter()
                     .filter_map(|part| match part {
                         ModelContentPart::Text { text } => Some(text.as_str()),
-                        ModelContentPart::Image { .. } => None,
+                        ModelContentPart::Image { .. } | ModelContentPart::File { .. } => None,
                     })
                     .collect::<Vec<_>>()
                     .join("\n"),
@@ -147,7 +147,19 @@ impl ModelContent {
         };
         parts.iter().filter_map(|part| match part {
             ModelContentPart::Image { image } => Some(image),
-            ModelContentPart::Text { .. } => None,
+            ModelContentPart::Text { .. } | ModelContentPart::File { .. } => None,
+        })
+    }
+
+    /// Iterate over verified PDF file references in content order.
+    pub fn files(&self) -> impl Iterator<Item = &ModelFileReference> {
+        let parts = match self {
+            Self::Text(_) => &[][..],
+            Self::Parts(parts) => parts.as_slice(),
+        };
+        parts.iter().filter_map(|part| match part {
+            ModelContentPart::File { file } => Some(file),
+            _ => None,
         })
     }
 
@@ -159,7 +171,7 @@ impl ModelContent {
                 .iter()
                 .map(|part| match part {
                     ModelContentPart::Text { text } => text.len(),
-                    ModelContentPart::Image { .. } => 0,
+                    ModelContentPart::Image { .. } | ModelContentPart::File { .. } => 0,
                 })
                 .sum(),
         }
@@ -180,6 +192,27 @@ pub enum ModelContentPart {
         /// Exact image artifact reference.
         image: ModelImageReference,
     },
+    /// Verified PDF artifact metadata; bytes and provider file IDs remain private.
+    File {
+        /// Exact encrypted artifact reference.
+        file: ModelFileReference,
+    },
+}
+
+/// Verified metadata for one encrypted PDF run-input artifact.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelFileReference {
+    /// Opaque encrypted artifact identifier.
+    pub artifact_id: String,
+    /// Bounded display name, never a source path.
+    pub file_name: String,
+    /// Exactly `application/pdf` in this version.
+    pub media_type: String,
+    /// Exact verified byte length.
+    pub size_bytes: u64,
+    /// Lowercase SHA-256 of the exact artifact bytes.
+    pub sha256: String,
 }
 
 /// The only image-detail policy accepted in this release.
@@ -238,6 +271,28 @@ pub fn validate_model_message_content(message: &ModelMessage) -> Result<(), Mode
         ));
     }
     for part in parts {
+        if let ModelContentPart::File { file } = part {
+            if message.role != ModelMessageRole::User {
+                return Err(content_error("only user messages may contain file parts"));
+            }
+            if file.artifact_id.is_empty()
+                || file.file_name.is_empty()
+                || file.file_name.len() > 255
+                || file.file_name.chars().any(char::is_control)
+                || file.file_name.contains(['/', '\\'])
+                || file.size_bytes == 0
+                || file.size_bytes > 16 * 1_048_576
+                || file.media_type != "application/pdf"
+                || file.sha256.len() != 64
+                || !file
+                    .sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(content_error("PDF reference metadata is invalid"));
+            }
+            continue;
+        }
         let ModelContentPart::Image { image } = part else {
             continue;
         };

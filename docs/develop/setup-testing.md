@@ -93,6 +93,23 @@ Git's `core.symlinks=true`); a checkout that materializes a text file containing
         live_splunk_streamable_http_discovery -- --ignored
     ```
 
+    A configured PDF-capable provider can exercise Files uploads, document extraction,
+    and deletion through both Responses and Chat Completions, with streamed and JSON
+    responses. Supply the credential through the process environment or secret manager:
+
+    ```bash
+    COLOSSUS_LIVE_PDF_BASE_URL=https://api.openai.com/v1 \
+    COLOSSUS_LIVE_PDF_MODEL=YOUR_PDF_CAPABLE_MODEL \
+    COLOSSUS_LIVE_PDF_CREDENTIAL_REFERENCE=env:OPENAI_API_KEY \
+      cargo test -p colossus-provider live_pdf_inputs -- --ignored
+    ```
+
+    This sends a generated one-page PDF containing a unique verification code. The
+    model must return the code, which is absent from the text prompt. Provider billing
+    applies. Both APIs and the Files API must be available; this is not an offline CI
+    gate. See the [PDF upload lifecycle](../use/providers/openai-api.md#5-attach-a-pdf)
+    for cleanup limits.
+
     Credential-free public MCP acceptance uses Cloudflare's documentation server:
 
     ```bash

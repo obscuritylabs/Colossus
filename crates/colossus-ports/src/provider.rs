@@ -24,14 +24,14 @@ pub struct ResolvedRunInputImage {
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum RunInputMediaError {
     /// The artifact was unavailable, not owner-authorized, or did not match its reference.
-    #[error("run-input image is unavailable or does not match its verified reference")]
+    #[error("run-input media is unavailable or does not match its verified reference")]
     Unavailable,
-    /// The artifact bytes did not satisfy the bounded image contract.
-    #[error("run-input image failed bounded validation: {0}")]
+    /// The artifact bytes did not satisfy the bounded media contract.
+    #[error("run-input media failed bounded validation: {0}")]
     Invalid(String),
 }
 
-/// Late-bound resolver for encrypted run-input image artifacts.
+/// Late-bound resolver for encrypted run-input image and PDF artifacts.
 #[async_trait]
 pub trait RunInputMediaResolver: Send + Sync {
     /// Resolve and re-verify exact bytes after the provider permit has been issued.
@@ -39,6 +39,22 @@ pub trait RunInputMediaResolver: Send + Sync {
         &self,
         reference: &ModelImageReference,
     ) -> Result<ResolvedRunInputImage, RunInputMediaError>;
+
+    /// Resolve and re-verify PDF bytes inside the authorized provider adapter.
+    async fn resolve_file(
+        &self,
+        _reference: &colossus_contracts::ModelFileReference,
+    ) -> Result<ResolvedRunInputFile, RunInputMediaError> {
+        Err(RunInputMediaError::Unavailable)
+    }
+}
+
+/// Exact transient PDF bytes resolved only after provider authorization.
+pub struct ResolvedRunInputFile {
+    /// Verified durable metadata bound into the provider effect.
+    pub reference: colossus_contracts::ModelFileReference,
+    /// Exact private artifact bytes, never released in diagnostics or logs.
+    pub bytes: Vec<u8>,
 }
 
 /// Role-routed, policy-bound model provider used by the application loop.

@@ -20,6 +20,73 @@ fn encoded(format: ImageFormat) -> Vec<u8> {
     bytes.into_inner()
 }
 
+#[test]
+fn pdf_envelopes_and_reference_budgets_are_bounded() {
+    let pdf = b"%PDF-1.7\nfixture\n%%EOF\n";
+    let (size, digest) = validate_pdf_bytes("report.pdf", pdf).expect("PDF envelope");
+    assert_eq!(size, pdf.len() as u64);
+    assert_eq!(digest, hex::encode(Sha256::digest(pdf)));
+    for (name, bytes) in [
+        ("report.pdf", b"not a PDF".as_slice()),
+        ("report.pdf", b"%PDF-1.7\ntruncated".as_slice()),
+        ("../report.pdf", pdf.as_slice()),
+        ("report\n.pdf", pdf.as_slice()),
+    ] {
+        assert!(validate_pdf_bytes(name, bytes).is_err());
+    }
+    let mut oversized = pdf.to_vec();
+    oversized.resize(MAX_PDF_BYTES as usize + 1, b' ');
+    assert!(validate_pdf_bytes("large.pdf", &oversized).is_err());
+    let file = colossus_contracts::ModelFileReference {
+        artifact_id: format!("artifact-{}", "c".repeat(64)),
+        file_name: "report.pdf".into(),
+        media_type: "application/pdf".into(),
+        size_bytes: MAX_PDF_BYTES,
+        sha256: digest,
+    };
+    assert!(validate_pdf_references([&file, &file]).is_ok());
+    assert!(validate_pdf_references([&file, &file, &file]).is_err());
+    let mut small = file;
+    small.size_bytes = 1;
+    assert!(validate_pdf_references([&small; 5]).is_err());
+}
+
+#[tokio::test]
+async fn pdf_artifacts_recheck_ownership_metadata_and_digest_after_restart() {
+    let pdf = b"%PDF-1.4\nprivate contents\n%%EOF\n";
+    let artifact_id = format!("artifact-{}", "e".repeat(64));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    journal.append(NewEvent {
+        event_version: 1, stream_id: format!("artifact:{artifact_id}"), expected_stream_version: 0,
+        classification: EventClassification::Domain, event_type: AVAILABLE_EVENT.into(),
+        actor: Actor { actor_type: ActorType::Application, id: "app:owner".into() }, context: ExecutionContext::default(),
+        payload: json!({"artifact": {"artifact_id":artifact_id, "file_name":"private.pdf", "media_type":"application/pdf", "size_bytes":pdf.len(), "sha256":hex::encode(Sha256::digest(pdf)), "purpose":"run_input", "state":"available", "created_at":"2026-10-08T00:00:00Z"}, "content_base64":BASE64.encode(pdf)}),
+    }).expect("artifact event");
+    let resolver = JournalRunInputMediaResolver::new(journal.clone());
+    let reference = resolver
+        .file_reference("app:owner", &artifact_id)
+        .expect("owner PDF reference");
+    assert!(matches!(
+        resolver.file_reference("app:other", &artifact_id),
+        Err(RunInputMediaError::Unavailable)
+    ));
+    let reopened = JournalRunInputMediaResolver::new(journal);
+    assert_eq!(
+        reopened
+            .resolve_file(&reference)
+            .await
+            .expect("verified bytes")
+            .bytes,
+        pdf
+    );
+    let mut changed = reference;
+    changed.sha256 = "f".repeat(64);
+    assert!(matches!(
+        reopened.resolve_file(&changed).await,
+        Err(RunInputMediaError::Unavailable)
+    ));
+}
+
 fn reference(index: usize, size_bytes: u64, width: u32, height: u32) -> ModelImageReference {
     ModelImageReference {
         artifact_id: format!("artifact-{index:064x}"),

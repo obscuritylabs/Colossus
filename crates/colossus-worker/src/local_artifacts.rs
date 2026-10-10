@@ -68,6 +68,8 @@ pub(super) async fn prepare_model_content(
     }
     let mut text_attachments = Vec::new();
     let mut images = Vec::<ModelImageReference>::new();
+    let mut files = Vec::new();
+    let mut media_parts = Vec::new();
     let mut combined_image_bytes = 0_u64;
     for path in attachments {
         let bytes = runtime.read_run_input_file_bytes(path).await?;
@@ -76,6 +78,28 @@ pub(super) async fn prepare_model_content(
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty())
             .ok_or_else(|| WorkerError::Protocol("attachment file name is invalid".into()))?;
+        if bytes.starts_with(b"%PDF-")
+            || path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case("pdf"))
+        {
+            let (_, digest) = colossus_runtime::validate_pdf_bytes(file_name, &bytes)
+                .map_err(|error| WorkerError::Protocol(error.to_string()))?;
+            let artifact = upload_image_bytes(
+                runtime,
+                file_name,
+                "application/pdf",
+                &bytes,
+                &format!("cli-pdf-{digest}"),
+            )
+            .await?;
+            let file =
+                runtime.run_input_file_reference("app:colossus-cli", &artifact.artifact_id)?;
+            files.push(file.clone());
+            media_parts.push(ModelContentPart::File { file });
+            continue;
+        }
         match runtime.validate_run_input_image(file_name, None, &bytes) {
             Ok(validated) => {
                 combined_image_bytes = combined_image_bytes
@@ -88,22 +112,25 @@ pub(super) async fn prepare_model_content(
                         "image inputs exceed the 16-image or 32 MiB bound".into(),
                     ));
                 }
-                images.push(import_validated_image(runtime, file_name, &bytes, &validated).await?);
+                let image = import_validated_image(runtime, file_name, &bytes, &validated).await?;
+                images.push(image.clone());
+                media_parts.push(ModelContentPart::Image { image });
             }
             Err(error) if image_candidate(path, &bytes) => return Err(error.into()),
             Err(_) => text_attachments.push((path.clone(), bytes)),
         }
     }
     let text = runtime.prompt_with_text_attachment_bytes(prompt, &text_attachments)?;
-    if images.is_empty() {
+    if files.len() > 4 || files.iter().map(|file| file.size_bytes).sum::<u64>() > 32 * 1_048_576 {
+        return Err(WorkerError::Protocol(
+            "PDF inputs exceed the 4-file or 32 MiB bound".into(),
+        ));
+    }
+    if images.is_empty() && files.is_empty() {
         return Ok(ModelContent::Text(text));
     }
     let mut parts = vec![ModelContentPart::Text { text }];
-    parts.extend(
-        images
-            .into_iter()
-            .map(|image| ModelContentPart::Image { image }),
-    );
+    parts.extend(media_parts);
     Ok(ModelContent::Parts(parts))
 }
 
@@ -251,6 +278,7 @@ fn artifact_media_type(path: &Path) -> &'static str {
         Some("yaml") | Some("yml") => "application/yaml",
         Some("toml") => "application/toml",
         Some("csv") => "text/csv",
+        Some("pdf") => "application/pdf",
         _ => "application/octet-stream",
     }
 }
