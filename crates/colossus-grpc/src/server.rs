@@ -290,6 +290,11 @@ impl BoundPublicGrpcServer {
         } else {
             system
         };
+        let system = if agent_runs.communication().is_some() {
+            system.with_agent_communication()
+        } else {
+            system
+        };
         Ok(Self {
             listener,
             local_addr,
@@ -357,11 +362,18 @@ impl BoundPublicGrpcServer {
         force_shutdown: impl Future<Output = ()> + Send + 'static,
     ) -> Result<(), PublicGrpcServerError> {
         let authentication = AuthenticationInterceptor::new(self.authenticator);
+        let watch_slots = Arc::new(Semaphore::new(MAX_ACTIVE_WATCH_STREAMS));
+        let communication = self.agent_runs.communication().map(|api| {
+            let service = colossus_api_proto::v1alpha1::agent_communication_service_server::AgentCommunicationServiceServer::new(
+                crate::communication::CommunicationServiceAdapter::new(api, watch_slots.clone()))
+                .max_decoding_message_size(32 * 1024)
+                .max_encoding_message_size(2 * 1024 * 1024);
+            InterceptedService::new(service, authentication.clone())
+        });
         let system = SystemServiceServer::new(self.system)
             .max_decoding_message_size(MAX_REQUEST_MESSAGE_BYTES)
             .max_encoding_message_size(MAX_RESPONSE_MESSAGE_BYTES);
         let system = InterceptedService::new(system, authentication.clone());
-        let watch_slots = Arc::new(Semaphore::new(MAX_ACTIVE_WATCH_STREAMS));
         let agent_runs = AgentRunServiceServer::new(
             AgentRunServiceAdapter::new(self.agent_runs).with_watch_slots(watch_slots.clone()),
         )
@@ -444,6 +456,7 @@ impl BoundPublicGrpcServer {
             .tcp_nodelay(true)
             .add_service(system)
             .add_service(agent_runs)
+            .add_optional_service(communication)
             .add_service(artifacts)
             .add_service(extensions)
             .add_service(workflows)

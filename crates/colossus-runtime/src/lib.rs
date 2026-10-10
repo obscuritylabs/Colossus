@@ -15,6 +15,7 @@ mod agent_runs;
 mod agent_tools;
 mod browser_tools;
 pub use browser_tools::RuntimeBrowserHost;
+mod communication;
 mod composition;
 mod config;
 mod context_tools;

@@ -449,6 +449,11 @@ fn local_read_error(error: colossus_sdk::ApiError, message: &'static str) -> Sta
 }
 async fn execute(runs: &dyn AgentRunClient, command: Command) -> CloudReply {
     let result = match command {
+        Command::InspectInboxes {
+            root_run_id,
+            participant_id,
+            after_sequence,
+        } => crate::inboxes::read(runs, root_run_id, participant_id, after_sequence).await,
         Command::History {
             source_run_id,
             page_token,

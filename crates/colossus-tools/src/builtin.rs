@@ -569,6 +569,35 @@ fn core_builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 512 * 1024,
         },
         ToolSpec {
+            name: "agent.participants".into(),
+            description: "Discover exact parent and child attempt addresses in this run's collaboration.".into(),
+            input_schema: object_schema(json!({}), &[]),
+            effect_action: Some("agent.message.read".into()), capability: Some("agent.message.read".into()), max_output_bytes: 128 * 1024,
+        },
+        ToolSpec {
+            name: "agent.send_message".into(),
+            description: "Send bounded peer input to an exact parent or child attempt. Acceptance is separate from inclusion in a model turn.".into(),
+            input_schema: object_schema(json!({
+                "recipient_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                "text": {"type": "string", "minLength": 1, "maxLength": 16384},
+                "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 128},
+                "reply_to": {"type": "string", "minLength": 1, "maxLength": 128}
+            }), &["recipient_id", "text", "idempotency_key"]),
+            effect_action: Some("agent.message.send".into()), capability: Some("agent.message.send".into()), max_output_bytes: 32 * 1024,
+        },
+        ToolSpec {
+            name: "agent.inbox".into(),
+            description: "Inspect a bounded page of admitted messages and their durable receipts for a collaboration participant.".into(),
+            input_schema: object_schema(json!({"participant_id": {"type": "string", "minLength": 1, "maxLength": 128}, "after_sequence": {"type": "integer", "minimum": 0}}), &["participant_id"]),
+            effect_action: Some("agent.message.read".into()), capability: Some("agent.message.read".into()), max_output_bytes: 512 * 1024,
+        },
+        ToolSpec {
+            name: "agent.await_message".into(),
+            description: "Wait up to thirty seconds for this execution's inbox. Returns availability without consuming input or extending run limits.".into(),
+            input_schema: object_schema(json!({"wait_ms": {"type": "integer", "minimum": 0, "maximum": 30000}}), &[]),
+            effect_action: Some("agent.message.read".into()), capability: Some("agent.message.read".into()), max_output_bytes: 1024,
+        },
+        ToolSpec {
             name: "agent.result".into(),
             description: "Return one current-session durable child-agent job and its result. Queued or running is pending work, not failure.".into(),
             input_schema: object_schema(

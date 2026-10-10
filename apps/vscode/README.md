@@ -66,6 +66,7 @@ colossus --workspace /absolute/path/to/repository worker \
   --public-api-dir /absolute/private/colossus-vscode-api \
   --enroll-application app:colossus-vscode \
   --scope runs:execute --scope runs:read --scope runs:control \
+  --scope agent_messages:read \
   --scope prompts:respond --scope approvals:respond \
   --role primary \
   --tool filesystem.list --tool filesystem.read --tool filesystem.search \

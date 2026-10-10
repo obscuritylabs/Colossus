@@ -13,11 +13,14 @@ colossus-observability.workspace = true
 colossus-ports.workspace = true
 colossus-tools.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+colossus-communication.workspace = true
 colossus-testkit.workspace = true
 colossus-session.workspace = true
 opentelemetry.workspace = true

@@ -41,3 +41,5 @@ export {
   decodeRuntimePolicyPosture,
   getRuntimePolicyPosture,
 } from "./posture.js";
+
+export { AgentCommunication, validateAgentMessage } from "./communication.js";

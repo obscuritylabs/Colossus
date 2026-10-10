@@ -96,6 +96,15 @@ impl RuntimeInventory {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    /// Inspect exact caller-owned agent attempts through the shared SDK.
+    InspectInboxes {
+        /// Fixed local run allocated to the cloud task.
+        root_run_id: String,
+        /// Optional exact recipient; absent lists attempts only.
+        participant_id: Option<String>,
+        /// Exclusive inbox sequence.
+        after_sequence: u64,
+    },
     /// Read canonical released conversation history under local sharing authority.
     History {
         /// Runtime-owned source run already mapped by the controller to this node/session.
@@ -136,6 +145,13 @@ pub enum Command {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CloudReply {
+    /// Released message inspection, independently scoped from execution or sending.
+    Inboxes {
+        /// Exact attempts in the task's caller-owned collaboration.
+        participants: Vec<colossus_sdk::AgentParticipant>,
+        /// Optional bounded recipient-ordered page.
+        page: Option<colossus_sdk::AgentMessagePage>,
+    },
     /// Canonical caller-visible user/assistant activity page; no tools or system lanes.
     History {
         /// Released bounded SDK history and its continuation/projection watermark.

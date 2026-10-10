@@ -424,6 +424,7 @@ impl ResearchService {
             session_id,
             message_run_id.unwrap_or(&run.id),
             ModelMessage {
+                agent_message_origin: None,
                 role: ModelMessageRole::Assistant,
                 content: run.report.clone().into(),
                 tool_call_id: None,

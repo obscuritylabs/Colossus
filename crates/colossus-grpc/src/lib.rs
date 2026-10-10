@@ -7,8 +7,11 @@
 #![allow(clippy::missing_errors_doc)]
 
 mod agent_run;
+pub mod agent_task_wire;
 mod artifact;
 mod auth;
+mod communication;
+pub mod communication_wire;
 mod endpoint;
 mod extensions;
 mod journal_credentials;

@@ -27,6 +27,7 @@ fn candidate() -> ProviderContinuation {
         },
         settled_hash: String::new(),
         assistant: ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Assistant,
             content: "done".into(),
             tool_call_id: None,

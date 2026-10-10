@@ -23,6 +23,7 @@
     "./conversation": "./src/conversation.ts",
     "./charts": "./src/charts.ts",
     "./automations": "./src/automations.ts",
+    "./agent-inbox": "./src/agent-inbox.tsx",
     "./automations/*": "./src/automations/*.tsx",
     "./automations/types": "./src/automations/types.ts",
     "./automations/workflow-graph": "./src/automations/workflow-graph.ts",

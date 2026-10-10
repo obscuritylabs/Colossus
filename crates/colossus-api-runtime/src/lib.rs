@@ -7,6 +7,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 mod admission;
+mod communication;
 mod feed;
 mod interactions;
 #[cfg(test)]
@@ -16,6 +17,8 @@ mod run_failures;
 mod service;
 #[cfg(test)]
 mod service_tests;
+mod task_inputs;
+mod task_queries;
 #[cfg(test)]
 mod workflow_tests;
 mod workflows;

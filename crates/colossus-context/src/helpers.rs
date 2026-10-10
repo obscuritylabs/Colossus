@@ -35,7 +35,7 @@ pub(super) fn deterministic_snapshot(session_id: &str, source: &[ModelMessage]) 
     let open_tasks = dedupe(
         source
             .iter()
-            .filter(|message| message.role == ModelMessageRole::User)
+            .filter(|message| message.begins_user_turn())
             .filter(|message| contains_task_word(&message.content.plain_text()))
             .map(|message| truncate_chars(&message.content.plain_text(), 220)),
         10,
@@ -112,6 +112,7 @@ pub(super) fn apply_snapshot(
         format!("\n\nCompacted image inputs:\n{}", markers.join("\n"))
     };
     prepared.push(ModelMessage {
+            agent_message_origin: None,
         role: ModelMessageRole::System,
         content: format!(
             "[Colossus context snapshot]\nsnapshot_id: {}\nstrategy: {}\nsource_message_range: {}-{}\n\n{}{}",
@@ -166,6 +167,7 @@ pub(super) fn memory_message(records: &[MemoryRecord]) -> Option<ModelMessage> {
         content.push_str(&item);
     }
     Some(ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::System,
         content: content.into(),
         tool_call_id: None,
@@ -438,7 +440,7 @@ pub(super) fn validate_newest_image_turn(messages: &[ModelMessage]) -> Result<()
     let Some(message) = messages
         .iter()
         .rev()
-        .find(|message| message.role == ModelMessageRole::User)
+        .find(|message| message.begins_user_turn())
     else {
         return Ok(());
     };

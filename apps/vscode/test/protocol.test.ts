@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseAction } from "../src/model.js";
+import { parseAction, parseInboxInspectionRequest } from "../src/model.js";
 import * as grpc from "@grpc/grpc-js";
 import { connectionStep, safeError } from "../src/connection.js";
 import {
@@ -8,6 +8,30 @@ import {
   UserError,
   type ConnectionDiagnostic,
 } from "../src/errors.js";
+
+test("inbox reads cannot nominate run ownership, transport or unbounded cursors", () => {
+  const valid = {
+    type: "agentInbox",
+    requestId: "read-1",
+    participantId: "participant-1",
+    afterSequence: 0,
+  };
+  assert.deepEqual(parseInboxInspectionRequest(valid), valid);
+  for (const changed of [
+    { runId: "foreign-run" },
+    { ownerApplicationId: "other-app" },
+    { endpoint: "https://other.example" },
+    { afterSequence: -1 },
+    { afterSequence: 4097 },
+    { afterSequence: 0.5 },
+    { participantId: "x".repeat(129) },
+    { requestId: "bad\nidentity" },
+  ])
+    assert.equal(
+      parseInboxInspectionRequest({ ...valid, ...changed }),
+      undefined,
+    );
+});
 
 test("the renderer can request native review but cannot supply approval authority or SDK arguments", () => {
   assert.deepEqual(parseAction({ type: "respond", id: "interaction-1" }), {

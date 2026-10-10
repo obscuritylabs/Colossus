@@ -297,6 +297,38 @@ impl CloudRepository {
         .await
     }
 
+    /// Queue an independently read-authorized inbox inspection for this task's fixed node.
+    pub async fn inspect_inboxes(
+        &self,
+        caller: &CloudCaller,
+        task_id: &str,
+        request_id: &str,
+        participant_id: Option<String>,
+        after_sequence: u64,
+    ) -> CloudResult<PendingCommand> {
+        caller.require(CloudPermission::Read)?;
+        let task = self.task(caller.project_id(), task_id).await?;
+        // Shared conversation visibility does not convey private collaboration ownership.
+        if task.source_read_only {
+            return Err(CloudError::PermissionDenied);
+        }
+        let root_run_id = task.run_id.clone().ok_or(CloudError::Conflict)?;
+        if let Some(id) = &participant_id {
+            validate_identifier(id)?;
+        }
+        self.queue_mutation(
+            caller,
+            &task,
+            request_id,
+            Command::InspectInboxes {
+                root_run_id,
+                participant_id,
+                after_sequence,
+            },
+        )
+        .await
+    }
+
     async fn queue_mutation(
         &self,
         caller: &CloudCaller,

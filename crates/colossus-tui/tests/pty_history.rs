@@ -83,6 +83,7 @@ impl InteractiveHost for FixtureHost {
                     run_id: "run-pty".into(),
                     sequence,
                     message: ModelMessage {
+                        agent_message_origin: None,
                         role: ModelMessageRole::Assistant,
                         content: format!("durable-row-{sequence:02}").into(),
                         tool_call_id: None,
@@ -417,6 +418,7 @@ impl InteractiveHost for FixtureHost {
                 run_id: "run-pty".into(),
                 sequence: 1,
                 message: ModelMessage {
+                    agent_message_origin: None,
                     role: ModelMessageRole::Assistant,
                     content: "durable-row-01".into(),
                     tool_call_id: None,

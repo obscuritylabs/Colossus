@@ -39,6 +39,7 @@ pub(crate) fn router(state: Arc<State>) -> Router {
         .route("/api/projects/{project}/tasks/{task}/updates",get(retained_updates))
         .route("/api/projects/{project}/tasks/{task}/cancel",post(cancel))
         .route("/api/projects/{project}/tasks/{task}/respond",post(respond))
+        .route("/api/projects/{project}/tasks/{task}/inboxes",post(inspect_inboxes))
         .merge(crate::resources::router()).merge(crate::admin::router()).merge(crate::observability::router()).merge(crate::settings::router())
         .fallback_service(spa::service(&state.config.web_root))
         .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(header::HeaderName::from_static("x-content-type-options"), header::HeaderValue::from_static("nosniff")))
@@ -874,4 +875,33 @@ async fn node_detail(
         }
     };
     Ok(Json(serde_json::json!({"node":node,"presence":presence})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InspectInboxesInput {
+    request_id: String,
+    participant_id: Option<String>,
+    #[serde(default)]
+    after_sequence: u64,
+}
+async fn inspect_inboxes(
+    Extract(state): Extract<Arc<State>>,
+    Path((project, task)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(input): Json<InspectInboxesInput>,
+) -> Result<Json<serde_json::Value>> {
+    let caller = state.auth.caller(&headers, &project, true).await?;
+    let command = db(state.repo.clone(), move |repo| async move {
+        repo.inspect_inboxes(
+            &caller,
+            &task,
+            &input.request_id,
+            input.participant_id,
+            input.after_sequence,
+        )
+        .await
+    })
+    .await?;
+    Ok(Json(serde_json::json!({"command": command})))
 }

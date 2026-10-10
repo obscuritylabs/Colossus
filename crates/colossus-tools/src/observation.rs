@@ -75,6 +75,7 @@ pub fn tool_result_observation_messages(results: &[ToolResult]) -> Vec<ModelMess
     let messages = results
         .iter()
         .map(|result| ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Tool,
             content: result.output.clone().into(),
             tool_call_id: Some(result.call_id.clone()),
@@ -106,8 +107,7 @@ pub fn project_model_tool_observations(messages: &[ModelMessage]) -> Vec<ModelMe
     let mut projected = messages.to_vec();
     let mut logical_start = 0;
     for index in 1..=projected.len() {
-        let logical_end =
-            index == projected.len() || projected[index].role == ModelMessageRole::User;
+        let logical_end = index == projected.len() || projected[index].begins_user_turn();
         if !logical_end {
             continue;
         }

@@ -38,12 +38,14 @@ pub(super) const TLS_SEED_ACCOUNT: &str = "tls-seed-v1";
 pub(super) const INSTANCE_SEED_ACCOUNT: &str = "instance-identity-seed-v1";
 const INSTANCE_ID_DOMAIN: &[u8] = b"colossus-public-api-instance-id-v1\0";
 
-const KNOWN_SCOPES: [&str; 5] = [
+const KNOWN_SCOPES: [&str; 7] = [
     scopes::RUNS_EXECUTE,
     scopes::RUNS_READ,
     scopes::RUNS_CONTROL,
     scopes::PROMPTS_RESPOND,
     scopes::APPROVALS_RESPOND,
+    scopes::AGENT_MESSAGES_READ,
+    scopes::AGENT_MESSAGES_SEND,
 ];
 const UNSUPPORTED_PUBLIC_TOOLS: [&str; 1] = ["agent.delegate"];
 
@@ -2196,6 +2198,13 @@ mod tests {
 
     #[test]
     fn exact_known_scope_and_keyring_identifier_validation_is_closed() {
+        assert!(
+            normalize_scopes(&[
+                scopes::AGENT_MESSAGES_READ.into(),
+                scopes::AGENT_MESSAGES_SEND.into()
+            ])
+            .is_ok()
+        );
         assert!(KNOWN_SCOPES.contains(&scopes::RUNS_EXECUTE));
         assert!(validate_keyring_identifier("com.example.app").is_ok());
         assert!(validate_keyring_identifier("bad value").is_err());

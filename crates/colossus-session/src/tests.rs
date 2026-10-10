@@ -21,6 +21,7 @@ fn event_sourced_session_repository_passes_shared_conformance() {
 
 fn message(role: ModelMessageRole, content: &str) -> ModelMessage {
     ModelMessage {
+        agent_message_origin: None,
         role,
         content: content.into(),
         tool_call_id: None,
@@ -141,6 +142,7 @@ fn multipart_image_messages_reconstruct_with_ordered_metadata_and_text_preview()
         detail: ModelImageDetail::Auto,
     };
     let message = ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::User,
         content: ModelContent::Parts(vec![
             ModelContentPart::Text {
@@ -187,6 +189,7 @@ fn message_batches_commit_all_or_none_in_order() {
         .create_session("batched", None, actor())
         .expect("create");
     let assistant = ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::Assistant,
         content: String::new().into(),
         tool_call_id: None,
@@ -197,6 +200,7 @@ fn message_batches_commit_all_or_none_in_order() {
         }],
     };
     let tool = ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::Tool,
         content: "done".into(),
         tool_call_id: Some("call-1".into()),
@@ -227,6 +231,7 @@ fn message_batches_commit_all_or_none_in_order() {
     );
 
     let invalid = ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::User,
         content: "bad".into(),
         tool_call_id: None,
@@ -290,6 +295,7 @@ fn pending_tool_turn_blocks_replay_until_messages_settle_atomically() {
         .expect_err("ordinary continuation is blocked");
 
     let assistant = ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::Assistant,
         content: String::new().into(),
         tool_call_id: None,
@@ -300,6 +306,7 @@ fn pending_tool_turn_blocks_replay_until_messages_settle_atomically() {
         }],
     };
     let tool = ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::Tool,
         content: "done".into(),
         tool_call_id: Some("call-guarded".into()),
@@ -415,6 +422,7 @@ fn invalid_message_shapes_fail_before_append() {
         .create_session("one", None, actor())
         .expect("create");
     let invalid = ModelMessage {
+        agent_message_origin: None,
         role: ModelMessageRole::User,
         content: "bad".into(),
         tool_call_id: None,

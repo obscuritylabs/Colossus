@@ -2841,6 +2841,7 @@ fn desktop_capabilities(
         artifacts: advertised.contains("artifacts.read"),
         plan_continuation: advertised.contains(PLAN_CONTINUATION_CAPABILITY),
         session_activity: advertised.contains(SESSION_ACTIVITY_CAPABILITY),
+        agent_inboxes: advertised.contains(colossus_sdk::AGENT_COMMUNICATION_READ_CAPABILITY),
         update_available: state.update_available(),
         agent_workflows: advertised.contains("automation.workflows"),
         attachments: advertised.contains("attachments.run_input"),

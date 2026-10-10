@@ -1,3 +1,4 @@
+import { parseInboxInspectionRequest } from "./model.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, sep } from "node:path";
@@ -151,7 +152,7 @@ export function activate(context: vscode.ExtensionContext) {
         : page === "work"
           ? ""
           : "workspace.css";
-    view.html = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${view.cspSource}; script-src 'nonce-${nonce}'; img-src ${view.cspSource}; connect-src 'none'; base-uri 'none'; form-action 'none'"><link rel="stylesheet" href="${asset("theme.css")}"><link rel="stylesheet" href="${asset("shadcn.css")}"><link rel="stylesheet" href="${asset("style.css")}"><link rel="stylesheet" href="${asset("composer.css")}"><link rel="stylesheet" href="${asset("select.css")}">${page === "settings" ? `<link rel="stylesheet" href="${asset("settings-frame.css")}">` : ""}${extraCss ? `<link rel="stylesheet" href="${asset(extraCss)}">` : ""}<title>Colossus ${page}</title></head><body data-colossus-mark="${asset("colossus-mark.svg")}"><div id="app"></div><script nonce="${nonce}" src="${asset(`${script}.js`)}"></script></body></html>`;
+    view.html = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${view.cspSource}; script-src 'nonce-${nonce}'; img-src ${view.cspSource}; connect-src 'none'; base-uri 'none'; form-action 'none'"><link rel="stylesheet" href="${asset("theme.css")}"><link rel="stylesheet" href="${asset("shadcn.css")}"><link rel="stylesheet" href="${asset("style.css")}"><link rel="stylesheet" href="${asset("composer.css")}"><link rel="stylesheet" href="${asset("select.css")}">${page === "settings" ? `<link rel="stylesheet" href="${asset("settings-frame.css")}">` : ""}${extraCss ? `<link rel="stylesheet" href="${asset(extraCss)}">` : ""}${page === "inspector" ? `<link rel="stylesheet" href="${asset("inspector.css")}">` : ""}<title>Colossus ${page}</title></head><body data-colossus-mark="${asset("colossus-mark.svg")}"><div id="app"></div><script nonce="${nonce}" src="${asset(`${script}.js`)}"></script></body></html>`;
   }
 
   async function openInspector(id: string, kind: "run" | "plan") {
@@ -183,6 +184,43 @@ export function activate(context: vscode.ExtensionContext) {
       );
       configureWebview(panel.webview, "inspector");
       const listener = panel.webview.onDidReceiveMessage((value) => {
+        const inbox = parseInboxInspectionRequest(value);
+        if (inbox) {
+          const generation = controller.connectionGeneration;
+          void run(async () => {
+            try {
+              await guard();
+              if (
+                !selectedInspection ||
+                selectedInspection.owner !== controller ||
+                selectedInspection.generation !== generation
+              )
+                throw new UserError("Select a listed run again.");
+              const payload = await controller.inspectAgentInbox(
+                inbox.participantId,
+                inbox.afterSequence,
+              );
+              if (
+                controller.connectionGeneration === generation &&
+                inspectionPanel === panel
+              )
+                await panel.webview.postMessage({
+                  type: "agentInbox",
+                  requestId: inbox.requestId,
+                  payload,
+                });
+            } catch {
+              if (inspectionPanel === panel)
+                await panel.webview.postMessage({
+                  type: "agentInbox",
+                  requestId: inbox.requestId,
+                  error:
+                    "Could not read this inbox under the current enrollment.",
+                });
+            }
+          });
+          return;
+        }
         if (
           !value ||
           typeof value !== "object" ||

@@ -36,6 +36,7 @@ where
                 "session-conformance",
                 "run-conformance",
                 ModelMessage {
+                    agent_message_origin: None,
                     role,
                     content: content.into(),
                     tool_call_id: None,
@@ -72,6 +73,7 @@ where
                 "missing-session",
                 "run-conformance",
                 ModelMessage {
+                    agent_message_origin: None,
                     role: ModelMessageRole::User,
                     content: "invalid".into(),
                     tool_call_id: None,

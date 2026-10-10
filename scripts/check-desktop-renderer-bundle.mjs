@@ -10,11 +10,14 @@ const maximumJavaScriptChunkBytes = 700_000;
 // Shared automation tables, badges and host-owned navigation retry state add
 // about 4 KB; reserve 10 KB across platform-specific bundler output. The 700 KB
 // per-chunk limit and production fixture exclusions remain unchanged.
-const maximumRendererBytes = 4_160_000;
+// Shared inbox inspection exceeds the previous ceiling by about 4 KB. Reserve
+// 10 KB for this feature across platform bundler output, retaining chunk bounds.
+const maximumRendererBytes = 4_170_000;
 const forbiddenFixtureStrings = [
   "Offline dictation preview",
   "fixture-run-desktop-release",
   "fixture-session-operations-studio",
+  "fixture-message-",
   "fixture-managed-local",
   "Sentinel completed a read-only security pass",
   "Stopped in the UI showcase",

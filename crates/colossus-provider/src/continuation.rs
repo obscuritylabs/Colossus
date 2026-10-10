@@ -122,6 +122,7 @@ impl ProviderExecutor {
             }
         }
         let assistant = ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Assistant,
             content: if calls.is_empty() {
                 final_text.unwrap_or(text)

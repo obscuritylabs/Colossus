@@ -651,11 +651,21 @@ impl WorkRepository for EventSourcedWorkRepository {
         instruction_snapshot_id: Option<String>,
         actor: Actor,
     ) -> Result<SubagentJob, StoreError> {
+        self.create_subagent_with_events(job, instruction_snapshot_id, actor, Vec::new())
+    }
+
+    fn create_subagent_with_events(
+        &self,
+        job: SubagentJob,
+        instruction_snapshot_id: Option<String>,
+        actor: Actor,
+        mut events: Vec<NewEvent>,
+    ) -> Result<SubagentJob, StoreError> {
         validate_subagent(&job)?;
         if job.status != SubagentStatus::Queued {
             return Err(StoreError::Adapter("new subagents must be queued".into()));
         }
-        self.journal.append(Self::event(
+        events.push(Self::event(
             Self::subagent_stream(&job.id),
             0,
             SUBAGENT_CREATED,
@@ -665,14 +675,25 @@ impl WorkRepository for EventSourcedWorkRepository {
                 "record": &job,
                 "instruction_snapshot_id": instruction_snapshot_id,
             }),
-        ))?;
+        ));
+        self.journal.append_batch(events)?;
         Ok(job)
     }
 
     fn update_subagent(&self, job: SubagentJob, actor: Actor) -> Result<SubagentJob, StoreError> {
+        self.update_subagent_with_events(job, actor, Vec::new())
+    }
+
+    fn update_subagent_with_events(
+        &self,
+        job: SubagentJob,
+        actor: Actor,
+        mut events: Vec<NewEvent>,
+    ) -> Result<SubagentJob, StoreError> {
         validate_subagent(&job)?;
-        let current = self
-            .get_subagent(&job.id)?
+        let stream = Self::subagent_stream(&job.id);
+        let (current, expected): (SubagentJob, u64) = self
+            .record_with_version(&stream, SUBAGENT_CREATED)?
             .ok_or_else(|| StoreError::NotFound(format!("subagent {}", job.id)))?;
         let transition_valid = matches!(
             (current.status, job.status),
@@ -704,16 +725,15 @@ impl WorkRepository for EventSourcedWorkRepository {
                 "invalid subagent transition or changed immutable provenance".into(),
             ));
         }
-        let stream = Self::subagent_stream(&job.id);
-        let expected = u64::try_from(self.journal.read_stream(&stream)?.len()).map_err(adapter)?;
-        self.journal.append(Self::event(
+        events.push(Self::event(
             stream,
             expected,
             SUBAGENT_UPDATED,
             actor,
             &job.session_id,
             json!({"record": &job}),
-        ))?;
+        ));
+        self.journal.append_batch(events)?;
         Ok(job)
     }
 
