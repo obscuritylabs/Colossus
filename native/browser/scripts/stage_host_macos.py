@@ -22,6 +22,10 @@ def main() -> int:
     parser.add_argument("--executable", type=Path, required=True)
     parser.add_argument("--app", type=Path, required=True)
     parser.add_argument("--platform", choices=("macosarm64", "macosx64"), required=True)
+    parser.add_argument("--macos-owned-profile-development", action="store_true",
+                        help="explicit unsupported Debug profile crypto; no production or certificate PKI acceptance")
+    parser.add_argument("--macos-network-envelope-policy", type=Path,
+                        help="native supervisor's fixed per-allocation policy resource; Debug only")
     options = parser.parse_args()
     try:
         if sys.platform != "darwin":
@@ -29,6 +33,8 @@ def main() -> int:
         print(stage_macos.stage_app(
             options.cef_root, options.native_build, options.executable, options.app,
             options.platform, "com.obscuritylabs.colossus.native-browser-host.preview", host=True,
+            profile_crypto_development=options.macos_owned_profile_development,
+            network_envelope_policy=options.macos_network_envelope_policy,
         ))
         return 0
     except (component.ComponentError, OSError, ValueError, subprocess.CalledProcessError):

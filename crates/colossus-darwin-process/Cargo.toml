@@ -11,6 +11,13 @@ description = "Audited safe wrapper for Darwin start-suspended process launch"
 [dependencies]
 libc = "0.2.186"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10.1"
+security-framework.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints.rust]
 unsafe_code = "allow"
 unsafe_op_in_unsafe_fn = "deny"

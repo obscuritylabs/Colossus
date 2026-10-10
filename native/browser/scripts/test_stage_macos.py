@@ -1,6 +1,7 @@
 """Development staging layout and failure contracts; no CEF or macOS required."""
 
 import errno
+import json
 import os
 from pathlib import Path
 import plistlib
@@ -89,6 +90,123 @@ class MacosStageTests(unittest.TestCase):
             stage_macos.stage_app(self.source, self.build, self.executable, self.app,
                                   "macosarm64", host=True)
         run.assert_not_called()
+
+    def prepare_profile_crypto(self):
+        host = self.root / "colossus-native-browser-host"
+        host.write_bytes(b"native host fixture")
+        host.chmod(0o755)
+        (self.build / stage_macos.PROFILE_CRYPTO_LIBRARY).write_bytes(b"profile crypto fixture")
+        (self.build / stage_macos.PROFILE_CRYPTO_BUILD).write_text(
+            json.dumps(stage_macos.PROFILE_CRYPTO_METADATA))
+        return host
+
+    def test_owned_profile_crypto_requires_explicit_host_debug_stage(self):
+        host = self.prepare_profile_crypto()
+        with patch.object(stage_macos, "run") as run:
+            with self.assertRaises(component.ComponentError):
+                stage_macos.stage_app(self.source, self.build, host, self.app,
+                                      "macosarm64", host=True)
+            with self.assertRaises(component.ComponentError):
+                stage_macos.stage_app(self.source, self.build, self.executable, self.app,
+                                      "macosarm64", profile_crypto_development=True)
+            (self.build / stage_macos.PROFILE_CRYPTO_BUILD).write_text(
+                json.dumps({**stage_macos.PROFILE_CRYPTO_METADATA, "build_type": "Release"}))
+            with self.assertRaises(component.ComponentError):
+                stage_macos.stage_app(self.source, self.build, host, self.app,
+                                      "macosarm64", host=True, profile_crypto_development=True)
+        run.assert_not_called()
+        self.assertFalse(self.app.exists())
+
+    def test_profile_crypto_dependency_is_mandatory_and_only_explicit_library_is_copied(self):
+        host = self.prepare_profile_crypto()
+        with patch.object(stage_macos.subprocess, "run", return_value=subprocess.CompletedProcess(
+                [], 0, str(host) + ":\n\t/usr/lib/libSystem.B.dylib (compatibility version 1)\n", "")):
+            with self.assertRaises(component.ComponentError):
+                stage_macos.stage_app(self.source, self.build, host, self.app,
+                                      "macosarm64", host=True, profile_crypto_development=True)
+        self.assertFalse(self.app.exists())
+        (self.build / "unrelated.dylib").write_bytes(b"not a dependency")
+        with patch.object(stage_macos, "profile_crypto_dependency") as dependency, \
+                patch.object(stage_macos, "run") as run:
+            stage_macos.stage_app(self.source, self.build, host, self.app,
+                                  "macosarm64", host=True, profile_crypto_development=True)
+        dependency.assert_called_once_with(host)
+        library = self.app / "Contents/Frameworks" / stage_macos.PROFILE_CRYPTO_LIBRARY
+        self.assertEqual(library.read_bytes(), b"profile crypto fixture")
+        self.assertFalse((self.app / "Contents/Frameworks/unrelated.dylib").exists())
+        claim = component.load_json(self.app / "Contents/Resources" / stage_macos.PROFILE_CRYPTO_CLAIM)
+        self.assertTrue(claim["development_only"])
+        self.assertTrue(claim["temporary_profiles_only"])
+        self.assertFalse(claim["production_accepted"])
+        self.assertFalse(claim["certificate_pki_accepted"])
+        signatures = [call.args[0] for call in run.call_args_list if "--sign" in call.args[0]]
+        adapter_index = next(index for index, command in enumerate(signatures)
+                             if command[-1].endswith(stage_macos.PROFILE_CRYPTO_LIBRARY))
+        self.assertLess(adapter_index, next(index for index, command in enumerate(signatures)
+                                          if command[-1].endswith(stage_macos.FRAMEWORK)))
+        inventory = component.verify_installed(self.app, self.app.with_name(self.app.name + ".browser-component.json"))
+        self.assertEqual(inventory["modes"], {"desktop": False, "headless": False})
+
+    def test_profile_crypto_dylib_links_and_hardlinks_are_refused(self):
+        host = self.prepare_profile_crypto()
+        library = self.build / stage_macos.PROFILE_CRYPTO_LIBRARY
+        library.unlink()
+        library.symlink_to(host)
+        for linked in (True, False):
+            with self.subTest(symlink=linked), patch.object(stage_macos, "profile_crypto_dependency") as dependency:
+                with self.assertRaises(component.ComponentError):
+                    stage_macos.stage_app(self.source, self.build, host, self.app,
+                                          "macosarm64", host=True, profile_crypto_development=True)
+                dependency.assert_not_called()
+            if linked:
+                library.unlink()
+                os.link(host, library)
+
+    def test_network_envelope_stages_exact_front_body_and_sealed_resource(self):
+        self.root = self.root.resolve()
+        self.app = self.root / "Colossus.app"
+        host = self.prepare_profile_crypto()
+        profile = self.root / "profile"
+        profile.mkdir(mode=0o700)
+        broker = self.root.parent / (self.root.name + "-broker")
+        broker.mkdir(mode=0o700)
+        self.addCleanup(broker.rmdir)
+        front = self.build / "envelope/colossus-native-browser-host"
+        front.parent.mkdir()
+        front.write_bytes(b"minimal front fixture")
+        front.chmod(0o755)
+        (self.build / stage_macos.NETWORK_ENVELOPE_BUILD).write_text(
+            json.dumps(stage_macos.NETWORK_ENVELOPE_METADATA))
+        for suffix, _ in stage_macos.HELPERS:
+            name = stage_macos.HELPER + suffix
+            body = self.build / "helpers" / (name + ".app") / "Contents/MacOS" / (name + " Body")
+            body.write_bytes(b"fixed body fixture")
+            body.chmod(0o755)
+        policy = self.root / "binding.source"
+        policy.write_text("\n".join((stage_macos.NETWORK_ENVELOPE_MARKER,
+                                     "42", "54321", str(self.root), str(self.app),
+                                     "com.colossus.nativehost", str(profile),
+                                     str(broker), str(self.root.parent), "")))
+        policy.chmod(0o600)
+        with patch.object(stage_macos, "profile_crypto_dependency"), \
+                patch.object(stage_macos, "run") as run:
+            stage_macos.stage_app(
+                self.source, self.build, host, self.app,
+                "macosarm64", "com.colossus.nativehost", host=True,
+                profile_crypto_development=True, network_envelope_policy=policy)
+        macos = self.app / "Contents/MacOS"
+        self.assertEqual((macos / host.name).read_bytes(), b"minimal front fixture")
+        self.assertEqual((macos / (host.name + " Body")).read_bytes(), b"native host fixture")
+        resource = self.app / "Contents/Resources" / stage_macos.NETWORK_ENVELOPE_RESOURCE
+        self.assertEqual(resource.read_bytes(), policy.read_bytes())
+        self.assertEqual(resource.stat().st_mode & 0o777, 0o400)
+        signatures = [call.args[0] for call in run.call_args_list if "--sign" in call.args[0]]
+        self.assertEqual(sum(command[-1].endswith(" Body") for command in signatures), 6)
+        self.assertTrue(all("--entitlements" not in command for command in signatures[-6:]))
+        policy.write_text(policy.read_text().replace("54321", "0"))
+        with self.assertRaises(component.ComponentError):
+            stage_macos.network_envelope_binding(policy, self.root / "second.app",
+                                                  "com.colossus.nativehost")
 
     def test_complete_loader_layout_and_distinct_helper_identities(self):
         with patch.object(stage_macos, "run") as run:

@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "chromium_version": "154.0.8037.98",
+  "origin": "https://github.com/chromium/chromium",
+  "source_path": "sandbox/policy/mac",
+  "files": {
+    "common.sb": {
+      "git_blob_sha": "b07cc8a9df28b953e4e987d27cf230153c50ddc3",
+      "sha256": "01bb90d3255ead3114ecc602cd7e7d5b78efc2371992706babc70c038aac7052"
+    },
+    "renderer.sb": {
+      "git_blob_sha": "f67307c763e190e009540b2eaa330b0ee07fd6d6",
+      "sha256": "45bc78ba343d70a31e3ac93a1949274e99681e2ffa7f0904cfbfc7baa6b31806"
+    },
+    "network.sb": {
+      "git_blob_sha": "27144995feaca88f4db9f9bb648fba2dec3bb593",
+      "sha256": "ba07080bbb294ec05e680e687665fa35195ff3353ccec4b11c368dfebc1ae619"
+    },
+    "gpu.sb": {
+      "git_blob_sha": "54fd73835cbe8dd5b0e716a54ea384e02211546f",
+      "sha256": "771e53cb9e38d9dd907f91f9f346fbf92fd1038faac2578d0449a1cfdfeb7825"
+    },
+    "utility.sb": {
+      "git_blob_sha": "b9b17134bb2e6bb0fad8bcfafbce322b6aacf16c",
+      "sha256": "47630de2cd5003eeb20e28d72ca21052ebd9f19e738561fd431fc3a99f6bfee4"
+    },
+    "audio.sb": {
+      "git_blob_sha": "72f305c16b27dc1bcdb03fb5bf2af26e9a7f9ca9",
+      "sha256": "3b98505e79ba84df1de7b0ba0f7c2ed616be4d8bf7cb25d1d63ee11831f97ff7"
+    },
+    "cdm.sb": {
+      "git_blob_sha": "45607a3e2a85634f120ca1fe31deb358d4e509d6",
+      "sha256": "27f906d38335cb4a00be4c3652712d9007acf16a4c28cbc03b00ecd8d97bec94"
+    },
+    "mirroring.sb": {
+      "git_blob_sha": "0d424ffc56aa2e8dee89c619c90776a62d1c671a",
+      "sha256": "b9397a2ba41e861f8e2ef660a2e4d554974712a04e510b5529330ab3d7026fe3"
+    },
+    "on_device_model_execution.sb": {
+      "git_blob_sha": "7a5cbeaa646d6d2ab0dfd5156c02aae065819599",
+      "sha256": "3522597c0e74fedfdf0334c6a5e8f7e8d3a38759a3ea04cb8fbdc41a4296f3fb"
+    },
+    "on_device_translation.sb": {
+      "git_blob_sha": "14691a750470ffbda737adb82a73d7da1a9b54a3",
+      "sha256": "177363b88b42653cefc7324b841a845e7e68cfea9fae1e8c6e162731af124b4b"
+    },
+    "print_backend.sb": {
+      "git_blob_sha": "54c5a26377ed49935f1078da42b0dcfaa9928752",
+      "sha256": "b8752a4f97267ca4b0cff7683412a17dae34fd023f715178e8d3d65b258534f5"
+    },
+    "print_compositor.sb": {
+      "git_blob_sha": "547daa62643b291cf789692e475da3f5046ee4a2",
+      "sha256": "44a1b67e8ed6c70e82f0c3d06f49c84b0c48ac87fd2dae3efab587a81d4f60cf"
+    },
+    "proxy_resolver.sb": {
+      "git_blob_sha": "b2c1e0d8719a6c3be00d86f8117e2f4fefbb21a8",
+      "sha256": "a44444e402af30a869d0da9e67ba8ce43f7ad3e782e9b23b5bc838e159916db6"
+    },
+    "screen_ai.sb": {
+      "git_blob_sha": "48b02a9a6900686d6a7864e80d148fde8989ad0d",
+      "sha256": "7f3ac9fccb17718e06e7c264d7373ed48d8bcd0b71d93c6dd798df2421cdaa26"
+    },
+    "speech_recognition.sb": {
+      "git_blob_sha": "49331658c6bc4962012fbad3483a08c7e6b91605",
+      "sha256": "18feddc50e2c3fba2105a6299a54ba6ed16b0388eaea8adf22b595f0d1ab6a36"
+    },
+    "webnn_model_compilation.sb": {
+      "git_blob_sha": "cd111b5962e2dc0709108ae5bb125425dfe0c284",
+      "sha256": "4f11c48cb8ad4400dacc307c59e6840ba94144b746b6bbc7db6e4b20b7c08958"
+    }
+  }
+}

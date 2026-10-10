@@ -292,6 +292,81 @@ macOS rendering or release-authentication acceptance. A macOS whole-host
 containment owner still needs implementation; staging the host does not contain
 its descendants or establish owned Keychain custody.
 
+The optional macOS Debug profile-crypto adapter is a separate unsupported
+dyld/Security-SPI experiment. It is OFF by default and is not certificate PKI or a
+hostile-process boundary. Its maintained fixture never launches Chromium and
+keeps production/PKI acceptance false. Build and sign one fresh private artifact
+without running store APIs:
+
+```sh
+node scripts/development-launch.mjs -- \
+  python3 -B native/browser/scripts/macos_profile_crypto_fixture.py build \
+  --native-build "$PWD/.local/cef-build-macos-profile-debug" \
+  --artifacts "$PWD/.local/profile-crypto-reviewed-001"
+```
+
+Review the saved source, hashes and signing evidence before the explicit `run`
+operation with that same `--artifacts` path. Run performs process-local interaction
+disablement, a public exact-requirement parser proof, owned store/query/cleanup
+checks and private before/after default/search metadata capture. It declines
+terminal/pipe output and verifies actual private capture descriptors including
+ACLs. A failed or interrupted run is never replayed, and unknown store state is
+preserved. A narrower `run --store-only` checks creation and removal of the
+initial file Keychain and its derived lock, without adding an item, routing
+Chromium, or enabling ordinary profile validity. On the reviewed macOS fixture,
+that one-shot check returned `prepare=0`, `store_valid=0`, ordinary profile
+`Denied`, `finish=0/0`, exact owned-artifact removal, and unchanged default/search
+metadata. The ordinary item path remains denied because Security can atomically
+replace the file inode; recognized filenames alone cannot establish generation
+ownership. Run the store-only operation only once on a fresh reviewed artifact:
+
+```sh
+MallocNanoZone=0 node scripts/development-launch.mjs -- \
+  python3 -B native/browser/scripts/macos_profile_crypto_fixture.py run \
+  --store-only --artifacts "$PWD/.local/profile-crypto-reviewed-001"
+```
+
+File-only runner regressions are
+`python3 -B -m unittest test_macos_profile_crypto_fixture` from
+`native/browser/scripts`.
+
+The separate macOS network-envelope builder is also Debug-only and off by
+default. It stages a fixed main entry and five paired helper entries, each
+compiled with only libSystem and libsandbox before applying its policy and
+loading CEF. The per-allocation policy resource is signed into a fresh app.
+The source builder removes Chromium's pinned broad TCP, UDP, bind, and system
+socket grants before it adds the sole assigned loopback proxy port; appending a
+generic deny alone did not override those more-specific grants. Reproduce the
+source, native compiler, and bounded local Seatbelt checks without launching
+Chromium or touching audit ports:
+
+```sh
+cmake -S native/browser -B .local/cef-build-macos-network-debug \
+  -DCEF_ROOT="$COLOSSUS_CEF_ROOT" -DCMAKE_BUILD_TYPE=Debug -DUSE_SANDBOX=ON \
+  -DCOLOSSUS_CEF_DEVELOPER_PROFILE_CRYPTO=ON \
+  -DCOLOSSUS_CEF_DEVELOPER_NETWORK_ENVELOPE=ON
+cmake --build .local/cef-build-macos-network-debug --target \
+  colossus-mac-network-envelope-source-test \
+  colossus-mac-network-envelope-compile-test \
+  colossus-mac-network-denial-test
+.local/cef-build-macos-network-debug/colossus-mac-network-envelope-source-test
+.local/cef-build-macos-network-debug/colossus-mac-network-envelope-compile-test
+.local/cef-build-macos-network-debug/colossus-mac-network-denial-test
+```
+
+The native denial fixture uses disposable loopback listeners. On this Mac it
+proved that the main and network-helper policies reach only the selected port,
+while renderer, proxy-resolver, and print-helper policies cannot reach it; it
+also denied broker-file reads and writes. This is policy evidence, not browser
+or whole-tree containment acceptance. Full request-origin enforcement, process
+supervision, certificate custody, and Desktop acceptance remain disabled.
+
+The separate [native TLS-broker custody prototype](pki/mac/README.md) also remains
+unaccepted and is not linked into CEF. Its explicit file-Keychain imports and
+nonexportable `SecKey` signer require an independently admitted broker and protected
+outside-Root state, plus native output-generation ownership. The public Keychain
+APIs provide paths rather than authenticated inode-generation receipts.
+
 ## Linux owned NSS provisioning
 
 The standalone host always creates a fresh 0700 HOME beneath its verified private

@@ -14,8 +14,12 @@ std::string context_path;
 }
 bool ProfileRoot(const char* root) {
   if (!persistent) return true;
+  if (!root || !*root) return false;
   std::error_code error;
-  const auto base = std::filesystem::u8path(root);
+  // char8_t input retains UTF-8 conversion on Windows without the deprecated
+  // C++17 u8path helper. Native bootstrap supplies this bounded UTF-8 path.
+  const std::string utf8(root);
+  const auto base = std::filesystem::path(std::u8string(utf8.begin(), utf8.end()));
   const auto path = base / "context";
   if (!base.is_absolute() || std::filesystem::canonical(base, error) != base || error) return false;
 #if defined(OS_WIN)

@@ -283,7 +283,7 @@ pub fn spawn_suspended_tty(
     })
 }
 
-fn spawn_suspended(
+pub(super) fn spawn_suspended(
     executable: &Path,
     arguments: &[OsString],
     environment: &[OsString],
@@ -419,12 +419,12 @@ impl Drop for SpawnAttributes {
     }
 }
 
-struct FileActions {
+pub(super) struct FileActions {
     raw: libc::posix_spawn_file_actions_t,
 }
 
 impl FileActions {
-    fn new() -> io::Result<Self> {
+    pub(super) fn new() -> io::Result<Self> {
         let mut raw = MaybeUninit::uninit();
         // SAFETY: Darwin initializes one opaque pointer in `raw` on success.
         cvt_errno(unsafe { libc::posix_spawn_file_actions_init(raw.as_mut_ptr()) })?;
@@ -433,18 +433,18 @@ impl FileActions {
         Ok(Self { raw })
     }
 
-    fn dup2(&mut self, fd: RawFd, destination: RawFd) -> io::Result<()> {
+    pub(super) fn dup2(&mut self, fd: RawFd, destination: RawFd) -> io::Result<()> {
         // SAFETY: the opaque action object is initialized and exclusively borrowed;
         // integer descriptors are copied by Darwin and never dereferenced by Rust.
         cvt_errno(unsafe { libc::posix_spawn_file_actions_adddup2(&mut self.raw, fd, destination) })
     }
 
-    fn close(&mut self, fd: RawFd) -> io::Result<()> {
+    pub(super) fn close(&mut self, fd: RawFd) -> io::Result<()> {
         // SAFETY: same initialized action ownership; Darwin records only the integer.
         cvt_errno(unsafe { libc::posix_spawn_file_actions_addclose(&mut self.raw, fd) })
     }
 
-    fn open(
+    pub(super) fn open(
         &mut self,
         fd: RawFd,
         path: &CStr,
@@ -466,7 +466,7 @@ impl Drop for FileActions {
     }
 }
 
-fn cloexec_pipe() -> io::Result<(OwnedFd, OwnedFd)> {
+pub(super) fn cloexec_pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     let mut descriptors = [0; 2];
     // SAFETY: `descriptors` is writable storage for exactly two file descriptors.
     cvt_minus_one(unsafe { libc::pipe(descriptors.as_mut_ptr()) })?;
@@ -482,18 +482,20 @@ fn cloexec_pipe() -> io::Result<(OwnedFd, OwnedFd)> {
 }
 
 fn normalize_channel_source(fd: OwnedFd) -> io::Result<OwnedFd> {
-    if fd.as_raw_fd() >= FIRST_CHANNEL_SOURCE_FD {
+    normalize_channel_source_above(fd, FIRST_CHANNEL_SOURCE_FD)
+}
+
+pub(super) fn normalize_channel_source_above(
+    fd: OwnedFd,
+    first_source: RawFd,
+) -> io::Result<OwnedFd> {
+    if fd.as_raw_fd() >= first_source {
         return Ok(fd);
     }
     // SAFETY: `fd` is a valid owned descriptor. F_DUPFD_CLOEXEC creates one distinct
     // descriptor at or above the requested floor without consuming the source.
-    let duplicate = cvt_fd(unsafe {
-        libc::fcntl(
-            fd.as_raw_fd(),
-            libc::F_DUPFD_CLOEXEC,
-            FIRST_CHANNEL_SOURCE_FD,
-        )
-    })?;
+    let duplicate =
+        cvt_fd(unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, first_source) })?;
     // SAFETY: the successful fcntl call returned a new uniquely owned descriptor.
     let duplicate = unsafe { OwnedFd::from_raw_fd(duplicate) };
     Ok(duplicate)

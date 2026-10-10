@@ -17,6 +17,9 @@ std::map<uint64_t, CefRefPtr<CefRequestContext>> contexts;
 bool initialized = false;
 bool headless = false;
 static std::thread::id owning_thread;
+bool OnOwningThread() {
+  return owning_thread == std::this_thread::get_id();
+}
 struct Proxy {
   std::string address;
   uint16_t port = 0;
@@ -109,6 +112,9 @@ extern "C" int32_t colossus_cef_proxy_configure(const char* address,
         return (c >= '0' && c <= '9') || c == '.' || c == ':' ||
           (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
       })) return COLOSSUS_CEF_INVALID;
+  // The dedicated host configures its proxy before CEF initialization. macOS
+  // must load the framework before any CefString or parser utility is called.
+  if (!PlatformLoadLibrary()) return COLOSSUS_CEF_UNAVAILABLE;
   CefURLParts parts;
   const auto bracketed = host.find(':') == std::string::npos ? host : "[" + host + "]";
   if (!CefParseURL("http://" + bracketed + ":" + std::to_string(port), parts))
@@ -223,7 +229,7 @@ extern "C" int32_t colossus_cef_bootstrap(const colossus_cef_bootstrap_options* 
 
 extern "C" int32_t colossus_cef_pump() {
   if (!colossus::initialized) return COLOSSUS_CEF_UNAVAILABLE;
-  if (std::this_thread::get_id() != colossus::owning_thread) return COLOSSUS_CEF_WRONG_THREAD;
+  if (!colossus::OnOwningThread()) return COLOSSUS_CEF_WRONG_THREAD;
   colossus::PlatformEventLoopDiagnostics();
   colossus::PresentationExpire();
   colossus::DownloadExpire();

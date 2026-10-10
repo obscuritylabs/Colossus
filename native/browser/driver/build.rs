@@ -17,6 +17,25 @@ fn main() {
     let build = PathBuf::from(build)
         .canonicalize()
         .expect("native build must exist");
+    if env::var_os("CARGO_FEATURE_MACOS_OWNED_PROFILE_DEVELOPMENT").is_some() {
+        assert_eq!(
+            target, "macos",
+            "development profile adapter requires macOS"
+        );
+        assert_eq!(
+            env::var("DEBUG").as_deref(),
+            Ok("true"),
+            "development profile adapter rejects release builds"
+        );
+        let adapter = build.join("libcolossus_mac_profile_crypto.dylib");
+        assert!(
+            adapter.is_file(),
+            "explicit owned profile adapter build required"
+        );
+        println!("cargo:rerun-if-changed={}", adapter.display());
+        println!("cargo:rustc-link-lib=dylib=colossus_mac_profile_crypto");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
+    }
     let cef = PathBuf::from(env::var_os("COLOSSUS_CEF_ROOT").expect("pinned CEF root required"))
         .canonicalize()
         .expect("CEF root must exist");

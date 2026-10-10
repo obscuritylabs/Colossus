@@ -3,6 +3,26 @@ use std::ffi::{c_char, c_void};
 
 pub const ABI_VERSION: u32 = 2;
 
+#[cfg(all(target_os = "macos", feature = "macos-owned-profile-development"))]
+#[link(name = "colossus_mac_profile_crypto", kind = "dylib")]
+unsafe extern "C" {
+    pub fn colossus_mac_profile_crypto_prepare(
+        parent: *const c_char,
+        imports: *const *const c_void,
+    ) -> i32;
+    pub fn colossus_mac_profile_crypto_valid() -> i32;
+    pub fn colossus_mac_profile_crypto_finish() -> i32;
+}
+
+#[cfg(all(target_os = "macos", feature = "macos-owned-profile-development"))]
+#[link(name = "Security", kind = "framework")]
+unsafe extern "C" {
+    pub fn SecItemCopyMatching(query: *const c_void, result: *mut *const c_void) -> i32;
+    pub fn SecItemAdd(query: *const c_void, result: *mut *const c_void) -> i32;
+    pub fn SecItemUpdate(query: *const c_void, attributes: *const c_void) -> i32;
+    pub fn SecItemDelete(query: *const c_void) -> i32;
+}
+
 #[repr(C)]
 pub struct DownloadState {
     pub status: u32,

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import json
 import os
 from pathlib import Path
 import plistlib
@@ -31,6 +32,67 @@ ENTITLEMENTS = Path(__file__).resolve().parent.parent / "mac/development.entitle
 MAIN_ENTITLEMENTS = Path(__file__).resolve().parent.parent / "mac/development-main.entitlements.plist"
 DESKTOP_INFO_PLIST = Path(__file__).resolve().parents[3] / "apps/desktop/src-tauri/Info.plist"
 DICTATION_RESOURCES = ("ggml-tiny.en.bin", "models.json", "LICENSE-MIT")
+PROFILE_CRYPTO_LIBRARY = "libcolossus_mac_profile_crypto.dylib"
+PROFILE_CRYPTO_BUILD = "profile-crypto-development-build.json"
+PROFILE_CRYPTO_CLAIM = "profile-crypto-development.json"
+NETWORK_ENVELOPE_RESOURCE = "colossus-network-envelope.policy"
+NETWORK_ENVELOPE_MARKER = "COLOSSUS_MAC_NETWORK_ENVELOPE_V1"
+NETWORK_ENVELOPE_BUILD = "network-envelope-development-build.json"
+NETWORK_ENVELOPE_METADATA = {
+    "schema_version": 1, "development_only": True, "build_type": "Debug",
+    "production_accepted": False, "native_acceptance": False,
+}
+PROFILE_CRYPTO_METADATA = {
+    "schema_version": 1, "development_only": True, "build_type": "Debug",
+    "production_accepted": False, "api": "unsupported-dyld-security-spi",
+}
+
+
+def profile_crypto_dependency(executable: Path) -> None:
+    """The adapter must be an ordinary launch dependency, never loader injection."""
+    result = subprocess.run(["/usr/bin/otool", "-L", str(executable)],
+                            check=True, text=True, capture_output=True)
+    dependencies = [line.strip().split(" ", 1)[0] for line in result.stdout.splitlines()[1:]]
+    if "@rpath/" + PROFILE_CRYPTO_LIBRARY not in dependencies:
+        raise component.ComponentError("development profile crypto requires the signed launch dependency")
+
+
+def network_envelope_binding(source: Path, app: Path, identifier: str) -> bytes:
+    """Bind a finite native-only policy resource to this exact fresh app path."""
+    source = source.absolute()
+    descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    with os.fdopen(descriptor, "rb") as input_file:
+        before = os.fstat(input_file.fileno())
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid() or
+                before.st_nlink != 1 or before.st_mode & 0o077 or
+                before.st_size == 0 or before.st_size > 32 * 1024):
+            raise component.ComponentError("network envelope source is not private and bounded")
+        data = input_file.read(32 * 1024 + 1)
+        after = os.fstat(input_file.fileno())
+        if (len(data) != before.st_size or len(data) > 32 * 1024 or
+                (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) !=
+                (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)):
+            raise component.ComponentError("network envelope source changed during binding")
+    try:
+        fields = data.decode("ascii").split("\n")
+    except UnicodeDecodeError as error:
+        raise component.ComponentError("network envelope has invalid encoding") from error
+    if (len(fields) != 10 or fields[-1] or fields[0] != NETWORK_ENVELOPE_MARKER or
+            not fields[1].isdecimal() or int(fields[1]) in (0, 2**32 - 1) or
+            int(fields[1]) >= 2**32 or not fields[2].isdecimal() or
+            not 1 <= int(fields[2]) <= 65535):
+        raise component.ComponentError("network envelope has invalid fixed fields")
+    allocation, bundle, profile, broker, personal = map(
+        Path, (fields[3], fields[4], fields[6], fields[7], fields[8]))
+    if (bundle != app or allocation != app.parent or profile != allocation / "profile" or
+            fields[5] != identifier or source.parent != allocation or
+            not all(path.is_absolute() and path.resolve() == path for path in
+                    (allocation, profile, broker, personal)) or
+            not profile.is_relative_to(allocation) or broker.is_relative_to(allocation)):
+        raise component.ComponentError("network envelope does not bind this owned allocation")
+    if not re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", fields[5]):
+        raise component.ComponentError("network envelope has invalid bundle identity")
+    return data
 
 
 def verify_source(root: Path, platform: str) -> Path:
@@ -133,32 +195,49 @@ def publish_artifacts(artifacts: list[tuple[Path, Path]]) -> None:
         raise
 
 
-def sign_app(app: Path, helpers: list[Path], platform: str, *, host: bool = False) -> None:
+def sign_app(app: Path, helpers: list[Path], platform: str, *, host: bool = False,
+             profile_crypto_development: bool = False,
+             network_envelope_development: bool = False) -> None:
     arch = "arm64" if platform == "macosarm64" else "x86_64"
     framework = app / "Contents/Frameworks" / FRAMEWORK
     # A copied pinned framework includes libcef_sandbox.dylib: helpers load it
     # before loading Chromium. Sign every nested dylib before its container.
     libraries = sorted((framework / "Versions/A/Libraries").glob("*.dylib"))
+    if profile_crypto_development:
+        libraries.append(app / "Contents/Frameworks" / PROFILE_CRYPTO_LIBRARY)
     with (app / "Contents/Info.plist").open("rb") as source:
         main_executable = plistlib.load(source)["CFBundleExecutable"]
+    bodies = ([app / "Contents/MacOS" / (main_executable + " Body")]
+              + [helper / "Contents/MacOS" / (helper.stem + " Body") for helper in helpers]
+              if network_envelope_development else [])
     for binary in [app / "Contents/MacOS" / main_executable,
                    *(helper / "Contents/MacOS" / helper.stem for helper in helpers),
-                   framework / "Versions/A/Chromium Embedded Framework", *libraries]:
+                   framework / "Versions/A/Chromium Embedded Framework", *libraries,
+                   *bodies]:
         run(["/usr/bin/lipo", str(binary), "-verify_arch", arch])
     for library in libraries:
         run(["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none", str(library)])
     run(["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none", str(framework)])
-    for target in [*helpers, app]:
-        entitlements = MAIN_ENTITLEMENTS if target == app and not host else ENTITLEMENTS
+    for body in bodies:
         run(["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none",
-             "--options", "runtime", "--entitlements", str(entitlements), str(target)])
+             "--options", "runtime", "--entitlements", str(ENTITLEMENTS), str(body)])
+        run(["/usr/bin/codesign", "--verify", "--strict", str(body)])
+    for target in [*helpers, app]:
+        command = ["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none",
+                   "--options", "runtime"]
+        if not network_envelope_development:
+            entitlements = MAIN_ENTITLEMENTS if target == app and not host else ENTITLEMENTS
+            command.extend(["--entitlements", str(entitlements)])
+        run([*command, str(target)])
     # Verify recursively, but never use --deep signing to choose entitlements.
     run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)])
 
 
 def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
               platform: str, identifier: str = IDENTIFIER,
-              dictation_resources: Path | None = None, *, host: bool = False) -> Path:
+              dictation_resources: Path | None = None, *, host: bool = False,
+              profile_crypto_development: bool = False,
+              network_envelope_policy: Path | None = None) -> Path:
     if platform not in ("macosarm64", "macosx64"):
         raise component.ComponentError("development app staging requires a macOS platform")
     if not re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", identifier):
@@ -168,6 +247,19 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
     executable = regular_executable(executable.absolute())
     if host and (executable.name != "colossus-native-browser-host" or dictation_resources is not None):
         raise component.ComponentError("native host staging requires the fixed host executable and no Desktop assets")
+    if profile_crypto_development and not host:
+        raise component.ComponentError("unsupported profile crypto is restricted to the explicit native development host")
+    network_envelope_development = network_envelope_policy is not None
+    if network_envelope_development and (not host or not profile_crypto_development):
+        raise component.ComponentError("the network envelope requires the explicit private Debug host and owned profile adapter")
+    crypto_build = native_build / PROFILE_CRYPTO_BUILD
+    if host and crypto_build.exists() and not profile_crypto_development:
+        raise component.ComponentError("a profile crypto Debug build requires explicit development staging")
+    if profile_crypto_development:
+        if component.load_json(crypto_build) != PROFILE_CRYPTO_METADATA:
+            raise component.ComponentError("unsupported or non-Debug profile crypto build")
+        component.digest_file(native_build / PROFILE_CRYPTO_LIBRARY)
+        profile_crypto_dependency(executable)
     if dictation_resources is not None:
         dictation_resources = component.directory(dictation_resources)
         for name in DICTATION_RESOURCES:
@@ -179,6 +271,13 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
     manifest = app.with_name(app.name + ".browser-component.json")
     if manifest.exists() or manifest.is_symlink():
         raise component.ComponentError("an inventory already exists for this development app")
+    policy_bytes = (network_envelope_binding(network_envelope_policy, app, identifier)
+                    if network_envelope_policy is not None else None)
+    front = native_build / "envelope/colossus-native-browser-host"
+    if network_envelope_development:
+        if component.load_json(native_build / NETWORK_ENVELOPE_BUILD) != NETWORK_ENVELOPE_METADATA:
+            raise component.ComponentError("network envelope requires the explicit Debug front build")
+        regular_executable(front)
     parent = component.directory(app.parent, create=True)
     helper_root = component.directory(native_build / "helpers")
     component.inventory_files(helper_root, component.MANIFEST)
@@ -186,6 +285,8 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
         name = HELPER + suffix
         helper = helper_root / (name + ".app")
         regular_executable(helper / "Contents/MacOS" / name)
+        if network_envelope_development:
+            regular_executable(helper / "Contents/MacOS" / (name + " Body"))
         with (helper / "Contents/Info.plist").open("rb") as source:
             info = plistlib.load(source)
         if info.get("CFBundleExecutable") != name or info.get("CFBundlePackageType") != "APPL":
@@ -203,7 +304,17 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
             dictation.mkdir()
             for name in DICTATION_RESOURCES:
                 shutil.copy2(dictation_resources / name, dictation / name)
-        shutil.copy2(executable, macos / executable_name)
+        if network_envelope_development:
+            shutil.copy2(front, macos / executable_name)
+            shutil.copy2(executable, macos / (executable_name + " Body"))
+            policy = resources / NETWORK_ENVELOPE_RESOURCE
+            with policy.open("xb") as output:
+                output.write(policy_bytes)
+                output.flush()
+                os.fsync(output.fileno())
+            policy.chmod(0o400)
+        else:
+            shutil.copy2(executable, macos / executable_name)
         framework = frameworks / FRAMEWORK
         version = framework / "Versions/A"
         shutil.copytree(cef_root / "Release" / FRAMEWORK, version, symlinks=True)
@@ -253,8 +364,16 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
         notices.mkdir()
         for name in ("LICENSE.txt", "CREDITS.html"):
             shutil.copy2(cef_root / name, notices / name)
+        if profile_crypto_development:
+            shutil.copy2(native_build / PROFILE_CRYPTO_LIBRARY, frameworks / PROFILE_CRYPTO_LIBRARY)
+            with (resources / PROFILE_CRYPTO_CLAIM).open("x", encoding="utf-8") as output:
+                json.dump({**PROFILE_CRYPTO_METADATA, "temporary_profiles_only": True,
+                           "certificate_pki_accepted": False}, output, sort_keys=True)
+                output.write("\n")
         component.inventory_files(staged, component.MANIFEST)
-        sign_app(staged, helpers, platform, host=host)
+        sign_app(staged, helpers, platform, host=host,
+                 profile_crypto_development=profile_crypto_development,
+                 network_envelope_development=network_envelope_development)
         # This developer consistency receipt lives beside the signed app.
         # It does not establish publisher identity or promote release modes.
         temporary_manifest = Path(temporary) / component.MANIFEST

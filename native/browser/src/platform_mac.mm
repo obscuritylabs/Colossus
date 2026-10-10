@@ -57,8 +57,7 @@ bool TaoEventLoopInstalled() {
 
 extern "C" int32_t colossus_cef_standalone_platform_pump() {
   if (!colossus::initialized) return COLOSSUS_CEF_UNAVAILABLE;
-  if (![NSThread isMainThread] ||
-      std::this_thread::get_id() != colossus::owning_thread)
+  if (![NSThread isMainThread] || !colossus::OnOwningThread())
     return COLOSSUS_CEF_WRONG_THREAD;
   if (!NSApp || ![NSApp conformsToProtocol:@protocol(CefAppProtocol)] ||
       TaoEventLoopInstalled())

@@ -69,6 +69,7 @@ int32_t PlatformBounds(CefWindowHandle handle, colossus_cef_bounds bounds);
 int32_t PlatformVisible(CefWindowHandle handle, bool visible);
 bool PlatformEarlySetup();
 bool PlatformLoadLibrary();
+bool OnOwningThread();
 void PlatformEventLoopDiagnostics();
 bool PlatformCloseChild(CefWindowHandle handle);
 int32_t PlatformAcceptanceActivate(CefWindowHandle handle);

@@ -1,5 +1,11 @@
 //! Private supervised CEF host. This is never a general CDP server.
 
+#[cfg(all(
+    feature = "macos-owned-profile-development",
+    any(not(target_os = "macos"), not(debug_assertions))
+))]
+compile_error!("the owned macOS profile adapter is development-only");
+
 #[cfg(any(
     test,
     all(any(target_os = "linux", target_os = "macos"), colossus_cef_linked)

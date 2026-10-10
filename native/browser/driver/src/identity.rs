@@ -1,6 +1,7 @@
 //! Native enrollment bindings only; the browser action/model surface cannot select keys.
 use colossus_contracts::BrowserOrigin;
 use colossus_native_browser_pki::{fingerprint, identity_validity};
+#[cfg(any(not(target_os = "macos"), feature = "macos-owned-profile-development"))]
 use colossus_ports::BrowserDriverError;
 use serde::Deserialize;
 
@@ -17,6 +18,7 @@ pub struct Policy {
 }
 
 impl Policy {
+    #[cfg(any(not(target_os = "macos"), feature = "macos-owned-profile-development"))]
     pub fn new(bindings: Vec<Binding>) -> Result<Self, BrowserDriverError> {
         if bindings.len() > 32 {
             return Err(BrowserDriverError::LimitExceeded);

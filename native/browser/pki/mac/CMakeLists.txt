@@ -1,0 +1,23 @@
+cmake_minimum_required(VERSION 3.21)
+project(colossus_mac_owned_pki LANGUAGES CXX OBJCXX)
+option(COLOSSUS_MAC_OWNED_PKI_PROTOTYPE "Compile unaccepted native TLS-broker custody prototype" OFF)
+if(NOT COLOSSUS_MAC_OWNED_PKI_PROTOTYPE)
+  return()
+endif()
+if(NOT APPLE OR NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+  message(FATAL_ERROR "The unaccepted owned PKI prototype requires an explicit macOS Debug build.")
+endif()
+add_library(colossus_mac_owned_identity STATIC owned_identity.mm)
+target_compile_features(colossus_mac_owned_identity PRIVATE cxx_std_20)
+target_compile_definitions(colossus_mac_owned_identity PRIVATE COLOSSUS_MAC_OWNED_PKI_PROTOTYPE=1)
+target_compile_options(colossus_mac_owned_identity PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(colossus_mac_owned_identity PRIVATE "-framework Security" "-framework CoreFoundation")
+set_target_properties(colossus_mac_owned_identity PROPERTIES
+  CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
+add_executable(colossus-mac-owned-pki-file-test EXCLUDE_FROM_ALL owned_identity_ownership_test.mm)
+target_compile_features(colossus-mac-owned-pki-file-test PRIVATE cxx_std_20)
+target_compile_definitions(colossus-mac-owned-pki-file-test PRIVATE COLOSSUS_MAC_OWNED_PKI_PROTOTYPE=1)
+target_compile_options(colossus-mac-owned-pki-file-test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(colossus-mac-owned-pki-file-test PRIVATE "-framework Security" "-framework CoreFoundation")
+# Deliberately no CEF linkage, broker executable, installation, automatic run
+# target, or release manifest. Compilation cannot enable PKI acceptance.

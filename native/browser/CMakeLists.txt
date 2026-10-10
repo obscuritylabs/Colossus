@@ -27,6 +27,51 @@ if(NOT OS_MAC)
 endif()
 
 add_library(colossus_cef STATIC src/host.cc src/client.cc src/control.cc src/platform.cc src/presentation.cc src/transfer.cc src/profile.cc)
+option(COLOSSUS_CEF_DEVELOPER_PROFILE_CRYPTO "Build unsupported Debug-only macOS owned profile crypto" OFF)
+option(COLOSSUS_CEF_DEVELOPER_NETWORK_ENVELOPE "Build unsupported Debug-only macOS per-allocation network envelope fronts" OFF)
+if(COLOSSUS_CEF_DEVELOPER_NETWORK_ENVELOPE)
+  if(NOT OS_MAC OR NOT CMAKE_BUILD_TYPE STREQUAL "Debug" OR NOT COLOSSUS_CEF_DEVELOPER_PROFILE_CRYPTO)
+    message(FATAL_ERROR "The macOS network envelope requires an explicit Debug owned-profile build; no production capability is enabled.")
+  endif()
+  include(mac/network_envelope.cmake)
+  add_executable(colossus-mac-browser-envelope-front mac/host_envelope_front.c)
+  target_link_libraries(colossus-mac-browser-envelope-front PRIVATE colossus_mac_network_policy sandbox)
+  target_compile_options(colossus-mac-browser-envelope-front PRIVATE -Wall -Wextra -Werror)
+  set_target_properties(colossus-mac-browser-envelope-front PROPERTIES
+    OUTPUT_NAME "colossus-native-browser-host"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/envelope")
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/network-envelope-development-build.json"
+    "{\"schema_version\":1,\"development_only\":true,\"build_type\":\"Debug\",\"production_accepted\":false,\"native_acceptance\":false}\n")
+endif()
+if(COLOSSUS_CEF_DEVELOPER_PROFILE_CRYPTO)
+  if(NOT OS_MAC OR NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+    message(FATAL_ERROR "Owned profile crypto requires an explicit macOS Debug development build; it is not production acceptance.")
+  endif()
+  # dyld ignores interpose sections in MH_EXECUTE. This must remain a normal
+  # signed MH_DYLIB launch dependency, never a merged/static library or injection.
+  add_library(colossus_mac_profile_crypto SHARED mac/profile_crypto.mm)
+  target_compile_definitions(colossus_mac_profile_crypto PRIVATE COLOSSUS_MAC_PROFILE_CRYPTO_DEVELOPMENT=1)
+  target_include_directories(colossus_mac_profile_crypto PUBLIC mac)
+  target_link_libraries(colossus_mac_profile_crypto PRIVATE "-framework Security" "-framework CoreFoundation")
+  target_compile_options(colossus_mac_profile_crypto PRIVATE -Wall -Wextra -Werror)
+  set_target_properties(colossus_mac_profile_crypto PROPERTIES
+    MACOSX_RPATH ON INSTALL_NAME_DIR "@rpath"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/profile-crypto-development-build.json"
+    "{\"schema_version\":1,\"development_only\":true,\"build_type\":\"Debug\",\"production_accepted\":false,\"api\":\"unsupported-dyld-security-spi\"}\n")
+  install(TARGETS colossus_mac_profile_crypto LIBRARY DESTINATION .)
+  add_executable(colossus-mac-profile-crypto-ownership-test EXCLUDE_FROM_ALL mac/profile_crypto_ownership_test.mm)
+  target_compile_definitions(colossus-mac-profile-crypto-ownership-test PRIVATE COLOSSUS_MAC_PROFILE_CRYPTO_DEVELOPMENT=1)
+  target_link_libraries(colossus-mac-profile-crypto-ownership-test PRIVATE "-framework Security" "-framework CoreFoundation")
+  target_compile_options(colossus-mac-profile-crypto-ownership-test PRIVATE -Wall -Wextra -Werror)
+  # Explicit operator fixture only. Building/signing it does not run Security
+  # operations; use the reviewed two-step runner and fresh private evidence.
+  add_executable(colossus-mac-profile-crypto-fixture EXCLUDE_FROM_ALL mac/profile_crypto_fixture.mm)
+  target_include_directories(colossus-mac-profile-crypto-fixture PRIVATE mac)
+  target_link_libraries(colossus-mac-profile-crypto-fixture PRIVATE colossus_mac_profile_crypto "-framework Security" "-framework CoreFoundation")
+  target_compile_options(colossus-mac-profile-crypto-fixture PRIVATE -Wall -Wextra -Werror)
+endif()
 option(COLOSSUS_CEF_TEST_CUSTODY "Build the closed Linux native renderer NSS open-denial experiment" OFF)
 if(COLOSSUS_CEF_TEST_CUSTODY)
   if(NOT OS_LINUX)
@@ -85,15 +130,31 @@ if(OS_MAC)
     set(COLOSSUS_HELPER_IDENTIFIER "com.obscuritylabs.colossus.chromium-preview.helper${_plist_suffix}")
     set(_helper_plist "${CMAKE_CURRENT_BINARY_DIR}/helper${_target_suffix}-Info.plist")
     configure_file(mac/helper-Info.plist.in "${_helper_plist}" @ONLY)
-    add_executable(${_helper_target} MACOSX_BUNDLE src/helper_mac.mm)
-    SET_EXECUTABLE_TARGET_PROPERTIES(${_helper_target})
-    target_include_directories(${_helper_target} PRIVATE "${CEF_ROOT}")
-    target_link_libraries(${_helper_target} PRIVATE libcef_dll_wrapper ${CEF_STANDARD_LIBS})
-    set_target_properties(${_helper_target} PROPERTIES
-      OUTPUT_NAME "${COLOSSUS_HELPER_NAME}"
-      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/helpers"
-      MACOSX_BUNDLE_INFO_PLIST "${_helper_plist}")
-    install(TARGETS ${_helper_target} BUNDLE DESTINATION helpers)
+    if(COLOSSUS_CEF_DEVELOPER_NETWORK_ENVELOPE)
+      if(_target_suffix STREQUAL "_renderer")
+        set(_helper_kind 1)
+      elseif(_target_suffix STREQUAL "_gpu")
+        set(_helper_kind 2)
+      elseif(_target_suffix STREQUAL "_plugin")
+        set(_helper_kind 3)
+      elseif(_target_suffix STREQUAL "_alerts")
+        set(_helper_kind 4)
+      else()
+        set(_helper_kind 0)
+      endif()
+      colossus_add_network_helper(${_helper_target} "${COLOSSUS_HELPER_NAME}"
+        "${_helper_plist}" "${_helper_kind}")
+    else()
+      add_executable(${_helper_target} MACOSX_BUNDLE src/helper_mac.mm)
+      SET_EXECUTABLE_TARGET_PROPERTIES(${_helper_target})
+      target_include_directories(${_helper_target} PRIVATE "${CEF_ROOT}")
+      target_link_libraries(${_helper_target} PRIVATE libcef_dll_wrapper ${CEF_STANDARD_LIBS})
+      set_target_properties(${_helper_target} PROPERTIES
+        OUTPUT_NAME "${COLOSSUS_HELPER_NAME}"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/helpers"
+        MACOSX_BUNDLE_INFO_PLIST "${_helper_plist}")
+      install(TARGETS ${_helper_target} BUNDLE DESTINATION helpers)
+    endif()
   endforeach()
   # The distribution framework is unversioned. The development app stager
   # creates the supported Versions/A layout and signs only copied bytes.
