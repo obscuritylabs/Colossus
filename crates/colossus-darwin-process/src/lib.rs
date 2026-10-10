@@ -32,6 +32,8 @@ mod audit_session;
 #[cfg(target_os = "macos")]
 mod identity;
 #[cfg(target_os = "macos")]
+mod keeper;
+#[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
 mod private_channels;
@@ -50,6 +52,8 @@ pub use audit_peer::DarwinAuditPeer;
 pub use audit_session::RetainedDarwinAuditSession;
 #[cfg(target_os = "macos")]
 pub use identity::{DarwinProcessIdentity, DarwinProcessSignal, audit_token_signals_supported};
+#[cfg(target_os = "macos")]
+pub use keeper::{DarwinKeeperAdmission, DarwinKeeperJob};
 #[cfg(target_os = "macos")]
 pub use private_channels::{SpawnedPrivateChannels, spawn_suspended_private_channels};
 #[cfg(target_os = "macos")]
