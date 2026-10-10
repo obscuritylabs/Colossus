@@ -10,6 +10,7 @@ mod cli_control;
 mod discovery;
 mod headless;
 mod history;
+mod inboxes;
 mod inventory;
 pub use inventory::native_host_label;
 mod outbound;

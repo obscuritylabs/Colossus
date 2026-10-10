@@ -139,6 +139,43 @@ async function conversationMenuItem(label: string) {
 }
 
 describe("human cloud conversation authority", () => {
+  it("retains inbox inspection when switching shared session views", async () => {
+    const task: Task = {
+      task_id: "task-a",
+      project_id: "project-a",
+      node_id: "node-a",
+      subject: "human",
+      request: {
+        input: [{ text: "Inspect delegated work" }],
+        mode: "execute",
+        role: "primary",
+      },
+      run_id: "run-a",
+      revision: 1,
+      last_sequence: 0,
+      snapshot: null,
+    };
+    const fetch = vi.fn(async (_url: string) =>
+      response({ ...history, tasks: [task] }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    await render(thread, [node], ["read"]);
+    await act(() => button("Inboxes").click());
+    const inboxes = container.querySelector('[aria-label="Session inboxes"]');
+    expect(inboxes?.querySelector("summary")?.textContent).toBe(
+      "Agent inboxes",
+    );
+    expect(
+      container.querySelector('[aria-label="Conversation history"]'),
+    ).toBeNull();
+    expect(fetch.mock.calls.some(([url]) => url.endsWith("/inboxes"))).toBe(
+      false,
+    );
+    await act(() => button("Conversation").click());
+    expect(
+      container.querySelector('[aria-label="Conversation history"]'),
+    ).not.toBeNull();
+  });
   it("renders recorded account names and leaves imported authors neutral", async () => {
     const messages = ["own", "other", "imported"].map((id, index) => ({
       message_id: id,

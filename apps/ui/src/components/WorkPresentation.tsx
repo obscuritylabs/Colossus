@@ -7,6 +7,7 @@ export type SessionWorkspaceView =
   | "plans"
   | "snapshots"
   | "activity"
+  | "inboxes"
   | "sources"
   | "resources";
 export const SESSION_WORKSPACE_VIEWS: readonly {
@@ -18,6 +19,7 @@ export const SESSION_WORKSPACE_VIEWS: readonly {
   { id: "plans", label: "Plans" },
   { id: "snapshots", label: "Snapshots" },
   { id: "activity", label: "Activity" },
+  { id: "inboxes", label: "Inboxes" },
   { id: "sources", label: "Sources" },
   { id: "resources", label: "Resources" },
 ];

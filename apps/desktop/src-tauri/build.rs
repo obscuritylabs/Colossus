@@ -140,6 +140,8 @@ const COMMANDS: &[&str] = &[
     "read_shell_session",
     "stop_shell_session",
     "list_session_activity",
+    "list_agent_participants",
+    "list_agent_messages",
     "list_asides",
     "watch_run",
     "cancel_run",

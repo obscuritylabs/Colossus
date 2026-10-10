@@ -275,6 +275,9 @@ fn content_error(detail: impl Into<String>) -> ModelContentError {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelMessage {
+    /// Trusted input provenance; peer input does not begin a new human logical turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_message_origin: Option<crate::AgentMessageOrigin>,
     /// Message provenance role.
     pub role: ModelMessageRole,
     /// Visible bounded text or ordered text and image references.
@@ -284,6 +287,13 @@ pub struct ModelMessage {
     /// Strict assistant tool calls preserved for provider continuation.
     #[serde(default)]
     pub tool_calls: Vec<ModelToolCall>,
+}
+
+impl ModelMessage {
+    /// Whether this message begins a human logical turn for context and budget accounting.
+    pub fn begins_user_turn(&self) -> bool {
+        self.role == ModelMessageRole::User && self.agent_message_origin.is_none()
+    }
 }
 
 /// One message and its immutable durable actor for an atomic session append.

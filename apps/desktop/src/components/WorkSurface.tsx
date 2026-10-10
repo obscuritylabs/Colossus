@@ -1,3 +1,5 @@
+import { AgentInboxesView } from "./AgentInboxesView";
+import { type AgentInboxProps } from "@colossus/ui/agent-inbox";
 import {
   IconArrowDown,
   IconFiles,
@@ -156,6 +158,7 @@ interface WorkSurfaceProps {
   activityComparisonEnabled?: boolean;
   initialSessionWorkspaceView?: SessionWorkspaceView;
   onSessionWorkspaceViewChange?: (view: SessionWorkspaceView) => void;
+  agentInbox?: Omit<AgentInboxProps, "rootRunId">;
   sessionActivityAvailable?: boolean;
   loadSessionActivity?: (
     request: ListSessionActivityRequest,
@@ -246,6 +249,7 @@ export function WorkSurface({
   activityComparisonEnabled = false,
   initialSessionWorkspaceView = "conversation",
   onSessionWorkspaceViewChange = IGNORE_SESSION_WORKSPACE_VIEW,
+  agentInbox,
   sessionActivityAvailable = false,
   loadSessionActivity = async () => ({
     activities: [],
@@ -1298,6 +1302,12 @@ export function WorkSurface({
                   sourceRunId={view.run.runId}
                   available={sessionActivityAvailable}
                   loadPage={loadSessionActivity}
+                />
+              ) : sessionWorkspaceView === "inboxes" ? (
+                <AgentInboxesView
+                  currentRunId={view.run.runId}
+                  views={conversationViews}
+                  inbox={agentInbox}
                 />
               ) : sessionWorkspaceView === "plans" ? (
                 <SessionPlansView

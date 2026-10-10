@@ -52,6 +52,9 @@ pub fn builtin_tool_descriptor(name: &str) -> Result<ToolDescriptor, AccessError
         }
         "goal.show" | "goal.update" => simple_tool("goals"),
         "agent.delegate" | "agent.result" | "agent.list" => simple_tool("subagents"),
+        "agent.participants" | "agent.send_message" | "agent.inbox" | "agent.await_message" => {
+            simple_tool("communication")
+        }
         "memory.create" | "memory.update" | "memory.list" | "memory.search" | "memory.archive"
         | "memory.supersede" => simple_tool("memory"),
         "context.show" | "context.compact" | "context.snapshots" | "context.restore" => {
@@ -132,6 +135,7 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "goal.show",
             "subagent.read",
             "subagent.list",
+            "agent.message.read",
             "memory.read",
             "memory.list",
             "memory.search",
@@ -176,6 +180,7 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "subagent.cancel",
             "subagent.interrupt",
             "subagent.requeue",
+            "agent.message.send",
             "memory.create",
             "memory.update",
             "memory.archive",

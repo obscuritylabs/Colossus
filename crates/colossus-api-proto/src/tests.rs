@@ -51,7 +51,7 @@ fn every_file_is_versioned_in_the_public_package() {
         .iter()
         .filter(|file| file.package.as_deref() == Some(PUBLIC_PACKAGE))
         .collect::<Vec<_>>();
-    assert_eq!(public_files.len(), 6);
+    assert_eq!(public_files.len(), 7);
     assert!(public_files.iter().all(|file| {
         file.name
             .as_deref()

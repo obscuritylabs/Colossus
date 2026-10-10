@@ -3,6 +3,9 @@ use super::*;
 /// Runtime construction or application failure.
 #[derive(Debug, Error)]
 pub enum RuntimeError {
+    /// Durable communication admission or ownership failure.
+    #[error(transparent)]
+    Communication(#[from] colossus_communication::CommunicationError),
     /// Strict configuration failed.
     #[error("configuration error: {0}")]
     Config(String),
@@ -57,6 +60,9 @@ impl RuntimeError {
     pub fn outcome_unknown(&self) -> bool {
         match self {
             Self::Store(StoreError::OutcomeUnknown(_))
+            | Self::Communication(colossus_communication::CommunicationError::Store(
+                StoreError::OutcomeUnknown(_),
+            ))
             | Self::SearchPort(SearchError::OutcomeUnknown(_)) => true,
             Self::Gateway(GatewayError::OutcomeUnknown(_))
             | Self::Gateway(GatewayError::Journal(StoreError::OutcomeUnknown(_))) => true,
@@ -64,6 +70,7 @@ impl RuntimeError {
             Self::Context(ContextError::Store(StoreError::OutcomeUnknown(_)))
             | Self::Context(ContextError::Provider(ModelProviderError::OutcomeUnknown(_))) => true,
             Self::Config(_)
+            | Self::Communication(_)
             | Self::Io(_)
             | Self::Store(_)
             | Self::Gateway(_)

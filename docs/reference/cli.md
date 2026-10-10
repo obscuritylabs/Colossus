@@ -217,8 +217,9 @@ colossus --config .colossus/config.yaml worker \
 ```
 
 `--scope` and `--role` must each appear at least once. Scope values are exact and must
-be one of `runs:execute`, `runs:read`, `runs:control`, `prompts:respond`, or
-`approvals:respond`. Repeat `--tool EXACT_TOOL_NAME` to grant tool ceilings; omitting
+be one of `runs:execute`, `runs:read`, `runs:control`, `prompts:respond`,
+`approvals:respond`, `agent_messages:read`, or `agent_messages:send`.
+Repeat `--tool EXACT_TOOL_NAME` to grant tool ceilings; omitting
 it denies every tool. `agent.delegate` is rejected until public application authority
 can be propagated safely to child runs. Enrollment refuses to run while a private
 worker endpoint or journal writer exists.

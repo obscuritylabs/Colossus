@@ -274,6 +274,10 @@ export class WorkController {
       }
       if (!current()) return;
       this.view.inspection = {
+        agentInboxesAvailable: client.info.capabilities.some(
+          (capability) =>
+            capability.name === "agent_messages.read.v1" && capability.enabled,
+        ),
         run: runView(run),
         plan,
         output,
@@ -296,6 +300,69 @@ export class WorkController {
         this.publish();
       }
     }
+  }
+
+  async inspectAgentInbox(participantId: string | null, afterSequence: number) {
+    const client = this.requireClient();
+    const source = this.view.inspection;
+    if (!source)
+      throw new UserError("Select a listed run to inspect its inboxes.");
+    const participants = await client.inboxParticipants(source.run.id);
+    const records = participants.map((item) => ({
+      id: item.id,
+      root_run_id: item.rootRunId,
+      session_id: item.sessionId,
+      run_id: item.runId ?? null,
+      parent_id: item.parentId ?? null,
+      subagent_id: item.subagentId ?? null,
+      generation: Number(item.generation),
+      open: item.open,
+      closed_reason: item.closedReason ?? null,
+      pending_messages: item.pendingMessages,
+      pending_bytes: item.pendingBytes,
+      created_at: item.createdAt,
+    }));
+    if (participantId === null) return { participants: records, page: null };
+    if (!participants.some((item) => item.id === participantId))
+      throw new UserError("The inbox is outside this selected run.");
+    const page = await client.inboxMessages(
+      participantId,
+      BigInt(afterSequence),
+    );
+    return {
+      participants: records,
+      page: {
+        messages: page.messages.map((item) => ({
+          id: item.id,
+          root_run_id: item.rootRunId,
+          sender:
+            item.sender?.$case === "senderParticipantId"
+              ? { kind: "participant", participant_id: item.sender.value }
+              : {
+                  kind: "application",
+                  application_id: item.sender?.value ?? "",
+                },
+          recipient_id: item.recipientId,
+          sequence: Number(item.sequence),
+          text: item.text,
+          reply_to: item.replyTo ?? null,
+          accepted_at: item.acceptedAt,
+          receipt:
+            item.receipt?.state === "included_in_turn"
+              ? {
+                  state: "included_in_turn",
+                  run_id: item.receipt.runId,
+                  turn: item.receipt.turn,
+                  request_hash: item.receipt.requestHash,
+                }
+              : item.receipt?.state === "not_delivered"
+                ? { state: "not_delivered", reason: item.receipt.reason }
+                : { state: "accepted" },
+        })),
+        next_sequence: Number(page.nextSequence),
+        has_more: page.hasMore,
+      },
+    };
   }
 
   async newSession() {

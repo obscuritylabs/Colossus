@@ -63,6 +63,8 @@ fn plan_mode_allowlist_blocks_implementation_and_external_mutation() {
     ));
 }
 
+mod communication;
+
 struct ScriptedProvider {
     turns: Mutex<VecDeque<Result<ProviderTurn, ModelProviderError>>>,
     requests: Mutex<Vec<ModelRequest>>,
@@ -1389,6 +1391,7 @@ async fn text_only_models_omit_tools_and_reject_structured_tool_history() {
             "structured-session",
             "earlier-run",
             ModelMessage {
+                agent_message_origin: None,
                 role: ModelMessageRole::Assistant,
                 content: String::new().into(),
                 tool_call_id: None,
@@ -1406,6 +1409,7 @@ async fn text_only_models_omit_tools_and_reject_structured_tool_history() {
             "structured-session",
             "earlier-run",
             ModelMessage {
+                agent_message_origin: None,
                 role: ModelMessageRole::Tool,
                 content: "hello".into(),
                 tool_call_id: Some("call-1".into()),
@@ -2248,6 +2252,7 @@ async fn legacy_dangling_session_fails_locally_before_appending_new_input() {
             "legacy-corrupt",
             "legacy-run",
             ModelMessage {
+                agent_message_origin: None,
                 role: ModelMessageRole::User,
                 content: "old input".into(),
                 tool_call_id: None,
@@ -2261,6 +2266,7 @@ async fn legacy_dangling_session_fails_locally_before_appending_new_input() {
             "legacy-corrupt",
             "legacy-run",
             ModelMessage {
+                agent_message_origin: None,
                 role: ModelMessageRole::Assistant,
                 content: String::new().into(),
                 tool_call_id: None,
@@ -2983,12 +2989,14 @@ async fn resumed_legacy_session_projects_oversized_tool_history_without_a_contex
         .expect("session");
     let legacy_messages = [
         ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::User,
             content: "old request".into(),
             tool_call_id: None,
             tool_calls: Vec::new(),
         },
         ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Assistant,
             content: String::new().into(),
             tool_call_id: None,
@@ -2999,6 +3007,7 @@ async fn resumed_legacy_session_projects_oversized_tool_history_without_a_contex
             }],
         },
         ModelMessage {
+            agent_message_origin: None,
             role: ModelMessageRole::Tool,
             content: "x".repeat(900_000).into(),
             tool_call_id: Some("legacy-large-call".into()),

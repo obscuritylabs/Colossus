@@ -4,6 +4,7 @@ members = [
     "crates/colossus-cloud",
     "crates/colossus-cloud-postgres",
     "crates/colossus-cloud-server",
+    "crates/colossus-a2a-server",
     "crates/colossus-connector",
     "crates/colossus-cloud-protocol",
     "xtask",
@@ -42,6 +43,7 @@ members = [
     "crates/colossus-context",
     "crates/colossus-media",
     "crates/colossus-work",
+    "crates/colossus-communication",
     "crates/colossus-memory",
     "crates/colossus-memory-chroma",
     "crates/colossus-research",
@@ -74,9 +76,11 @@ repository = "https://github.com/obscuritylabs/Colossus"
 publish-sdks = false
 
 [workspace.dependencies]
+colossus-communication = { version = "=0.11.8", path = "crates/colossus-communication" }
 chrono = "0.4.44"
 openidconnect = { version = "4.0.1", default-features = false, features = ["reqwest", "rustls-tls"] }
 colossus-connector = { version = "=0.11.8", path = "crates/colossus-connector" }
+colossus-a2a-server = { version = "=0.11.8", path = "crates/colossus-a2a-server" }
 colossus-cloud-server = { version = "=0.11.8", path = "crates/colossus-cloud-server" }
 axum = { version = "0.8.9", features = ["json", "tokio", "http1", "http2"] }
 colossus-cloud-protocol = { version = "=0.11.8", path = "crates/colossus-cloud-protocol" }

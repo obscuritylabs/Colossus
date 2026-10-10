@@ -19,6 +19,7 @@ fn restored_shell_calls_withhold_unprepared_command_and_credentials() {
             run_id: "run".into(),
             sequence: 1,
             message: ModelMessage {
+                agent_message_origin: None,
                 role: ModelMessageRole::Assistant,
                 content: String::new().into(),
                 tool_call_id: None,
@@ -33,6 +34,7 @@ fn restored_shell_calls_withhold_unprepared_command_and_credentials() {
         source.transcript.messages.push(SessionMessage {
             session_id: "019f-test".into(), run_id: "run".into(), sequence: 2,
             message: ModelMessage {
+            agent_message_origin: None,
                 role: ModelMessageRole::Tool, tool_call_id: Some("call".into()), tool_calls: vec![],
                 content: serde_json::json!({"invocation": {"command": "PRIVATE_COMMAND"},
                     "resolved_argv": ["PRIVATE_ARGV"], "cwd": "PRIVATE_PATH", "stdout": "SAFE_OUTPUT", "stderr": ""}).to_string().into(),

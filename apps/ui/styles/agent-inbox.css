@@ -1,0 +1,74 @@
+.agent-inbox {
+  padding: 1rem;
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--font-size-body);
+  font-family: var(--font-sans);
+  line-height: var(--line-height-body);
+}
+.agent-inbox-heading,
+.agent-inbox-message-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.agent-inbox h2 {
+  margin: 0;
+  font-size: var(--font-size-heading);
+}
+.agent-inbox-help,
+.agent-inbox-meta {
+  color: var(--muted);
+}
+.agent-inbox-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 0.75rem;
+  margin-block: 1rem;
+}
+.agent-inbox label {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.agent-inbox summary:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+.agent-inbox-messages {
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.75rem;
+}
+.agent-inbox article,
+.agent-inbox-details {
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.agent-inbox pre {
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.agent-inbox-meta,
+.agent-inbox dd {
+  overflow-wrap: anywhere;
+}
+.agent-inbox dl {
+  display: grid;
+  grid-template-columns: minmax(5rem, auto) minmax(0, 1fr);
+  gap: 0.4rem 0.75rem;
+}
+.agent-inbox dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-body-sm);
+}
+.agent-inbox summary {
+  cursor: pointer;
+}

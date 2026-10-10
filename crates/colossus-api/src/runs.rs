@@ -1206,11 +1206,13 @@ impl CreateRunRequest {
 }
 
 /// Validated server-created run identity paired with a create request.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct NewRun {
     id: String,
     session_id: String,
     role: String,
+    transaction_events: Vec<colossus_contracts::NewEvent>,
+    peer_message_id: Option<String>,
 }
 
 impl NewRun {
@@ -1254,7 +1256,31 @@ impl NewRun {
             id,
             session_id,
             role,
+            transaction_events: Vec::new(),
+            peer_message_id: None,
         })
+    }
+
+    /// Stage application-owned journal records in the same allocation transaction.
+    /// This coordinator contract is never deserialized from a client request.
+    pub fn with_transaction_events(mut self, events: Vec<colossus_contracts::NewEvent>) -> Self {
+        self.transaction_events.extend(events);
+        self
+    }
+
+    pub(crate) fn transaction_events(&self) -> &[colossus_contracts::NewEvent] {
+        &self.transaction_events
+    }
+
+    /// Mark an initial peer task at the trusted coordinator boundary, never from run input.
+    pub fn with_peer_message_id(mut self, id: String) -> Self {
+        self.peer_message_id = Some(id);
+        self
+    }
+
+    /// Verified initial peer message, if allocation originated at the communication API.
+    pub fn peer_message_id(&self) -> Option<&str> {
+        self.peer_message_id.as_deref()
     }
 
     /// Server-created run identifier.
@@ -1603,6 +1629,10 @@ pub trait RunExecutor: Send + Sync {
 /// Public run application service implemented by embedded and remote backends.
 #[async_trait]
 pub trait AgentRunApi: Send + Sync {
+    /// Optional shared communication application service. Absence is an explicit capability.
+    fn communication(&self) -> Option<std::sync::Arc<dyn crate::AgentCommunicationApi>> {
+        None
+    }
     /// Advertise this optional metadata contract only when implemented by composition.
     fn supports_runtime_policy_posture(&self) -> bool {
         false

@@ -60,7 +60,7 @@ const browserBuild = await build({
     webview: "webview/main.tsx",
     settings: "webview/settings.tsx",
     explorer: "webview/explorer.ts",
-    inspector: "webview/inspector.ts",
+    inspector: "webview/inspector.tsx",
   },
   bundle: true,
   platform: "browser",
@@ -72,6 +72,7 @@ const browserBuild = await build({
   outdir: "dist",
   metafile: true,
 });
+// The inspector entry imports the shared inbox stylesheet; esbuild emits dist/inspector.css.
 const licenses = new Map();
 for (const input of [
   ...Object.keys(hostBuild.metafile.inputs),

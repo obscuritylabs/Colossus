@@ -64,6 +64,7 @@ export interface ActivityView {
   result: string;
 }
 export interface InspectionView {
+  agentInboxesAvailable?: boolean;
   run: RunView;
   plan?: PlanView | undefined;
   output: string;
@@ -267,4 +268,34 @@ export function supportsResearch(
   return capabilities.some(
     (capability) => capability.name === "research.create" && capability.enabled,
   );
+}
+
+export type InboxInspectionRequest = {
+  type: "agentInbox";
+  requestId: string;
+  participantId: string | null;
+  afterSequence: number;
+};
+export function parseInboxInspectionRequest(
+  value: unknown,
+): InboxInspectionRequest | undefined {
+  if (!value || typeof value !== "object") return;
+  const input = value as Record<string, unknown>;
+  if (
+    Object.keys(input).length !== 4 ||
+    input.type !== "agentInbox" ||
+    typeof input.requestId !== "string" ||
+    !/^[A-Za-z0-9-]{1,64}$/u.test(input.requestId) ||
+    !(
+      input.participantId === null ||
+      (typeof input.participantId === "string" &&
+        /^[A-Za-z0-9._:-]{1,128}$/u.test(input.participantId))
+    ) ||
+    typeof input.afterSequence !== "number" ||
+    !Number.isSafeInteger(input.afterSequence) ||
+    input.afterSequence < 0 ||
+    input.afterSequence > 4096
+  )
+    return;
+  return input as InboxInspectionRequest;
 }
