@@ -3,16 +3,63 @@
 use std::{
     collections::HashMap,
     ffi::{c_char, c_void},
-    sync::{Mutex, OnceLock},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use tokio::sync::oneshot;
 
-use crate::{BrowserEvent, EventSink, NavigationPolicy, PageState};
+use crate::{BrowserError, BrowserEvent, EventSink, NavigationPolicy, PageState};
 
 use super::ffi;
 
 const MAX_STATE_BYTES: usize = 32 * 1024;
+type QuitHandler = Arc<dyn Fn() + Send + Sync>;
+static QUIT_HANDLER: OnceLock<Mutex<Option<QuitHandler>>> = OnceLock::new();
+static QUIT_PENDING: AtomicBool = AtomicBool::new(false);
+
+pub(super) fn bind_quit_handler(
+    handler: impl Fn() + Send + Sync + 'static,
+) -> Result<(), BrowserError> {
+    let handler: QuitHandler = Arc::new(handler);
+    {
+        let mut registered = QUIT_HANDLER
+            .get_or_init(Mutex::default)
+            .lock()
+            .map_err(|_| BrowserError::Unavailable)?;
+        if registered.is_some() {
+            return Err(BrowserError::Unavailable);
+        }
+        *registered = Some(handler.clone());
+    }
+    if QUIT_PENDING.swap(false, Ordering::AcqRel) {
+        handler();
+    }
+    Ok(())
+}
+
+pub(super) fn release_quit_handler() {
+    if let Some(handler) = QUIT_HANDLER.get()
+        && let Ok(mut handler) = handler.lock()
+    {
+        *handler = None;
+    }
+}
+
+fn request_quit() {
+    let handler = QUIT_HANDLER
+        .get()
+        .and_then(|handler| handler.lock().ok())
+        .and_then(|handler| handler.clone());
+    if let Some(handler) = handler {
+        handler();
+    } else {
+        QUIT_PENDING.store(true, Ordering::Release);
+    }
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PageUpdate {
@@ -31,6 +78,8 @@ pub(super) struct Entry {
     pub closed: Option<oneshot::Sender<()>>,
     pub inspection: Option<oneshot::Sender<PageState>>,
     pub abandoned: bool,
+    #[cfg(feature = "native-test-driver")]
+    pub acceptance: Option<oneshot::Sender<Result<super::AcceptanceProbe, crate::BrowserError>>>,
 }
 
 pub(super) fn entries() -> &'static Mutex<HashMap<u64, Entry>> {
@@ -48,6 +97,19 @@ pub(super) fn callbacks() -> ffi::Callbacks {
     }
 }
 
+#[cfg(feature = "native-test-driver")]
+fn complete_acceptance(entry: &mut Entry, success: bool, evidence: Option<&[u8]>) {
+    if let Some(sender) = entry.acceptance.take() {
+        let result = evidence
+            .filter(|_| success)
+            .ok_or(BrowserError::Unavailable)
+            .and_then(|evidence| {
+                serde_json::from_slice(evidence).map_err(|_| BrowserError::Unavailable)
+            });
+        let _ = sender.send(result);
+    }
+}
+
 unsafe extern "C" fn event(
     _: *mut c_void,
     tab: u64,
@@ -61,6 +123,13 @@ unsafe extern "C" fn event(
     // Native callers own the payload during this callback. All parsing/copies
     // are bounded, and panics never unwind into Chromium.
     let _ = std::panic::catch_unwind(|| {
+        // Native application Quit is independent of any tab. Pages cannot
+        // generate this event, and the trusted host binds its exit callback.
+        if event == 17 && tab == 0 && generation == 0 {
+            eprintln!("native AppKit Quit callback received");
+            request_quit();
+            return;
+        }
         let Ok(mut entries) = entries().lock() else {
             return;
         };
@@ -137,6 +206,16 @@ unsafe extern "C" fn event(
                 return;
             }
             14 => emit = Some(BrowserEvent::AuthenticationRequired),
+            #[cfg(feature = "native-test-driver")]
+            16 => {
+                let evidence = if !payload.is_null() && length <= MAX_STATE_BYTES {
+                    // SAFETY: The shim supplies the bounded borrowed evidence buffer.
+                    Some(unsafe { std::slice::from_raw_parts(payload, length) })
+                } else {
+                    None
+                };
+                complete_acceptance(entry, success != 0, evidence);
+            }
             _ => {}
         }
         let sink = entry.sink.clone();
@@ -215,6 +294,8 @@ mod tests {
                 closed: Some(sender),
                 inspection: None,
                 abandoned: false,
+                #[cfg(feature = "native-test-driver")]
+                acceptance: None,
             },
         );
         // SAFETY: Callback takes no payload for CLOSED and pointer is null.

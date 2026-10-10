@@ -63,6 +63,9 @@ legacy_python_sources=$(git ls-files -- '*.py' ':(exclude)sdk/python/**' \
     ':(exclude)native/browser/scripts/test_component.py' \
     ':(exclude)native/browser/scripts/run_probe.py' \
     ':(exclude)native/browser/scripts/test_probe.py' \
+    ':(exclude)native/browser/scripts/stage_macos.py' \
+    ':(exclude)native/browser/scripts/test_stage_macos.py' \
+    ':(exclude)native/browser/scripts/test_launcher_macos.py' \
     ':(exclude)bundled-plugins/colossus/skills/security-review/scripts/init_review.py' \
     ':(exclude)scripts/tests/test_security_review_workspace.py' \
     ':(exclude)examples/sdk/integration/server.py' \

@@ -26,6 +26,25 @@ fn main() {
         directory.is_dir(),
         "native CEF shim directory must be a directory"
     );
+    let (shim_name, wrapper_name) = if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        ("colossus_cef.lib", "libcef_dll_wrapper.lib")
+    } else {
+        ("libcolossus_cef.a", "libcef_dll_wrapper.a")
+    };
+    // CMake runs outside Cargo. Watch the archives that the linker consumes so
+    // a rebuilt native shim cannot leave a stale browser host in the executable.
+    // Installed stages place both archives together; build trees keep the CEF
+    // wrapper in its own target directory.
+    let shim = directory.join(shim_name);
+    let installed_wrapper = directory.join(wrapper_name);
+    let wrapper = if installed_wrapper.is_file() {
+        installed_wrapper
+    } else {
+        directory.join("libcef_dll_wrapper").join(wrapper_name)
+    };
+    for archive in [&shim, &wrapper] {
+        println!("cargo:rerun-if-changed={}", archive.display());
+    }
     println!("cargo:rustc-link-search=native={}", directory.display());
     let cef = PathBuf::from(
         env::var_os("COLOSSUS_CEF_ROOT")

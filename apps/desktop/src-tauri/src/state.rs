@@ -1341,8 +1341,13 @@ impl AppState {
         self.approval_guard.try_lock().ok()
     }
 
+    #[cfg(test)]
     pub(crate) async fn close_all(&self) {
-        self.browser.close_all().await;
+        let _ = self.close_all_settled().await;
+    }
+
+    pub(crate) async fn close_all_settled(&self) -> Result<(), crate::dto::CommandErrorDto> {
+        self.browser.close_all_settled().await?;
         #[cfg(windows)]
         self.stop_all_outlook_companions().await;
         {
@@ -1391,6 +1396,7 @@ impl AppState {
         for client in clients {
             let _ = client.close().await;
         }
+        Ok(())
     }
 
     pub(crate) fn terminal_manager(&self) -> TerminalManager {

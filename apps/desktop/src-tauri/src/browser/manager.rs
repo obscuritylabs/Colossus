@@ -133,7 +133,10 @@ impl BrowserManager {
             .ok_or_else(|| error("This tab is no longer available in the selected workspace."))
     }
 
-    #[cfg(feature = "browser-test-bridge")]
+    #[cfg(all(
+        feature = "browser-test-bridge",
+        not(feature = "embedded-chromium-preview")
+    ))]
     pub(super) fn legacy_tab(
         &self,
         id: &str,
@@ -149,11 +152,7 @@ impl BrowserManager {
 
     /// Revoke controller generations, hide, then settle native teardown before
     /// temporary profiles are dropped. Failed cleanup keeps profile ownership.
-    pub(crate) async fn close_all(&self) {
-        let _ = self.close_all_settled().await;
-    }
-
-    pub(super) async fn close_all_settled(&self) -> Result<u64, CommandErrorDto> {
+    pub(crate) async fn close_all_settled(&self) -> Result<u64, CommandErrorDto> {
         let operation = self.operation.lock().await;
         self.close_all_locked(&operation, None).await
     }

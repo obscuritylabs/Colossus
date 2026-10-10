@@ -7,7 +7,9 @@ namespace colossus {
 #if !defined(OS_MAC)
 bool PlatformEarlySetup() { return true; }
 bool PlatformLoadLibrary() { return true; }
+void PlatformEventLoopDiagnostics() {}
 colossus_cef_bounds PlatformChildBounds(uintptr_t, colossus_cef_bounds bounds) { return bounds; }
+bool PlatformAcceptanceEvidence(CefWindowHandle, const void*, size_t, std::string*) { return false; }
 #endif
 int32_t PlatformBounds(CefWindowHandle handle, colossus_cef_bounds b) {
 #if defined(OS_WIN)

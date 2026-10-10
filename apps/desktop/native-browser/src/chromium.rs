@@ -11,7 +11,7 @@ mod ffi;
 mod linked;
 
 #[cfg(colossus_cef_linked)]
-pub use linked::{Surface, bootstrap, pump, shutdown};
+pub use linked::{Surface, bind_quit_handler, bootstrap, pump, shutdown};
 
 use crate::BrowserError;
 
@@ -21,6 +21,47 @@ pub enum Bootstrap {
     Ready,
     SubprocessExit(i32),
     Unavailable(BrowserError),
+}
+
+/// Closed native acceptance evidence for one actual Chromium child view.
+///
+/// Pixel counts sample a fixed PNG capture from the same CEF browser. `AppKit`
+/// bounds and visibility are read from its native child, independently of CDP.
+#[cfg(feature = "native-test-driver")]
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+// Independent observed native facts are serialized evidence, not state flags.
+#[allow(clippy::struct_excessive_bools)]
+pub struct AcceptanceProbe {
+    pub visible: bool,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub magenta_pixels: u32,
+    pub green_pixels: u32,
+    pub pixel_width: u32,
+    pub pixel_height: u32,
+    pub bits_per_sample: u32,
+    pub samples_per_pixel: u32,
+    pub alpha_first: bool,
+    pub magenta_sample: Vec<u32>,
+    pub green_sample: Vec<u32>,
+    pub child_width: f64,
+    pub child_height: f64,
+    pub child_class: String,
+    pub parent_layer: bool,
+    pub view_autoresizes_subviews: bool,
+    pub child_autoresizing_mask: u32,
+    pub cef_application: bool,
+    pub tauri_event_loop: bool,
+    pub parent_attached: bool,
+    pub app_active: bool,
+    pub activation_policy: i32,
+    pub window_key: bool,
+    pub window_visible: bool,
+    pub window_can_become_key: bool,
+    pub delegate_class: String,
 }
 
 /// Actual availability established by early bootstrap; never a compile-time guess.
@@ -98,6 +139,27 @@ impl Surface {
     pub async fn control(&self, _: crate::NavigationAction) -> Result<(), BrowserError> {
         readiness()
     }
+
+    /// # Errors
+    /// A linked, accepted native Chromium component is required.
+    #[cfg(feature = "native-test-driver")]
+    pub async fn acceptance_probe(&self) -> Result<AcceptanceProbe, BrowserError> {
+        Err(BrowserError::ComponentMissing)
+    }
+
+    /// # Errors
+    /// A linked native Chromium component and owning window are required.
+    #[cfg(feature = "native-test-driver")]
+    pub async fn acceptance_activate_parent(&self) -> Result<(), BrowserError> {
+        Err(BrowserError::ComponentMissing)
+    }
+
+    /// # Errors
+    /// A linked native Chromium component and owning window are required.
+    #[cfg(feature = "native-test-driver")]
+    pub async fn acceptance_terminate_application(&self) -> Result<(), BrowserError> {
+        Err(BrowserError::ComponentMissing)
+    }
 }
 
 #[cfg(not(colossus_cef_linked))]
@@ -112,5 +174,19 @@ pub fn bootstrap(_: &std::path::Path, _: &std::path::Path) -> Bootstrap {
 pub fn pump() {}
 
 #[cfg(not(colossus_cef_linked))]
-/// No native component needs teardown in an unlinked build.
-pub fn shutdown() {}
+/// Bind the trusted native application's Quit route.
+///
+/// # Errors
+/// Returns the missing-component error for an unlinked preview build.
+pub fn bind_quit_handler(_: impl Fn() + Send + Sync + 'static) -> Result<(), BrowserError> {
+    Err(BrowserError::ComponentMissing)
+}
+
+#[cfg(not(colossus_cef_linked))]
+/// Report absent native teardown evidence for an unlinked preview build.
+///
+/// # Errors
+/// Returns the missing-component error because no Chromium host initialized.
+pub fn shutdown() -> Result<(), BrowserError> {
+    Err(BrowserError::ComponentMissing)
+}

@@ -72,6 +72,26 @@ belongs in an immutable distribution location; writable session/profile data
 belongs in a separate owner-private directory. Inventory must run after every
 binary signing or bundle transformation that changes the staged bytes.
 
+An ad-hoc macOS development app keeps its consistency inventory beside the
+`.app`, because adding an unsigned file to the bundle root invalidates strict
+code-signature verification. `inventory` and `verify` accept `--manifest FILE`
+for that external developer receipt; the inventoried file paths still resolve
+only within `--root`, and an external receipt carries no additional authority:
+
+```sh
+python3 -B native/browser/scripts/component.py verify \
+  --root '.local/review-preview/Colossus Chromium Preview.app' \
+  --manifest '.local/review-preview/Colossus Chromium Preview.app.browser-component.json'
+```
+
+Verify a macOS development app before launch or after clean shutdown. Chromium's
+[code-sign clone manager](https://chromium.googlesource.com/chromium/src/+/main/chrome/browser/mac/code_sign_clone_manager.h)
+temporarily hard-links the running main executable into a private clone to
+preserve signature validity during updates. The inventory's single-link check
+therefore rejects that active bundle. Normal Chromium shutdown removes the
+clone; if an interrupted developer run leaves one behind, restage a fresh app.
+Keep the hard-link restriction in place.
+
 ## Preserve the Chromium sandbox
 
 CEF requires native process bootstrap and packaging in addition to copying its
@@ -118,6 +138,18 @@ Its fixtures cover archive path/link attacks, digest mismatches, redirect bounds
 source-cache substitution, installed-file tampering, unexpected entries,
 permission changes and unsupported mode promotion. Native build and browser
 acceptance remain separate checks.
+
+The macOS development app stager has separate stdlib-only layout, helper identity,
+signing-order and failure-cleanup tests:
+
+```sh
+python3 -B -m unittest discover -s native/browser/scripts -p test_stage_macos.py -v
+```
+
+See the [Desktop development launcher](../README.md#launch-the-macos-desktop-development-preview)
+for pinned-source provisioning, preview builds and ad-hoc staging. Production
+packaging remains disabled until the authenticated Core bridge, complete network
+containment and release acceptance gates exist.
 
 ## Exercise the native no-display fixture
 

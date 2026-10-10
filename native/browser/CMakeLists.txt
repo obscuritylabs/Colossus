@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.21)
 project(colossus_browser LANGUAGES C CXX)
+if(APPLE)
+  enable_language(OBJCXX)
+endif()
 
 if(NOT IS_DIRECTORY "${CEF_ROOT}")
   message(FATAL_ERROR "Set CEF_ROOT to the verified pinned minimal distribution.")
@@ -34,15 +37,34 @@ if(NOT OS_MAC)
   target_link_libraries(colossus_cef PUBLIC libcef_lib)
 endif()
 if(OS_MAC)
-  enable_language(OBJCXX)
   target_sources(colossus_cef PRIVATE src/platform_mac.mm)
   target_link_libraries(colossus_cef PUBLIC "-framework Cocoa")
-  add_executable(colossus-browser-helper MACOSX_BUNDLE src/helper_mac.mm)
-  SET_EXECUTABLE_TARGET_PROPERTIES(colossus-browser-helper)
-  target_include_directories(colossus-browser-helper PRIVATE "${CEF_ROOT}")
-  target_link_libraries(colossus-browser-helper PRIVATE libcef_dll_wrapper ${CEF_STANDARD_LIBS})
-  set_target_properties(colossus-browser-helper PROPERTIES OUTPUT_NAME "Colossus Browser Helper")
-  install(TARGETS colossus-browser-helper BUNDLE DESTINATION helpers)
+  # CEF selects typed helpers by adding these pinned suffixes to the base
+  # subprocess bundle. Keep each bundle/executable and identifier distinct.
+  foreach(_suffix_list ${CEF_HELPER_APP_SUFFIXES})
+    string(REPLACE ":" ";" _suffix_list "${_suffix_list}")
+    list(GET _suffix_list 0 _name_suffix)
+    list(GET _suffix_list 1 _target_suffix)
+    list(GET _suffix_list 2 _plist_suffix)
+    set(_helper_target "colossus-browser-helper${_target_suffix}")
+    set(COLOSSUS_HELPER_NAME "Colossus Browser Helper${_name_suffix}")
+    set(COLOSSUS_HELPER_IDENTIFIER "com.obscuritylabs.colossus.chromium-preview.helper${_plist_suffix}")
+    set(_helper_plist "${CMAKE_CURRENT_BINARY_DIR}/helper${_target_suffix}-Info.plist")
+    configure_file(mac/helper-Info.plist.in "${_helper_plist}" @ONLY)
+    add_executable(${_helper_target} MACOSX_BUNDLE src/helper_mac.mm)
+    SET_EXECUTABLE_TARGET_PROPERTIES(${_helper_target})
+    target_include_directories(${_helper_target} PRIVATE "${CEF_ROOT}")
+    target_link_libraries(${_helper_target} PRIVATE libcef_dll_wrapper ${CEF_STANDARD_LIBS})
+    set_target_properties(${_helper_target} PROPERTIES
+      OUTPUT_NAME "${COLOSSUS_HELPER_NAME}"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/helpers"
+      MACOSX_BUNDLE_INFO_PLIST "${_helper_plist}")
+    install(TARGETS ${_helper_target} BUNDLE DESTINATION helpers)
+  endforeach()
+  # The distribution framework is unversioned. The development app stager
+  # creates the supported Versions/A layout and signs only copied bytes.
+  install(DIRECTORY "${CEF_ROOT}/Release/Chromium Embedded Framework.framework"
+    DESTINATION Frameworks USE_SOURCE_PERMISSIONS)
 endif()
 
 # Probe proves only Linux no-display startup and direct method continuity. It does

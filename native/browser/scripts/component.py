@@ -306,7 +306,7 @@ def extract_archive(archive: Path, destination: Path, expected_root: str) -> Non
         (staging / expected_root).rename(destination)
 
 
-def inventory_files(root: Path, excluded: str) -> list[dict]:
+def inventory_files(root: Path, excluded: str | None) -> list[dict]:
     records: list[dict] = []
     kinds: dict[str, str] = {}
     links: dict[str, str] = {}
@@ -420,11 +420,22 @@ def provision(cache: Path, platform: str) -> Path:
     return source_root
 
 
-def installed_inventory(root: Path, platform: str, executable: str) -> Path:
+def external_manifest_path(root: Path, manifest_path: Path) -> Path:
+    manifest_path = manifest_path.absolute()
+    manifest_path = directory(manifest_path.parent) / manifest_path.name
+    if manifest_path.is_relative_to(root):
+        raise ComponentError("an external inventory must be outside the component root")
+    return manifest_path
+
+
+def installed_inventory(root: Path, platform: str, executable: str,
+                        manifest_path: Path | None = None) -> Path:
     root = directory(root)
     executable = safe_path(executable)
     pin = load_lock()["archives"][platform]
-    records = inventory_files(root, MANIFEST)
+    if manifest_path is not None:
+        manifest_path = external_manifest_path(root, manifest_path)
+    records = inventory_files(root, MANIFEST if manifest_path is None else None)
     program = next((record for record in records if record["path"] == executable), None)
     if program is None or program["kind"] != "file":
         raise ComponentError("component executable must be an inventoried regular file")
@@ -437,12 +448,16 @@ def installed_inventory(root: Path, platform: str, executable: str) -> Path:
         "executable": executable, "modes": {"desktop": False, "headless": False},
         "files": records,
     }
-    return write_manifest(root, MANIFEST, document)
+    if manifest_path is None:
+        return write_manifest(root, MANIFEST, document)
+    return write_manifest(manifest_path.parent, manifest_path.name, document)
 
 
-def verify_installed(root: Path) -> dict:
+def verify_installed(root: Path, manifest_path: Path | None = None) -> dict:
     root = directory(root)
-    document = load_json(root / MANIFEST)
+    if manifest_path is not None:
+        manifest_path = external_manifest_path(root, manifest_path)
+    document = load_json(root / MANIFEST if manifest_path is None else manifest_path)
     if (
         document.get("schema_version") != 1 or document.get("protocol_version") != 1
         or document.get("component") != "colossus-browser"
@@ -455,7 +470,7 @@ def verify_installed(root: Path) -> dict:
     pin = load_lock()["archives"][document["platform"]]
     if document.get("archive_sha256") != pin["sha256"] or document.get("target") != pin["target"]:
         raise ComponentError("installed component source pin or target differs from lock")
-    files = inventory_files(root, MANIFEST)
+    files = inventory_files(root, MANIFEST if manifest_path is None else None)
     if document.get("files") != files:
         raise ComponentError("installed browser component inventory differs: missing, added, or modified entry")
     executable = safe_path(document.get("executable"))
@@ -477,16 +492,18 @@ def main() -> int:
     inventory.add_argument("--root", type=Path, required=True)
     inventory.add_argument("--platform", choices=PLATFORMS, required=True)
     inventory.add_argument("--executable", required=True)
+    inventory.add_argument("--manifest", type=Path, help="external developer consistency inventory")
     verify = commands.add_parser("verify", help="verify every installed file and link")
     verify.add_argument("--root", type=Path, required=True)
+    verify.add_argument("--manifest", type=Path, help="external developer consistency inventory")
     options = parser.parse_args()
     try:
         if options.command == "fetch":
             print(provision(options.cache, options.platform))
         elif options.command == "inventory":
-            print(installed_inventory(options.root, options.platform, options.executable))
+            print(installed_inventory(options.root, options.platform, options.executable, options.manifest))
         else:
-            document = verify_installed(options.root)
+            document = verify_installed(options.root, options.manifest)
             print(json.dumps({"verified": True, "platform": document["platform"],
                               "protocol_version": document["protocol_version"],
                               "modes": document["modes"]}, sort_keys=True))

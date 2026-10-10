@@ -66,4 +66,10 @@ unsafe extern "C" {
     pub(super) fn colossus_cef_bounds_set(tab: u64, generation: u64, bounds: Bounds) -> i32;
     pub(super) fn colossus_cef_visible(tab: u64, generation: u64, visible: i32) -> i32;
     pub(super) fn colossus_cef_close(tab: u64, generation: u64) -> i32;
+    #[cfg(feature = "native-test-driver")]
+    pub(super) fn colossus_cef_acceptance_probe(tab: u64, generation: u64) -> i32;
+    #[cfg(feature = "native-test-driver")]
+    pub(super) fn colossus_cef_acceptance_activate(tab: u64, generation: u64) -> i32;
+    #[cfg(feature = "native-test-driver")]
+    pub(super) fn colossus_cef_acceptance_terminate(tab: u64, generation: u64) -> i32;
 }

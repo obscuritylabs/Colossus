@@ -118,16 +118,41 @@ pub fn pump() {
     }
 }
 
+/// Bind native `AppKit` Quit to the trusted application's controlled exit path.
+///
+/// # Errors
+/// Requires initialized Chromium and rejects replacing an existing host owner.
+pub fn bind_quit_handler(handler: impl Fn() + Send + Sync + 'static) -> Result<(), BrowserError> {
+    readiness()?;
+    callbacks::bind_quit_handler(handler)
+}
+
 /// Shutdown occurs on main thread after native close acknowledgements.
-pub fn shutdown() {
-    if readiness().is_ok() {
-        // SAFETY: The application-entry owner remains alive until this returns.
-        if unsafe { ffi::colossus_cef_shutdown() } == 0
-            && let Ok(mut entries) = callbacks::entries().lock()
-        {
-            entries.clear();
-        }
+///
+/// # Errors
+/// Reports missing initialization, outstanding native tabs, wrong-thread
+/// shutdown, or unavailable callback ownership instead of claiming teardown.
+pub fn shutdown() -> Result<(), BrowserError> {
+    readiness()?;
+    // SAFETY: The application-entry owner remains alive until this returns.
+    // Native shutdown refuses live tabs and calls CefShutdown on its UI thread.
+    let code = unsafe { ffi::colossus_cef_shutdown() };
+    if code != 0 {
+        let reason = match code {
+            2 => "Chromium is not initialized",
+            4 => "shutdown is not on the owning UI thread",
+            6 => "native browser close acknowledgements remain outstanding",
+            _ => "unexpected native lifecycle status",
+        };
+        eprintln!("native CefShutdown refused: {reason} (status {code})");
+        return status(code);
     }
+    callbacks::release_quit_handler();
+    callbacks::entries()
+        .lock()
+        .map_err(|_| BrowserError::Closed)?
+        .clear();
+    Ok(())
 }
 
 /// Real CEF tab, not a `WebView` navigated to a matching URL.
@@ -178,6 +203,8 @@ impl Surface {
                     closed: None,
                     inspection: None,
                     abandoned: false,
+                    #[cfg(feature = "native-test-driver")]
+                    acceptance: None,
                 },
             );
         let surface = Self {
@@ -397,6 +424,76 @@ impl Surface {
         self.dispatch(move || {
             // SAFETY: Closed operation set, exact native identity, UI thread.
             status(unsafe { ffi::colossus_cef_control(tab, generation, action) })
+        })
+        .await
+    }
+
+    /// Inspect rendering and `AppKit` presentation with a fixed native test probe.
+    ///
+    /// This accepts neither page script nor a `DevTools` method, and is absent
+    /// from ordinary Desktop builds and renderer IPC.
+    ///
+    /// # Errors
+    /// Fails for unsupported platforms, stale guests, busy probes, or timeout.
+    #[cfg(feature = "native-test-driver")]
+    pub async fn acceptance_probe(&self) -> Result<super::AcceptanceProbe, BrowserError> {
+        let (sender, receive) = oneshot::channel();
+        {
+            let mut entries = callbacks::entries()
+                .lock()
+                .map_err(|_| BrowserError::Closed)?;
+            let entry = entries
+                .get_mut(&self.tab)
+                .filter(|entry| entry.generation == self.generation)
+                .ok_or(BrowserError::Closed)?;
+            if entry
+                .acceptance
+                .as_ref()
+                .is_some_and(|sender| !sender.is_closed())
+            {
+                return Err(BrowserError::Unavailable);
+            }
+            entry.acceptance = Some(sender);
+        }
+        let (tab, generation) = (self.tab, self.generation);
+        self.dispatch(move || {
+            // SAFETY: Fixed read-only native probe on the owning main thread.
+            status(unsafe { ffi::colossus_cef_acceptance_probe(tab, generation) })
+        })
+        .await?;
+        tokio::time::timeout(DEADLINE, receive)
+            .await
+            .map_err(|_| BrowserError::TimedOut)?
+            .map_err(|_| BrowserError::Closed)?
+    }
+
+    /// Request OS activation of this exact guest's owning application/window.
+    ///
+    /// Test callers must separately observe native activation before presenting
+    /// a guest. The request does not override production inactive-window hiding.
+    ///
+    /// # Errors
+    /// Rejects unsupported platforms, closed guests, or a missing owning window.
+    #[cfg(feature = "native-test-driver")]
+    pub async fn acceptance_activate_parent(&self) -> Result<(), BrowserError> {
+        let (tab, generation) = (self.tab, self.generation);
+        self.dispatch(move || {
+            // SAFETY: Exact native identity, owning UI thread, closed test API.
+            status(unsafe { ffi::colossus_cef_acceptance_activate(tab, generation) })
+        })
+        .await
+    }
+
+    /// Invoke the normal native `AppKit` Quit path with this live owned guest.
+    ///
+    /// # Errors
+    /// Rejects unsupported platforms, closed guests, or a missing owning window.
+    #[cfg(feature = "native-test-driver")]
+    pub async fn acceptance_terminate_application(&self) -> Result<(), BrowserError> {
+        let (tab, generation) = (self.tab, self.generation);
+        self.dispatch(move || {
+            // SAFETY: Exact native identity and owning UI thread, test-only API.
+            status(unsafe { ffi::colossus_cef_acceptance_terminate(tab, generation) })
         })
         .await
     }

@@ -41,7 +41,10 @@ enum colossus_cef_event {
   COLOSSUS_CEF_DEVTOOLS_EVENT = 12,
   COLOSSUS_CEF_DEVTOOLS_DETACHED = 13,
   COLOSSUS_CEF_PKI_SELECTION_REQUIRED = 14,
-  COLOSSUS_CEF_PROTOCOL_OVERFLOW = 15
+  COLOSSUS_CEF_PROTOCOL_OVERFLOW = 15,
+  COLOSSUS_CEF_ACCEPTANCE_EVIDENCE = 16,
+  /* Trusted native AppKit Quit request, never a page/tab event. */
+  COLOSSUS_CEF_APPLICATION_QUIT = 17
 };
 enum colossus_cef_navigation { COLOSSUS_CEF_BACK = 1, COLOSSUS_CEF_FORWARD = 2,
   COLOSSUS_CEF_RELOAD = 3, COLOSSUS_CEF_STOP = 4 };
@@ -116,6 +119,18 @@ int32_t colossus_cef_close(colossus_cef_tab tab, uint64_t generation);
  */
 int32_t colossus_cef_devtools(colossus_cef_tab tab, uint64_t generation,
   int32_t command_id, const char* method, const uint8_t* params, size_t params_len);
+/* Native development acceptance only: fixed screenshot and AppKit presentation
+ * evidence. No page script or caller-supplied DevTools method is accepted.
+ * Never expose this entry to ordinary web IPC or production automation.
+ */
+int32_t colossus_cef_acceptance_probe(colossus_cef_tab tab, uint64_t generation);
+/* Test-only request to activate the exact guest's owning application/window.
+ * A successful request is not evidence of OS activation; verify the native
+ * window's key/active state separately before granting a presentation lease.
+ */
+int32_t colossus_cef_acceptance_activate(colossus_cef_tab tab, uint64_t generation);
+/* Test-only invocation of AppKit's normal terminate: path with a live guest. */
+int32_t colossus_cef_acceptance_terminate(colossus_cef_tab tab, uint64_t generation);
 
 #ifdef __cplusplus
 }

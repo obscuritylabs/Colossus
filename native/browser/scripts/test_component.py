@@ -228,6 +228,43 @@ class ComponentTests(unittest.TestCase):
         with self.assertRaises(component.ComponentError):
             component.installed_inventory(root, "linux64", "colossus-browser")
 
+    def test_external_development_inventory_stays_outside_signed_component(self):
+        root = self.stage_component()
+        (root / component.MANIFEST).unlink()
+        external = self.root / "external-browser-component.json"
+        component.installed_inventory(root, "linux64", "colossus-browser", external)
+        self.assertFalse((root / component.MANIFEST).exists())
+        self.assertEqual(component.verify_installed(root, external)["modes"],
+                         {"desktop": False, "headless": False})
+        with self.assertRaises(component.ComponentError):
+            component.installed_inventory(root, "linux64", "colossus-browser", external)
+        with self.assertRaises(component.ComponentError):
+            component.installed_inventory(root, "linux64", "colossus-browser", root / "nested.json")
+        (root / "colossus-browser").write_bytes(b"changed executable")
+        with self.assertRaises(component.ComponentError):
+            component.verify_installed(root, external)
+
+    def test_external_inventory_rejects_added_embedded_receipt_name(self):
+        root = self.stage_component()
+        (root / component.MANIFEST).unlink()
+        external = self.root / "external-browser-component.json"
+        component.installed_inventory(root, "linux64", "colossus-browser", external)
+        (root / component.MANIFEST).write_text("unexpected file in signed component")
+        with self.assertRaises(component.ComponentError):
+            component.verify_installed(root, external)
+
+    @unittest.skipIf(os.name == "nt", "symlink creation needs Windows Developer Mode")
+    def test_external_manifest_parent_alias_cannot_place_receipt_inside_component(self):
+        root = self.stage_component()
+        alias = self.root / "root-alias"
+        alias.symlink_to(root, target_is_directory=True)
+        manifest = alias / "new-receipt.json"
+        with self.assertRaises(component.ComponentError):
+            component.installed_inventory(root, "linux64", "colossus-browser", manifest)
+        with self.assertRaises(component.ComponentError):
+            component.verify_installed(root, alias / component.MANIFEST)
+        self.assertFalse(manifest.exists())
+
     def test_executable_cannot_escape_or_be_missing(self):
         root = self.root / "empty"
         root.mkdir()

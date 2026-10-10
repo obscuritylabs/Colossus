@@ -8,8 +8,22 @@ type CF = *const c_void;
 const UTF8: u32 = 0x0800_0100;
 const DUPLICATE_ITEM: i32 = -25299;
 
+#[repr(C)]
+struct DictionaryKeyCallbacks {
+    version: isize,
+    retain: Option<unsafe extern "C" fn(CF, CF) -> CF>,
+    release: Option<unsafe extern "C" fn(CF, CF)>,
+    copy_description: Option<unsafe extern "C" fn(CF) -> CF>,
+    equal: Option<unsafe extern "C" fn(CF, CF) -> u8>,
+    hash: Option<unsafe extern "C" fn(CF) -> usize>,
+}
+
+#[cfg(test)]
+mod tests;
+
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
+    static kCFTypeDictionaryKeyCallBacks: DictionaryKeyCallbacks;
     fn CFRelease(value: CF);
     fn CFDataCreate(allocator: CF, bytes: *const u8, length: isize) -> CF;
     fn CFDataGetLength(data: CF) -> isize;
@@ -46,7 +60,6 @@ unsafe extern "C" {
     static kSecImportExportPassphrase: CF;
     static kSecImportExportKeychain: CF;
     static kSecImportItemIdentity: CF;
-    static kSecTrustSettingsResult: CF;
     fn SecKeychainCopyDefault(keychain: *mut CF) -> i32;
     fn SecCertificateCreateWithData(allocator: CF, data: CF) -> CF;
     fn SecCertificateAddToKeychain(certificate: CF, keychain: CF) -> i32;
@@ -95,6 +108,38 @@ fn keychain() -> Result<Owned, PkiError> {
     Owned::new(keychain)
 }
 
+fn trust_dictionary(result: &Owned) -> Result<Owned, PkiError> {
+    // SecTrustSettings.h defines this key with CFSTR, not an exported symbol.
+    // Create the same string value and retain/compare it by CF content, since
+    // Security's constant key has a different address from this owned string.
+    let bytes = b"kSecTrustSettingsResult";
+    // SAFETY: CF copies the fixed valid UTF-8 key into a retained string.
+    let key = Owned::new(unsafe {
+        CFStringCreateWithBytes(
+            std::ptr::null(),
+            bytes.as_ptr(),
+            isize::try_from(bytes.len()).map_err(|_| PkiError::Unavailable)?,
+            UTF8,
+            0,
+        )
+    })?;
+    let keys = [key.0];
+    let values = [result.0];
+    // SAFETY: CoreFoundation's exported key callbacks retain CF references and
+    // compare/hash CFString values. The caller keeps the no-retain value alive
+    // through the synchronous trust operation.
+    Owned::new(unsafe {
+        CFDictionaryCreate(
+            std::ptr::null(),
+            keys.as_ptr(),
+            values.as_ptr(),
+            1,
+            (&raw const kCFTypeDictionaryKeyCallBacks).cast(),
+            std::ptr::null(),
+        )
+    })
+}
+
 pub(super) fn import_ca(der: &[u8]) -> Result<(), PkiError> {
     let bytes = data(der)?;
     let keychain = keychain()?;
@@ -115,21 +160,10 @@ pub(super) fn import_ca(der: &[u8]) -> Result<(), PkiError> {
     } else {
         2
     };
-    // kCFNumberSInt32Type = 3. The no-retain containers live only within this call.
+    // kCFNumberSInt32Type = 3. No-retain values live only within this call.
     let result =
         Owned::new(unsafe { CFNumberCreate(std::ptr::null(), 3, (&raw const result).cast()) })?;
-    let keys = unsafe { [kSecTrustSettingsResult] };
-    let values = [result.0];
-    let dictionary = Owned::new(unsafe {
-        CFDictionaryCreate(
-            std::ptr::null(),
-            keys.as_ptr(),
-            values.as_ptr(),
-            1,
-            std::ptr::null(),
-            std::ptr::null(),
-        )
-    })?;
+    let dictionary = trust_dictionary(&result)?;
     let settings = Owned::new(unsafe {
         CFArrayCreate(
             std::ptr::null(),

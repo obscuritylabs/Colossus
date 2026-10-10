@@ -144,6 +144,7 @@ extern "C" int32_t colossus_cef_bootstrap(const colossus_cef_bootstrap_options* 
 extern "C" int32_t colossus_cef_pump() {
   if (!colossus::initialized) return COLOSSUS_CEF_UNAVAILABLE;
   if (std::this_thread::get_id() != colossus::owning_thread) return COLOSSUS_CEF_WRONG_THREAD;
+  colossus::PlatformEventLoopDiagnostics();
   CefDoMessageLoopWork(); return COLOSSUS_CEF_OK;
 }
 extern "C" int32_t colossus_cef_shutdown() {

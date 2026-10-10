@@ -9,6 +9,7 @@
 #include "include/cef_focus_handler.h"
 #include "include/wrapper/cef_helpers.h"
 #include <vector>
+#include <limits>
 
 namespace colossus {
 class ContextBoundary final : public CefRequestContextHandler,
@@ -71,6 +72,16 @@ class Client final : public CefClient, public CefLifeSpanHandler,
     if (it->second.closing) { browser->GetHost()->CloseBrowser(true); return; }
     it->second.observer_registration = browser->GetHost()->AddDevToolsMessageObserver(this);
     Emit(tab_, generation_, COLOSSUS_CEF_CREATED); State(tab_);
+  }
+  bool DoClose(CefRefPtr<CefBrowser> browser) override {
+    CEF_REQUIRE_UI_THREAD();
+#if defined(OS_MAC)
+    // Every macOS guest is an external Tauri child. Closing one tab must not
+    // ask AppKit to close the parent Desktop window or wait for its teardown.
+    return PlatformCloseChild(browser->GetHost()->GetWindowHandle());
+#else
+    return false;
+#endif
   }
   void OnBeforeClose(CefRefPtr<CefBrowser>) override {
     CEF_REQUIRE_UI_THREAD();
@@ -180,6 +191,17 @@ class Client final : public CefClient, public CefLifeSpanHandler,
   }
   void OnDevToolsMethodResult(CefRefPtr<CefBrowser>, int id, bool success,
     const void* result, size_t size) override {
+    auto it = tabs.find(tab_);
+    if (id == std::numeric_limits<int32_t>::max() && it != tabs.end() &&
+        it->second.generation == generation_ && it->second.acceptance_probe_pending) {
+      it->second.acceptance_probe_pending = false;
+      std::string evidence;
+      const bool accepted = success && PlatformAcceptanceEvidence(
+        it->second.browser->GetHost()->GetWindowHandle(), result, size, &evidence);
+      Emit(tab_, generation_, COLOSSUS_CEF_ACCEPTANCE_EVIDENCE, id, accepted,
+           evidence.data(), evidence.size());
+      return;
+    }
     Emit(tab_, generation_, COLOSSUS_CEF_DEVTOOLS_RESULT, id, success, result, size);
   }
   void OnDevToolsEvent(CefRefPtr<CefBrowser>, const CefString& method,

@@ -1,6 +1,7 @@
 #include "host_internal.h"
 #include "include/wrapper/cef_helpers.h"
 #include <cstring>
+#include <limits>
 
 extern "C" int32_t colossus_cef_create(colossus_cef_tab tab, uint64_t generation,
   uint64_t context_id, uintptr_t parent, colossus_cef_bounds bounds, const char* url) {
@@ -110,11 +111,52 @@ extern "C" int32_t colossus_cef_devtools(colossus_cef_tab tab, uint64_t generati
   int32_t command, const char* method, const uint8_t* params, size_t size) {
   colossus::Tab* t; auto status = colossus::Resolve(tab, generation, &t);
   if (status) return status;
-  if (command <= 0 || !method || strnlen(method, 257) > 256 ||
+  if (command <= 0 || command == std::numeric_limits<int32_t>::max() ||
+      !method || strnlen(method, 257) > 256 ||
       !params || !size || size > COLOSSUS_CEF_MAX_PROTOCOL_BYTES) return COLOSSUS_CEF_INVALID;
   auto parsed = CefParseJSON(params, size, JSON_PARSER_RFC);
   if (!parsed || parsed->GetType() != VTYPE_DICTIONARY) return COLOSSUS_CEF_INVALID;
   if (!t->browser->GetHost()->ExecuteDevToolsMethod(command, method, parsed->GetDictionary()))
     return COLOSSUS_CEF_UNAVAILABLE;
   return COLOSSUS_CEF_OK;
+}
+
+extern "C" int32_t colossus_cef_acceptance_probe(colossus_cef_tab tab, uint64_t generation) {
+  colossus::Tab* t; auto status = colossus::Resolve(tab, generation, &t);
+  if (status) return status;
+#if !defined(OS_MAC)
+  return COLOSSUS_CEF_UNAVAILABLE;
+#else
+  if (t->acceptance_probe_pending) return COLOSSUS_CEF_BUSY;
+  auto params = CefDictionaryValue::Create();
+  params->SetString("format", "png");
+  params->SetBool("captureBeyondViewport", false);
+  t->acceptance_probe_pending = true;
+  if (!t->browser->GetHost()->ExecuteDevToolsMethod(std::numeric_limits<int32_t>::max(),
+                                                    "Page.captureScreenshot", params)) {
+    t->acceptance_probe_pending = false;
+    return COLOSSUS_CEF_UNAVAILABLE;
+  }
+  return COLOSSUS_CEF_OK;
+#endif
+}
+
+extern "C" int32_t colossus_cef_acceptance_activate(colossus_cef_tab tab, uint64_t generation) {
+  colossus::Tab* t; auto status = colossus::Resolve(tab, generation, &t);
+  if (status) return status;
+#if defined(OS_MAC)
+  return colossus::PlatformAcceptanceActivate(t->browser->GetHost()->GetWindowHandle());
+#else
+  return COLOSSUS_CEF_UNAVAILABLE;
+#endif
+}
+
+extern "C" int32_t colossus_cef_acceptance_terminate(colossus_cef_tab tab, uint64_t generation) {
+  colossus::Tab* t; auto status = colossus::Resolve(tab, generation, &t);
+  if (status) return status;
+#if defined(OS_MAC)
+  return colossus::PlatformAcceptanceTerminate(t->browser->GetHost()->GetWindowHandle());
+#else
+  return COLOSSUS_CEF_UNAVAILABLE;
+#endif
 }

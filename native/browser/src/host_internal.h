@@ -20,6 +20,7 @@ struct Tab {
   CefRefPtr<CefRegistration> observer_registration;
   bool closing = false;
   bool visible = false;
+  bool acceptance_probe_pending = false;
 };
 extern colossus_cef_callbacks callbacks;
 extern std::map<colossus_cef_tab, Tab> tabs;
@@ -40,7 +41,13 @@ int32_t PlatformBounds(CefWindowHandle handle, colossus_cef_bounds bounds);
 int32_t PlatformVisible(CefWindowHandle handle, bool visible);
 bool PlatformEarlySetup();
 bool PlatformLoadLibrary();
+void PlatformEventLoopDiagnostics();
+bool PlatformCloseChild(CefWindowHandle handle);
+int32_t PlatformAcceptanceActivate(CefWindowHandle handle);
+int32_t PlatformAcceptanceTerminate(CefWindowHandle handle);
 colossus_cef_bounds PlatformChildBounds(uintptr_t parent, colossus_cef_bounds bounds);
 bool ValidBounds(colossus_cef_bounds bounds);
+bool PlatformAcceptanceEvidence(CefWindowHandle handle, const void* result,
+                                size_t size, std::string* evidence);
 }
 #endif

@@ -220,6 +220,50 @@ development home. Direct Tauri launches still accept `--features browser-preview
 
 The feature is off in normal builds until the native release gates pass.
 
+### Desktop Chromium development acceptance on macOS
+
+Prepare the pinned native component with the
+[Chromium development launcher](setup-testing.md#run-the-embedded-chromium-preview-on-macos).
+Use the source and native build paths it prints:
+
+```sh
+COLOSSUS_CEF_ROOT=/absolute/path/to/verified/cef/source \
+COLOSSUS_CEF_NATIVE_LIB_DIR=/absolute/path/to/native/build \
+  npm --prefix apps/desktop run test:browser-chromium-native
+```
+
+This operator-owned tier requires an unlocked interactive macOS session, loopback
+sockets, and native process inspection. Keep the test Desktop window in front.
+It builds the actual renderer assets and a debug CEF-linked Tauri acceptance app,
+stages and verifies its ad-hoc signatures, and launches through macOS LaunchServices.
+Its isolated UUID home never uses saved Desktop workspaces or credentials.
+
+Acceptance first requires the actual main WebView document to pass the same native
+controller authorization used by browser IPC. It then checks rendered PNG pixels
+and native child geometry, CEF/Tauri AppKit coexistence,
+navigation/back/forward/reload, shared-session tabs and hidden siblings,
+resizing, controller overlay occlusion and restoration, expired viewport leases,
+workspace generations, privileged app-origin denial, and disabled agent control.
+It records live renderer seatbelt startup and rejects sandbox-disabling or remote
+debugging flags. It reopens a loaded visible tab before requesting AppKit quit,
+then requires the Desktop exit guard to acknowledge that live tab's closure.
+Success requires native close acknowledgements, successful `CefShutdown`, private
+cache removal, actual fixture HTTP requests, and no surviving owned helper processes.
+Failure cleanup does not turn an unsuccessful shutdown into acceptance.
+
+Logs, the staged app, and `native-acceptance.json` remain in a generated
+`.local/chromium-acceptance-UUID` directory. Set
+`COLOSSUS_BROWSER_ACCEPTANCE_EVIDENCE_DIR` to a fresh absolute directory to select
+the evidence destination. `COLOSSUS_BROWSER_ACCEPTANCE_PAUSE_MS` holds visual
+checkpoints for up to 30 seconds each. On macOS sessions that reject programmatic
+activation, set `COLOSSUS_BROWSER_ACCEPTANCE_FOREGROUND_WAIT_MS=60000` to allow
+up to one minute to activate the observed test window; the foreground check still
+must pass.
+
+These development results do not promote component modes or enable production
+automation. Authenticated Core host enrollment and complete browser network
+containment remain required by [ADR 0007](adr/0007-owned-chromium-browser.md).
+
 ### Plan Mode acceptance
 
 Run `cargo test -p colossus-cli --test plan_mode_smoke --test interactive_plan_smoke`
