@@ -6,6 +6,8 @@ import socket
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
+import uuid
 
 from pki_fixture_private import private_write
 from pki_fixture_retirement import FixtureInputs, startup_receipt
@@ -48,6 +50,23 @@ class RetirementTests(unittest.TestCase):
                 with self.assertRaises(ProbeError):
                     inputs.retire()
                 self.assertTrue(quarantines[0].exists())
+
+    def test_existing_quarantine_is_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as allocation:
+            root = Path(allocation)
+            source = root / "source"
+            private_write(source, b"synthetic-identity")
+            with FixtureInputs(root / "inputs") as inputs:
+                copied = Path(inputs.copy(source, "identity.pfx", 128))
+                fixed_id = uuid.UUID(int=1)
+                quarantine = inputs.directory / f".retired-input-{fixed_id.hex}"
+                private_write(quarantine, b"unrelated-owned-file")
+                with patch("pki_fixture_retirement.uuid.uuid4", return_value=fixed_id):
+                    with self.assertRaises(ProbeError):
+                        inputs.retire()
+                self.assertTrue(inputs.quarantined)
+                self.assertEqual(copied.read_bytes(), b"synthetic-identity")
+                self.assertEqual(quarantine.read_bytes(), b"unrelated-owned-file")
 
     def test_source_bounds_and_indirection_fail_before_copy(self):
         with tempfile.TemporaryDirectory() as allocation:

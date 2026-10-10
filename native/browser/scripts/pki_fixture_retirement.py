@@ -11,6 +11,7 @@ import ctypes
 import os
 from pathlib import Path
 import stat
+import sys
 import uuid
 
 from pki_fixture_private import private_directory
@@ -73,7 +74,20 @@ class FixtureInputs:
 
     def retire(self) -> None:
         libc = ctypes.CDLL(None, use_errno=True)
-        rename = libc.renameat2
+        # Linux and macOS expose different no-replace rename operations. Both
+        # must reject a pre-existing quarantine name atomically; plain renameat
+        # could overwrite an unknown file before we compare the retained inode.
+        if sys.platform == "linux":
+            symbol, no_replace = "renameat2", 1  # RENAME_NOREPLACE
+        elif sys.platform == "darwin":
+            symbol, no_replace = "renameatx_np", 4  # RENAME_EXCL
+        else:
+            self.quarantined = True
+            raise ProbeError("native fixture source retirement is unsupported on this OS")
+        rename = getattr(libc, symbol, None)
+        if rename is None:
+            self.quarantined = True
+            raise ProbeError("native fixture source retirement lacks atomic no-replace rename")
         rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
                            ctypes.c_uint]
         rename.restype = ctypes.c_int
@@ -85,7 +99,8 @@ class FixtureInputs:
                 self.quarantined = True
                 raise ProbeError("native fixture source retirement ownership unknown")
             quarantine = f".retired-input-{uuid.uuid4().hex}"
-            if rename(self.fd, os.fsencode(item["name"]), self.fd, os.fsencode(quarantine), 1) != 0:
+            if rename(self.fd, os.fsencode(item["name"]), self.fd,
+                      os.fsencode(quarantine), no_replace) != 0:
                 self.quarantined = True
                 raise ProbeError("native fixture source retirement could not quarantine its input")
             moved = os.stat(quarantine, dir_fd=self.fd, follow_symlinks=False)

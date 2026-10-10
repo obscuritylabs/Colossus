@@ -17,6 +17,7 @@ namespace colossus::browser::pki::mac {
 enum class Status { Ready, Denied, Unavailable, OutcomeUnknown };
 using Fingerprint = std::array<std::uint8_t, 32>;
 using CodeHash = std::array<std::uint8_t, 20>;
+using Generation = std::array<std::uint8_t, 32>;
 
 struct Binding {
   std::string origin;
@@ -39,6 +40,9 @@ struct Bootstrap {
   int retained_parent_fd = -1;
   std::string canonical_parent;
   CodeHash expected_broker_cdhash{};
+  // Fresh supervisor entropy for this enrollment. Every broker request carries
+  // it so a command retained from an earlier store generation fails closed.
+  Generation generation{};
   std::vector<Binding> bindings;
   PublicValidation validate;
 };
@@ -61,6 +65,7 @@ enum class Tls13Scheme : std::uint16_t {
 // It is useful only inside this owner and before its bounded deadline.
 struct Handshake {
   std::uint64_t sequence = 0;
+  Generation generation{};
 };
 
 class OwnedIdentity final {
@@ -76,12 +81,14 @@ class OwnedIdentity final {
 
   // Public material only. CA roots belong in the broker's own TLS verifier;
   // importing a client chain grants no CA trust. No OS trust setter is used.
-  Status CopyPublicMaterial(std::vector<std::vector<std::uint8_t>>* ca_der,
+  Status CopyPublicMaterial(const Generation& generation,
+                            std::vector<std::vector<std::uint8_t>>* ca_der,
                             std::vector<std::uint8_t>* leaf_der);
 
   // Native TLS engine only, after the exact admitted request origin/lease check.
   // This is not an IPC signing oracle. Only one outstanding handshake is kept.
-  Status BeginHandshake(const std::string& admitted_origin,
+  Status BeginHandshake(const Generation& generation,
+                        const std::string& admitted_origin,
                         const Fingerprint& reviewed_leaf,
                         std::chrono::steady_clock::time_point deadline,
                         Handshake* output);

@@ -1,5 +1,5 @@
 use super::*;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Browser placement; neither mode permits an automatic fallback to a personal browser.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -67,8 +67,8 @@ pub struct BrowserOpenOptions {
 }
 
 /// Closed persistence choice; native filesystem paths and personal profiles are forbidden.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BrowserProfileSelection {
     /// Fresh ephemeral browser state, removed after verified native cleanup.
     #[default]
@@ -78,6 +78,25 @@ pub enum BrowserProfileSelection {
         /// Opaque native-created identifier; never an engine path or directory name.
         id: BrowserProfileId,
     },
+}
+
+impl<'de> Deserialize<'de> for BrowserProfileSelection {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Serde's internally tagged unit variant silently accepts extra fields.
+        // An empty struct variant enforces the closed temporary-profile shape
+        // while preserving the public unit variant used by callers.
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+        enum StrictProfileSelection {
+            Temporary {},
+            Workspace { id: BrowserProfileId },
+        }
+
+        match StrictProfileSelection::deserialize(deserializer)? {
+            StrictProfileSelection::Temporary {} => Ok(Self::Temporary),
+            StrictProfileSelection::Workspace { id } => Ok(Self::Workspace { id }),
+        }
+    }
 }
 
 /// Credential-free profile management metadata; no cache path or stored site data.

@@ -20,11 +20,19 @@ static int fixture_fsync(int descriptor) {
 
 namespace colossus::browser::pki::mac {
 struct FileOnlyFixture {
+  static bool ValidOrigin(const std::string& origin) {
+    return origin == "https://allowed.example";
+  }
   static std::unique_ptr<OwnedIdentity> Setup(bool record) {
     char path[] = "/private/tmp/colossus-owned-pki-files.XXXXXX";
     assert(mkdtemp(path));
     auto state = std::make_unique<OwnedIdentity::State>();
     state->bootstrap.canonical_parent = path;
+    state->bootstrap.generation.fill(0x42);
+    state->bootstrap.validate.origin = ValidOrigin;
+    state->leaf_hash.fill(0x24);
+    state->bootstrap.bindings.push_back(
+        {"https://allowed.example", state->leaf_hash});
     state->parent = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     struct stat value{};
     assert(fstat(state->parent, &value) == 0);
@@ -178,6 +186,22 @@ struct FileOnlyFixture {
     assert(forbidden_parent("/private/tmp/System.Keychain/parent"));
     assert(!forbidden_parent("/private/tmp/colossus-owned-pki"));
   }
+  static void GenerationAndOriginBinding() {
+    auto owner = Setup(true);
+    auto& state = *owner->state_;
+    Generation stale = state.bootstrap.generation;
+    stale[0] ^= 1;
+    Fingerprint other_leaf = state.leaf_hash;
+    other_leaf[0] ^= 1;
+    assert(state.BindingValid(state.bootstrap.generation,
+                              "https://allowed.example", state.leaf_hash));
+    assert(!state.BindingValid(stale, "https://allowed.example", state.leaf_hash));
+    assert(!state.BindingValid(state.bootstrap.generation,
+                               "https://other.example", state.leaf_hash));
+    assert(!state.BindingValid(state.bootstrap.generation,
+                               "https://allowed.example", other_leaf));
+    RemoveFixture(std::move(owner));
+  }
 };
 }  // namespace colossus::browser::pki::mac
 
@@ -187,11 +211,11 @@ int main() {
                     Fixture::DerivedLockRejected, Fixture::StoreAliasRejected,
                     Fixture::RetryFlush, Fixture::EarlyDrop, Fixture::ParentAclChange,
                     Fixture::PasswordDeniedWipes, Fixture::CancellationAndRevoke,
-                    Fixture::LoginNamespaceRejected}) {
+                    Fixture::LoginNamespaceRejected, Fixture::GenerationAndOriginBinding}) {
     const pid_t child = fork(); assert(child >= 0);
     if (child == 0) { test(); _exit(0); }
     int status = 0;
     assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
   }
-  puts("PASS eleven file-only owned PKI custody regressions; no Security API, audit-port, or browser calls");
+  puts("PASS twelve file-only owned PKI custody regressions; no Security API, audit-port, or browser calls");
 }

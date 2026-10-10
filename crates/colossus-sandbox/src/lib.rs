@@ -113,6 +113,8 @@ mod browser_profiles;
 pub use browser_profiles::{
     BrowserProfileEngine, BrowserProfileError, BrowserProfileLease, BrowserProfileStore,
 };
+#[cfg(target_os = "macos")]
+mod browser_macos;
 #[cfg(windows)]
 mod browser_windows;
 pub use browser_egress::{
@@ -123,6 +125,9 @@ pub use browser_windows::{
     WindowsBrowserConfig, WindowsBrowserPresentation, WindowsBrowserShutdownReceipt,
     WindowsBrowserSupervisor,
 };
+
+#[cfg(target_os = "macos")]
+pub use browser_macos::{MacosBrowserReadiness, MacosBrowserRequirement, MacosBrowserSupervisor};
 
 #[cfg(target_os = "linux")]
 mod browser_oci;

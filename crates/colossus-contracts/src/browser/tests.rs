@@ -56,6 +56,16 @@ fn persistent_profile_choice_is_opaque_and_temporary_by_default() {
     }))
     .unwrap();
     assert_eq!(open.profile, BrowserProfileSelection::Temporary);
+    assert_eq!(
+        serde_json::from_value::<BrowserProfileSelection>(json!({"kind":"temporary"})).unwrap(),
+        BrowserProfileSelection::Temporary
+    );
+    assert!(matches!(
+        serde_json::from_value::<BrowserProfileSelection>(
+            json!({"kind":"workspace","id":"bp_01234567890123456789012345678901"})
+        ),
+        Ok(BrowserProfileSelection::Workspace { .. })
+    ));
     for profile in [
         json!({"kind":"workspace","id":"/tmp/personal-chrome"}),
         json!({"kind":"workspace","id":"bp_01234567890123456789012345678901","path":"/tmp/cache"}),

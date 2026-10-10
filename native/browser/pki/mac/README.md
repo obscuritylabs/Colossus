@@ -16,7 +16,10 @@ can register login-named paths even without an explicit search-list setter.
 
 `OwnedIdentity::Prepare` requires public-validation callbacks from the shared PKI
 validator, one reviewed client leaf, exact canonical HTTPS origin bindings, an
-encrypted PKCS#12, and a bounded native password. It wipes the supplied password on
+encrypted PKCS#12, a fresh 256-bit supervisor enrollment generation, and a bounded
+native password. Public-material reads and signing handshakes must present that exact
+generation, so commands retained across store replacement cannot address the new
+identity. It wipes the supplied password on
 every exit. It creates an explicit file Keychain and passes that retained store to
 `SecItemImport`, with sign-only usage and an explicit permanent/sensitive attribute
 array that omits extractability. Imported chain certificates grant no CA trust.
@@ -63,11 +66,12 @@ node scripts/development-launch.mjs -- \
   .local/mac-owned-pki-source/colossus-mac-owned-pki-file-test
 ```
 
-The eleven file-only regressions exercise the real cleanup state machine with plain
+The twelve file-only regressions exercise the real cleanup state machine with plain
 owned files, plus password wiping and memory revocation. They also prove that a
 plausible derived Keychain lock basename and a later database inode generation are
-rejected and preserved rather than adopted. They construct no native key/item/code
-references and invoke no Security, browser or audit-port APIs. This target does not
-run a real store or TLS acceptance fixture. Accepting native output still requires
-an independently enforced creator-only mutation window and exact generation receipt;
-the library intentionally has neither.
+rejected and preserved rather than adopted, and that stale enrollment generations,
+foreign origins and other leaf fingerprints fail the binding check. They construct
+no native key/item/code references and invoke no Security, browser or audit-port APIs.
+This target does not run a real store or TLS acceptance fixture. Accepting native
+output still requires an independently enforced creator-only mutation window and
+exact generation receipt; the library intentionally has neither.

@@ -9,9 +9,32 @@ pub mod manifest;
 
 use crate::RuntimeBrowserHost;
 use colossus_ports::BrowserDriverError;
-#[cfg(target_os = "linux")]
+#[cfg(any(
+    target_os = "linux",
+    all(
+        target_os = "macos",
+        debug_assertions,
+        feature = "macos-browser-host-acceptance"
+    )
+))]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{path::Path, sync::Arc};
+
+/// Explicit cleanup contract for an accepted macOS browser host.
+///
+/// This source-only acceptance seam does not grant availability. A platform owner
+/// must separately implement the host factory, private presenter, and this positive
+/// shutdown receipt before managed Core can retain it.
+#[cfg(all(
+    target_os = "macos",
+    debug_assertions,
+    feature = "macos-browser-host-acceptance"
+))]
+#[async_trait::async_trait]
+pub trait MacosBrowserCleanupOwner: Send + Sync {
+    /// Revoke the network envelope and reap the browser and every helper process.
+    async fn shutdown(&self) -> Result<(), BrowserDriverError>;
+}
 
 /// Categorical installation failure; component paths and credentials are unreleased.
 #[derive(Debug, thiserror::Error)]
@@ -31,12 +54,50 @@ pub struct InstalledBrowserOwner {
     supervisor: Arc<colossus_sandbox::OciBrowserSupervisor>,
     #[cfg(target_os = "linux")]
     shutdown_confirmed: AtomicBool,
+    #[cfg(all(
+        target_os = "macos",
+        debug_assertions,
+        feature = "macos-browser-host-acceptance"
+    ))]
+    macos_owner: Option<Arc<dyn MacosBrowserCleanupOwner>>,
+    #[cfg(all(
+        target_os = "macos",
+        debug_assertions,
+        feature = "macos-browser-host-acceptance"
+    ))]
+    shutdown_confirmed: AtomicBool,
 }
 impl InstalledBrowserOwner {
     /// Clone only the already verified worker/runtime driver binding.
     #[must_use]
     pub fn host(&self) -> RuntimeBrowserHost {
         self.host.clone()
+    }
+
+    /// Retain one accepted macOS owner across managed worker and Desktop lifetimes.
+    ///
+    /// The same object supplies Core allocation, the private native compositor, and
+    /// full cleanup. The current fail-closed Mac supervisor deliberately cannot meet
+    /// these bounds, so this constructor cannot enable it or installed discovery.
+    #[cfg(all(
+        target_os = "macos",
+        debug_assertions,
+        feature = "macos-browser-host-acceptance"
+    ))]
+    pub fn macos_for_acceptance<F>(supervisor: Arc<F>) -> Result<Arc<Self>, BrowserDriverError>
+    where
+        F: colossus_browser_bridge::BrowserHostFactory
+            + crate::RuntimeBrowserPresenter
+            + MacosBrowserCleanupOwner
+            + 'static,
+    {
+        let (host, retained) = RuntimeBrowserHost::macos_supervised_for_acceptance(supervisor)?;
+        let macos_owner: Arc<dyn MacosBrowserCleanupOwner> = retained;
+        Ok(Arc::new(Self {
+            host,
+            macos_owner: Some(macos_owner),
+            shutdown_confirmed: AtomicBool::new(false),
+        }))
     }
     /// Revoke and positively reap the exact process/profile/installation owner.
     pub async fn shutdown(&self) -> Result<(), BrowserDriverError> {
@@ -46,7 +107,26 @@ impl InstalledBrowserOwner {
             self.shutdown_confirmed.store(true, Ordering::Release);
             Ok(())
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(all(
+            target_os = "macos",
+            debug_assertions,
+            feature = "macos-browser-host-acceptance"
+        ))]
+        {
+            if let Some(owner) = &self.macos_owner {
+                owner.shutdown().await?;
+                self.shutdown_confirmed.store(true, Ordering::Release);
+            }
+            Ok(())
+        }
+        #[cfg(not(any(
+            target_os = "linux",
+            all(
+                target_os = "macos",
+                debug_assertions,
+                feature = "macos-browser-host-acceptance"
+            )
+        )))]
         Ok(())
     }
 }
@@ -55,6 +135,21 @@ impl Drop for InstalledBrowserOwner {
         #[cfg(target_os = "linux")]
         if !self.shutdown_confirmed.load(Ordering::Acquire) {
             linux::retain_cleanup(Arc::clone(&self.supervisor));
+        }
+        #[cfg(all(
+            target_os = "macos",
+            debug_assertions,
+            feature = "macos-browser-host-acceptance"
+        ))]
+        if !self.shutdown_confirmed.load(Ordering::Acquire)
+            && let Some(owner) = self.macos_owner.take()
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            runtime.spawn(async move {
+                while owner.shutdown().await.is_err() {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+            });
         }
     }
 }

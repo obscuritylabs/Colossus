@@ -1,10 +1,11 @@
-#![cfg(target_os = "macos")]
 //! Real scoped kernel source/export evidence, with an external native observer.
 //!
 //! These ignored tests require a logged-in macOS GUI user, Python 3, the native SDK
 //! compiler and user launchd. They neither launch a browser nor change audit policy.
 //! Run: cargo test -p colossus-darwin-process --test native_audit_events -- --ignored --nocapture
 //! The outside observer is a fixed fixture, not a production receiver or containment proof.
+
+#![cfg(target_os = "macos")]
 
 use colossus_darwin_process::{DarwinAuditSessionEvents, RetainedDarwinAuditSession};
 use std::{fs, os::fd::AsRawFd as _, path::Path, process::Command, time::Duration};

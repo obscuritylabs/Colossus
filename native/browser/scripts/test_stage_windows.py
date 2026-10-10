@@ -133,7 +133,9 @@ class WindowsStageTests(unittest.TestCase):
             with self.subTest(changed=changed):
                 def replace_during_copy(source, target, **options):
                     copied = original_copy(source, target, **options)
-                    if Path(source) == changed:
+                    # macOS resolves /var through /private/var while the test
+                    # fixture records the original spelling of the same file.
+                    if Path(source).samefile(changed):
                         Path(target).write_bytes(client_image(eager=True))
                     return copied
                 with patch.object(stage_windows.shutil, "copy2", side_effect=replace_during_copy):

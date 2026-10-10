@@ -115,6 +115,9 @@ Fingerprint fingerprint(std::span<const std::uint8_t> bytes) {
 bool nonzero(const CodeHash& value) {
   return std::any_of(value.begin(), value.end(), [](auto byte) { return byte != 0; });
 }
+bool nonzero(const Generation& value) {
+  return std::any_of(value.begin(), value.end(), [](auto byte) { return byte != 0; });
+}
 bool boolean(CFDictionaryRef dictionary, CFStringRef attribute, bool expected) {
   CFTypeRef value = CFDictionaryGetValue(dictionary, attribute);
   return value && CFGetTypeID(value) == CFBooleanGetTypeID() &&
@@ -259,6 +262,15 @@ struct OwnedIdentity::State {
   bool CodeValid() const {
     return code && requirement && SecCodeCheckValidity(code, kSecCSDefaultFlags, requirement) == errSecSuccess;
   }
+  bool BindingValid(const Generation& generation, const std::string& origin,
+                    const Fingerprint& leaf) const {
+    return generation == bootstrap.generation && leaf == leaf_hash &&
+        bootstrap.validate.origin && bootstrap.validate.origin(origin) &&
+        std::any_of(bootstrap.bindings.begin(), bootstrap.bindings.end(),
+                    [&origin, &leaf](const auto& binding) {
+                      return binding.origin == origin && binding.leaf_sha256 == leaf;
+                    });
+  }
   bool SameStore(SecKeychainItemRef item) const {
     Ref<SecKeychainRef> store;
     return item && SecKeychainItemCopyKeychain(item, store.out()) == errSecSuccess &&
@@ -331,7 +343,7 @@ Status OwnedIdentity::Prepare(Bootstrap bootstrap, Enrollment enrollment,
   WipeOnExit password_wipe{enrollment.password};
   if (!output || *output || bootstrap.retained_parent_fd < 0 ||
       !canonical(bootstrap.canonical_parent) || forbidden_parent(bootstrap.canonical_parent) ||
-      !nonzero(bootstrap.expected_broker_cdhash) ||
+      !nonzero(bootstrap.expected_broker_cdhash) || !nonzero(bootstrap.generation) ||
       !bootstrap.validate.ca || !bootstrap.validate.identity || !bootstrap.validate.origin ||
       bootstrap.bindings.empty() || bootstrap.bindings.size() > 32 ||
       enrollment.encrypted_pkcs12.empty() || enrollment.encrypted_pkcs12.size() > kMaxPkcs12 ||
@@ -458,30 +470,32 @@ Status OwnedIdentity::Prepare(Bootstrap bootstrap, Enrollment enrollment,
   return Status::Ready;
 }
 
-Status OwnedIdentity::CopyPublicMaterial(std::vector<std::vector<std::uint8_t>>* ca_der,
+Status OwnedIdentity::CopyPublicMaterial(const Generation& generation,
+                                        std::vector<std::vector<std::uint8_t>>* ca_der,
                                         std::vector<std::uint8_t>* leaf_der) {
   std::lock_guard lock(state_->mutex);
-  if (!ca_der || !leaf_der || !state_->Valid()) return Status::Denied;
+  if (generation != state_->bootstrap.generation || !ca_der || !leaf_der ||
+      !state_->Valid()) return Status::Denied;
   for (const auto& root : state_->roots) if (!state_->bootstrap.validate.ca(root)) return Status::Denied;
   *ca_der = state_->roots;
   *leaf_der = state_->leaf;
   return Status::Ready;
 }
 
-Status OwnedIdentity::BeginHandshake(const std::string& origin, const Fingerprint& leaf,
+Status OwnedIdentity::BeginHandshake(const Generation& generation,
+                                    const std::string& origin, const Fingerprint& leaf,
                                     std::chrono::steady_clock::time_point deadline, Handshake* output) {
   std::lock_guard lock(state_->mutex);
   State& owner = *state_;
   const auto now = std::chrono::steady_clock::now();
   if (owner.handshake && owner.handshake->second <= now) owner.handshake.reset();
-  if (!output || owner.handshake || !owner.Valid() || deadline <= now ||
-      deadline - now > std::chrono::seconds(30) || owner.sequence == UINT64_MAX || leaf != owner.leaf_hash ||
-      !owner.bootstrap.validate.origin(origin) ||
-      !std::any_of(owner.bootstrap.bindings.begin(), owner.bootstrap.bindings.end(),
-                   [&origin, &leaf](const auto& binding) { return binding.origin == origin && binding.leaf_sha256 == leaf; })) return Status::Denied;
+  if (!output || owner.handshake || !owner.BindingValid(generation, origin, leaf) ||
+      !owner.Valid() || deadline <= now || deadline - now > std::chrono::seconds(30) ||
+      owner.sequence == UINT64_MAX) return Status::Denied;
   const auto sequence = ++owner.sequence;
   owner.handshake = std::pair{sequence, deadline};
   output->sequence = sequence;
+  output->generation = generation;
   return Status::Ready;
 }
 
@@ -491,7 +505,8 @@ Status OwnedIdentity::CertificateVerify(Handshake handshake, Tls13Scheme scheme,
   std::lock_guard lock(state_->mutex);
   State& owner = *state_;
   if (signature) signature->clear();
-  if (!signature || !owner.handshake || owner.handshake->first != handshake.sequence || !owner.Valid()) return Status::Denied;
+  if (!signature || handshake.generation != owner.bootstrap.generation || !owner.handshake ||
+      owner.handshake->first != handshake.sequence || !owner.Valid()) return Status::Denied;
   const auto deadline = owner.handshake->second;
   owner.handshake.reset();  // Consume before any signature/error; never retry it.
   if (std::chrono::steady_clock::now() >= deadline) return Status::Denied;

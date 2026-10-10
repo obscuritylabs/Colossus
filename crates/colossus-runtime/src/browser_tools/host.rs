@@ -234,6 +234,13 @@ mod macos_acceptance_tests {
         }
     }
 
+    #[async_trait]
+    impl crate::browser_package::MacosBrowserCleanupOwner for AcceptanceSupervisor {
+        async fn shutdown(&self) -> Result<(), BrowserDriverError> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn macos_acceptance_composition_retains_one_factory_and_presenter_owner() {
         let supervisor = Arc::new(AcceptanceSupervisor);
@@ -243,5 +250,31 @@ mod macos_acceptance_tests {
         assert!(host.presenter.is_some());
         assert!(Arc::ptr_eq(&supervisor, &retained));
         assert!(Arc::strong_count(&supervisor) >= 4);
+    }
+
+    #[test]
+    fn incomplete_macos_supervisor_cannot_advertise_or_present() {
+        let supervisor = Arc::new(colossus_sandbox::MacosBrowserSupervisor::unavailable());
+        let readiness = supervisor.readiness();
+        assert!(!readiness.is_available());
+        assert!(!readiness.blockers().is_empty());
+
+        let factory: Arc<dyn BrowserHostFactory> = supervisor;
+        let host = RuntimeBrowserHost::from_supervised_factory(factory).unwrap();
+
+        assert!(!host.driver.capabilities().available);
+        assert!(host.presenter.is_none());
+    }
+
+    #[tokio::test]
+    async fn macos_managed_owner_retains_one_host_presenter_and_cleanup_domain() {
+        let supervisor = Arc::new(AcceptanceSupervisor);
+        let owner =
+            crate::browser_package::InstalledBrowserOwner::macos_for_acceptance(supervisor.clone())
+                .unwrap();
+
+        assert!(owner.host().presenter.is_some());
+        assert!(Arc::strong_count(&supervisor) >= 4);
+        owner.shutdown().await.unwrap();
     }
 }
