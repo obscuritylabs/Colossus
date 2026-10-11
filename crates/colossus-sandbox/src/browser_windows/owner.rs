@@ -29,6 +29,7 @@ pub(super) struct Owner {
 struct Native {
     child: Option<SandboxedChild>,
     profile: Option<ExclusiveAppContainerProfile>,
+    profile_directory: Option<std::fs::File>,
     forced: bool,
 }
 impl Native {
@@ -62,6 +63,7 @@ impl Native {
         }
         self.profile.take();
         self.child.take();
+        self.profile_directory.take();
         Ok(self.forced)
     }
 }
@@ -75,6 +77,9 @@ impl Drop for Native {
             }
             if let Some(child) = self.child.take() {
                 std::mem::forget(child);
+            }
+            if let Some(directory) = self.profile_directory.take() {
+                std::mem::forget(directory);
             }
         }
     }
@@ -100,6 +105,7 @@ impl Owner {
                 let mut native = Native {
                     child: None,
                     profile: None,
+                    profile_directory: None,
                     forced: false,
                 };
                 let mut result = allocate(&request, &mut native).and_then(|channels| {
@@ -115,11 +121,37 @@ impl Owner {
                                 .process_handle(),
                         )
                         .and_then(|principal| principal.create_directory(&request.profile))
-                        .map_err(|_| BrowserDriverError::Denied)
-                        .map(|()| SupervisedChildChannels {
-                            channels,
-                            stdout: native.child.as_mut().and_then(|child| child.stdout.take()),
-                            stderr: native.child.as_mut().and_then(|child| child.stderr.take()),
+                        .map_err(|_error| {
+                            #[cfg(debug_assertions)]
+                            {
+                                if let colossus_windows_native::WindowsNativeError::Io {
+                                    operation,
+                                    source,
+                                } = &_error
+                                {
+                                    eprintln!(
+                                        "Windows browser token/profile admission: operation={operation}, os_code={:?}",
+                                        source.raw_os_error()
+                                    );
+                                } else {
+                                    eprintln!("Windows browser token/profile admission: {_error}");
+                                }
+                                if let Some(child) = &native.child {
+                                    eprintln!(
+                                        "Windows browser direct-child startup exit: {:?}",
+                                        child.wait_timeout(Duration::ZERO)
+                                    );
+                                }
+                            }
+                            BrowserDriverError::Denied
+                        })
+                        .map(|directory| {
+                            native.profile_directory = Some(directory);
+                            SupervisedChildChannels {
+                                channels,
+                                stdout: native.child.as_mut().and_then(|child| child.stdout.take()),
+                                stderr: native.child.as_mut().and_then(|child| child.stderr.take()),
+                            }
                         })
                 });
                 if result.is_err() {
@@ -220,8 +252,10 @@ fn allocate(
         .into_os_string()
         .into_string()
         .map_err(|_| BrowserDriverError::Unavailable)?;
+    let private_home = request.profile.to_string_lossy().into_owned();
     let environment = BTreeMap::from([
         ("SystemRoot".into(), system.clone()),
+        ("windir".into(), system.clone()),
         (
             "PATH".into(),
             PathBuf::from(&system)
@@ -229,6 +263,12 @@ fn allocate(
                 .to_string_lossy()
                 .into_owned(),
         ),
+        ("HOME".into(), private_home.clone()),
+        ("USERPROFILE".into(), private_home.clone()),
+        ("APPDATA".into(), private_home.clone()),
+        ("LOCALAPPDATA".into(), private_home.clone()),
+        ("TEMP".into(), private_home.clone()),
+        ("TMP".into(), private_home),
     ]);
     let SupervisedChild {
         mut child,
@@ -251,7 +291,17 @@ fn allocate(
         },
         4,
     )
-    .map_err(|_| BrowserDriverError::Unavailable)?;
+    .map_err(|_error| {
+        #[cfg(debug_assertions)]
+        if let colossus_windows_process::WindowsProcessError::Win32 { operation, source } = &_error
+        {
+            eprintln!(
+                "Windows browser process startup: operation={operation}, os_code={:?}",
+                source.raw_os_error()
+            );
+        }
+        BrowserDriverError::Unavailable
+    })?;
     child.stdin.take();
     native.child = Some(child);
     Ok(channels)

@@ -8,11 +8,17 @@ use tokio::io::AsyncReadExt as _;
 pub(super) async fn receipt(reader: &mut PrivateReader) -> Result<(), BrowserDriverError> {
     for expected in 1..=7 {
         let mut record = [0; 5];
-        reader
-            .read_exact(&mut record)
-            .await
-            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        reader.read_exact(&mut record).await.map_err(|_error| {
+            #[cfg(debug_assertions)]
+            eprintln!("Windows browser startup receipt missing: expected_phase={expected}");
+            BrowserDriverError::OutcomeUnknown
+        })?;
         if record[..4] != [b'C', b'B', b'H', 1] || record[4] != expected {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "Windows browser startup receipt rejected: expected_phase={expected}, received_phase={}",
+                record[4]
+            );
             return Err(BrowserDriverError::Denied);
         }
     }

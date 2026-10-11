@@ -26,6 +26,22 @@ pub struct PrivateDirectoryCreation {
     package: Option<AppContainerPrincipal>,
 }
 impl PrivateDirectoryCreation {
+    pub(super) fn allocation_file(&self) -> Result<&File, WindowsNativeError> {
+        self.file
+            .as_ref()
+            .ok_or(WindowsNativeError::IdentityChanged)
+    }
+
+    /// Transfer the exact allocation to a native process-tree owner. This is
+    /// ownership transfer, never a deletion or complete-cleanup acknowledgement.
+    pub(super) fn into_file(mut self) -> Result<File, WindowsNativeError> {
+        let file = self
+            .file
+            .take()
+            .ok_or(WindowsNativeError::IdentityChanged)?;
+        self.closed = true;
+        Ok(file)
+    }
     /// Atomically create one fresh leaf relative to a retained owner-private parent.
     /// NT `FILE_CREATE` returns the allocation handle in the same operation and
     /// cannot adopt an existing directory, junction or caller-selected replacement.

@@ -528,6 +528,49 @@ fn immutable_component_binding_blocks_byte_and_namespace_replacement_until_relea
 
 #[cfg(windows)]
 #[test]
+fn immutable_component_directory_accepts_protected_ancestry_on_an_ordinary_windows_volume() {
+    let user_profile = std::env::var_os("USERPROFILE").expect("native user profile");
+    let temporary = tempfile::tempdir_in(user_profile).expect("fresh native fixture parent");
+    let component = temporary.path().join("component");
+    crate::create_private_directory(&component).expect("private component");
+    let binding = crate::BoundPath::open_directory(&component).expect("component binding");
+    binding
+        .validate_immutable_directory_dacl()
+        .expect("ordinary C: volume permits siblings, never replacement of this component");
+    binding.revalidate().expect("same retained component");
+    let status = std::process::Command::new("icacls.exe")
+        .arg(&component)
+        .args(["/grant", "*S-1-3-4:(OI)(CI)(F)"])
+        .status()
+        .expect("grant fixture-only OWNER RIGHTS");
+    assert!(status.success());
+    binding
+        .validate_immutable_directory_dacl()
+        .expect("OWNER RIGHTS refers only to the already validated trusted owner");
+    let status = std::process::Command::new("icacls.exe")
+        .arg(&component)
+        .args(["/grant", "*S-1-1-0:(WD)"])
+        .status()
+        .expect("grant fixture-only Everyone add-file authority");
+    assert!(status.success());
+    assert!(
+        binding.validate_immutable_directory_dacl().is_err(),
+        "untrusted additions inside the component must remain denied"
+    );
+    let status = std::process::Command::new("icacls.exe")
+        .arg(temporary.path())
+        .args(["/grant", "*S-1-1-0:(DC)"])
+        .status()
+        .expect("grant fixture-only Everyone delete-child authority");
+    assert!(status.success());
+    assert!(
+        binding.validate_ancestor_namespace_authority().is_err(),
+        "replacement through an ancestor must remain denied"
+    );
+}
+
+#[cfg(windows)]
+#[test]
 fn allocation_owner_survives_failed_binding_and_retires_only_its_original_object() {
     let temporary = tempfile::tempdir().expect("temporary parent");
     let parent = temporary.path().join("owned-parent");
@@ -571,4 +614,38 @@ fn package_allocation_rejects_adopting_an_existing_profile() {
     profile.close().unwrap();
     profile.close().unwrap();
     assert!(profile.sid_string().is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn partial_loopback_setup_is_retired_before_the_owned_package_can_be_recreated() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let name = format!("colossus.browser.{nonce:032x}");
+    let mut profile = ExclusiveAppContainerProfile::create(&name).expect("fresh exact package");
+    let sid = profile.sid_string().expect("native package SID");
+    // Non-elevated hosts normally deny this mutation. Both an acknowledged grant
+    // and a failed/uncertain attempt must keep their removal owner until close.
+    let setup = profile.enable_loopback();
+    if let Err(WindowsNativeError::Io { operation, source }) = &setup {
+        eprintln!(
+            "native loopback setup denied: operation={operation}, os_code={:?}",
+            source.raw_os_error()
+        );
+    }
+    assert!(
+        profile.enable_loopback().is_err(),
+        "no second setup attempt"
+    );
+    profile
+        .close()
+        .expect("verified exact loopback absence and package deletion");
+    profile.close().expect("idempotent acknowledged cleanup");
+    assert!(profile.sid_string().is_err());
+    let mut replacement =
+        ExclusiveAppContainerProfile::create(&name).expect("original package physically deleted");
+    assert_eq!(replacement.sid_string().unwrap(), sid);
+    replacement.close().expect("fixture replacement cleanup");
 }

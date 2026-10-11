@@ -103,7 +103,9 @@ impl AppContainerPrincipal {
     /// Grants only current user/System/Admin and this kernel-derived package.
     /// Package cache access excludes WRITE_DAC and WRITE_OWNER; inherited broad
     /// access and every reparse component fail closed. Existing names are rejected.
-    pub fn create_directory(&self, path: &Path) -> Result<(), WindowsNativeError> {
+    /// The caller retains the returned allocation handle until its whole process
+    /// tree is quiescent, then retires the directory through its owned parent.
+    pub fn create_directory(&self, path: &Path) -> Result<File, WindowsNativeError> {
         let current = current_user_sid()?;
         if !sid_matches(
             current.as_ptr().cast_mut().cast(),
@@ -118,21 +120,61 @@ impl AppContainerPrincipal {
         parent.validate_private_owner_dacl()?;
         parent.validate_ancestor_namespace_authority()?;
         parent.revalidate()?;
-        let encoded = nul_terminated_path(path)?;
+        let creation = PrivateDirectoryCreation::create(path)?;
+        let file = creation.allocation_file()?;
+        // The empty allocation is owner-private while its mandatory label changes.
+        // The package receives access only after exact Low label readback succeeds.
+        mandatory::LowLabel::new()?.apply(file)?;
         with_security_attributes(
             PRIVATE_DIRECTORY_LABELS,
             SUB_CONTAINERS_AND_OBJECTS_INHERIT,
             Some(self.package_sid()),
             |attributes| {
-                // SAFETY: terminated path and protected descriptor live for the call.
-                if unsafe { CreateDirectoryW(encoded.as_ptr(), attributes) } == 0 {
-                    return Err(last_error("create enrolled AppContainer profile"));
+                let mut present = 0;
+                let mut defaulted = 0;
+                let mut acl = null_mut();
+                // SAFETY: borrowed descriptor and output pointers live for this call.
+                if unsafe {
+                    GetSecurityDescriptorDacl(
+                        attributes.lpSecurityDescriptor,
+                        &mut present,
+                        &mut acl,
+                        &mut defaulted,
+                    )
+                } == 0
+                    || present == 0
+                    || acl.is_null()
+                    || defaulted != 0
+                {
+                    return Err(last_error("read enrolled AppContainer profile DACL"));
+                }
+                // SAFETY: retained allocation includes WRITE_DAC; the protected
+                // exact-package DACL remains borrowed for the synchronous operation.
+                let status = unsafe {
+                    SetSecurityInfo(
+                        file.as_raw_handle().cast(),
+                        SE_FILE_OBJECT,
+                        DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                        null_mut(),
+                        null_mut(),
+                        acl,
+                        null_mut(),
+                    )
+                };
+                if status != NO_ERROR {
+                    return Err(WindowsNativeError::Io {
+                        operation: "admit enrolled AppContainer profile DACL",
+                        source: std::io::Error::from_raw_os_error(status as i32),
+                    });
                 }
                 Ok(())
             },
         )?;
         let verify = || {
             let created = open_bound(path, BoundKind::Directory)?;
+            if created.identity != file_identity(file)? {
+                return Err(WindowsNativeError::IdentityChanged);
+            }
             validate_owner_dacl(
                 &created.file,
                 DaclValidation::PrivateAppContainer(self.package_sid()),
@@ -140,11 +182,8 @@ impl AppContainerPrincipal {
             created.revalidate()?;
             parent.revalidate()
         };
-        if let Err(error) = verify() {
-            let _ = fs::remove_dir(path);
-            return Err(error);
-        }
-        Ok(())
+        verify()?;
+        creation.into_file()
     }
 }
 

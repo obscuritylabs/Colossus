@@ -50,6 +50,20 @@ async fn owned_windows_chromium_frames_input_viewer_and_full_cleanup() {
     )
     .expect("owner-private exact state allocation");
     let state_path = state.path().to_owned();
+    let state_binding = colossus_windows_native::BoundPath::open_directory(&state_path)
+        .expect("native state root binding");
+    state_binding
+        .validate_private_owner_dacl()
+        .expect("native state root DACL");
+    state_binding
+        .validate_ancestor_namespace_authority()
+        .expect("native state root protected ancestry");
+    let component_binding = colossus_windows_native::BoundPath::open_directory(&component)
+        .expect("native component root binding");
+    component_binding
+        .validate_immutable_directory_dacl()
+        .expect("native component payload and ancestry DACL");
+    drop((state_binding, component_binding));
     let fixture = fixture::Fixture::start().await;
     let request = BrowserDriverOpenRequest {
         binding: BrowserSessionBinding {

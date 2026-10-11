@@ -1,6 +1,9 @@
 use super::{SpawnRequest, WindowsProcessError, spawn, spawn_with_private_channels};
 use std::{collections::BTreeMap, path::PathBuf};
 
+#[cfg(windows)]
+mod native;
+
 #[test]
 fn rejects_relative_and_unbounded_launch_contracts_before_platform_dispatch() {
     let mut request = SpawnRequest {

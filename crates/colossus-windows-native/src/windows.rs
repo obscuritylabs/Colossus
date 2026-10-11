@@ -22,15 +22,16 @@ use windows_sys::Win32::{
         ACCESS_ALLOWED_ACE, ACE_FLAGS, ACE_HEADER,
         Authorization::{
             EXPLICIT_ACCESS_W, GetSecurityInfo, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, SET_ACCESS,
-            SetEntriesInAclW, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+            SetEntriesInAclW, SetSecurityInfo, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
         },
         CreateWellKnownSid, DACL_SECURITY_INFORMATION, EqualSid, GetAce,
-        GetSecurityDescriptorControl, GetTokenInformation, InitializeSecurityDescriptor,
-        IsValidSid, NO_INHERITANCE, OWNER_SECURITY_INFORMATION, PSID, SE_DACL_PROTECTED,
-        SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SECURITY_MAX_SID_SIZE,
-        SUB_CONTAINERS_AND_OBJECTS_INHERIT, SetSecurityDescriptorControl,
-        SetSecurityDescriptorDacl, SetSecurityDescriptorOwner, TOKEN_QUERY, TOKEN_USER, TokenUser,
-        WinBuiltinAdministratorsSid, WinLocalSystemSid,
+        GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetTokenInformation,
+        InitializeSecurityDescriptor, IsValidSid, NO_INHERITANCE, OWNER_SECURITY_INFORMATION,
+        PROTECTED_DACL_SECURITY_INFORMATION, PSID, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
+        SECURITY_DESCRIPTOR, SECURITY_MAX_SID_SIZE, SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+        SetSecurityDescriptorControl, SetSecurityDescriptorDacl, SetSecurityDescriptorOwner,
+        TOKEN_QUERY, TOKEN_USER, TokenUser, WinBuiltinAdministratorsSid, WinCreatorOwnerRightsSid,
+        WinLocalSystemSid,
     },
     Storage::FileSystem::{
         BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE,
@@ -253,12 +254,9 @@ fn with_security_attributes<T>(
     } {
         return Err(last_error(labels.descriptor));
     }
-    // Only exact-package writable browser objects receive Low integrity. The
-    // private supervisor/state/installation objects retain their ambient label.
-    let low_label = package.map(|_| mandatory::LowLabel::new()).transpose()?;
-    if let Some(label) = &low_label {
-        label.attach(&mut descriptor)?;
-    }
+    // A general creation SACL requires the unrelated auditing privilege. The
+    // native owner sets LABEL information on the retained profile allocation
+    // before package admission; AppContainer-created descendants inherit Low.
     let attributes = SECURITY_ATTRIBUTES {
         nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>())
             .expect("security attributes size fits u32"),
@@ -671,10 +669,13 @@ impl BoundPathInner {
         if !matches!(self.kind, BoundKind::Directory) {
             return Err(WindowsNativeError::InvalidInput);
         }
-        self.ancestors
-            .iter()
-            .chain(std::iter::once(&self.file))
-            .try_for_each(|file| validate_owner_dacl(file, DaclValidation::ImmutableDirectory))
+        // Ancestors must protect the existing path from replacement. Requiring
+        // them to forbid creation of unrelated siblings rejects ordinary Windows
+        // volume roots (Authenticated Users may create new directories there).
+        // The actual component root and every inventoried child directory retain
+        // the stricter rule that forbids untrusted additions within the payload.
+        self.validate_ancestor_namespace_authority()?;
+        validate_owner_dacl(&self.file, DaclValidation::ImmutableDirectory)
     }
 }
 
@@ -1010,6 +1011,7 @@ fn validate_owner_dacl(file: &File, validation: DaclValidation) -> Result<(), Wi
     let local_system = well_known_sid(WinLocalSystemSid)?;
     let administrators = well_known_sid(WinBuiltinAdministratorsSid)?;
     let trusted_installer = trusted_installer_sid();
+    let owner_rights = well_known_sid(WinCreatorOwnerRightsSid)?;
     // Elevated Windows tokens can use BUILTIN\Administrators as the default owner
     // for newly inherited child objects. All accepted owners are already the only
     // principals permitted by the private DACL.
@@ -1089,7 +1091,11 @@ fn validate_owner_dacl(file: &File, validation: DaclValidation) -> Result<(), Wi
                     ) || matches!(
                         validation,
                         DaclValidation::NamespaceAuthority | DaclValidation::ImmutableDirectory
-                    ) && sid_matches(sid, trusted_installer.as_ptr().cast_mut().cast()));
+                    ) && (sid_matches(sid, trusted_installer.as_ptr().cast_mut().cast())
+                        // OWNER RIGHTS represents only the file's current owner,
+                        // already validated above. Python's private Windows stage
+                        // uses this SID; it is not a grant to an arbitrary user.
+                        || sid_matches(sid, owner_rights.as_ptr().cast_mut().cast())));
                 if !trusted
                     && (matches!(
                         validation,

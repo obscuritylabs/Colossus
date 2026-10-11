@@ -5,11 +5,14 @@ use super::*;
 use windows_sys::Win32::{
     Security::{
         Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
-        GetSecurityDescriptorSacl, LABEL_SECURITY_INFORMATION, SE_SACL_PROTECTED,
-        SYSTEM_MANDATORY_LABEL_ACE, SetSecurityDescriptorSacl, WinLowLabelSid,
+        GetSecurityDescriptorSacl, LABEL_SECURITY_INFORMATION, SYSTEM_MANDATORY_LABEL_ACE,
+        WinLowLabelSid,
     },
     System::SystemServices::{SYSTEM_MANDATORY_LABEL_ACE_TYPE, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP},
 };
+
+#[cfg(test)]
+mod tests;
 
 pub(super) struct LowLabel {
     _descriptor: LocalSecurityDescriptor,
@@ -53,29 +56,27 @@ impl LowLabel {
         })
     }
 
-    pub(super) fn attach(
-        &self,
-        descriptor: &mut SECURITY_DESCRIPTOR,
-    ) -> Result<(), WindowsNativeError> {
-        // SAFETY: absolute SD is writable, and the borrowed SACL remains alive
-        // through this owner's lifetime and the subsequent native creation call.
-        if unsafe {
-            SetSecurityDescriptorSacl(
-                (descriptor as *mut SECURITY_DESCRIPTOR).cast(),
-                1,
+    pub(super) fn apply(&self, file: &File) -> Result<(), WindowsNativeError> {
+        // SAFETY: exact allocation handle includes WRITE_OWNER. LABEL information
+        // changes only the mandatory label, without requesting general SACL access.
+        let status = unsafe {
+            SetSecurityInfo(
+                file.as_raw_handle().cast(),
+                SE_FILE_OBJECT,
+                LABEL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                null_mut(),
                 self.acl,
-                0,
-            ) != 0
-                && SetSecurityDescriptorControl(
-                    (descriptor as *mut SECURITY_DESCRIPTOR).cast(),
-                    SE_SACL_PROTECTED,
-                    SE_SACL_PROTECTED,
-                ) != 0
-        } {
-            Ok(())
-        } else {
-            Err(last_error("attach browser Low integrity label"))
+            )
+        };
+        if status != NO_ERROR {
+            return Err(WindowsNativeError::Io {
+                operation: "set browser Low integrity label",
+                source: std::io::Error::from_raw_os_error(status as i32),
+            });
         }
+        validate_low_label(file)
     }
 }
 
