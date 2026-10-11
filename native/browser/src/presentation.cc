@@ -253,7 +253,7 @@ extern "C" int32_t colossus_cef_presentation_input(colossus_cef_tab tab,
   if (input->kind == COLOSSUS_CEF_IME_COMMIT) {
     if (!Utf16(input->text, input->text_units)) return COLOSSUS_CEF_INVALID;
     const std::u16string text(input->text, input->text + input->text_units);
-    host->ImeCommitText(CefString(text), CefRange(-1, -1), 0);
+    host->ImeCommitText(CefString(text), CefRange::InvalidRange(), 0);
     return COLOSSUS_CEF_OK;
   }
   if (input->kind < COLOSSUS_CEF_KEY_DOWN || input->kind > COLOSSUS_CEF_CHARACTER ||

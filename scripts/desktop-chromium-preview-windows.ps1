@@ -21,8 +21,10 @@ try {
     if ($LASTEXITCODE -ne 0 -or $HostTriple -ne "x86_64-pc-windows-msvc") {
         throw "Use the native Windows x64 MSVC Rust toolchain."
     }
-    $CefRoot = (& python -B native/browser/scripts/component.py fetch --platform windows64).Trim()
+    $CefOutput = & python -B native/browser/scripts/component.py fetch --platform windows64
     if ($LASTEXITCODE -ne 0) { throw "Pinned CEF acquisition failed." }
+    if ([string]::IsNullOrWhiteSpace($CefOutput)) { throw "Pinned CEF acquisition returned no source root." }
+    $CefRoot = $CefOutput.Trim().Replace('\', '/')
     $Build = Join-Path $Repository ".local/cef-build-windows64"
     Invoke-Checked cmake @("-S", "native/browser", "-B", $Build, "-A", "x64", "-DCEF_ROOT=$CefRoot", "-DCEF_RUNTIME_LIBRARY_FLAG=/MD", "-DUSE_SANDBOX=ON")
     Invoke-Checked cmake @("--build", $Build, "--config", "Release", "--parallel", "4")
@@ -44,8 +46,14 @@ try {
     } finally { Pop-Location }
     Invoke-Checked cargo @("build", "--locked", "--manifest-path", (Join-Path $Native "Cargo.toml"), "--lib", "--features", "embedded-chromium-preview,tauri/custom-protocol")
     $Stage = Join-Path $Repository ".local/cef-desktop-preview-windows-$([Guid]::NewGuid().ToString('N'))"
-    $Executable = (& python -B native/browser/scripts/stage_windows.py --cef-root $CefRoot --native-build $env:COLOSSUS_CEF_NATIVE_LIB_DIR --client-dll (Join-Path $env:CARGO_TARGET_DIR "debug/colossus_desktop_lib.dll") --destination $Stage --dictation-resources (Join-Path $Native "dictation-assets")).Trim()
-    if ($LASTEXITCODE -ne 0) { throw "Windows CEF staging failed." }
+    $ClientCopy = Join-Path $env:CARGO_TARGET_DIR "stage-client-$([Guid]::NewGuid().ToString('N')).dll"
+    Copy-Item -LiteralPath (Join-Path $env:CARGO_TARGET_DIR "debug/colossus_desktop_lib.dll") -Destination $ClientCopy
+    try {
+        $StageOutput = & python -B native/browser/scripts/stage_windows.py --cef-root $CefRoot --native-build $env:COLOSSUS_CEF_NATIVE_LIB_DIR --client-dll $ClientCopy --destination $Stage --dictation-resources (Join-Path $Native "dictation-assets")
+        if ($LASTEXITCODE -ne 0) { throw "Windows CEF staging failed." }
+        if ([string]::IsNullOrWhiteSpace($StageOutput)) { throw "Windows CEF staging returned no executable." }
+        $Executable = $StageOutput.Trim()
+    } finally { Remove-Item -LiteralPath $ClientCopy }
     Invoke-Checked python @("-B", "native/browser/scripts/component.py", "verify", "--root", $Stage)
     Write-Host "Chromium developer component: $Stage"
     if (-not $BuildOnly) { Invoke-Checked node @("scripts/development-launch.mjs", "--", $Executable) }

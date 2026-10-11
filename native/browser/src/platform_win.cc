@@ -1,4 +1,5 @@
 #include "host_internal.h"
+#include "include/cef_task.h"
 #include <windows.h>
 #include <algorithm>
 #include <cstring>

@@ -1,3 +1,8 @@
+param(
+    [string]$EvidenceDirectory = '.local/windows-owned-browser-evidence',
+    [string]$Component = ''
+)
+
 # Reviewed premerge diagnostic only. This script never accepts a release mode or
 # copies profiles, transferred bytes, bootstrap keys or private channels as evidence.
 $ErrorActionPreference = "Stop"
@@ -6,7 +11,7 @@ if (-not $IsWindows -or [Runtime.InteropServices.RuntimeInformation]::OSArchitec
     throw "Native browser acceptance requires Windows x64 and PowerShell 7."
 }
 $Repository = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
-$Evidence = Join-Path $Repository ".local/windows-owned-browser-evidence"
+$Evidence = if ([IO.Path]::IsPathRooted($EvidenceDirectory)) { $EvidenceDirectory } else { Join-Path $Repository $EvidenceDirectory }
 if (Test-Path -LiteralPath $Evidence) { throw "Native evidence destination must be fresh." }
 $null = New-Item -ItemType Directory -Path $Evidence
 $Parent = $null
@@ -22,8 +27,13 @@ $Checked = @{}
 foreach ($Check in $Checks) { $Checked[$Check] = $false }
 Push-Location $Repository
 try {
-    & (Join-Path $Repository "scripts/browser-native-host-windows.ps1")
-    $Component = $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_COMPONENT
+    if ([string]::IsNullOrWhiteSpace($Component)) {
+        & (Join-Path $Repository "scripts/browser-native-host-windows.ps1")
+        $Component = $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_COMPONENT
+    } else {
+        & python -B native/browser/scripts/component.py verify --root $Component
+        if ($LASTEXITCODE -ne 0) { throw "Selected diagnostic component verification failed." }
+    }
     if (-not $Component) { throw "The builder did not select its fresh verified component." }
     $Manifest = Join-Path $Component "browser-component.json"
     if ((Get-Item -LiteralPath $Manifest).Length -gt 8MB) { throw "Component inventory exceeded its evidence bound." }
@@ -33,8 +43,10 @@ try {
     }
     $ManifestHash = (Get-FileHash -LiteralPath $Manifest -Algorithm SHA256).Hash.ToLowerInvariant()
     Copy-Item -LiteralPath $Manifest -Destination (Join-Path $Evidence "browser-component.json")
-    if (-not $env:LOCALAPPDATA) { throw "Native acceptance requires an owner-private local state parent." }
-    $Parent = Join-Path $env:LOCALAPPDATA ("ColossusBrowserCI-" + [Guid]::NewGuid().ToString("N"))
+    $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_COMPONENT = $Component
+    $UserProfile = [Environment]::GetFolderPath('UserProfile')
+    if ([string]::IsNullOrWhiteSpace($UserProfile)) { throw "Native acceptance requires an owned user profile." }
+    $Parent = Join-Path $UserProfile ("ColossusBrowserCI-" + [Guid]::NewGuid().ToString("N"))
     & python -B -c 'import sys; from pathlib import Path; sys.path.insert(0, "native/browser/scripts"); from pki_fixture_private import private_directory; private_directory(Path(sys.argv[1]))' $Parent
     if ($LASTEXITCODE -ne 0) { throw "Private fixture state allocation failed." }
     $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_STATE_PARENT = $Parent

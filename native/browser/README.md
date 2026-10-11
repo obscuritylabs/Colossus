@@ -966,11 +966,15 @@ Build the standalone private Windows host from a native x64 MSVC developer
 PowerShell terminal:
 
 ```powershell
-pwsh -File scripts/browser-native-host-windows.ps1
+./scripts/browser-native-host-windows.ps1
 ```
 
 This builds the sandbox-enabled CEF bootstrap and helper, links the Rust host
 client DLL with delayed `libcef.dll` loading, and stages a new pinned component.
+The component is allocated under a fresh owner-private user-profile directory;
+the build cache stays in `.local/`. A shared checkout cannot supply immutable
+component ancestry. Cargo's hard-linked DLL outputs are copied before staging,
+while the installed inventory still rejects hard links.
 Its fixed executable is `colossus-native-browser-host.exe`; Desktop dictation
 resources are excluded. The consistency inventory keeps both release modes
 false. The executable requires supervised anonymous inherited channels and cannot
@@ -988,17 +992,30 @@ and exact owned-directory removal. Runtime composition returns both
 `RuntimeBrowserHost` and the independent supervisor, whose `shutdown` must be
 awaited. `take_presentation` requires the full exact retained open request.
 
-After staging, run the explicit native factory fixture from the same MSVC
-developer terminal. Set `COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_COMPONENT` to the
+After staging, run the explicit native factory fixture from an elevated MSVC
+developer terminal: exact-package loopback and WFP setup require native privileges.
+A non-elevated attempt must fail closed, without an uncontained fallback.
+Set `COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_COMPONENT` to the
 new standalone host stage printed by the builder. Create a fresh owner-private
 state parent with the existing native fixture helper, then select it explicitly:
 
 ```powershell
-$BrowserAcceptanceParent = Join-Path $env:LOCALAPPDATA ("ColossusBrowserAcceptance-" + [Guid]::NewGuid().ToString("N"))
+$BrowserAcceptanceParent = Join-Path ([Environment]::GetFolderPath('UserProfile')) ("ColossusBrowserAcceptance-" + [Guid]::NewGuid().ToString("N"))
 python -B -c 'import sys; from pathlib import Path; sys.path.insert(0, "native/browser/scripts"); from pki_fixture_private import private_directory; private_directory(Path(sys.argv[1]))' $BrowserAcceptanceParent
 $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_STATE_PARENT = $BrowserAcceptanceParent
-cargo test --locked -p colossus-sandbox --test browser_windows_native -- --ignored --nocapture
+cargo test --locked -p colossus-sandbox --test browser_windows_native owned_windows_chromium_frames_input_viewer_and_full_cleanup -- --ignored --exact --nocapture
 ```
+
+The maintained runner can reuse that explicit verified component and preserve
+each attempt in a new evidence directory, without rebuilding it:
+
+```powershell
+./scripts/ci/browser-windows-native.ps1 -Component $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_COMPONENT -EvidenceDirectory .local/windows-owned-browser-attempt-1
+```
+
+It rejects an existing evidence directory, verifies the false-mode component,
+and requires the exact native receipt. Choose a fresh evidence destination for
+each retry. No successful build or zero-test invocation can satisfy the fixture.
 
 Missing native prerequisites fail this fixture. A source inventory and explicit
 state selector provide diagnostic authority only. The fixture requires actual

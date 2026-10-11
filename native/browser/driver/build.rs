@@ -78,7 +78,9 @@ fn main() {
             "crypt32",
             "gdi32",
             "rpcrt4",
+            "shell32",
             "shlwapi",
+            "user32",
             "wintrust",
             "ws2_32",
         ] {
