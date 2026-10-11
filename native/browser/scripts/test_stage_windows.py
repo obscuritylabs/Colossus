@@ -22,7 +22,12 @@ def client_image(*, export=b"RunWinMain", eager=False, machine=0x8664, delayed=T
     section = 0x98 + 240
     struct.pack_into("<IIII", image, section + 8, 2048, 0x1000, 2048, 0x200)
     struct.pack_into("<II", image, 0x98 + 112, 0x1000, 64)
-    struct.pack_into("<II", image, 0x200 + 24, 1, 0x1040)
+    # IMAGE_EXPORT_DIRECTORY has distinct function and name RVA tables at
+    # offsets 28 and 32. Use a real function RVA, not an export-name string, in
+    # the function table so the fixture cannot mask reading the wrong field.
+    struct.pack_into("<IIIII", image, 0x200 + 20, 1, 1, 0x1080, 0x1040, 0x1060)
+    struct.pack_into("<I", image, 0x280, 0x1300)
+    image[0x500] = 0xc3
     struct.pack_into("<I", image, 0x240, 0x1050)
     image[0x250:0x250 + len(export) + 1] = export + b"\0"
     if delayed:
@@ -86,6 +91,16 @@ class WindowsStageTests(unittest.TestCase):
                 with self.assertRaises(component.ComponentError):
                     stage_windows.stage(self.source, self.native_build, self.client, self.destination)
                 self.assertFalse(self.destination.exists())
+
+    def test_function_table_bytes_cannot_substitute_for_a_named_bootstrap_export(self):
+        image = client_image(export=b"WrongEntry")
+        # An incorrect parser reading AddressOfFunctions as AddressOfNames would
+        # accept this string even though no export has the required name.
+        struct.pack_into("<I", image, 0x280, 0x1090)
+        image[0x290:0x29b] = b"RunWinMain\0"
+        self.client.write_bytes(image)
+        with self.assertRaises(component.ComponentError):
+            stage_windows.inspect_client(self.client)
 
     def test_private_host_has_fixed_bootstrap_name_without_desktop_resources(self):
         program = stage_windows.stage(self.source, self.native_build, self.client, self.destination, host=True)

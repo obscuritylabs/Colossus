@@ -85,7 +85,8 @@ def inspect_client(path: Path) -> None:
     if not export_rva or export_size < 40:
         raise component.ComponentError("Windows client lacks bootstrap exports")
     export = offset(export_rva, 40)
-    count, names_rva = struct.unpack("<II", read(export + 24, 8))
+    count = integer(export + 24)
+    names_rva = integer(export + 32)
     if not 1 <= count <= 4096:
         raise component.ComponentError("Windows client export count is unsupported")
     names = offset(names_rva, count * 4)

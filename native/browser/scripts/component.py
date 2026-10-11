@@ -115,10 +115,23 @@ def digest_file(path: Path) -> str:
         digest = hashlib.file_digest(source, "sha256").hexdigest()
         after = os.fstat(source.fileno())
     current = path.lstat()
-    if any(
-        (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
-        != (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
-        for value in (after, current)
+    def identity(value):
+        return (value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode), value.st_nlink,
+                value.st_size, value.st_mtime_ns, getattr(value, "st_birthtime_ns", None))
+
+    # Windows Python currently returns creation time through lstat's ctime but
+    # change time through fstat's ctime (CPython issue 157671). Compare each API
+    # against its own initial result, preserving both mutation checks. Windows
+    # also synthesizes executable bits from a path's extension, unavailable to
+    # fstat. Unix permissions/change time must agree across both observations.
+    if (
+        any(identity(value) != identity(before) for value in (opened, after, current))
+        or current.st_ctime_ns != before.st_ctime_ns
+        or after.st_ctime_ns != opened.st_ctime_ns
+        or current.st_mode != before.st_mode
+        or after.st_mode != opened.st_mode
+        or (os.name != "nt" and (opened.st_ctime_ns, opened.st_mode)
+            != (before.st_ctime_ns, before.st_mode))
     ):
         raise ComponentError(f"file changed while hashing: {path}")
     return digest

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
 from urllib.request import Request
 from unittest.mock import patch
@@ -18,6 +19,7 @@ class ComponentTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
+        self.platform = "windows64" if os.name == "nt" else "linux64"
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -52,7 +54,7 @@ class ComponentTests(unittest.TestCase):
         program.chmod(0o755)
         (root / "resources").mkdir()
         (root / "resources" / "icudtl.dat").write_bytes(b"icu fixture")
-        component.installed_inventory(root, "linux64", "colossus-browser")
+        component.installed_inventory(root, self.platform, "colossus-browser")
         return root
 
     def test_checked_in_pins_are_complete_and_fixed(self):
@@ -78,6 +80,53 @@ class ComponentTests(unittest.TestCase):
             component.verify_archive(archive, {**pin, "sha256": "0" * 64})
         with self.assertRaises(component.ComponentError):
             component.verify_archive(archive, {**pin, "size": pin["size"] + 1})
+
+    def test_windows_hashing_compares_ctime_with_the_same_api(self):
+        path = self.root / "timestamp.bin"
+        payload = b"unchanged pinned bytes"
+        path.write_bytes(payload)
+        info = path.lstat()
+        fields = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_size",
+                  "st_mtime_ns", "st_ctime_ns", "st_birthtime_ns")
+        values = {field: getattr(info, field, None) for field in fields}
+        path_info = SimpleNamespace(**values)
+        handle_info = SimpleNamespace(**{**values, "st_ctime_ns": info.st_ctime_ns + 1,
+                                         "st_mode": info.st_mode ^ 0o111})
+        with patch.object(component.os, "name", "nt"), \
+                patch.object(type(path), "lstat", side_effect=[path_info, path_info]), \
+                patch.object(component.os, "fstat", side_effect=[handle_info, handle_info]):
+            self.assertEqual(component.digest_file(path), hashlib.sha256(payload).hexdigest())
+
+        # The same discrepancy on Unix is a genuine metadata change, not an API
+        # timestamp mismatch, and must still fail closed.
+        with patch.object(component.os, "name", "posix"), \
+                patch.object(type(path), "lstat", side_effect=[path_info, path_info]), \
+                patch.object(component.os, "fstat", side_effect=[handle_info, handle_info]), \
+                self.assertRaises(component.ComponentError):
+            component.digest_file(path)
+
+        for field in fields:
+            for changed_api in ("path", "handle"):
+                baseline = path_info if changed_api == "path" else handle_info
+                changed = SimpleNamespace(**vars(baseline))
+                setattr(changed, field, (getattr(baseline, field) or 0) + 1)
+                final_path = changed if changed_api == "path" else path_info
+                final_handle = changed if changed_api == "handle" else handle_info
+                with self.subTest(field=field, changed_api=changed_api), \
+                        patch.object(component.os, "name", "nt"), \
+                        patch.object(type(path), "lstat", side_effect=[path_info, final_path]), \
+                        patch.object(component.os, "fstat", side_effect=[handle_info, final_handle]), \
+                        self.assertRaises(component.ComponentError):
+                    component.digest_file(path)
+
+    @unittest.skipUnless(os.name == "nt", "actual Windows path/handle timestamp semantics")
+    def test_windows_hashing_accepts_a_file_with_distinct_creation_and_write_times(self):
+        path = self.root / "windows-timestamps.exe"
+        payload = b"actual Windows fixture"
+        path.write_bytes(payload)
+        timestamp = path.lstat().st_mtime_ns + 2_000_000_000
+        os.utime(path, ns=(timestamp, timestamp))
+        self.assertEqual(component.digest_file(path), hashlib.sha256(payload).hexdigest())
 
     def test_source_cache_inventory_comes_from_archive_bytes(self):
         archive = self.archive([
@@ -229,9 +278,10 @@ class ComponentTests(unittest.TestCase):
     def test_missing_file_and_changed_mode_are_rejected(self):
         root = self.stage_component()
         program = root / "colossus-browser"
-        program.chmod(0o644)
+        program.chmod(0o444 if os.name == "nt" else 0o644)
         with self.assertRaises(component.ComponentError):
             component.verify_installed(root)
+        program.chmod(0o755)
         program.unlink()
         with self.assertRaises(component.ComponentError):
             component.verify_installed(root)
@@ -255,20 +305,20 @@ class ComponentTests(unittest.TestCase):
     def test_manifest_cannot_replace_existing_inventory(self):
         root = self.stage_component()
         with self.assertRaises(component.ComponentError):
-            component.installed_inventory(root, "linux64", "colossus-browser")
+            component.installed_inventory(root, self.platform, "colossus-browser")
 
     def test_external_development_inventory_stays_outside_signed_component(self):
         root = self.stage_component()
         (root / component.MANIFEST).unlink()
         external = self.root / "external-browser-component.json"
-        component.installed_inventory(root, "linux64", "colossus-browser", external)
+        component.installed_inventory(root, self.platform, "colossus-browser", external)
         self.assertFalse((root / component.MANIFEST).exists())
         self.assertEqual(component.verify_installed(root, external)["modes"],
                          {"desktop": False, "headless": False})
         with self.assertRaises(component.ComponentError):
-            component.installed_inventory(root, "linux64", "colossus-browser", external)
+            component.installed_inventory(root, self.platform, "colossus-browser", external)
         with self.assertRaises(component.ComponentError):
-            component.installed_inventory(root, "linux64", "colossus-browser", root / "nested.json")
+            component.installed_inventory(root, self.platform, "colossus-browser", root / "nested.json")
         (root / "colossus-browser").write_bytes(b"changed executable")
         with self.assertRaises(component.ComponentError):
             component.verify_installed(root, external)
@@ -277,7 +327,7 @@ class ComponentTests(unittest.TestCase):
         root = self.stage_component()
         (root / component.MANIFEST).unlink()
         external = self.root / "external-browser-component.json"
-        component.installed_inventory(root, "linux64", "colossus-browser", external)
+        component.installed_inventory(root, self.platform, "colossus-browser", external)
         (root / component.MANIFEST).write_text("unexpected file in signed component")
         with self.assertRaises(component.ComponentError):
             component.verify_installed(root, external)
