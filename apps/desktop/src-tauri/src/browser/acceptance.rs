@@ -6,14 +6,22 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU8, Ordering},
 };
-#[cfg(not(feature = "embedded-chromium-preview"))]
+#[cfg(not(any(
+    feature = "embedded-chromium-preview",
+    feature = "macos-contained-browser-diagnostic"
+)))]
 use std::time::Duration;
 use tauri::Manager as _;
-#[cfg(not(feature = "embedded-chromium-preview"))]
+#[cfg(not(any(
+    feature = "embedded-chromium-preview",
+    feature = "macos-contained-browser-diagnostic"
+)))]
 use tauri::Webview;
 
 #[cfg(feature = "embedded-chromium-preview")]
 mod chromium;
+#[cfg(feature = "macos-contained-browser-diagnostic")]
+mod contained_diagnostic;
 #[cfg(feature = "embedded-chromium-preview")]
 mod pki;
 
@@ -62,6 +70,8 @@ pub(crate) fn run() -> i32 {
             println!("Native app initialized");
             super::bootstrap::start_pump(app.handle())?;
             super::start_watchdog(app.handle().clone());
+            #[cfg(feature = "macos-contained-browser-diagnostic")]
+            super::contained::install(app.handle())?;
             let app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let result = async {
@@ -70,7 +80,14 @@ pub(crate) fn run() -> i32 {
                     {
                         chromium::exercise(&app, &address).await
                     }
-                    #[cfg(not(feature = "embedded-chromium-preview"))]
+                    #[cfg(feature = "macos-contained-browser-diagnostic")]
+                    {
+                        contained_diagnostic::exercise(&app, &address, &home).await
+                    }
+                    #[cfg(not(any(
+                        feature = "embedded-chromium-preview",
+                        feature = "macos-contained-browser-diagnostic"
+                    )))]
                     {
                         exercise(&app, &address).await
                     }
@@ -157,8 +174,8 @@ fn run_lifecycle(application: tauri::App, completed: &AtomicBool) -> i32 {
     let shutdown = Arc::new(AtomicU8::new(0));
     let closed = Arc::new(AtomicBool::new(false));
     let close_result = closed.clone();
-    let native_shutdown = Arc::new(AtomicBool::new(false));
-    let shutdown_result = native_shutdown.clone();
+    let event_loop_exit = Arc::new(AtomicBool::new(false));
+    let shutdown_result = event_loop_exit.clone();
     application.run_return(move |app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
             if shutdown.load(Ordering::Acquire) < 2 {
@@ -199,6 +216,14 @@ fn run_lifecycle(application: tauri::App, completed: &AtomicBool) -> i32 {
                 }
             }
         } else if matches!(event, tauri::RunEvent::Exit) {
+            #[cfg(feature = "macos-contained-browser-diagnostic")]
+            {
+                // The contained host was already closed by the diagnostic.
+                // No in-process CEF engine was initialized in Desktop.
+                shutdown_result.store(true, Ordering::Release);
+                println!("PASS Desktop AppKit event loop exited after contained host shutdown");
+            }
+            #[cfg(not(feature = "macos-contained-browser-diagnostic"))]
             match super::bootstrap::shutdown() {
                 Ok(()) => {
                     shutdown_result.store(true, Ordering::Release);
@@ -215,7 +240,7 @@ fn run_lifecycle(application: tauri::App, completed: &AtomicBool) -> i32 {
     // completed exercise authorizes success, including when the window closes early.
     let passed = completed.load(Ordering::SeqCst)
         && closed.load(Ordering::Acquire)
-        && native_shutdown.load(Ordering::Acquire);
+        && event_loop_exit.load(Ordering::Acquire);
     if passed {
         println!("PASS native clean shutdown after close acknowledgements");
     }
@@ -246,13 +271,21 @@ async fn action(
         .map_err(|e| anyhow::anyhow!(e.message))
 }
 
-#[cfg(all(target_os = "macos", not(feature = "embedded-chromium-preview")))]
+#[cfg(all(
+    target_os = "macos",
+    not(feature = "embedded-chromium-preview"),
+    not(feature = "macos-contained-browser-diagnostic")
+))]
 async fn evaluate(view: &Webview, script: &'static str) -> anyhow::Result<serde_json::Value> {
     let value = colossus_native_browser::acceptance::evaluate(view, script).await?;
     Ok(serde_json::from_str(&value)?)
 }
 
-#[cfg(all(not(target_os = "macos"), not(feature = "embedded-chromium-preview")))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(feature = "embedded-chromium-preview"),
+    not(feature = "macos-contained-browser-diagnostic")
+))]
 async fn evaluate(view: &Webview, script: &'static str) -> anyhow::Result<serde_json::Value> {
     let (send, receive) = tokio::sync::oneshot::channel();
     let send = std::sync::Mutex::new(Some(send));
@@ -265,7 +298,10 @@ async fn evaluate(view: &Webview, script: &'static str) -> anyhow::Result<serde_
     Ok(serde_json::from_str(&value)?)
 }
 
-#[cfg(not(feature = "embedded-chromium-preview"))]
+#[cfg(not(any(
+    feature = "embedded-chromium-preview",
+    feature = "macos-contained-browser-diagnostic"
+)))]
 async fn wait_title(view: &Webview, title: &str) -> anyhow::Result<()> {
     for _ in 0..100 {
         if colossus_native_browser::inspect(view).await?.title == title {
@@ -276,7 +312,10 @@ async fn wait_title(view: &Webview, title: &str) -> anyhow::Result<()> {
     anyhow::bail!("expected native title {title:?}")
 }
 
-#[cfg(not(feature = "embedded-chromium-preview"))]
+#[cfg(not(any(
+    feature = "embedded-chromium-preview",
+    feature = "macos-contained-browser-diagnostic"
+)))]
 async fn exercise(app: &tauri::AppHandle, address: &str) -> anyhow::Result<()> {
     println!("Creating first native browser tab");
     let state = app.state::<AppState>();
@@ -315,7 +354,10 @@ async fn exercise(app: &tauri::AppHandle, address: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(not(feature = "embedded-chromium-preview"))]
+#[cfg(not(any(
+    feature = "embedded-chromium-preview",
+    feature = "macos-contained-browser-diagnostic"
+)))]
 async fn history(
     app: &tauri::AppHandle,
     address: &str,
@@ -370,7 +412,10 @@ async fn history(
     Ok(())
 }
 
-#[cfg(not(feature = "embedded-chromium-preview"))]
+#[cfg(not(any(
+    feature = "embedded-chromium-preview",
+    feature = "macos-contained-browser-diagnostic"
+)))]
 async fn sessions(app: &tauri::AppHandle, address: &str, generation: u64) -> anyhow::Result<()> {
     let state = app.state::<AppState>();
     let second = action(
@@ -445,7 +490,10 @@ async fn sessions(app: &tauri::AppHandle, address: &str, generation: u64) -> any
     Ok(())
 }
 
-#[cfg(not(feature = "embedded-chromium-preview"))]
+#[cfg(not(any(
+    feature = "embedded-chromium-preview",
+    feature = "macos-contained-browser-diagnostic"
+)))]
 fn acceptance_bounds(view: &Webview) -> anyhow::Result<super::dto::BrowserRect> {
     let window = view.window();
     let size = window
@@ -463,7 +511,10 @@ fn acceptance_bounds(view: &Webview) -> anyhow::Result<super::dto::BrowserRect> 
     })
 }
 
-#[cfg(not(feature = "embedded-chromium-preview"))]
+#[cfg(not(any(
+    feature = "embedded-chromium-preview",
+    feature = "macos-contained-browser-diagnostic"
+)))]
 async fn permissions(view: &Webview) -> anyhow::Result<()> {
     let rect = acceptance_bounds(view)?;
     view.set_bounds(tauri::Rect {
@@ -498,7 +549,10 @@ async fn permissions(view: &Webview) -> anyhow::Result<()> {
     anyhow::bail!("native permission callback did not resolve")
 }
 
-#[cfg(not(feature = "embedded-chromium-preview"))]
+#[cfg(not(any(
+    feature = "embedded-chromium-preview",
+    feature = "macos-contained-browser-diagnostic"
+)))]
 async fn viewport(app: &tauri::AppHandle, view: &Webview) -> anyhow::Result<()> {
     use super::dto::BrowserViewportRequest;
     let state = app.state::<AppState>();
@@ -550,7 +604,10 @@ async fn viewport(app: &tauri::AppHandle, view: &Webview) -> anyhow::Result<()> 
     Ok(())
 }
 
-#[cfg(not(feature = "embedded-chromium-preview"))]
+#[cfg(not(any(
+    feature = "embedded-chromium-preview",
+    feature = "macos-contained-browser-diagnostic"
+)))]
 async fn guest_denial(
     app: &tauri::AppHandle,
     address: &str,
@@ -589,7 +646,10 @@ async fn guest_denial(
     Ok(())
 }
 
-#[cfg(not(feature = "embedded-chromium-preview"))]
+#[cfg(not(any(
+    feature = "embedded-chromium-preview",
+    feature = "macos-contained-browser-diagnostic"
+)))]
 async fn handoffs(
     app: &tauri::AppHandle,
     b: &str,
@@ -639,7 +699,10 @@ async fn handoffs(
     Ok(())
 }
 
-#[cfg(not(feature = "embedded-chromium-preview"))]
+#[cfg(not(any(
+    feature = "embedded-chromium-preview",
+    feature = "macos-contained-browser-diagnostic"
+)))]
 async fn cleanup(app: &tauri::AppHandle, address: &str) -> anyhow::Result<()> {
     let state = app.state::<AppState>();
     action(app, BrowserAction::Clear).await?;

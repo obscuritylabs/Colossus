@@ -8,6 +8,8 @@ use crate::{
     presentation::PresentationSurface,
 };
 use colossus_browser_presentation::{Configure, HumanCommand, Input, Lease, PresentationClient};
+#[cfg(all(target_os = "macos", feature = "native-test-driver"))]
+use colossus_browser_presentation::{PageState as NativePageState, PresentationError};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -58,6 +60,37 @@ struct Owner {
 }
 /// Cloneable human guest handle; page pixels travel only on the private native channel.
 pub struct RemoteSurface(Arc<Owner>);
+
+/// Debug evidence that a supervised remote view submitted authenticated pixels
+/// to a live native presenter. Foreground OS compositing needs separate evidence.
+#[cfg(all(target_os = "macos", feature = "native-test-driver"))]
+#[derive(Clone, Debug)]
+pub struct RemoteAcceptanceProbe {
+    /// Metadata and exact document target from the authenticated native channel.
+    pub page: NativePageState,
+    /// The trusted viewport remains visible and within its active lease.
+    pub visible: bool,
+    /// Native-applied logical viewport width.
+    pub width: u32,
+    /// Native-applied logical viewport height.
+    pub height: u32,
+    /// Last authenticated frame synchronously accepted by this native view.
+    pub frame: Option<RemoteAcceptedFrame>,
+}
+
+/// Debug-only per-document pixels accepted by the native `NSView`; not OS-compositor evidence.
+#[cfg(all(target_os = "macos", feature = "native-test-driver"))]
+#[derive(Clone, Copy, Debug)]
+pub struct RemoteAcceptedFrame {
+    /// Exact authenticated lease, including native document and viewport generations.
+    pub lease: Lease,
+    /// Host sequence authenticated with the frame pixels and lease.
+    pub sequence: u64,
+    /// Center BGRA pixel copied from the accepted frame after native acknowledgement.
+    pub center_bgra: [u8; 4],
+    /// Synchronous frame-and-visible acknowledgements for this surface instance.
+    pub count: u64,
+}
 impl Clone for RemoteSurface {
     fn clone(&self) -> Self {
         self.0.handles.fetch_add(1, Ordering::Relaxed);
@@ -65,6 +98,49 @@ impl Clone for RemoteSurface {
     }
 }
 impl RemoteSurface {
+    /// Read native presentation evidence for a source-only acceptance fixture.
+    ///
+    /// # Errors
+    /// Reports closed or poisoned native view state.
+    #[cfg(all(target_os = "macos", feature = "native-test-driver"))]
+    pub async fn acceptance_probe(&self) -> Result<RemoteAcceptanceProbe, BrowserError> {
+        let lease = self.0.state.lock().map_err(|_| BrowserError::Closed)?.lease;
+        let page = self
+            .0
+            .client
+            .observe(lease)
+            .await
+            .map_err(|error| match error {
+                PresentationError::Stale | PresentationError::Hidden => BrowserError::Stale,
+                _ => BrowserError::Closed,
+            })?;
+        let state = self.0.state.lock().map_err(|_| BrowserError::Closed)?;
+        if state.lease != lease || state.configure.target != page.target {
+            return Err(BrowserError::Stale);
+        }
+        let bounds = state.applied.ok_or(BrowserError::Unavailable)?;
+        let surface = state.surface.as_ref().ok_or(BrowserError::Unavailable)?;
+        let frame = surface
+            .acceptance_accepted_frame()?
+            .map(|accepted| RemoteAcceptedFrame {
+                lease: accepted.lease,
+                sequence: accepted.sequence,
+                center_bgra: accepted.center_bgra,
+                count: accepted.count,
+            });
+        if frame.is_some_and(|accepted| accepted.lease != lease) {
+            return Err(BrowserError::Stale);
+        }
+        Ok(RemoteAcceptanceProbe {
+            page,
+            visible: state.visible
+                && !self.0.closing.load(Ordering::Acquire)
+                && state.heartbeat.elapsed() < std::time::Duration::from_millis(1500),
+            width: bounds.width,
+            height: bounds.height,
+            frame,
+        })
+    }
     /// Attach a supervisor-admitted human session to the actual Desktop native window.
     ///
     /// # Errors

@@ -49,6 +49,21 @@ impl RuntimeBrowserPresenter for colossus_sandbox::WindowsBrowserSupervisor {
     }
 }
 
+#[cfg(all(
+    target_os = "macos",
+    debug_assertions,
+    feature = "macos-browser-host-acceptance"
+))]
+#[async_trait]
+impl RuntimeBrowserPresenter for colossus_sandbox::MacosBrowserSupervisor {
+    async fn acquire(
+        &self,
+        request: &BrowserDriverOpenRequest,
+    ) -> Result<(PresentationClient, [u8; 32]), BrowserDriverError> {
+        self.presentation(request).await
+    }
+}
+
 /// Categorical native errors contain no page, private protocol or certificate data.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum RuntimeNativeBrowserError {

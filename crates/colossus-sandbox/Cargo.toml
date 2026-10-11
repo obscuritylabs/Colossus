@@ -40,6 +40,7 @@ zeroize.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 nono.workspace = true
+rustix = { workspace = true, features = ["event", "fs"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 colossus-darwin-process.workspace = true
@@ -48,7 +49,6 @@ libc = "0.2.186"
 [target.'cfg(target_os = "linux")'.dependencies]
 capctl.workspace = true
 nix.workspace = true
-rustix = { workspace = true, features = ["event", "fs"] }
 
 [target.'cfg(windows)'.dependencies]
 rappct = { workspace = true, features = ["net"] }

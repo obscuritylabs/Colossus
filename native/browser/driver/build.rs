@@ -17,6 +17,17 @@ fn main() {
     let build = PathBuf::from(build)
         .canonicalize()
         .expect("native build must exist");
+    if env::var_os("CARGO_FEATURE_MACOS_SYNTHETIC_PROFILE_DIAGNOSTIC").is_some() {
+        assert_eq!(
+            target, "macos",
+            "synthetic profile diagnostic requires macOS"
+        );
+        assert_eq!(
+            env::var("DEBUG").as_deref(),
+            Ok("true"),
+            "synthetic profile diagnostic rejects release builds"
+        );
+    }
     if env::var_os("CARGO_FEATURE_MACOS_OWNED_PROFILE_DEVELOPMENT").is_some() {
         assert_eq!(
             target, "macos",

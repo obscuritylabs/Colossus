@@ -35,6 +35,13 @@ DICTATION_RESOURCES = ("ggml-tiny.en.bin", "models.json", "LICENSE-MIT")
 PROFILE_CRYPTO_LIBRARY = "libcolossus_mac_profile_crypto.dylib"
 PROFILE_CRYPTO_BUILD = "profile-crypto-development-build.json"
 PROFILE_CRYPTO_CLAIM = "profile-crypto-development.json"
+SYNTHETIC_PROFILE_BUILD = "synthetic-profile-diagnostic-build.json"
+SYNTHETIC_PROFILE_CLAIM = "synthetic-profile-diagnostic.json"
+SYNTHETIC_PROFILE_METADATA = {
+    "schema_version": 1, "development_only": True, "build_type": "Debug",
+    "production_accepted": False, "api": "chromium-use-mock-keychain",
+    "http_loopback_only": True, "temporary_profiles_only": True,
+}
 NETWORK_ENVELOPE_RESOURCE = "colossus-network-envelope.policy"
 NETWORK_ENVELOPE_MARKER = "COLOSSUS_MAC_NETWORK_ENVELOPE_V1"
 NETWORK_ENVELOPE_BUILD = "network-envelope-development-build.json"
@@ -237,6 +244,7 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
               platform: str, identifier: str = IDENTIFIER,
               dictation_resources: Path | None = None, *, host: bool = False,
               profile_crypto_development: bool = False,
+              synthetic_profile_diagnostic: bool = False,
               network_envelope_policy: Path | None = None) -> Path:
     if platform not in ("macosarm64", "macosx64"):
         raise component.ComponentError("development app staging requires a macOS platform")
@@ -250,8 +258,17 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
     if profile_crypto_development and not host:
         raise component.ComponentError("unsupported profile crypto is restricted to the explicit native development host")
     network_envelope_development = network_envelope_policy is not None
-    if network_envelope_development and (not host or not profile_crypto_development):
-        raise component.ComponentError("the network envelope requires the explicit private Debug host and owned profile adapter")
+    if synthetic_profile_diagnostic and (
+            not host or profile_crypto_development or not network_envelope_development):
+        raise component.ComponentError("synthetic profiles require a separate Debug host with its network envelope")
+    if network_envelope_development and (
+            not host or not (profile_crypto_development or synthetic_profile_diagnostic)):
+        raise component.ComponentError("the network envelope requires an explicit Debug host profile mode")
+    synthetic_build = native_build / SYNTHETIC_PROFILE_BUILD
+    if synthetic_build.exists() and not synthetic_profile_diagnostic:
+        raise component.ComponentError("a synthetic-profile Debug build requires explicit diagnostic staging")
+    if synthetic_profile_diagnostic and component.load_json(synthetic_build) != SYNTHETIC_PROFILE_METADATA:
+        raise component.ComponentError("unsupported or non-Debug synthetic-profile build")
     crypto_build = native_build / PROFILE_CRYPTO_BUILD
     if host and crypto_build.exists() and not profile_crypto_development:
         raise component.ComponentError("a profile crypto Debug build requires explicit development staging")
@@ -369,6 +386,10 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
             with (resources / PROFILE_CRYPTO_CLAIM).open("x", encoding="utf-8") as output:
                 json.dump({**PROFILE_CRYPTO_METADATA, "temporary_profiles_only": True,
                            "certificate_pki_accepted": False}, output, sort_keys=True)
+                output.write("\n")
+        if synthetic_profile_diagnostic:
+            with (resources / SYNTHETIC_PROFILE_CLAIM).open("x", encoding="utf-8") as output:
+                json.dump(SYNTHETIC_PROFILE_METADATA, output, sort_keys=True)
                 output.write("\n")
         component.inventory_files(staged, component.MANIFEST)
         sign_app(staged, helpers, platform, host=host,

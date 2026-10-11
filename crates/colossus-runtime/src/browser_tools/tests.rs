@@ -11,6 +11,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[cfg(all(target_os = "linux", debug_assertions))]
 mod native;
+#[cfg(all(
+    target_os = "macos",
+    debug_assertions,
+    feature = "macos-browser-host-acceptance"
+))]
+mod native_macos;
 #[cfg(all(target_os = "linux", debug_assertions))]
 mod native_pki;
 #[cfg(all(target_os = "linux", debug_assertions))]

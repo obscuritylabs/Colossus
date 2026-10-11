@@ -13,7 +13,9 @@ use super::{
     inspection::{SNAPSHOT_BUDGET, collect_pages},
     registry::{DRAINING_MESSAGE, MAX_TABS, Registry, Tab},
 };
-use crate::{desktop_settings::SettingsStore, dto::CommandErrorDto};
+#[cfg(not(feature = "macos-contained-browser-diagnostic"))]
+use crate::desktop_settings::SettingsStore;
+use crate::dto::CommandErrorDto;
 
 #[derive(Default)]
 pub(crate) struct BrowserManager {
@@ -158,7 +160,8 @@ impl BrowserManager {
 
     #[cfg(all(
         feature = "browser-test-bridge",
-        not(feature = "embedded-chromium-preview")
+        not(feature = "embedded-chromium-preview"),
+        not(feature = "macos-contained-browser-diagnostic")
     ))]
     pub(super) fn legacy_tab(
         &self,
@@ -424,40 +427,54 @@ impl BrowserManager {
         &self,
         scope: &str,
     ) -> Result<(std::path::PathBuf, Option<Webview>), CommandErrorDto> {
-        let mut state = self.lock()?;
-        if state.draining {
-            return Err(error(DRAINING_MESSAGE));
+        #[cfg(feature = "macos-contained-browser-diagnostic")]
+        {
+            let state = self.lock()?;
+            if state.draining || state.tabs.len() >= MAX_TABS {
+                return Err(error("The supervised browser cannot open another tab."));
+            }
+            let _ = scope;
+            // The separate host owns its temporary profile. Desktop must not
+            // create a second local browser profile for a remote pixel view.
+            Ok((std::path::PathBuf::new(), None))
         }
-        if state.tabs.len() >= MAX_TABS {
-            return Err(error(
-                "Eight browser tabs are already open. Close a tab before opening another.",
-            ));
+        #[cfg(not(feature = "macos-contained-browser-diagnostic"))]
+        {
+            let mut state = self.lock()?;
+            if state.draining {
+                return Err(error(DRAINING_MESSAGE));
+            }
+            if state.tabs.len() >= MAX_TABS {
+                return Err(error(
+                    "Eight browser tabs are already open. Close a tab before opening another.",
+                ));
+            }
+            if !state.profiles.contains_key(scope) {
+                let store = SettingsStore::open_application()?;
+                let directory = tempfile::Builder::new()
+                    .prefix("browser-session-")
+                    .tempdir_in(store.application_root())
+                    .map_err(|_| error("The temporary browser session could not be created."))?;
+                state.profiles.insert(scope.to_owned(), directory);
+                state.sessions.insert(
+                    scope.to_owned(),
+                    format!("browser-session-{}", uuid::Uuid::new_v4()),
+                );
+            }
+            Ok((
+                state
+                    .profiles
+                    .get(scope)
+                    .ok_or_else(|| error("The browser profile is unavailable."))?
+                    .path()
+                    .to_owned(),
+                state
+                    .tabs
+                    .iter()
+                    .filter(|t| t.scope == scope)
+                    .find_map(|t| t.view.system_view().cloned()),
+            ))
         }
-        if !state.profiles.contains_key(scope) {
-            let store = SettingsStore::open_application()?;
-            let directory = tempfile::Builder::new()
-                .prefix("browser-session-")
-                .tempdir_in(store.application_root())
-                .map_err(|_| error("The temporary browser session could not be created."))?;
-            state.profiles.insert(scope.to_owned(), directory);
-            state.sessions.insert(
-                scope.to_owned(),
-                format!("browser-session-{}", uuid::Uuid::new_v4()),
-            );
-        }
-        Ok((
-            state
-                .profiles
-                .get(scope)
-                .ok_or_else(|| error("The browser profile is unavailable."))?
-                .path()
-                .to_owned(),
-            state
-                .tabs
-                .iter()
-                .filter(|t| t.scope == scope)
-                .find_map(|t| t.view.system_view().cloned()),
-        ))
     }
 
     async fn create(
@@ -518,10 +535,10 @@ impl BrowserManager {
         self.hide_all();
         {
             let mut state = self.lock()?;
-            let session_id = state
-                .sessions
-                .get(scope)
-                .cloned()
+            let session_id = view
+                .contained_session_id()
+                .map(str::to_owned)
+                .or_else(|| state.sessions.get(scope).cloned())
                 .ok_or_else(|| error("The browser session identity is unavailable."))?;
             state.selected.insert(scope.to_owned(), id.clone());
             state.tabs.push(Tab {
@@ -532,9 +549,7 @@ impl BrowserManager {
                 presentation_epoch: Arc::new(AtomicU64::new(0)),
                 dto: BrowserTabDto {
                     id: id.clone(),
-                    session_id: view
-                        .contained_session_id()
-                        .map_or(session_id, str::to_owned),
+                    session_id,
                     conversation_id: view.conversation_id().map(str::to_owned),
                     control: if view.human_control_available() {
                         "human"
@@ -553,6 +568,10 @@ impl BrowserManager {
                 },
             });
         }
+        // The managed sidecar already opened the exact initial address before
+        // returning the RemoteSurface. Sending a second human navigation here
+        // could race the authenticated presentation's first frame.
+        #[cfg(not(feature = "macos-contained-browser-diagnostic"))]
         if let Some(url) = url
             && view.navigate(url).is_err()
         {

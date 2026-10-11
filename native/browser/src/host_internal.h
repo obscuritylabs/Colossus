@@ -2,6 +2,7 @@
 #define COLOSSUS_CEF_HOST_INTERNAL_H
 
 #include "colossus_cef.h"
+#include "platform_environment.h"
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
 #include "include/cef_devtools_message_observer.h"

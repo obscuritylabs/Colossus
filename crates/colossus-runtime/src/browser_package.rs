@@ -200,6 +200,35 @@ pub async fn discover(
     }
 }
 
+/// A source-only Mac diagnostic owner. Its shutdown receipt covers the proxy and
+/// direct host child, not the full helper tree or production browser acceptance.
+#[cfg(all(
+    target_os = "macos",
+    debug_assertions,
+    feature = "macos-browser-host-acceptance"
+))]
+pub use macos_diagnostic::MacosDiagnosticBrowserOwner;
+
+/// Compose a compiler-embedded signed Debug fixture. The source binary supplies
+/// the bytes at build time; ordinary macOS `discover` remains unavailable.
+#[cfg(all(
+    target_os = "macos",
+    debug_assertions,
+    feature = "macos-browser-host-acceptance"
+))]
+pub async fn macos_diagnostic_from_compiler_seal(
+    seal: &'static [u8],
+) -> Result<Arc<MacosDiagnosticBrowserOwner>, BrowserPackageError> {
+    macos_diagnostic::install(seal).await
+}
+
+#[cfg(all(
+    target_os = "macos",
+    debug_assertions,
+    feature = "macos-browser-host-acceptance"
+))]
+mod macos_diagnostic;
+
 #[cfg(target_os = "linux")]
 mod linux {
     use super::*;

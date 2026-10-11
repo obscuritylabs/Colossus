@@ -3,6 +3,11 @@ use std::ffi::{c_char, c_void};
 
 pub const ABI_VERSION: u32 = 2;
 
+#[cfg(all(target_os = "macos", feature = "macos-synthetic-profile-diagnostic"))]
+unsafe extern "C" {
+    pub fn colossus_cef_synthetic_profile_prepare() -> i32;
+}
+
 #[cfg(all(target_os = "macos", feature = "macos-owned-profile-development"))]
 #[link(name = "colossus_mac_profile_crypto", kind = "dylib")]
 unsafe extern "C" {

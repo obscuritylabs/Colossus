@@ -6,6 +6,13 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt as _;
 #[cfg(target_os = "macos")]
 use std::os::unix::net::UnixStream;
+#[cfg(target_os = "macos")]
+use std::{
+    fs::OpenOptions,
+    io::Read as _,
+    os::unix::fs::{MetadataExt as _, OpenOptionsExt as _},
+    path::Path,
+};
 
 use colossus_contracts::{BrowserCapabilities, BrowserMode};
 use colossus_ports::BrowserDriverError;
@@ -106,6 +113,109 @@ pub fn verify_channel_peers(streams: &[UnixStream]) -> Result<(), BrowserDriverE
     Ok(())
 }
 
+/// Match CEF's direct loopback proxy to the immutable policy applied by the
+/// signed front before Rust or CEF loaded. The macOS host has no in-process
+/// relay: the supervisor owns this listener and the network-service helper may
+/// connect only to the port in this resource.
+#[cfg(target_os = "macos")]
+pub fn verify_proxy_binding(
+    address: &str,
+    port: u16,
+    profile: &Path,
+) -> Result<(), BrowserDriverError> {
+    let executable = std::env::current_exe()
+        .and_then(|path| path.canonicalize())
+        .map_err(|_| BrowserDriverError::Denied)?;
+    let macos = executable.parent().ok_or(BrowserDriverError::Denied)?;
+    let contents = macos.parent().ok_or(BrowserDriverError::Denied)?;
+    let app = contents.parent().ok_or(BrowserDriverError::Denied)?;
+    if executable.file_name() != Some(OsStr::new("colossus-native-browser-host Body"))
+        || macos.file_name() != Some(OsStr::new("MacOS"))
+        || contents.file_name() != Some(OsStr::new("Contents"))
+        || app.extension() != Some(OsStr::new("app"))
+    {
+        return Err(BrowserDriverError::Denied);
+    }
+    let resource = contents.join("Resources/colossus-network-envelope.policy");
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(resource)
+        .map_err(|_| BrowserDriverError::Denied)?;
+    let before = file.metadata().map_err(|_| BrowserDriverError::Denied)?;
+    // SAFETY: geteuid reads the current process credential without parameters.
+    let owner = unsafe { libc::geteuid() };
+    if !before.is_file()
+        || before.uid() != owner
+        || before.nlink() != 1
+        || before.mode() & 0o7777 != 0o400
+        || before.len() == 0
+        || before.len() > 32 * 1024
+    {
+        return Err(BrowserDriverError::Denied);
+    }
+    let mut bytes = vec![0; before.len() as usize];
+    file.read_exact(&mut bytes)
+        .map_err(|_| BrowserDriverError::Denied)?;
+    let mut trailing = [0];
+    if file
+        .read(&mut trailing)
+        .map_err(|_| BrowserDriverError::Denied)?
+        != 0
+    {
+        return Err(BrowserDriverError::Denied);
+    }
+    let after = file.metadata().map_err(|_| BrowserDriverError::Denied)?;
+    if (
+        before.dev(),
+        before.ino(),
+        before.len(),
+        before.mtime(),
+        before.mtime_nsec(),
+    ) != (
+        after.dev(),
+        after.ino(),
+        after.len(),
+        after.mtime(),
+        after.mtime_nsec(),
+    ) || !proxy_matches_policy(&bytes, app, address, port, profile)
+    {
+        return Err(BrowserDriverError::Denied);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn proxy_matches_policy(
+    bytes: &[u8],
+    app: &Path,
+    address: &str,
+    port: u16,
+    profile: &Path,
+) -> bool {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let fields = text.split('\n').collect::<Vec<_>>();
+    let decimal = |value: &str| {
+        (!value.is_empty()
+            && !value.starts_with('0')
+            && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| value.parse::<u32>().ok())
+        .flatten()
+    };
+    fields.len() == 10
+        && fields[0] == "COLOSSUS_MAC_NETWORK_ENVELOPE_V1"
+        && decimal(fields[1]).is_some_and(|session| session != 0 && session != u32::MAX)
+        && decimal(fields[2]) == Some(u32::from(port))
+        && port != 0
+        && fields[3] == app.parent().and_then(Path::to_str).unwrap_or_default()
+        && fields[4] == app.to_str().unwrap_or_default()
+        && fields[6] == profile.to_str().unwrap_or_default()
+        && fields[9].is_empty()
+        && address == "127.0.0.1"
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
@@ -144,6 +254,57 @@ mod tests {
             Err(BrowserDriverError::Denied)
         );
     }
+
+    #[test]
+    fn signed_proxy_resource_must_match_the_exact_supervisor_port_and_profile() {
+        let app = Path::new("/private/owned/Colossus Browser Host.app");
+        let profile = Path::new("/private/owned/profile");
+        let resource = "COLOSSUS_MAC_NETWORK_ENVELOPE_V1\n123\n18081\n/private/owned\n/private/owned/Colossus Browser Host.app\ncom.obscuritylabs.colossus.native-browser-host.preview\n/private/owned/profile\n/private/broker\n/private/home\n";
+        assert!(proxy_matches_policy(
+            resource.as_bytes(),
+            app,
+            "127.0.0.1",
+            18081,
+            profile
+        ));
+        assert!(!proxy_matches_policy(
+            resource.as_bytes(),
+            app,
+            "127.0.0.1",
+            18082,
+            profile
+        ));
+        assert!(!proxy_matches_policy(
+            resource.as_bytes(),
+            app,
+            "localhost",
+            18081,
+            profile
+        ));
+        assert!(!proxy_matches_policy(
+            resource.as_bytes(),
+            app,
+            "127.0.0.1",
+            18081,
+            Path::new("/private/other/profile")
+        ));
+        let malformed = resource.replace("123\n", "0123\n");
+        assert!(!proxy_matches_policy(
+            malformed.as_bytes(),
+            app,
+            "127.0.0.1",
+            18081,
+            profile
+        ));
+        let invalid_session = resource.replace("123\n", "0\n");
+        assert!(!proxy_matches_policy(
+            invalid_session.as_bytes(),
+            app,
+            "127.0.0.1",
+            18081,
+            profile
+        ));
+    }
 }
 
 impl Entry {
@@ -174,7 +335,11 @@ impl Entry {
             }
             let executable = std::env::current_exe()
                 .and_then(|path| path.canonicalize())
-                .map_err(|_| BrowserDriverError::Unavailable)?;
+                .map_err(|_| {
+                    #[cfg(feature = "macos-synthetic-profile-diagnostic")]
+                    eprintln!("Mac diagnostic entry: current executable unavailable");
+                    BrowserDriverError::Unavailable
+                })?;
             let macos = executable.parent().ok_or(BrowserDriverError::Denied)?;
             let contents = macos.parent().ok_or(BrowserDriverError::Denied)?;
             let app = contents.parent().ok_or(BrowserDriverError::Denied)?;
@@ -187,8 +352,11 @@ impl Entry {
             let helper = contents.join(
                 "Frameworks/Colossus Browser Helper.app/Contents/MacOS/Colossus Browser Helper",
             );
-            let metadata =
-                std::fs::symlink_metadata(&helper).map_err(|_| BrowserDriverError::Unavailable)?;
+            let metadata = std::fs::symlink_metadata(&helper).map_err(|_| {
+                #[cfg(feature = "macos-synthetic-profile-diagnostic")]
+                eprintln!("Mac diagnostic entry: fixed helper metadata unavailable");
+                BrowserDriverError::Unavailable
+            })?;
             use std::os::unix::fs::PermissionsExt as _;
             if !metadata.is_file()
                 || metadata.file_type().is_symlink()
@@ -294,20 +462,6 @@ pub fn container_channels(
     #[cfg(target_os = "macos")]
     {
         let _ = presentation;
-        Err(BrowserDriverError::Unsupported)
-    }
-}
-
-#[cfg(target_os = "macos")]
-pub struct Relay;
-#[cfg(target_os = "macos")]
-impl Relay {
-    pub fn start(
-        _: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    ) -> Result<Self, BrowserDriverError> {
-        Err(BrowserDriverError::Unsupported)
-    }
-    pub fn stop(&mut self) -> Result<(), BrowserDriverError> {
         Err(BrowserDriverError::Unsupported)
     }
 }

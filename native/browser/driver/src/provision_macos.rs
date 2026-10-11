@@ -10,12 +10,18 @@ use crate::identity::Policy;
 #[serde(deny_unknown_fields)]
 pub struct Configuration {}
 
-#[cfg(not(feature = "macos-owned-profile-development"))]
+#[cfg(not(any(
+    feature = "macos-owned-profile-development",
+    feature = "macos-synthetic-profile-diagnostic"
+)))]
 pub struct Home {
     _unavailable: (),
 }
 
-#[cfg(not(feature = "macos-owned-profile-development"))]
+#[cfg(not(any(
+    feature = "macos-owned-profile-development",
+    feature = "macos-synthetic-profile-diagnostic"
+)))]
 impl Home {
     pub fn prepare(
         _profile: &Path,
@@ -40,7 +46,20 @@ mod development;
 #[cfg(feature = "macos-owned-profile-development")]
 pub use development::Home;
 
-#[cfg(all(test, not(feature = "macos-owned-profile-development")))]
+#[cfg(feature = "macos-synthetic-profile-diagnostic")]
+#[path = "provision_macos/synthetic.rs"]
+mod synthetic;
+
+#[cfg(feature = "macos-synthetic-profile-diagnostic")]
+pub use synthetic::Home;
+
+#[cfg(all(
+    test,
+    not(any(
+        feature = "macos-owned-profile-development",
+        feature = "macos-synthetic-profile-diagnostic"
+    ))
+))]
 mod tests {
     use super::*;
     use crate::owned_directory::OwnedDirectory;

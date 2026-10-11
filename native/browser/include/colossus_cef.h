@@ -130,6 +130,15 @@ int32_t colossus_cef_proxy_configure(const char* address, uint16_t port,
  * No model/renderer pathname or personal-profile discovery is accepted here.
  */
 int32_t colossus_cef_profile_persistent(int32_t enabled);
+
+/* Native-only one-use selection for the explicitly compiled macOS Debug
+ * synthetic HTTP-loopback fixture. It performs no CEF or Keychain operation.
+ * Ordinary builds return UNAVAILABLE. Call on main before proxy/bootstrap.
+ * The trusted diagnostic enrollment must reject PKI, login/persistent profiles
+ * and non-loopback HTTP fixtures; this synthetic secret is public test data.
+ * This API does not grant production, crypto custody, or sandbox acceptance.
+ */
+int32_t colossus_cef_synthetic_profile_prepare(void);
 /* parent is NSView* (macOS), HWND (Windows); zero only for headless probe.
  * request_context is isolated in-memory; personal profiles are never attached.
  */

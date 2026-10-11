@@ -34,13 +34,25 @@ struct colossus_mac_network_binding {
  * no browser-supplied policy text, compiled blob or parameter is accepted.
  * ScreenAI, SODA and TranslateKit roles fail closed until their downloaded
  * native components have a separate publisher-bound enrollment contract.
- * WebNN remains rejected until its extra platform parameter is verified. */
+ * WebNN remains rejected until its extra platform parameter is verified.
+ * Allocation ancestors receive only literal file-read-metadata for realpath;
+ * these grants admit no file data or directory entries outside the allocation.
+ * Helper Body pre-exec LibIgnition also receives literal root-directory data;
+ * this directory-FD exception grants no descendant file data or subpaths. */
 int colossus_mac_helper_policy(enum colossus_mac_network_role role,
     const struct colossus_mac_network_binding* binding, const char* executable,
     int32_t browser_pid, uint32_t os_version, char** source);
-/* Main profile permits only the listed fixed sealed fronts to leave its profile.
+/* Main profile lets only its exact fixed host Body exec inherit the profile.
+ * It permits only the listed fixed sealed helper fronts to leave its profile.
  * Each front applies its own composite before executing its fixed body.
- * No other process-exec or process-fork receives authority. */
+ * AppKit registration has only its exact LaunchServices/CoreServices endpoints;
+ * the main process may bind only Unix sockets under the owned profile/tmp.
+ * TCP listeners and delegated lsopen and AppleEvent sends remain denied. No other process-exec
+ * target receives authority; forked children retain the main envelope.
+ * Only a separately compiled Debug synthetic diagnostic admits the dirhelper
+ * service and explicitly denies shared Darwin cache data/xattrs outside the
+ * allocation. Its private service operations remain unresolved production
+ * authority; ordinary and real-profile envelopes retain their prior rules. */
 int colossus_mac_main_network_policy(const struct colossus_mac_network_binding* binding,
     const char* const* fronts, size_t count, char** source);
 /* Minimal front permits only an exact fixed body exec, with profile inheritance. */

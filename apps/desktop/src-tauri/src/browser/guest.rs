@@ -2,11 +2,17 @@
 
 use std::path::PathBuf;
 
-#[cfg(not(feature = "embedded-chromium-preview"))]
+#[cfg(not(any(
+    feature = "embedded-chromium-preview",
+    feature = "macos-contained-browser-diagnostic"
+)))]
 use colossus_native_browser::BrowserEvent;
 use colossus_native_browser::{self as engine, BrowserView, EventSink, NavigationPolicy};
 use tauri::{AppHandle, Manager as _, Webview};
-#[cfg(not(feature = "embedded-chromium-preview"))]
+#[cfg(not(any(
+    feature = "embedded-chromium-preview",
+    feature = "macos-contained-browser-diagnostic"
+)))]
 use tauri::{
     WebviewUrl,
     webview::{DownloadEvent, NewWindowResponse, WebviewBuilder},
@@ -27,6 +33,8 @@ pub(super) struct GuestRequest {
     pub sink: EventSink,
 }
 
+// Compile-time engine branches share one guest entry point and authority check.
+#[allow(clippy::too_many_lines)]
 pub(super) async fn create(
     app: &AppHandle,
     request: GuestRequest,
@@ -45,6 +53,35 @@ pub(super) async fn create(
     let window = app
         .get_window("main")
         .ok_or_else(|| error("The Desktop window has closed."))?;
+    #[cfg(feature = "macos-contained-browser-diagnostic")]
+    {
+        let _ = (directory, source);
+        let composition = app
+            .try_state::<engine::contained::ContainedBrowserComposition>()
+            .ok_or_else(|| error("The supervised browser is unavailable."))?;
+        let request = engine::contained::ContainedGuestRequest {
+            id,
+            generation,
+            scope,
+            conversation_id,
+            initial_url,
+            policy,
+            sink,
+        };
+        if !composition
+            .0
+            .available(&window, &request)
+            .await
+            .map_err(|failure| error(&failure.to_string()))?
+        {
+            return Err(error("The supervised browser is unavailable."));
+        }
+        return composition
+            .0
+            .create(&window, request)
+            .await
+            .map_err(|failure| error(&failure.to_string()));
+    }
     #[cfg(feature = "embedded-chromium-preview")]
     {
         if let Some(composition) = app.try_state::<engine::contained::ContainedBrowserComposition>()
@@ -79,7 +116,10 @@ pub(super) async fn create(
         .map(BrowserView::Chromium)
         .map_err(|failure| error(&failure.to_string()));
     }
-    #[cfg(not(feature = "embedded-chromium-preview"))]
+    #[cfg(not(any(
+        feature = "embedded-chromium-preview",
+        feature = "macos-contained-browser-diagnostic"
+    )))]
     {
         let _ = (generation, scope, initial_url, conversation_id);
         let popup_sink = sink.clone();

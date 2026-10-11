@@ -903,8 +903,7 @@ async fn prepare_managed_bootstrap(
         )
     })?;
     let worker_bootstrap_secret = worker_authentication.copy_secret();
-    let mut native_browser_key = zeroize::Zeroizing::new(vec![0_u8; 32]);
-    getrandom::fill(&mut native_browser_key).map_err(|_| {
+    let native_browser_key = crate::native_browser_authentication::generate().map_err(|_| {
         classified(
             "runtime_authentication",
             "Managed Local browser authentication could not be created.",
@@ -929,10 +928,7 @@ async fn prepare_managed_bootstrap(
         companion,
     )
     .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?
-    .with_native_browser_authentication(
-        Secret::new(native_browser_key.to_vec())
-            .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Authentication))?,
-    )
+    .with_native_browser_authentication(native_browser_key)
     .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Authentication))?;
     if let Some(identity) = settings.client_identity.as_ref() {
         let (certificate, key) = credentials

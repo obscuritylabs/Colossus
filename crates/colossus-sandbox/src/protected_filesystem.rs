@@ -9,7 +9,7 @@ const MAX_PROTECTED_ENTRIES: usize = 100_000;
 #[derive(Clone, Default)]
 pub struct ProtectedFilesystem {
     roots: Vec<ConfinedRoot>,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     native_profiles: Vec<ConfinedRoot>,
 }
 
@@ -19,7 +19,7 @@ impl ProtectedFilesystem {
     pub fn new(roots: Vec<ConfinedRoot>) -> Result<Self, ExecutionError> {
         let protection = Self {
             roots,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             native_profiles: Vec::new(),
         };
         protection.snapshot()?;
@@ -27,7 +27,7 @@ impl ProtectedFilesystem {
     }
 
     pub(super) fn is_empty(&self) -> bool {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if !self.native_profiles.is_empty() {
             return false;
         }
@@ -37,7 +37,7 @@ impl ProtectedFilesystem {
     /// Add native browser cache roots independently of caller policy and grants.
     /// Chromium's child sockets/symlinks are never followed; bounded metadata-only
     /// traversal retains regular inode aliases. Strict credential roots are unchanged.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn with_native_profile_roots(
         mut self,
         roots: Vec<ConfinedRoot>,
@@ -82,19 +82,19 @@ impl ProtectedFilesystem {
             }
             root.revalidate().map_err(protected_failure)?;
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let roots = self
             .roots
             .iter()
             .chain(&self.native_profiles)
             .cloned()
             .collect();
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let roots = self.roots.clone();
         Ok(ProtectedFilesystemSnapshot {
             roots,
             files,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             native_profiles: native_profiles::Snapshot::capture(&self.native_profiles)?,
         })
     }
@@ -136,7 +136,7 @@ impl ProtectedFilesystem {
 pub(super) struct ProtectedFilesystemSnapshot {
     roots: Vec<ConfinedRoot>,
     files: Vec<(ConfinedRoot, ConfinedFile)>,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     native_profiles: native_profiles::Snapshot,
 }
 
@@ -170,7 +170,7 @@ impl ProtectedFilesystemSnapshot {
                 ));
             }
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.native_profiles.check_file(file)?;
         Ok(())
     }
@@ -182,7 +182,7 @@ impl ProtectedFilesystemSnapshot {
         for (root, file) in &self.files {
             file.revalidate(root).map_err(protected_failure)?;
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.native_profiles.revalidate()?;
         Ok(())
     }
@@ -202,6 +202,9 @@ fn protected_failure(_: impl std::fmt::Display) -> ExecutionError {
 }
 
 #[cfg(target_os = "linux")]
+mod native_profiles;
+#[cfg(target_os = "macos")]
+#[path = "protected_filesystem/native_profiles_macos.rs"]
 mod native_profiles;
 #[cfg(test)]
 mod tests;

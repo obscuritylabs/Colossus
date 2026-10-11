@@ -24,6 +24,8 @@ def main() -> int:
     parser.add_argument("--platform", choices=("macosarm64", "macosx64"), required=True)
     parser.add_argument("--macos-owned-profile-development", action="store_true",
                         help="explicit unsupported Debug profile crypto; no production or certificate PKI acceptance")
+    parser.add_argument("--macos-synthetic-profile-diagnostic", action="store_true",
+                        help="Debug-only synthetic profile for a disposable HTTP loopback fixture; no Keychain or PKI acceptance")
     parser.add_argument("--macos-network-envelope-policy", type=Path,
                         help="native supervisor's fixed per-allocation policy resource; Debug only")
     options = parser.parse_args()
@@ -34,6 +36,7 @@ def main() -> int:
             options.cef_root, options.native_build, options.executable, options.app,
             options.platform, "com.obscuritylabs.colossus.native-browser-host.preview", host=True,
             profile_crypto_development=options.macos_owned_profile_development,
+            synthetic_profile_diagnostic=options.macos_synthetic_profile_diagnostic,
             network_envelope_policy=options.macos_network_envelope_policy,
         ))
         return 0

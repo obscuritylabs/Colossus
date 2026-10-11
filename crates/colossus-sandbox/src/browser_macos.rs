@@ -14,6 +14,11 @@ use colossus_ports::{
 };
 use std::sync::Arc;
 
+#[cfg(debug_assertions)]
+mod acceptance;
+#[cfg(debug_assertions)]
+pub use acceptance::{MacosBrowserAcceptanceConfig, MacosBrowserShutdownReceipt};
+
 #[cfg(target_os = "macos")]
 mod process_cleanup {
     use colossus_darwin_process::{
@@ -328,48 +333,135 @@ impl MacosBrowserReadiness {
 
 /// Retained Mac browser owner that deliberately cannot launch before acceptance.
 ///
-/// There is intentionally no constructor accepting booleans, paths, process IDs,
-/// audit-session IDs, or self-reported child evidence. A future accepted native
-/// owner must introduce an unforgeable receipt and replace this gate as one reviewed
-/// change. Until then Core can retain this value without accidentally enabling Mac
-/// automation.
-#[derive(Clone, Copy, Debug)]
-pub struct MacosBrowserSupervisor;
+/// Production has no constructor accepting booleans, paths, process IDs,
+/// audit-session IDs, or self-reported child evidence. The Debug-only acceptance
+/// constructor verifies a fresh signed diagnostic allocation and remains outside
+/// ordinary discovery. A future production owner still needs an unforgeable
+/// whole-tree receipt.
+#[derive(Clone)]
+pub struct MacosBrowserSupervisor {
+    #[cfg(debug_assertions)]
+    acceptance: Option<Arc<acceptance::Acceptance>>,
+}
 
 impl MacosBrowserSupervisor {
     /// Construct the current fail-closed native owner.
     #[must_use]
     pub fn unavailable() -> Self {
-        Self
+        Self {
+            #[cfg(debug_assertions)]
+            acceptance: None,
+        }
     }
 
     /// Return the exact independently unaccepted requirements.
     #[must_use]
-    pub fn readiness(self) -> MacosBrowserReadiness {
+    pub fn readiness(&self) -> MacosBrowserReadiness {
         MacosBrowserReadiness {
             blockers: &CURRENT_BLOCKERS,
         }
+    }
+
+    /// Install one explicitly staged, one-session Debug acceptance host.
+    ///
+    /// This constructor is absent from release builds and is never used by ordinary
+    /// browser package discovery. It accepts only temporary Embedded browsing to a
+    /// numeric loopback HTTP origin and still does not establish production cleanup.
+    #[cfg(debug_assertions)]
+    pub async fn install_for_acceptance(
+        config: MacosBrowserAcceptanceConfig,
+    ) -> Result<Self, BrowserDriverError> {
+        Ok(Self {
+            acceptance: Some(Arc::new(acceptance::Acceptance::install(config).await?)),
+        })
+    }
+
+    /// Clone the separately authenticated presenter for the exact diagnostic session.
+    #[cfg(debug_assertions)]
+    pub async fn presentation(
+        &self,
+        request: &BrowserDriverOpenRequest,
+    ) -> Result<(colossus_browser_presentation::PresentationClient, [u8; 32]), BrowserDriverError>
+    {
+        self.acceptance
+            .as_ref()
+            .ok_or(BrowserDriverError::Unavailable)?
+            .presentation(request)
+            .await
+    }
+
+    /// Stop the retained diagnostic host. Unknown direct-child cleanup remains retained.
+    #[cfg(debug_assertions)]
+    pub async fn shutdown(&self) -> Result<(), BrowserDriverError> {
+        match &self.acceptance {
+            Some(acceptance) => acceptance.shutdown().await,
+            None => Ok(()),
+        }
+    }
+
+    /// Direct-child diagnostic receipts. These never satisfy whole-tree acceptance.
+    #[cfg(debug_assertions)]
+    pub async fn shutdown_receipts(
+        &self,
+    ) -> Vec<(
+        colossus_contracts::BrowserSessionId,
+        Option<MacosBrowserShutdownReceipt>,
+    )> {
+        match &self.acceptance {
+            Some(acceptance) => acceptance.shutdown_receipts().await,
+            None => Vec::new(),
+        }
+    }
+}
+
+impl std::fmt::Debug for MacosBrowserSupervisor {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MacosBrowserSupervisor")
+            .field("diagnostic_acceptance", &{
+                #[cfg(debug_assertions)]
+                {
+                    self.acceptance.is_some()
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    false
+                }
+            })
+            .finish_non_exhaustive()
     }
 }
 
 #[async_trait]
 impl BrowserHostFactory for MacosBrowserSupervisor {
     fn capabilities(&self) -> BrowserCapabilities {
+        #[cfg(debug_assertions)]
+        if let Some(acceptance) = &self.acceptance {
+            return acceptance.capabilities();
+        }
         BrowserCapabilities::unavailable()
     }
 
     async fn launch(
         &self,
-        _request: &BrowserDriverOpenRequest,
-        _control: &BrowserDriverControl,
+        request: &BrowserDriverOpenRequest,
+        control: &BrowserDriverControl,
     ) -> Result<Arc<dyn BrowserDriver>, BrowserDriverError> {
+        #[cfg(debug_assertions)]
+        if let Some(acceptance) = &self.acceptance {
+            return acceptance.launch(request, control).await;
+        }
         Err(BrowserDriverError::Unavailable)
     }
 
     async fn reap_failed_launch(
         &self,
-        _request: &BrowserDriverOpenRequest,
+        request: &BrowserDriverOpenRequest,
     ) -> Result<(), BrowserDriverError> {
+        #[cfg(debug_assertions)]
+        if let Some(acceptance) = &self.acceptance {
+            return acceptance.reap_failed_launch(request).await;
+        }
         // `launch` performs no allocation before returning unavailable. There is no
         // uncertain native obligation to reconcile through this gate.
         Ok(())

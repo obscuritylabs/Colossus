@@ -13,6 +13,7 @@ crate-type = ["cdylib"]
 [features]
 native-custody-test = []
 macos-owned-profile-development = []
+macos-synthetic-profile-diagnostic = []
 
 [workspace]
 resolver = "3"

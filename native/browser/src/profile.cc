@@ -1,4 +1,5 @@
 #include "host_internal.h"
+#include "synthetic_profile.h"
 #include <cerrno>
 #include <filesystem>
 #if !defined(OS_WIN)
@@ -56,6 +57,7 @@ void ProfileShutdown() {
 extern "C" int32_t colossus_cef_profile_persistent(int32_t enabled) {
   if (colossus::initialized) return COLOSSUS_CEF_BUSY;
   if (enabled != 0 && enabled != 1) return COLOSSUS_CEF_INVALID;
+  if (enabled && !colossus::SyntheticProfileAllowsPersistence()) return COLOSSUS_CEF_DENIED;
   colossus::persistent = enabled != 0;
   return COLOSSUS_CEF_OK;
 }

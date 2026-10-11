@@ -63,6 +63,7 @@ static int fixed_environment(const struct colossus_mac_network_binding *binding)
       {"XDG_DATA_HOME", data}, {"TMPDIR", temp},
       {"PATH", "/usr/bin:/bin"}, {"LANG", "en_US.UTF-8"},
       {"MallocNanoZone", "0"},
+      {"MAC_CHROMIUM_TMPDIR", temp},
   };
   size_t seen = 0;
   for (char **entry = environ; *entry; ++entry) {

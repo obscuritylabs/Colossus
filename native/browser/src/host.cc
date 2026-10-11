@@ -1,16 +1,33 @@
 #include "host_internal.h"
+#include "synthetic_profile.h"
 #include "include/cef_app.h"
 #include "include/cef_command_line.h"
+#include "include/cef_path_util.h"
 #include "include/wrapper/cef_helpers.h"
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <thread>
+#if defined(OS_MAC)
+#include "mac_helper_programs.h"
+#endif
 #if defined(COLOSSUS_CEF_TEST_CUSTODY)
 #include "custody_linux.h"
 #endif
 
 namespace colossus {
+namespace {
+void BootstrapDiagnostic(const char* stage, int32_t status, int32_t detail = 0) {
+#if defined(COLOSSUS_CEF_MAC_SYNTHETIC_PROFILE_DIAGNOSTIC)
+  // Fixed categories/numbers only. No path, credential, page or policy bytes.
+  std::fprintf(stderr, "native cef bootstrap substage=%s status=%d detail=%d\n",
+               stage, status, detail);
+#else
+  (void)stage; (void)status; (void)detail;
+#endif
+}
+}
 colossus_cef_callbacks callbacks{};
 std::map<colossus_cef_tab, Tab> tabs;
 std::map<uint64_t, CefRefPtr<CefRequestContext>> contexts;
@@ -38,13 +55,42 @@ bool ProxyCredentials(const std::string& host, int port,
 class App final : public CefApp, public CefBrowserProcessHandler {
  public:
   explicit App(bool no_display) : no_display_(no_display) {}
+#if defined(OS_MAC)
+  App(bool no_display, MacHelperPrograms helpers)
+    : no_display_(no_display), owned_helpers_(std::move(helpers)) {}
+#endif
   CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override { return this; }
 #if defined(COLOSSUS_CEF_TEST_CUSTODY)
   CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override { return custody_renderer_; }
-  void OnBeforeChildProcessLaunch(CefRefPtr<CefCommandLine> line) override { CustodyChild(line); }
+#endif
+#if defined(COLOSSUS_CEF_TEST_CUSTODY) || defined(OS_MAC)
+  void OnBeforeChildProcessLaunch(CefRefPtr<CefCommandLine> line) override {
+#if defined(COLOSSUS_CEF_TEST_CUSTODY)
+    CustodyChild(line);
+#endif
+#if defined(OS_MAC)
+    if (!owned_helpers_) return;
+    const auto process = line->GetSwitchValue("type").ToString();
+    const auto program = line->GetProgram().ToString();
+    const auto selected = owned_helpers_->GpuProgram(process, program);
+#if defined(COLOSSUS_CEF_MAC_SYNTHETIC_PROFILE_DIAGNOSTIC)
+    std::fprintf(stderr, "native helper launch process=%d program=%d selected=%d\n",
+      MacChildProcessClass(process), MacHelperProgramKind(program),
+      selected ? MacHelperProgramKind(*selected) : MacHelperProgramKind(program));
+#endif
+    // CEF's public callback admits only this validated fixed GPU front. Do not
+    // turn the generic utility front into a GPU entry or change sandbox flags.
+    if (selected) line->SetProgram(*selected);
+#endif
+  }
 #endif
   void OnBeforeCommandLineProcessing(const CefString& process,
                                     CefRefPtr<CefCommandLine> line) override {
+    // The exact pinned Chromium testing provider avoids eager OSCrypt Keychain
+    // calls for the separately admitted synthetic fixture. Never select it in a
+    // helper, from process arguments, or in an ordinary/release native component.
+    if (const auto* selection = SyntheticProfileSwitch(process.empty()))
+      line->AppendSwitch(selection);
     if (process.empty()) {
       if (no_display_) {
         line->AppendSwitchWithValue("ozone-platform", "headless");
@@ -80,6 +126,9 @@ class App final : public CefApp, public CefBrowserProcessHandler {
   }
  private:
   bool no_display_;
+#if defined(OS_MAC)
+  const std::optional<MacHelperPrograms> owned_helpers_;
+#endif
 #if defined(COLOSSUS_CEF_TEST_CUSTODY)
   // CEF obtains the handler independently for context creation and incoming
   // process messages. Retain one instance so the challenge sees that context.
@@ -175,7 +224,27 @@ extern "C" int32_t colossus_cef_bootstrap(const colossus_cef_bootstrap_options* 
       o->argc < 0 || !o->argv || o->headless < 0 || o->headless > 2) return COLOSSUS_CEF_INVALID;
   *subprocess_exit = -1;
   if (initialized) return COLOSSUS_CEF_BUSY;
-  if (!PlatformLoadLibrary()) return COLOSSUS_CEF_UNAVAILABLE;
+  const auto diagnostic = SyntheticProfileBootstrap(o->headless);
+  if (diagnostic) { BootstrapDiagnostic("selection", diagnostic); return diagnostic; }
+#if defined(OS_MAC)
+  if (o->headless == 2 && !PlatformDedicatedEnvironment(o->root_cache_path)) {
+    BootstrapDiagnostic("owned-environment", COLOSSUS_CEF_DENIED);
+    return COLOSSUS_CEF_DENIED;
+  }
+  std::optional<MacHelperPrograms> owned_helpers;
+  if (o->headless == 2) {
+    owned_helpers = PrepareMacHelperPrograms(o->browser_subprocess_path);
+    if (!owned_helpers) {
+      BootstrapDiagnostic("helper-programs", COLOSSUS_CEF_DENIED);
+      return COLOSSUS_CEF_DENIED;
+    }
+  }
+#endif
+  if (!PlatformLoadLibrary()) {
+    BootstrapDiagnostic("framework", COLOSSUS_CEF_UNAVAILABLE);
+    return COLOSSUS_CEF_UNAVAILABLE;
+  }
+  BootstrapDiagnostic("framework", COLOSSUS_CEF_OK);
 #if defined(OS_WIN)
   // New CEF Windows builds require the bootstrap-provided client DLL entry.
   // A raw Tauri executable cannot synthesize this proof or opt out of sandbox.
@@ -197,6 +266,8 @@ extern "C" int32_t colossus_cef_bootstrap(const colossus_cef_bootstrap_options* 
   // Both private host placements render offscreen. Embedded presentation travels
   // over the authenticated frame channel and needs no X11/Wayland connection.
   CefRefPtr<App> app = new App(headless);
+#elif defined(OS_MAC)
+  CefRefPtr<App> app = owned_helpers ? new App(false, std::move(*owned_helpers)) : new App(o->headless == 1);
 #else
   CefRefPtr<App> app = new App(o->headless == 1);
 #endif
@@ -205,10 +276,29 @@ extern "C" int32_t colossus_cef_bootstrap(const colossus_cef_bootstrap_options* 
   const int result = CefExecuteProcess(args, app, o->sandbox_info);
   if (result >= 0) { *subprocess_exit = result; return COLOSSUS_CEF_OK; }
 #endif
+#if defined(OS_MAC)
+  if (o->headless == 2) {
+    CefString temporary;
+    if (!CefGetPath(PK_DIR_TEMP, temporary) ||
+        temporary.ToString() != std::string(o->root_cache_path) + "/tmp") {
+      BootstrapDiagnostic("owned-temporary-path", COLOSSUS_CEF_DENIED);
+      return COLOSSUS_CEF_DENIED;
+    }
+    BootstrapDiagnostic("owned-temporary-path", COLOSSUS_CEF_OK);
+  }
+#endif
   if (!o->root_cache_path || !std::filesystem::path(o->root_cache_path).is_absolute() ||
       !o->callbacks.event || !o->callbacks.allow_url) return COLOSSUS_CEF_INVALID;
-  if (!ProfileRoot(o->root_cache_path)) return COLOSSUS_CEF_DENIED;
-  if (!PlatformEarlySetup()) return COLOSSUS_CEF_UNAVAILABLE;
+  if (!ProfileRoot(o->root_cache_path)) {
+    BootstrapDiagnostic("profile", COLOSSUS_CEF_DENIED);
+    return COLOSSUS_CEF_DENIED;
+  }
+  BootstrapDiagnostic("profile", COLOSSUS_CEF_OK);
+  if (!PlatformEarlySetup()) {
+    BootstrapDiagnostic("appkit", COLOSSUS_CEF_UNAVAILABLE);
+    return COLOSSUS_CEF_UNAVAILABLE;
+  }
+  BootstrapDiagnostic("appkit", COLOSSUS_CEF_OK);
   CefSettings settings;
   settings.no_sandbox = false;
   settings.external_message_pump = true;
@@ -222,7 +312,13 @@ extern "C" int32_t colossus_cef_bootstrap(const colossus_cef_bootstrap_options* 
       return COLOSSUS_CEF_INVALID;
     CefString(&settings.browser_subprocess_path) = o->browser_subprocess_path;
   }
-  if (!CefInitialize(args, settings, app, o->sandbox_info)) return COLOSSUS_CEF_UNAVAILABLE;
+  BootstrapDiagnostic("initialize-enter", COLOSSUS_CEF_OK);
+  if (!CefInitialize(args, settings, app, o->sandbox_info)) {
+    // CEF's public numeric exit code identifies an early initialization result.
+    BootstrapDiagnostic("initialize-exit", COLOSSUS_CEF_UNAVAILABLE, CefGetExitCode());
+    return COLOSSUS_CEF_UNAVAILABLE;
+  }
+  BootstrapDiagnostic("initialize-exit", COLOSSUS_CEF_OK);
   owning_thread = std::this_thread::get_id(); initialized = true;
   return COLOSSUS_CEF_OK;
 }

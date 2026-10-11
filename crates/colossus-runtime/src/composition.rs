@@ -299,7 +299,7 @@ impl Runtime {
                 colossus_home_root.as_ref(),
                 &workspace,
             )?;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let development_protection = development_protection
             .with_native_profile_roots(
                 browser_host
@@ -309,7 +309,7 @@ impl Runtime {
             .map_err(|_| {
                 RuntimeError::Config("native browser profile confinement is invalid".into())
             })?;
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         if browser_host
             .as_ref()
             .is_some_and(|host| !host.protected_profile_roots().is_empty())

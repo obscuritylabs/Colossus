@@ -5,6 +5,12 @@
 #import <objc/runtime.h>
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <limits.h>
+#include <pthread.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -85,6 +91,25 @@ extern "C" int32_t colossus_cef_standalone_platform_pump() {
 }
 
 namespace colossus {
+bool PlatformDedicatedEnvironment(const char* root) {
+  // Initial inherited environment only. Never mutate process-wide environment
+  // after loading frameworks or starting native/CEF threads.
+  if (!pthread_main_np() || !root || root[0] != '/' ||
+      strnlen(root, PATH_MAX) + 4 >= PATH_MAX) return false;
+  const std::string temporary = std::string(root) + "/tmp";
+  const char* normal = std::getenv("TMPDIR");
+  const char* chromium = std::getenv("MAC_CHROMIUM_TMPDIR");
+  if (!normal || !chromium || temporary != normal || temporary != chromium) return false;
+  for (const auto* path : {root, temporary.c_str()}) {
+    char canonical[PATH_MAX];
+    struct stat metadata{};
+    if (!realpath(path, canonical) || std::strcmp(path, canonical) != 0 ||
+        lstat(path, &metadata) != 0 || !S_ISDIR(metadata.st_mode) ||
+        metadata.st_uid != geteuid() || (metadata.st_mode & 0077) != 0)
+      return false;
+  }
+  return true;
+}
 bool PlatformLoadLibrary() {
   // Main-process framework must be loaded dynamically for macOS sandboxing.
   // Helpers have a different entry that initializes their sandbox first.

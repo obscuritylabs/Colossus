@@ -80,13 +80,16 @@ python3 -B native/browser/scripts/run_host_probe.py \
 ```
 
 The harness verifies all native startup phases before requesting authenticated
-readiness and requires the host's entire process group to disappear after normal
-shutdown. A development environment whose PID 1 does not reap adopted helpers
-must run the same fixture under an installed process subreaper, for example
-`tini -s -- python3 -B native/browser/scripts/run_host_probe.py ...`. Exited helper
-zombies do not satisfy the cleanup check. Linux component verification also checks
-the host's ELF dependency order: Chromium's `libcef.so` must precede `libc.so.6`
-so its supported syscall interposers can resolve their next libc implementation.
+readiness, then requires the native close acknowledgment, bounded output-channel
+EOF and the direct child's zero exit. It retains the fresh owner-private fixture
+directory and profile after every attempt because those observations do not prove
+complete helper retirement. The success receipt reports `fixture_directory`,
+`direct_child_exit`, `output_channels_closed` and `helper_cleanup_proven: false`.
+Process-group signals are bounded fixture cleanup while the direct child remains
+retained; they establish no whole-tree receipt. A signal, output or exit deadline
+failure remains unknown. Linux component verification also checks the host's ELF
+dependency order: Chromium's `libcef.so` must precede `libc.so.6` so its supported
+syscall interposers can resolve their next libc implementation.
 
 The fixture creates three anonymous inherited Unix sockets: a bounded native-only
 bootstrap carrying enrollment and authentication material, a typed data channel,
@@ -291,6 +294,250 @@ on this entry. Cross-target Rust checks and staging tests do not replace native
 macOS rendering or release-authentication acceptance. A macOS whole-host
 containment owner still needs implementation; staging the host does not contain
 its descendants or establish owned Keychain custody.
+
+### Run the Debug Core Mac HTTP diagnostic
+
+Use a native macOS ARM64 or x64 login session, Python 3.11+, CMake, Xcode
+command-line tools, and the repository Rust toolchain. Select both Cargo and
+rustc from that toolchain before building; a newer Homebrew Cargo cannot substitute
+for it. From the repository root:
+
+```sh
+mac_diag_rustc=$(rustup which --toolchain 1.96.0 rustc)
+export PATH="$(dirname "$mac_diag_rustc"):$PATH"
+case "$(uname -m)" in
+  arm64) mac_diag_platform=macosarm64 ;;
+  x86_64) mac_diag_platform=macosx64 ;;
+  *) exit 1 ;;
+esac
+mac_diag_cef=$(python3 -B native/browser/scripts/component.py fetch --platform "$mac_diag_platform")
+mac_diag_native="$PWD/.local/cef-macos-synthetic-debug"
+mac_diag_host="$PWD/.local/native-host-macos-synthetic"
+cmake -S native/browser -B "$mac_diag_native" \
+  -DCEF_ROOT="$mac_diag_cef" -DCMAKE_BUILD_TYPE=Debug -DUSE_SANDBOX=ON \
+  -DCOLOSSUS_CEF_MAC_SYNTHETIC_PROFILE_DIAGNOSTIC=ON \
+  -DCOLOSSUS_CEF_DEVELOPER_NETWORK_ENVELOPE=ON \
+  -DCOLOSSUS_CEF_DEVELOPER_PROFILE_CRYPTO=OFF
+cmake --build "$mac_diag_native" --parallel 4
+COLOSSUS_CEF_ROOT="$mac_diag_cef" \
+COLOSSUS_CEF_NATIVE_LIB_DIR="$mac_diag_native" \
+CARGO_TARGET_DIR="$mac_diag_host" \
+  cargo build --locked --manifest-path native/browser/driver/Cargo.toml \
+    --features macos-synthetic-profile-diagnostic
+mac_diag_output=$(mktemp -d /private/tmp/cm.XXXXXX)
+python3 -B native/browser/scripts/run_core_macos_diagnostic.py \
+  --cef-root "$mac_diag_cef" --native-build "$mac_diag_native" \
+  --host-binary "$mac_diag_host/debug/colossus-native-browser-host" \
+  --output-root "$mac_diag_output"
+```
+
+Use a short private output path because Chromium creates filesystem Unix sockets
+below its profile temporary directory. The runner requires an owned `0700`
+evidence parent, creates fresh `0700` allocation and broker directories, stages
+and ad-hoc signs the main front/body, CEF framework/resources and five helper
+front/body pairs, and binds the policy to the current read-only audit identity.
+It reserves the exact IPv4/IPv6 loopback proxy port during staging. Core later
+binds that sealed port or fails; it cannot choose a replacement port.
+
+The selected profile uses Chromium's fixed mock Safe Storage only for a disposable
+plain-HTTP numeric loopback page. It has no private CAs, client identities,
+persistent profile reuse or login data. The real custody
+adapter is excluded. Chromium's sandbox remains enabled, and the browser has no
+debugging TCP listener. This diagnostic is unavailable in release builds and
+ordinary Mac package discovery remains disabled.
+
+The runner invokes only
+`browser_tools::tests::native_macos::real_mac_chromium_executes_core_tools_and_paints_authenticated_frames`
+with `--ignored --exact`. It never runs `native_session_ports`, audit-session
+joining, or the earlier session-port probes. The fixture checks the real Core
+effect gateway, CEF page/AX observations, button control, authenticated bounded
+frames at two scales, PNG publication, continued navigation after presentation
+detachment, and the direct host's graceful shutdown. This Core fixture does not
+create a Desktop window; visible Desktop composition needs its separate native
+acceptance run. Build, staging and launcher unit tests do not establish a native
+browser pass.
+
+The native macOS ARM64 Core fixture passed with the signed Debug component:
+Core observed the actual accessibility tree, clicked the button, navigated, and
+decoded a 1280×960 PNG containing the expected page pixels. The authenticated
+presentation channel passed fractional-scale rounding and a resize at 2× Retina
+scale. Viewer detachment left Core in control; closing the run acknowledged CEF
+shutdown and the direct host exited zero. The successful receipt is one named
+test, `1 passed; 0 failed`, and `cef_acknowledged=true`. This establishes this
+temporary HTTP fixture, not complete helper ownership or production readiness.
+
+The native startup path uses the owned `MAC_CHROMIUM_TMPDIR`, a main-only Unix
+socket bind beneath `profile/tmp`, and exact helper executable selection. Helpers
+may read the root directory itself so macOS can acquire its early loader directory
+descriptor; this grants no root-subtree file access. The synthetic Debug main also
+permits macOS's directory service lookup while denying shared cache contents,
+xattrs and writes. Public directory queries preserved the recorded identity and
+permissions; observed ctime drift and the service's additional private operations
+remain unaccepted production requirements. Ordinary and real-custody components
+do not gain that diagnostic service allowance.
+
+The printed evidence directory contains `core-test.log`, signature logs, a
+`0600` `stage-environment.json`, the captured PNG when the fixture succeeds, and a
+seven-field `0600` `desktop-compiler-seal.json`. Every allocation, broker directory
+and generated log remains available after success or failure. Steps have bounded
+deadlines; a timeout or interruption is failure and establishes no process cleanup.
+Do not reuse a stage after a launch attempt or infer complete helper exit from
+the direct-child receipt. Parent-crash containment, HTTPS request enforcement,
+owned certificate custody and signed installed acceptance remain outstanding.
+
+To prepare an unconsumed allocation for the managed Desktop diagnostic instead
+of running Core, append `--stage-only`. An optional
+`--fixture-origin http://127.0.0.1:60924` fixes the Desktop's exact synthetic
+fixture port; otherwise the runner selects an available one. Stage only never
+launches Chromium. Pass the printed seal path at build time as
+`COLOSSUS_SIDECAR_MAC_BROWSER_ACCEPTANCE_SEAL` when building the Debug sidecar with
+`macos-browser-host-acceptance`. The Desktop diagnostic must bind the seal's exact
+`fixture_origin`; the runtime cannot substitute a broader or different origin.
+
+Run the launcher's file/command-selection regressions without Chromium:
+
+```sh
+python3 -B -m unittest discover -s native/browser/scripts \
+  -p test_run_core_macos_diagnostic.py
+```
+
+### Run the managed Core-to-Desktop diagnostic
+
+This is a separate, source-only macOS Debug pass. It uses the same synthetic CEF
+build and host binary from above, but stages a **fresh** signed allocation without
+launching Core first. Use a logged-in, unlocked desktop session. The stage-only
+runner generates a private seven-field compiler seal and reserves a different,
+exact loopback fixture origin; the Desktop harness starts that fixture server
+itself. Keep the output root and signed allocation after the run. Do not reuse a
+stage after any launch attempt.
+
+```sh
+set -euo pipefail
+umask 077
+mac_diag_output=$(mktemp -d /private/tmp/cd.XXXXXX)
+python3 -B native/browser/scripts/run_core_macos_diagnostic.py \
+  --cef-root "$mac_diag_cef" --native-build "$mac_diag_native" \
+  --host-binary "$mac_diag_host/debug/colossus-native-browser-host" \
+  --output-root "$mac_diag_output" --stage-only
+mac_diag_evidence=$(python3 - "$mac_diag_output" <<'PY'
+from pathlib import Path
+import sys
+matches = [path for path in Path(sys.argv[1]).iterdir()
+           if path.is_dir() and path.name.startswith("evidence-")]
+assert len(matches) == 1, "expected exactly one fresh evidence directory"
+print(matches[0])
+PY
+)
+mac_diag_seal="$mac_diag_evidence/desktop-compiler-seal.json"
+mac_diag_origin=$(python3 - "$mac_diag_seal" <<'PY'
+import json
+import sys
+from pathlib import Path
+seal = json.loads(Path(sys.argv[1]).read_text())
+assert set(seal) == {"allocation_root", "app_bundle", "manifest_sha256",
+                     "front_cdhash", "body_cdhash", "policy_sha256", "fixture_origin"}
+print(seal["fixture_origin"])
+PY
+)
+```
+
+Select the repository Rust/Cargo toolchain as above. Build the compiler-sealed
+sidecar, build the ordinary CLI, and copy both into Desktop's expected debug
+binary slots **before** building the Desktop example. Desktop's build script
+hashes those exact staged executables. Do not run `cargo xtask desktop prepare`
+between these steps; it replaces the diagnostic sidecar. The seal is a build
+input only, never a runtime browser-path selector.
+
+```sh
+mac_diag_managed="$PWD/.local/managed-browser-build"
+unset COLOSSUS_SIDECAR_BROWSER_MANIFEST
+COLOSSUS_SIDECAR_MAC_BROWSER_ACCEPTANCE_SEAL="$mac_diag_seal" \
+CARGO_TARGET_DIR="$mac_diag_managed" \
+  cargo build --locked -p colossus-sidecar \
+    --features macos-browser-host-acceptance
+CARGO_TARGET_DIR="$mac_diag_managed" \
+  cargo build --locked -p colossus-cli --bin colossus
+mac_diag_target=$(rustc --print host-tuple)
+install -m 0755 "$mac_diag_managed/debug/colossus-sidecar" \
+  "apps/desktop/src-tauri/binaries/colossus-sidecar-$mac_diag_target"
+install -m 0755 "$mac_diag_managed/debug/colossus" \
+  "apps/desktop/src-tauri/binaries/colossus-$mac_diag_target"
+npm --prefix apps/desktop ci --ignore-scripts
+npm --prefix apps/desktop run build
+COLOSSUS_CEF_ROOT="$mac_diag_cef" \
+COLOSSUS_CEF_NATIVE_LIB_DIR="$mac_diag_native" \
+  cargo build --locked --manifest-path apps/desktop/src-tauri/Cargo.toml \
+    --target-dir "$PWD/apps/desktop/src-tauri/target" \
+    --example browser-acceptance --no-default-features \
+    --features macos-contained-browser-diagnostic
+```
+
+For LaunchServices and foreground-window inspection, wrap only the Desktop
+**example** in a minimal ad-hoc signed `.app`. This is distinct from the signed
+CEF host allocation and does not add CEF to Desktop or initialize an in-process
+browser. The example's compiled Debug manifest still resolves and verifies the
+already staged sidecar and CLI.
+
+```sh
+mac_diag_desktop="$mac_diag_evidence/Colossus Core Acceptance.app"
+mkdir -p "$mac_diag_desktop/Contents/MacOS"
+install -m 0755 \
+  apps/desktop/src-tauri/target/debug/examples/browser-acceptance \
+  "$mac_diag_desktop/Contents/MacOS/browser-acceptance"
+python3 - "$mac_diag_desktop/Contents/Info.plist" <<'PY'
+import plistlib
+import sys
+from pathlib import Path
+info = {
+    "CFBundleDisplayName": "Colossus Core Acceptance",
+    "CFBundleExecutable": "browser-acceptance",
+    "CFBundleIdentifier": "com.obscuritylabs.colossus.contained-acceptance",
+    "CFBundleName": "Colossus Core Acceptance",
+    "CFBundlePackageType": "APPL",
+    "CFBundleShortVersionString": "0.1",
+    "CFBundleVersion": "1",
+    "NSHighResolutionCapable": True,
+}
+Path(sys.argv[1]).write_bytes(plistlib.dumps(info))
+PY
+/usr/bin/codesign --force --sign - --timestamp=none "$mac_diag_desktop"
+/usr/bin/codesign --verify --deep --strict "$mac_diag_desktop"
+mac_diag_home="$mac_diag_evidence/desktop-home-1"
+test ! -e "$mac_diag_home"
+: > "$mac_diag_evidence/desktop-stdout.log"
+: > "$mac_diag_evidence/desktop-stderr.log"
+chmod 600 "$mac_diag_evidence/desktop-stdout.log" \
+  "$mac_diag_evidence/desktop-stderr.log"
+unset COLOSSUS_SIDECAR_MAC_BROWSER_ACCEPTANCE_SEAL
+unset COLOSSUS_CEF_ROOT COLOSSUS_CEF_NATIVE_LIB_DIR
+/usr/bin/open -n -W \
+  --stdout "$mac_diag_evidence/desktop-stdout.log" \
+  --stderr "$mac_diag_evidence/desktop-stderr.log" \
+  --env "COLOSSUS_HOME=$mac_diag_home" \
+  --env MallocNanoZone=0 \
+  --env COLOSSUS_BROWSER_ACCEPTANCE_VISUAL_HOLD_MS=40000 \
+  "$mac_diag_desktop" --args "$mac_diag_origin/"
+```
+
+The bounded visual checkpoint keeps the authenticated green agent page submitted
+to Desktop's native view for up to 40 seconds so the foreground window can be
+captured separately. The harness requires an actual Core-created run using the
+public SDK, the native human-to-agent handoff, a Core click and navigation,
+the exact new-document frame with the green fixture pixel, a Core screenshot,
+viewer detachment, and a successful SDK close. Its sidecar exits zero only with
+exactly one typed `GracefulDirectChildExit` receipt for the direct host. Require
+the `PASS` lines, no `native browser acceptance failed`, and the matching
+`EVIDENCE contained Mac diagnostic origin` in the two private logs; `open -W`
+alone is not a test result. If bootstrap or a later assertion fails, retain the
+logs, Desktop home and signed allocation. A categorical cleanup line reports
+what the SDK could verify; `unknown` is not success.
+
+This Desktop pass has **not** been accepted yet. Native frame submission does
+not alone prove that pixels reached the foreground screen; record that through
+the separate macOS window inspection. Neither a successful Core fixture nor a
+future Desktop diagnostic proves whole-helper or parent-crash containment,
+HTTPS request enforcement, certificate custody, signed installation, or
+production automation.
 
 The optional macOS Debug profile-crypto adapter is a separate unsupported
 dyld/Security-SPI experiment. It is OFF by default and is not certificate PKI or a

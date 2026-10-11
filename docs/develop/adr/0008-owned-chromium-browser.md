@@ -175,10 +175,24 @@ also passed with graceful physical cleanup. Each fixture checked the unchanged
 component. These are actual Core conformance results, not production containment
 or signed-distribution acceptance.
 
+The macOS Debug Core fixture now launches the independently staged and signed
+CEF host through the authenticated bridge. Its actual page accessibility tree,
+button click, navigation and decoded 1280×960 screenshot passed. The native
+presentation channel also passed fractional-scale rounding, resizing at 2×
+Retina scale and independent viewer detachment. CEF acknowledged closing and
+the direct host exited zero. This uses one fresh temporary profile, a synthetic
+Safe Storage provider and one numeric plain-HTTP loopback origin. It does not
+accept persistent profiles, certificate custody, complete helper cleanup or
+parent-crash recovery. Managed Core-to-Desktop foreground acceptance remains
+separate. Reproduce the fixture with the [native component instructions](https://github.com/obscuritylabs/Colossus/blob/main/native/browser/README.md#run-the-debug-core-mac-http-diagnostic).
+
+![Actual Core-controlled macOS Chromium fixture after its button click](../images/owned-chromium-core-macos.png)
+
 | Area | Implemented or demonstrated | Remaining requirement |
 | --- | --- | --- |
 | Shared authority and artifacts | Typed tools, one writer, stale-reference fencing, authenticated private channels, retained cleanup, screenshot/upload/download gateway release | Native action and cleanup acceptance must match the exact installed component and image |
 | macOS human preview | Native rendering, AppKit coexistence and preview lifecycle acceptance. Separate Debug host staging signs a fixed main entry and five paired helper entries; bounded native Seatbelt checks deny unselected loopback ports for the main/network helper and all tested helper traffic for renderer, proxy-resolver and print roles | Implement the independent separate-host process owner, complete request-origin enforcement and owned certificate custody, then accept Core/Desktop native composition; preview or policy-fixture success does not enable automation |
+| macOS Core diagnostic | Signed separate-host launch, authenticated page control, decoded screenshots, native Retina frames, viewer detachment and graceful direct-host exit passed for a temporary HTTP loopback fixture | Independent complete helper cleanup and parent-crash recovery, authenticated HTTPS origin/TLS broker, owned certificate custody, managed Desktop foreground/input and installed-package acceptance. Production discovery remains disabled |
 | Native Desktop attachment | Managed SDK/sidecar/worker admission, canonical conversation ownership, native human fence and atomic human-to-agent handoff, read-only native frames | Connected Windows/macOS OS acceptance; same-page agent-to-human takeover is absent. Terminal cancellation and run completion close the owned context; human access requires a fresh session |
 | Linux contained host | Networkless OCI supervisor, authenticated egress relay, exact process identity and cleanup ownership; actual Core open/snapshot, read-only frames/detach, profile restart/reset and per-request PKI fixtures with graceful physical cleanup | Broker/socket denial, crash/reaping and installed-package acceptance |
 | Windows contained host | AppContainer/Job/WFP supervisor, private I/O, pinned helper/client staging and native frame/input fixtures; source checks | Actual Windows SDK/OS execution, browser/network-service/helper denial, full-tree cleanup, native input and installed signing acceptance |

@@ -78,7 +78,8 @@ static int front_kind(const char* executable,const struct colossus_mac_network_b
 }
 static void constraint(struct builder* out, const struct colossus_mac_network_binding* b, int proxy) {
   append(out,"\n; Colossus mandatory native envelope, appended after all stock role rules.\n"
-    "(deny network*)\n(deny system-socket)\n(deny file-issue-extension)\n");
+    "(deny network*)\n(deny system-socket)\n(deny file-issue-extension)\n"
+    "(deny lsopen)\n(deny appleevent-send)\n");
   if (proxy) append(out,"(allow network-outbound (remote tcp \"localhost:%u\"))\n",(unsigned)b->proxy_port);
   append(out,"(deny mach-lookup)\n"
     "(allow mach-lookup (global-name \"com.apple.logd\") (global-name \"com.apple.system.logger\")"
@@ -88,6 +89,14 @@ static void constraint(struct builder* out, const struct colossus_mac_network_bi
     "(deny file-write* (require-not (subpath \"%s\")))\n"
     "(deny process-fork)\n(deny process-exec*)\n",
     b->broker_root,b->personal_home,b->allocation_root,b->profile_root);
+  /* realpath walks allocation ancestors outside the allocation itself. Permit
+   * only metadata on those exact directories, never their entries or data.
+   * The allocation path is already validated as quote-free absolute syntax. */
+  append(out,"(allow file-read-metadata (literal \"/\"))\n");
+  for(const char* slash=b->allocation_root+1;*slash;++slash) {
+    if(*slash=='/') append(out,"(allow file-read-metadata (literal \"%.*s\"))\n",
+      (int)(slash-b->allocation_root),b->allocation_root);
+  }
 }
 static int finish(struct builder* out, char** source) {
   if (!out->valid) { free(out->bytes); return 0; }
@@ -189,7 +198,12 @@ static int helper(enum colossus_mac_network_role role,const struct colossus_mac_
   parameter(&out,"USER_HOMEDIR_AS_LITERAL",home); parameter(&out,"OS_VERSION",version);
   parameter(&out,"LOG_FILE_PATH",log); parameter(&out,"DARWIN_USER_CACHE_DIR",cache);
   parameter(&out,"DARWIN_USER_DIR",temp); parameter(&out,"DARWIN_USER_TEMP_DIR",temp);
-  parameter(&out,"DISABLE_SANDBOX_DENIAL_LOGGING","TRUE"); parameter(&out,"ENABLE_LOGGING","FALSE");
+#if defined(COLOSSUS_CEF_MAC_SYNTHETIC_PROFILE_DIAGNOSTIC)
+  parameter(&out,"DISABLE_SANDBOX_DENIAL_LOGGING","FALSE");
+#else
+  parameter(&out,"DISABLE_SANDBOX_DENIAL_LOGGING","TRUE");
+#endif
+  parameter(&out,"ENABLE_LOGGING","FALSE");
   parameter(&out,"NETWORK_USER_DIR_ACCESS","FALSE"); parameter(&out,"ODME_USER_DIR_ACCESS","FALSE");
   parameter(&out,"DISABLE_METAL_SHADER_CACHE","TRUE"); parameter(&out,"SYSTEM_PROXY_NETWORK_ACCESS","FALSE");
   parameter(&out,"NETWORK_SERVICE_STORAGE_PATHS_COUNT","1"); parameter(&out,"NETWORK_SERVICE_STORAGE_PATH_0",b->profile_root);
@@ -206,6 +220,10 @@ static int helper(enum colossus_mac_network_role role,const struct colossus_mac_
     role==COLOSSUS_MAC_ROLE_PROXY_RESOLVER || role==COLOSSUS_MAC_ROLE_PRINT_BACKEND ? 1 : 0;
   if(out.removed_network_grants!=expected){free(out.bytes);return 0;}
   constraint(&out,b,role==COLOSSUS_MAC_ROLE_NETWORK);
+  /* Inherited policy is active before the Body's dyld/libSystem bootstrap.
+   * Native counterexample proves LibIgnition needs the root directory FD.
+   * This literal admits root directory data only, never descendant file data. */
+  append(&out,"(allow file-read-data (literal \"/\"))\n");
   append(&out,"(allow mach-lookup (global-name \"%s.MachPortRendezvousServer.%d\"))\n",b->bundle_id,browser_pid);
   if (role==COLOSSUS_MAC_ROLE_RENDERER) append(&out,
     "(allow mach-lookup (global-name \"com.apple.FontObjectsServer\") (global-name \"com.apple.fonts\")"
@@ -234,14 +252,40 @@ int colossus_mac_main_network_policy(const struct colossus_mac_network_binding* 
     if(!path(fronts[i]) || !inside(fronts[i],b->bundle_path) || front_kind(fronts[i],b)<0) return 0;
     for(size_t j=0;j<i;++j) if(strcmp(fronts[i],fronts[j])==0) return 0;
   }
+  char body[PATH_MAX];
+  int body_length=snprintf(body,sizeof(body),"%s/Contents/MacOS/colossus-native-browser-host Body",b->bundle_path);
+  if(body_length<=0 || (size_t)body_length>=sizeof(body) || !path(body)) return 0;
   struct builder out={ (char*)malloc(POLICY_CAPACITY),0,1,0 };
   if(!out.bytes) return 0;
   append(&out,"(version 1)\n(allow default)\n"); constraint(&out,b,1);
+#if defined(COLOSSUS_CEF_MAC_SYNTHETIC_PROFILE_DIAGNOSTIC)
+#if !defined(__APPLE__) || defined(NDEBUG)
+#error "Darwin directory query allowance is only a macOS Debug synthetic diagnostic"
+#endif
+  /* A stock browser queries shared Darwin directory names when preparing its
+   * helper sandbox. Names/metadata must never grant their existing contents. */
+  append(&out,"(deny file-read-data file-read-xattr (require-all"
+    " (require-any (subpath \"/private/var/folders\") (subpath \"/var/folders\"))"
+    " (require-not (subpath \"%s\"))))\n",b->allocation_root);
+  /* This service has private operations beyond the public confstr query.
+   * Only the sealed no-secret diagnostic accepts that unresolved authority. */
+  append(&out,"(allow mach-lookup (global-name \"com.apple.bsd.dirhelper\"))\n");
+#endif
   /* posix_spawn requires process-fork. Forked children retain the full main
-   * envelope and may execute only the same exact sealed fronts. The external
+   * envelope and may execute only the same exact sealed entries. The external
    * audit-session owner must retain these descendants through cleanup. */
   append(&out,"(allow process-fork)\n");
+  /* The main front installs this envelope before its fixed body starts. That
+   * exec must inherit the policy; only helper fronts need their separate,
+   * pinned role transition. Never give the main body a no-sandbox transition. */
+  append(&out,"(allow process-exec (literal \"%s\"))\n",body);
+  /* Chromium's process singleton listens on a Unix socket in GetTempDir().
+   * Its dedicated mode validates this exact owned directory before initialize.
+   * Do not admit a TCP listener or a socket elsewhere in the writable profile. */
+  append(&out,"(allow network-bind (local unix-socket (subpath \"%s/tmp\")))\n",b->profile_root);
   append(&out,"(allow mach-lookup (global-name \"com.apple.windowserver.active\")"
+    " (global-name \"com.apple.coreservices.launchservicesd\")"
+    " (global-name \"com.apple.CoreServices.coreservicesd\")"
     " (global-name \"com.apple.CARenderServer\") (global-name \"com.apple.FontObjectsServer\")"
     " (global-name \"com.apple.fonts\") (global-name \"com.apple.lsd.mapdb\")"
     " (global-name \"com.apple.system.notification_center\"))\n");

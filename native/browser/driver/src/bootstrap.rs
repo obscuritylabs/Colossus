@@ -115,6 +115,41 @@ fn configure_proxy(proxy: &ProxyConfiguration) -> Result<(), BrowserDriverError>
     Ok(())
 }
 
+#[cfg(all(target_os = "macos", feature = "macos-synthetic-profile-diagnostic"))]
+fn synthetic_diagnostic_admission(configuration: &Configuration) -> Result<(), BrowserDriverError> {
+    use colossus_contracts::{BrowserMode, BrowserProfileSelection};
+
+    let enrollment = &configuration.enrollment;
+    if configuration.persistent_profile.is_some()
+        || configuration.pki.is_some()
+        || configuration.presentation.is_none()
+        || enrollment.mode != BrowserMode::Embedded
+        || enrollment.profile != BrowserProfileSelection::Temporary
+        || enrollment.allowed_origins.len() != 1
+        || !enrollment.capabilities.available
+        || enrollment.capabilities.modes != [BrowserMode::Embedded]
+        || !enrollment.capabilities.restrictive_egress
+        || enrollment.capabilities.private_ca_trust
+        || enrollment.capabilities.client_identities
+    {
+        return Err(BrowserDriverError::Unsupported);
+    }
+    let origin = url::Url::parse(enrollment.allowed_origins[0].as_str())
+        .map_err(|_| BrowserDriverError::Denied)?;
+    if origin.scheme() != "http"
+        || origin.host_str() != Some("127.0.0.1")
+        || origin.port().is_none()
+        || !origin.username().is_empty()
+        || origin.password().is_some()
+        || origin.path() != "/"
+        || origin.query().is_some()
+        || origin.fragment().is_some()
+    {
+        return Err(BrowserDriverError::Unsupported);
+    }
+    Ok(())
+}
+
 fn arguments() -> Result<NativeArguments, BrowserDriverError> {
     NativeArguments::new(std::env::args_os().map(|argument| argument.as_bytes().to_vec()))
 }
@@ -384,6 +419,8 @@ pub fn run() -> Result<(), BrowserDriverError> {
         serde_json::from_slice(&configuration_bytes).map_err(|_| BrowserDriverError::Denied)?;
     drop(bootstrap);
     configuration.enrollment.validate()?;
+    #[cfg(all(target_os = "macos", feature = "macos-synthetic-profile-diagnostic"))]
+    synthetic_diagnostic_admission(&configuration)?;
     let selected_profile = configuration.persistent_profile.as_ref().map_or(
         colossus_contracts::BrowserProfileSelection::Temporary,
         |id| colossus_contracts::BrowserProfileSelection::Workspace { id: id.clone() },
@@ -409,6 +446,12 @@ pub fn run() -> Result<(), BrowserDriverError> {
     let entry = platform::Entry::prepare(
         configuration.enrollment.mode,
         &configuration.enrollment.capabilities,
+    )?;
+    #[cfg(target_os = "macos")]
+    platform::verify_proxy_binding(
+        &configuration.proxy.address,
+        configuration.proxy.port,
+        &configuration.profile_path,
     )?;
     if is_container {
         create_container_profile(&configuration)?;
@@ -454,6 +497,7 @@ pub fn run() -> Result<(), BrowserDriverError> {
     }
     let cancelled = Arc::new(AtomicBool::new(false));
     callbacks.configure_identity(identity_policy, Arc::clone(&cancelled))?;
+    #[cfg(target_os = "linux")]
     let mut relay = if is_container {
         if configuration.proxy.address != "127.0.0.1" || configuration.proxy.port != 18081 {
             return Err(BrowserDriverError::Denied);
@@ -574,6 +618,10 @@ pub fn run() -> Result<(), BrowserDriverError> {
     if presentation_enabled {
         host.enable_presentation(human_input);
     }
+    #[cfg(target_os = "linux")]
+    let close_egress = || relay.as_mut().map_or(Ok(()), platform::Relay::stop);
+    #[cfg(target_os = "macos")]
+    let close_egress = || Ok(());
     runtime::pump(
         &mut host,
         runtime::Channels {
@@ -586,7 +634,7 @@ pub fn run() -> Result<(), BrowserDriverError> {
             presentation_revoked,
             cancelled,
         },
-        || relay.as_mut().map_or(Ok(()), platform::Relay::stop),
+        close_egress,
     )?;
     endpoint
         .join()
@@ -599,10 +647,132 @@ pub fn run() -> Result<(), BrowserDriverError> {
 mod tests {
     use super::*;
 
+    #[cfg(all(target_os = "macos", feature = "macos-synthetic-profile-diagnostic"))]
+    fn synthetic_fixture() -> Configuration {
+        use colossus_contracts::{
+            BrowserActionKind, BrowserCapabilities, BrowserLimits, BrowserMode, BrowserOrigin,
+            BrowserProfileSelection, BrowserScope, BrowserSessionBinding,
+        };
+
+        Configuration {
+            enrollment: BrowserBridgeEnrollment {
+                binding: BrowserSessionBinding {
+                    runtime_id: "synthetic-runtime".into(),
+                    workspace_id: "synthetic-workspace".into(),
+                    application_id: "synthetic-application".into(),
+                    scope: BrowserScope::Conversation {
+                        id: "synthetic-conversation".into(),
+                    },
+                },
+                mode: BrowserMode::Embedded,
+                profile: BrowserProfileSelection::Temporary,
+                allowed_origins: vec![BrowserOrigin::parse("http://127.0.0.1:60924").unwrap()],
+                instance_nonce: [1; 16],
+                component_digest: [1; 32],
+                cancellation_closes_context: true,
+                capabilities: BrowserCapabilities {
+                    available: true,
+                    engine_version: Some("154.0.8037.98".into()),
+                    modes: vec![BrowserMode::Embedded],
+                    actions: vec![BrowserActionKind::Snapshot],
+                    limits: BrowserLimits::default(),
+                    private_ca_trust: false,
+                    client_identities: false,
+                    restrictive_egress: true,
+                },
+            },
+            profile_path: PathBuf::from("/private/synthetic/profile"),
+            persistent_profile: None,
+            proxy: ProxyConfiguration {
+                address: "127.0.0.1".into(),
+                port: 18081,
+                username: "fixture".into(),
+                password: "fixture".into(),
+            },
+            pki: None,
+            presentation: Some(PresentationConfiguration { human_input: true }),
+        }
+    }
+
+    #[cfg(all(target_os = "macos", feature = "macos-synthetic-profile-diagnostic"))]
+    #[test]
+    fn synthetic_profile_diagnostic_accepts_only_temporary_plain_loopback() {
+        use colossus_contracts::{BrowserMode, BrowserOrigin, BrowserProfileId};
+
+        let mut fixture = synthetic_fixture();
+        assert_eq!(synthetic_diagnostic_admission(&fixture), Ok(()));
+
+        fixture.enrollment.allowed_origins =
+            vec![BrowserOrigin::parse("https://127.0.0.1:60924").unwrap()];
+        assert_eq!(
+            synthetic_diagnostic_admission(&fixture),
+            Err(BrowserDriverError::Unsupported)
+        );
+        fixture.enrollment.allowed_origins =
+            vec![BrowserOrigin::parse("http://localhost:60924").unwrap()];
+        assert_eq!(
+            synthetic_diagnostic_admission(&fixture),
+            Err(BrowserDriverError::Unsupported)
+        );
+        fixture = synthetic_fixture();
+        fixture
+            .enrollment
+            .allowed_origins
+            .push(BrowserOrigin::parse("http://127.0.0.1:60925").unwrap());
+        assert_eq!(
+            synthetic_diagnostic_admission(&fixture),
+            Err(BrowserDriverError::Unsupported)
+        );
+        fixture = synthetic_fixture();
+        fixture.enrollment.mode = BrowserMode::Headless;
+        assert_eq!(
+            synthetic_diagnostic_admission(&fixture),
+            Err(BrowserDriverError::Unsupported)
+        );
+        fixture = synthetic_fixture();
+        fixture.enrollment.capabilities.private_ca_trust = true;
+        assert_eq!(
+            synthetic_diagnostic_admission(&fixture),
+            Err(BrowserDriverError::Unsupported)
+        );
+        fixture = synthetic_fixture();
+        fixture.enrollment.capabilities.client_identities = true;
+        assert_eq!(
+            synthetic_diagnostic_admission(&fixture),
+            Err(BrowserDriverError::Unsupported)
+        );
+        fixture = synthetic_fixture();
+        fixture.enrollment.capabilities.restrictive_egress = false;
+        assert_eq!(
+            synthetic_diagnostic_admission(&fixture),
+            Err(BrowserDriverError::Unsupported)
+        );
+        fixture = synthetic_fixture();
+        fixture.persistent_profile =
+            Some(BrowserProfileId::parse(format!("bp_{}", "1".repeat(32))).unwrap());
+        assert_eq!(
+            synthetic_diagnostic_admission(&fixture),
+            Err(BrowserDriverError::Unsupported)
+        );
+        fixture = synthetic_fixture();
+        fixture.pki = Some(provision::Configuration {});
+        assert_eq!(
+            synthetic_diagnostic_admission(&fixture),
+            Err(BrowserDriverError::Unsupported)
+        );
+        fixture = synthetic_fixture();
+        fixture.presentation = None;
+        assert_eq!(
+            synthetic_diagnostic_admission(&fixture),
+            Err(BrowserDriverError::Unsupported)
+        );
+    }
+
     #[test]
     fn inherited_channel_requires_connected_unix_stream() {
         let (parent, child) = UnixStream::pair().expect("private pair");
         let accepted = inherited(child.into_raw_fd()).expect("connected private channel");
+        // SAFETY: accepted owns this live descriptor, and F_GETFD has no pointer arguments.
         let flags = unsafe { libc::fcntl(accepted.as_raw_fd(), libc::F_GETFD) };
         assert_ne!(flags & libc::FD_CLOEXEC, 0);
         drop(accepted);

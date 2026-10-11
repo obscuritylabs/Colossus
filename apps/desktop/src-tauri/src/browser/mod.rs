@@ -5,7 +5,10 @@ pub(crate) mod acceptance;
 pub(crate) mod bootstrap;
 pub(crate) mod certificates;
 pub(crate) mod commands;
-#[cfg(feature = "embedded-chromium-preview")]
+#[cfg(any(
+    feature = "embedded-chromium-preview",
+    feature = "macos-contained-browser-diagnostic"
+))]
 pub(crate) mod contained;
 pub(crate) mod dto;
 mod guest;

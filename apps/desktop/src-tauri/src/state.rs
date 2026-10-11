@@ -929,7 +929,10 @@ impl AppState {
             .clone_from(&client);
     }
 
-    #[cfg(feature = "embedded-chromium-preview")]
+    #[cfg(any(
+        feature = "embedded-chromium-preview",
+        feature = "macos-contained-browser-diagnostic"
+    ))]
     pub(crate) async fn managed_browser_for(&self, space_id: &str) -> Option<NativeBrowserClient> {
         self.existing_managed_space_runtime(space_id)
             .await?

@@ -21,6 +21,16 @@
 extern char** environ;
 extern int sandbox_init_with_parameters(const char*, uint64_t, const char* const*, char**);
 extern void sandbox_free_error(char*);
+static void diagnostic(int stage,int status,int detail) {
+#if defined(COLOSSUS_CEF_MAC_SYNTHETIC_PROFILE_DIAGNOSTIC)
+  fprintf(stderr,"native helper front kind=%d pid=%d stage=%d status=%d detail=%d\n",
+    COLOSSUS_MAC_HELPER_KIND,getpid(),stage,status,detail);
+#else
+  (void)stage; (void)status; (void)detail;
+#endif
+}
+static int failure(int code) { diagnostic(code,1,0); return code; }
+static int argument_failure(int* reason,int code) { *reason=code; return 0; }
 static int decimal(const char* s,int* result) {
   if(!*s || strlen(s)>5 || (*s=='0' && s[1]))return 0;
   unsigned n=0; for(const char* c=s;*c;++c){if(*c<'0'||*c>'9')return 0;n=n*10+(unsigned)(*c-'0');}
@@ -32,28 +42,34 @@ static int denied_switch(const char* a) {
     "renderer-cmd-prefix","utility-cmd-prefix","zygote-cmd-prefix","gpu-launcher",
     "browser-subprocess-path","launch-as-browser","remote-debugging-port","remote-debugging-pipe"};
   for(size_t i=0;i<sizeof(names)/sizeof(names[0]);++i){size_t n=strlen(names[i]);
-    if(strncmp(a+2,names[i],n)==0 && (a[n+2]==0 || a[n+2]=='='))return 1;}
+    if(strncmp(a+2,names[i],n)==0 && (a[n+2]==0 || a[n+2]=='='))return (int)i+1;}
   return 0;
 }
-static int arguments(int argc,char** argv,enum colossus_mac_network_role* role,int* policy_fd) {
-  if(argc<2 || argc>256)return 0;
+static int arguments(int argc,char** argv,enum colossus_mac_network_role* role,int* policy_fd,int* reason) {
+  *reason=0;
+  if(argc<2 || argc>256)return argument_failure(reason,1);
   const char* type=NULL; const char* service=NULL;
   *policy_fd=-1;
   for(int i=1;i<argc;++i) {
     const char* a=argv[i]; size_t n=strnlen(a,4097);
-    if(n<3 || n>4096 || a[0]!='-' || a[1]!='-' || denied_switch(a))return 0;
-    for(size_t j=0;j<n;++j)if((unsigned char)a[j]<32 || (unsigned char)a[j]>126)return 0;
-    if(strncmp(a,"--type=",7)==0){if(type)return 0;type=a+7;}
-    if(strncmp(a,"--service-sandbox-type=",23)==0){if(service)return 0;service=a+23;}
-    if(strncmp(a,"--seatbelt-client=",18)==0){if(*policy_fd!=-1||!decimal(a+18,policy_fd))return 0;}
+    if(n<3 || n>4096 || a[0]!='-' || a[1]!='-')return argument_failure(reason,2);
+    int denied=denied_switch(a);
+    if(denied)return argument_failure(reason,100+denied);
+    for(size_t j=0;j<n;++j)if((unsigned char)a[j]<32 || (unsigned char)a[j]>126)return argument_failure(reason,3);
+    if(strncmp(a,"--type=",7)==0){if(type)return argument_failure(reason,4);type=a+7;}
+    if(strncmp(a,"--service-sandbox-type=",23)==0){if(service)return argument_failure(reason,5);service=a+23;}
+    if(strncmp(a,"--seatbelt-client=",18)==0){if(*policy_fd!=-1||!decimal(a+18,policy_fd))return argument_failure(reason,6);}
   }
-  if(!type || *policy_fd<3)return 0;
+  if(!type)return argument_failure(reason,7);
+  if(*policy_fd<3)return argument_failure(reason,8);
+  int type_class=strcmp(type,"renderer")==0?1:strcmp(type,"gpu-process")==0?2:strcmp(type,"utility")==0?3:0;
 #if COLOSSUS_MAC_HELPER_KIND == 1
-  if(strcmp(type,"renderer") || service)return 0; *role=COLOSSUS_MAC_ROLE_RENDERER; return 1;
+  if(strcmp(type,"renderer") || service)return argument_failure(reason,200+type_class); *role=COLOSSUS_MAC_ROLE_RENDERER; return 1;
 #elif COLOSSUS_MAC_HELPER_KIND == 2
-  if(strcmp(type,"gpu-process") || service)return 0; *role=COLOSSUS_MAC_ROLE_GPU; return 1;
+  if(strcmp(type,"gpu-process") || service)return argument_failure(reason,200+type_class); *role=COLOSSUS_MAC_ROLE_GPU; return 1;
 #else
-  if(strcmp(type,"utility") || !service)return 0;
+  if(strcmp(type,"utility"))return argument_failure(reason,200+type_class);
+  if(!service)return argument_failure(reason,9);
   struct item { const char* name; enum colossus_mac_network_role role; };
   static const struct item roles[]={
     {"network",COLOSSUS_MAC_ROLE_NETWORK},{"utility",COLOSSUS_MAC_ROLE_UTILITY},
@@ -67,13 +83,13 @@ static int arguments(int argc,char** argv,enum colossus_mac_network_role* role,i
     {"webnn_model_compilation",COLOSSUS_MAC_ROLE_WEBNN}};
   for(size_t i=0;i<sizeof(roles)/sizeof(roles[0]);++i)if(strcmp(service,roles[i].name)==0){
 #if COLOSSUS_MAC_HELPER_KIND == 3
-    if(roles[i].role!=COLOSSUS_MAC_ROLE_CDM)return 0;
+    if(roles[i].role!=COLOSSUS_MAC_ROLE_CDM)return argument_failure(reason,10);
 #elif COLOSSUS_MAC_HELPER_KIND == 4
-    if(roles[i].role!=COLOSSUS_MAC_ROLE_UTILITY)return 0;
+    if(roles[i].role!=COLOSSUS_MAC_ROLE_UTILITY)return argument_failure(reason,11);
 #endif
     *role=roles[i].role; return 1;
   }
-  return 0;
+  return argument_failure(reason,12);
 #endif
 }
 static int exact_read(int fd,void* output,size_t size) {
@@ -133,49 +149,55 @@ static void clean_environment(void) {
   }
 }
 int main(int argc,char** argv) {
-  if(signal(SIGALRM,SIG_DFL)==SIG_ERR)return 70;
+  diagnostic(1,0,argc);
+  if(signal(SIGALRM,SIG_DFL)==SIG_ERR)return failure(70);
   sigset_t timeout_signals;
   if(sigemptyset(&timeout_signals)!=0 || sigaddset(&timeout_signals,SIGALRM)!=0 ||
-    sigprocmask(SIG_UNBLOCK,&timeout_signals,NULL)!=0)return 70;
+    sigprocmask(SIG_UNBLOCK,&timeout_signals,NULL)!=0)return failure(70);
   alarm(15);
-  if(getuid()==0 || getuid()!=geteuid())return 70;
+  if(getuid()==0 || getuid()!=geteuid())return failure(70);
   clean_environment();
-  enum colossus_mac_network_role role; int policy_fd;
-  if(!arguments(argc,argv,&role,&policy_fd))return 71;
+  enum colossus_mac_network_role role; int policy_fd,reason;
+  if(!arguments(argc,argv,&role,&policy_fd,&reason)){diagnostic(71,1,reason);return 71;}
+  diagnostic(2,0,role);
   char executable[PATH_MAX],raw[PATH_MAX]; uint32_t capacity=sizeof(raw);
-  if(_NSGetExecutablePath(raw,&capacity)!=0 || !realpath(raw,executable))return 72;
+  if(_NSGetExecutablePath(raw,&capacity)!=0 || !realpath(raw,executable))return failure(72);
   char* nested=strstr(executable,"/Contents/Frameworks/");
-  if(!nested)return 72;
+  if(!nested)return failure(72);
   char bundle[PATH_MAX]; size_t prefix=(size_t)(nested-executable);
-  if(prefix>=sizeof(bundle))return 72; memcpy(bundle,executable,prefix);bundle[prefix]=0;
+  if(prefix>=sizeof(bundle))return failure(72); memcpy(bundle,executable,prefix);bundle[prefix]=0;
   char storage[32*1024+1]; size_t size;
   struct colossus_mac_network_binding binding;
   if(!resource(bundle,storage,sizeof(storage),&size) ||
-    !colossus_mac_network_binding_parse(storage,size,&binding) || strcmp(bundle,binding.bundle_path))return 73;
+    !colossus_mac_network_binding_parse(storage,size,&binding) || strcmp(bundle,binding.bundle_path))return failure(73);
   auditinfo_addr_t audit;
-  if(getaudit_addr(&audit,sizeof(audit))!=0 || (uint32_t)audit.ai_asid!=binding.audit_session || getppid()<=1)return 74;
+  if(getaudit_addr(&audit,sizeof(audit))!=0 || (uint32_t)audit.ai_asid!=binding.audit_session || getppid()<=1)return failure(74);
   char checked[PATH_MAX];
   const char* paths[]={binding.allocation_root,binding.bundle_path,binding.profile_root,binding.broker_root,binding.personal_home};
-  for(size_t i=0;i<sizeof(paths)/sizeof(paths[0]);++i)if(!canonical(paths[i],checked))return 75;
+  for(size_t i=0;i<sizeof(paths)/sizeof(paths[0]);++i)if(!canonical(paths[i],checked))return failure(75);
   struct stat root;
-  if(stat(binding.allocation_root,&root)!=0 || !S_ISDIR(root.st_mode) || root.st_uid!=geteuid() || (root.st_mode&0777)!=0700)return 75;
+  if(stat(binding.allocation_root,&root)!=0 || !S_ISDIR(root.st_mode) || root.st_uid!=geteuid() || (root.st_mode&0777)!=0700)return failure(75);
   char body[PATH_MAX]; int written=snprintf(body,sizeof(body),"%s Body",executable);
-  if(written<0||(size_t)written>=sizeof(body)||!canonical(body,checked))return 76;
+  if(written<0||(size_t)written>=sizeof(body)||!canonical(body,checked))return failure(76);
   struct stat image;
-  if(lstat(body,&image)!=0 || !S_ISREG(image.st_mode) || image.st_uid!=geteuid() || image.st_nlink!=1 || (image.st_mode&0022))return 76;
-  if(!discard_browser_policy(policy_fd))return 77;
+  if(lstat(body,&image)!=0 || !S_ISREG(image.st_mode) || image.st_uid!=geteuid() || image.st_nlink!=1 || (image.st_mode&0022))return failure(76);
+  diagnostic(3,0,0);
+  if(!discard_browser_policy(policy_fd))return failure(77);
+  diagnostic(4,0,0);
   char* source=NULL;
-  if(!colossus_mac_helper_body_policy(role,&binding,executable,body,getppid(),os_version(),&source))return 78;
+  if(!colossus_mac_helper_body_policy(role,&binding,executable,body,getppid(),os_version(),&source))return failure(78);
   const char* parameters[]={NULL}; char* error=NULL;
   int applied=sandbox_init_with_parameters(source,0,parameters,&error);
   free(source);
   if(error)sandbox_free_error(error);
-  if(applied!=0)return 79;
+  if(applied!=0)return failure(79);
+  diagnostic(5,0,0);
   int output=1;
   for(int i=1;i<argc;++i)if(strncmp(argv[i],"--seatbelt-client=",18))argv[output++]=argv[i];
   argv[0]=body; argv[output]=NULL;
   memset(storage,0,sizeof(storage));
   alarm(0);
+  diagnostic(6,0,0);
   execve(body,argv,environ);
-  return 80;
+  return failure(80);
 }

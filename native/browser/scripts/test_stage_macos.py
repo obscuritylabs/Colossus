@@ -208,6 +208,79 @@ class MacosStageTests(unittest.TestCase):
             stage_macos.network_envelope_binding(policy, self.root / "second.app",
                                                   "com.colossus.nativehost")
 
+    def prepare_synthetic_envelope(self):
+        self.root = self.root.resolve()
+        self.app = self.root / "Colossus.app"
+        host = self.root / "colossus-native-browser-host"
+        host.write_bytes(b"synthetic host fixture")
+        host.chmod(0o755)
+        (self.build / stage_macos.SYNTHETIC_PROFILE_BUILD).write_text(
+            json.dumps(stage_macos.SYNTHETIC_PROFILE_METADATA))
+        (self.build / stage_macos.NETWORK_ENVELOPE_BUILD).write_text(
+            json.dumps(stage_macos.NETWORK_ENVELOPE_METADATA))
+        front = self.build / "envelope/colossus-native-browser-host"
+        front.parent.mkdir()
+        front.write_bytes(b"minimal front fixture")
+        front.chmod(0o755)
+        for suffix, _ in stage_macos.HELPERS:
+            name = stage_macos.HELPER + suffix
+            body = self.build / "helpers" / (name + ".app") / "Contents/MacOS" / (name + " Body")
+            body.write_bytes(b"fixed body fixture")
+            body.chmod(0o755)
+        profile = self.root / "profile"
+        profile.mkdir(mode=0o700)
+        broker = self.root.parent / (self.root.name + "-broker")
+        broker.mkdir(mode=0o700)
+        self.addCleanup(broker.rmdir)
+        policy = self.root / "binding.source"
+        policy.write_text("\n".join((stage_macos.NETWORK_ENVELOPE_MARKER,
+                                     "42", "54321", str(self.root), str(self.app),
+                                     "com.colossus.nativehost", str(profile),
+                                     str(broker), str(self.root.parent), "")))
+        policy.chmod(0o600)
+        return host, policy
+
+    def test_synthetic_profile_requires_explicit_debug_host_and_envelope(self):
+        host, policy = self.prepare_synthetic_envelope()
+        with patch.object(stage_macos, "run") as run:
+            for options in ({}, {"synthetic_profile_diagnostic": True},
+                            {"synthetic_profile_diagnostic": True,
+                             "profile_crypto_development": True,
+                             "network_envelope_policy": policy}):
+                with self.subTest(options=options), self.assertRaises(component.ComponentError):
+                    stage_macos.stage_app(self.source, self.build, host, self.app,
+                                          "macosarm64", "com.colossus.nativehost", host=True,
+                                          **options)
+            (self.build / stage_macos.SYNTHETIC_PROFILE_BUILD).write_text(
+                json.dumps({**stage_macos.SYNTHETIC_PROFILE_METADATA, "build_type": "Release"}))
+            with self.assertRaises(component.ComponentError):
+                stage_macos.stage_app(self.source, self.build, host, self.app,
+                                      "macosarm64", "com.colossus.nativehost", host=True,
+                                      synthetic_profile_diagnostic=True, network_envelope_policy=policy)
+        run.assert_not_called()
+        self.assertFalse(self.app.exists())
+
+    def test_synthetic_profile_stage_retains_sandbox_pairs_without_keychain_adapter(self):
+        host, policy = self.prepare_synthetic_envelope()
+        with patch.object(stage_macos, "profile_crypto_dependency") as dependency, \
+                patch.object(stage_macos, "run") as run:
+            stage_macos.stage_app(self.source, self.build, host, self.app,
+                                  "macosarm64", "com.colossus.nativehost", host=True,
+                                  synthetic_profile_diagnostic=True, network_envelope_policy=policy)
+        dependency.assert_not_called()
+        self.assertFalse((self.app / "Contents/Frameworks" / stage_macos.PROFILE_CRYPTO_LIBRARY).exists())
+        self.assertFalse((self.app / "Contents/Resources" / stage_macos.PROFILE_CRYPTO_CLAIM).exists())
+        claim = component.load_json(self.app / "Contents/Resources" / stage_macos.SYNTHETIC_PROFILE_CLAIM)
+        self.assertEqual(claim, stage_macos.SYNTHETIC_PROFILE_METADATA)
+        self.assertFalse(claim["production_accepted"])
+        resource = self.app / "Contents/Resources" / stage_macos.NETWORK_ENVELOPE_RESOURCE
+        self.assertEqual(resource.read_bytes(), policy.read_bytes())
+        self.assertEqual(resource.stat().st_mode & 0o777, 0o400)
+        signatures = [call.args[0] for call in run.call_args_list if "--sign" in call.args[0]]
+        self.assertEqual(sum(command[-1].endswith(" Body") for command in signatures), 6)
+        inventory = component.verify_installed(self.app, self.app.with_name(self.app.name + ".browser-component.json"))
+        self.assertEqual(inventory["modes"], {"desktop": False, "headless": False})
+
     def test_complete_loader_layout_and_distinct_helper_identities(self):
         with patch.object(stage_macos, "run") as run:
             binary = self.stage()

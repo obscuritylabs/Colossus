@@ -18,6 +18,9 @@ approval-test-bridge = []
 browser-preview = []
 embedded-chromium-preview = ["browser-preview", "colossus-native-browser/cef-preview"]
 browser-test-bridge = ["browser-preview", "colossus-native-browser/native-test-driver"]
+# Separate-host Debug lane: link only the native pixel adapter; never bootstrap
+# an in-process CEF guest or fall back to a system webview for this lane.
+macos-contained-browser-diagnostic = ["browser-test-bridge", "colossus-native-browser/cef-preview"]
 dictation = ["dep:colossus-native-dictation", "colossus-native-dictation/download"]
 dictation-preview = ["dictation"]
 dictation-metal = ["dictation", "colossus-native-dictation/metal"]

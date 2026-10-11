@@ -38,7 +38,12 @@ impl Registry {
         if self.tabs.iter().any(|tab| {
             Some(&tab.scope) == self.scope.as_ref() && tab.view.contained_session_id().is_some()
         }) {
-            engine.preview = false;
+            // A source-only Mac diagnostic remains a preview even when the
+            // independently supervised native surface is actually attached.
+            #[cfg(not(feature = "macos-contained-browser-diagnostic"))]
+            {
+                engine.preview = false;
+            }
             engine.ready = true;
             engine.agent_control_available = true;
             engine.message = None;

@@ -126,6 +126,8 @@ pub use browser_windows::{
     WindowsBrowserSupervisor,
 };
 
+#[cfg(all(target_os = "macos", debug_assertions))]
+pub use browser_macos::{MacosBrowserAcceptanceConfig, MacosBrowserShutdownReceipt};
 #[cfg(target_os = "macos")]
 pub use browser_macos::{MacosBrowserProcessClearance, MacosBrowserProcessKeeper};
 #[cfg(target_os = "macos")]

@@ -4,6 +4,8 @@ mod callbacks;
 mod ffi;
 mod lifecycle;
 use crate::BrowserError;
+#[cfg(feature = "native-test-driver")]
+use colossus_browser_presentation::Frame;
 use colossus_browser_presentation::{FrameCodec, Input, LatestFrames, Lease, LeaseGuard};
 use std::{
     sync::{
@@ -22,6 +24,32 @@ struct Owner {
     focus: Box<dyn Fn(Lease, bool) + Send + Sync>,
     frames: Mutex<LatestFrames>,
     scheduled: AtomicBool,
+    #[cfg(feature = "native-test-driver")]
+    accepted_frame: Mutex<Option<AcceptedNativeFrame>>,
+}
+
+/// One authenticated frame that the native view synchronously accepted and made visible.
+#[cfg(feature = "native-test-driver")]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AcceptedNativeFrame {
+    pub lease: Lease,
+    pub sequence: u64,
+    pub center_bgra: [u8; 4],
+    pub count: u64,
+}
+
+#[cfg(feature = "native-test-driver")]
+fn center_bgra(frame: &Frame) -> Option<[u8; 4]> {
+    let index = u64::from(frame.lease.pixel_height / 2)
+        .checked_mul(u64::from(frame.lease.pixel_width))?
+        .checked_add(u64::from(frame.lease.pixel_width / 2))?
+        .checked_mul(4)?;
+    let offset = usize::try_from(index).ok()?;
+    frame
+        .pixels
+        .get(offset..offset.checked_add(4)?)?
+        .try_into()
+        .ok()
 }
 /// Native view owned by Desktop, consuming authenticated page pixels and events.
 /// The supervisor must bind callbacks to a separately authenticated input channel.
@@ -55,6 +83,8 @@ impl PresentationSurface {
             focus: Box::new(focus),
             frames: Mutex::new(frames),
             scheduled: AtomicBool::new(false),
+            #[cfg(feature = "native-test-driver")]
+            accepted_frame: Mutex::new(None),
         });
         let native_owner = Arc::clone(&owner);
         let native_window = window.clone();
@@ -128,6 +158,19 @@ impl PresentationSurface {
             &self.owner,
             self.handle.load(Ordering::Acquire),
         )
+    }
+
+    /// Observe an authenticated frame synchronously accepted by the native view.
+    /// This does not establish that macOS composited the view in the foreground.
+    #[cfg(feature = "native-test-driver")]
+    pub(crate) fn acceptance_accepted_frame(
+        &self,
+    ) -> Result<Option<AcceptedNativeFrame>, BrowserError> {
+        Ok(*self
+            .owner
+            .accepted_frame
+            .lock()
+            .map_err(|_| BrowserError::Closed)?)
     }
 
     /// Update trusted native bounds; logical coordinates on macOS, physical on Windows.
@@ -230,7 +273,25 @@ fn schedule(window: &Window, owner: &Arc<Owner>, handle: usize) -> Result<(), Br
                 } == 0
                 {
                     // SAFETY: exact owned view on its UI thread with a live native epoch.
-                    let _ = unsafe { ffi::colossus_presenter_visible(handle, 1) };
+                    let shown = unsafe { ffi::colossus_presenter_visible(handle, 1) } == 0;
+                    #[cfg(feature = "native-test-driver")]
+                    if shown
+                        && let Some(center_bgra) = center_bgra(&frame)
+                        && let Ok(mut accepted) = owner.accepted_frame.lock()
+                    {
+                        let count = accepted
+                            .as_ref()
+                            .map_or(0, |last| last.count)
+                            .saturating_add(1);
+                        *accepted = Some(AcceptedNativeFrame {
+                            lease: frame.lease,
+                            sequence: frame.sequence,
+                            center_bgra,
+                            count,
+                        });
+                    }
+                    #[cfg(not(feature = "native-test-driver"))]
+                    let _ = shown;
                 }
             } else {
                 // SAFETY: native hide clears cached pixels/focus on expiry.

@@ -12,7 +12,7 @@ pub struct NativeBrowserBootstrap {
     pub generation: String,
     /// Exact supervising native process, checked against the authenticated bootstrap parent.
     pub parent_process_id: u32,
-    /// Independent 256-bit key, encoded only inside the zeroizing inherited frame.
+    /// Independent 32-byte channel key, encoded only inside the zeroizing inherited frame.
     pub authentication: SecretString,
 }
 impl NativeBrowserBootstrap {

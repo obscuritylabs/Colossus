@@ -1,3 +1,14 @@
+#[cfg(all(
+    feature = "macos-contained-browser-diagnostic",
+    any(not(target_os = "macos"), not(debug_assertions))
+))]
+compile_error!("the contained Mac browser diagnostic is Debug-only on macOS");
+#[cfg(all(
+    feature = "macos-contained-browser-diagnostic",
+    feature = "embedded-chromium-preview"
+))]
+compile_error!("the contained diagnostic cannot enable the in-process Chromium preview");
+
 mod cloud_connector;
 mod control_plane_profiles;
 use cloud_connector::{
@@ -40,6 +51,7 @@ mod managed_configuration_commands;
 mod managed_diagnostics;
 mod managed_runtime;
 mod mcp_health;
+mod native_browser_authentication;
 #[cfg(windows)]
 mod outlook_companion;
 mod plugin_adapter;
@@ -196,7 +208,10 @@ pub fn run() {
             status_bar::setup(app)?;
             browser::start_watchdog(app.handle().clone());
             browser::bootstrap::start_pump(app.handle())?;
-            #[cfg(feature = "embedded-chromium-preview")]
+            #[cfg(any(
+                feature = "embedded-chromium-preview",
+                feature = "macos-contained-browser-diagnostic"
+            ))]
             browser::contained::install(app.handle())?;
             #[cfg(windows)]
             outlook_companion::start_watchdog(app.handle().clone());

@@ -48,7 +48,21 @@ impl BrowserEngineDto {
                 agent_control_available: false,
             }
         }
-        #[cfg(not(feature = "embedded-chromium-preview"))]
+        #[cfg(feature = "macos-contained-browser-diagnostic")]
+        {
+            let ready = colossus_native_browser::contained::native_presentation_available();
+            Self {
+                kind: "contained_chromium",
+                preview: true,
+                ready,
+                message: (!ready).then(|| "The native pixel adapter is unavailable.".into()),
+                agent_control_available: false,
+            }
+        }
+        #[cfg(not(any(
+            feature = "embedded-chromium-preview",
+            feature = "macos-contained-browser-diagnostic"
+        )))]
         Self {
             kind: if cfg!(windows) {
                 "webview2"

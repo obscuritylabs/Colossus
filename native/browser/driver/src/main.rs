@@ -6,6 +6,18 @@
 ))]
 compile_error!("the owned macOS profile adapter is development-only");
 
+#[cfg(all(
+    feature = "macos-synthetic-profile-diagnostic",
+    any(not(target_os = "macos"), not(debug_assertions))
+))]
+compile_error!("the synthetic macOS profile diagnostic is Debug-only on macOS");
+
+#[cfg(all(
+    feature = "macos-synthetic-profile-diagnostic",
+    feature = "macos-owned-profile-development"
+))]
+compile_error!("the synthetic diagnostic and owned profile adapter are mutually exclusive");
+
 #[cfg(any(
     test,
     all(any(target_os = "linux", target_os = "macos"), colossus_cef_linked)

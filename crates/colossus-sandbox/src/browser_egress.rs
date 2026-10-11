@@ -112,15 +112,47 @@ impl BrowserEgressLease {
         limits: BrowserEgressLimits,
     ) -> Result<Self, BrowserEgressError> {
         validate(&origins, limits)?;
+        let (listener, ipv6) = super::http_proxy::bind_proxy_loopbacks(cfg!(target_os = "macos"))
+            .await
+            .map_err(|_| BrowserEgressError::Unavailable)?;
+        Self::from_listeners(session, origins, limits, listener, ipv6)
+    }
+
+    /// Bind the exact port sealed into a macOS main/helper network policy.
+    /// No alternate port may replace an occupied or unavailable policy binding.
+    #[cfg(target_os = "macos")]
+    pub(crate) async fn start_at_port(
+        session: BrowserSessionId,
+        origins: Vec<BrowserOrigin>,
+        limits: BrowserEgressLimits,
+        port: u16,
+    ) -> Result<Self, BrowserEgressError> {
+        validate(&origins, limits)?;
+        if port == 0 {
+            return Err(BrowserEgressError::InvalidConfiguration);
+        }
+        let ipv4 = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
+            .await
+            .map_err(|_| BrowserEgressError::Unavailable)?;
+        let ipv6 = TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port))
+            .await
+            .map_err(|_| BrowserEgressError::Unavailable)?;
+        Self::from_listeners(session, origins, limits, ipv4, Some(ipv6))
+    }
+
+    fn from_listeners(
+        session: BrowserSessionId,
+        origins: Vec<BrowserOrigin>,
+        limits: BrowserEgressLimits,
+        listener: TcpListener,
+        ipv6: Option<TcpListener>,
+    ) -> Result<Self, BrowserEgressError> {
         let mut random = Zeroizing::new([0_u8; 32]);
         getrandom::fill(random.as_mut()).map_err(|_| BrowserEgressError::Unavailable)?;
         let credential = Arc::new(
             HostSecret::new(hex::encode(random.as_ref()))
                 .map_err(|_| BrowserEgressError::Unavailable)?,
         );
-        let (listener, ipv6) = super::http_proxy::bind_proxy_loopbacks(cfg!(target_os = "macos"))
-            .await
-            .map_err(|_| BrowserEgressError::Unavailable)?;
         let address = listener
             .local_addr()
             .map_err(|_| BrowserEgressError::Unavailable)?;

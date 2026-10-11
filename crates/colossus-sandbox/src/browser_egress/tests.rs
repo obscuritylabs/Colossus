@@ -14,6 +14,78 @@ fn limits() -> BrowserEgressLimits {
     }
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn sealed_mac_proxy_port_binds_both_loopbacks_and_never_falls_back() {
+    let (ipv4, ipv6) = crate::http_proxy::bind_proxy_loopbacks(true).await.unwrap();
+    let port = ipv4.local_addr().unwrap().port();
+    let origins = vec![BrowserOrigin::parse("https://allowed.example").unwrap()];
+    let session =
+        || BrowserSessionId::parse(format!("bs_{}", uuid::Uuid::now_v7().simple())).unwrap();
+    assert_eq!(
+        BrowserEgressLease::start_at_port(session(), origins.clone(), limits(), port)
+            .await
+            .unwrap_err(),
+        BrowserEgressError::Unavailable
+    );
+    drop(ipv4);
+    // Failure to bind the second loopback also releases the first listener.
+    assert_eq!(
+        BrowserEgressLease::start_at_port(session(), origins.clone(), limits(), port)
+            .await
+            .unwrap_err(),
+        BrowserEgressError::Unavailable
+    );
+    let released = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
+        .await
+        .unwrap();
+    drop(released);
+    drop(ipv6);
+    let mut proxy = BrowserEgressLease::start_at_port(session(), origins, limits(), port)
+        .await
+        .unwrap();
+    assert_eq!(proxy.address().port(), port);
+    let mut connection = TcpStream::connect((std::net::Ipv6Addr::LOCALHOST, port))
+        .await
+        .unwrap();
+    connection
+        .write_all(b"CONNECT allowed.example:443 HTTP/1.1\r\nHost: allowed.example\r\n\r\n")
+        .await
+        .unwrap();
+    let mut response = Vec::new();
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        connection.read_to_end(&mut response),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(response.starts_with(b"HTTP/1.1 407"));
+    proxy.revoke().await.unwrap();
+    assert!(TcpStream::connect(proxy.address()).await.is_err());
+    assert!(
+        TcpStream::connect((std::net::Ipv6Addr::LOCALHOST, port))
+            .await
+            .is_err()
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn sealed_mac_proxy_rejects_zero_port_before_allocation() {
+    assert_eq!(
+        BrowserEgressLease::start_at_port(
+            BrowserSessionId::parse(format!("bs_{}", uuid::Uuid::now_v7().simple())).unwrap(),
+            vec![BrowserOrigin::parse("https://allowed.example").unwrap()],
+            limits(),
+            0,
+        )
+        .await
+        .unwrap_err(),
+        BrowserEgressError::InvalidConfiguration
+    );
+}
+
 async fn lease(origins: Vec<BrowserOrigin>, limits: BrowserEgressLimits) -> BrowserEgressLease {
     BrowserEgressLease::start(
         BrowserSessionId::parse(format!("bs_{}", uuid::Uuid::now_v7().simple())).unwrap(),
