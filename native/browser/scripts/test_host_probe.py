@@ -1,12 +1,14 @@
 """Portable integrity checks for the native acceptance client's private framing."""
 import struct
 import os
+import signal
 import subprocess
 import sys
+import threading
 import unittest
+from unittest.mock import patch
 
 from run_host_probe import BoundedCapture, Channel, MAX_FRAME, ProbeError, encoded, MAX_OUTPUT_BYTES, startup_receipt
-from run_probe import stop_process
 
 
 class Stream:
@@ -79,8 +81,7 @@ class HostOutputBounds(unittest.TestCase):
             self.assertEqual(bytes(capture.captured["stdout"]), b"output")
             self.assertEqual(bytes(capture.captured["stderr"]), b"diagnostic")
         finally:
-            stop_process(process)
-            capture.join()
+            capture.stop()
 
     def test_excess_native_output_is_killed_and_retention_stays_bounded(self):
         process = self.child("import os; os.write(1, b'x' * 262144)")
@@ -91,8 +92,86 @@ class HostOutputBounds(unittest.TestCase):
             self.assertLessEqual(sum(len(value) for value in capture.captured.values()), MAX_OUTPUT_BYTES)
             self.assertTrue(capture.overflow.is_set())
         finally:
-            stop_process(process)
-            capture.join()
+            capture.stop()
+
+    def test_concurrent_stdout_stderr_overflow_dispatches_once_before_reaping(self):
+        source = """import os, threading
+def write(fd):
+    for _ in range(256):
+        os.write(fd, b'x' * 4096)
+threads = [threading.Thread(target=write, args=(fd,)) for fd in (1, 2)]
+for thread in threads: thread.start()
+for thread in threads: thread.join()
+"""
+        process = self.child(source)
+        calls, thread_errors = [], []
+        native_killpg = os.killpg
+
+        def dispatch(pgid, number):
+            calls.append((pgid, number, process.returncode))
+            return native_killpg(pgid, number)
+
+        with patch("run_host_probe.os.killpg", side_effect=dispatch), \
+             patch.object(threading, "excepthook", side_effect=thread_errors.append):
+            capture = BoundedCapture(process)
+            try:
+                with self.assertRaises(ProbeError):
+                    capture.finish()
+                # The real child/pipe boundary distinguishes one retained
+                # dispatch from repeated kills of buffered bytes after wait.
+                self.assertEqual(calls, [(process.pid, signal.SIGKILL, None)])
+                self.assertFalse(thread_errors)
+                self.assertTrue(capture.overflow.is_set())
+                self.assertLessEqual(sum(map(len, capture.captured.values())), MAX_OUTPUT_BYTES)
+                self.assertTrue(all(not reader.is_alive() for reader in capture.readers))
+                self.assertIsNotNone(process.returncode)
+                capture.stop()
+                self.assertEqual(len(calls), 1)
+            finally:
+                capture.stop()
+
+    def test_group_signal_denial_is_sticky_and_never_escapes_reader(self):
+        process = self.child("import os; os.write(1, b'x' * 262144)")
+        errors = []
+        with patch("run_host_probe.os.killpg", side_effect=PermissionError()), \
+             patch.object(threading, "excepthook", side_effect=errors.append):
+            capture = BoundedCapture(process)
+            try:
+                with self.assertRaisesRegex(ProbeError, "cleanup remains unknown"):
+                    capture.finish()
+                self.assertFalse(errors)
+                self.assertIsNotNone(process.returncode)
+                self.assertTrue(capture.overflow.is_set())
+                self.assertLessEqual(sum(map(len, capture.captured.values())), MAX_OUTPUT_BYTES)
+                with self.assertRaisesRegex(ProbeError, "cleanup remains unknown"):
+                    capture.stop()
+            finally:
+                with self.assertRaises(ProbeError):
+                    capture.stop()
+
+    def test_open_pipe_deadline_stays_unknown_after_child_exits_cleanly(self):
+        # The parent intentionally retains a writer. Exact direct-child exit
+        # cannot turn that incomplete output teardown into a successful receipt.
+        read_fd, write_fd = os.pipe()
+        process = subprocess.Popen([sys.executable, "-c", "print('output')"],
+            stdin=subprocess.DEVNULL, stdout=write_fd, stderr=subprocess.PIPE,
+            start_new_session=True)
+        process.stdout = os.fdopen(read_fd, "rb")
+        capture = BoundedCapture(process)
+        try:
+            with self.assertRaisesRegex(ProbeError, "cleanup remains unknown"):
+                capture.join(timeout=0.05)
+            os.close(write_fd)
+            write_fd = None
+            with self.assertRaisesRegex(ProbeError, "cleanup remains unknown"):
+                capture.finish()
+            self.assertEqual(process.returncode, 0)
+            self.assertTrue(all(not reader.is_alive() for reader in capture.readers))
+        finally:
+            if write_fd is not None:
+                os.close(write_fd)
+            with self.assertRaises(ProbeError):
+                capture.stop()
 
 
 if __name__ == "__main__":

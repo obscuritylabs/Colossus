@@ -15,7 +15,6 @@ import json
 import os
 from pathlib import Path
 import signal
-import shutil
 import socket
 import struct
 import subprocess
@@ -95,16 +94,61 @@ def identity(prefix: str) -> str:
 
 
 class BoundedCapture:
-    """Drain both native streams continuously without retaining unbounded logs."""
+    """Own draining and reaping of a fresh-session fixture child.
+
+    Callers must use finish/stop rather than independently reaping this child.
+    A process-group signal is fixture cleanup, never a whole-tree receipt.
+    """
     def __init__(self, process: subprocess.Popen):
         self.process = process
         self.captured = {"stdout":bytearray(), "stderr":bytearray()}
         self.lock = threading.Lock()
         self.overflow = threading.Event()
+        self.failure = None
+        self.process_lock = threading.Lock()
+        self.termination_requested = False
+        self.signals_allowed = True
         self.readers = [threading.Thread(target=self.drain, args=(name, stream), daemon=True)
                         for name, stream in (("stdout",process.stdout),("stderr",process.stderr))]
         for reader in self.readers:
             reader.start()
+
+    def record_failure(self, message):
+        with self.lock:
+            if self.failure is None:
+                self.failure = message
+
+    def terminate_once(self):
+        # The unreaped direct child retains its PID incarnation. The lifecycle
+        # lock fences every group dispatch before a wait can release that PID.
+        with self.process_lock:
+            if not self.signals_allowed or self.termination_requested or self.process.returncode is not None:
+                return
+            self.termination_requested = True
+            try:
+                os.killpg(self.process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError:
+                self.record_failure("native fixture process-group termination failed; cleanup remains unknown")
+                # Retained direct-child fallback bounds this fixture's own
+                # writer. It cannot discharge any descendant obligation.
+                try:
+                    self.process.kill()
+                except OSError:
+                    self.record_failure("native fixture direct-child termination failed; cleanup remains unknown")
+
+    def reap(self, timeout):
+        with self.process_lock:
+            self.signals_allowed = False
+            try:
+                self.process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired as error:
+                # A timed-out wait has not released the direct child's PID.
+                # Only that retained incarnation can authorize later cleanup.
+                self.signals_allowed = self.process.returncode is None
+                self.record_failure("native fixture direct-child exit deadline elapsed; cleanup remains unknown")
+                raise ProbeError(self.failure) from error
 
     def drain(self, name, stream):
         try:
@@ -115,33 +159,56 @@ class BoundedCapture:
                     if len(block) > available:
                         self.overflow.set()
                 if self.overflow.is_set():
-                    try:
-                        os.killpg(self.process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
+                    self.terminate_once()
+        except (OSError, ValueError):
+            self.record_failure("native host output channel failed")
+            self.terminate_once()
         finally:
-            stream.close()
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                self.record_failure("native host output channel close failed")
 
     def finish(self):
-        self.process.wait(timeout=10)
-        self.join()
+        # EOF precedes reaping: overflow callbacks cannot signal a retired PGID
+        # while either reader still owns bytes already buffered in its pipe.
+        try:
+            self.join(timeout=10)
+        except ProbeError:
+            self.stop()
+            raise
+        self.reap(timeout=10)
+        if self.failure is not None:
+            raise ProbeError(self.failure)
         if self.process.returncode != 0 or self.overflow.is_set():
             raise ProbeError("native host failed its bounded acknowledged shutdown")
-        deadline = time.monotonic() + 1
-        while True:
-            try:
-                os.killpg(self.process.pid, 0)
-            except ProcessLookupError:
-                break
-            if time.monotonic() >= deadline:
-                raise ProbeError("native CEF shutdown left an owned helper process alive")
-            time.sleep(0.01)
+        # The authenticated close response and this exact child's exit/EOF are
+        # the evidence here. No post-reap numeric PGID query can prove ownership
+        # or that detached/reparented Chromium descendants have been retired.
 
-    def join(self):
+    def join(self, timeout=1):
+        deadline = time.monotonic() + timeout
         for reader in self.readers:
-            reader.join(timeout=1)
+            reader.join(timeout=max(0, deadline - time.monotonic()))
         if any(reader.is_alive() for reader in self.readers):
-            raise ProbeError("native host left an output channel open after termination")
+            message = "native host output channel did not close within teardown deadline; cleanup remains unknown"
+            self.record_failure(message)
+            raise ProbeError(message)
+
+    def stop(self):
+        self.terminate_once()
+        error = None
+        try:
+            self.join()
+        except ProbeError as failure:
+            error = failure
+        # Even if an escaped writer keeps a pipe open, fence late drain signals
+        # before reaping the direct child; such an open channel stays unknown.
+        self.reap(timeout=5)
+        if error is not None:
+            raise error
+        if self.failure is not None:
+            raise ProbeError(self.failure)
 
 
 def run_host_probe(root: Path, host: Path, screenshot: bool = False, transfers: bool = False) -> dict:
@@ -386,19 +453,19 @@ def run_host_probe(root: Path, host: Path, screenshot: bool = False, transfers: 
             raise ProbeError("native host did not authenticate to its fixed proxy")
         if component.verify_installed(root) != inventory or component.digest_file(host) != host_digest or component.digest_file(root / component.MANIFEST) != manifest_digest:
             raise ProbeError("native host changed its inventoried browser component")
-        return {**screenshot_receipt,"host_sha256":host_digest,"component_manifest_sha256":manifest_digest,"authenticated_bridge":True,"native_snapshot":True,"native_fill":True,"native_select":True,"native_click":True,"native_press":True,"native_scroll":True,"native_wait":True,"native_navigation_history":True,"native_reload":True,"native_stop_idle":True,"native_owned_tabs":True,"protected_fields":True,"origin_denial":True,"proxy_authentication":True,"cef_shutdown":True,"production_containment":False}
+        return {**screenshot_receipt,"host_sha256":host_digest,"component_manifest_sha256":manifest_digest,"authenticated_bridge":True,"native_snapshot":True,"native_fill":True,"native_select":True,"native_click":True,"native_press":True,"native_scroll":True,"native_wait":True,"native_navigation_history":True,"native_reload":True,"native_stop_idle":True,"native_owned_tabs":True,"protected_fields":True,"origin_denial":True,"proxy_authentication":True,"cef_shutdown":True,"fixture_directory":str(temporary),"direct_child_exit":process.returncode,"output_channels_closed":all(not reader.is_alive() for reader in capture.readers) and process.stdout.closed and process.stderr.closed,"helper_cleanup_proven":False,"production_containment":False}
     finally:
         try:
             for stream in channels:
                 stream.close()
-            if process is not None:
-                stop_process(process)
             if capture is not None:
-                capture.join()
-            # Delete the positively created fixture directory only after the
-            # child group and both native output channels have been drained.
-            shutil.rmtree(temporary)
+                capture.stop()
+            elif process is not None:
+                stop_process(process)
         finally:
+            # Unknown descendant ownership prevents physical profile removal,
+            # including after direct-child exit and output-channel EOF succeed.
+            print("native host fixture retained: " + str(temporary), file=sys.stderr)
             proxy.shutdown()
             proxy.server_close()
             serving.join(timeout=1)
