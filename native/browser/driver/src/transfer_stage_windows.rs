@@ -87,11 +87,12 @@ impl Directory {
     }
 }
 impl Stage {
-    pub fn create(profile: &Path) -> Result<Self, BrowserDriverError> {
-        let parent = BoundPath::open_appcontainer_directory(profile)
+    pub fn create(profile: &BoundPath) -> Result<Self, BrowserDriverError> {
+        profile
+            .validate_private_appcontainer_dacl()
             .map_err(|_| BrowserDriverError::Denied)?;
         Ok(Self {
-            directory: Directory::create(&parent, "transfer-")?,
+            directory: Directory::create(profile, "transfer-")?,
             nonce: random("stage-")?,
             slots: Vec::new(),
             bytes: 0,
@@ -142,7 +143,10 @@ impl Stage {
         file.write_all(bytes)
             .and_then(|()| file.sync_all())
             .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-        let bound = BoundPath::open_appcontainer_file(&path)
+        let bound = slot
+            .directory
+            .bound()?
+            .open_appcontainer_file_beneath(&path)
             .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
         if bound.identity()
             != colossus_windows_native::FileIdentity::of(&file)
@@ -201,7 +205,10 @@ impl Stage {
         if !slot.pending || reservation.path != slot.directory.path().join("download") {
             return Err(BrowserDriverError::Denied);
         }
-        let bound = BoundPath::open_appcontainer_file(&reservation.path)
+        let bound = slot
+            .directory
+            .bound()?
+            .open_appcontainer_file_beneath(&reservation.path)
             .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
         // A retained no-write-sharing reader freezes bytes after CEF's actual
         // completion; the separate binding proves exact package ACL/identity.
@@ -270,7 +277,10 @@ impl Stage {
                 {
                     return Err(BrowserDriverError::OutcomeUnknown);
                 }
-                let file = BoundPath::open_appcontainer_file(&row.path())
+                let file = slot
+                    .directory
+                    .bound()?
+                    .open_appcontainer_file_beneath(&row.path())
                     .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
                 file.remove_appcontainer_file()
                     .map_err(|_| BrowserDriverError::OutcomeUnknown)?;

@@ -60,7 +60,9 @@ use windows_sys::Win32::{
 };
 use windows_sys::core::GUID;
 
+pub(super) mod bootstrap;
 mod channels;
+pub(super) mod tree;
 
 pub(super) struct OwnedHandle(HANDLE);
 
@@ -482,6 +484,11 @@ pub(super) fn spawn_with_channels(
     {
         return Err(last_error("SetInformationJobObject"));
     }
+    // Private-channel browser hosts preserve Chromium's own alternate desktops,
+    // token restrictions and nested sandbox Jobs. Outer Job UI limits prohibit
+    // that initialization (Chromium sandbox/policy/sandbox.cc's alternate-desktop
+    // CHECK) and are incompatible with nested Jobs on Windows. Ordinary command
+    // launches keep every existing UI restriction. Neither path permits breakaway.
     let ui_restrictions = JOBOBJECT_BASIC_UI_RESTRICTIONS {
         UIRestrictionsClass: JOB_OBJECT_UILIMIT_DESKTOP
             | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS
@@ -493,15 +500,16 @@ pub(super) fn spawn_with_channels(
             | JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
     };
     // SAFETY: ui_restrictions has the exact structure required by this information class.
-    if unsafe {
-        SetInformationJobObject(
-            job.raw(),
-            JobObjectBasicUIRestrictions,
-            (&raw const ui_restrictions).cast(),
-            u32::try_from(size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>())
-                .expect("structure size fits u32"),
-        )
-    } == 0
+    if count == 0
+        && unsafe {
+            SetInformationJobObject(
+                job.raw(),
+                JobObjectBasicUIRestrictions,
+                (&raw const ui_restrictions).cast(),
+                u32::try_from(size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>())
+                    .expect("structure size fits u32"),
+            )
+        } == 0
     {
         return Err(last_error("SetInformationJobObject(UI restrictions)"));
     }

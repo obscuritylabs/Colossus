@@ -67,12 +67,11 @@ impl PrivateDirectoryCreation {
         parent.revalidate()?;
         parent.validate_private_appcontainer_dacl()?;
         let package = AppContainerPrincipal::of_current()?;
-        let bound = open_bound_with_mode(
+        let bound = enrolled::reopen(
+            &parent.inner,
             parent.canonical_path(),
             BoundKind::Directory,
             appcontainer::PACKAGE_PROFILE_RIGHTS | SYNCHRONIZE,
-            false,
-            true,
         )?;
         if bound.identity != parent.identity() {
             return Err(WindowsNativeError::IdentityChanged);
@@ -179,7 +178,7 @@ impl PrivateDirectoryCreation {
                 file,
                 DaclValidation::PrivateAppContainer(package.package_sid()),
             )?;
-            open_bound_appcontainer_directory(&self.path)?
+            enrolled::reopen(&self.parent, &self.path, BoundKind::Directory, GENERIC_READ)?
         } else {
             validate_private_owner_dacl(file)?;
             open_bound(&self.path, BoundKind::Directory)?
@@ -260,7 +259,7 @@ impl PrivateDirectoryCreation {
             self.file.take();
         }
         let current = if self.package.is_some() {
-            open_bound_appcontainer_directory(&self.path)
+            enrolled::reopen(&self.parent, &self.path, BoundKind::Directory, GENERIC_READ)
         } else {
             open_bound(&self.path, BoundKind::Directory)
         };

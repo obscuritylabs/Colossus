@@ -117,6 +117,9 @@ int32_t colossus_cef_windows_run(uintptr_t instance, void* sandbox_info,
                                void* version_info, int32_t (*run)(void));
 /* Returns the borrowed context only on that live entry's owning main thread. */
 int32_t colossus_cef_windows_context(uintptr_t* instance, void** sandbox_info);
+/* Explicit Debug host diagnostic only, before CEF initialization. Fixed startup
+ * categories and an owned-profile error log; no release caller selects this. */
+int32_t colossus_cef_windows_startup_diagnostics(void);
 #endif
 /* Private supervisor-only fixed proxy configuration before bootstrap. Numeric
  * address only; credentials authenticate this exact proxy challenge and are never

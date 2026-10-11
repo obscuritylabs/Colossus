@@ -66,7 +66,7 @@ fn bootstrap_inner(root: &Path, helper: &Path) -> Bootstrap {
             .collect::<Result<Vec<_>, _>>()?;
         Ok((root, helper, args))
     };
-    let Ok((root, helper, args)) = build() else {
+    let Ok((root, _helper, args)) = build() else {
         return Bootstrap::Unavailable(BrowserError::Unavailable);
     };
     let Ok(argument_count) = i32::try_from(args.len()) else {
@@ -88,7 +88,11 @@ fn bootstrap_inner(root: &Path, helper: &Path) -> Bootstrap {
         platform_instance,
         sandbox_info,
         root_cache_path: root.as_ptr(),
-        browser_subprocess_path: helper.as_ptr(),
+        // Windows sandbox dispatch must re-enter the same pinned bootstrap.
+        #[cfg(windows)]
+        browser_subprocess_path: std::ptr::null(),
+        #[cfg(not(windows))]
+        browser_subprocess_path: _helper.as_ptr(),
         headless: 0,
         callbacks: callbacks::callbacks(),
     };

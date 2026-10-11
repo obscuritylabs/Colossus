@@ -4,9 +4,14 @@ use std::{ffi::CString, path::PathBuf};
 use colossus_browser_bridge::BrowserBridgeEnrollment;
 use colossus_contracts::{BrowserMode, BrowserProfileSelection};
 use colossus_ports::BrowserDriverError;
-use colossus_windows_native::BoundPath;
+use colossus_windows_native::{BoundPath, FileIdentity, WindowsNativeError};
 use serde::Deserialize;
+use std::os::windows::io::FromRawHandle as _;
 use tokio::io::AsyncReadExt as _;
+use windows_sys::Win32::{
+    Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation},
+    Storage::FileSystem::{FILE_TYPE_DISK, GetFileType},
+};
 use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::{ffi, windows_io};
@@ -16,6 +21,9 @@ use crate::{ffi, windows_io};
 pub(super) struct Configuration {
     pub enrollment: BrowserBridgeEnrollment,
     pub profile_path: PathBuf,
+    profile_handle: u64,
+    profile_volume: u64,
+    profile_file_id: [u8; 16],
     proxy: Proxy,
     pki: Option<serde_json::Value>,
     pub presentation: Option<Presentation>,
@@ -97,17 +105,39 @@ impl Configuration {
         Ok(())
     }
 
-    pub(super) fn profile(&self) -> Result<(BoundPath, CString), BrowserDriverError> {
-        let profile = BoundPath::open_appcontainer_directory(&self.profile_path)
-            .map_err(|_| BrowserDriverError::Denied)?;
+    pub(super) fn profile(&mut self) -> Result<(BoundPath, CString), BrowserDriverError> {
+        let handle = usize::try_from(std::mem::take(&mut self.profile_handle))
+            .ok()
+            .filter(|value| *value > 4 && *value != usize::MAX)
+            .ok_or(BrowserDriverError::Denied)? as *mut std::ffi::c_void;
+        // SAFETY: the authenticated supervising parent duplicated this exact
+        // non-inherited directory into us after token attestation. Verify native
+        // type before transferring ownership; it cannot be inherited by helpers.
+        if unsafe { GetFileType(handle) } != FILE_TYPE_DISK
+            || unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0
+        {
+            return Err(BrowserDriverError::Denied);
+        }
+        // SAFETY: this is the uniquely transferred live disk handle in private
+        // bootstrap. The numeric value is consumed once and never exposed in IPC.
+        let file = unsafe { std::fs::File::from_raw_handle(handle.cast()) };
+        let profile = BoundPath::from_enrolled_appcontainer_directory(
+            file,
+            &self.profile_path,
+            FileIdentity {
+                volume_serial_number: self.profile_volume,
+                file_id: self.profile_file_id,
+            },
+        )
+        .map_err(|error| profile_error("open", error))?;
         // Current token and exact kernel package SID are queried here; no input
         // SID or a parent's capability flag can substitute for actual ownership.
         profile
             .validate_private_appcontainer_dacl()
-            .map_err(|_| BrowserDriverError::Denied)?;
+            .map_err(|error| profile_error("dacl", error))?;
         profile
             .revalidate()
-            .map_err(|_| BrowserDriverError::Denied)?;
+            .map_err(|error| profile_error("identity", error))?;
         if std::fs::read_dir(profile.canonical_path())
             .map_err(|_| BrowserDriverError::Denied)?
             .next()
@@ -167,4 +197,22 @@ impl Configuration {
         }
         Ok(())
     }
+}
+
+fn profile_error(_phase: &'static str, _error: WindowsNativeError) -> BrowserDriverError {
+    #[cfg(debug_assertions)]
+    match _error {
+        WindowsNativeError::Io { operation, source } => eprintln!(
+            "native Windows profile rejection phase={_phase} category=io operation={operation} os_code={}",
+            source.raw_os_error().unwrap_or(0)
+        ),
+        WindowsNativeError::IdentityChanged => {
+            eprintln!("native Windows profile rejection phase={_phase} category=identity")
+        }
+        WindowsNativeError::UnsafePermissions => {
+            eprintln!("native Windows profile rejection phase={_phase} category=permissions")
+        }
+        _ => eprintln!("native Windows profile rejection phase={_phase} category=invalid"),
+    }
+    BrowserDriverError::Denied
 }

@@ -180,10 +180,26 @@ async fn appcontainer_job_retains_and_terminates_descendants_after_the_direct_ch
         let mut line = String::new();
         reader.read_line(&mut line).await?;
         let principal = profile.verify_process(child.process_handle())?;
+        let tree = child.observe_process_tree()?;
+        if tree.len() != 2 || !tree.iter().any(|process| process.process_id() == child.pid) {
+            return Err(std::io::Error::other("incomplete root and descendant observation").into());
+        }
+        for process in &tree {
+            profile.verify_process(process.process_handle())?;
+        }
         let directory = principal.create_directory(&admitted_path)?;
         input.write_all(b"complete\r\n")?;
         let exit = child.wait_timeout(Duration::from_secs(2))?;
         let tree_empty = child.wait_tree_timeout(Duration::ZERO)?;
+        let descendants = child.observe_process_tree()?;
+        if descendants.len() != 1
+            || descendants
+                .iter()
+                .any(|process| process.process_id() == child.pid)
+        {
+            return Err(std::io::Error::other("direct-child exit lost retained descendant").into());
+        }
+        profile.verify_process(descendants[0].process_handle())?;
         Ok::<_, Box<dyn std::error::Error>>((line, exit, tree_empty, directory))
     })
     .await;
@@ -192,6 +208,7 @@ async fn appcontainer_job_retains_and_terminates_descendants_after_the_direct_ch
         child.wait_tree_timeout(Duration::from_secs(5)).unwrap(),
         "positive full Job zero"
     );
+    assert!(child.observe_process_tree().unwrap().is_empty());
     drop(reader);
     lease.cancel();
     assert!(

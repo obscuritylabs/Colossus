@@ -199,6 +199,9 @@ async fn start(
         serde_json::to_vec(&Bootstrap {
             enrollment,
             profile_path: &resource.profile,
+            profile_handle: child.profile_handle,
+            profile_volume: child.profile_identity.volume_serial_number,
+            profile_file_id: child.profile_identity.file_id,
             proxy: Proxy {
                 address: "127.0.0.1",
                 port: proxy_port,
@@ -241,6 +244,14 @@ async fn start(
     .await
     .map_err(|_| BrowserDriverError::OutcomeUnknown)??;
     drop(bootstrap);
+    // Authenticate the main process and every live helper against retained Job
+    // handles after CEF startup, before either control channel can become ready.
+    resource
+        .owner
+        .as_ref()
+        .ok_or(BrowserDriverError::OutcomeUnknown)?
+        .attest_tree()
+        .await?;
     let key = BrowserBridgeKey::from_bootstrap(key);
     let presentation_key = key.derive_presentation_key();
     let (bridge, client) = tokio::try_join!(

@@ -12,13 +12,57 @@
 #if defined(OS_MAC)
 #include "mac_helper_programs.h"
 #endif
+#if defined(OS_WIN)
+#include <windows.h>
+#endif
 #if defined(COLOSSUS_CEF_TEST_CUSTODY)
 #include "custody_linux.h"
 #endif
 
 namespace colossus {
 namespace {
+#if defined(OS_WIN)
+bool windows_startup_diagnostic = false;
+void* windows_startup_handler = nullptr;
+LONG CALLBACK StartupBreakpoint(EXCEPTION_POINTERS* exception) {
+  if (!exception || !exception->ExceptionRecord ||
+      exception->ExceptionRecord->ExceptionCode != EXCEPTION_BREAKPOINT)
+    return EXCEPTION_CONTINUE_SEARCH;
+  // Code offsets only: no memory dumps, absolute addresses, paths, arguments or
+  // private bootstrap bytes. Do not handle/swallow the original exception.
+  void* frames[24]{};
+  const auto count = CaptureStackBackTrace(0, 24, frames, nullptr);
+  for (USHORT index = 0; index < count; ++index) {
+    HMODULE module = nullptr;
+    const char* category = "other";
+    size_t offset = 0;
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+          reinterpret_cast<LPCWSTR>(frames[index]), &module)) {
+      wchar_t path[32768]{};
+      if (GetModuleFileNameW(module, path, 32768)) {
+        const auto name = std::filesystem::path(path).filename().wstring();
+        if (_wcsicmp(name.c_str(), L"libcef.dll") == 0) category = "libcef";
+        else if (_wcsicmp(name.c_str(), L"colossus-native-browser-host.dll") == 0) category = "client";
+        else if (_wcsicmp(name.c_str(), L"ntdll.dll") == 0) category = "ntdll";
+        else if (_wcsicmp(name.c_str(), L"kernelbase.dll") == 0) category = "kernelbase";
+        if (std::strcmp(category, "other"))
+          offset = reinterpret_cast<size_t>(frames[index]) - reinterpret_cast<size_t>(module);
+      }
+    }
+    std::fprintf(stderr, "native cef startup breakpoint frame=%u module=%s offset=%zx\n",
+                 index, category, offset);
+  }
+  std::fflush(stderr);
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
 void BootstrapDiagnostic(const char* stage, int32_t status, int32_t detail = 0) {
+#if defined(OS_WIN)
+  if (windows_startup_diagnostic) {
+    std::fprintf(stderr, "native cef bootstrap substage=%s status=%d detail=%d\n", stage, status, detail);
+  }
+#endif
 #if defined(COLOSSUS_CEF_MAC_SYNTHETIC_PROFILE_DIAGNOSTIC)
   // Fixed categories/numbers only. No path, credential, page or policy bytes.
   std::fprintf(stderr, "native cef bootstrap substage=%s status=%d detail=%d\n",
@@ -43,6 +87,19 @@ struct Proxy {
   std::string username;
   std::string password;
 };
+
+#if defined(OS_WIN)
+extern "C" int32_t colossus_cef_windows_startup_diagnostics(void) {
+  uintptr_t instance = 0; void* sandbox = nullptr;
+  if (initialized || colossus_cef_windows_context(&instance, &sandbox) != COLOSSUS_CEF_OK)
+    return COLOSSUS_CEF_UNAVAILABLE;
+  windows_startup_diagnostic = true;
+  if (!windows_startup_handler)
+    windows_startup_handler = AddVectoredExceptionHandler(1, StartupBreakpoint);
+  if (!windows_startup_handler) return COLOSSUS_CEF_UNAVAILABLE;
+  return COLOSSUS_CEF_OK;
+}
+#endif
 static Proxy proxy;
 
 bool ProxyCredentials(const std::string& host, int port,
@@ -306,19 +363,39 @@ extern "C" int32_t colossus_cef_bootstrap(const colossus_cef_bootstrap_options* 
   settings.command_line_args_disabled = true;
   settings.remote_debugging_port = 0;
   settings.log_severity = LOGSEVERITY_DISABLE;
+#if defined(OS_WIN)
+  if (windows_startup_diagnostic) {
+    settings.log_severity = LOGSEVERITY_ERROR;
+    CefString(&settings.log_file) = std::string(o->root_cache_path) + "\\startup.log";
+  }
+#endif
   CefString(&settings.root_cache_path) = o->root_cache_path;
+#if defined(OS_WIN)
+  // Windows sandbox requires a common bootstrap EXE for the broker and every
+  // subprocess. An alternate helper executable is not a supported sandbox path.
+  if (o->browser_subprocess_path) return COLOSSUS_CEF_INVALID;
+#else
   if (o->browser_subprocess_path) {
     if (!std::filesystem::path(o->browser_subprocess_path).is_absolute())
       return COLOSSUS_CEF_INVALID;
     CefString(&settings.browser_subprocess_path) = o->browser_subprocess_path;
   }
+#endif
   BootstrapDiagnostic("initialize-enter", COLOSSUS_CEF_OK);
   if (!CefInitialize(args, settings, app, o->sandbox_info)) {
+#if defined(OS_WIN)
+    if (windows_startup_handler) RemoveVectoredExceptionHandler(windows_startup_handler);
+    windows_startup_handler = nullptr;
+#endif
     // CEF's public numeric exit code identifies an early initialization result.
     BootstrapDiagnostic("initialize-exit", COLOSSUS_CEF_UNAVAILABLE, CefGetExitCode());
     return COLOSSUS_CEF_UNAVAILABLE;
   }
   BootstrapDiagnostic("initialize-exit", COLOSSUS_CEF_OK);
+#if defined(OS_WIN)
+  if (windows_startup_handler) RemoveVectoredExceptionHandler(windows_startup_handler);
+  windows_startup_handler = nullptr;
+#endif
   owning_thread = std::this_thread::get_id(); initialized = true;
   return COLOSSUS_CEF_OK;
 }

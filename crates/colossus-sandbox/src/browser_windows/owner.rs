@@ -21,6 +21,7 @@ pub(super) struct Request {
 }
 enum Command {
     Close(oneshot::Sender<Result<bool, BrowserDriverError>>),
+    Attest(oneshot::Sender<Result<u16, BrowserDriverError>>),
 }
 pub(super) struct Owner {
     commands: mpsc::SyncSender<Command>,
@@ -33,6 +34,27 @@ struct Native {
     forced: bool,
 }
 impl Native {
+    fn attest_tree(&self) -> Result<u16, BrowserDriverError> {
+        let child = self.child.as_ref().ok_or(BrowserDriverError::Stale)?;
+        let profile = self.profile.as_ref().ok_or(BrowserDriverError::Stale)?;
+        let processes = child
+            .observe_process_tree()
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        if processes.is_empty()
+            || !processes
+                .iter()
+                .any(|process| process.process_id() == child.pid)
+        {
+            return Err(BrowserDriverError::OutcomeUnknown);
+        }
+        for process in &processes {
+            profile
+                .verify_process(process.process_handle())
+                .map_err(|_| BrowserDriverError::Denied)?;
+        }
+        u16::try_from(processes.len()).map_err(|_| BrowserDriverError::LimitExceeded)
+    }
+
     fn cleanup(&mut self) -> Result<bool, BrowserDriverError> {
         if let Some(child) = &self.child {
             if !child
@@ -145,13 +167,21 @@ impl Owner {
                             }
                             BrowserDriverError::Denied
                         })
-                        .map(|directory| {
+                        .and_then(|directory| {
                             native.profile_directory = Some(directory);
-                            SupervisedChildChannels {
+                            let directory = native.profile_directory.as_ref().expect("retained allocation");
+                            let identity = colossus_windows_native::FileIdentity::of(directory)
+                                .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+                            let profile_handle = native.child.as_ref().expect("retained child")
+                                .enroll_profile_directory(directory)
+                                .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+                            Ok(SupervisedChildChannels {
                                 channels,
+                                profile_handle,
+                                profile_identity: identity,
                                 stdout: native.child.as_mut().and_then(|child| child.stdout.take()),
                                 stderr: native.child.as_mut().and_then(|child| child.stderr.take()),
-                            }
+                            })
                         })
                 });
                 if result.is_err() {
@@ -179,6 +209,9 @@ impl Owner {
                 }
                 loop {
                     match receiver.recv() {
+                        Ok(Command::Attest(sender)) => {
+                            let _ = sender.send(native.attest_tree());
+                        }
                         Ok(Command::Close(sender)) => {
                             let result = native.cleanup();
                             let done = result.is_ok();
@@ -223,9 +256,25 @@ impl Owner {
             .map_err(|_| BrowserDriverError::OutcomeUnknown)?
             .map_err(|_| BrowserDriverError::OutcomeUnknown)?
     }
+
+    pub(super) async fn attest_tree(&self) -> Result<u16, BrowserDriverError> {
+        if self.closed.load(std::sync::atomic::Ordering::Acquire) != 0 {
+            return Err(BrowserDriverError::Stale);
+        }
+        let (sender, receiver) = oneshot::channel();
+        self.commands
+            .try_send(Command::Attest(sender))
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        tokio::time::timeout(Duration::from_secs(5), receiver)
+            .await
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+    }
 }
 pub(super) struct SupervisedChildChannels {
     pub channels: Vec<PrivateProcessChannel>,
+    pub profile_handle: u64,
+    pub profile_identity: colossus_windows_native::FileIdentity,
     pub stdout: Option<std::fs::File>,
     pub stderr: Option<std::fs::File>,
 }

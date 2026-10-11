@@ -69,6 +69,7 @@ mod package;
 pub use package::{ExclusiveAppContainerProfile, system_windows_directory};
 mod directory_creation;
 pub use directory_creation::PrivateDirectoryCreation;
+pub(super) mod enrolled;
 mod mandatory;
 
 pub(super) fn configure_suspended_process(command: &mut std::process::Command) {
@@ -429,7 +430,8 @@ pub(super) struct BoundPathInner {
     ancestors: Vec<File>,
     kind: BoundKind,
     immutable: bool,
-    appcontainer: bool,
+    pub(super) appcontainer: bool,
+    appcontainer_scope: Option<std::sync::Arc<enrolled::Root>>,
 }
 
 pub(super) struct KillOnCloseJob {
@@ -623,13 +625,7 @@ impl BoundPathInner {
     }
 
     pub(super) fn revalidate(&self) -> Result<(), WindowsNativeError> {
-        let current = open_bound_with_mode(
-            &self.canonical_path,
-            self.kind,
-            GENERIC_READ,
-            self.immutable,
-            self.appcontainer,
-        )?;
+        let current = enrolled::reopen(self, &self.canonical_path, self.kind, GENERIC_READ)?;
         if current.identity != self.identity || file_identity(&self.file)? != self.identity {
             return Err(WindowsNativeError::IdentityChanged);
         }
@@ -638,7 +634,7 @@ impl BoundPathInner {
         }
         for (index, (actual, expected)) in current.ancestors.iter().zip(&self.ancestors).enumerate()
         {
-            let unchanged = if index == 0 {
+            let unchanged = if index == 0 && self.appcontainer_scope.is_none() {
                 root_file_identity(actual)? == root_file_identity(expected)?
             } else {
                 file_identity(actual)? == file_identity(expected)?
@@ -746,12 +742,11 @@ pub(super) fn remove_bound_appcontainer_file(
         return Ok(());
     }
     bound.revalidate()?;
-    let deletion = open_bound_with_mode(
+    let deletion = enrolled::reopen(
+        bound,
         &bound.canonical_path,
         BoundKind::File,
         GENERIC_READ | DELETE,
-        false,
-        true,
     )?;
     if deletion.identity != bound.identity || file_link_count(&deletion.file)? != 1 {
         return Err(WindowsNativeError::IdentityChanged);
@@ -827,7 +822,15 @@ fn open_bound_with_mode(
             if leaf { file_access } else { 0 },
             immutable,
             !appcontainer || leaf,
-        )?;
+        )
+        .inspect_err(|_| {
+            #[cfg(debug_assertions)]
+            if appcontainer {
+                eprintln!(
+                    "native Windows profile rejection phase=walk component_index={index} leaf={leaf}"
+                );
+            }
+        })?;
         if leaf {
             if let Some(principal) = &principal {
                 validate_owner_dacl(
@@ -853,6 +856,7 @@ fn open_bound_with_mode(
                 kind,
                 immutable,
                 appcontainer,
+                appcontainer_scope: None,
             });
         }
         ancestors.push(opened);
@@ -868,7 +872,7 @@ fn open_exact(
     metadata_access: bool,
 ) -> Result<File, WindowsNativeError> {
     let mut options = OpenOptions::new();
-    let data_access = if matches!(kind, BoundKind::File) {
+    let data_access = if matches!(kind, BoundKind::File) || file_access != GENERIC_READ {
         file_access
     } else {
         0

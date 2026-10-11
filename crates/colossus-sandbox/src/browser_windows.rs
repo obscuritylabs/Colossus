@@ -3,6 +3,8 @@ mod installation;
 mod launch;
 mod lifecycle;
 mod owner;
+#[cfg(all(test, debug_assertions))]
+mod startup_tests;
 
 use async_trait::async_trait;
 use colossus_browser_bridge::BrowserHostFactory;

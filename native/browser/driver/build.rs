@@ -59,6 +59,17 @@ fn main() {
     if target == "windows" {
         // Supported CEF bootstrap resolves RunWinMain in this client DLL.
         // libcef may only load after its sandbox/version handoff succeeds.
+        for library in [
+            build.join("colossus_cef.lib"),
+            build
+                .parent()
+                .expect("native Release parent")
+                .join("libcef_dll_wrapper/Release/libcef_dll_wrapper.lib"),
+            cef.join("Release/libcef.lib"),
+        ] {
+            assert!(library.is_file(), "native Windows library required");
+            println!("cargo:rerun-if-changed={}", library.display());
+        }
         for directory in [
             &build,
             &cef.join("Release"),

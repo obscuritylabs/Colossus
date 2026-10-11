@@ -107,6 +107,8 @@ unsafe extern "C" {
     ) -> i32;
     #[cfg(windows)]
     pub fn colossus_cef_windows_context(instance: *mut usize, sandbox: *mut *mut c_void) -> i32;
+    #[cfg(all(windows, debug_assertions))]
+    pub fn colossus_cef_windows_startup_diagnostics() -> i32;
     #[cfg(all(target_os = "linux", feature = "native-custody-test"))]
     pub fn colossus_cef_custody_test_prepare(fixture_url: *const c_char) -> i32;
 }

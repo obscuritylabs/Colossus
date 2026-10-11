@@ -71,7 +71,7 @@ impl FileIdentity {
 /// A retained exact Windows filesystem object and all opened path ancestors.
 pub struct BoundPath {
     #[cfg(windows)]
-    inner: crate::windows::BoundPathInner,
+    pub(crate) inner: crate::windows::BoundPathInner,
     #[cfg(not(windows))]
     _unsupported: (),
 }
@@ -87,6 +87,42 @@ impl std::fmt::Debug for BoundPath {
 }
 
 impl BoundPath {
+    /// Adopt an exact profile handle transferred by the supervising parent over
+    /// its private bootstrap. The parent must retain verified ancestry and the
+    /// allocation until full process cleanup. This consumes existing native file
+    /// authority; paths, SID strings and renderer values cannot grant it.
+    ///
+    /// The current Low AppContainer package, protected DACL, Low label, handle
+    /// path and kernel identity are independently checked. Descendant operations
+    /// remain confined to this retained root without opening ambient volume roots.
+    #[cfg(windows)]
+    pub fn from_enrolled_appcontainer_directory(
+        file: File,
+        expected_path: &Path,
+        expected_identity: FileIdentity,
+    ) -> Result<Self, WindowsNativeError> {
+        crate::windows::enrolled::bind(file, expected_path, expected_identity).map(Self::from_inner)
+    }
+
+    /// Bind one native-produced, single-link file beneath this enrolled package
+    /// directory. Foreign roots, parent traversal and reparses fail explicitly.
+    #[cfg(windows)]
+    pub fn open_appcontainer_file_beneath(&self, path: &Path) -> Result<Self, WindowsNativeError> {
+        if !self.inner.appcontainer || !path.starts_with(self.canonical_path()) {
+            return Err(WindowsNativeError::InvalidInput);
+        }
+        self.revalidate()?;
+        let inner = crate::windows::enrolled::reopen(
+            &self.inner,
+            path,
+            crate::windows::BoundKind::File,
+            windows_sys::Win32::Foundation::GENERIC_READ,
+        )?;
+        if crate::windows::file_link_count(&inner.file)? != 1 {
+            return Err(WindowsNativeError::UnsafePermissions);
+        }
+        Ok(Self::from_inner(inner))
+    }
     #[cfg(windows)]
     pub(crate) fn from_inner(inner: crate::windows::BoundPathInner) -> Self {
         Self { inner }

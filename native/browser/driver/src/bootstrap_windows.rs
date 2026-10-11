@@ -3,14 +3,12 @@ mod configuration;
 mod endpoint;
 
 use std::{
-    ffi::CString,
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use colossus_browser_bridge::BrowserBridgeKey;
 use colossus_ports::BrowserDriverError;
-use colossus_windows_native::BoundPath;
 use sha2::{Digest as _, Sha256};
 use tokio::io::AsyncWriteExt as _;
 
@@ -52,7 +50,7 @@ pub fn run() -> Result<(), BrowserDriverError> {
         })
     };
     receipt(&mut bootstrap.writer, 1)?;
-    let (key, configuration) = startup.block_on(async {
+    let (key, mut configuration) = startup.block_on(async {
         tokio::time::timeout(
             Duration::from_secs(5),
             configuration::read(&mut bootstrap.reader),
@@ -62,16 +60,8 @@ pub fn run() -> Result<(), BrowserDriverError> {
     })?;
     configuration.validate(presenter_pipe.is_some())?;
     receipt(&mut bootstrap.writer, 2)?;
-    let (_profile, cache) = configuration.profile()?;
+    let (profile, cache) = configuration.profile()?;
     receipt(&mut bootstrap.writer, 3)?;
-    let executable = std::env::current_exe().map_err(|_| BrowserDriverError::Unavailable)?;
-    let helper = executable
-        .parent()
-        .ok_or(BrowserDriverError::Denied)?
-        .join("colossus-browser-helper.exe");
-    let _helper = BoundPath::open_file(&helper).map_err(|_| BrowserDriverError::Denied)?;
-    let helper = CString::new(helper.to_str().ok_or(BrowserDriverError::Denied)?)
-        .map_err(|_| BrowserDriverError::Denied)?;
     let callbacks = Box::<cef::Callbacks>::default();
     let cancelled = Arc::new(AtomicBool::new(false));
     callbacks.configure_identity(identity::Policy::new(Vec::new())?, Arc::clone(&cancelled))?;
@@ -92,11 +82,20 @@ pub fn run() -> Result<(), BrowserDriverError> {
         platform_instance: instance,
         sandbox_info: sandbox,
         root_cache_path: cache.as_ptr(),
-        browser_subprocess_path: helper.as_ptr(),
+        // Windows Chromium sandboxing requires the same bootstrap executable
+        // for broker and subprocesses. Its RunWinMain dispatches helpers before
+        // Rust host state, inherited channels or profile enrollment are parsed.
+        browser_subprocess_path: std::ptr::null(),
         headless: 2,
         callbacks: callbacks.ffi(),
     };
     let mut subprocess = -1;
+    #[cfg(debug_assertions)]
+    // SAFETY: this is the verified live owning bootstrap thread, before CEF.
+    // Release hosts do not call the diagnostic selector.
+    if unsafe { ffi::colossus_cef_windows_startup_diagnostics() } != 0 {
+        return Err(BrowserDriverError::Denied);
+    }
     receipt(&mut bootstrap.writer, 6)?;
     // SAFETY: native main-thread entry; boxed callbacks, retained paths, sandbox
     // and profile cache strings live through actual CefShutdown below.
@@ -105,7 +104,7 @@ pub fn run() -> Result<(), BrowserDriverError> {
     }
     let mut initialized = Initialized(cef::Host::new(callbacks, Arc::clone(&cancelled)));
     let host = &mut initialized.0;
-    host.configure_transfers(&configuration.profile_path)?;
+    host.configure_transfers(&profile)?;
     let started = receipt(&mut bootstrap.writer, 7);
     drop(bootstrap);
     drop(startup);

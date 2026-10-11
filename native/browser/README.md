@@ -927,10 +927,11 @@ Its adjacent client DLL exports CEF's five-argument `RunWinMain` entry. The entr
 checks the bootstrap's full engine and sandbox compatibility versions, keeps the
 scoped library loader alive, passes the real bootstrap sandbox context to
 `CefExecuteProcess` and `CefInitialize`, and executes subprocesses before any
-Tauri UI or acceptance home exists. A separate `colossus-browser-helper.exe`
-bootstrap and minimal CEF-only helper DLL handle renderer/GPU/utility children,
-so restricted subprocesses do not load the Desktop's Tauri, dictation or
-credential dependencies. A plain Tauri executable still fails closed.
+Tauri UI or acceptance home exists. Windows sandbox dispatch re-enters the same
+bootstrap executable and client DLL; selecting a separate subprocess executable
+is incompatible with CEF's Windows sandbox requirements. The private host client
+contains no Desktop dictation or credential dependencies. A plain Tauri
+executable still fails closed.
 The client must delay-load `libcef.dll`; the stager checks its x64 PE DLL shape,
 bootstrap export and import tables for both DLLs before publishing them.
 
@@ -986,11 +987,32 @@ proxy lease and retained native I/O workers. Its four anonymous pipe pairs carry
 bootstrap, typed automation, cancellation and separately authenticated
 presentation. The bootstrap derives its Windows directory from the OS API and
 creates the fresh browser profile with the actual spawned process package SID.
+The parent transfers a non-inherited read/query handle to that exact profile;
+the child checks its kernel file identity, protected package DACL and Low label.
+Its filesystem bindings retain the enrolled root and reject traversal, reparse
+points and hard-linked transfer files without opening ambient volume roots.
 Startup errors retain every partial allocation; acknowledged cleanup requires
 full Job exit, positive loopback-exemption removal, all native I/O workers joined
 and exact owned-directory removal. Runtime composition returns both
 `RuntimeBrowserHost` and the independent supervisor, whose `shutdown` must be
 awaited. `take_presentation` requires the full exact retained open request.
+
+An explicit networkless startup diagnostic needs no administrator token:
+
+```powershell
+cargo test --locked -p colossus-sandbox --lib browser_windows::startup_tests::real_cef_initializes_in_networkless_appcontainer_without_elevation -- --ignored --exact --nocapture
+```
+
+Use the same verified component and owner-private state-parent selectors described
+below. This diagnostic initializes only an empty owned context, requests no WFP
+filter or loopback exemption, and checks full Job, private-I/O and profile cleanup.
+It does not establish page networking or production availability. Current native
+execution passes profile enrollment but fails Chromium's mandatory alternate
+window-station creation with Windows error 5, even after removing incompatible
+outer Job UI limits. The exact pinned CEF symbols locate the failure in
+`sandbox::policy::Sandbox::Initialize`; native evidence distinguishes this from
+a missing build or malformed bootstrap. Browser-compatible Job composition keeps
+Chromium's own sandbox enabled; ordinary command Jobs retain their UI restrictions.
 
 After staging, run the explicit native factory fixture from an elevated MSVC
 developer terminal: exact-package loopback and WFP setup require native privileges.

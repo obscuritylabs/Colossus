@@ -37,6 +37,9 @@ pub(super) async fn receipt(reader: &mut PrivateReader) -> Result<(), BrowserDri
 pub(super) struct Bootstrap<'a> {
     pub enrollment: &'a BrowserBridgeEnrollment,
     pub profile_path: &'a std::path::Path,
+    pub profile_handle: u64,
+    pub profile_volume: u64,
+    pub profile_file_id: [u8; 16],
     pub proxy: Proxy<'a>,
     pub pki: Option<()>,
     pub presentation: Presentation,

@@ -43,6 +43,31 @@ pub struct SandboxedChild {
     _network: Option<crate::windows_impl::NetworkGuard>,
 }
 
+/// Observation-only retained process object positively bound to the exact Job.
+/// This native-only value grants no termination rights and must never enter IPC.
+#[cfg(windows)]
+pub struct JobProcessObservation {
+    pub(crate) id: u32,
+    pub(crate) process: crate::windows_impl::OwnedHandle,
+}
+
+#[cfg(windows)]
+impl JobProcessObservation {
+    /// Categorical identifier for matching the retained root within this snapshot.
+    #[must_use]
+    pub fn process_id(&self) -> u32 {
+        self.id
+    }
+
+    /// Borrow the exact non-inherited observation handle for kernel token checks.
+    /// Membership was positively checked after opening; PID reuse cannot substitute
+    /// a process outside the Job. Retain this value throughout those checks.
+    #[must_use]
+    pub fn process_handle(&self) -> std::os::windows::io::BorrowedHandle<'_> {
+        self.process.borrow()
+    }
+}
+
 impl Drop for SandboxedChild {
     fn drop(&mut self) {
         #[cfg(windows)]
@@ -109,6 +134,24 @@ pub enum WindowsProcessError {
 }
 
 impl SandboxedChild {
+    /// Transfer read/query authority to one exact profile directory into this
+    /// retained child, after native composition verifies its AppContainer token.
+    /// The returned process-local handle belongs only in private bootstrap. It
+    /// is non-inherited; an undelivered handle is retired by full process cleanup.
+    /// Neither a path nor a caller-supplied PID can request this transfer.
+    #[cfg(windows)]
+    pub fn enroll_profile_directory(&self, directory: &File) -> Result<u64, WindowsProcessError> {
+        crate::windows_impl::bootstrap::profile_directory(&self.process, directory)
+    }
+    /// Retain every member of a complete, stable, bounded live Job snapshot.
+    /// Query failure, an inaccessible helper or membership churn fails explicitly.
+    /// This does not attest helpers that already exited, nor replace full Job-zero
+    /// cleanup. Callers must validate each returned kernel token independently.
+    #[cfg(windows)]
+    pub fn observe_process_tree(&self) -> Result<Vec<JobProcessObservation>, WindowsProcessError> {
+        crate::windows_impl::tree::observe(&self.job)
+    }
+
     /// Explicitly retire the exact dynamic WFP session only after the whole Job
     /// reaches zero processes. Failure retains the same guard for an idempotent
     /// retry; Drop never substitutes for this acknowledged network cleanup.
