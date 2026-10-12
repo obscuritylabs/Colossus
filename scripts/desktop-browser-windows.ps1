@@ -91,7 +91,8 @@ try {
     $env:COLOSSUS_BROWSER_ACCEPTANCE_VISUAL_HOLD_MS = '0'
     $env:COLOSSUS_BROWSER_ACCEPTANCE_CLOSE_AFTER_COMPLETION = $null
     Invoke-Logged 'apps/desktop/src-tauri/target/debug/examples/browser-acceptance.exe' @('http://127.0.0.1:53713/') 'desktop.log'
-    foreach ($Name in @('windows-human-foreground.png', 'windows-overlay-foreground.png', 'windows-agent-foreground.png')) {
+    foreach ($Name in @('windows-human-foreground.png', 'windows-overlay-foreground.png', 'windows-agent-foreground.png',
+        'windows-agent-cursor-foreground.png', 'windows-agent-cursor-expired.png')) {
         Copy-Item -LiteralPath (Join-Path $env:COLOSSUS_HOME $Name) -Destination (Join-Path $Evidence $Name)
     }
     $env:COLOSSUS_BROWSER_ACCEPTANCE_OWNED_TABS = $null

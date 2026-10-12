@@ -21,6 +21,8 @@ use serde_json::{Value, json};
 
 use crate::{ffi, identity, semantic};
 
+#[cfg(windows)]
+mod agent_indicator_windows;
 mod capture;
 mod presentation;
 mod transfer;
@@ -1054,6 +1056,8 @@ impl Host {
                     json!({"type":"mouseReleased","button":"left","clickCount":1,"x":x,"y":y}),
                     control,
                 )?;
+                #[cfg(windows)]
+                self.indicate_agent_target(native, &model, 1);
             }
             BrowserAction::Fill { element, text } => {
                 if text.len() > 8192 {
@@ -1077,10 +1081,14 @@ impl Host {
                     return Err(BrowserDriverError::Denied);
                 }
                 self.method(native, "Input.insertText", json!({"text":text}), control)?;
+                #[cfg(windows)]
+                self.indicate_agent_focus(native, backend, control);
             }
             BrowserAction::Select { element, values } => {
                 let backend = self.backend(&identity, element)?;
                 self.select(native, backend, values, control)?;
+                #[cfg(windows)]
+                self.indicate_agent_focus(native, backend, control);
             }
             BrowserAction::Press { key } => {
                 if !matches!(key, BrowserKey::Tab | BrowserKey::Escape)
@@ -1091,8 +1099,16 @@ impl Host {
                 }
                 let (key, code) = safe_key(*key);
                 self.key(native, key, code, 0, control)?;
+                #[cfg(windows)]
+                if let Ok(Some(backend)) = self.focused_backend(native, control) {
+                    self.indicate_agent_focus(native, backend, control);
+                } else {
+                    self.clear_agent_indicator(native);
+                }
             }
             BrowserAction::Scroll { x, y } => {
+                #[cfg(windows)]
+                self.clear_agent_indicator(native);
                 if x.unsigned_abs() > 10_000 || y.unsigned_abs() > 10_000 {
                     return Err(BrowserDriverError::LimitExceeded);
                 }

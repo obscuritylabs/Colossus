@@ -49,6 +49,17 @@ int32_t colossus_cef_presentation_frame(colossus_cef_tab tab, uint64_t generatio
   uint8_t* bytes, size_t capacity);
 int32_t colossus_cef_presentation_input(colossus_cef_tab tab, uint64_t generation,
   uint64_t viewport_generation, uint64_t document_generation, const colossus_cef_input* input);
+#if defined(_WIN32)
+/* Private host decoration only: 0 clears, 1 marks a click, 2 marks focus.
+ * Logical viewport coordinates; no input, DOM mutation or public endpoint.
+ */
+typedef struct colossus_cef_agent_indicator {
+  uint32_t kind, ttl_ms;
+  double x, y, left, top, width, height;
+} colossus_cef_agent_indicator;
+int32_t colossus_cef_presentation_agent_indicator(colossus_cef_tab tab,
+  uint64_t generation, uint64_t document_generation, const colossus_cef_agent_indicator* indicator);
+#endif
 #ifdef __cplusplus
 }
 #endif

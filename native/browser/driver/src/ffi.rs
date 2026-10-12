@@ -193,6 +193,13 @@ pub struct PresentationInput {
 unsafe extern "C" {
     #[cfg(windows)]
     pub fn colossus_cef_automation_activate(tab: u64, generation: u64, document: u64) -> i32;
+    #[cfg(windows)]
+    pub fn colossus_cef_presentation_agent_indicator(
+        tab: u64,
+        generation: u64,
+        document: u64,
+        indicator: *const AgentIndicator,
+    ) -> i32;
     pub fn colossus_cef_presentation_document(tab: u64, generation: u64, document: *mut u64)
     -> i32;
     pub fn colossus_cef_presentation_configure(
@@ -236,6 +243,19 @@ unsafe extern "C" {
         document: u64,
         input: *const PresentationInput,
     ) -> i32;
+}
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct AgentIndicator {
+    pub kind: u32,
+    pub ttl_ms: u32,
+    pub x: f64,
+    pub y: f64,
+    pub left: f64,
+    pub top: f64,
+    pub width: f64,
+    pub height: f64,
 }
 unsafe extern "C" {
     pub fn colossus_cef_bootstrap(options: *const Options, subprocess_exit: *mut i32) -> i32;

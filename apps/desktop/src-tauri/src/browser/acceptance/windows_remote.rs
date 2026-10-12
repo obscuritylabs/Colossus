@@ -71,6 +71,19 @@ fn save(screen: &WindowsScreenEvidence, home: &Path, name: &str) -> anyhow::Resu
     Ok(())
 }
 
+fn cursor_edge(screen: &WindowsScreenEvidence) -> anyhow::Result<usize> {
+    let dpi = u64::from(screen.dpi);
+    let x = ((40 * dpi + 48) / 96)
+        .checked_sub(1)
+        .context("invalid native DPI")?;
+    let y = (165 * dpi + 48) / 96;
+    ensure!(
+        x < u64::from(screen.width) && y < u64::from(screen.height),
+        "cursor probe lies outside the actual native viewport"
+    );
+    Ok(usize::try_from((y * u64::from(screen.width) + x) * 4)?)
+}
+
 pub(super) async fn human(
     app: &tauri::AppHandle,
     tab: &str,
@@ -166,6 +179,83 @@ pub(super) async fn agent(
         "PASS actual foreground Windows desktop shows the Core-controlled browser: {}x{} dpi={} center_bgra={:?}",
         screen.width, screen.height, screen.dpi, screen.center_bgra
     );
+    Ok(())
+}
+
+pub(super) async fn agent_click_indicator(
+    app: &tauri::AppHandle,
+    tab: &str,
+    view: &RemoteSurface,
+    rect: BrowserRect,
+    home: &Path,
+) -> anyhow::Result<()> {
+    println!("EVIDENCE native agent click title acknowledged; checking foreground cursor pixels");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut candidate_saved = false;
+    let marked = loop {
+        present(app, tab, rect).await?;
+        let screen = match view.acceptance_windows_screen().await {
+            Ok(screen) => screen,
+            Err(error) => {
+                if tokio::time::Instant::now() >= deadline {
+                    println!("EVIDENCE cursor foreground capture failure: {error:?}");
+                    anyhow::bail!("Core click agent cursor capture failed: {error:?}");
+                }
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                continue;
+            }
+        };
+        // The synthetic button begins at DIP (40,160). Its outer agent outline
+        // lies outside the page's own border, so this cannot pass on HTML focus CSS.
+        let index = cursor_edge(&screen)?;
+        if !candidate_saved {
+            save(&screen, home, "windows-agent-cursor-candidate.png")?;
+            candidate_saved = true;
+        }
+        if screen.foreground
+            && screen.visible
+            && screen.hit_test
+            && screen.pixels.get(index..index + 4) == Some(&[0, 0, 0, 255])
+        {
+            break screen;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            println!(
+                "EVIDENCE cursor foreground failure: foreground={} visible={} hit_test={} {}x{} sample={:?}",
+                screen.foreground,
+                screen.visible,
+                screen.hit_test,
+                screen.width,
+                screen.height,
+                screen.pixels.get(index..index + 4)
+            );
+            anyhow::bail!("Core click agent outline never reached actual Windows desktop pixels");
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    };
+    save(&marked, home, "windows-agent-cursor-foreground.png")?;
+    tokio::time::sleep(Duration::from_millis(2400)).await;
+    let cleared = view.acceptance_windows_screen().await?;
+    let index = cursor_edge(&cleared)?;
+    ensure!(
+        cleared.pixels.get(index..index + 4) == Some(&[255, 241, 231, 255]),
+        "expired agent cursor remained painted on the native viewer"
+    );
+    save(&cleared, home, "windows-agent-cursor-expired.png")?;
+    println!(
+        "PASS Core click shows agent cursor/target outline in actual foreground Windows pixels and removes it after expiry"
+    );
+    Ok(())
+}
+
+pub(super) async fn agent_ready(
+    app: &tauri::AppHandle,
+    tab: &str,
+    view: &RemoteSurface,
+    rect: BrowserRect,
+) -> anyhow::Result<()> {
+    let _ = screen(app, tab, view, rect, [255, 241, 231, 255]).await?;
+    println!("PASS replacement agent viewer is foreground before Core input begins");
     Ok(())
 }
 

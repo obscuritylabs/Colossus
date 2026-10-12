@@ -6,6 +6,9 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#if defined(OS_WIN)
+#include "agent_indicator_win.h"
+#endif
 
 namespace colossus {
 namespace {
@@ -16,6 +19,9 @@ struct Presentation {
   bool visible = false, focused = false;
   std::chrono::steady_clock::time_point deadline{};
   std::vector<uint8_t> frame;
+#if defined(OS_WIN)
+  AgentIndicator indicator;
+#endif
 };
 std::map<colossus_cef_tab, Presentation> presentations;
 std::map<colossus_cef_tab, std::pair<uint64_t, uint64_t>> documents;
@@ -88,6 +94,9 @@ void PresentationPaint(colossus_cef_tab tab, uint64_t generation,
   }
   state.frame.assign(static_cast<const uint8_t*>(pixels),
                      static_cast<const uint8_t*>(pixels) + size);
+#if defined(OS_WIN)
+  state.indicator.Paint(state.frame, width, height, state.scale, std::chrono::steady_clock::now());
+#endif
   retained += state.frame.size();
   state.pixel_width = width; state.pixel_height = height;
   ++state.sequence;
@@ -95,6 +104,11 @@ void PresentationPaint(colossus_cef_tab tab, uint64_t generation,
 void PresentationExpire() {
   for (auto& [tab, state] : presentations) {
     const auto browser = tabs.find(tab);
+#if defined(OS_WIN)
+    if (state.indicator.Expire(std::chrono::steady_clock::now()) && Lease(state) &&
+        browser != tabs.end() && browser->second.browser)
+      browser->second.browser->GetHost()->Invalidate(PET_VIEW);
+#endif
     if (browser == tabs.end() || browser->second.generation != state.generation ||
         browser->second.closing || (state.visible && !Lease(state))) {
       if (browser != tabs.end() && browser->second.browser) {
@@ -102,6 +116,9 @@ void PresentationExpire() {
         host->SetFocus(false); host->ImeCancelComposition(); host->WasHidden(true);
       }
       state.visible = false; state.focused = false; Clear(state);
+#if defined(OS_WIN)
+      state.indicator.Clear();
+#endif
     }
   }
 }
@@ -113,6 +130,9 @@ void PresentationDocument(colossus_cef_tab tab, uint64_t generation) {
   if (found != presentations.end()) {
     auto& state = found->second;
     state.visible = false; state.focused = false; Clear(state);
+#if defined(OS_WIN)
+    state.indicator.Clear();
+#endif
     const auto browser = tabs.find(tab);
     if (browser != tabs.end() && browser->second.browser) {
       auto host = browser->second.browser->GetHost();
@@ -159,6 +179,9 @@ extern "C" int32_t colossus_cef_presentation_configure(colossus_cef_tab tab,
   auto& state = presentations[tab];
   if (state.generation == generation && viewport <= state.viewport) return COLOSSUS_CEF_DENIED;
   Clear(state);
+#if defined(OS_WIN)
+  state.indicator.Clear();
+#endif
   state.generation = generation; state.viewport = viewport; state.document = document;
   state.width = width; state.height = height; state.scale = scale;
   state.visible = true; state.focused = false;
@@ -187,6 +210,9 @@ extern "C" int32_t colossus_cef_presentation_visible(colossus_cef_tab tab,
   state->deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(lease_ms);
   auto host = browser->browser->GetHost();
   if (!visible) { state->focused = false; host->SetFocus(false); host->ImeCancelComposition(); Clear(*state); }
+#if defined(OS_WIN)
+  if (!visible) state->indicator.Clear();
+#endif
   host->WasHidden(!visible);
   return COLOSSUS_CEF_OK;
 }
@@ -218,6 +244,30 @@ extern "C" int32_t colossus_cef_presentation_frame(colossus_cef_tab tab,
   std::memcpy(bytes, state->frame.data(), state->frame.size()); Clear(*state);
   return COLOSSUS_CEF_OK;
 }
+#if defined(OS_WIN)
+extern "C" int32_t colossus_cef_presentation_agent_indicator(colossus_cef_tab tab,
+    uint64_t generation, uint64_t document, const colossus_cef_agent_indicator* indicator) {
+  using namespace colossus;
+  Tab* browser = nullptr;
+  const auto status = Resolve(tab, generation, &browser);
+  if (status) return status;
+  const auto found = presentations.find(tab);
+  if (!indicator || !headless || found == presentations.end()) return COLOSSUS_CEF_DENIED;
+  auto& state = found->second;
+  if (state.generation != generation || state.document != document || !Lease(state))
+    return COLOSSUS_CEF_DENIED;
+  const auto current = documents.find(tab);
+  if (current == documents.end() || current->second != std::pair{generation, document})
+    return COLOSSUS_CEF_DENIED;
+  if (indicator->kind && (indicator->x < 0 || indicator->x >= state.width ||
+      indicator->y < 0 || indicator->y >= state.height)) return COLOSSUS_CEF_INVALID;
+  if (!state.indicator.Set(indicator->kind, indicator->x, indicator->y, indicator->left,
+      indicator->top, indicator->width, indicator->height, std::chrono::steady_clock::now(), indicator->ttl_ms))
+    return COLOSSUS_CEF_INVALID;
+  browser->browser->GetHost()->Invalidate(PET_VIEW);
+  return COLOSSUS_CEF_OK;
+}
+#endif
 extern "C" int32_t colossus_cef_presentation_input(colossus_cef_tab tab,
     uint64_t generation, uint64_t viewport, uint64_t document, const colossus_cef_input* input) {
   using namespace colossus;

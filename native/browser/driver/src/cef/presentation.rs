@@ -23,6 +23,8 @@ pub(super) struct State {
     pub(super) control_generation: u64,
     pub(super) handoff: crate::handoff::Cache,
     pub(super) selected_tab: Option<BrowserTabId>,
+    #[cfg(windows)]
+    pub(super) agent_indicator: Option<super::agent_indicator_windows::Pending>,
     active: Option<(Configure, LeaseGuard)>,
 }
 fn status(status: i32) -> Result<(), PresentationError> {
@@ -35,6 +37,18 @@ fn status(status: i32) -> Result<(), PresentationError> {
     }
 }
 impl State {
+    #[cfg(windows)]
+    pub(super) fn geometry(&self) -> (u32, u32, u32) {
+        self.active
+            .as_ref()
+            .map_or((1280, 800, 1000), |(configuration, _)| {
+                (
+                    configuration.width,
+                    configuration.height,
+                    configuration.scale_milli,
+                )
+            })
+    }
     pub(super) fn dimensions(&self) -> (u32, u32) {
         self.active
             .as_ref()
@@ -185,6 +199,8 @@ impl Host {
             Duration::from_millis(u64::from(configuration.lease_ms)),
         )?;
         self.presentation.active = Some((configuration, guard));
+        #[cfg(windows)]
+        self.replay_agent_indicator(lease);
         Ok(lease)
     }
     pub fn presentation_command(

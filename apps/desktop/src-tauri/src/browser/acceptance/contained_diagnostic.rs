@@ -1500,13 +1500,19 @@ async fn exercise_owned(
         !view.human_control_available(),
         "handoff retained human input"
     );
+    #[cfg(windows)]
+    windows::agent_ready(app, &tab, &view, rect).await?;
     fixture.state.signal(&fixture.state.handoff_done);
     println!("PASS authenticated native human-to-agent handoff");
 
     title(&view, "Agent click received").await?;
+    #[cfg(windows)]
+    windows::agent_click_indicator(app, &tab, &view, rect, home).await?;
     fixture.state.signal(&fixture.state.click_observed);
     println!("PASS Core browser.snapshot and browser.click changed the visible page");
     title(&view, "Agent controlled page").await?;
+    #[cfg(windows)]
+    println!("EVIDENCE Core navigation title acknowledged; awaiting matching native frame");
     let page = view.inspect().await?;
     ensure!(
         page.url == format!("{}/agent", fixture.origin),
@@ -1684,6 +1690,12 @@ pub(super) async fn exercise(
     state.remove_target(SPACE).await;
     state.select_target(None).await;
     if exercise.is_err() {
+        #[cfg(windows)]
+        if let Err(error) = &exercise {
+            eprintln!(
+                "EVIDENCE original Windows acceptance assertion before fixture cleanup: {error:#}"
+            );
+        }
         eprintln!(
             "EVIDENCE failed contained diagnostic cleanup ViewerDrain={} SDKClose={}",
             if drain.is_ok() { "ok" } else { "unknown" },
