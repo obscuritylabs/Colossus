@@ -125,6 +125,19 @@ test("browser pane expands, resizes, and has accessible controls", async ({
   await expect(
     page.getByRole("separator", { name: "Resize browser pane" }),
   ).toBeVisible();
+  await page.setViewportSize({ width: 1920, height: 950 });
+  const divider = page.getByRole("separator", { name: "Resize browser pane" });
+  await divider.press("End");
+  await expect
+    .poll(async () => (await pane.boundingBox())?.width ?? 0)
+    .toBeGreaterThan(760);
+  await expect(
+    page.getByRole("region", { name: "Work conversation" }),
+  ).toBeInViewport();
+  const maximum = Number(await divider.getAttribute("aria-valuemax"));
+  await expect(divider).toHaveAttribute("aria-valuenow", String(maximum));
+  await divider.press("ArrowRight");
+  await expect(divider).toHaveAttribute("aria-valuenow", String(maximum - 8));
   await page.getByRole("button", { name: "Expand tool pane" }).click();
   await expect(
     page.getByRole("region", { name: "Work conversation" }),
