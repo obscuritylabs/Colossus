@@ -346,7 +346,7 @@ adapter is excluded. Chromium's sandbox remains enabled, and the browser has no
 debugging TCP listener. This diagnostic is unavailable in release builds and
 ordinary Mac package discovery remains disabled.
 
-The runner invokes only
+The default `--case page` invokes only
 `browser_tools::tests::native_macos::real_mac_chromium_executes_core_tools_and_paints_authenticated_frames`
 with `--ignored --exact`. It never runs `native_session_ports`, audit-session
 joining, or the earlier session-port probes. The fixture checks the real Core
@@ -365,6 +365,28 @@ scale. Viewer detachment left Core in control; closing the run acknowledged CEF
 shutdown and the direct host exited zero. The successful receipt is one named
 test, `1 passed; 0 failed`, and `cef_acknowledged=true`. This establishes this
 temporary HTTP fixture, not complete helper ownership or production readiness.
+
+Use a fresh allocation with `--case transfers` to run the separate exact Core
+artifact fixture with the same built component:
+
+```sh
+mac_transfer_output=$(mktemp -d /private/tmp/ct.XXXXXX)
+python3 -B native/browser/scripts/run_core_macos_diagnostic.py \
+  --cef-root "$mac_diag_cef" --native-build "$mac_diag_native" \
+  --host-binary "$mac_diag_host/debug/colossus-native-browser-host" \
+  --output-root "$mac_transfer_output" --case transfers
+```
+
+On macOS ARM64 this native case passed one real HTTP multipart upload and a
+same-origin redirected binary download through Core's artifact authority. It
+verified exact SHA-256 and owner metadata, rejected unknown upload artifacts,
+wrong upload digests and post-effect release denial, and observed zero requests
+at a live listener behind a forbidden redirect. CEF shutdown was acknowledged
+and the direct host exited zero. The runner requires the exact named test and
+its completed transfer assertion receipt; an empty test filter cannot pass.
+The finite selectors accept only `page` and `transfers`. Each run retains its
+allocation, including failures; this result does not establish HTTPS, certificate
+custody, complete helper cleanup or Desktop input acceptance.
 
 The native startup path uses the owned `MAC_CHROMIUM_TMPDIR`, a main-only Unix
 socket bind beneath `profile/tmp`, and exact helper executable selection. Helpers
@@ -520,9 +542,11 @@ unset COLOSSUS_CEF_ROOT COLOSSUS_CEF_NATIVE_LIB_DIR
 ```
 
 The bounded visual checkpoint keeps the authenticated green agent page submitted
-to Desktop's native view for up to 40 seconds so the foreground window can be
+to Desktop's native view for 40 seconds in this example; the explicit option
+accepts `0..40000` milliseconds so the foreground window can be
 captured separately. The harness requires an actual Core-created run using the
-public SDK, the native human-to-agent handoff, a Core click and navigation,
+public SDK, the native human-to-agent handoff, a Core click, a fresh snapshot
+after that click, and navigation using the snapshot's exact target,
 the exact new-document frame with the green fixture pixel, a Core screenshot,
 viewer detachment, and a successful SDK close. Its sidecar exits zero only with
 exactly one typed `GracefulDirectChildExit` receipt for the direct host. Require
@@ -532,10 +556,18 @@ alone is not a test result. If bootstrap or a later assertion fails, retain the
 logs, Desktop home and signed allocation. A categorical cleanup line reports
 what the SDK could verify; `unknown` is not success.
 
-This Desktop pass has **not** been accepted yet. Native frame submission does
-not alone prove that pixels reached the foreground screen; record that through
-the separate macOS window inspection. Neither a successful Core fixture nor a
-future Desktop diagnostic proves whole-helper or parent-crash containment,
+On October 11, 2026, the signed ARM64 Desktop diagnostic passed the complete
+connected sequence: human page rendering, 2004×1280 Retina frames, overlay
+hide/clear/restore, authenticated handoff, Core click and navigation, PNG
+publication, recovery of a fresh same-document frame after screenshot capture,
+the 40-second checkpoint, viewer detachment and verified direct-host shutdown.
+The exact sidecar exit required `GracefulDirectChildExit`; the Desktop AppKit
+event loop then exited cleanly. Separate native window inspection captured the
+blue human fixture and the green agent-controlled page inside Colossus Desktop.
+The green capture was taken during a complete passing 40-second visual run,
+which then detached the viewer and completed the acknowledged native shutdown.
+These results do not prove
+whole-helper or parent-crash containment,
 HTTPS request enforcement, certificate custody, signed installation, or
 production automation.
 

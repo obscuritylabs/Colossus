@@ -23,7 +23,7 @@ pub enum Role {
 }
 
 /// A native-owned opaque target and bounded logical viewport, never a HWND/NSView.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Configure {
     /// Exact supervised opaque session.

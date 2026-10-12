@@ -1,6 +1,46 @@
 use super::*;
 use std::os::unix::fs::{PermissionsExt as _, symlink};
 
+#[test]
+fn tls_bootstrap_requires_exact_signed_numeric_loopback_destination_and_public_roots() {
+    let valid = MacosBrowserTlsConfig {
+        broker_cdhash: [1; 20],
+        origin: colossus_contracts::BrowserOrigin::parse("https://127.0.0.1:60924").unwrap(),
+        destinations: vec!["127.0.0.1:60924".parse().unwrap()],
+        public_roots: vec![vec![1]],
+        pki_registry_sha256: None,
+    };
+    validate_tls(&valid).unwrap();
+    for invalid in [
+        MacosBrowserTlsConfig {
+            broker_cdhash: [0; 20],
+            ..valid.clone()
+        },
+        MacosBrowserTlsConfig {
+            origin: colossus_contracts::BrowserOrigin::parse("http://127.0.0.1:60924").unwrap(),
+            ..valid.clone()
+        },
+        MacosBrowserTlsConfig {
+            origin: colossus_contracts::BrowserOrigin::parse("https://localhost:60924").unwrap(),
+            ..valid.clone()
+        },
+        MacosBrowserTlsConfig {
+            destinations: vec!["127.0.0.1:60925".parse().unwrap()],
+            ..valid.clone()
+        },
+        MacosBrowserTlsConfig {
+            destinations: vec!["192.0.2.1:60924".parse().unwrap()],
+            ..valid.clone()
+        },
+        MacosBrowserTlsConfig {
+            public_roots: Vec::new(),
+            ..valid.clone()
+        },
+    ] {
+        assert_eq!(validate_tls(&invalid), Err(BrowserDriverError::Denied));
+    }
+}
+
 fn policy(allocation: &str, app: &str, profile: &str) -> String {
     format!(
         "COLOSSUS_MAC_NETWORK_ENVELOPE_V1\n123\n60924\n{allocation}\n{app}\ncom.obscuritylabs.ColossusBrowser\n{profile}\n/private/tmp/broker\n/Users/test\n"
@@ -16,12 +56,22 @@ fn policy_requires_exact_allocation_app_and_profile() {
         app.to_str().unwrap(),
         allocation.join("profile").to_str().unwrap(),
     );
-    assert_eq!(parse_policy(&valid, allocation, &app), Ok((123, 60924)));
+    assert_eq!(
+        parse_policy(&valid, allocation, &app),
+        Ok(PolicyBinding {
+            audit_session: 123,
+            proxy_port: 60924,
+            custody_root: "/private/tmp/broker".into()
+        })
+    );
     for invalid in [
         valid.replacen("/private/tmp/allocation\n", "/private/tmp/other\n", 1),
         valid.replacen("Colossus Browser Host.app", "Other.app", 1),
         valid.replacen("/profile\n", "/other-profile\n", 1),
         format!("{valid}extra\n"),
+        valid.replace("/private/tmp/broker\n", "/private/tmp/allocation/profile\n"),
+        valid.replace("/private/tmp/broker\n", "/private/tmp/../broker\n"),
+        valid.replace("/private/tmp/broker\n", "/private/tmp\n"),
     ] {
         assert_eq!(
             parse_policy(&invalid, allocation, &app),

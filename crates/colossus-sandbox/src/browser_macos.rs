@@ -16,8 +16,15 @@ use std::sync::Arc;
 
 #[cfg(debug_assertions)]
 mod acceptance;
+#[cfg(all(debug_assertions, feature = "macos-browser-tls-development"))]
+mod pki;
+#[cfg(all(debug_assertions, feature = "macos-browser-tls-development"))]
+pub use acceptance::MacosBrowserCustodyRetirementReceipt;
 #[cfg(debug_assertions)]
-pub use acceptance::{MacosBrowserAcceptanceConfig, MacosBrowserShutdownReceipt};
+pub use acceptance::{
+    MacosBrowserAcceptanceConfig, MacosBrowserOwnedProcessConfig, MacosBrowserShutdownReceipt,
+    MacosBrowserTlsConfig, MacosBrowserTlsLifetimeOwner,
+};
 
 #[cfg(target_os = "macos")]
 mod process_cleanup {
@@ -366,7 +373,8 @@ impl MacosBrowserSupervisor {
     ///
     /// This constructor is absent from release builds and is never used by ordinary
     /// browser package discovery. It accepts only temporary Embedded browsing to a
-    /// numeric loopback HTTP origin and still does not establish production cleanup.
+    /// numeric loopback HTTP origin, or a signed owned-process HTTPS fixture with
+    /// independently admitted native TLS broker. Production cleanup is unaccepted.
     #[cfg(debug_assertions)]
     pub async fn install_for_acceptance(
         config: MacosBrowserAcceptanceConfig,
@@ -374,6 +382,18 @@ impl MacosBrowserSupervisor {
         Ok(Self {
             acceptance: Some(Arc::new(acceptance::Acceptance::install(config).await?)),
         })
+    }
+
+    /// Retained custody root derived from the independently hashed signed policy.
+    /// Native Runtime protects this sibling separately from the browser allocation.
+    #[cfg(debug_assertions)]
+    pub fn protected_custody_root(
+        &self,
+    ) -> Result<colossus_home::ConfinedRoot, BrowserDriverError> {
+        self.acceptance
+            .as_ref()
+            .ok_or(BrowserDriverError::Unavailable)?
+            .protected_custody_root()
     }
 
     /// Clone the separately authenticated presenter for the exact diagnostic session.
@@ -409,6 +429,20 @@ impl MacosBrowserSupervisor {
     )> {
         match &self.acceptance {
             Some(acceptance) => acceptance.shutdown_receipts().await,
+            None => Vec::new(),
+        }
+    }
+    /// Completed native identity removal evidence for each exact Debug session.
+    /// Missing evidence remains unknown; the journal cannot mint this receipt.
+    #[cfg(all(debug_assertions, feature = "macos-browser-tls-development"))]
+    pub async fn custody_retirement_receipts(
+        &self,
+    ) -> Vec<(
+        colossus_contracts::BrowserSessionId,
+        Option<MacosBrowserCustodyRetirementReceipt>,
+    )> {
+        match &self.acceptance {
+            Some(acceptance) => acceptance.custody_retirement_receipts().await,
             None => Vec::new(),
         }
     }

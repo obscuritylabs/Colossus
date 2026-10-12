@@ -47,11 +47,32 @@ impl NativeRelay {
         {
             return Err(PresentationError::Stale);
         }
-        let lease = self.client.configure(value.clone()).await?;
-        // Only the authenticated private native ACK is passed to this non-wire Runtime seam.
-        self.session
-            .confirm_presentation_lease(&value, lease)
-            .map_err(|_| PresentationError::OutcomeUnknown)?;
+        if self
+            .frames
+            .lock()
+            .map_err(|_| PresentationError::OutcomeUnknown)?
+            .as_ref()
+            .is_some_and(|(prior, _)| value.viewport_generation <= prior.viewport_generation)
+        {
+            return Err(PresentationError::Stale);
+        }
+        let lease = if value == current && value.control_generation > 0 {
+            match self
+                .session
+                .take_handoff_presentation_lease(&value)
+                .map_err(|_| PresentationError::Stale)?
+            {
+                Some(lease) => lease,
+                None => return Err(PresentationError::Stale),
+            }
+        } else {
+            let lease = self.client.configure(value.clone()).await?;
+            // Only the authenticated private native ACK reaches Runtime.
+            self.session
+                .confirm_presentation_lease(&value, lease)
+                .map_err(|_| PresentationError::OutcomeUnknown)?;
+            lease
+        };
         self.acknowledged()?;
         *self
             .frames
@@ -80,7 +101,15 @@ impl PresentationHost for NativeRelay {
                 let state = self.client.observe(lease).await?;
                 self.session
                     .confirm_presentation_state(lease, &state)
-                    .map_err(|_| PresentationError::OutcomeUnknown)?;
+                    .map_err(|error| match error {
+                        // A concurrent handoff, viewport or document transition
+                        // can retire this read-only observation. Retire its view
+                        // without classifying a known stale query as a lost effect.
+                        colossus_runtime::RuntimeNativeBrowserError::Stale => {
+                            PresentationError::Stale
+                        }
+                        _ => PresentationError::OutcomeUnknown,
+                    })?;
                 self.acknowledged()?;
                 Ok(PresentationReply::State(state))
             }

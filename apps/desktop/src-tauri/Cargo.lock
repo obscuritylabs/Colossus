@@ -1114,6 +1114,7 @@ dependencies = [
  "core-foundation",
  "libc",
  "security-framework",
+ "sha2",
 ]
 
 [[package]]

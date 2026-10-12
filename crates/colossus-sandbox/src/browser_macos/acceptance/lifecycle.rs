@@ -7,6 +7,7 @@ use colossus_contracts::{
     BrowserCapabilities, BrowserObservation, BrowserSessionId, BrowserTabSummary,
 };
 use colossus_darwin_process::{DarwinAuditPeer, DarwinChild, DarwinDirectChildCleanup};
+use colossus_mac_browser_process_broker::CoreProcessOwner;
 use colossus_ports::{
     BrowserCancelDisposition, BrowserDownloadChunk, BrowserDownloadDescriptor,
     BrowserDownloadReadRequest, BrowserDriver, BrowserDriverCommand, BrowserDriverControl,
@@ -28,6 +29,9 @@ pub(super) struct Resources {
     pub request: BrowserDriverOpenRequest,
     pub installation: Arc<Installation>,
     pub child: Option<DarwinChild>,
+    pub process_owner: Option<CoreProcessOwner>,
+    #[cfg(feature = "macos-browser-tls-development")]
+    pub tls: Option<super::tls::Owner>,
     pub spawn_attempted: bool,
     child_cleanup: Option<DarwinDirectChildCleanup>,
     pub peer: Option<DarwinAuditPeer>,
@@ -52,6 +56,9 @@ impl Resources {
             request,
             installation,
             child: None,
+            process_owner: None,
+            #[cfg(feature = "macos-browser-tls-development")]
+            tls: None,
             spawn_attempted: false,
             child_cleanup: None,
             peer: None,
@@ -79,6 +86,22 @@ impl Resources {
             presenter.disconnect();
         }
         let mut unknown = false;
+        #[cfg(feature = "macos-browser-tls-development")]
+        if let Some(tls) = &mut self.tls
+            && tls.close().await.is_err()
+        {
+            unknown = true;
+        }
+        if let Some(tls_owner) = &self.installation.tls_owner
+            && !matches!(
+                tokio::time::timeout(Duration::from_secs(7), tls_owner.revoke()).await,
+                Ok(Ok(()))
+            )
+        {
+            // TLS lifetime failure cannot suppress independent process/proxy
+            // cleanup, and the exact owner remains held by the installation.
+            unknown = true;
+        }
         if let Some(egress) = &mut self.egress
             && !matches!(
                 tokio::time::timeout(Duration::from_secs(2), egress.revoke()).await,
@@ -87,6 +110,12 @@ impl Resources {
         {
             // A proxy failure cannot suppress the independent child and pipe
             // cleanup duties. Its lease retains the unresolved revocation.
+            unknown = true;
+        }
+        let owned_process = self.process_owner.is_some();
+        if let Some(owner) = self.process_owner.as_mut()
+            && owner.close().is_err()
+        {
             unknown = true;
         }
         if self.cef_acknowledged
@@ -125,7 +154,7 @@ impl Resources {
                     unknown = true;
                 }
             }
-        } else if self.spawn_attempted && self.child_cleanup.is_none() {
+        } else if self.spawn_attempted && self.child_cleanup.is_none() && !owned_process {
             // A failed native spawn may have crossed posix_spawn before its
             // internal cleanup failed. Absence of a returned child is no receipt.
             unknown = true;
@@ -144,13 +173,24 @@ impl Resources {
             return Err(BrowserDriverError::OutcomeUnknown);
         }
         self.closed = true;
-        self.receipt = Some(match self.child_cleanup {
-            Some(cleanup) if self.cef_acknowledged && cleanup.status().success() => {
-                MacosBrowserShutdownReceipt::GracefulDirectChildExit
-            }
-            Some(_) => MacosBrowserShutdownReceipt::TerminatedDirectChildExit,
-            None => MacosBrowserShutdownReceipt::NoDirectChildAllocated,
+        let owned_graceful = self.process_owner.as_ref().is_some_and(|owner| {
+            owner
+                .receipt()
+                .is_some_and(|receipt| receipt.main_status == Some(0))
         });
+        self.receipt = Some(
+            match (owned_process, self.cef_acknowledged, self.child_cleanup) {
+                (true, true, _) if owned_graceful => {
+                    MacosBrowserShutdownReceipt::GracefulKnownChildrenExit
+                }
+                (true, _, _) => MacosBrowserShutdownReceipt::TerminatedKnownChildrenExit,
+                (_, _, Some(cleanup)) if self.cef_acknowledged && cleanup.status().success() => {
+                    MacosBrowserShutdownReceipt::GracefulDirectChildExit
+                }
+                (_, _, Some(_)) => MacosBrowserShutdownReceipt::TerminatedDirectChildExit,
+                (_, _, None) => MacosBrowserShutdownReceipt::NoDirectChildAllocated,
+            },
+        );
         Ok(())
     }
 }
@@ -353,9 +393,16 @@ mod tests {
     use colossus_contracts::{
         BrowserDocumentId, BrowserOpenOptions, BrowserScope, BrowserSessionBinding, BrowserTabId,
     };
+    use std::os::unix::fs::PermissionsExt as _;
     use tokio::sync::oneshot;
 
-    fn unstarted_resources() -> Resources {
+    fn unstarted_resources() -> (tempfile::TempDir, Resources) {
+        let directory = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let custody =
+            colossus_home::ConfinedRoot::bind(directory.path().canonicalize().unwrap()).unwrap();
         let installation = Installation {
             allocation: "/private/tmp/unstarted-browser-test".into(),
             executable: "/private/tmp/unstarted-browser-test/host".into(),
@@ -367,6 +414,7 @@ mod tests {
             manifest_entries: Vec::new(),
             policy: "/private/tmp/unstarted-browser-test/policy".into(),
             policy_sha256: [4; 32],
+            custody,
             capabilities: BrowserCapabilities::unavailable(),
             audit_session: 123,
             proxy_port: 60924,
@@ -376,6 +424,11 @@ mod tests {
                 connection_timeout: Duration::from_secs(1),
                 max_connection_bytes: 64 * 1024,
             },
+            owned_process: None,
+            tls_owner: None,
+            tls_config: None,
+            #[cfg(feature = "macos-browser-tls-development")]
+            pki_registry: None,
         };
         let request = BrowserDriverOpenRequest {
             binding: BrowserSessionBinding {
@@ -397,16 +450,19 @@ mod tests {
                 profile: Default::default(),
             },
         };
-        Resources::new(
-            request,
-            Arc::new(installation),
-            Arc::new(AtomicBool::new(false)),
+        (
+            directory,
+            Resources::new(
+                request,
+                Arc::new(installation),
+                Arc::new(AtomicBool::new(false)),
+            ),
         )
     }
 
     #[tokio::test]
     async fn pre_spawn_admission_failure_closes_without_claiming_child_exit() {
-        let mut resource = unstarted_resources();
+        let (_directory, mut resource) = unstarted_resources();
         assert_eq!(resource.cleanup().await, Ok(()));
         assert!(resource.closed);
         assert!(resource.fenced.load(Ordering::Acquire));
@@ -419,7 +475,7 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_error_without_returned_owner_never_claims_no_child() {
-        let mut resource = unstarted_resources();
+        let (_directory, mut resource) = unstarted_resources();
         resource.spawn_attempted = true;
         assert_eq!(
             resource.cleanup().await,

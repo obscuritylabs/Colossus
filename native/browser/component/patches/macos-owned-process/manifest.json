@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "development_only": true,
+  "production_accepted": false,
+  "cef_commit": "14c5a089e8452874cb1a556dc3fde26ed2d87723",
+  "chromium_revision": "refs/tags/154.0.8037.98",
+  "patch_sha256": "d2df56cb7b7e8fe3d26b03ac9ffabf0dfe54e43d82dc7311090364accab60ed2",
+  "source_sha256": {
+    "base/process/launch_mac.cc": "2c62e962f5b2fdabcfaaf8a5e4155e15e40ae332cda3a6c9c51261933877e80a",
+    "base/apple/mach_port_rendezvous_mac.cc": "1de18c3104a1b7edc92f9e7ec9615c4dc1d49be114d564baf0b4ec94c2f46d34",
+    "content/browser/child_process_launcher_helper_mac.cc": "9be8f233064e315009400054f9a13c7f69823ffb88679d99c6e85e240f707c4e",
+    "base/BUILD.gn": "6923bf617d6f758957984aeacdc0cdaa040e1187a7589d4d658682becfb268f5",
+    "base/process/kill_posix.cc": "7500d4a99480cf3846133aebdcb71e05bdccea2539d6a7b6128fef658d91a02e",
+    "base/process/process_posix.cc": "5d2af509cd43e0914ebfac1ecc6928271f0511931ffa336e5ba95cf3d4713868",
+    "base/synchronization/lock_metrics_recorder.cc": "d8a0467d0920ab6a66b74430f8e81ceb438bbe767c090927c0a57f13e26ec3c2",
+    "chrome/common/chrome_paths_mac.mm": "d1dfa65cbd46600c6340aa51fa3ebdc5559aa91d20f78a375364a0af6ab3e588"
+  },
+  "overlay_sources": {
+    "client.cc": "base/process/colossus_owned_process_client.cc",
+    "client.h": "base/process/colossus_owned_process_client.h"
+  },
+  "overlay_sha256": {
+    "client.cc": "d5d6ab95cfa4c1f61c8ccf8659f5208c85385c39d516c00de7c3108fac781e2f",
+    "client.h": "2c1078de8c978c231b146632bc363661e83b2dd2ab503243400c9b29d4e8436a"
+  },
+  "cef_lazy_sampler_seed_patch_sha256": "f6dc88202b951c5adae4ca1a75258f41d1168fc940d5182a7be5a726200d4976",
+  "not_accepted": [
+    "actual Chromium page rendering and all-role helper supervision",
+    "complete helper-domain and native partial-creation recovery",
+    "configured native certificate custody through Core and Desktop",
+    "signed installation or production discovery"
+  ]
+}

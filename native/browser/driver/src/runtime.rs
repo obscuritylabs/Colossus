@@ -30,6 +30,10 @@ pub fn pump(
     lifetime: Lifetime,
     mut close_egress: impl FnMut() -> Result<(), BrowserDriverError>,
 ) -> Result<(), BrowserDriverError> {
+    host.install_presentation_lane(presentation::Lane::new(
+        channels.presentation,
+        Arc::clone(&lifetime.presentation_revoked),
+    ));
     let result = loop {
         while let Ok(queue::Control::Close(session, sender)) = channels.control.try_recv() {
             let result = close_egress().and_then(|()| host.close(&session));
@@ -43,7 +47,14 @@ pub fn pump(
                 let _ = sender.send(host.open(request, &control));
             }
             Ok(queue::Data::Execute(command, control, sender)) => {
-                let _ = sender.send(host.execute(command, &control));
+                let action = command.action.kind();
+                let result = host.execute(command, &control);
+                crate::execution_diagnostic::trace(
+                    crate::execution_diagnostic::Stage::Host,
+                    action,
+                    &result,
+                );
+                let _ = sender.send(result);
             }
             Ok(queue::Data::Capture(command, control, sender)) => {
                 let _ = sender.send(host.capture(command, &control));
@@ -71,37 +82,7 @@ pub fn pump(
             }
             Err(_) => {}
         }
-        if lifetime.presentation_revoked.load(Ordering::Acquire) {
-            host.revoke_human_presentation();
-        }
-        for _ in 0..16 {
-            match channels.presentation.try_recv() {
-                Ok(presentation::Command::Control(command, sender)) => {
-                    if sender.is_closed() {
-                        continue;
-                    }
-                    let result = if lifetime.presentation_revoked.load(Ordering::Acquire) {
-                        Err(colossus_browser_presentation::PresentationError::Hidden)
-                    } else {
-                        host.presentation_command(command)
-                    };
-                    let _ = sender.send(result);
-                }
-                Ok(presentation::Command::Frame(lease, sender)) => {
-                    if sender.is_closed() {
-                        continue;
-                    }
-                    let result = if lifetime.presentation_revoked.load(Ordering::Acquire) {
-                        Err(colossus_browser_presentation::PresentationError::Hidden)
-                    } else {
-                        host.presentation_frame(lease)
-                    };
-                    let _ = sender.send(result);
-                }
-                Ok(presentation::Command::Revoke) => host.revoke_human_presentation(),
-                Err(_) => break,
-            }
-        }
+        host.service_presentation(false);
         if let Err(error) = host.idle_pump() {
             break Err(error);
         }

@@ -238,14 +238,14 @@ impl EffectExecutor for BrowserEffect<'_> {
                     )
                     .await;
                 }
-                serde_json::to_value(
-                    self.browser
-                        .coordinator
-                        .execute(&run.actor, &lease, &target, action, &run.control)
-                        .await
-                        .map_err(execution_error)?,
-                )
-                .map_err(encoding_error)?
+                let observation = self
+                    .browser
+                    .coordinator
+                    .execute(&run.actor, &lease, &target, action, &run.control)
+                    .await
+                    .map_err(execution_error)?;
+                super::native::selection::record(self.browser, &run, &lease)?;
+                serde_json::to_value(observation).map_err(encoding_error)?
             }
         };
         let bytes = serde_json::to_vec(&value).map_err(encoding_error)?;

@@ -3,6 +3,7 @@ mod allocation;
 pub(super) mod driver;
 mod handoff;
 pub(super) mod lifecycle;
+pub(super) mod selection;
 mod types;
 
 pub(super) use types::NativeState;

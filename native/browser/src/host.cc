@@ -1,5 +1,7 @@
+#include "bootstrap_network.h"
 #include "host_internal.h"
 #include "synthetic_profile.h"
+#include "broker_tls.h"
 #include "include/cef_app.h"
 #include "include/cef_command_line.h"
 #include "include/cef_path_util.h"
@@ -105,6 +107,28 @@ extern "C" int32_t colossus_cef_windows_startup_diagnostics(void) {
 }
 #endif
 static Proxy proxy;
+static BrokerTlsTrust broker_tls;
+
+bool BrokerTlsCertificate(const std::string& url, CefRefPtr<CefSSLInfo> info) {
+#if defined(OS_MAC) && defined(COLOSSUS_CEF_DEVELOPER_PROCESS_BROKER)
+  if (!initialized || !OnOwningThread() || !info ||
+      info->GetCertStatus() != CERT_STATUS_AUTHORITY_INVALID) return false;
+  CefURLParts parts;
+  if (!CefParseURL(url, parts) || CefString(&parts.scheme).ToString() != "https" ||
+      parts.username.length || parts.password.length) return false;
+  const auto certificate = info->GetX509Certificate();
+  const auto der = certificate ? certificate->GetDEREncoded() : nullptr;
+  if (!der || !der->GetSize() || der->GetSize() > 65536) return false;
+  std::vector<uint8_t> leaf(der->GetSize());
+  if (der->GetData(leaf.data(), leaf.size(), 0) != leaf.size()) return false;
+  const auto origin = CefString(&parts.origin).ToString();
+  return !origin.empty() && broker_tls.Matches(origin.substr(0, origin.size() - 1), leaf.data(),
+                           leaf.size(), std::chrono::steady_clock::now());
+#else
+  (void)url; (void)info;
+  return false;
+#endif
+}
 
 bool ProxyCredentials(const std::string& host, int port,
                       std::string* username, std::string* password) {
@@ -133,7 +157,10 @@ class App final : public CefApp, public CefBrowserProcessHandler {
     if (!owned_helpers_) return;
     const auto process = line->GetSwitchValue("type").ToString();
     const auto program = line->GetProgram().ToString();
-    const auto selected = owned_helpers_->GpuProgram(process, program);
+    // Chrome's helper discovery assumes its versioned framework layout. This
+    // owned component supplies fixed separately validated fronts instead; the
+    // creator still selects and verifies the signed image/body for every role.
+    const auto selected = owned_helpers_->Program(process);
 #if defined(COLOSSUS_CEF_MAC_SYNTHETIC_PROFILE_DIAGNOSTIC)
     std::fprintf(stderr, "native helper launch process=%d program=%d selected=%d\n",
       MacChildProcessClass(process), MacHelperProgramKind(program),
@@ -217,20 +244,25 @@ extern "C" int32_t colossus_cef_proxy_configure(const char* address,
       strnlen(password, 4097) > 4096 || !*username || !*password)
     return COLOSSUS_CEF_INVALID;
   const std::string host(address);
-  // Admit only literal IP syntax. CEF parsing validates the actual address.
-  if (!std::all_of(host.begin(), host.end(), [](unsigned char c) {
-        return (c >= '0' && c <= '9') || c == '.' || c == ':' ||
-          (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
-      })) return COLOSSUS_CEF_INVALID;
-  // The dedicated host configures its proxy before CEF initialization. macOS
-  // must load the framework before any CefString or parser utility is called.
-  if (!PlatformLoadLibrary()) return COLOSSUS_CEF_UNAVAILABLE;
-  CefURLParts parts;
-  const auto bracketed = host.find(':') == std::string::npos ? host : "[" + host + "]";
-  if (!CefParseURL("http://" + bracketed + ":" + std::to_string(port), parts))
-    return COLOSSUS_CEF_INVALID;
+  if (!BootstrapLiteralAddress(host)) return COLOSSUS_CEF_INVALID;
   proxy = {host, port, username, password};
   return COLOSSUS_CEF_OK;
+}
+
+extern "C" int32_t colossus_cef_broker_tls_configure(const char* origin,
+  const uint8_t* leaf, size_t bytes, uint32_t lifetime_ms) {
+#if defined(OS_MAC) && defined(COLOSSUS_CEF_DEVELOPER_PROCESS_BROKER)
+  using namespace colossus;
+  if (initialized || !proxy.port) return COLOSSUS_CEF_BUSY;
+  if (!origin || strnlen(origin, 4097) > 4096 || !*origin)
+    return COLOSSUS_CEF_INVALID;
+  if (!BootstrapNumericHttpsOrigin(origin)) return COLOSSUS_CEF_INVALID;
+  return broker_tls.Configure(origin, leaf, bytes, lifetime_ms,
+    std::chrono::steady_clock::now()) ? COLOSSUS_CEF_OK : COLOSSUS_CEF_DENIED;
+#else
+  (void)origin; (void)leaf; (void)bytes; (void)lifetime_ms;
+  return COLOSSUS_CEF_UNAVAILABLE;
+#endif
 }
 
 bool Allow(colossus_cef_tab tab, uint64_t generation, const std::string& url,
@@ -425,5 +457,6 @@ extern "C" int32_t colossus_cef_shutdown() {
   std::fill(proxy.username.begin(), proxy.username.end(), '\0');
   std::fill(proxy.password.begin(), proxy.password.end(), '\0');
   proxy = {};
+  broker_tls.Revoke();
   return COLOSSUS_CEF_OK;
 }

@@ -21,6 +21,7 @@ import sys
 import tempfile
 
 import component
+import owned_process_component
 
 
 FRAMEWORK = "Chromium Embedded Framework.framework"
@@ -41,6 +42,12 @@ SYNTHETIC_PROFILE_METADATA = {
     "schema_version": 1, "development_only": True, "build_type": "Debug",
     "production_accepted": False, "api": "chromium-use-mock-keychain",
     "http_loopback_only": True, "temporary_profiles_only": True,
+}
+OWNED_PROFILE_METADATA = {
+    "schema_version": 1, "development_only": True, "build_type": "Debug",
+    "production_accepted": False, "api": "chromium-use-mock-keychain",
+    "loopback_only": True, "https_broker_leaf_pin_required": True,
+    "temporary_profiles_only": True,
 }
 NETWORK_ENVELOPE_RESOURCE = "colossus-network-envelope.policy"
 NETWORK_ENVELOPE_MARKER = "COLOSSUS_MAC_NETWORK_ENVELOPE_V1"
@@ -204,7 +211,8 @@ def publish_artifacts(artifacts: list[tuple[Path, Path]]) -> None:
 
 def sign_app(app: Path, helpers: list[Path], platform: str, *, host: bool = False,
              profile_crypto_development: bool = False,
-             network_envelope_development: bool = False) -> None:
+             network_envelope_development: bool = False,
+             owned_process_development: bool = False) -> None:
     arch = "arm64" if platform == "macosarm64" else "x86_64"
     framework = app / "Contents/Frameworks" / FRAMEWORK
     # A copied pinned framework includes libcef_sandbox.dylib: helpers load it
@@ -214,25 +222,39 @@ def sign_app(app: Path, helpers: list[Path], platform: str, *, host: bool = Fals
         libraries.append(app / "Contents/Frameworks" / PROFILE_CRYPTO_LIBRARY)
     with (app / "Contents/Info.plist").open("rb") as source:
         main_executable = plistlib.load(source)["CFBundleExecutable"]
-    bodies = ([app / "Contents/MacOS" / (main_executable + " Body")]
-              + [helper / "Contents/MacOS" / (helper.stem + " Body") for helper in helpers]
+    body_suffix = " Body.dylib" if owned_process_development else " Body"
+    bodies = ([app / "Contents/MacOS" / (main_executable + body_suffix)]
+              + [helper / "Contents/MacOS" / (helper.stem + body_suffix) for helper in helpers]
               if network_envelope_development else [])
+    brokers = ([app / "Contents/MacOS/colossus-mac-browser-process-broker"]
+               if owned_process_development else [])
+    tls_broker = app / "Contents/MacOS/colossus-native-browser-tls-broker"
+    if owned_process_development and tls_broker.exists():
+        brokers.append(tls_broker)
     for binary in [app / "Contents/MacOS" / main_executable,
                    *(helper / "Contents/MacOS" / helper.stem for helper in helpers),
                    framework / "Versions/A/Chromium Embedded Framework", *libraries,
-                   *bodies]:
+                   *bodies, *brokers]:
         run(["/usr/bin/lipo", str(binary), "-verify_arch", arch])
     for library in libraries:
         run(["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none", str(library)])
     run(["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none", str(framework)])
     for body in bodies:
-        run(["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none",
-             "--options", "runtime", "--entitlements", str(ENTITLEMENTS), str(body)])
+        command = ["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none", "--options", "runtime"]
+        if not owned_process_development:
+            command.extend(["--entitlements", str(ENTITLEMENTS)])
+        run([*command, str(body)])
         run(["/usr/bin/codesign", "--verify", "--strict", str(body)])
+    for broker in brokers:
+        # Native supervision gets neither Chromium JIT nor library-validation
+        # exceptions. It is signed before the outer app seals the inventory.
+        run(["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none",
+             "--options", "runtime", str(broker)])
+        run(["/usr/bin/codesign", "--verify", "--strict", str(broker)])
     for target in [*helpers, app]:
         command = ["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none",
                    "--options", "runtime"]
-        if not network_envelope_development:
+        if not network_envelope_development or owned_process_development:
             entitlements = MAIN_ENTITLEMENTS if target == app and not host else ENTITLEMENTS
             command.extend(["--entitlements", str(entitlements)])
         run([*command, str(target)])
@@ -245,19 +267,42 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
               dictation_resources: Path | None = None, *, host: bool = False,
               profile_crypto_development: bool = False,
               synthetic_profile_diagnostic: bool = False,
-              network_envelope_policy: Path | None = None) -> Path:
+              network_envelope_policy: Path | None = None,
+              owned_process_development: bool = False,
+              process_broker: Path | None = None,
+              tls_broker: Path | None = None) -> Path:
     if platform not in ("macosarm64", "macosx64"):
         raise component.ComponentError("development app staging requires a macOS platform")
     if not re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", identifier):
         raise component.ComponentError("invalid development app identifier")
-    cef_root = verify_source(cef_root, platform)
+    cef_root = (owned_process_component.verify_source(cef_root, platform)
+                if owned_process_development else verify_source(cef_root, platform))
     native_build = component.directory(native_build)
     executable = regular_executable(executable.absolute())
-    if host and (executable.name != "colossus-native-browser-host" or dictation_resources is not None):
+    expected_program = "libcolossus_native_browser_host.dylib" if owned_process_development else "colossus-native-browser-host"
+    if host and (executable.name != expected_program or dictation_resources is not None):
         raise component.ComponentError("native host staging requires the fixed host executable and no Desktop assets")
     if profile_crypto_development and not host:
         raise component.ComponentError("unsupported profile crypto is restricted to the explicit native development host")
     network_envelope_development = network_envelope_policy is not None
+    if owned_process_development:
+        if not host or not network_envelope_development:
+            raise component.ComponentError("owned process staging requires the dedicated host and fixed network envelope")
+        owned_process_component.verify_build(cef_root, native_build, platform)
+        owned_process_component.dylib(executable)
+        if process_broker is None:
+            raise component.ComponentError("owned process staging requires the independent native supervisor")
+        process_broker = regular_executable(process_broker.absolute())
+        if process_broker.name != "colossus-mac-browser-process-broker":
+            raise component.ComponentError("native supervisor requires its fixed package executable")
+        if tls_broker is not None:
+            tls_broker = regular_executable(tls_broker.absolute())
+            if tls_broker.name != "colossus-native-browser-tls-broker":
+                raise component.ComponentError("native TLS broker requires its fixed package executable")
+    elif (native_build / owned_process_component.BUILD_RECEIPT).exists():
+        raise component.ComponentError("owned process build requires explicit no-exec staging")
+    elif process_broker is not None or tls_broker is not None:
+        raise component.ComponentError("native supervisor cannot enter stock preview staging")
     if synthetic_profile_diagnostic and (
             not host or profile_crypto_development or not network_envelope_development):
         raise component.ComponentError("synthetic profiles require a separate Debug host with its network envelope")
@@ -267,7 +312,8 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
     synthetic_build = native_build / SYNTHETIC_PROFILE_BUILD
     if synthetic_build.exists() and not synthetic_profile_diagnostic:
         raise component.ComponentError("a synthetic-profile Debug build requires explicit diagnostic staging")
-    if synthetic_profile_diagnostic and component.load_json(synthetic_build) != SYNTHETIC_PROFILE_METADATA:
+    profile_metadata = OWNED_PROFILE_METADATA if owned_process_development else SYNTHETIC_PROFILE_METADATA
+    if synthetic_profile_diagnostic and component.load_json(synthetic_build) != profile_metadata:
         raise component.ComponentError("unsupported or non-Debug synthetic-profile build")
     crypto_build = native_build / PROFILE_CRYPTO_BUILD
     if host and crypto_build.exists() and not profile_crypto_development:
@@ -281,7 +327,7 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
         dictation_resources = component.directory(dictation_resources)
         for name in DICTATION_RESOURCES:
             component.digest_file(dictation_resources / name)
-    executable_name = component.safe_path(executable.name)
+    executable_name = ("colossus-native-browser-host" if owned_process_development else component.safe_path(executable.name))
     app = app.absolute()
     if app.suffix != ".app" or app.exists() or app.is_symlink():
         raise component.ComponentError("select a new .app destination; existing apps are never replaced")
@@ -303,7 +349,10 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
         helper = helper_root / (name + ".app")
         regular_executable(helper / "Contents/MacOS" / name)
         if network_envelope_development:
-            regular_executable(helper / "Contents/MacOS" / (name + " Body"))
+            body = helper / "Contents/MacOS" / (name + (" Body.dylib" if owned_process_development else " Body"))
+            regular_executable(body)
+            if owned_process_development:
+                owned_process_component.dylib(body)
         with (helper / "Contents/Info.plist").open("rb") as source:
             info = plistlib.load(source)
         if info.get("CFBundleExecutable") != name or info.get("CFBundlePackageType") != "APPL":
@@ -316,6 +365,10 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
         frameworks = contents / "Frameworks"
         for directory in (macos, resources, frameworks):
             directory.mkdir(parents=True, exist_ok=True)
+        if process_broker is not None:
+            shutil.copy2(process_broker, macos / "colossus-mac-browser-process-broker")
+        if tls_broker is not None:
+            shutil.copy2(tls_broker, macos / "colossus-native-browser-tls-broker")
         if dictation_resources is not None:
             dictation = resources / "dictation"
             dictation.mkdir()
@@ -323,7 +376,7 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
                 shutil.copy2(dictation_resources / name, dictation / name)
         if network_envelope_development:
             shutil.copy2(front, macos / executable_name)
-            shutil.copy2(executable, macos / (executable_name + " Body"))
+            shutil.copy2(executable, macos / (executable_name + (" Body.dylib" if owned_process_development else " Body")))
             policy = resources / NETWORK_ENVELOPE_RESOURCE
             with policy.open("xb") as output:
                 output.write(policy_bytes)
@@ -389,18 +442,27 @@ def stage_app(cef_root: Path, native_build: Path, executable: Path, app: Path,
                 output.write("\n")
         if synthetic_profile_diagnostic:
             with (resources / SYNTHETIC_PROFILE_CLAIM).open("x", encoding="utf-8") as output:
-                json.dump(SYNTHETIC_PROFILE_METADATA, output, sort_keys=True)
+                json.dump(profile_metadata, output, sort_keys=True)
+                output.write("\n")
+        if owned_process_development:
+            claim = {**owned_process_component.verify_build(cef_root, native_build, platform),
+                     "front_body_transition": "dlopen-after-final-policy", "creator_required": True,
+                     "complete_helper_cleanup_accepted": False, "runtime_available": False}
+            with (resources / owned_process_component.CLAIM).open("x", encoding="utf-8") as output:
+                json.dump(claim, output, sort_keys=True)
                 output.write("\n")
         component.inventory_files(staged, component.MANIFEST)
         sign_app(staged, helpers, platform, host=host,
                  profile_crypto_development=profile_crypto_development,
-                 network_envelope_development=network_envelope_development)
+                 network_envelope_development=network_envelope_development,
+                 owned_process_development=owned_process_development)
         # This developer consistency receipt lives beside the signed app.
         # It does not establish publisher identity or promote release modes.
         temporary_manifest = Path(temporary) / component.MANIFEST
-        component.installed_inventory(staged, platform, "Contents/MacOS/" + executable_name,
-                                       temporary_manifest)
-        component.verify_installed(staged, temporary_manifest)
+        inventory = owned_process_component.installed_inventory if owned_process_development else component.installed_inventory
+        verify = owned_process_component.verify_installed if owned_process_development else component.verify_installed
+        inventory(staged, platform, "Contents/MacOS/" + executable_name, temporary_manifest)
+        verify(staged, temporary_manifest)
         run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(staged)])
         publish_artifacts([(staged, app), (temporary_manifest, manifest)])
     return app / "Contents/MacOS" / executable_name

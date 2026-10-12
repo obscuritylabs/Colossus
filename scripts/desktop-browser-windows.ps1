@@ -26,7 +26,9 @@ $Development = Join-Path ([Environment]::GetFolderPath('UserProfile')) "Colossus
 $SavedEnvironment = @{}
 foreach ($Name in @('PATH', 'COLOSSUS_HOME', 'LOCALAPPDATA', 'TEMP', 'TMP',
     'COLOSSUS_SIDECAR_WINDOWS_BROWSER_DEVELOPMENT', 'COLOSSUS_CEF_ROOT', 'COLOSSUS_CEF_NATIVE_LIB_DIR',
-    'COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_COMPONENT', 'COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_STATE_PARENT')) {
+    'COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_COMPONENT', 'COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_STATE_PARENT',
+    'COLOSSUS_BROWSER_ACCEPTANCE_OWNED_TABS', 'COLOSSUS_BROWSER_ACCEPTANCE_NATIVE_INPUT',
+    'COLOSSUS_BROWSER_ACCEPTANCE_VISUAL_HOLD_MS')) {
     $SavedEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name, 'Process')
 }
 function Invoke-Logged([string]$Command, [string[]]$Arguments, [string]$Log) {
@@ -75,6 +77,9 @@ try {
     Invoke-Logged cargo @('build', '--locked', '--manifest-path', 'apps/desktop/src-tauri/Cargo.toml',
         '--no-default-features', '--features', 'windows-browser-development', '--example', 'browser-acceptance') 'desktop-build.log'
     $env:PATH = $Component + ';' + $env:PATH
+    $env:COLOSSUS_BROWSER_ACCEPTANCE_OWNED_TABS = '1'
+    $env:COLOSSUS_BROWSER_ACCEPTANCE_NATIVE_INPUT = $null
+    $env:COLOSSUS_BROWSER_ACCEPTANCE_VISUAL_HOLD_MS = '0'
     Invoke-Logged 'apps/desktop/src-tauri/target/debug/examples/browser-acceptance.exe' @('http://127.0.0.1:53713/') 'desktop.log'
     foreach ($Name in @('windows-human-foreground.png', 'windows-overlay-foreground.png', 'windows-agent-foreground.png')) {
         Copy-Item -LiteralPath (Join-Path $env:COLOSSUS_HOME $Name) -Destination (Join-Path $Evidence $Name)

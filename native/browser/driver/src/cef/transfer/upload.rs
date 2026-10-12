@@ -17,6 +17,7 @@ impl Host {
             max_bytes,
         } = &request.command.action
         else {
+            diagnostic(UploadAdmission::Action);
             return Err(BrowserDriverError::Denied);
         };
         let metadata = &request.descriptor;
@@ -36,10 +37,15 @@ impl Host {
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.')
         {
+            diagnostic(UploadAdmission::Descriptor);
             return Err(BrowserDriverError::Denied);
         }
         let element = element.clone();
-        let owner = self.transfer_owner(request.command, control)?;
+        let owner = self
+            .transfer_owner(request.command, control)
+            .inspect_err(|_| {
+                diagnostic(UploadAdmission::Owner);
+            })?;
         self.file_input(&owner, &element, control)?;
         let receipt = BrowserUploadReceipt {
             transfer_id: owner.token.clone(),
@@ -95,13 +101,25 @@ impl Host {
         element: &BrowserElementRef,
         control: &BrowserDriverControl,
     ) -> Result<i32, BrowserDriverError> {
-        let (backend, name, attributes) = self.transfer_node(owner, element, control)?;
-        if name != "INPUT"
-            || !attribute(&attributes, "type")
-                .is_some_and(|value| value.eq_ignore_ascii_case("file"))
-            || attribute(&attributes, "disabled").is_some()
-            || semantic::protected(&attributes)
-        {
+        let (backend, name, attributes) =
+            self.transfer_node(owner, element, control)
+                .inspect_err(|_| {
+                    diagnostic(UploadAdmission::Node);
+                })?;
+        if name != "INPUT" {
+            diagnostic(UploadAdmission::Tag);
+            return Err(BrowserDriverError::Denied);
+        }
+        if !attribute(&attributes, "type").is_some_and(|value| value.eq_ignore_ascii_case("file")) {
+            diagnostic(UploadAdmission::Type);
+            return Err(BrowserDriverError::Denied);
+        }
+        if attribute(&attributes, "disabled").is_some() {
+            diagnostic(UploadAdmission::Disabled);
+            return Err(BrowserDriverError::Denied);
+        }
+        if semantic::protected(&attributes) {
+            diagnostic(UploadAdmission::Protected);
             return Err(BrowserDriverError::Denied);
         }
         Ok(backend)
@@ -168,4 +186,43 @@ impl Host {
             truncated: false,
         })
     }
+}
+
+#[derive(Clone, Copy)]
+enum UploadAdmission {
+    Action,
+    Descriptor,
+    Owner,
+    Node,
+    Tag,
+    Type,
+    Disabled,
+    Protected,
+}
+
+fn diagnostic(category: UploadAdmission) {
+    #[cfg(all(
+        target_os = "macos",
+        debug_assertions,
+        feature = "macos-synthetic-profile-diagnostic"
+    ))]
+    eprintln!(
+        "Mac diagnostic upload admission: {}",
+        match category {
+            UploadAdmission::Action => "action",
+            UploadAdmission::Descriptor => "descriptor",
+            UploadAdmission::Owner => "owner",
+            UploadAdmission::Node => "node",
+            UploadAdmission::Tag => "tag",
+            UploadAdmission::Type => "type",
+            UploadAdmission::Disabled => "disabled",
+            UploadAdmission::Protected => "protected",
+        }
+    );
+    #[cfg(not(all(
+        target_os = "macos",
+        debug_assertions,
+        feature = "macos-synthetic-profile-diagnostic"
+    )))]
+    let _ = category;
 }

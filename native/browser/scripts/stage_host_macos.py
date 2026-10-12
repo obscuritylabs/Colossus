@@ -28,6 +28,12 @@ def main() -> int:
                         help="Debug-only synthetic profile for a disposable HTTP loopback fixture; no Keychain or PKI acceptance")
     parser.add_argument("--macos-network-envelope-policy", type=Path,
                         help="native supervisor's fixed per-allocation policy resource; Debug only")
+    parser.add_argument("--owned-process-development", action="store_true",
+                        help="explicit Debug-only no-exec fronts and dylib bodies for patched CEF; no production acceptance")
+    parser.add_argument("--process-broker", type=Path,
+                        help="independently compiled native creator/keeper executable; owned-process Debug lane only")
+    parser.add_argument("--tls-broker", type=Path,
+                        help="independently compiled exact-parent HTTPS broker; owned-process Debug lane only")
     options = parser.parse_args()
     try:
         if sys.platform != "darwin":
@@ -38,6 +44,9 @@ def main() -> int:
             profile_crypto_development=options.macos_owned_profile_development,
             synthetic_profile_diagnostic=options.macos_synthetic_profile_diagnostic,
             network_envelope_policy=options.macos_network_envelope_policy,
+            owned_process_development=options.owned_process_development,
+            process_broker=options.process_broker,
+            tls_broker=options.tls_broker,
         ))
         return 0
     except (component.ComponentError, OSError, ValueError, subprocess.CalledProcessError):

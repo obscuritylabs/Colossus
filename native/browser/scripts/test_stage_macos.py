@@ -11,7 +11,26 @@ import unittest
 from unittest.mock import patch
 
 import component
+import stage_host_macos
 import stage_macos
+import owned_process_component
+
+
+class HostStageCliTests(unittest.TestCase):
+    def test_owned_process_is_explicit_and_stock_is_the_default(self):
+        arguments = ["stage_host_macos.py", "--cef-root", "/unused/cef",
+                     "--native-build", "/unused/build", "--executable", "/unused/host",
+                     "--app", "/unused/Colossus.app", "--platform", "macosarm64"]
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled), \
+                    patch.object(stage_host_macos.sys, "argv", arguments + (["--owned-process-development"] if enabled else [])), \
+                    patch.object(stage_host_macos.sys, "platform", "darwin"), \
+                    patch.object(stage_host_macos.stage_macos, "stage_app", return_value=Path("/unused/staged")) as stage, \
+                    patch("builtins.print"):
+                self.assertEqual(stage_host_macos.main(), 0)
+            stage.assert_called_once()
+            self.assertIs(stage.call_args.kwargs["owned_process_development"], enabled)
+            self.assertTrue(stage.call_args.kwargs["host"])
 
 
 @unittest.skipIf(os.name == "nt", "CEF macOS staging requires POSIX links")
@@ -202,6 +221,10 @@ class MacosStageTests(unittest.TestCase):
         self.assertEqual(resource.stat().st_mode & 0o777, 0o400)
         signatures = [call.args[0] for call in run.call_args_list if "--sign" in call.args[0]]
         self.assertEqual(sum(command[-1].endswith(" Body") for command in signatures), 6)
+        inventory = component.verify_installed(self.app, self.app.with_name(self.app.name + ".browser-component.json"))
+        self.assertEqual(inventory["modes"], {"desktop": False, "headless": False})
+        signatures = [call.args[0] for call in run.call_args_list if "--sign" in call.args[0]]
+        self.assertEqual(sum(command[-1].endswith(" Body") for command in signatures), 6)
         self.assertTrue(all("--entitlements" not in command for command in signatures[-6:]))
         policy.write_text(policy.read_text().replace("54321", "0"))
         with self.assertRaises(component.ComponentError):
@@ -276,10 +299,96 @@ class MacosStageTests(unittest.TestCase):
         resource = self.app / "Contents/Resources" / stage_macos.NETWORK_ENVELOPE_RESOURCE
         self.assertEqual(resource.read_bytes(), policy.read_bytes())
         self.assertEqual(resource.stat().st_mode & 0o777, 0o400)
+
+    def test_owned_process_stages_dylibs_and_gives_fronts_the_process_entitlements(self):
+        host, policy = self.prepare_synthetic_envelope()
+        body = self.root / "libcolossus_native_browser_host.dylib"
+        body.write_bytes(b"Main dylib fixture")
+        body.chmod(0o755)
+        broker = self.root / "colossus-mac-browser-process-broker"
+        broker.write_bytes(b"native independent supervisor fixture")
+        broker.chmod(0o755)
+        tls_broker = self.root / "colossus-native-browser-tls-broker"
+        tls_broker.write_bytes(b"native independently admitted TLS fixture")
+        tls_broker.chmod(0o755)
+        (self.build / stage_macos.SYNTHETIC_PROFILE_BUILD).write_text(json.dumps(stage_macos.OWNED_PROFILE_METADATA))
+        for suffix, _ in stage_macos.HELPERS:
+            name = stage_macos.HELPER + suffix
+            old = self.build / "helpers" / (name + ".app") / "Contents/MacOS" / (name + " Body")
+            old.rename(old.with_name(name + " Body.dylib"))
+        metadata = {"schema_version": 1, "development_only": True, "production_accepted": False,
+                    "native_acceptance": False, "main_body": "dylib", "creator_descriptor": 7}
+        with patch.object(owned_process_component, "verify_source", return_value=self.source), \
+                patch.object(owned_process_component, "verify_build", return_value=metadata), \
+                patch.object(owned_process_component, "dylib") as validate_body, \
+                patch.object(owned_process_component, "symbols"), \
+                patch.object(stage_macos, "run") as run:
+            stage_macos.stage_app(self.source, self.build, body, self.app,
+                "macosarm64", "com.colossus.nativehost", host=True,
+                synthetic_profile_diagnostic=True, network_envelope_policy=policy,
+                owned_process_development=True, process_broker=broker, tls_broker=tls_broker)
+        self.assertEqual((self.app / "Contents/MacOS/colossus-native-browser-host Body.dylib").read_bytes(), b"Main dylib fixture")
+        self.assertFalse((self.app / "Contents/MacOS/colossus-native-browser-host Body").exists())
+        self.assertEqual((self.app / "Contents/MacOS/colossus-mac-browser-process-broker").read_bytes(),
+                         b"native independent supervisor fixture")
         signatures = [call.args[0] for call in run.call_args_list if "--sign" in call.args[0]]
-        self.assertEqual(sum(command[-1].endswith(" Body") for command in signatures), 6)
-        inventory = component.verify_installed(self.app, self.app.with_name(self.app.name + ".browser-component.json"))
-        self.assertEqual(inventory["modes"], {"desktop": False, "headless": False})
+        fronts = [command for command in signatures if command[-1].endswith(".app")]
+        self.assertEqual(len(fronts), 6)
+        self.assertTrue(all("--entitlements" in command and str(stage_macos.ENTITLEMENTS) in command for command in fronts))
+        dylibs = [command for command in signatures if command[-1].endswith(" Body.dylib")]
+        self.assertEqual(len(dylibs), 6)
+        self.assertTrue(all("--entitlements" not in command for command in dylibs))
+        supervisor = [command for command in signatures if command[-1].endswith("colossus-mac-browser-process-broker")]
+        self.assertEqual(len(supervisor), 1)
+        self.assertNotIn("--entitlements", supervisor[0])
+        tls_signatures = [command for command in signatures if command[-1].endswith("colossus-native-browser-tls-broker")]
+        self.assertEqual(len(tls_signatures), 1)
+        self.assertNotIn("--entitlements", tls_signatures[0])
+        self.assertEqual(component.load_json(self.app / "Contents/Resources" / stage_macos.SYNTHETIC_PROFILE_CLAIM),
+                         stage_macos.OWNED_PROFILE_METADATA)
+        self.assertGreaterEqual(validate_body.call_count, 12)
+        value = component.load_json(self.app.with_name(self.app.name + ".browser-component.json"))
+        self.assertNotIn("archive_sha256", value)
+        self.assertEqual(value["source_kind"], "patched-chromium-development")
+        self.assertEqual(value["modes"], {"desktop": False, "headless": False})
+
+    def test_owned_build_cannot_enter_stock_stage_or_accept_executable_body(self):
+        host, policy = self.prepare_synthetic_envelope()
+        body = self.root / "libcolossus_native_browser_host.dylib"
+        body.write_bytes(b"executable body fixture")
+        body.chmod(0o755)
+        (self.build / owned_process_component.BUILD_RECEIPT).write_text("{}")
+        with patch.object(stage_macos, "run") as run:
+            with self.assertRaises(component.ComponentError):
+                stage_macos.stage_app(self.source, self.build, host, self.app,
+                    "macosarm64", host=True, synthetic_profile_diagnostic=True,
+                    network_envelope_policy=policy)
+            with patch.object(owned_process_component, "verify_source", return_value=self.source), \
+                    patch.object(owned_process_component, "verify_build"), \
+                    patch.object(owned_process_component, "dylib", side_effect=component.ComponentError("not dylib")) as validate_body:
+                with self.assertRaises(component.ComponentError):
+                    stage_macos.stage_app(self.source, self.build, body, self.app,
+                        "macosarm64", host=True, synthetic_profile_diagnostic=True,
+                        network_envelope_policy=policy, owned_process_development=True)
+            validate_body.assert_called_once_with(body)
+        run.assert_not_called()
+        self.assertFalse(self.app.exists())
+
+    def test_owned_loopback_marker_and_native_tls_artifact_cannot_enter_stock_stage(self):
+        host, policy = self.prepare_synthetic_envelope()
+        (self.build / stage_macos.SYNTHETIC_PROFILE_BUILD).write_text(json.dumps(stage_macos.OWNED_PROFILE_METADATA))
+        tls_broker = self.root / "colossus-native-browser-tls-broker"
+        tls_broker.write_bytes(b"TLS fixture")
+        tls_broker.chmod(0o755)
+        with patch.object(stage_macos, "run") as run:
+            with self.assertRaises(component.ComponentError):
+                stage_macos.stage_app(self.source, self.build, host, self.app, "macosarm64", host=True,
+                    synthetic_profile_diagnostic=True, network_envelope_policy=policy)
+            with self.assertRaises(component.ComponentError):
+                stage_macos.stage_app(self.source, self.build, host, self.app, "macosarm64", host=True,
+                    tls_broker=tls_broker)
+        run.assert_not_called()
+        self.assertFalse(self.app.exists())
 
     def test_complete_loader_layout_and_distinct_helper_identities(self):
         with patch.object(stage_macos, "run") as run:

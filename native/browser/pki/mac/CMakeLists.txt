@@ -19,5 +19,11 @@ target_compile_features(colossus-mac-owned-pki-file-test PRIVATE cxx_std_20)
 target_compile_definitions(colossus-mac-owned-pki-file-test PRIVATE COLOSSUS_MAC_OWNED_PKI_PROTOTYPE=1)
 target_compile_options(colossus-mac-owned-pki-file-test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(colossus-mac-owned-pki-file-test PRIVATE "-framework Security" "-framework CoreFoundation")
+add_executable(colossus-mac-custody-boundary-file-test EXCLUDE_FROM_ALL
+  custody_boundary.mm custody_boundary_file_test.mm)
+target_compile_features(colossus-mac-custody-boundary-file-test PRIVATE cxx_std_20)
+target_compile_definitions(colossus-mac-custody-boundary-file-test PRIVATE COLOSSUS_MAC_OWNED_PKI_PROTOTYPE=1)
+target_compile_options(colossus-mac-custody-boundary-file-test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(colossus-mac-custody-boundary-file-test PRIVATE "-framework Security" "-framework CoreFoundation")
 # Deliberately no CEF linkage, broker executable, installation, automatic run
 # target, or release manifest. Compilation cannot enable PKI acceptance.

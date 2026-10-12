@@ -8,7 +8,7 @@ use colossus_browser_presentation::{
     Configure, Frame, HumanCommand, HumanFenceReceipt, Input, Lease, LeaseGuard,
     PresentationCommand, PresentationError, PresentationReply,
 };
-use colossus_contracts::BrowserUrl;
+use colossus_contracts::{BrowserTabId, BrowserUrl};
 
 use super::Host;
 use crate::ffi;
@@ -22,6 +22,7 @@ pub(super) struct State {
     pub(super) human: bool,
     pub(super) control_generation: u64,
     pub(super) handoff: crate::handoff::Cache,
+    pub(super) selected_tab: Option<BrowserTabId>,
     active: Option<(Configure, LeaseGuard)>,
 }
 fn status(status: i32) -> Result<(), PresentationError> {
@@ -57,7 +58,7 @@ impl Host {
             };
         }
     }
-    fn owned_lease(&self, lease: Lease) -> Result<(), PresentationError> {
+    fn owned_viewport(&self, lease: Lease) -> Result<(), PresentationError> {
         let (configuration, guard) = self
             .presentation
             .active
@@ -69,10 +70,25 @@ impl Host {
             || guard.lease() != lease
             || lease.control_generation != self.presentation.control_generation
             || self.session.as_ref() != Some(&configuration.session)
-            || self
-                .tabs
-                .get(&configuration.target.tab_id)
-                .is_none_or(|tab| tab.native != lease.tab)
+        {
+            return Err(PresentationError::Stale);
+        }
+        Ok(())
+    }
+    fn owned_lease(&self, lease: Lease) -> Result<(), PresentationError> {
+        self.owned_viewport(lease)?;
+        let configuration = &self
+            .presentation
+            .active
+            .as_ref()
+            .ok_or(PresentationError::Stale)?
+            .0;
+        if self
+            .tabs
+            .get(&configuration.target.tab_id)
+            .is_none_or(|tab| tab.native != lease.tab)
+            || (lease.control_generation > 0
+                && self.presentation.selected_tab.as_ref() != Some(&configuration.target.tab_id))
         {
             return Err(PresentationError::Stale);
         }
@@ -101,6 +117,11 @@ impl Host {
             || self.cancelled.load(super::Ordering::Acquire)
             || self.session.as_ref() != Some(&configuration.session)
             || configuration.control_generation != self.presentation.control_generation
+            || (configuration.control_generation > 0
+                && self.presentation.selected_tab.as_ref() != Some(&configuration.target.tab_id))
+            || self.presentation.active.as_ref().is_some_and(|(_, old)| {
+                configuration.viewport_generation <= old.lease().viewport_generation
+            })
         {
             return Err(PresentationError::Stale);
         }
@@ -212,7 +233,11 @@ impl Host {
                 Ok(PresentationReply::Ack)
             }
             PresentationCommand::Focus { lease, focused } => {
-                self.current_document(lease)?;
+                if focused {
+                    self.current_document(lease)?;
+                } else {
+                    self.owned_viewport(lease)?;
+                }
                 if focused && !self.presentation.human {
                     return Err(PresentationError::Hidden);
                 }
@@ -223,7 +248,7 @@ impl Host {
                     .1
                     .focus(focused, Instant::now())?;
                 // SAFETY: exact native lease; no OS parent handle crosses this boundary.
-                status(unsafe {
+                let settled = status(unsafe {
                     ffi::colossus_cef_presentation_focus(
                         lease.tab,
                         1,
@@ -231,11 +256,21 @@ impl Host {
                         lease.document_generation,
                         i32::from(focused),
                     )
-                })?;
+                });
+                if focused {
+                    settled?;
+                } else if let Err(error) = settled {
+                    // The exact old viewport remains retireable after its tab
+                    // closes or Core selects another document. No show/input
+                    // operation gains authority from this known stale result.
+                    if error != PresentationError::Stale && error != PresentationError::Hidden {
+                        return Err(error);
+                    }
+                }
                 Ok(PresentationReply::Ack)
             }
             PresentationCommand::Hide { lease } => {
-                self.owned_lease(lease)?;
+                self.owned_viewport(lease)?;
                 self.presentation
                     .active
                     .as_mut()

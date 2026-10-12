@@ -28,12 +28,13 @@ int main() {
   }
   auto owned = PrepareMacHelperPrograms(paths[0].c_str());
   assert(owned && owned->paths == paths);
-  assert(owned->GpuProgram("gpu-process", paths[0]) == paths[2]);
-  assert(owned->GpuProgram("gpu-process", paths[2]) == paths[2]);
-  assert(!owned->GpuProgram("renderer", paths[0]));
-  assert(!owned->GpuProgram("utility", paths[0]));
-  assert(!owned->GpuProgram("gpu-process", paths[1]));
-  assert(!owned->GpuProgram("gpu-process", "/bin/sh"));
+  assert(owned->Program("renderer") == paths[1]);
+  assert(owned->Program("gpu-process") == paths[2]);
+  assert(owned->Program("utility") == paths[0]);
+  assert(!owned->Program(""));
+  assert(!owned->Program("plugin"));
+  assert(!owned->Program("/bin/sh"));
+  assert(!owned->Program("utility --no-sandbox"));
   assert(!PrepareMacHelperPrograms(paths[2].c_str()));
   assert(chmod(paths[2].c_str(), 0777) == 0);
   assert(!PrepareMacHelperPrograms(paths[0].c_str()));
@@ -52,5 +53,5 @@ int main() {
   assert(MacHelperProgramKind("/bin/sh") == 9);
   fs::remove_all(root);
   assert(!fs::exists(root));
-  std::puts("PASS fixed canonical helper selection; mismatched role/program, unsafe/missing/symlink component rejected; owned files removed");
+  std::puts("PASS fixed canonical helper selection; unsupported roles and unsafe/missing/symlink components rejected; owned files removed");
 }

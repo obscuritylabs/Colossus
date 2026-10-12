@@ -290,7 +290,9 @@ observations, clicks, navigation and a released PNG artifact.
 The actual Desktop fixture uses a deterministic local model provider through
 the ordinary authenticated SDK/sidecar/worker channels. It authorizes the real
 controller document, hands its human page to an agent and requires native click,
-navigation, screenshot, read-only viewer detachment and shutdown receipts.
+navigation, screenshot, read-only viewer detachment and shutdown receipts. Core
+also opens, selects and closes owned tabs; each retarget must reach the foreground
+Windows HWND under the same writer and a fresh authenticated viewport.
 Windows screen probes read the foreground desktop DC for the exact owned HWND;
 an accepted frame buffer alone is insufficient. Native resize/current display
 DPI, overlay occlusion, mouse/key dispatch, Unicode surrogate commits and IME

@@ -8,6 +8,8 @@ mod windows_acceptance;
 use crate::BrowserError;
 #[cfg(feature = "native-test-driver")]
 use colossus_browser_presentation::Frame;
+#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+use colossus_browser_presentation::PresentationError;
 use colossus_browser_presentation::{FrameCodec, Input, LatestFrames, Lease, LeaseGuard};
 use std::{
     sync::{
@@ -40,6 +42,57 @@ pub(crate) struct AcceptedNativeFrame {
     pub sequence: u64,
     pub center_bgra: [u8; 4],
     pub count: u64,
+}
+
+/// Fixed, private `AppKit` focus facts for the source-only Mac acceptance run.
+/// No window title, process identity, pointer, or page data is exposed.
+#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+#[derive(Clone, Copy)]
+pub struct AcceptanceFocusState(u32);
+
+#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+impl AcceptanceFocusState {
+    /// Whether the retained Tauri parent still belongs to a native window.
+    #[must_use]
+    pub fn parent_attached(self) -> bool {
+        self.0 & 1 != 0
+    }
+
+    /// Whether that native window belongs to this Desktop application.
+    #[must_use]
+    pub fn own_window(self) -> bool {
+        self.0 & 2 != 0
+    }
+
+    /// Whether the native window is visible.
+    #[must_use]
+    pub fn window_visible(self) -> bool {
+        self.0 & 4 != 0
+    }
+
+    /// Whether `NSApp` is active in this desktop session.
+    #[must_use]
+    pub fn app_active(self) -> bool {
+        self.0 & 8 != 0
+    }
+
+    /// Whether the retained parent window reports that it is key.
+    #[must_use]
+    pub fn window_key(self) -> bool {
+        self.0 & 16 != 0
+    }
+
+    /// Whether `NSApp` reports the retained parent as its key window.
+    #[must_use]
+    pub fn app_key_matches(self) -> bool {
+        self.0 & 32 != 0
+    }
+
+    /// Whether this exact Desktop window is active and key under `AppKit`.
+    #[must_use]
+    pub fn foreground(self) -> bool {
+        self.0 == 0b11_1111
+    }
 }
 
 #[cfg(feature = "native-test-driver")]
@@ -150,12 +203,32 @@ impl PresentationSurface {
             .lock()
             .map_err(|_| BrowserError::Closed)?
             .decode(envelope)
+            .inspect_err(|error| {
+                #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+                trace_frame_rejection("decode", *error);
+                #[cfg(not(all(
+                    target_os = "macos",
+                    feature = "native-test-driver",
+                    debug_assertions
+                )))]
+                let _ = error;
+            })
             .map_err(|_| BrowserError::Closed)?;
         self.owner
             .frames
             .lock()
             .map_err(|_| BrowserError::Closed)?
             .push(frame)
+            .inspect_err(|error| {
+                #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+                trace_frame_rejection("queue", *error);
+                #[cfg(not(all(
+                    target_os = "macos",
+                    feature = "native-test-driver",
+                    debug_assertions
+                )))]
+                let _ = error;
+            })
             .map_err(|_| BrowserError::Closed)?;
         schedule(
             &self.window,
@@ -175,6 +248,35 @@ impl PresentationSurface {
             .accepted_frame
             .lock()
             .map_err(|_| BrowserError::Closed)?)
+    }
+
+    /// Query whether the actual native view is hidden and has cleared pixels.
+    /// The caller must first establish that a frame reached this same view.
+    ///
+    /// # Errors
+    /// Rejects a retired view or failed main-thread observation.
+    #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+    pub(crate) async fn acceptance_hidden(&self) -> Result<bool, BrowserError> {
+        let handle = self.handle.load(Ordering::Acquire);
+        if handle == 0 {
+            return Err(BrowserError::Closed);
+        }
+        let (send, receive) = oneshot::channel();
+        self.window
+            .run_on_main_thread(move || {
+                // SAFETY: the exact retained view is queried on its owning UI thread.
+                let status = unsafe { ffi::colossus_presenter_acceptance_hidden(handle) };
+                let _ = send.send(match status {
+                    0 => Ok(false),
+                    1 => Ok(true),
+                    _ => Err(BrowserError::Closed),
+                });
+            })
+            .map_err(|_| BrowserError::Closed)?;
+        tokio::time::timeout(Duration::from_secs(2), receive)
+            .await
+            .map_err(|_| BrowserError::TimedOut)?
+            .map_err(|_| BrowserError::Closed)?
     }
 
     /// Update trusted native bounds; logical coordinates on macOS, physical on Windows.
@@ -236,6 +338,18 @@ impl PresentationSurface {
             .map_err(|_| BrowserError::Closed)
     }
 }
+#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+fn trace_frame_rejection(stage: &'static str, error: PresentationError) {
+    let failure = match error {
+        PresentationError::Invalid => "invalid",
+        PresentationError::Stale => "stale",
+        PresentationError::Unauthenticated => "unauthenticated",
+        PresentationError::Hidden => "hidden",
+        PresentationError::LimitExceeded => "limit_exceeded",
+        PresentationError::OutcomeUnknown => "outcome_unknown",
+    };
+    eprintln!("EVIDENCE mac-remote-frame stage={stage} failure={failure}");
+}
 #[cfg(windows)]
 fn parent(window: &Window) -> Option<usize> {
     window.hwnd().ok().map(|handle| handle.0 as usize)
@@ -243,6 +357,54 @@ fn parent(window: &Window) -> Option<usize> {
 #[cfg(target_os = "macos")]
 fn parent(window: &Window) -> Option<usize> {
     window.ns_view().ok().map(|handle| handle as usize)
+}
+
+/// Request activation of the diagnostic fixture's own Desktop window and
+/// independently observe bounded `AppKit` foreground facts. An activation
+/// request alone is never foreground evidence.
+///
+/// # Errors
+/// Rejects a missing parent, a window outside this application, or a failed
+/// main-thread dispatch. This source-only helper cannot create a CEF browser.
+#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+pub async fn acceptance_focus_state(
+    window: &Window,
+    request_activation: bool,
+) -> Result<AcceptanceFocusState, BrowserError> {
+    let native_window = window.clone();
+    let (send, receive) = oneshot::channel();
+    window
+        .run_on_main_thread(move || {
+            let result = parent(&native_window)
+                .ok_or(BrowserError::Closed)
+                .and_then(|parent| {
+                    if request_activation {
+                        // SAFETY: the parent is the fixture's retained Tauri NSView;
+                        // native admission checks ownership on this main thread.
+                        let status =
+                            unsafe { ffi::colossus_presenter_acceptance_activate_parent(parent) };
+                        if status != 0 {
+                            return Err(BrowserError::Unavailable);
+                        }
+                    }
+                    let mut flags = 0_u32;
+                    // SAFETY: the retained Tauri parent is observed only on its
+                    // owning main thread; native output is one bounded bitmask.
+                    let status = unsafe {
+                        ffi::colossus_presenter_acceptance_focus_state(parent, &raw mut flags)
+                    };
+                    if status != 0 || flags & !0b11_1111 != 0 {
+                        return Err(BrowserError::Unavailable);
+                    }
+                    Ok(AcceptanceFocusState(flags))
+                });
+            let _ = send.send(result);
+        })
+        .map_err(|_| BrowserError::Closed)?;
+    tokio::time::timeout(Duration::from_secs(2), receive)
+        .await
+        .map_err(|_| BrowserError::TimedOut)?
+        .map_err(|_| BrowserError::Closed)?
 }
 
 fn schedule(window: &Window, owner: &Arc<Owner>, handle: usize) -> Result<(), BrowserError> {

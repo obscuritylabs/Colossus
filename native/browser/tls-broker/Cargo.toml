@@ -1,0 +1,71 @@
+[package]
+name = "colossus-native-browser-tls-broker"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+license = "Apache-2.0"
+
+[workspace]
+resolver = "3"
+members = ["../pki/mac"]
+
+[features]
+default = []
+macos-https-broker-development = []
+macos-https-broker-entry-development = ["macos-https-broker-development", "dep:colossus-darwin-process"]
+macos-https-broker-native-acceptance = ["macos-https-broker-development", "dep:colossus-darwin-process"]
+macos-native-identity-development = ["macos-https-broker-development", "dep:colossus-native-browser-mac-identity"]
+macos-native-custody-development = ["macos-native-identity-development", "macos-https-broker-entry-development", "registry-metadata-development", "colossus-native-browser-mac-identity/macos-custody-development"]
+macos-native-custody-acceptance = ["macos-native-custody-development", "colossus-native-browser-mac-identity/macos-custody-native-acceptance", "dep:serde", "dep:serde_json", "dep:hex"]
+registry-metadata-development = ["macos-https-broker-development", "dep:serde", "dep:serde_json", "dep:hex"]
+macos-custody-parent-acceptance = ["macos-https-broker-native-acceptance", "dep:serde_json", "dep:hex"]
+
+[[bin]]
+name = "colossus-native-browser-tls-broker"
+path = "src/bin/tls_broker.rs"
+required-features = ["macos-https-broker-entry-development"]
+
+[[bin]]
+name = "colossus-native-custody-acceptance"
+path = "src/bin/native_custody_acceptance.rs"
+required-features = ["macos-native-custody-acceptance"]
+
+[[example]]
+name = "native-parent-acceptance"
+path = "examples/native_parent_acceptance.rs"
+required-features = ["macos-https-broker-native-acceptance"]
+
+[[example]]
+name = "native-custody-parent"
+path = "examples/native_custody_parent.rs"
+required-features = ["macos-custody-parent-acceptance"]
+
+[dependencies]
+base64 = "0.22.1"
+colossus-native-browser-pki = { version = "=0.1.0", path = "../pki" }
+getrandom = "0.4.3"
+hmac = "0.12.1"
+rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "ring", "zeroize"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+sha2 = "0.10.9"
+socket2 = "0.6.4"
+subtle = "2.6.1"
+time = "0.3.53"
+tokio = { version = "1.49.0", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"] }
+url = "2.5.8"
+zeroize = "1.8.2"
+serde = { version = "1.0.228", features = ["derive"], optional = true }
+serde_json = { version = "1.0.149", optional = true }
+hex = { version = "0.4.3", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+colossus-darwin-process = { version = "=0.11.8", path = "../../../crates/colossus-darwin-process", optional = true }
+colossus-native-browser-mac-identity = { version = "=0.1.0", path = "../pki/mac", optional = true }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"

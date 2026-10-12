@@ -1,0 +1,50 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Human fixture</title>
+  </head>
+  <body style="background: #e7f1ff">
+    <h1>Human fixture</h1>
+    <p>
+      Click the input, type <strong>Mac input café😀x</strong>, then press
+      Backspace.
+    </p>
+    <label for="native-input">Native Mac keyboard and Unicode commit</label>
+    <input
+      id="native-input"
+      type="text"
+      autocomplete="off"
+      autofocus
+      style="display: block; width: 460px; margin: 12px 0"
+    />
+    <p id="input-status">Waiting for human native input</p>
+    <button
+      onclick="
+        document.title = 'Agent click received';
+        document.querySelector('output').textContent = 'Agent clicked';
+      "
+    >
+      Agent click
+    </button>
+    <output>Waiting for Core</output>
+    <script>
+      const field = document.getElementById("native-input");
+      let backspace = false;
+      field.addEventListener("keydown", (event) => {
+        if (event.isTrusted && event.key === "Backspace") backspace = true;
+      });
+      field.addEventListener("input", (event) => {
+        if (
+          event.isTrusted &&
+          backspace &&
+          field.value === "Mac input café😀"
+        ) {
+          document.getElementById("input-status").textContent =
+            "Human native keyboard and Unicode commit accepted";
+          document.title = "Human input complete";
+        }
+      });
+    </script>
+  </body>
+</html>

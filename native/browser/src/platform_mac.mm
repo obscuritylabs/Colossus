@@ -91,6 +91,9 @@ extern "C" int32_t colossus_cef_standalone_platform_pump() {
 }
 
 namespace colossus {
+#if defined(COLOSSUS_CEF_DEVELOPER_PROCESS_BROKER)
+bool OwnedProcessInstallLoadedFramework();
+#endif
 bool PlatformDedicatedEnvironment(const char* root) {
   // Initial inherited environment only. Never mutate process-wide environment
   // after loading frameworks or starting native/CEF threads.
@@ -115,7 +118,11 @@ bool PlatformLoadLibrary() {
   // Helpers have a different entry that initializes their sandbox first.
   static CefScopedLibraryLoader loader;
   static bool loaded = loader.LoadInMain();
+#if defined(COLOSSUS_CEF_DEVELOPER_PROCESS_BROKER)
+  return loaded && OwnedProcessInstallLoadedFramework();
+#else
   return loaded;
+#endif
 }
 bool PlatformEarlySetup() {
   if (![NSThread isMainThread]) return false;

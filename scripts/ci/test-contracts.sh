@@ -302,3 +302,5 @@ trap - EXIT HUP INT TERM
 # executable fixtures. Ordinary CI never downloads CEF or launches Chromium.
 "${PYTHON:-python3}" -B -m unittest discover \
     -s "$script_dir/../../native/browser/scripts" -p 'test_*.py'
+"${PYTHON:-python3}" -B -m unittest discover \
+    -s "$script_dir/../../native/browser/tls-broker/scripts" -p 'test_*.py'

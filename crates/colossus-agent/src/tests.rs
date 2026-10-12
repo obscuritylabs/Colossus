@@ -1493,6 +1493,94 @@ async fn authenticated_application_is_the_immutable_run_initiator() {
     }));
 }
 
+#[derive(Default)]
+struct RecordedRunAuthority(std::sync::Mutex<Vec<(ExecutionContext, Actor)>>);
+#[async_trait]
+impl colossus_ports::AgentRunLifecycle for RecordedRunAuthority {
+    fn begin_run(
+        &self,
+        context: &ExecutionContext,
+        initiator: &Actor,
+        _: RunControl,
+    ) -> Result<(), ToolError> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((context.clone(), initiator.clone()));
+        Ok(())
+    }
+    fn cancel_run(&self, _: &str) {}
+    async fn finish_run(&self, _: &str) {}
+}
+
+#[tokio::test]
+async fn public_run_registers_authenticated_actor_and_exact_offered_tools_before_first_model() {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
+        ProviderEvent::FinalOutput {
+            text: "done".into(),
+        },
+    ])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let authority = Arc::new(RecordedRunAuthority::default());
+    let service = AgentService::new(
+        journal.clone(),
+        provider.clone(),
+        Arc::new(
+            StaticToolRegistry::builtins(&[
+                "browser.open".into(),
+                "shell.run".into(),
+                "echo".into(),
+            ])
+            .unwrap(),
+        ),
+        Arc::new(EchoTools),
+        Arc::new(EventSourcedSessionRepository::new(journal)),
+    )
+    .with_run_lifecycle(authority.clone());
+    let mut observer = RecordingRunObserver::default();
+    service
+        .run_public_with_skills_stream_controlled(
+            "primary",
+            "test",
+            "hello",
+            1,
+            "public-native-run",
+            "public-native-session",
+            true,
+            &[],
+            &["browser.open".into(), "shell.run".into()],
+            false,
+            Actor {
+                actor_type: ActorType::Application,
+                id: "app:native-ui".into(),
+            },
+            &mut observer,
+            &RunControl::default(),
+        )
+        .await
+        .unwrap();
+    let registered = authority.0.lock().unwrap();
+    assert_eq!(registered.len(), 1);
+    assert_eq!(
+        registered[0].1,
+        Actor {
+            actor_type: ActorType::Application,
+            id: "app:native-ui".into()
+        }
+    );
+    assert_eq!(registered[0].0.offered_tools, ["browser.open", "shell.run"]);
+    assert_eq!(registered[0].0.run_id.as_deref(), Some("public-native-run"));
+    let requests = provider.requests.lock().unwrap();
+    assert_eq!(
+        requests[0]
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["browser.open", "shell.run"]
+    );
+}
+
 #[tokio::test]
 async fn public_tool_ceiling_offers_delegation_only_when_explicitly_granted() {
     let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![

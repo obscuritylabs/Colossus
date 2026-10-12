@@ -1,4 +1,5 @@
 use crate::*;
+mod relay_tests;
 use async_trait::async_trait;
 use colossus_contracts::{BrowserDocumentId, BrowserSessionId, BrowserTabId, BrowserTarget};
 use std::sync::{

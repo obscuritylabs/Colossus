@@ -43,6 +43,11 @@ pub(crate) fn run() -> i32 {
     let url = tauri::Url::parse(&address).expect("fixture URL");
     assert_eq!(url.scheme(), "http");
     assert_eq!(url.host_str(), Some("127.0.0.1"));
+    let mut context = crate::app_context::create();
+    #[cfg(feature = "macos-contained-browser-diagnostic")]
+    if !embedded_controller_available(&context) {
+        return 1;
+    }
     let home =
         std::path::PathBuf::from(std::env::var_os("COLOSSUS_HOME").expect("isolated test home"));
     assert!(!home.exists(), "test home must be new");
@@ -62,7 +67,6 @@ pub(crate) fn run() -> i32 {
         eprintln!("native Chromium acceptance bootstrap failed: {error}");
         return 1;
     }
-    let mut context = crate::app_context::create();
     context.config_mut().build.dev_url = None;
     context.config_mut().app.windows[0].data_directory = Some(home.join("controller"));
     context.config_mut().app.windows[0].incognito = true;
@@ -142,6 +146,15 @@ pub(crate) fn run() -> i32 {
         .expect("native browser acceptance app");
     let result = run_lifecycle(application, &completed);
     settle_cache(result, browser_cache)
+}
+
+#[cfg(feature = "macos-contained-browser-diagnostic")]
+fn embedded_controller_available(context: &tauri::Context<tauri::Wry>) -> bool {
+    let available = context.assets().get(&"index.html".into()).is_some();
+    if !available {
+        eprintln!("native browser acceptance requires the embedded Desktop renderer");
+    }
+    available
 }
 
 fn settle_cache(result: i32, cache: Option<tempfile::TempDir>) -> i32 {

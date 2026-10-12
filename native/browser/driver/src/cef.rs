@@ -304,6 +304,7 @@ pub struct Host {
     cancelled: Arc<AtomicBool>,
     session: Option<BrowserSessionId>,
     tabs: HashMap<BrowserTabId, Tab>,
+    tab_order: Vec<BrowserTabId>,
     next_tab: u64,
     next_command: i32,
     initialized: bool,
@@ -311,6 +312,7 @@ pub struct Host {
     presentation: presentation::State,
     screenshot: Option<capture::Transfer>,
     transfer: transfer::State,
+    presentation_lane: Option<crate::presentation::Lane>,
 }
 impl Host {
     pub fn new(callbacks: Box<Callbacks>, cancelled: Arc<AtomicBool>) -> Self {
@@ -319,6 +321,7 @@ impl Host {
             cancelled,
             session: None,
             tabs: HashMap::new(),
+            tab_order: Vec::new(),
             next_tab: 1,
             next_command: 1,
             initialized: true,
@@ -326,6 +329,7 @@ impl Host {
             presentation: presentation::State::default(),
             screenshot: None,
             transfer: transfer::State::default(),
+            presentation_lane: None,
         }
     }
     fn pump(&self) -> Result<(), BrowserDriverError> {
@@ -353,7 +357,7 @@ impl Host {
         self.cancelled.load(Ordering::Acquire) || control.is_cancelled()
     }
     fn until(
-        &self,
+        &mut self,
         control: Option<&BrowserDriverControl>,
         timeout: Duration,
         mut ready: impl FnMut(&State) -> bool,
@@ -361,6 +365,7 @@ impl Host {
         let deadline = Instant::now() + timeout;
         loop {
             self.pump()?;
+            self.service_presentation(true);
             if self.state(&mut ready)? {
                 return Ok(());
             }
@@ -512,6 +517,7 @@ impl Host {
                 elements: HashMap::new(),
             },
         );
+        self.tab_order.push(identity.clone());
         self.until(Some(control), Duration::from_secs(60), |state| {
             state.failed.contains(&native)
                 || (state.created.contains(&native)
@@ -564,6 +570,7 @@ impl Host {
             .lock()
             .map_err(|_| BrowserDriverError::Failed)? = request.options.allowed_origins;
         self.session = Some(request.session_id);
+        self.presentation.selected_tab = Some(request.tab_id.clone());
         self.allocate(
             BrowserTabSummary {
                 tab_id: request.tab_id,
@@ -1161,6 +1168,10 @@ impl Host {
                     .remove(tab_id)
                     .ok_or(BrowserDriverError::Stale)?
                     .summary;
+                self.tab_order.retain(|id| id != tab_id);
+                if self.presentation.selected_tab.as_ref() == Some(tab_id) {
+                    self.presentation.selected_tab = self.tab_order.first().cloned();
+                }
                 return Ok(BrowserObservation {
                     session_id: command.session_id,
                     tab: summary,
@@ -1214,6 +1225,12 @@ impl Host {
         tab.native_document = new_native_document;
         tab.summary.origin = origin;
         tab.summary.title = title;
+        if matches!(
+            command.action,
+            BrowserAction::TabOpen { .. } | BrowserAction::TabSelect { .. }
+        ) {
+            self.presentation.selected_tab = Some(selected);
+        }
         Ok(BrowserObservation {
             session_id: command.session_id,
             tab: tab.summary.clone(),
@@ -1253,6 +1270,8 @@ impl Host {
             tabs.iter().all(|tab| state.closed.contains(tab))
         })?;
         self.tabs.clear();
+        self.tab_order.clear();
+        self.presentation.selected_tab = None;
         self.session = None;
         Ok(())
     }
@@ -1276,6 +1295,39 @@ impl Host {
         } else {
             Ok(())
         }
+    }
+    pub(crate) fn install_presentation_lane(&mut self, lane: crate::presentation::Lane) {
+        self.presentation_lane = Some(lane);
+    }
+    pub(crate) fn service_presentation(&mut self, waiting: bool) {
+        if let Some(mut lane) = self.presentation_lane.take() {
+            lane.service(self, waiting);
+            self.presentation_lane = Some(lane);
+        }
+    }
+}
+
+impl crate::presentation::Target for Host {
+    fn control(
+        &mut self,
+        command: colossus_browser_presentation::PresentationCommand,
+    ) -> Result<
+        colossus_browser_presentation::PresentationReply,
+        colossus_browser_presentation::PresentationError,
+    > {
+        self.presentation_command(command)
+    }
+    fn frame(
+        &mut self,
+        lease: colossus_browser_presentation::Lease,
+    ) -> Result<
+        Option<colossus_browser_presentation::Frame>,
+        colossus_browser_presentation::PresentationError,
+    > {
+        self.presentation_frame(lease)
+    }
+    fn revoke(&mut self) {
+        self.revoke_human_presentation();
     }
 }
 

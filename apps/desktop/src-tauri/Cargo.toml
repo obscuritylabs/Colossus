@@ -20,8 +20,10 @@ embedded-chromium-preview = ["browser-preview", "colossus-native-browser/cef-pre
 browser-test-bridge = ["browser-preview", "colossus-native-browser/native-test-driver"]
 # Separate-host Debug lane: link only the native pixel adapter; never bootstrap
 # an in-process CEF guest or fall back to a system webview for this lane.
-macos-contained-browser-diagnostic = ["browser-test-bridge", "colossus-native-browser/cef-preview"]
-windows-browser-development = ["browser-test-bridge", "colossus-native-browser/cef-preview"]
+# This standalone example has no Vite server. Embed the built renderer at compile
+# time; clearing devUrl at runtime cannot restore assets omitted by Tauri codegen.
+macos-contained-browser-diagnostic = ["browser-test-bridge", "colossus-native-browser/cef-preview", "tauri/custom-protocol"]
+windows-browser-development = ["browser-test-bridge", "colossus-native-browser/cef-preview", "tauri/custom-protocol"]
 dictation = ["dep:colossus-native-dictation", "colossus-native-dictation/download"]
 dictation-preview = ["dictation"]
 dictation-metal = ["dictation", "colossus-native-dictation/metal"]
@@ -128,3 +130,7 @@ unsafe_code = "forbid"
 [lints.clippy]
 all = "warn"
 pedantic = "warn"
+
+# Match Core's authenticated Retina-frame hashing within the existing lease.
+[profile.dev.package.sha2]
+opt-level = 3

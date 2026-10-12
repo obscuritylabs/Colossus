@@ -39,11 +39,11 @@ std::optional<MacHelperPrograms> PrepareMacHelperPrograms(const char* base) {
   return result;
 }
 
-std::optional<std::string> MacHelperPrograms::GpuProgram(std::string_view process,
-                                                        std::string_view current) const {
-  if (process != "gpu-process" || (current != paths[0] && current != paths[2]))
-    return std::nullopt;
-  return paths[2];
+std::optional<std::string> MacHelperPrograms::Program(std::string_view process) const {
+  if (process == "renderer") return paths[1];
+  if (process == "gpu-process") return paths[2];
+  if (process == "utility") return paths[0];
+  return std::nullopt;
 }
 
 int MacChildProcessClass(std::string_view process) {

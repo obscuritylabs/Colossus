@@ -1,0 +1,37 @@
+[package]
+name = "colossus-mac-browser-process-broker"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+license = "Apache-2.0"
+
+[features]
+default = []
+macos-process-entry-development = []
+macos-process-observation-fixture = []
+macos-process-output-diagnostic = ["macos-process-entry-development"]
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.10.9"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["event", "fs"] }
+
+[workspace]
+resolver = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+colossus-darwin-process = { version = "=0.11.8", path = "../../../crates/colossus-darwin-process" }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+libc = "0.2.186"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }

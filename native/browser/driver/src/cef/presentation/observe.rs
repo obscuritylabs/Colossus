@@ -10,8 +10,8 @@ impl Host {
     ) -> Result<PageState, PresentationError> {
         // Reading the same owned tab remains possible after hide, expiry or navigation;
         // no input or old pixels are authorized by this recovery metadata.
-        self.owned_lease(lease)?;
-        let identity = self
+        self.owned_viewport(lease)?;
+        let configured = self
             .presentation
             .active
             .as_ref()
@@ -20,11 +20,26 @@ impl Host {
             .target
             .tab_id
             .clone();
+        let identity = if lease.control_generation > 0 {
+            self.presentation
+                .selected_tab
+                .clone()
+                .ok_or(PresentationError::Stale)?
+        } else {
+            // The native human path has exactly its original configured tab.
+            self.owned_lease(lease)?;
+            configured
+        };
+        let native = self
+            .tabs
+            .get(&identity)
+            .ok_or(PresentationError::Stale)?
+            .native;
         let (origin, title, revision) = self
-            .metadata(lease.tab)
+            .metadata(native)
             .map_err(|_| PresentationError::OutcomeUnknown)?;
         let native_document = self
-            .native_document(lease.tab)
+            .native_document(native)
             .map_err(|_| PresentationError::Stale)?;
         let tab = self
             .tabs
@@ -62,9 +77,9 @@ impl Host {
         let (url, loading, history) = self
             .state(|state| {
                 (
-                    state.addresses.get(&lease.tab).cloned().unwrap_or_default(),
-                    state.loading.contains(&lease.tab),
-                    state.history.get(&lease.tab).copied().unwrap_or_default(),
+                    state.addresses.get(&native).cloned().unwrap_or_default(),
+                    state.loading.contains(&native),
+                    state.history.get(&native).copied().unwrap_or_default(),
                 )
             })
             .map_err(|_| PresentationError::OutcomeUnknown)?;

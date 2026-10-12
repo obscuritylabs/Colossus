@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 import select
 import socket
+from socketserver import TCPServer
 import threading
 import time
 from urllib.parse import urlsplit
@@ -88,6 +89,10 @@ class FixtureProxy:
             daemon_threads = True
             block_on_close = False
             request_queue_size = 16
+
+            def server_bind(self):
+                TCPServer.server_bind(self)
+                self.server_name, self.server_port = self.server_address
 
             def process_request(self, request, address):
                 if not proxy.capacity.acquire(blocking=False):

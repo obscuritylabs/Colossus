@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from urllib.parse import urlsplit
 
 import pki_fixture
@@ -91,6 +92,21 @@ class PkiFixtureTests(unittest.TestCase):
             self.assertFalse(report["report"]["native_browser_verified"])
             self.assertFalse(report["report"]["os_store_cleanup_verified"])
             self.assertNotIn((allocation / "passphrase.txt").read_text("ascii"), result.stdout)
+
+    def test_loopback_servers_and_proxy_start_without_dns(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = pki_fixture.Fixture(Path(directory) / "private")
+            proxy = None
+            try:
+                with patch.object(socket, "getfqdn", side_effect=AssertionError("DNS forbidden")):
+                    metadata = fixture.start()
+                    proxy = FixtureProxy(metadata)
+                self.assertEqual(len(metadata["urls"]), 6)
+                self.assertEqual(proxy.configuration()["address"], "127.0.0.1")
+            finally:
+                if proxy is not None:
+                    proxy.close()
+                fixture.close()
 
     def test_private_ca_succeeds_without_changing_os_trust(self):
         status, _, body = self.request("public")

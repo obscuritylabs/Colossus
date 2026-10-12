@@ -1,5 +1,6 @@
 //! Genuine kernel audit identities and identity-bound signal dispatch.
 
+use sha2::{Digest as _, Sha256};
 use std::{fmt, io, mem, sync::OnceLock};
 
 const TASK_AUDIT_TOKEN: libc::task_flavor_t = 15;
@@ -93,6 +94,20 @@ impl DarwinProcessIdentity {
     /// Process identifier embedded in the genuine kernel token.
     pub fn pid(&self) -> u32 {
         self.token.words[5]
+    }
+    /// Opaque private-state correlation for one custody enrollment generation.
+    ///
+    /// This digest is not live identity, executable attestation or authority.
+    /// Effects still require the retained genuine identity and native peer check.
+    /// It serializes no token/right and performs no additional OS operation.
+    pub fn custody_generation_binding(&self, generation: &[u8; 32]) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(b"colossus-macos-custody-parent-generation-v1\0");
+        for word in self.token.words {
+            digest.update(word.to_be_bytes());
+        }
+        digest.update(generation);
+        digest.finalize().into()
     }
 
     /// Kernel audit session inherited across ordinary fork, setsid and reparenting.
@@ -260,4 +275,25 @@ fn lookup_error(pid: libc::pid_t, operation: &str, status: libc::kern_return_t) 
 
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
+}
+
+#[cfg(test)]
+mod custody_binding_tests {
+    use super::*;
+    #[test]
+    fn generation_incarnation_and_exec_generation_are_distinct_private_bindings() {
+        let original = DarwinProcessIdentity {
+            token: AuditToken {
+                words: [1, 2, 3, 4, 5, 6, 7, 8],
+            },
+        };
+        let bound = original.custody_generation_binding(&[9; 32]);
+        assert_eq!(bound, original.clone().custody_generation_binding(&[9; 32]));
+        assert_ne!(bound, original.custody_generation_binding(&[10; 32]));
+        for index in [5, 7] {
+            let mut changed = original.clone();
+            changed.token.words[index] += 1;
+            assert_ne!(bound, changed.custody_generation_binding(&[9; 32]));
+        }
+    }
 }

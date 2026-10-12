@@ -106,6 +106,11 @@ class CoreMacosDiagnosticTests(unittest.TestCase):
         self.assertEqual(command[-6:], ["--", "--ignored", "--exact", "--nocapture", "--color", "never"])
         self.assertIn("--lib", command)
         self.assertNotIn("--release", command)
+        transfer = diagnostic.core_command("transfers")
+        self.assertEqual(transfer.count(diagnostic.TRANSFER_TEST), 1)
+        self.assertNotIn(diagnostic.CORE_TEST, transfer)
+        with self.assertRaises(KeyError):
+            diagnostic.core_command("native_session_ports")
         with patch.object(diagnostic, "run_logged", return_value=b"123\n") as run:
             self.assertEqual(diagnostic.current_audit_session({}, self.root), 123)
         identity = run.call_args.args[0]
@@ -232,6 +237,22 @@ class CoreMacosDiagnosticTests(unittest.TestCase):
         screenshot.write_bytes(b"invalid picture")
         with self.assertRaises(diagnostic.DiagnosticError):
             diagnostic.verify_core_result(evidence)
+
+    def test_transfer_result_requires_its_exact_case_and_completion_receipt(self):
+        evidence = self.root / "transfer-evidence"
+        evidence.mkdir()
+        log = evidence / "core-test.log"
+        result = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured;\n"
+        log.write_text(f"test {diagnostic.TRANSFER_TEST} ... ok\n" + result)
+        with self.assertRaises(diagnostic.DiagnosticError):
+            diagnostic.verify_core_result(evidence, "transfers")
+        receipt = (diagnostic.TRANSFER_RECEIPT +
+                   b" direct-child shutdown passed; production acceptance false\n").decode()
+        log.write_text(receipt + f"test {diagnostic.CORE_TEST} ... ok\n" + result)
+        with self.assertRaises(diagnostic.DiagnosticError):
+            diagnostic.verify_core_result(evidence, "transfers")
+        log.write_text(receipt + f"test {diagnostic.TRANSFER_TEST} ... ok\n" + result)
+        diagnostic.verify_core_result(evidence, "transfers")
 
 
 if __name__ == "__main__":

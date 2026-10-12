@@ -1,5 +1,5 @@
 //! Real Windows HWND rendering and native input for the supervised Core fixture.
-use super::{BrowserRect, PAGE_TIMEOUT, present, title};
+use super::{BrowserRect, PAGE_TIMEOUT, ViewportHeartbeat, present, title};
 use anyhow::{Context as _, ensure};
 use colossus_native_browser::{presentation::WindowsScreenEvidence, remote::RemoteSurface};
 use std::{fs::OpenOptions, path::Path, time::Duration};
@@ -77,7 +77,11 @@ pub(super) async fn human(
     view: &RemoteSurface,
     rect: BrowserRect,
     home: &Path,
+    heartbeat: &ViewportHeartbeat,
 ) -> anyhow::Result<()> {
+    // Windows resize and overlay assertions own their viewport pulses. Settle
+    // the ordinary heartbeat so it cannot restore old geometry or show an overlay.
+    heartbeat.pause().await?;
     let initial = screen(app, tab, view, rect, [255, 241, 231, 255]).await?;
     save(&initial, home, "windows-human-foreground.png")?;
     let smaller = BrowserRect {
@@ -136,8 +140,9 @@ pub(super) async fn human(
     println!("PASS actual Desktop overlay occludes the native browser HWND");
     controller.eval("document.getElementById('owned-windows-overlay')?.remove();")?;
     let _ = screen(app, tab, view, rect, [255, 241, 231, 255]).await?;
+    heartbeat.resume(tab, rect).await?;
     view.acceptance_windows_input().await?;
-    title(app, tab, view, rect, "Human input Ab3Ω😀").await?;
+    title(view, "Human input Ab3Ω😀").await?;
     println!(
         "PASS native HWND mouse/key dispatch, Unicode surrogate IME commit and IME cancel reached real Chromium"
     );
@@ -160,6 +165,21 @@ pub(super) async fn agent(
     println!(
         "PASS actual foreground Windows desktop shows the Core-controlled browser: {}x{} dpi={} center_bgra={:?}",
         screen.width, screen.height, screen.dpi, screen.center_bgra
+    );
+    Ok(())
+}
+
+pub(super) async fn selected_tab(
+    app: &tauri::AppHandle,
+    tab: &str,
+    view: &RemoteSurface,
+    rect: BrowserRect,
+    color: [u8; 4],
+) -> anyhow::Result<()> {
+    let frame = screen(app, tab, view, rect, color).await?;
+    println!(
+        "PASS Core-selected tab reached the actual foreground Windows HWND: {}x{} dpi={} center_bgra={:?}",
+        frame.width, frame.height, frame.dpi, frame.center_bgra,
     );
     Ok(())
 }
