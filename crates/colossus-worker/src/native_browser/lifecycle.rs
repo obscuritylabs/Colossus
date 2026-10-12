@@ -112,6 +112,27 @@ impl NativeBrowserService {
         close: bool,
     ) -> Result<(), WorkerError> {
         let _cleanup = self.cleanup.lock().await;
+        self.finish_locked(session, close).await
+    }
+    #[cfg(windows)]
+    pub(super) async fn finish_owned(
+        &self,
+        owner: &Arc<colossus_runtime::RuntimeNativeBrowserSession>,
+    ) -> Result<(), WorkerError> {
+        let _cleanup = self.cleanup.lock().await;
+        if !self
+            .tracked(owner.session_id())
+            .is_some_and(|current| Arc::ptr_eq(&current, owner))
+        {
+            return Ok(());
+        }
+        self.finish_locked(owner.session_id(), false).await
+    }
+    async fn finish_locked(
+        &self,
+        session: &BrowserSessionId,
+        close: bool,
+    ) -> Result<(), WorkerError> {
         if self
             .retired
             .lock()
@@ -203,20 +224,41 @@ impl NativeBrowserService {
 }
 pub(super) struct DetachOnDrop {
     service: Arc<NativeBrowserService>,
+    #[cfg(not(windows))]
     session: BrowserSessionId,
+    #[cfg(windows)]
+    owner: Arc<colossus_runtime::RuntimeNativeBrowserSession>,
 }
 impl DetachOnDrop {
+    #[cfg(not(windows))]
     pub(super) fn new(service: Arc<NativeBrowserService>, session: BrowserSessionId) -> Self {
         Self { service, session }
+    }
+    #[cfg(windows)]
+    pub(super) fn new_owned(
+        service: Arc<NativeBrowserService>,
+        owner: Arc<colossus_runtime::RuntimeNativeBrowserSession>,
+    ) -> Self {
+        Self { service, owner }
     }
 }
 impl Drop for DetachOnDrop {
     fn drop(&mut self) {
         let service = Arc::clone(&self.service);
+        #[cfg(not(windows))]
         let session = self.session.clone();
+        #[cfg(windows)]
+        let owner = Arc::clone(&self.owner);
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
-                while service.finish(&session, false).await.is_err() {
+                loop {
+                    #[cfg(windows)]
+                    let result = service.finish_owned(&owner).await;
+                    #[cfg(not(windows))]
+                    let result = service.finish(&session, false).await;
+                    if result.is_ok() {
+                        break;
+                    }
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
             });

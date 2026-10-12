@@ -11,6 +11,8 @@ use std::{
 
 pub(super) const MAX_TABS: usize = 8;
 pub(super) const DRAINING_MESSAGE: &str = "The browser is closing for application shutdown.";
+pub(super) const CRASHED_MESSAGE: &str =
+    "This browser tab stopped responding. Close it and open a new tab.";
 
 pub(super) struct Tab {
     pub(super) scope: String,
@@ -31,6 +33,8 @@ pub(super) struct Registry {
     pub(super) selected: HashMap<String, String>,
     pub(super) profiles: HashMap<String, tempfile::TempDir>,
     pub(super) sessions: HashMap<String, String>,
+    #[cfg(feature = "windows-browser-development")]
+    pub(super) viewer_recoveries: HashMap<String, u8>,
 }
 
 impl Registry {
@@ -100,9 +104,7 @@ impl Registry {
             }
             BrowserEvent::Crashed => {
                 tab.dto.page.loading = false;
-                tab.dto.error = Some(
-                    "This browser tab stopped responding. Close it and open a new tab.".into(),
-                );
+                tab.dto.error = Some(CRASHED_MESSAGE.into());
                 tab.presentation_epoch.fetch_add(1, Ordering::AcqRel);
                 tab.heartbeat = None;
             }

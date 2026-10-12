@@ -39,6 +39,10 @@ impl Runtime {
             })
             .cloned()
             .ok_or(RuntimeNativeBrowserError::Denied)?;
+        #[cfg(windows)]
+        if let Some(session) = super::windows_watch::resume(browser, role, &run).await? {
+            return Ok(session);
+        }
         let original = {
             let requests = browser
                 .native

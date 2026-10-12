@@ -1441,6 +1441,25 @@ async fn exercise_owned(
         "human page was not submitted under its native human lease"
     );
     println!("PASS authenticated Core human page submitted to Desktop RemoteSurface");
+    #[cfg(feature = "windows-browser-development")]
+    {
+        let loaded = state
+            .browser
+            .snapshot()
+            .await
+            .map_err(|error| anyhow::anyhow!(error.message))?;
+        ensure!(
+            loaded
+                .tabs
+                .iter()
+                .find(|entry| entry.id == tab)
+                .is_some_and(|entry| !entry.page.loading),
+            "a loaded supervised page kept the legacy Windows loading spinner"
+        );
+        println!(
+            "PASS supervised Windows loading metadata clears the spinner after real navigation"
+        );
+    }
     #[cfg(windows)]
     windows::human(app, &tab, &view, rect, home, heartbeat).await?;
     #[cfg(not(windows))]
@@ -1480,7 +1499,7 @@ async fn exercise_owned(
     if fixture.state.native_input {
         native_input::checkpoint(app, &tab, &view, rect, &fixture.origin).await?;
     }
-    let run = client.create_run(request(conversation)?).await?.run;
+    let run = client.create_run(request(conversation.clone())?).await?.run;
     *fixture.state.run_id.lock().unwrap() = Some(run.run_id.clone());
     fixture
         .state
@@ -1597,7 +1616,7 @@ async fn exercise_owned(
     if fixture.state.native_tabs {
         owned_tabs::checkpoint(app, &tab, &view, rect, fixture).await?;
     }
-    heartbeat.stop().await?;
+    heartbeat.pause().await?;
     if close_after_completion() {
         ensure!(
             !fixture.state.native_tabs,
@@ -1605,10 +1624,101 @@ async fn exercise_owned(
         );
         fixture.state.signal(&fixture.state.viewer_detached);
         run_complete(client, &run.run_id).await?;
+        #[cfg(feature = "windows-browser-development")]
+        state
+            .browser
+            .watch_agent(app, SPACE, &run.run_id, &conversation)
+            .await
+            .map_err(|error| anyhow::anyhow!(error.message))?;
+        #[cfg(feature = "windows-browser-development")]
+        ensure!(
+            state
+                .browser
+                .lock()
+                .map_err(|error| anyhow::anyhow!(error.message))?
+                .tabs
+                .is_empty(),
+            "a completed run left its viewer marked as a crashed tab"
+        );
     }
-    #[cfg(windows)]
-    view.acceptance_disconnect_presentation();
-    action(app, BrowserAction::Close { tab_id: tab }).await?;
+    if !close_after_completion() {
+        #[cfg(windows)]
+        view.acceptance_disconnect_presentation();
+        #[cfg(feature = "windows-browser-development")]
+        {
+            // The normal context reconciliation must replace a failed viewer
+            // without opening a browser or granting another agent writer.
+            let deadline = tokio::time::Instant::now() + PAGE_TIMEOUT;
+            loop {
+                let failed = state
+                    .browser
+                    .lock()
+                    .map_err(|error| anyhow::anyhow!(error.message))?
+                    .tabs
+                    .iter()
+                    .any(|entry| {
+                        entry.dto.id == tab
+                            && entry.dto.error.as_deref()
+                                == Some(super::super::registry::CRASHED_MESSAGE)
+                    });
+                if failed {
+                    break;
+                }
+                ensure!(
+                    tokio::time::Instant::now() < deadline,
+                    "lost viewer channel did not signal its failure"
+                );
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            state
+                .browser
+                .watch_agent(app, SPACE, &run.run_id, &conversation)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.message))?;
+            let replacement = state
+                .browser
+                .lock()
+                .map_err(|error| anyhow::anyhow!(error.message))?
+                .selected
+                .get(SPACE)
+                .cloned()
+                .context("recovered viewer is missing")?;
+            ensure!(
+                replacement != tab,
+                "failed viewer was reused instead of freshly authenticated"
+            );
+            let recovered = remote(app, &replacement)?;
+            ensure!(
+                recovered.session_id() == session && !recovered.human_control_available(),
+                "viewer recovery changed the browser or granted human control"
+            );
+            heartbeat.resume(&replacement, rect).await?;
+            let color = if fixture.state.native_tabs {
+                [255, 255, 255, 255]
+            } else {
+                [216, 247, 217, 255]
+            };
+            windows::selected_tab(app, &replacement, &recovered, rect, color).await?;
+            heartbeat.stop().await?;
+            println!(
+                "PASS normal context recovery freshly authenticated the same Core browser and displayed native pixels after viewer channel loss"
+            );
+            action(
+                app,
+                BrowserAction::Close {
+                    tab_id: replacement,
+                },
+            )
+            .await?;
+        }
+        #[cfg(not(feature = "windows-browser-development"))]
+        action(app, BrowserAction::Close { tab_id: tab }).await?;
+    }
+    #[cfg(not(feature = "windows-browser-development"))]
+    if close_after_completion() {
+        action(app, BrowserAction::Close { tab_id: tab }).await?;
+    }
+    heartbeat.stop().await?;
     #[cfg(windows)]
     println!("PASS lost viewer stream reconciled through separate authenticated native detach");
     ensure!(
@@ -1627,6 +1737,11 @@ async fn exercise_owned(
     fixture.state.signal(&fixture.state.viewer_detached);
     run_complete(client, &run.run_id).await?;
     if close_after_completion() {
+        #[cfg(feature = "windows-browser-development")]
+        println!(
+            "PASS completed Core run automatically retired its viewer through acknowledged detach without a crashed tab"
+        );
+        #[cfg(not(feature = "windows-browser-development"))]
         println!(
             "PASS completed Core run retired its viewer; later native close reconciled the positive cleanup receipt"
         );

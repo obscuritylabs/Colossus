@@ -447,6 +447,40 @@ async fn agent_viewer_uses_existing_host_and_denies_foreign_conversations_and_hu
         .await
         .unwrap();
     assert_eq!(driver.closed.load(Ordering::SeqCst), 0);
+    #[cfg(windows)]
+    {
+        let resumed = runtime
+            .watch_native_browser(&role, "agent-view", "owned-conversation")
+            .await
+            .unwrap();
+        assert_eq!(resumed.session_id(), viewer.session_id());
+        assert_eq!(
+            resumed.configure().unwrap().control_generation,
+            lease.control_generation
+        );
+        let replacement = resumed
+            .take_handoff_presentation_lease(&resumed.configure().unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(replacement.viewport_generation > visible.viewport_generation);
+        assert_eq!(driver.opened.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            runtime
+                .watch_native_browser(&role, "agent-view", "owned-conversation")
+                .await,
+            Err(RuntimeNativeBrowserError::Busy)
+        ));
+        assert!(
+            resumed
+                .presentation()
+                .command(PresentationCommand::Human {
+                    lease: replacement,
+                    command: HumanCommand::Reload
+                })
+                .await
+                .is_err()
+        );
+    }
     browser.cancel_run("agent-view");
     assert!(matches!(
         runtime

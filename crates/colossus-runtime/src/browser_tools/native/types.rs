@@ -420,6 +420,8 @@ pub(in crate::browser_tools) struct View {
     pub(in crate::browser_tools) fenced: bool,
     pub(in crate::browser_tools) closed: bool,
     pub(in crate::browser_tools) retired: bool,
+    #[cfg(windows)]
+    pub(in crate::browser_tools) viewer_detached: bool,
     pub(in crate::browser_tools) agent_generation: Option<u64>,
 }
 pub(in crate::browser_tools) fn target(request: &BrowserDriverOpenRequest) -> BrowserTarget {

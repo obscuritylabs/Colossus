@@ -22,6 +22,8 @@ mod registry;
 pub(crate) mod viewport;
 #[cfg(all(windows, feature = "embedded-chromium-preview"))]
 mod windows_entry;
+#[cfg(feature = "windows-browser-development")]
+mod windows_viewer;
 
 pub(crate) use manager::BrowserManager;
 pub(crate) use viewport::{handle_window_event, start_watchdog};

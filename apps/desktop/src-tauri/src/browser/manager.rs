@@ -290,7 +290,12 @@ impl BrowserManager {
             if let Some(tab) = state.tabs.iter_mut().find(|t| t.dto.id == id) {
                 #[cfg(windows)]
                 {
-                    page.loading = tab.dto.page.loading;
+                    // WebView2's event-owned loading flag is independent from
+                    // its inspection API. The supervised host instead returns
+                    // authenticated loading metadata for its exact document.
+                    if tab.view.contained_session_id().is_none() {
+                        page.loading = tab.dto.page.loading;
+                    }
                 }
                 if page.url == "about:blank" {
                     if page.loading {
@@ -608,6 +613,13 @@ impl BrowserManager {
         run_id: &str,
         conversation_id: &str,
     ) -> Result<(), CommandErrorDto> {
+        #[cfg(feature = "windows-browser-development")]
+        if !self
+            .reconcile_windows_agent(app, scope, run_id, conversation_id)
+            .await?
+        {
+            return Ok(());
+        }
         // Dropping an old read-only viewer preserves an active Core writer;
         // confirmed run cleanup has already retired its native owner otherwise.
         let prior = self
@@ -681,7 +693,7 @@ impl BrowserManager {
         Ok(())
     }
 
-    async fn close(&self, scope: &str, id: &str) -> Result<(), CommandErrorDto> {
+    pub(super) async fn close(&self, scope: &str, id: &str) -> Result<(), CommandErrorDto> {
         let (view, _) = self.tab(id, scope)?;
         let _ = view.hide();
         view.close()

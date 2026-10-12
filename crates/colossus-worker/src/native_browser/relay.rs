@@ -146,6 +146,9 @@ impl PresentationHost for NativeRelay {
     async fn revoke(&self) {
         self.revoke_now();
         // Detach hides the viewer but retains the run-owned host channel after transfer.
+        #[cfg(windows)]
+        let _ = self.service.finish_owned(&self.session).await;
+        #[cfg(not(windows))]
         let _ = self.service.finish(self.session.session_id(), false).await;
     }
 }

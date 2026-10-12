@@ -87,13 +87,27 @@ pub(super) async fn handle(
                 return Ok(());
             }
         };
-        service
-            .sessions
-            .lock()
-            .map_err(|_| WorkerError::BrowserCleanupUnknown)?
-            .insert(session.session_id().clone(), Arc::clone(&session));
+        {
+            #[cfg(windows)]
+            let _cleanup = service.cleanup.lock().await;
+            service
+                .sessions
+                .lock()
+                .map_err(|_| WorkerError::BrowserCleanupUnknown)?
+                .insert(session.session_id().clone(), Arc::clone(&session));
+            #[cfg(windows)]
+            service
+                .detached
+                .lock()
+                .map_err(|_| WorkerError::BrowserCleanupUnknown)?
+                .remove(session.session_id());
+        }
+        #[cfg(not(windows))]
         let _intent =
             lifecycle::DetachOnDrop::new(Arc::clone(&service), session.session_id().clone());
+        #[cfg(windows)]
+        let _intent =
+            lifecycle::DetachOnDrop::new_owned(Arc::clone(&service), Arc::clone(&session));
         if !service.authorized() {
             return Err(WorkerError::BrowserCleanupUnknown);
         }

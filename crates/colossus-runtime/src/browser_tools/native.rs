@@ -6,6 +6,8 @@ pub(super) mod lifecycle;
 pub(super) mod selection;
 mod types;
 mod watch;
+#[cfg(windows)]
+mod windows_watch;
 
 pub(super) use types::NativeState;
 pub use types::{
