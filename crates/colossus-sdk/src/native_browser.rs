@@ -179,6 +179,65 @@ impl NativeBrowserClient {
             owner,
         })
     }
+    /// Attach read-only native pixels to this application's existing active run.
+    /// Missing pages return None; this never allocates a browser or grants a writer.
+    pub async fn watch_agent(
+        &self,
+        run_id: &str,
+        conversation_id: &str,
+    ) -> SdkResult<Option<NativeBrowserAttachment>> {
+        let request = NativeBrowserRequest::Watch {
+            run_id: run_id.to_owned(),
+            conversation_id: conversation_id.to_owned(),
+        };
+        request.validate().map_err(|_| SdkError::IdentityMismatch)?;
+        let mut channel = self.connect().await?;
+        let reply = channel
+            .request(&request)
+            .await
+            .map_err(|_| SdkError::SidecarFailed)?;
+        let NativeBrowserReply::Opened {
+            conversation_id: admitted,
+            configure,
+            enrollment_digest,
+        } = reply
+        else {
+            return match reply {
+                NativeBrowserReply::Unavailable | NativeBrowserReply::Denied => Ok(None),
+                _ => Err(SdkError::SidecarFailed),
+            };
+        };
+        let owner = Arc::new(NativeBrowserSessionOwner::new(
+            self.clone(),
+            configure.session.clone(),
+        ));
+        configure
+            .validate()
+            .map_err(|_| SdkError::IdentityMismatch)?;
+        if configure.control_generation == 0
+            || admitted != conversation_id
+            || enrollment_digest == [0; 32]
+        {
+            return Err(SdkError::IdentityMismatch);
+        }
+        let (stream, key) = channel.into_presentation();
+        let (reader, writer) = tokio::io::split(stream);
+        let presentation = PresentationClient::connect(
+            PresentationChannel::new(reader, writer),
+            key,
+            enrollment_digest,
+        )
+        .await
+        .map_err(|_| SdkError::SidecarFailed)?;
+        Ok(Some(NativeBrowserAttachment {
+            conversation_id: admitted,
+            presentation,
+            configure,
+            enrollment_digest,
+            owner,
+        }))
+    }
+
     pub(super) async fn close_session(&self, session: &BrowserSessionId) -> SdkResult<()> {
         match self
             .connect()

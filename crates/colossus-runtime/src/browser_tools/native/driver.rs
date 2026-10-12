@@ -42,22 +42,57 @@ impl BrowserDriver for Registrar {
                 return Err(BrowserDriverError::Denied);
             }
             *slot = Some(request.clone());
+        } else {
+            self.0
+                .agent_requests
+                .lock()
+                .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+                .insert(request.session_id.clone(), request.clone());
         }
-        self.0.driver.open_session(request, control).await
+        let session_id = request.session_id.clone();
+        let result = self.0.driver.open_session(request, control).await;
+        if result.is_err() {
+            // Only presentation metadata is discarded. The coordinator/factory
+            // still owns failed allocation and any uncertain physical cleanup.
+            self.0
+                .agent_requests
+                .lock()
+                .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+                .remove(&session_id);
+        }
+        result
     }
     async fn execute(
         &self,
         c: BrowserDriverCommand,
         k: &BrowserDriverControl,
     ) -> Result<BrowserObservation, BrowserDriverError> {
-        self.0.driver.execute(c, k).await
+        let identity = (c.session_id.clone(), c.control_generation);
+        let result = self.0.driver.execute(c, k).await;
+        if result.is_ok() {
+            self.0
+                .agent_generations
+                .lock()
+                .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+                .insert(identity.0, identity.1);
+        }
+        result
     }
     async fn capture(
         &self,
         c: BrowserDriverCommand,
         k: &BrowserDriverControl,
     ) -> Result<BrowserScreenshotDescriptor, BrowserDriverError> {
-        self.0.driver.capture(c, k).await
+        let identity = (c.session_id.clone(), c.control_generation);
+        let result = self.0.driver.capture(c, k).await;
+        if result.is_ok() {
+            self.0
+                .agent_generations
+                .lock()
+                .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+                .insert(identity.0, identity.1);
+        }
+        result
     }
     async fn read_screenshot_chunk(
         &self,
@@ -112,6 +147,17 @@ impl BrowserDriver for Registrar {
         self.0.driver.cancel_session(s).await
     }
     async fn close_session(&self, s: &BrowserSessionId) -> Result<(), BrowserDriverError> {
-        self.0.driver.close_session(s).await
+        self.0.driver.close_session(s).await?;
+        self.0
+            .agent_requests
+            .lock()
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+            .remove(s);
+        self.0
+            .agent_generations
+            .lock()
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+            .remove(s);
+        Ok(())
     }
 }

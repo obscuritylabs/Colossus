@@ -297,6 +297,8 @@ controller document, hands its human page to an agent and requires native click,
 navigation, screenshot, read-only viewer detachment and shutdown receipts. Core
 also opens, selects and closes owned tabs; each retarget must reach the foreground
 Windows HWND under the same writer and a fresh authenticated viewport.
+Both loss of the outer viewer stream and viewer closure after natural Core run
+completion require a separate authenticated detach or retained cleanup receipt.
 Windows screen probes read the foreground desktop DC for the exact owned HWND;
 an accepted frame buffer alone is insufficient. Native resize/current display
 DPI, overlay occlusion, mouse/key dispatch, Unicode surrogate commits and IME

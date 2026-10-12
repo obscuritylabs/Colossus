@@ -57,6 +57,9 @@ extern "C" int32_t colossus_cef_create(colossus_cef_tab tab, uint64_t generation
   window.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
   CefBrowserSettings settings;
   settings.webgl = STATE_DISABLED;
+  // Offscreen CEF interprets zero alpha as transparent painting. Owned browser
+  // pages use the ordinary opaque canvas even when HTML omits a background.
+  settings.background_color = CefColorSetARGB(255, 255, 255, 255);
   if (!CefBrowserHost::CreateBrowser(window, client, url, settings, nullptr, context)) {
     tabs.erase(tab); bool used = false;
     for (const auto& entry : tabs) used |= entry.second.context_id == context_id;

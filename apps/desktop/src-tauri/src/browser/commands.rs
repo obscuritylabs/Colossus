@@ -37,14 +37,34 @@ fn trusted_document(url: &tauri::Url, development: bool) -> bool {
 
 #[tauri::command]
 pub(crate) async fn browser_context(
+    app: AppHandle,
     caller: Webview,
     state: State<'_, AppState>,
+    run_id: Option<String>,
+    conversation_id: Option<String>,
 ) -> Result<BrowserSnapshotDto, CommandErrorDto> {
     require_controller(&caller)?;
     let _operation = state.browser.operation.lock().await;
     state.browser.require_open()?;
     let selected = state.browser_selection().await;
     state.browser.selection_changed(selected.clone());
+    #[cfg(any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    ))]
+    if let (Some(scope), Some(run), Some(conversation)) =
+        (selected.clone(), run_id, conversation_id)
+    {
+        state
+            .browser
+            .watch_agent(&app, &scope, &run, &conversation)
+            .await?;
+    }
+    #[cfg(not(any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    )))]
+    let _ = (app, run_id, conversation_id);
     state.browser.snapshot().await
 }
 

@@ -127,6 +127,14 @@ pub enum NativeBrowserRequest {
     Probe,
     /// Explicit native human admission to an app-owned canonical conversation.
     Open(NativeBrowserOpen),
+    /// Read-only pixels for an existing run-owned Embedded page. Runtime verifies
+    /// the enrolled application and canonical conversation; IDs confer no authority.
+    Watch {
+        /// Existing run, whose ownership is reconstructed from the registered actor.
+        run_id: String,
+        /// Exact enrolled application's canonical conversation.
+        conversation_id: String,
+    },
     /// Reap the exact native admission and its private context.
     Close {
         /// Exact opaque native admission owned by this enrolled application.
@@ -152,6 +160,15 @@ impl NativeBrowserRequest {
     pub fn validate(&self) -> Result<(), PresentationError> {
         match self {
             Self::Open(request) => request.validate(),
+            Self::Watch {
+                run_id,
+                conversation_id,
+            } if [run_id, conversation_id]
+                .iter()
+                .any(|id| id.is_empty() || id.len() > 256 || id.chars().any(char::is_control)) =>
+            {
+                Err(PresentationError::Invalid)
+            }
             Self::Handoff {
                 run_id, lease_ms, ..
             } if run_id.is_empty()

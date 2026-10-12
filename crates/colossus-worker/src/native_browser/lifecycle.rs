@@ -132,6 +132,27 @@ impl NativeBrowserService {
         let tracked = self
             .tracked(session)
             .ok_or_else(|| WorkerError::Protocol("native session is not owned".into()))?;
+        if tracked
+            .is_closed()
+            .map_err(|_| WorkerError::BrowserCleanupUnknown)?
+        {
+            // Core's positive run-cleanup receipt outlives the removed native
+            // registry entry. Reconcile it before attempting another close or
+            // detach; neither a session ID nor channel EOF proves retirement.
+            self.sessions
+                .lock()
+                .map_err(|_| WorkerError::BrowserCleanupUnknown)?
+                .remove(session);
+            self.detached
+                .lock()
+                .map_err(|_| WorkerError::BrowserCleanupUnknown)?
+                .remove(session);
+            self.retired
+                .lock()
+                .map_err(|_| WorkerError::BrowserCleanupUnknown)?
+                .insert(session.clone());
+            return Ok(());
+        }
         let authority = self
             .authority
             .as_ref()

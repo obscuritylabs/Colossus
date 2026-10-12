@@ -95,6 +95,46 @@ struct ManagedOwner {
     native: Arc<NativeBrowserSessionOwner>,
     digest: [u8; 32],
 }
+
+pub(super) async fn watch_agent(
+    window: &Window,
+    scope: &str,
+    run_id: &str,
+    conversation_id: &str,
+    sink: engine::EventSink,
+) -> Result<Option<BrowserView>, BrowserError> {
+    let Some(client) = window
+        .state::<crate::state::AppState>()
+        .managed_browser_for(scope)
+        .await
+    else {
+        return Ok(None);
+    };
+    let Some(attachment) = client
+        .watch_agent(run_id, conversation_id)
+        .await
+        .map_err(|_| BrowserError::Unavailable)?
+    else {
+        return Ok(None);
+    };
+    let owner = Arc::new(ManagedOwner {
+        client,
+        conversation_id: attachment.conversation_id().to_owned(),
+        session_id: attachment.owner().session_id().to_string(),
+        native: attachment.owner(),
+        digest: attachment.enrollment_digest(),
+    });
+    engine::contained::attach_read_only(
+        window,
+        attachment.presentation(),
+        attachment.configure(),
+        attachment.enrollment_digest(),
+        owner,
+        sink,
+    )
+    .await
+    .map(Some)
+}
 #[async_trait]
 impl RemoteHostOwner for ManagedOwner {
     fn conversation_id(&self) -> &str {
@@ -112,7 +152,11 @@ impl RemoteHostOwner for ManagedOwner {
     ) -> Result<colossus_native_browser::contained::NativeConfigure, BrowserError> {
         let granted = self
             .client
-            .handoff(self.native.session_id(), run_id, 60_000)
+            .handoff(
+                self.native.session_id(),
+                run_id,
+                colossus_contracts::BrowserLimits::default().max_lease_ms,
+            )
             .await
             .map_err(|_| BrowserError::Unavailable)?;
         if granted.enrollment_digest() != self.digest {

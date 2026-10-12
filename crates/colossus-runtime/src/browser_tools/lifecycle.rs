@@ -112,9 +112,11 @@ impl AgentRunLifecycle for RuntimeBrowserTools {
                 let coordinator = Arc::clone(&self.coordinator);
                 let cleanup = Arc::clone(&run.cleanup);
                 let runs = Arc::clone(&self.runs);
+                let native = Arc::clone(&self.native);
                 handle.spawn(async move {
                     let _guard = cleanup.lock().await;
                     if coordinator.finish_run(&run.actor).await.is_ok() {
+                        super::native::lifecycle::retire_run(&native, &run);
                         let mut runs = runs.lock().unwrap_or_else(|error| error.into_inner());
                         if runs
                             .get(&run.actor.run_id)
@@ -141,6 +143,7 @@ impl AgentRunLifecycle for RuntimeBrowserTools {
             // after normal completion as well as cancellation; driver cleanup is bounded.
             let _guard = run.cleanup.lock().await;
             if self.coordinator.finish_run(&run.actor).await.is_ok() {
+                super::native::lifecycle::retire_run(&self.native, &run);
                 self.runs
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())

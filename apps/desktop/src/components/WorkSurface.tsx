@@ -315,6 +315,7 @@ export function WorkSurface({
     activeDrawer === "browser",
     browserFixture,
     view?.run.sessionId ?? browserConversationId,
+    view?.run.runId,
   );
   const browserTriggerRef = useRef<HTMLButtonElement>(null);
   const [selectionLauncher, setSelectionLauncher] = useState<

@@ -139,6 +139,40 @@ pub(in crate::browser_tools) async fn drain(browser: &super::super::RuntimeBrows
     }
 }
 
+/// Retire native viewer metadata only after Core confirms every run-owned host
+/// has closed. The SDK's retained session receives the same positive receipt;
+/// a stale HWND cannot keep an idle runtime pinned or consume future admissions.
+pub(in crate::browser_tools) fn retire_run(
+    state: &NativeState,
+    run: &super::super::service::BrowserRun,
+) {
+    let Ok(mut entries) = state.entries.lock() else {
+        return;
+    };
+    entries.retain(|_, entry| {
+        if entry.binding != run.actor.binding
+            || !entry.request.lock().is_ok_and(|request| {
+                request
+                    .as_ref()
+                    .is_some_and(|request| run.sessions.contains_key(&request.session_id))
+            })
+        {
+            return true;
+        }
+        let Ok(mut view) = entry.view.lock() else {
+            return true;
+        };
+        entry.control.cancel();
+        view.fenced = true;
+        view.closed = true;
+        view.retired = true;
+        if let Some(client) = &view.client {
+            client.disconnect();
+        }
+        false
+    });
+}
+
 impl Runtime {
     /// Explicit native user close reaps the entire owned browser context.
     /// The cleanup task survives loss of its caller and retains uncertain ownership.

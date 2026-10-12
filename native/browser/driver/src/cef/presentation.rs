@@ -34,6 +34,16 @@ fn status(status: i32) -> Result<(), PresentationError> {
         _ => Err(PresentationError::OutcomeUnknown),
     }
 }
+impl State {
+    pub(super) fn dimensions(&self) -> (u32, u32) {
+        self.active
+            .as_ref()
+            .map_or((1280, 800), |(configuration, _)| {
+                (configuration.width, configuration.height)
+            })
+    }
+}
+
 impl Host {
     /// Install only supervisor-owned presentation configuration before session admission.
     pub fn enable_presentation(&mut self, human_input: bool) {

@@ -5,6 +5,7 @@ mod handoff;
 pub(super) mod lifecycle;
 pub(super) mod selection;
 mod types;
+mod watch;
 
 pub(super) use types::NativeState;
 pub use types::{

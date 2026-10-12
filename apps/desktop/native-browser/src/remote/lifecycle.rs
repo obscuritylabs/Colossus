@@ -43,12 +43,12 @@ pub(super) async fn close(owner: &Arc<Owner>) -> Result<(), BrowserError> {
     if let Some(surface) = surface {
         surface.hide_confirmed().await?;
     }
-    let hidden = hide_host(owner, lease).await;
+    let _ = hide_host(owner, lease).await;
     owner.client.disconnect();
+    // The separate native owner must positively acknowledge detach/cleanup.
+    // That receipt also reconciles an already ended frame stream: an active
+    // writer's view is confirmed hidden, or Core has confirmed host shutdown.
     owner.native.close().await?;
-    if owner.read_only.load(Ordering::Acquire) {
-        hidden?;
-    }
     owner
         .state
         .lock()

@@ -115,6 +115,34 @@ pub async fn attach(
         Err(BrowserError::Unavailable)
     }
 }
+/// Attach an independently admitted agent viewer without enabling human input.
+///
+/// # Errors
+/// Rejects a human generation or missing native compositor and retains cleanup.
+pub async fn attach_read_only(
+    window: &Window,
+    client: colossus_browser_presentation::PresentationClient,
+    configure: colossus_browser_presentation::Configure,
+    digest: [u8; 32],
+    owner: Arc<dyn RemoteHostOwner>,
+    sink: EventSink,
+) -> Result<BrowserView, BrowserError> {
+    #[cfg(all(colossus_cef_linked, any(windows, target_os = "macos")))]
+    {
+        crate::remote::RemoteSurface::create_read_only(
+            window, client, configure, digest, owner, sink,
+        )
+        .await
+        .map(BrowserView::Remote)
+    }
+    #[cfg(not(all(colossus_cef_linked, any(windows, target_os = "macos"))))]
+    {
+        let _ = (window, client, configure, digest, sink);
+        owner.close().await?;
+        Err(BrowserError::Unavailable)
+    }
+}
+
 /// Native-only application state. No web IPC command installs or replaces this factory.
 pub struct ContainedBrowserComposition(pub Arc<dyn ContainedGuestFactory>);
 impl ContainedBrowserComposition {

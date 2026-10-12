@@ -21,6 +21,7 @@ export function useBrowser(
   visible: boolean,
   fixture = false,
   conversationId?: string,
+  runId?: string,
 ) {
   const appearance = useAppearance();
   const appearanceRef = useRef(appearance);
@@ -66,7 +67,10 @@ export function useBrowser(
           currentScope.current === capturedScope &&
           sequence.current === started;
         try {
-          const value = await api.current.context();
+          const value = await api.current.context(
+            visible ? runId : undefined,
+            conversation.current,
+          );
           if (current()) {
             setSnapshot(value);
             setLoading(false);
@@ -93,7 +97,7 @@ export function useBrowser(
           .viewport({ generation: current.generation, tabId: null, rect: null })
           .catch(() => {});
     };
-  }, [scope, visible, fixture]);
+  }, [scope, visible, fixture, runId]);
 
   const command = useCallback(async (action: BrowserAction) => {
     const operation = ++sequence.current;

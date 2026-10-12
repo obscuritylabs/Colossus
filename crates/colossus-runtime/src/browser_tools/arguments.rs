@@ -11,6 +11,7 @@ pub(super) enum BrowserInvocation {
     Open {
         options: BrowserOpenOptions,
     },
+    Sessions {},
     Status {
         session_id: BrowserSessionId,
         tabs_only: bool,
@@ -33,6 +34,14 @@ impl BrowserInvocation {
             return Ok(Self::Open {
                 options: decode(call, &call.arguments)?,
             });
+        }
+        if call.name == "browser.status"
+            && !call
+                .arguments
+                .as_object()
+                .is_some_and(|args| args.contains_key("session_id"))
+        {
+            return Ok(Self::Sessions {});
         }
         let session_id = field(call, "session_id")?;
         if matches!(call.name.as_str(), "browser.status" | "browser.tabs") {
@@ -148,7 +157,8 @@ impl BrowserInvocation {
     pub(super) fn action(&self) -> &'static str {
         match self {
             Self::Open { .. } => "browser.open",
-            Self::Status {
+            Self::Sessions {}
+            | Self::Status {
                 tabs_only: false, ..
             } => "browser.status",
             Self::Status {
@@ -180,7 +190,7 @@ impl BrowserInvocation {
 
     pub(super) fn resource(&self) -> &str {
         match self {
-            Self::Open { .. } => "browser-sessions",
+            Self::Open { .. } | Self::Sessions {} => "browser-sessions",
             Self::Status { session_id, .. }
             | Self::Close { session_id, .. }
             | Self::Action { session_id, .. } => session_id.as_str(),

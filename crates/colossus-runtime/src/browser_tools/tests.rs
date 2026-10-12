@@ -510,6 +510,24 @@ async fn other_run_cannot_claim_session_and_cancel_revokes_dispatch() {
     let opened = call(&executor, &first, "browser.open", open_arguments())
         .await
         .unwrap();
+    // Discovery is run-owned even when both registered runs share a conversation.
+    let discovered = call(&executor, &first, "browser.status", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        discovered["sessions"][0]["session"]["session_id"],
+        opened["session"]["session_id"]
+    );
+    assert_eq!(
+        discovered["sessions"][0]["control_generation"],
+        opened["control_generation"]
+    );
+    assert_eq!(
+        call(&executor, &second, "browser.status", json!({}))
+            .await
+            .unwrap()["sessions"],
+        json!([])
+    );
     assert!(
         call(
             &executor,
@@ -521,6 +539,11 @@ async fn other_run_cannot_claim_session_and_cancel_revokes_dispatch() {
         .is_err()
     );
     runtime.browser.as_ref().unwrap().cancel_run("first");
+    assert!(
+        call(&executor, &first, "browser.status", json!({}))
+            .await
+            .is_err()
+    );
     assert!(
         call(
             &executor,

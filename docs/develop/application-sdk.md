@@ -350,7 +350,13 @@ retain cleanup ownership and authoritative presentation state; neither this key 
 native leases, host paths or input-fence receipts enter renderer IPC. A new human
 page owns a canonical conversation, and human-to-agent handoff accepts only a run
 in that conversation through the runtime effect gateway. This connected source
-path remains unavailable without an accepted Embedded supervisor and installed
+also supports read-only attachment to an existing active run's Embedded page,
+after its first gateway-authorized native action establishes the writer generation.
+Runtime verifies the enrolled application and canonical conversation; attachment
+allocates no browser and grants no writer. `browser.status` without `session_id`
+discovers only the active run's already granted sessions, including a handed-off
+human page. Its observations still pass through the effect gateway and release policy.
+Production attachment remains unavailable without an accepted Embedded supervisor and installed
 package. See [owned browser readiness](adr/0008-owned-chromium-browser.md#current-enablement-and-remaining-work)
 for functional gaps and the distinct native acceptance requirements.
 

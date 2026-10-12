@@ -77,7 +77,7 @@ export interface BrowserViewport {
 }
 
 export interface BrowserApi {
-  context(): Promise<BrowserSnapshot>;
+  context(runId?: string, conversationId?: string): Promise<BrowserSnapshot>;
   command(generation: number, action: BrowserAction): Promise<BrowserSnapshot>;
   viewport(request: BrowserViewport): Promise<void>;
   certificates?(
@@ -92,7 +92,8 @@ export interface BrowserApi {
 }
 
 export const nativeBrowserApi: BrowserApi = {
-  context: () => invoke("browser_context"),
+  context: (runId, conversationId) =>
+    invoke("browser_context", { runId, conversationId }),
   command: (generation, action) =>
     invoke("browser_command", { request: { generation, action } }),
   viewport: (request) => invoke("browser_viewport", { request }),

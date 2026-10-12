@@ -783,6 +783,10 @@ impl Host {
         Ok(())
     }
 
+    fn viewport_dimensions(&self) -> (u32, u32) {
+        self.presentation.dimensions()
+    }
+
     fn select(
         &mut self,
         native: u64,
@@ -819,10 +823,7 @@ impl Host {
         }
         let mut options = Vec::new();
         collect_options(node, false, &mut options)?;
-        let chosen = options
-            .iter()
-            .find(|option| option.value == values[0])
-            .ok_or(BrowserDriverError::Denied)?;
+        let chosen = choose_option(&options, &values[0])?;
         if chosen.disabled {
             return Err(BrowserDriverError::Denied);
         }
@@ -1040,7 +1041,7 @@ impl Host {
                     json!({"backendNodeId":backend}),
                     control,
                 )?;
-                let (x, y) = center(&model)?;
+                let (x, y) = center(&model, self.viewport_dimensions())?;
                 self.method(
                     native,
                     "Input.dispatchMouseEvent",
@@ -1095,10 +1096,11 @@ impl Host {
                 if x.unsigned_abs() > 10_000 || y.unsigned_abs() > 10_000 {
                     return Err(BrowserDriverError::LimitExceeded);
                 }
+                let (width, height) = self.viewport_dimensions();
                 self.method(
                     native,
                     "Input.dispatchMouseEvent",
-                    json!({"type":"mouseWheel","x":640,"y":400,"deltaX":x,"deltaY":y}),
+                    json!({"type":"mouseWheel","x":width / 2,"y":height / 2,"deltaX":x,"deltaY":y}),
                     control,
                 )?;
             }
@@ -1127,7 +1129,9 @@ impl Host {
                                     json!({"backendNodeId":backend}),
                                     control,
                                 )
-                                .is_ok_and(|value| center(&value).is_ok())
+                                .is_ok_and(|value| {
+                                    center(&value, self.viewport_dimensions()).is_ok()
+                                })
                             {
                                 break;
                             }
@@ -1354,7 +1358,22 @@ fn status_result(status: i32) -> Result<(), BrowserDriverError> {
 struct SelectOption {
     backend: i32,
     value: String,
+    label: String,
     disabled: bool,
+}
+fn choose_option<'a>(
+    options: &'a [SelectOption],
+    requested: &str,
+) -> Result<&'a SelectOption, BrowserDriverError> {
+    if let Some(option) = options.iter().find(|option| option.value == requested) {
+        return Ok(option);
+    }
+    let mut matching = options.iter().filter(|option| option.label == requested);
+    let option = matching.next().ok_or(BrowserDriverError::Denied)?;
+    if matching.next().is_some() {
+        return Err(BrowserDriverError::Denied);
+    }
+    Ok(option)
 }
 fn attribute<'a>(attributes: &'a [String], name: &str) -> Option<&'a str> {
     attributes
@@ -1417,9 +1436,41 @@ fn collect_options(
         if value.len() > 1024 {
             return Err(BrowserDriverError::LimitExceeded);
         }
+        let text: String = node
+            .get("children")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|child| {
+                child
+                    .get("nodeValue")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+            })
+            .collect();
+        let label = attributes
+            .and_then(|attributes| {
+                attributes
+                    .chunks_exact(2)
+                    .find(|pair| {
+                        pair[0]
+                            .as_str()
+                            .is_some_and(|key| key.eq_ignore_ascii_case("label"))
+                    })
+                    .and_then(|pair| pair[1].as_str())
+            })
+            .filter(|label| !label.is_empty())
+            .map_or_else(
+                || text.split_ascii_whitespace().collect::<Vec<_>>().join(" "),
+                str::to_owned,
+            );
+        if label.len() > 1024 {
+            return Err(BrowserDriverError::LimitExceeded);
+        }
         result.push(SelectOption {
             backend,
             value,
+            label,
             disabled,
         });
     } else if let Some(children) = node.get("children").and_then(Value::as_array) {
@@ -1433,7 +1484,7 @@ fn collect_options(
     }
     Ok(())
 }
-fn center(value: &Value) -> Result<(f64, f64), BrowserDriverError> {
+fn center(value: &Value, viewport: (u32, u32)) -> Result<(f64, f64), BrowserDriverError> {
     let points = value
         .get("model")
         .and_then(|model| model.get("content"))
@@ -1447,7 +1498,9 @@ fn center(value: &Value) -> Result<(f64, f64), BrowserDriverError> {
             .ok_or(BrowserDriverError::Stale)
     };
     let center = ((point(0)? + point(2)?) / 2.0, (point(1)? + point(5)?) / 2.0);
-    if !(0.0..1280.0).contains(&center.0) || !(0.0..800.0).contains(&center.1) {
+    if !(0.0..f64::from(viewport.0)).contains(&center.0)
+        || !(0.0..f64::from(viewport.1)).contains(&center.1)
+    {
         return Err(BrowserDriverError::Stale);
     }
     Ok(center)
@@ -1468,5 +1521,65 @@ fn safe_key(key: BrowserKey) -> (&'static str, &'static str) {
         BrowserKey::PageUp => ("PageUp", "PageUp"),
         BrowserKey::PageDown => ("PageDown", "PageDown"),
         BrowserKey::Space => (" ", "Space"),
+    }
+}
+
+#[cfg(test)]
+mod select_tests {
+    use super::*;
+
+    #[test]
+    fn exact_values_take_precedence_and_visible_labels_must_be_unique() {
+        let options = vec![
+            SelectOption {
+                backend: 1,
+                value: "one".into(),
+                label: "One".into(),
+                disabled: false,
+            },
+            SelectOption {
+                backend: 2,
+                value: "two".into(),
+                label: "Two".into(),
+                disabled: false,
+            },
+            SelectOption {
+                backend: 3,
+                value: "Three".into(),
+                label: "Two".into(),
+                disabled: true,
+            },
+        ];
+        assert_eq!(choose_option(&options, "two").unwrap().backend, 2);
+        assert_eq!(choose_option(&options[..2], "Two").unwrap().backend, 2);
+        assert!(matches!(
+            choose_option(&options, "Two"),
+            Err(BrowserDriverError::Denied)
+        ));
+        assert!(matches!(
+            choose_option(&options, "invented"),
+            Err(BrowserDriverError::Denied)
+        ));
+        assert!(choose_option(&options, "Three").unwrap().disabled);
+    }
+}
+
+#[cfg(test)]
+mod viewport_tests {
+    use super::*;
+
+    #[test]
+    fn element_coordinates_follow_the_admitted_viewport_and_reject_outside_points() {
+        let model = json!({"model":{"content":[900,820,1100,820,1100,960,900,960]}});
+        assert_eq!(center(&model, (1400, 1000)).unwrap(), (1000.0, 890.0));
+        assert!(matches!(
+            center(&model, (556, 600)),
+            Err(BrowserDriverError::Stale)
+        ));
+        let outside = json!({"model":{"content":[-4,0,-2,0,-2,8,-4,8]}});
+        assert!(matches!(
+            center(&outside, (1400, 1000)),
+            Err(BrowserDriverError::Stale)
+        ));
     }
 }

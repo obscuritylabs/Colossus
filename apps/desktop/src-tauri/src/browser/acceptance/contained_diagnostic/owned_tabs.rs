@@ -1,7 +1,7 @@
 //! Exact Core-selected tabs presented through the existing native compositor.
 use super::*;
 
-pub(super) const PAGE: &[u8] = b"<!doctype html><html><head><title>Core owned second tab</title></head><body style=\"background:#fff3c4\"><h1>Core owned second tab</h1><p>Core opened and selected this exact owned tab.</p></body></html>";
+pub(super) const PAGE: &[u8] = b"<!doctype html><html><head><title>Core owned second tab</title></head><body><h1>Core owned second tab</h1><p>Core opened and selected this exact owned tab.</p></body></html>";
 pub(super) fn enabled() -> anyhow::Result<bool> {
     match std::env::var_os("COLOSSUS_BROWSER_ACCEPTANCE_OWNED_TABS") {
         None => Ok(false),
@@ -158,7 +158,7 @@ pub(super) async fn checkpoint(
                 },
                 url: &format!("{}{path}", fixture.origin),
                 center_bgra: if second {
-                    [196, 243, 255, 255]
+                    [255, 255, 255, 255]
                 } else {
                     [216, 247, 217, 255]
                 },
@@ -191,7 +191,7 @@ pub(super) async fn checkpoint(
             view,
             rect,
             if second {
-                [196, 243, 255, 255]
+                [255, 255, 255, 255]
             } else {
                 [216, 247, 217, 255]
             },

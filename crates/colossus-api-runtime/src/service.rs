@@ -443,8 +443,11 @@ impl RuntimeAgentRunApi {
                         })?;
                         ModelContentPart::Text {
                             text: format!(
-                                "Attached file {} ({}):\n{}",
-                                download.artifact.file_name, download.artifact.media_type, text
+                                "Attached file {} ({}) [RunInput artifact: {}]:\n{}",
+                                download.artifact.file_name,
+                                download.artifact.media_type,
+                                artifact_id,
+                                text
                             ),
                         }
                     } else if artifact.media_type.starts_with("image/") {

@@ -23,7 +23,10 @@ pub(super) async fn handle(
             .map_err(admission_error)?;
         return Ok(());
     }
-    if let NativeBrowserRequest::Open(request) = request {
+    if matches!(
+        &request,
+        NativeBrowserRequest::Open(_) | NativeBrowserRequest::Watch { .. }
+    ) {
         if !service.available()
             || service
                 .admitted
@@ -42,22 +45,36 @@ pub(super) async fn handle(
             .authority
             .as_ref()
             .ok_or(WorkerError::BrowserCleanupUnknown)?;
-        let session = match service
-            .runtime
-            .open_native_browser(
-                authority,
-                colossus_runtime::NativeBrowserOpenRequest {
-                    conversation_id: request.conversation_id,
-                    url: request.url,
-                    width: request.width,
-                    height: request.height,
-                    scale_milli: request.scale_milli,
-                    viewport_generation: request.viewport_generation,
-                    lease_ms: request.lease_ms,
-                },
-            )
-            .await
-        {
+        let admitted = match &request {
+            NativeBrowserRequest::Open(request) => {
+                service
+                    .runtime
+                    .open_native_browser(
+                        authority,
+                        colossus_runtime::NativeBrowserOpenRequest {
+                            conversation_id: request.conversation_id.clone(),
+                            url: request.url.clone(),
+                            width: request.width,
+                            height: request.height,
+                            scale_milli: request.scale_milli,
+                            viewport_generation: request.viewport_generation,
+                            lease_ms: request.lease_ms,
+                        },
+                    )
+                    .await
+            }
+            NativeBrowserRequest::Watch {
+                run_id,
+                conversation_id,
+            } => {
+                service
+                    .runtime
+                    .watch_native_browser(authority, run_id, conversation_id)
+                    .await
+            }
+            _ => unreachable!("only allocation or native viewer admission"),
+        };
+        let session = match admitted {
             Ok(session) => Arc::new(session),
             Err(error) => {
                 if error != colossus_runtime::RuntimeNativeBrowserError::OutcomeUnknown {
@@ -145,7 +162,9 @@ pub(super) async fn handle(
                 NativeBrowserReply::Unavailable
             }
         }
-        NativeBrowserRequest::Open(_) => unreachable!("Open handled before reply-only operations"),
+        NativeBrowserRequest::Open(_) | NativeBrowserRequest::Watch { .. } => {
+            unreachable!("admission handled before reply-only operations")
+        }
     };
     if !service.authorized() {
         return Err(WorkerError::BrowserCleanupUnknown);

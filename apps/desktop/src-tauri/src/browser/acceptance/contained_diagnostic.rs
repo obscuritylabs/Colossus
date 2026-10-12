@@ -26,11 +26,10 @@ use colossus_native_browser::{
     remote::{RemoteAcceptanceProbe, RemoteAcceptedFrame, RemoteSurface},
 };
 use colossus_sdk::{
-    ApiMajor, ApiScope, AppPrivateInstanceDir, CancelRunRequest, Colossus, CreateRunRequest,
-    GetRunRequest, IdempotencyKey, InputContentPart, InstanceId, ManagedAccessProfile,
-    ManagedExecutionBoundary, ManagedFieldOverride, ManagedProviderKind, ManagedRuntimeConfig,
-    NativeSidecarLifecycle, RunMode, RunStatus, SidecarApplicationGrant, SidecarBootstrapConfig,
-    SidecarOptions, scopes,
+    ApiMajor, AppPrivateInstanceDir, CancelRunRequest, Colossus, CreateRunRequest, GetRunRequest,
+    IdempotencyKey, InputContentPart, InstanceId, ManagedAccessProfile, ManagedExecutionBoundary,
+    ManagedFieldOverride, ManagedProviderKind, ManagedRuntimeConfig, NativeSidecarLifecycle,
+    RunMode, RunStatus, SidecarApplicationGrant, SidecarBootstrapConfig, SidecarOptions,
 };
 use serde_json::{Value, json};
 use tauri::Manager as _;
@@ -117,6 +116,11 @@ struct FixtureState {
     navigated_target: Mutex<Option<BrowserTarget>>,
     run_id: Mutex<Option<String>>,
     failure: Mutex<Option<String>>,
+}
+
+fn close_after_completion() -> bool {
+    cfg!(windows)
+        && std::env::var("COLOSSUS_BROWSER_ACCEPTANCE_CLOSE_AFTER_COMPLETION").as_deref() == Ok("1")
 }
 
 impl FixtureState {
@@ -612,6 +616,11 @@ async fn model_response(
             state
                 .wait(&state.viewer_detached, "native viewer detachment")
                 .await?;
+            if close_after_completion() {
+                return Ok(
+                    json!({"id":"fixture-natural-complete","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"Owned browser natural completion acceptance."},"finish_reason":"stop"}]}),
+                );
+            }
             let target = session.context("missing owned target for Core close")?;
             Ok(model_tool(
                 phase,
@@ -702,15 +711,10 @@ fn managed_runtime(origin: &str, visual_hold: Duration) -> ManagedRuntimeConfig 
 }
 
 fn grant() -> anyhow::Result<SidecarApplicationGrant> {
-    let scopes = [scopes::RUNS_EXECUTE, scopes::RUNS_READ]
-        .into_iter()
-        .map(ApiScope::new)
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(SidecarApplicationGrant::new(
-        "app:mac-contained-browser-diagnostic",
-        scopes,
-        ["primary".into()],
-        TOOLS.into_iter().map(str::to_owned),
+    // Exercise the interactive app's authenticated tool ceiling rather than
+    // supplying a fixture-only grant that can hide Desktop composition gaps.
+    Ok(crate::managed_runtime::application_grant(
+        crate::desktop_settings::AccessProfileSetting::AllowAll,
     )?)
 }
 
@@ -1588,7 +1592,19 @@ async fn exercise_owned(
         owned_tabs::checkpoint(app, &tab, &view, rect, fixture).await?;
     }
     heartbeat.stop().await?;
+    if close_after_completion() {
+        ensure!(
+            !fixture.state.native_tabs,
+            "natural-completion fixture uses its original single tab"
+        );
+        fixture.state.signal(&fixture.state.viewer_detached);
+        run_complete(client, &run.run_id).await?;
+    }
+    #[cfg(windows)]
+    view.acceptance_disconnect_presentation();
     action(app, BrowserAction::Close { tab_id: tab }).await?;
+    #[cfg(windows)]
+    println!("PASS lost viewer stream reconciled through separate authenticated native detach");
     ensure!(
         state
             .browser
@@ -1604,6 +1620,11 @@ async fn exercise_owned(
     );
     fixture.state.signal(&fixture.state.viewer_detached);
     run_complete(client, &run.run_id).await?;
+    if close_after_completion() {
+        println!(
+            "PASS completed Core run retired its viewer; later native close reconciled the positive cleanup receipt"
+        );
+    }
     fixture.state.check()?;
     println!("PASS viewer detachment, Core run completion, and native browser close");
     Ok(())

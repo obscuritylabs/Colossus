@@ -60,8 +60,15 @@ impl EffectExecutor for BrowserEffect<'_> {
                 "browser policy output bound is below the installed observation contract".into(),
             ));
         }
+        let session_origins = run
+            .sessions
+            .values()
+            .flat_map(|session| session.origins.iter())
+            .cloned()
+            .collect::<Vec<_>>();
         let origins = match &invocation {
             BrowserInvocation::Open { options } => &options.allowed_origins,
+            BrowserInvocation::Sessions {} => &session_origins,
             _ => {
                 &authority
                     .as_ref()
@@ -87,6 +94,23 @@ impl EffectExecutor for BrowserEffect<'_> {
             }
         }
         let value = match invocation {
+            BrowserInvocation::Sessions {} => {
+                let mut sessions = Vec::new();
+                for owned in run.sessions.values() {
+                    let lease = &owned.lease;
+                    self.browser
+                        .coordinator
+                        .lease(&run.actor, &lease.session_id, lease.control_generation)
+                        .map_err(execution_error)?;
+                    let summary = self
+                        .browser
+                        .coordinator
+                        .get(&run.actor.binding, &lease.session_id)
+                        .map_err(execution_error)?;
+                    sessions.push(json!({"session":summary,"control_generation":lease.control_generation,"expires_at_ms":lease.expires_at_ms}));
+                }
+                json!({"sessions":sessions})
+            }
             BrowserInvocation::Open { options } => {
                 let summary = self
                     .browser

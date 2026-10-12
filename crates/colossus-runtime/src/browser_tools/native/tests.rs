@@ -333,6 +333,133 @@ fn role(runtime: &Runtime) -> RuntimeNativeBrowserAuthority {
         .bind_native_browser_authority("desktop", Uuid::now_v7())
         .unwrap()
 }
+
+#[tokio::test]
+async fn agent_viewer_uses_existing_host_and_denies_foreign_conversations_and_human_input() {
+    let directory = private_tempdir();
+    let driver = Arc::new(Fixture::default());
+    let runtime = fixture_runtime(directory.path(), driver.clone(), true);
+    let role = role(&runtime);
+    let browser = runtime.browser.as_ref().unwrap();
+    let context = ExecutionContext {
+        run_id: Some("agent-view".into()),
+        session_id: Some("owned-conversation".into()),
+        offered_tools: vec!["browser.open".into(), "browser.status".into()],
+        ..ExecutionContext::default()
+    };
+    browser
+        .begin_run(
+            &context,
+            &Actor {
+                actor_type: ActorType::Application,
+                id: "desktop".into(),
+            },
+            RunControl::default(),
+        )
+        .unwrap();
+    let run = browser.run(&context).unwrap();
+    let options = BrowserOpenOptions {
+        mode: BrowserMode::Embedded,
+        profile: Default::default(),
+        initial_url: Some(BrowserUrl::parse("https://example.org/page").unwrap()),
+        allowed_origins: vec![BrowserOrigin::parse("https://example.org").unwrap()],
+    };
+    let session = browser
+        .coordinator
+        .open_for_run(&run.actor, options.clone(), &run.control)
+        .await
+        .unwrap();
+    let lease = browser
+        .coordinator
+        .grant_control(&run.actor, &session.session_id, 3000)
+        .unwrap();
+    browser
+        .remember_session(
+            &run.actor,
+            super::super::service::BrowserSessionAuthority {
+                lease: lease.clone(),
+                origins: options.allowed_origins,
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        runtime
+            .watch_native_browser(&role, "agent-view", "owned-conversation")
+            .await,
+        Err(RuntimeNativeBrowserError::Unavailable)
+    ));
+    let target = BrowserTarget {
+        tab_id: session.tabs[0].tab_id.clone(),
+        document_id: session.tabs[0].document_id.clone(),
+    };
+    browser
+        .coordinator
+        .execute(
+            &run.actor,
+            &lease,
+            &target,
+            BrowserAction::Snapshot { max_nodes: 1 },
+            &run.control,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        runtime
+            .watch_native_browser(&role, "agent-view", "foreign")
+            .await,
+        Err(RuntimeNativeBrowserError::Denied)
+    ));
+    let foreign = runtime
+        .bind_native_browser_authority("another-app", Uuid::now_v7())
+        .unwrap();
+    assert!(matches!(
+        runtime
+            .watch_native_browser(&foreign, "agent-view", "owned-conversation")
+            .await,
+        Err(RuntimeNativeBrowserError::Denied)
+    ));
+    let viewer = runtime
+        .watch_native_browser(&role, "agent-view", "owned-conversation")
+        .await
+        .unwrap();
+    assert_eq!(viewer.session_id(), &session.session_id);
+    assert_eq!(
+        viewer.configure().unwrap().control_generation,
+        lease.control_generation
+    );
+    let visible = viewer
+        .take_handoff_presentation_lease(&viewer.configure().unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(
+        viewer
+            .presentation()
+            .command(PresentationCommand::Human {
+                lease: visible,
+                command: HumanCommand::Reload
+            })
+            .await
+            .is_err()
+    );
+    assert_eq!(driver.opened.load(Ordering::SeqCst), 1);
+    runtime
+        .detach_native_browser(&role, viewer.session_id())
+        .await
+        .unwrap();
+    assert_eq!(driver.closed.load(Ordering::SeqCst), 0);
+    browser.cancel_run("agent-view");
+    assert!(matches!(
+        runtime
+            .watch_native_browser(&role, "agent-view", "owned-conversation")
+            .await,
+        Err(RuntimeNativeBrowserError::Denied)
+    ));
+    browser.finish_run("agent-view").await;
+    assert!(viewer.is_closed().unwrap());
+    assert!(!runtime.browser_active_work());
+    assert_eq!(driver.closed.load(Ordering::SeqCst), 1);
+    runtime.drain_browser_sessions().await;
+}
 async fn configured(session: &RuntimeNativeBrowserSession) -> Lease {
     let config = session.configure().unwrap();
     let lease = session

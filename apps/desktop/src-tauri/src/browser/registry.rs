@@ -15,6 +15,7 @@ pub(super) const DRAINING_MESSAGE: &str = "The browser is closing for applicatio
 pub(super) struct Tab {
     pub(super) scope: String,
     pub(super) view: BrowserView,
+    pub(super) agent_run_id: Option<String>,
     pub(super) policy: NavigationPolicy,
     pub(super) dto: BrowserTabDto,
     pub(super) heartbeat: Option<Instant>,

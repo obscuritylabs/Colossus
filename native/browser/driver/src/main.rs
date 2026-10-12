@@ -43,7 +43,13 @@ mod container;
     test,
     all(any(target_os = "linux", target_os = "macos"), colossus_cef_linked)
 ))]
-#[cfg_attr(not(colossus_cef_linked), allow(dead_code))]
+#[cfg_attr(
+    any(windows, not(colossus_cef_linked)),
+    allow(
+        dead_code,
+        reason = "the Windows host is the DLL; console-only adapter uses are absent in its protocol tests"
+    )
+)]
 mod execution_diagnostic;
 #[cfg(all(any(target_os = "linux", target_os = "macos"), colossus_cef_linked))]
 mod ffi;
@@ -65,7 +71,13 @@ mod platform;
     test,
     all(any(target_os = "linux", target_os = "macos"), colossus_cef_linked)
 ))]
-#[cfg_attr(not(colossus_cef_linked), allow(dead_code))]
+#[cfg_attr(
+    any(windows, not(colossus_cef_linked)),
+    allow(
+        dead_code,
+        reason = "the Windows host is the DLL; console-only adapter uses are absent in its protocol tests"
+    )
+)]
 mod presentation;
 #[cfg(all(target_os = "linux", colossus_cef_linked))]
 mod provision;

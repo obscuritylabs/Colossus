@@ -327,6 +327,7 @@ impl BrowserManager {
                     .find(|tab| tab.dto.id == tab_id)
                 {
                     tab.dto.control = "agent";
+                    tab.agent_run_id = Some(run_id);
                 }
             }
             BrowserAction::Clear => {
@@ -556,6 +557,7 @@ impl BrowserManager {
             state.tabs.push(Tab {
                 scope: scope.to_owned(),
                 view: view.clone(),
+                agent_run_id: None,
                 policy,
                 heartbeat: None,
                 presentation_epoch: Arc::new(AtomicU64::new(0)),
@@ -592,6 +594,90 @@ impl BrowserManager {
         {
             self.lock()?.event(&id, BrowserEvent::Failed);
         }
+        Ok(())
+    }
+
+    #[cfg(any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    ))]
+    pub(super) async fn watch_agent(
+        &self,
+        app: &AppHandle,
+        scope: &str,
+        run_id: &str,
+        conversation_id: &str,
+    ) -> Result<(), CommandErrorDto> {
+        // Dropping an old read-only viewer preserves an active Core writer;
+        // confirmed run cleanup has already retired its native owner otherwise.
+        let prior = self
+            .lock()?
+            .tabs
+            .iter()
+            .filter(|tab| {
+                tab.scope == scope && tab.agent_run_id.as_deref().is_some_and(|id| id != run_id)
+            })
+            .map(|tab| tab.dto.id.clone())
+            .collect::<Vec<_>>();
+        for id in prior {
+            self.close(scope, &id).await?;
+        }
+        if self
+            .lock()?
+            .tabs
+            .iter()
+            .any(|tab| tab.scope == scope && tab.agent_run_id.as_deref() == Some(run_id))
+        {
+            return Ok(());
+        }
+        if self.lock()?.tabs.len() >= MAX_TABS {
+            return Err(error("Close a browser tab before attaching another page."));
+        }
+        let window = app
+            .get_window("main")
+            .ok_or_else(|| error("The Desktop window has closed."))?;
+        let id = format!("browser-{}", uuid::Uuid::new_v4());
+        let weak = Arc::downgrade(&self.data);
+        let event_id = id.clone();
+        let sink: EventSink = Arc::new(move |event| {
+            if let Some(data) = weak.upgrade()
+                && let Ok(mut state) = data.lock()
+            {
+                state.event(&event_id, event);
+            }
+        });
+        let Some(view) =
+            super::contained::watch_agent(&window, scope, run_id, conversation_id, sink)
+                .await
+                .map_err(engine_error)?
+        else {
+            return Ok(());
+        };
+        let session_id = view
+            .contained_session_id()
+            .ok_or_else(|| error("The browser session identity is unavailable."))?
+            .to_owned();
+        self.hide_all();
+        let mut state = self.lock()?;
+        state.selected.insert(scope.to_owned(), id.clone());
+        state.tabs.push(Tab {
+            scope: scope.to_owned(),
+            view,
+            agent_run_id: Some(run_id.to_owned()),
+            policy: NavigationPolicy::default(),
+            heartbeat: None,
+            presentation_epoch: Arc::new(AtomicU64::new(0)),
+            dto: BrowserTabDto {
+                id,
+                session_id,
+                conversation_id: Some(conversation_id.to_owned()),
+                control: "agent",
+                page: PageState::default(),
+                error: None,
+                notice: None,
+                popup_url: None,
+            },
+        });
         Ok(())
     }
 

@@ -47,6 +47,7 @@ fn browser_tools_accept_typed_operations_and_have_exact_effect_identity() {
             json!({"mode": "embedded", "allowed_origins": ["https://example.test"], "initial_url": "https://example.test/start"}),
         ),
         ("browser.status", json!({"session_id": opaque("bs")})),
+        ("browser.status", json!({})),
         ("browser.tabs", json!({"session_id": opaque("bs")})),
         (
             "browser.tab.open",

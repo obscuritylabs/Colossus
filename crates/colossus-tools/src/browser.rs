@@ -30,8 +30,8 @@ pub(super) fn browser_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "browser.status",
-            "Read bounded status for one owned browser session; this never grants control or reveals credentials or engine endpoints.",
-            object_schema(json!({"session_id": id_schema("bs")}), &["session_id"]),
+            "Read bounded status for one owned browser session. Omit session_id to discover only this active run's already granted sessions, including a human page handed to the agent. This never grants control or reveals credentials or engine endpoints.",
+            object_schema(json!({"session_id": id_schema("bs")}), &[]),
         ),
         tool(
             "browser.tabs",
@@ -104,7 +104,7 @@ pub(super) fn browser_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "browser.select",
-            "Choose bounded option values in a fresh referenced form control. Option changes are website mutations.",
+            "Choose bounded option values or unique visible option labels in a fresh referenced form control. Refresh the snapshot after each mutation. Option changes are website mutations.",
             element_schema(
                 json!({"values": {
                     "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true,

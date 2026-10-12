@@ -85,7 +85,7 @@ impl RuntimeBrowserTools {
         invocation: &BrowserInvocation,
     ) -> Result<Option<BrowserSessionAuthority>, ToolError> {
         let (session_id, generation) = match invocation {
-            BrowserInvocation::Open { .. } => return Ok(None),
+            BrowserInvocation::Open { .. } | BrowserInvocation::Sessions {} => return Ok(None),
             BrowserInvocation::Status { session_id, .. }
             | BrowserInvocation::Close { session_id, .. } => (session_id, None),
             BrowserInvocation::Action {

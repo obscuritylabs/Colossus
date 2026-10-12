@@ -162,6 +162,12 @@ impl Clone for RemoteSurface {
     }
 }
 impl RemoteSurface {
+    /// Diagnostic loss of this viewer's outer stream. The separate native
+    /// admission owner must still acknowledge detach; this does not close Core's writer.
+    #[cfg(all(any(windows, target_os = "macos"), feature = "native-test-driver"))]
+    pub fn acceptance_disconnect_presentation(&self) {
+        self.0.client.disconnect();
+    }
     /// Read native presentation evidence for a source-only acceptance fixture.
     ///
     /// # Errors

@@ -361,6 +361,9 @@ pub(in crate::browser_tools) struct NativeState {
     pub(in crate::browser_tools) presenter: Option<Arc<dyn RuntimeBrowserPresenter>>,
     pub(in crate::browser_tools) entries: Mutex<BTreeMap<Uuid, Arc<Entry>>>,
     pub(in crate::browser_tools) current: Mutex<Option<Arc<Entry>>>,
+    pub(in crate::browser_tools) agent_requests:
+        Mutex<BTreeMap<BrowserSessionId, BrowserDriverOpenRequest>>,
+    pub(in crate::browser_tools) agent_generations: Mutex<BTreeMap<BrowserSessionId, u64>>,
     pub(in crate::browser_tools) opening: AsyncMutex<()>,
     pub(in crate::browser_tools) stopped: AtomicBool,
 }
@@ -374,6 +377,8 @@ impl NativeState {
             presenter,
             entries: Mutex::new(BTreeMap::new()),
             current: Mutex::new(None),
+            agent_requests: Mutex::new(BTreeMap::new()),
+            agent_generations: Mutex::new(BTreeMap::new()),
             opening: AsyncMutex::new(()),
             stopped: AtomicBool::new(false),
         })
