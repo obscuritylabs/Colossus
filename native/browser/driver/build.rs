@@ -7,6 +7,10 @@ fn main() {
         println!("cargo:rerun-if-env-changed={name}");
     }
     let Some(build) = env::var_os("COLOSSUS_CEF_NATIVE_LIB_DIR") else {
+        assert!(
+            env::var_os("CARGO_FEATURE_MACOS_OWNED_PROCESS_DEVELOPMENT").is_none(),
+            "owned Main body requires explicit linked native archives and patched CEF"
+        );
         return;
     };
     let target = env::var("CARGO_CFG_TARGET_OS").expect("target OS required");
@@ -17,6 +21,26 @@ fn main() {
     let build = PathBuf::from(build)
         .canonicalize()
         .expect("native build must exist");
+    if env::var_os("CARGO_FEATURE_MACOS_OWNED_PROCESS_DEVELOPMENT").is_some() {
+        assert_eq!(target, "macos", "owned Main body requires macOS");
+        assert_eq!(
+            env::var("DEBUG").as_deref(),
+            Ok("true"),
+            "owned Main body requires Debug"
+        );
+        assert!(
+            build.join("owned-process-development-build.json").is_file(),
+            "owned Main body requires the guarded no-exec CMake lane"
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            build.join("owned-process-development-build.json").display()
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            build.join("owned-process-native-artifacts.json").display()
+        );
+    }
     if env::var_os("CARGO_FEATURE_MACOS_SYNTHETIC_PROFILE_DIAGNOSTIC").is_some() {
         assert_eq!(
             target, "macos",
@@ -56,6 +80,38 @@ fn main() {
         header.contains("154.0.34+g14c5a08+chromium-154.0.8037.98"),
         "CEF pin mismatch"
     );
+    if env::var_os("CARGO_FEATURE_MACOS_OWNED_PROCESS_DEVELOPMENT").is_some() {
+        let script =
+            PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest directory required"))
+                .join("../scripts/owned_process_component.py");
+        let platform = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+            Ok("aarch64") => "macosarm64",
+            Ok("x86_64") => "macosx64",
+            _ => panic!("unsupported owned Main architecture"),
+        };
+        assert!(
+            std::process::Command::new("python3")
+                .arg("-B")
+                .arg(&script)
+                .arg("--cef-root")
+                .arg(&cef)
+                .arg("--platform")
+                .arg(platform)
+                .arg("--verify-build")
+                .arg(&build)
+                .status()
+                .expect("patched CEF verifier required")
+                .success(),
+            "owned Main requires actual matching patched CEF exports and build receipt"
+        );
+        println!("cargo:rerun-if-changed={}", script.display());
+        for path in [
+            cef.join(".cef-owned-process-source.json"),
+            cef.join("Release/Chromium Embedded Framework.framework/Chromium Embedded Framework"),
+        ] {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
     if target == "windows" {
         // Supported CEF bootstrap resolves RunWinMain in this client DLL.
         // libcef may only load after its sandbox/version handoff succeeds.

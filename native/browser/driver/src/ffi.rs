@@ -37,6 +37,12 @@ pub struct DownloadState {
     pub final_url_len: u32,
 }
 unsafe extern "C" {
+    pub fn colossus_cef_broker_tls_configure(
+        origin: *const c_char,
+        leaf: *const u8,
+        bytes: usize,
+        lifetime_ms: u32,
+    ) -> i32;
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn colossus_cef_profile_persistent(enabled: i32) -> i32;
     pub fn colossus_cef_download_arm(
@@ -257,4 +263,9 @@ unsafe extern "C" {
         params: *const u8,
         len: usize,
     ) -> i32;
+}
+
+#[cfg(all(target_os = "macos", feature = "macos-owned-process-development"))]
+unsafe extern "C" {
+    pub fn colossus_cef_owned_process_install(nonce: *const u8, browser_pid: u32) -> bool;
 }

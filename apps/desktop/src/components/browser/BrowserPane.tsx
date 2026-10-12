@@ -83,6 +83,9 @@ export function BrowserPane({
           embedded_chromium: snapshot.engine.preview
             ? "Chromium preview"
             : "Chromium",
+          contained_chromium: snapshot.engine.preview
+            ? "Chromium preview"
+            : "Chromium",
           webview2: "WebView2",
           webkit: "WebKit",
           unavailable: "Browser unavailable",

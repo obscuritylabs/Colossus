@@ -126,8 +126,17 @@ pub use browser_windows::{
     WindowsBrowserSupervisor,
 };
 
+#[cfg(all(
+    target_os = "macos",
+    debug_assertions,
+    feature = "macos-browser-tls-development"
+))]
+pub use browser_macos::MacosBrowserCustodyRetirementReceipt;
 #[cfg(all(target_os = "macos", debug_assertions))]
-pub use browser_macos::{MacosBrowserAcceptanceConfig, MacosBrowserShutdownReceipt};
+pub use browser_macos::{
+    MacosBrowserAcceptanceConfig, MacosBrowserOwnedProcessConfig, MacosBrowserShutdownReceipt,
+    MacosBrowserTlsConfig, MacosBrowserTlsLifetimeOwner,
+};
 #[cfg(target_os = "macos")]
 pub use browser_macos::{MacosBrowserProcessClearance, MacosBrowserProcessKeeper};
 #[cfg(target_os = "macos")]

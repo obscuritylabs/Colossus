@@ -49,6 +49,12 @@ use zeroize::Zeroizing;
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
 
+#[cfg(all(
+    target_os = "macos",
+    debug_assertions,
+    feature = "macos-browser-host-acceptance"
+))]
+mod macos_startup_diagnostic;
 mod native_browser;
 
 const MANAGED_SIDECAR_ARGUMENT: &str = "__managed-sidecar-v1";
@@ -249,7 +255,18 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
             .shutdown_direct_child()
             .await
             .map_err(|_| FailureCode::RuntimeFailed)?;
-        if result.is_ok() && !mac_diagnostic_graceful_direct_child(&receipts) {
+        let graceful = if owner.is_owned_process_diagnostic() {
+            matches!(
+                receipts.as_slice(),
+                [(
+                    _,
+                    Some(colossus_sandbox::MacosBrowserShutdownReceipt::GracefulKnownChildrenExit)
+                )]
+            )
+        } else {
+            mac_diagnostic_graceful_direct_child(&receipts)
+        };
+        if result.is_ok() && !graceful {
             return Err(FailureCode::RuntimeFailed);
         }
     }
@@ -326,6 +343,12 @@ async fn run_with_browser_owner(
             .await
             .map_err(|_| FailureCode::InvalidConfiguration)?,
         );
+        // LaunchServices can start this sealed Debug sidecar with a 256-FD soft
+        // limit. The native profile guard retains descriptors for every regular
+        // file and directory in the signed allocation to prove inode identity.
+        // Raise only this process's soft limit before Runtime snapshots it.
+        macos_startup_diagnostic::prepare_native_profile_fd_budget(&instance_root)
+            .map_err(|_| FailureCode::InvalidConfiguration)?;
     }
     // Bind process-relative operations to the descriptor that reproduced the native
     // parent's opaque identity. The runtime separately reopens the pathname and checks
@@ -427,10 +450,26 @@ async fn run_with_browser_owner(
         worker_authentication.map(WorkerAuthenticationKey::from_zeroizing),
         browser.clone(),
     )
-    .map_err(map_worker_open_failure)?
+    .map_err(|error| {
+        #[cfg(all(
+            target_os = "macos",
+            debug_assertions,
+            feature = "macos-browser-host-acceptance"
+        ))]
+        macos_startup_diagnostic::record(&instance_root, &error);
+        map_worker_open_failure(error)
+    })?
     .prepare_worker_ipc()
     .await
-    .map_err(map_worker_open_failure)?;
+    .map_err(|error| {
+        #[cfg(all(
+            target_os = "macos",
+            debug_assertions,
+            feature = "macos-browser-host-acceptance"
+        ))]
+        macos_startup_diagnostic::record(&instance_root, &error);
+        map_worker_open_failure(error)
+    })?;
 
     let mut authentication_root = Zeroizing::new([0_u8; 32]);
     getrandom::fill(authentication_root.as_mut()).map_err(|_| FailureCode::PublicApiSetup)?;

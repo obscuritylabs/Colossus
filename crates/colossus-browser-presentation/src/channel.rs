@@ -15,6 +15,16 @@ use crate::{
     PresentationReply, Role,
 };
 
+// A Retina BGRA paint can cross the native host and worker relay before the
+// presenter receives its authenticated copy. Keep effects on the short
+// deadline; only read-only Poll gets the bounded frame-transfer budget.
+const CONTROL_OPERATION_TIMEOUT: Duration = Duration::from_millis(750);
+const FRAME_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
+// Callers may queue behind one in-flight frame. The worker still applies the
+// short per-effect deadline after dispatch, so this wait grants no extra
+// execution time or retry to a human command.
+const CALL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(6);
+
 trait Reader: AsyncRead + Unpin + Send {}
 impl<T: AsyncRead + Unpin + Send> Reader for T {}
 trait Writer: AsyncWrite + Unpin + Send {}
@@ -130,7 +140,12 @@ pub async fn serve_presentation(
             if matches!(command, PresentationCommand::Ready) {
                 return Err(PresentationError::Stale);
             }
-            let result = tokio::time::timeout(Duration::from_millis(750), async {
+            let budget = if matches!(&command, PresentationCommand::Poll { .. }) {
+                FRAME_OPERATION_TIMEOUT
+            } else {
+                CONTROL_OPERATION_TIMEOUT
+            };
+            let result = tokio::time::timeout(budget, async {
                 if let PresentationCommand::Poll { lease } = command {
                     match host.frame(lease).await {
                         Ok(Some(frame)) => {
@@ -203,7 +218,7 @@ pub async fn serve_presentation(
     }
     .await;
     host.revoke_now();
-    let _ = tokio::time::timeout(Duration::from_millis(750), host.revoke()).await;
+    let _ = tokio::time::timeout(CONTROL_OPERATION_TIMEOUT, host.revoke()).await;
     result
 }
 
@@ -286,6 +301,12 @@ impl PresentationClient {
                 if call.response.is_closed() {
                     continue;
                 }
+                let read_only_frame = matches!(&call.command, PresentationCommand::Poll { .. });
+                let budget = if read_only_frame {
+                    FRAME_OPERATION_TIMEOUT
+                } else {
+                    CONTROL_OPERATION_TIMEOUT
+                };
                 let operation = async {
                     channel
                         .writer
@@ -353,7 +374,14 @@ impl PresentationClient {
                 };
                 let result = tokio::select! {
                     _ = call.response.closed() => break,
-                    result = tokio::time::timeout(Duration::from_millis(750), operation) => result.unwrap_or(Err(PresentationError::OutcomeUnknown)).map_err(|_| PresentationError::OutcomeUnknown),
+                    result = tokio::time::timeout(budget, operation) => match result {
+                        Ok(Ok(reply)) => Ok(reply),
+                        // Poll has no human effect. Preserve a verified parser's
+                        // categorical rejection for diagnostics, but terminate
+                        // this channel below just as an uncertain effect does.
+                        Ok(Err(error)) if read_only_frame => Err(error),
+                        _ => Err(PresentationError::OutcomeUnknown),
+                    },
                 };
                 let disconnected = result.is_err();
                 let _ = call.response.send(result);
@@ -383,13 +411,13 @@ impl PresentationClient {
         command.validate()?;
         let (response, receiver) = oneshot::channel();
         tokio::time::timeout(
-            Duration::from_millis(750),
+            CONTROL_OPERATION_TIMEOUT,
             self.0.sender.send(Call { command, response }),
         )
         .await
         .map_err(|_| PresentationError::OutcomeUnknown)?
         .map_err(|_| PresentationError::OutcomeUnknown)?;
-        let result = tokio::time::timeout(Duration::from_millis(750), receiver)
+        let result = tokio::time::timeout(CALL_RESPONSE_TIMEOUT, receiver)
             .await
             .map_err(|_| PresentationError::OutcomeUnknown)?
             .map_err(|_| PresentationError::OutcomeUnknown)??;

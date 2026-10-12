@@ -40,6 +40,62 @@ pub struct SpawnedPrivateChannels {
     pub stderr: File,
 }
 
+/// Exact stopped child with one fixed native control stream at descriptor three.
+///
+/// This narrow entry is for a separately admitted native broker, not CEF. Output
+/// has distinct pipes and no extra native capability descriptors are inherited.
+pub struct SpawnedParentChannel {
+    /// Retained exact child; validate live code before explicitly resuming it.
+    pub child: DarwinChild,
+    /// Private parent endpoint connected only to child descriptor three.
+    pub channel: UnixStream,
+    /// Parent reader for standard output.
+    pub stdout: File,
+    /// Parent reader for standard error.
+    pub stderr: File,
+}
+
+/// Spawn one stopped native broker with a single fixed connected control stream.
+///
+/// All executable, argument and environment inputs belong to trusted composition.
+/// No descriptor nomination or channel address is accepted. This does not attest
+/// a sandbox, publisher policy, native shutdown or descendant cleanup.
+///
+/// # Errors
+/// Returns allocation, descriptor-action or native spawn errors. As with other
+/// Darwin launchers, the caller retains uncertainty after a partial spawn error.
+pub fn spawn_suspended_parent_channel(
+    executable: &Path,
+    arguments: &[OsString],
+    environment: &[OsString],
+) -> io::Result<SpawnedParentChannel> {
+    let channel = private_pair()?;
+    let (stdout, child_stdout) = output_pipe()?;
+    let (stderr, child_stderr) = output_pipe()?;
+    let mut actions = FileActions::new()?;
+    actions.open(0, c"/dev/null", libc::O_RDONLY, 0)?;
+    actions.dup2(child_stdout.as_raw_fd(), 1)?;
+    actions.dup2(child_stderr.as_raw_fd(), 2)?;
+    actions.dup2(channel.child.as_raw_fd(), 3)?;
+    for endpoint in [
+        &channel.child,
+        &channel.parent,
+        &stdout,
+        &child_stdout,
+        &stderr,
+        &child_stderr,
+    ] {
+        actions.close(endpoint.as_raw_fd())?;
+    }
+    let child = crate::macos::spawn_suspended(executable, arguments, environment, &actions)?;
+    Ok(SpawnedParentChannel {
+        child,
+        channel: channel.parent.into(),
+        stdout: stdout.into(),
+        stderr: stderr.into(),
+    })
+}
+
 /// Spawn an exact executable with four fixed private Unix stream channels.
 ///
 /// Executable, arguments and environment come from trusted native composition.

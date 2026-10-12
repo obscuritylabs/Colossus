@@ -25,6 +25,16 @@ mod transfer_stage;
 #[cfg(all(windows, colossus_cef_linked))]
 mod windows_io;
 
+#[cfg(any(
+    all(windows, colossus_cef_linked),
+    all(
+        target_os = "macos",
+        feature = "macos-owned-process-development",
+        colossus_cef_linked
+    )
+))]
+mod execution_diagnostic;
+
 #[cfg(all(windows, colossus_cef_linked))]
 #[unsafe(no_mangle)]
 #[allow(non_snake_case, reason = "CEF bootstrap resolves this exact export")]
@@ -51,4 +61,141 @@ unsafe extern "C" fn run_host() -> i32 {
         }
     })
     .unwrap_or(1)
+}
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "macos-owned-process-development",
+    colossus_cef_linked
+))]
+mod arguments;
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "macos-owned-process-development",
+    colossus_cef_linked
+))]
+mod bootstrap;
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "macos-owned-process-development",
+    colossus_cef_linked
+))]
+mod cef;
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "macos-owned-process-development",
+    colossus_cef_linked
+))]
+mod document;
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "macos-owned-process-development",
+    colossus_cef_linked
+))]
+mod ffi;
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "macos-owned-process-development",
+    colossus_cef_linked
+))]
+mod handoff;
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "macos-owned-process-development",
+    colossus_cef_linked
+))]
+mod identity;
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "macos-owned-process-development",
+    colossus_cef_linked
+))]
+mod owned_directory;
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "macos-owned-process-development",
+    colossus_cef_linked
+))]
+mod platform;
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "macos-owned-process-development",
+    colossus_cef_linked
+))]
+mod presentation;
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "macos-owned-process-development",
+    colossus_cef_linked
+))]
+mod queue;
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "macos-owned-process-development",
+    colossus_cef_linked
+))]
+mod runtime;
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "macos-owned-process-development",
+    colossus_cef_linked
+))]
+mod semantic;
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "macos-owned-process-development",
+    colossus_cef_linked
+))]
+mod transfer_stage;
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "macos-owned-process-development",
+    colossus_cef_linked
+))]
+mod macos_owned_body;
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "macos-owned-process-development",
+    colossus_cef_linked
+))]
+#[path = "provision_macos.rs"]
+mod provision;
+
+#[cfg(all(
+    feature = "macos-owned-process-development",
+    any(not(target_os = "macos"), not(debug_assertions))
+))]
+compile_error!("owned process body is macOS Debug development only");
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "macos-owned-process-development",
+    colossus_cef_linked
+))]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn colossus_owned_body_main(
+    argc: i32,
+    argv: *mut *mut std::ffi::c_char,
+    browser_pid: u32,
+    nonce: *const u8,
+    role: u8,
+) -> i32 {
+    // SAFETY: only the independently verified C frontend owns these borrowed
+    // pointers through this synchronous no-exec body entry.
+    unsafe { macos_owned_body::enter(argc, argv, browser_pid, nonce, role) }
 }

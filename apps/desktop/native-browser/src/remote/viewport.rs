@@ -4,9 +4,11 @@ use super::{
     lifecycle,
 };
 use crate::BrowserError;
+#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+use std::time::Instant;
 use std::{
     sync::{Arc, atomic::Ordering},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 pub(super) fn update(owner: &Arc<Owner>) {
@@ -21,12 +23,36 @@ pub(super) fn update(owner: &Arc<Owner>) {
             match apply(&owner, applied).await {
                 Ok(()) => {}
                 Err(BrowserError::Stale) => {
-                    if wait_for_target(&owner).await.is_err() {
+                    if let Err(error) = wait_for_target(&owner).await {
+                        #[cfg(all(
+                            target_os = "macos",
+                            feature = "native-test-driver",
+                            debug_assertions
+                        ))]
+                        super::trace_frame_browser_failure("viewport_target_wait", error);
+                        #[cfg(not(all(
+                            target_os = "macos",
+                            feature = "native-test-driver",
+                            debug_assertions
+                        )))]
+                        let _ = error;
                         fail(&owner);
                     }
                     break;
                 }
-                Err(_) => {
+                Err(error) => {
+                    #[cfg(all(
+                        target_os = "macos",
+                        feature = "native-test-driver",
+                        debug_assertions
+                    ))]
+                    super::trace_frame_browser_failure("viewport_apply", error);
+                    #[cfg(not(all(
+                        target_os = "macos",
+                        feature = "native-test-driver",
+                        debug_assertions
+                    )))]
+                    let _ = error;
                     fail(&owner);
                     break;
                 }
@@ -48,7 +74,7 @@ pub(super) fn update(owner: &Arc<Owner>) {
 }
 async fn apply(owner: &Arc<Owner>, revision: u64) -> Result<(), BrowserError> {
     let _operation = owner.operation.lock().await;
-    let (mut configure, lease, bounds, applied, surface, heartbeat) = {
+    let (mut configure, lease, bounds, applied, surface) = {
         let state = owner.state.lock().map_err(|_| BrowserError::Closed)?;
         if !state.visible || owner.closing.load(Ordering::Acquire) {
             return Ok(());
@@ -59,18 +85,20 @@ async fn apply(owner: &Arc<Owner>, revision: u64) -> Result<(), BrowserError> {
             state.bounds,
             state.applied,
             state.surface.clone(),
-            state.heartbeat,
         )
     };
     let Some(bounds) = bounds else {
         return Ok(());
     };
-    let state = owner
-        .client
-        .observe(lease)
-        .await
-        .map_err(presentation_error)?;
-    let ttl = remaining(heartbeat)?;
+    #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+    let observed_at = Instant::now();
+    let state = owner.client.observe(lease).await.map_err(|error| {
+        #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+        super::trace_frame_channel_failure("viewport_observe", error, observed_at.elapsed());
+        presentation_error(error)
+    })?;
+    let ttl = remaining(owner, revision)
+        .inspect_err(|error| trace_apply("viewport_ttl_after_observe", *error))?;
     if applied == Some(bounds)
         && state.target == configure.target
         && let Some(surface) = &surface
@@ -82,13 +110,24 @@ async fn apply(owner: &Arc<Owner>, revision: u64) -> Result<(), BrowserError> {
     {
         return Ok(());
     }
-    lifecycle::hide_surface(surface.as_ref()).await?;
-    lifecycle::hide_host(owner, lease).await?;
+    {
+        // Revoke the previous layout before hiding either endpoint. Ordinary
+        // renewals above retain it, so their current frames remain admissible.
+        let mut state = owner.state.lock().map_err(|_| BrowserError::Closed)?;
+        state.applied = None;
+    }
+    lifecycle::hide_surface(surface.as_ref())
+        .await
+        .inspect_err(|error| trace_apply("viewport_hide_surface", *error))?;
+    lifecycle::hide_host(owner, lease)
+        .await
+        .inspect_err(|error| trace_apply("viewport_hide_host", *error))?;
     configure.target = state.target;
     configure.width = bounds.width;
     configure.height = bounds.height;
     configure.scale_milli = bounds.scale_milli;
-    configure.lease_ms = remaining(heartbeat)?;
+    configure.lease_ms = remaining(owner, revision)
+        .inspect_err(|error| trace_apply("viewport_ttl_before_configure", *error))?;
     configure.viewport_generation = owner
         .viewport
         .fetch_add(1, Ordering::AcqRel)
@@ -98,7 +137,8 @@ async fn apply(owner: &Arc<Owner>, revision: u64) -> Result<(), BrowserError> {
         .client
         .configure(configure.clone())
         .await
-        .map_err(presentation_error)?;
+        .map_err(presentation_error)
+        .inspect_err(|error| trace_apply("viewport_configure", *error))?;
     let next = create_surface(
         &owner.window,
         &owner.client,
@@ -107,24 +147,22 @@ async fn apply(owner: &Arc<Owner>, revision: u64) -> Result<(), BrowserError> {
         owner.digest,
         !owner.read_only.load(Ordering::Acquire),
     )
-    .await?;
-    next.renew_confirmed(
-        lease,
-        Duration::from_millis(u64::from(remaining(heartbeat)?)),
-    )
-    .await?;
-    let factor = if cfg!(windows) {
-        f64::from(bounds.scale_milli) / 1000.0
-    } else {
-        1.0
+    .await
+    .inspect_err(|error| trace_apply("viewport_create_surface", *error))?;
+    let ttl = match remaining(owner, revision) {
+        Ok(ttl) => ttl,
+        Err(error) => {
+            trace_apply("viewport_ttl_after_create", error);
+            next.hide_confirmed().await?;
+            lifecycle::hide_host(owner, lease).await?;
+            return Err(error);
+        }
     };
-    #[allow(clippy::cast_possible_truncation)]
-    next.set_bounds(
-        (f64::from(bounds.x) * factor).round() as i32,
-        (f64::from(bounds.y) * factor).round() as i32,
-        (f64::from(bounds.width) * factor).round() as i32,
-        (f64::from(bounds.height) * factor).round() as i32,
-    )?;
+    next.renew_confirmed(lease, Duration::from_millis(u64::from(ttl)))
+        .await
+        .inspect_err(|error| trace_apply("viewport_renew_surface", *error))?;
+    set_native_bounds(&next, bounds)
+        .inspect_err(|error| trace_apply("viewport_set_bounds", *error))?;
     if owner.revision.load(Ordering::Acquire) != revision || owner.closing.load(Ordering::Acquire) {
         next.hide_confirmed().await?;
         lifecycle::hide_host(owner, lease).await?;
@@ -135,6 +173,29 @@ async fn apply(owner: &Arc<Owner>, revision: u64) -> Result<(), BrowserError> {
     state.applied = (owner.revision.load(Ordering::Acquire) == revision).then_some(bounds);
     state.surface = Some(Arc::new(next));
     Ok(())
+}
+fn set_native_bounds(
+    surface: &crate::presentation::PresentationSurface,
+    bounds: super::Bounds,
+) -> Result<(), BrowserError> {
+    let factor = if cfg!(windows) {
+        f64::from(bounds.scale_milli) / 1000.0
+    } else {
+        1.0
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    surface.set_bounds(
+        (f64::from(bounds.x) * factor).round() as i32,
+        (f64::from(bounds.y) * factor).round() as i32,
+        (f64::from(bounds.width) * factor).round() as i32,
+        (f64::from(bounds.height) * factor).round() as i32,
+    )
+}
+fn trace_apply(stage: &'static str, error: BrowserError) {
+    #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+    super::trace_frame_browser_failure(stage, error);
+    #[cfg(not(all(target_os = "macos", feature = "native-test-driver", debug_assertions)))]
+    let _ = (stage, error);
 }
 fn presentation_error(error: colossus_browser_presentation::PresentationError) -> BrowserError {
     match error {
@@ -153,13 +214,25 @@ async fn wait_for_target(owner: &Owner) -> Result<(), BrowserError> {
     lifecycle::hide_surface(surface.as_ref()).await?;
     lifecycle::hide_host(owner, lease).await
 }
-fn remaining(heartbeat: Instant) -> Result<u16, BrowserError> {
+fn remaining(owner: &Owner, revision: u64) -> Result<u16, BrowserError> {
+    let state = owner.state.lock().map_err(|_| BrowserError::Closed)?;
+    if !state.visible
+        || owner.closing.load(Ordering::Acquire)
+        || owner.revision.load(Ordering::Acquire) != revision
+    {
+        return Err(BrowserError::Stale);
+    }
+    // Re-read the latest trusted pulse after native/channel awaits. Preserve
+    // its original 1.5s absolute lifetime rather than refreshing it here.
     u16::try_from(
         Duration::from_millis(1500)
-            .saturating_sub(heartbeat.elapsed())
+            .saturating_sub(state.heartbeat.elapsed())
             .as_millis(),
     )
     .ok()
     .filter(|ttl| *ttl > 0)
-    .ok_or(BrowserError::Closed)
+    // Visibility expiry retires this viewport; it does not establish that the
+    // independently owned browser or its authenticated channel has crashed.
+    // A later trusted visible pulse may configure a fresh lease after hiding.
+    .ok_or(BrowserError::Stale)
 }

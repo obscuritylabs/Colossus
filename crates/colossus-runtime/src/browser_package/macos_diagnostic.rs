@@ -24,14 +24,14 @@ use std::{
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Seal {
-    allocation_root: PathBuf,
-    app_bundle: PathBuf,
-    manifest_sha256: String,
-    front_cdhash: String,
-    body_cdhash: String,
-    policy_sha256: String,
-    fixture_origin: String,
+pub(super) struct Seal {
+    pub(super) allocation_root: PathBuf,
+    pub(super) app_bundle: PathBuf,
+    pub(super) manifest_sha256: String,
+    pub(super) front_cdhash: String,
+    pub(super) body_cdhash: String,
+    pub(super) policy_sha256: String,
+    pub(super) fixture_origin: String,
 }
 
 struct FixtureHost {
@@ -119,9 +119,16 @@ pub struct MacosDiagnosticBrowserOwner {
     host: RuntimeBrowserHost,
     supervisor: Arc<MacosBrowserSupervisor>,
     direct_child_shutdown: AtomicBool,
+    owned_process: bool,
 }
 
 impl MacosDiagnosticBrowserOwner {
+    /// Whether this owner uses the independent known-child creator/keeper lane.
+    /// This never establishes production or complete browser-domain acceptance.
+    #[must_use]
+    pub fn is_owned_process_diagnostic(&self) -> bool {
+        self.owned_process
+    }
     /// Clone only the verified factory+presenter binding for Core composition.
     #[must_use]
     pub fn host(&self) -> RuntimeBrowserHost {
@@ -137,6 +144,16 @@ impl MacosDiagnosticBrowserOwner {
         let receipts = settle_direct_child(&self.supervisor).await?;
         self.direct_child_shutdown.store(true, Ordering::Release);
         Ok(receipts)
+    }
+    /// Read only completed native custody retirement evidence; opaque actor
+    /// correlations cannot be used to enroll, sign or nominate an OS identity.
+    pub async fn custody_retirement_receipts(
+        &self,
+    ) -> Vec<(
+        BrowserSessionId,
+        Option<colossus_sandbox::MacosBrowserCustodyRetirementReceipt>,
+    )> {
+        self.supervisor.custody_retirement_receipts().await
     }
 }
 
@@ -165,20 +182,45 @@ pub(super) async fn install(
     if bytes.is_empty() || bytes.len() > 4096 {
         return Err(BrowserPackageError::Invalid);
     }
+    let candidate: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| BrowserPackageError::Invalid)?;
+    if candidate.get("purpose").is_some() {
+        let (seal, owned, tls) = super::macos_owned::verify(bytes)?;
+        return install_metadata(seal, Some(owned), tls).await;
+    }
     let seal: Seal = serde_json::from_slice(bytes).map_err(|_| BrowserPackageError::Invalid)?;
-    let origin = fixture_origin(&seal.fixture_origin)?;
-    // Protect the entire retained allocation, including temporary profile,
-    // broker state and the signed host package, from model-visible effects.
+    install_metadata(seal, None, None).await
+}
+
+pub(super) async fn install_metadata(
+    seal: Seal,
+    owned: Option<colossus_sandbox::MacosBrowserOwnedProcessConfig>,
+    tls: Option<colossus_sandbox::MacosBrowserTlsConfig>,
+) -> Result<Arc<MacosDiagnosticBrowserOwner>, BrowserPackageError> {
+    let owned_process = owned.is_some();
+    let origin = if let Some(tls) = &tls {
+        if tls.origin.as_str() != seal.fixture_origin {
+            return Err(BrowserPackageError::Invalid);
+        }
+        tls.origin.clone()
+    } else {
+        fixture_origin(&seal.fixture_origin)?
+    };
+    // Protect the retained allocation and separately derived sibling custody
+    // namespace from model-visible filesystem/process effects.
     // The browser supervisor independently verifies its native inventory.
     let protected_allocation =
         ConfinedRoot::bind(&seal.allocation_root).map_err(|_| BrowserPackageError::Invalid)?;
     let limits = BrowserLimits {
         max_sessions: 1,
-        max_tabs: 1,
+        max_tabs: 2,
         ..BrowserLimits::default()
     };
     let supervisor = Arc::new(
         MacosBrowserSupervisor::install_for_acceptance(MacosBrowserAcceptanceConfig {
+            owned_process: owned,
+            tls_owner: None,
+            tls_config: tls,
             allocation_root: seal.allocation_root,
             app_bundle: seal.app_bundle,
             manifest_sha256: digest(&seal.manifest_sha256)?,
@@ -194,6 +236,9 @@ pub(super) async fn install(
                     BrowserActionKind::Navigate,
                     BrowserActionKind::Click,
                     BrowserActionKind::Screenshot,
+                    BrowserActionKind::TabOpen,
+                    BrowserActionKind::TabSelect,
+                    BrowserActionKind::TabClose,
                 ],
                 limits,
                 private_ca_trust: false,
@@ -203,7 +248,7 @@ pub(super) async fn install(
             egress: BrowserEgressLimits {
                 max_connections: 4,
                 // A source-only visual checkpoint can retain the fixed loopback
-                // page for up to 60 seconds after Core startup and screenshot.
+                // page for up to 40 seconds after Core startup and screenshot.
                 lifetime: Duration::from_secs(180),
                 connection_timeout: Duration::from_secs(10),
                 max_connection_bytes: 1024 * 1024,
@@ -221,11 +266,15 @@ pub(super) async fn install(
             retain(Arc::clone(&supervisor));
             BrowserPackageError::CleanupUnknown
         })?;
-    let host = host.with_native_profile_protection(vec![protected_allocation]);
+    let protected_custody = supervisor
+        .protected_custody_root()
+        .map_err(|_| BrowserPackageError::Invalid)?;
+    let host = host.with_native_profile_protection(vec![protected_allocation, protected_custody]);
     Ok(Arc::new(MacosDiagnosticBrowserOwner {
         host,
         supervisor,
         direct_child_shutdown: AtomicBool::new(false),
+        owned_process,
     }))
 }
 

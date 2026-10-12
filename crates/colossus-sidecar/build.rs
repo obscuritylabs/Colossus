@@ -92,7 +92,7 @@ fn seal_mac_diagnostic() -> Result<(), Box<dyn Error>> {
     let object = value
         .as_object()
         .ok_or("Mac browser seal must be an object")?;
-    let fields = [
+    let direct_fields = [
         "allocation_root",
         "app_bundle",
         "manifest_sha256",
@@ -101,14 +101,40 @@ fn seal_mac_diagnostic() -> Result<(), Box<dyn Error>> {
         "policy_sha256",
         "fixture_origin",
     ];
-    if object.len() != fields.len()
-        || fields.iter().any(|field| {
+    let direct_valid = object.len() == direct_fields.len()
+        && direct_fields.iter().all(|field| {
             object
                 .get(*field)
                 .and_then(serde_json::Value::as_str)
-                .is_none()
-        })
-    {
+                .is_some()
+        });
+    // Core embeds an independent public key before its CDHash is sealed into
+    // the native broker. The final package descriptor is signed afterwards;
+    // it contains no runtime-supplied trust anchor or production admission.
+    let trust_fields = [
+        "schema_version",
+        "purpose",
+        "package_root",
+        "publisher",
+        "key_id",
+        "public_key",
+    ];
+    let trust_valid = object.len() == trust_fields.len()
+        && object
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            == Some(1)
+        && object.get("purpose").and_then(serde_json::Value::as_str)
+            == Some("colossus-macos-owned-process-development")
+        && object.get("publisher").and_then(serde_json::Value::as_str)
+            == Some("colossus-macos-development")
+        && trust_fields[1..].iter().all(|field| {
+            object
+                .get(*field)
+                .and_then(serde_json::Value::as_str)
+                .is_some()
+        });
+    if !direct_valid && !trust_valid {
         return Err("Mac browser diagnostic seal fields are invalid".into());
     }
     println!("cargo:rerun-if-changed={}", path.display());

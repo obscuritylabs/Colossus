@@ -30,6 +30,12 @@ mod audit_peer;
 #[cfg(target_os = "macos")]
 mod audit_session;
 #[cfg(target_os = "macos")]
+mod browser_private_channels;
+#[cfg(target_os = "macos")]
+mod entry_channel;
+#[cfg(target_os = "macos")]
+mod exit_observer;
+#[cfg(target_os = "macos")]
 mod identity;
 #[cfg(target_os = "macos")]
 mod keeper;
@@ -39,6 +45,8 @@ mod macos;
 mod private_channels;
 #[cfg(target_os = "macos")]
 mod snapshot;
+#[cfg(target_os = "macos")]
+mod stream_observer;
 
 #[cfg(target_os = "macos")]
 pub use audit_events::{DarwinAuditSessionEnd, DarwinAuditSessionEvents};
@@ -51,13 +59,31 @@ pub use audit_peer::DarwinAuditPeer;
 #[cfg(target_os = "macos")]
 pub use audit_session::RetainedDarwinAuditSession;
 #[cfg(target_os = "macos")]
+pub use browser_private_channels::{
+    SpawnedOwnedBrowserChannels, SpawnedOwnedBrowserChannelsWithKeeper,
+    spawn_suspended_owned_browser_channels, spawn_suspended_owned_browser_channels_with_keeper,
+};
+#[cfg(target_os = "macos")]
+pub use entry_channel::{
+    DarwinCreatorEntry, DarwinOwnedBrowserEntry, DarwinParentChannel,
+    take_connected_creator_channels, take_connected_owned_browser_channels,
+    take_connected_parent_channel,
+};
+#[cfg(target_os = "macos")]
+pub use exit_observer::{DarwinProcessExit, DarwinProcessExitObserver};
+#[cfg(target_os = "macos")]
 pub use identity::{DarwinProcessIdentity, DarwinProcessSignal, audit_token_signals_supported};
 #[cfg(target_os = "macos")]
 pub use keeper::{DarwinKeeperAdmission, DarwinKeeperJob};
 #[cfg(target_os = "macos")]
-pub use private_channels::{SpawnedPrivateChannels, spawn_suspended_private_channels};
+pub use private_channels::{
+    SpawnedParentChannel, SpawnedPrivateChannels, spawn_suspended_parent_channel,
+    spawn_suspended_private_channels,
+};
 #[cfg(target_os = "macos")]
 pub use snapshot::{DarwinProcessSnapshot, EmptyProcessDomainEvidence};
+#[cfg(target_os = "macos")]
+pub use stream_observer::DarwinStreamDisconnectObserver;
 
 #[cfg(target_os = "macos")]
 pub use macos::{

@@ -39,4 +39,10 @@ unsafe extern "C" {
     pub(super) fn colossus_presenter_visible(view: usize, visible: i32) -> i32;
     pub(super) fn colossus_presenter_lease(view: usize, epoch: u64, lease_ms: u32) -> i32;
     pub(super) fn colossus_presenter_destroy(view: usize) -> i32;
+    #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+    pub(super) fn colossus_presenter_acceptance_activate_parent(parent: usize) -> i32;
+    #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+    pub(super) fn colossus_presenter_acceptance_focus_state(parent: usize, flags: *mut u32) -> i32;
+    #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+    pub(super) fn colossus_presenter_acceptance_hidden(view: usize) -> i32;
 }

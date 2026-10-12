@@ -22,6 +22,15 @@ int32_t colossus_presenter_frame(uintptr_t view, uint32_t width, uint32_t height
   const uint8_t* bgra, size_t bytes);
 int32_t colossus_presenter_visible(uintptr_t view, int32_t visible);
 int32_t colossus_presenter_destroy(uintptr_t view);
+#if defined(__APPLE__) && !defined(NDEBUG)
+/* Source-only Desktop acceptance requests activation for its own parent view.
+ * The separate fixed-bit state query must observe NSApp active and that window
+ * key; an activation request alone never passes acceptance. Main thread only.
+ */
+int32_t colossus_presenter_acceptance_activate_parent(uintptr_t parent);
+int32_t colossus_presenter_acceptance_focus_state(uintptr_t parent, uint32_t* flags);
+int32_t colossus_presenter_acceptance_hidden(uintptr_t view);
+#endif
 #ifdef __cplusplus
 }
 #endif

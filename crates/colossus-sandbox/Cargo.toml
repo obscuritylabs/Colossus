@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+macos-browser-tls-development = ["dep:colossus-native-browser-tls-broker", "dep:rustls"]
+
 [dependencies]
 async-trait.workspace = true
 base64.workspace = true
@@ -44,6 +47,9 @@ rustix = { workspace = true, features = ["event", "fs"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 colossus-darwin-process.workspace = true
+colossus-mac-browser-process-broker = { version = "=0.1.0", path = "../../native/browser/process-broker" }
+colossus-native-browser-tls-broker = { version = "=0.1.0", path = "../../native/browser/tls-broker", optional = true, features = ["macos-https-broker-development", "registry-metadata-development"] }
+rustls = { workspace = true, optional = true }
 libc = "0.2.186"
 
 [target.'cfg(target_os = "linux")'.dependencies]

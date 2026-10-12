@@ -12,6 +12,10 @@ use colossus_sandbox::{
 use std::time::Duration;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
+mod owned_https;
+mod owned_pki;
+mod transfer;
+
 const PAGE: &str = r#"<!doctype html><html><head><title>Core Mac fixture</title></head>
 <body style="background:rgb(231,241,255)"><h1>Core Mac fixture</h1>
 <button onclick="document.querySelector('output').textContent='Core click received'">Core click</button>
@@ -218,11 +222,16 @@ async fn real_mac_chromium_executes_core_tools_and_paints_authenticated_frames()
     .unwrap();
     let workspace = private_tempdir();
     let (origin, fixture_task) = fixture().await;
-    let mut limits = BrowserLimits::default();
-    limits.max_sessions = 1;
-    limits.max_tabs = 1;
+    let limits = BrowserLimits {
+        max_sessions: 1,
+        max_tabs: 1,
+        ..BrowserLimits::default()
+    };
     let supervisor = Arc::new(
         MacosBrowserSupervisor::install_for_acceptance(MacosBrowserAcceptanceConfig {
+            owned_process: None,
+            tls_owner: None,
+            tls_config: None,
             allocation_root: allocation.clone(),
             app_bundle: app,
             manifest_sha256: digest("COLOSSUS_BROWSER_MACOS_MANIFEST_SHA256"),

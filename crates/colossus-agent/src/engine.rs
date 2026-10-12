@@ -277,6 +277,32 @@ impl AgentService {
             }),
             ..ExecutionContext::default()
         };
+        // Managed resources retain their run authority before the first model
+        // request. Capture the same filtered tool ceiling before registration;
+        // later browser handoff cannot infer it from a tool that has not run yet.
+        let mut definitions = model_definitions(self.tools.as_ref());
+        definitions.retain(|definition| {
+            (scope.goal_id.is_some()
+                || !matches!(definition.name.as_str(), "goal.show" | "goal.update"))
+                && (scope.subagent_id.is_none() || definition.name != "agent.delegate")
+                && plan_target
+                    .as_ref()
+                    .is_none_or(|target| plan_mode_tool(&definition.name, target))
+                && scope
+                    .allowed_tools
+                    .is_none_or(|allowed| allowed.contains(&definition.name))
+        });
+        if !route.capabilities.tool_calls {
+            definitions.clear();
+        }
+        let initial_offered_tools = definitions
+            .iter()
+            .map(|definition| definition.name.as_str())
+            .collect::<BTreeSet<_>>();
+        context.offered_tools = initial_offered_tools
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
         if let Some(lifecycle) = &self.lifecycle {
             lifecycle.begin_run(&context, &initiator, control.cloned().unwrap_or_default())?;
             owns_run.store(true, Ordering::Release);
@@ -365,21 +391,6 @@ impl AgentService {
             initiator.clone(),
         )?;
         messages.push(user_message);
-        let mut definitions = model_definitions(self.tools.as_ref());
-        definitions.retain(|definition| {
-            (scope.goal_id.is_some()
-                || !matches!(definition.name.as_str(), "goal.show" | "goal.update"))
-                && (scope.subagent_id.is_none() || definition.name != "agent.delegate")
-                && plan_target
-                    .as_ref()
-                    .is_none_or(|target| plan_mode_tool(&definition.name, target))
-                && scope
-                    .allowed_tools
-                    .is_none_or(|allowed| allowed.contains(&definition.name))
-        });
-        if !route.capabilities.tool_calls {
-            definitions.clear();
-        }
         let instructions = if needs_initial_title
             && definitions
                 .iter()
@@ -391,14 +402,6 @@ impl AgentService {
         } else {
             instructions.to_owned()
         };
-        let initial_offered_tools = definitions
-            .iter()
-            .map(|definition| definition.name.as_str())
-            .collect::<BTreeSet<_>>();
-        context.offered_tools = initial_offered_tools
-            .iter()
-            .map(|name| (*name).to_owned())
-            .collect();
         let mut stream_version = 0_u64;
         let mut recovery_attempts = 0_u8;
         self.append(

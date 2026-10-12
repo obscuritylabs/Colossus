@@ -82,6 +82,7 @@ colossus_cef_bounds PlatformChildBounds(uintptr_t parent, colossus_cef_bounds bo
 bool ValidBounds(colossus_cef_bounds bounds);
 bool ProxyCredentials(const std::string& host, int port,
   std::string* username, std::string* password);
+bool BrokerTlsCertificate(const std::string& url, CefRefPtr<CefSSLInfo> info);
 bool PlatformAcceptanceEvidence(CefWindowHandle handle, const void* result,
                                 size_t size, std::string* evidence);
 }

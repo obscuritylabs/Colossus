@@ -229,6 +229,13 @@ pub async fn macos_diagnostic_from_compiler_seal(
 ))]
 mod macos_diagnostic;
 
+#[cfg(all(
+    target_os = "macos",
+    debug_assertions,
+    feature = "macos-browser-host-acceptance"
+))]
+mod macos_owned;
+
 #[cfg(target_os = "linux")]
 mod linux {
     use super::*;

@@ -1,9 +1,13 @@
-//! Explicit Debug-only macOS CEF launch path.
+//! Explicit Debug-only macOS CEF launch and exact-origin TLS composition.
 
 mod launch;
 mod lifecycle;
+mod owned_process;
+mod startup;
 #[cfg(test)]
 mod tests;
+#[cfg(feature = "macos-browser-tls-development")]
+mod tls;
 
 use crate::BrowserEgressLimits;
 use colossus_browser_presentation::PresentationClient;
@@ -30,6 +34,7 @@ const MAX_MANIFEST: u64 = 8 * 1024 * 1024;
 const MAX_POLICY: u64 = 32 * 1024;
 const MAX_COMPONENT: u64 = 4 * 1024 * 1024 * 1024;
 const SYNTHETIC_METADATA: &[u8] = b"{\"api\": \"chromium-use-mock-keychain\", \"build_type\": \"Debug\", \"development_only\": true, \"http_loopback_only\": true, \"production_accepted\": false, \"schema_version\": 1, \"temporary_profiles_only\": true}\n";
+const OWNED_METADATA: &[u8] = b"{\"api\": \"chromium-use-mock-keychain\", \"build_type\": \"Debug\", \"development_only\": true, \"https_broker_leaf_pin_required\": true, \"loopback_only\": true, \"production_accepted\": false, \"schema_version\": 1, \"temporary_profiles_only\": true}\n";
 
 #[derive(Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -42,7 +47,9 @@ struct Manifest {
     executable: String,
     cef_version: String,
     chromium_version: String,
-    archive_sha256: String,
+    archive_sha256: Option<String>,
+    source_kind: Option<String>,
+    owned_process: Option<serde_json::Value>,
     modes: Modes,
     files: Vec<Entry>,
 }
@@ -83,6 +90,94 @@ pub struct MacosBrowserAcceptanceConfig {
     pub capabilities: BrowserCapabilities,
     /// Bounded proxy limits for the exact policy-sealed loopback port.
     pub egress: BrowserEgressLimits,
+    /// Optional independently verified creator/keeper native deployment.
+    /// Stock preview diagnostics remain a separate direct-child lane.
+    pub owned_process: Option<MacosBrowserOwnedProcessConfig>,
+    /// Separately retained native TLS broker lifetime, available only with the
+    /// independent owned-process lane. Public TLS pin admission remains separate.
+    pub tls_owner: Option<Arc<dyn MacosBrowserTlsLifetimeOwner>>,
+    /// Signed exact-origin/public-root metadata for the retained native TLS broker.
+    pub tls_config: Option<MacosBrowserTlsConfig>,
+}
+
+/// Signed development-only upstream TLS authority for one contained host.
+#[derive(Clone)]
+pub struct MacosBrowserTlsConfig {
+    /// Exact native TLS broker code seal from the independently signed inventory.
+    pub broker_cdhash: [u8; 20],
+    /// One canonical HTTPS origin admitted by Core policy before allocation.
+    pub origin: colossus_contracts::BrowserOrigin,
+    /// Reviewed numeric loopback fixture addresses; no DNS selection or fallback.
+    pub destinations: Vec<std::net::SocketAddr>,
+    /// Reviewed public upstream CA certificates in DER, never private keys.
+    pub public_roots: Vec<Vec<u8>>,
+    /// Optional protected registry metadata digest from the signed descriptor.
+    pub pki_registry_sha256: Option<[u8; 32]>,
+}
+
+/// Debug evidence from the retained admitted native TLS child after its
+/// authenticated removal/drainage ACK, nonforced zero exit and output EOF.
+/// Opaque actor hashes correlate the protected journal; they confer no authority.
+#[cfg(feature = "macos-browser-tls-development")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MacosBrowserCustodyRetirementReceipt {
+    /// SHA-256 of the private authenticated enrollment generation.
+    generation_sha256: [u8; 32],
+    /// Exact independently admitted native broker code seal.
+    broker_cdhash: [u8; 20],
+    /// Exact retained broker PID, never a peer-supplied process nomination.
+    broker_pid: u32,
+    /// Opaque correlation of this admitted broker incarnation and generation.
+    broker_generation_binding_sha256: [u8; 32],
+    /// Opaque correlation of this Core incarnation and the same generation.
+    parent_generation_binding_sha256: [u8; 32],
+    /// Exact policy-sealed loopback port whose listeners acknowledged drainage.
+    proxy_port: u16,
+}
+#[cfg(feature = "macos-browser-tls-development")]
+impl MacosBrowserCustodyRetirementReceipt {
+    /// SHA-256 of the private authenticated enrollment generation.
+    pub const fn generation_sha256(self) -> [u8; 32] {
+        self.generation_sha256
+    }
+    /// Exact independently admitted native broker code seal.
+    pub const fn broker_cdhash(self) -> [u8; 20] {
+        self.broker_cdhash
+    }
+    /// Exact retained broker PID, without a reusable process capability.
+    pub const fn broker_pid(self) -> u32 {
+        self.broker_pid
+    }
+    /// Opaque correlation of the admitted broker incarnation and generation.
+    pub const fn broker_generation_binding_sha256(self) -> [u8; 32] {
+        self.broker_generation_binding_sha256
+    }
+    /// Opaque correlation of this Core incarnation and the same generation.
+    pub const fn parent_generation_binding_sha256(self) -> [u8; 32] {
+        self.parent_generation_binding_sha256
+    }
+    /// Exact policy-sealed loopback port that acknowledged listener drainage.
+    pub const fn proxy_port(self) -> u16 {
+        self.proxy_port
+    }
+}
+
+/// Native-only lifetime for an independently authenticated per-origin TLS broker.
+/// This owns no renderer selector and never grants global certificate trust.
+#[async_trait::async_trait]
+pub trait MacosBrowserTlsLifetimeOwner: Send + Sync {
+    /// Revoke all listeners/connections, verify exact broker exit, and remove
+    /// owned TLS custody. Failure retains this same owner for reconciliation.
+    async fn revoke(&self) -> Result<(), BrowserDriverError>;
+}
+
+/// Explicit Debug-only deployment of the independently supervised native creator.
+#[derive(Clone)]
+pub struct MacosBrowserOwnedProcessConfig {
+    /// Independently verified code seal of the fixed sibling native broker.
+    pub broker_cdhash: [u8; 20],
+    /// Renderer, GPU, network and utility fronts in fixed role order.
+    pub helper_cdhashes: [[u8; 20]; 4],
 }
 
 /// Diagnostic shutdown category. Neither variant is production whole-tree evidence.
@@ -94,6 +189,12 @@ pub enum MacosBrowserShutdownReceipt {
     GracefulDirectChildExit,
     /// The exact direct child required supervisor termination.
     TerminatedDirectChildExit,
+    /// CEF acknowledged shutdown; independent creator reaped its known roster.
+    /// Creation crash windows and whole-domain containment remain unaccepted.
+    GracefulKnownChildrenExit,
+    /// Independent creator reaped its known roster after native revocation.
+    /// This is neither a graceful CEF acknowledgement nor full-domain clearance.
+    TerminatedKnownChildrenExit,
 }
 
 pub(super) struct Installation {
@@ -107,10 +208,16 @@ pub(super) struct Installation {
     manifest_entries: Vec<Entry>,
     policy: PathBuf,
     policy_sha256: [u8; 32],
+    custody: colossus_home::ConfinedRoot,
     capabilities: BrowserCapabilities,
     audit_session: u32,
     proxy_port: u16,
     egress: BrowserEgressLimits,
+    owned_process: Option<owned_process::Installation>,
+    tls_owner: Option<Arc<dyn MacosBrowserTlsLifetimeOwner>>,
+    tls_config: Option<MacosBrowserTlsConfig>,
+    #[cfg(feature = "macos-browser-tls-development")]
+    pki_registry: Option<super::pki::AdmittedRegistry>,
 }
 
 pub(super) struct Acceptance {
@@ -120,6 +227,15 @@ pub(super) struct Acceptance {
 }
 
 impl Acceptance {
+    pub(super) fn protected_custody_root(
+        &self,
+    ) -> Result<colossus_home::ConfinedRoot, BrowserDriverError> {
+        self.installation
+            .custody
+            .revalidate()
+            .map_err(|_| BrowserDriverError::Denied)?;
+        Ok(self.installation.custody.clone())
+    }
     pub(super) async fn install(
         config: MacosBrowserAcceptanceConfig,
     ) -> Result<Self, BrowserDriverError> {
@@ -216,9 +332,39 @@ impl Acceptance {
         }
         receipts
     }
+
+    #[cfg(feature = "macos-browser-tls-development")]
+    pub(super) async fn custody_retirement_receipts(
+        &self,
+    ) -> Vec<(
+        BrowserSessionId,
+        Option<MacosBrowserCustodyRetirementReceipt>,
+    )> {
+        let resources: Vec<_> = self
+            .sessions
+            .lock()
+            .await
+            .iter()
+            .map(|(id, resource)| (id.clone(), Arc::clone(resource)))
+            .collect();
+        let mut receipts = Vec::with_capacity(resources.len());
+        for (id, resource) in resources {
+            let resource = resource.lock().await;
+            receipts.push((
+                id,
+                resource
+                    .tls
+                    .as_ref()
+                    .and_then(tls::Owner::retirement_receipt),
+            ));
+        }
+        receipts
+    }
 }
 
 fn bind(config: MacosBrowserAcceptanceConfig) -> Result<Installation, BrowserDriverError> {
+    #[cfg(feature = "macos-browser-tls-development")]
+    let mut config = config;
     if config.manifest_sha256 == [0; 32]
         || config.front_cdhash == [0; 20]
         || config.body_cdhash == [0; 20]
@@ -226,8 +372,14 @@ fn bind(config: MacosBrowserAcceptanceConfig) -> Result<Installation, BrowserDri
         || config.capabilities.modes != [BrowserMode::Embedded]
         || !config.capabilities.available
         || !config.capabilities.restrictive_egress
-        || config.capabilities.private_ca_trust
-        || config.capabilities.client_identities
+        || ((config.capabilities.private_ca_trust || config.capabilities.client_identities)
+            && config
+                .tls_config
+                .as_ref()
+                .is_none_or(|tls| tls.pki_registry_sha256.is_none()))
+        || (config.tls_owner.is_some() && config.owned_process.is_none())
+        || (config.tls_config.is_some() && config.owned_process.is_none())
+        || (config.tls_config.is_some() && !cfg!(feature = "macos-browser-tls-development"))
     {
         return Err(BrowserDriverError::Denied);
     }
@@ -263,7 +415,39 @@ fn bind(config: MacosBrowserAcceptanceConfig) -> Result<Installation, BrowserDri
         return Err(BrowserDriverError::Denied);
     }
     let policy_text = std::str::from_utf8(&policy_bytes).map_err(|_| BrowserDriverError::Denied)?;
-    let (audit_session, proxy_port) = parse_policy(policy_text, &allocation, &app)?;
+    let parsed = parse_policy(policy_text, &allocation, &app)?;
+    let custody_path = parsed
+        .custody_root
+        .canonicalize()
+        .map_err(|_| BrowserDriverError::Denied)?;
+    if custody_path != parsed.custody_root {
+        return Err(BrowserDriverError::Denied);
+    }
+    let custody =
+        colossus_home::ConfinedRoot::bind(&custody_path).map_err(|_| BrowserDriverError::Denied)?;
+    #[cfg(feature = "macos-browser-tls-development")]
+    let pki_registry = if let Some(expected) = config
+        .tls_config
+        .as_ref()
+        .and_then(|tls| tls.pki_registry_sha256)
+    {
+        let bytes =
+            bounded_regular_bytes(&custody_path.join("owned-pki-registry.json"), 128 * 1024)?;
+        if Sha256::digest(&bytes).as_slice() != expected {
+            return Err(BrowserDriverError::Denied);
+        }
+        let metadata =
+            colossus_native_browser_tls_broker::registry_metadata::RegistryMetadata::parse(&bytes)
+                .map_err(|_| BrowserDriverError::Denied)?;
+        let registry = super::pki::from_metadata(&metadata)?;
+        config.capabilities.private_ca_trust = registry.has_private_ca();
+        config.capabilities.client_identities = registry.has_client_identities();
+        Some(registry)
+    } else {
+        None
+    };
+    let audit_session = parsed.audit_session;
+    let proxy_port = parsed.proxy_port;
     let manifest_path = app.with_extension("app.browser-component.json");
     let manifest_bytes = bounded_regular_bytes(&manifest_path, MAX_MANIFEST)?;
     if Sha256::digest(&manifest_bytes).as_slice() != config.manifest_sha256 {
@@ -271,15 +455,35 @@ fn bind(config: MacosBrowserAcceptanceConfig) -> Result<Installation, BrowserDri
     }
     let manifest: Manifest =
         serde_json::from_slice(&manifest_bytes).map_err(|_| BrowserDriverError::Denied)?;
-    validate_manifest(&manifest)?;
+    validate_manifest(&manifest, config.owned_process.is_some())?;
     if config.capabilities.engine_version.as_deref() != Some(manifest.cef_version.as_str()) {
         return Err(BrowserDriverError::Denied);
     }
     verify_entries(&app, &manifest.files)?;
+    if let Some(tls) = &config.tls_config {
+        validate_tls(tls)?;
+        let broker = "Contents/MacOS/colossus-native-browser-tls-broker";
+        if !manifest
+            .files
+            .iter()
+            .any(|entry| entry.path == broker && entry.kind == "file")
+        {
+            return Err(BrowserDriverError::Denied);
+        }
+    }
+    let owned_process = config
+        .owned_process
+        .map(|owned| owned_process::Installation::bind(&app, owned, &manifest.files))
+        .transpose()?;
+    let expected_profile_metadata = if owned_process.is_some() {
+        OWNED_METADATA
+    } else {
+        SYNTHETIC_METADATA
+    };
     if bounded_regular_bytes(
         &app.join("Contents/Resources/synthetic-profile-diagnostic.json"),
         MAX_POLICY,
-    )? != SYNTHETIC_METADATA
+    )? != expected_profile_metadata
     {
         return Err(BrowserDriverError::Denied);
     }
@@ -294,15 +498,47 @@ fn bind(config: MacosBrowserAcceptanceConfig) -> Result<Installation, BrowserDri
         manifest_entries: manifest.files,
         policy,
         policy_sha256: config.policy_sha256,
+        custody,
         capabilities: config.capabilities,
         audit_session,
         proxy_port,
         egress: config.egress,
+        owned_process,
+        tls_owner: config.tls_owner,
+        tls_config: config.tls_config,
+        #[cfg(feature = "macos-browser-tls-development")]
+        pki_registry,
     })
+}
+
+fn validate_tls(tls: &MacosBrowserTlsConfig) -> Result<(), BrowserDriverError> {
+    let value = tls.origin.as_str();
+    let port = value
+        .strip_prefix("https://127.0.0.1:")
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| !matches!(port, 0 | 443))
+        .ok_or(BrowserDriverError::Denied)?;
+    if tls.broker_cdhash == [0; 20]
+        || tls.destinations.len() != 1
+        || tls.destinations[0] != std::net::SocketAddr::from(([127, 0, 0, 1], port))
+        || tls.public_roots.is_empty()
+        || tls.public_roots.len() > 4
+        || tls
+            .public_roots
+            .iter()
+            .any(|root| root.is_empty() || root.len() > 8192)
+        || tls.public_roots.iter().map(Vec::len).sum::<usize>() > 16 * 1024
+    {
+        return Err(BrowserDriverError::Denied);
+    }
+    Ok(())
 }
 
 impl Installation {
     pub(super) fn revalidate(&self) -> Result<(), BrowserDriverError> {
+        self.custody
+            .revalidate()
+            .map_err(|_| BrowserDriverError::Denied)?;
         let manifest = bounded_regular_bytes(&self.manifest, MAX_MANIFEST)?;
         if Sha256::digest(&manifest).as_slice() != self.manifest_digest {
             return Err(BrowserDriverError::Denied);
@@ -311,12 +547,30 @@ impl Installation {
         if Sha256::digest(&policy).as_slice() != self.policy_sha256 {
             return Err(BrowserDriverError::Denied);
         }
+        if let Some(expected) = self
+            .tls_config
+            .as_ref()
+            .and_then(|tls| tls.pki_registry_sha256)
+        {
+            let bytes = bounded_regular_bytes(
+                &self.custody.path().join("owned-pki-registry.json"),
+                128 * 1024,
+            )?;
+            if Sha256::digest(&bytes).as_slice() != expected {
+                return Err(BrowserDriverError::Denied);
+            }
+        }
+        let expected = if self.owned_process.is_some() {
+            OWNED_METADATA
+        } else {
+            SYNTHETIC_METADATA
+        };
         if bounded_regular_bytes(
             &self
                 .app
                 .join("Contents/Resources/synthetic-profile-diagnostic.json"),
             MAX_POLICY,
-        )? != SYNTHETIC_METADATA
+        )? != expected
         {
             return Err(BrowserDriverError::Denied);
         }
@@ -324,7 +578,7 @@ impl Installation {
     }
 }
 
-fn validate_manifest(manifest: &Manifest) -> Result<(), BrowserDriverError> {
+fn validate_manifest(manifest: &Manifest, owned_process: bool) -> Result<(), BrowserDriverError> {
     if manifest.schema_version != 1
         || manifest.protocol_version != 1
         || manifest.component != "colossus-browser"
@@ -337,17 +591,13 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), BrowserDriverError> {
         || manifest.modes.headless
         || manifest.cef_version.is_empty()
         || manifest.chromium_version.is_empty()
-        || manifest.archive_sha256.len() != 64
-        || !manifest
-            .archive_sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || !valid_source(manifest, owned_process)
         || manifest.files.is_empty()
         || manifest.files.len() > 20_000
     {
         return Err(BrowserDriverError::Denied);
     }
-    let required = required_files();
+    let required = required_files(owned_process);
     let present: BTreeSet<_> = manifest
         .files
         .iter()
@@ -359,10 +609,41 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), BrowserDriverError> {
     Ok(())
 }
 
-fn required_files() -> Vec<String> {
+fn valid_source(manifest: &Manifest, owned: bool) -> bool {
+    if !owned {
+        return manifest.source_kind.is_none()
+            && manifest.owned_process.is_none()
+            && manifest.archive_sha256.as_deref().is_some_and(|value| {
+                value.len() == 64
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            });
+    }
+    manifest.archive_sha256.is_none()
+        && manifest.source_kind.as_deref() == Some("patched-chromium-development")
+        && manifest.owned_process.as_ref().is_some_and(|claim| {
+            claim.get("development_only") == Some(&serde_json::Value::Bool(true))
+                && [
+                    "production_accepted",
+                    "native_acceptance",
+                    "runtime_available",
+                    "complete_helper_cleanup_accepted",
+                ]
+                .iter()
+                .all(|key| claim.get(*key) == Some(&serde_json::Value::Bool(false)))
+        })
+}
+
+fn required_files(owned_process: bool) -> Vec<String> {
+    let body_suffix = if owned_process {
+        " Body.dylib"
+    } else {
+        " Body"
+    };
     let mut required = vec![
         "Contents/MacOS/colossus-native-browser-host".into(),
-        "Contents/MacOS/colossus-native-browser-host Body".into(),
+        format!("Contents/MacOS/colossus-native-browser-host{body_suffix}"),
         "Contents/Resources/colossus-network-envelope.policy".into(),
         "Contents/Resources/synthetic-profile-diagnostic.json".into(),
         "Contents/Frameworks/Chromium Embedded Framework.framework/Versions/A/Chromium Embedded Framework".into(),
@@ -374,7 +655,10 @@ fn required_files() -> Vec<String> {
         let name = format!("Colossus Browser Helper{suffix}");
         let base = format!("Contents/Frameworks/{name}.app/Contents/MacOS/{name}");
         required.push(base.clone());
-        required.push(format!("{base} Body"));
+        required.push(format!("{base}{body_suffix}"));
+    }
+    if owned_process {
+        required.push("Contents/MacOS/colossus-mac-browser-process-broker".into());
     }
     required
 }
@@ -557,11 +841,17 @@ fn decode_hash(value: Option<&str>) -> Result<[u8; 32], BrowserDriverError> {
     bytes.try_into().map_err(|_| BrowserDriverError::Denied)
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct PolicyBinding {
+    audit_session: u32,
+    proxy_port: u16,
+    custody_root: PathBuf,
+}
 fn parse_policy(
     policy_text: &str,
     allocation: &std::path::Path,
     app: &std::path::Path,
-) -> Result<(u32, u16), BrowserDriverError> {
+) -> Result<PolicyBinding, BrowserDriverError> {
     let mut fields = policy_text.split_terminator('\n');
     let marker = fields.next();
     let audit_session = fields.next().and_then(|value| value.parse::<u32>().ok());
@@ -573,11 +863,30 @@ fn parse_policy(
         || fields.next() != app.to_str()
         || fields.next().is_none()
         || fields.next() != allocation.join("profile").to_str()
-        || fields.next().is_none()
+    {
+        return Err(BrowserDriverError::Denied);
+    }
+    let custody = fields.next().ok_or(BrowserDriverError::Denied)?;
+    let custody_root = PathBuf::from(custody);
+    if !custody_root.is_absolute()
+        || custody_root == Path::new("/")
+        || custody.ends_with('/')
+        || custody.contains("//")
+        || custody.split('/').any(|part| matches!(part, "." | ".."))
+        || custody.bytes().any(|b| b < 32 || b == b'"' || b == b'\\')
+        || custody_root
+            .components()
+            .any(|c| !matches!(c, Component::RootDir | Component::Normal(_)))
+        || custody_root.starts_with(allocation)
+        || allocation.starts_with(&custody_root)
         || fields.next().is_none()
         || fields.next().is_some()
     {
         return Err(BrowserDriverError::Denied);
     }
-    Ok((audit_session.unwrap(), proxy_port.unwrap()))
+    Ok(PolicyBinding {
+        audit_session: audit_session.unwrap(),
+        proxy_port: proxy_port.unwrap(),
+        custody_root,
+    })
 }

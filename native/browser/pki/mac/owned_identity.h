@@ -15,6 +15,20 @@
 namespace colossus::browser::pki::mac {
 
 enum class Status { Ready, Denied, Unavailable, OutcomeUnknown };
+// Fixed Debug diagnostics contain categories/OSStatus integers only. No native
+// pointers, paths, certificates, passwords or key material leave the owner.
+enum class DiagnosticPhase : std::uint32_t { Admission, Namespace, Create, Import, Validate, Sign, Retire };
+enum class DiagnosticCheck : std::uint32_t {
+  Start, NativeApi, Path, Metadata, Entries, Harden, Seal, Binding,
+  StoreStatus, StoreLocked, Code, Access, ImportShape, Leaf, Key, Acl,
+  Items, Parent, Window, Lock, Rename, RemoveStore, RemoveAuxiliary,
+  RemoveDirectory, Sync, Unlock
+};
+struct Diagnostic {
+  DiagnosticPhase phase = DiagnosticPhase::Admission;
+  DiagnosticCheck check = DiagnosticCheck::Start;
+  std::int32_t os_status = 0;
+};
 using Fingerprint = std::array<std::uint8_t, 32>;
 using CodeHash = std::array<std::uint8_t, 20>;
 using Generation = std::array<std::uint8_t, 32>;
@@ -33,6 +47,39 @@ struct PublicValidation {
   bool (*origin)(const std::string&) = nullptr;
 };
 
+enum class Mutation { CreateStore, ImportIdentity, RetireStore, CreateNamespace };
+
+// In-process native supervisor boundary, never caller-asserted IPC fields. The
+// implementation independently excludes every other process/filesystem grant
+// from this retained namespace for the whole window. An advisory file lock or
+// mode0700 alone is insufficient. Failure keeps the physical state unaccepted.
+class MutationWindow {
+ public:
+  virtual ~MutationWindow() = default;
+  virtual bool Exclusive() const = 0;
+  // Called only after a successful native operation, with the exact open output
+  // descriptors (one directory for namespace creation, two files for store or
+  // import). The independent owner seals their generation before adoption.
+  virtual bool Seal(std::uint64_t sequence, std::span<const int> output_fds) = 0;
+  // Positively verified ordered physical retirement progress, persisted before
+  // publication. Failure keeps a real retained cleanup obligation.
+  virtual bool Checkpoint(std::uint64_t sequence, std::uint32_t step) = 0;
+  // A failed import may leave unknown contents inside the SAME already owned
+  // physical store. Quarantine/retire it only after independent exact-descriptor
+  // proof; never adopt a new or replaced output from a failed native operation.
+  virtual bool RetireUnchanged(std::uint64_t sequence, std::span<const int> previous_fds) = 0;
+};
+class MutationAuthority {
+ public:
+  virtual ~MutationAuthority() = default;
+  // Required current parent/package/generation admission, including before and
+  // after signing. Retirement may remain admitted after parent loss.
+  virtual bool SigningAdmitted(const Generation& generation) const = 0;
+  virtual std::unique_ptr<MutationWindow> Begin(
+      const Generation& generation, int retained_parent, int retained_directory,
+      std::uint64_t sequence, Mutation operation) = 0;
+};
+
 struct Bootstrap {
   // The native supervisor retains this newly created private parent outside
   // EVERY Root/browser filesystem grant. Mode0700 alone is not that boundary.
@@ -45,6 +92,7 @@ struct Bootstrap {
   Generation generation{};
   std::vector<Binding> bindings;
   PublicValidation validate;
+  std::shared_ptr<MutationAuthority> mutations;
 };
 
 struct Enrollment {
@@ -102,6 +150,7 @@ class OwnedIdentity final {
   // Revoke/drain before cleanup. Unknown namespace identity remains preserved.
   void Revoke();
   Status Finish();
+  Diagnostic CopyDiagnostic();
 
  private:
 #if defined(COLOSSUS_MAC_OWNED_PKI_FILE_ONLY_TEST)

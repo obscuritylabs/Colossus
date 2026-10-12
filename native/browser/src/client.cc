@@ -245,8 +245,17 @@ class Client final : public CefClient, public CefLifeSpanHandler,
     std::fill(password.begin(), password.end(), '\0');
     return true;
   }
-  bool OnCertificateError(CefRefPtr<CefBrowser>, ErrorCode, const CefString&,
-    CefRefPtr<CefSSLInfo>, CefRefPtr<CefCallback>) override {
+  bool OnCertificateError(CefRefPtr<CefBrowser>, ErrorCode error, const CefString& url,
+    CefRefPtr<CefSSLInfo> info, CefRefPtr<CefCallback> callback) override {
+    CEF_REQUIRE_UI_THREAD();
+    // Only the exact short-lived leaf enrolled by our private TLS broker may
+    // substitute its own issuer. All other certificate errors remain fatal.
+    if (error == ERR_CERT_AUTHORITY_INVALID && callback &&
+        Allow(tab_, generation_, url.ToString(), false) &&
+        BrokerTlsCertificate(url.ToString(), info)) {
+      callback->Continue();
+      return true;
+    }
     Emit(tab_, generation_, COLOSSUS_CEF_TLS_FAILED); return false;
   }
   bool OnSelectClientCertificate(CefRefPtr<CefBrowser>, bool proxy,

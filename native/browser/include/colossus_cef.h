@@ -124,6 +124,15 @@ int32_t colossus_cef_windows_context(uintptr_t* instance, void** sandbox_info);
  */
 int32_t colossus_cef_proxy_configure(const char* address, uint16_t port,
   const char* username, const char* password);
+/* Mac owned-process Debug only. Before bootstrap, enroll one exact HTTPS origin
+ * and the private TLS broker's public downstream leaf for at most five minutes.
+ * Only issuer-unknown for those exact bytes may continue; hostname/date/other
+ * failures remain fatal. No certificate, Keychain or global trust is installed.
+ * Ordinary components return UNAVAILABLE. Upstream CA/hostname/address validation
+ * and this lease's revocation still belong to the independently retained broker.
+ */
+int32_t colossus_cef_broker_tls_configure(const char* origin, const uint8_t* leaf,
+  size_t leaf_bytes, uint32_t lifetime_ms);
 /* Trusted native store lease only; configure before bootstrap. Persistent mode
  * uses the fixed owned root_cache_path/context directory and permits one request
  * context owner for the entire process. Temporary mode retains in-memory stores.

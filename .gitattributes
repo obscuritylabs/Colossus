@@ -1,2 +1,5 @@
 # Keep text checkouts stable across developer and CI operating systems.
 * text=auto eol=lf
+
+# Unified patches use a single space for an empty context line.
+native/browser/component/patches/macos-owned-process/chromium.patch whitespace=-blank-at-eol

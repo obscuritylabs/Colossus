@@ -36,6 +36,24 @@ impl Runtime {
                 .iter()
                 .any(|tool| tool == "browser.open")
         {
+            #[cfg(all(
+                target_os = "macos",
+                feature = "macos-browser-host-acceptance",
+                debug_assertions
+            ))]
+            tracing::warn!(
+                event = "mac_browser_handoff_rejected",
+                binding_matches = run.actor.binding == entry.binding,
+                conversation_matches =
+                    run.context.session_id.as_deref() == Some(&entry.conversation_id),
+                run_cancelled = run.control.is_cancelled(),
+                open_offered = run
+                    .context
+                    .offered_tools
+                    .iter()
+                    .any(|tool| tool == "browser.open"),
+                "native browser handoff rejected before gateway dispatch"
+            );
             return Err(RuntimeNativeBrowserError::Denied);
         }
         let gateway = self.gateway.clone();
@@ -358,11 +376,10 @@ impl EffectExecutor for HandoffEffect<'_> {
             view.agent_generation = Some(lease.control_generation);
             view.configure = Some(configure.clone());
             view.lease = Some(next);
+            view.leased_target = Some(configure.target.clone());
+            view.agent_target = Some(configure.target.clone());
+            view.handoff_relay_lease = Some((configure.clone(), next));
         }
-        configure.viewport_generation = configure
-            .viewport_generation
-            .checked_add(1)
-            .ok_or_else(|| unknown(RuntimeNativeBrowserError::LimitExceeded))?;
         let value =
             json!({"session_id":lease.session_id,"control_generation":lease.control_generation});
         let bytes = serde_json::to_vec(&value)

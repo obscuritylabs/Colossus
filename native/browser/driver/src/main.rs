@@ -1,5 +1,8 @@
 //! Private supervised CEF host. This is never a general CDP server.
 
+#[cfg(feature = "macos-owned-process-development")]
+compile_error!("owned process Main is a no-exec body library; build this feature with --lib");
+
 #[cfg(all(
     feature = "macos-owned-profile-development",
     any(not(target_os = "macos"), not(debug_assertions))
@@ -36,6 +39,12 @@ mod bootstrap;
 mod cef;
 #[cfg(all(target_os = "linux", colossus_cef_linked))]
 mod container;
+#[cfg(any(
+    test,
+    all(any(target_os = "linux", target_os = "macos"), colossus_cef_linked)
+))]
+#[cfg_attr(not(colossus_cef_linked), allow(dead_code))]
+mod execution_diagnostic;
 #[cfg(all(any(target_os = "linux", target_os = "macos"), colossus_cef_linked))]
 mod ffi;
 #[cfg(any(
@@ -52,7 +61,11 @@ mod identity;
 mod owned_directory;
 #[cfg(all(any(target_os = "linux", target_os = "macos"), colossus_cef_linked))]
 mod platform;
-#[cfg(all(any(target_os = "linux", target_os = "macos"), colossus_cef_linked))]
+#[cfg(any(
+    test,
+    all(any(target_os = "linux", target_os = "macos"), colossus_cef_linked)
+))]
+#[cfg_attr(not(colossus_cef_linked), allow(dead_code))]
 mod presentation;
 #[cfg(all(target_os = "linux", colossus_cef_linked))]
 mod provision;

@@ -3,7 +3,7 @@ use crate::{BrowserError, BrowserEvent, PageState, presentation::PresentationSur
 use colossus_browser_presentation::{HumanCommand, Lease, PresentationClient, PresentationCommand};
 use std::{
     sync::{Arc, atomic::Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::Window;
 use tokio::sync::mpsc;
@@ -29,10 +29,10 @@ pub(super) async fn create_surface(
             if !human_input {
                 return;
             }
-            if inputs
-                .try_send(Event::Input(lease, input, modifiers))
-                .is_err()
+            if let Err(error) =
+                super::input_queue::enqueue(&inputs, Event::Input(lease, input, modifiers))
             {
+                super::input_queue::trace("input", error);
                 input_client.disconnect();
             }
         },
@@ -40,14 +40,20 @@ pub(super) async fn create_surface(
             if !human_input {
                 return;
             }
-            if focuses.try_send(Event::Focus(lease, focused)).is_err() {
+            if let Err(error) = super::input_queue::enqueue(&focuses, Event::Focus(lease, focused))
+            {
+                super::input_queue::trace("focus", error);
                 focus_client.disconnect();
             }
         },
     )
     .await
 }
-pub(super) fn start(owner: &Arc<Owner>, mut events: mpsc::Receiver<Event>) {
+pub(super) fn start(owner: &Arc<Owner>, events: mpsc::Receiver<Event>) {
+    start_events(owner, events);
+    start_frames(owner);
+}
+fn start_events(owner: &Arc<Owner>, mut events: mpsc::Receiver<Event>) {
     let weak = Arc::downgrade(owner);
     tauri::async_runtime::spawn(async move {
         while let Some(event) = events.recv().await {
@@ -78,6 +84,12 @@ pub(super) fn start(owner: &Arc<Owner>, mut events: mpsc::Receiver<Event>) {
             {
                 continue;
             }
+            let started = Instant::now();
+            let stage = if matches!(&event, Event::Focus(..)) {
+                "focus_event"
+            } else {
+                "input_event"
+            };
             let result = match event {
                 Event::Focus(lease, focused) => owner.client.focus(lease, focused).await,
                 Event::Input(lease, input, modifiers) => {
@@ -93,13 +105,27 @@ pub(super) fn start(owner: &Arc<Owner>, mut events: mpsc::Receiver<Event>) {
                     colossus_browser_presentation::PresentationError::Stale
                     | colossus_browser_presentation::PresentationError::Hidden,
                 ) => super::viewport::update(&owner),
-                Err(_) => {
+                Err(error) => {
+                    #[cfg(all(
+                        target_os = "macos",
+                        feature = "native-test-driver",
+                        debug_assertions
+                    ))]
+                    super::trace_frame_channel_failure(stage, error, started.elapsed());
+                    #[cfg(not(all(
+                        target_os = "macos",
+                        feature = "native-test-driver",
+                        debug_assertions
+                    )))]
+                    let _ = (stage, error, started);
                     fail(&owner);
                     break;
                 }
             }
         }
     });
+}
+fn start_frames(owner: &Arc<Owner>) {
     let weak = Arc::downgrade(owner);
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(50));
@@ -122,9 +148,38 @@ pub(super) fn start(owner: &Arc<Owner>, mut events: mpsc::Receiver<Event>) {
             let Some((lease, Some(surface))) = current else {
                 continue;
             };
+            let started = Instant::now();
             match owner.client.next_frame(lease).await {
                 Ok(Some(frame)) => {
-                    if surface.present(frame).is_err() {
+                    // A resize, occlusion or document transition may replace
+                    // this surface while the authenticated frame is in flight.
+                    // Drop its obsolete pixels without reviving the old view or
+                    // disconnecting the independently current attachment.
+                    let current = owner.state.lock().is_ok_and(|state| {
+                        state.lease == lease
+                            && state.visible
+                            && state.applied.is_some()
+                            && state
+                                .surface
+                                .as_ref()
+                                .is_some_and(|current| Arc::ptr_eq(current, &surface))
+                    });
+                    if !current {
+                        continue;
+                    }
+                    if let Err(error) = surface.present(frame) {
+                        #[cfg(all(
+                            target_os = "macos",
+                            feature = "native-test-driver",
+                            debug_assertions
+                        ))]
+                        super::trace_frame_browser_failure("surface_present", error);
+                        #[cfg(not(all(
+                            target_os = "macos",
+                            feature = "native-test-driver",
+                            debug_assertions
+                        )))]
+                        let _ = error;
                         fail(&owner);
                         break;
                     }
@@ -136,7 +191,19 @@ pub(super) fn start(owner: &Arc<Owner>, mut events: mpsc::Receiver<Event>) {
                 ) => {
                     super::viewport::update(&owner);
                 }
-                Err(_) => {
+                Err(error) => {
+                    #[cfg(all(
+                        target_os = "macos",
+                        feature = "native-test-driver",
+                        debug_assertions
+                    ))]
+                    super::trace_frame_channel_failure("poll", error, started.elapsed());
+                    #[cfg(not(all(
+                        target_os = "macos",
+                        feature = "native-test-driver",
+                        debug_assertions
+                    )))]
+                    let _ = (error, started);
                     fail(&owner);
                     break;
                 }

@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 import queue
 import socket
+from socketserver import TCPServer
 import ssl
 import sys
 import threading
@@ -156,6 +157,12 @@ class Fixture:
                 daemon_threads = True
                 block_on_close = False
                 request_queue_size = 16
+
+                def server_bind(self):
+                    # HTTPServer performs reverse DNS during bind. This fixture
+                    # has a fixed numeric loopback address and requires no DNS.
+                    TCPServer.server_bind(self)
+                    self.server_name, self.server_port = self.server_address
 
                 def get_request(self):
                     connection, address = super().get_request()

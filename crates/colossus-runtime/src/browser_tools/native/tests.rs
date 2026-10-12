@@ -546,15 +546,18 @@ async fn native_handoff_adopts_manual_document_binds_first_snapshot_and_reuses_r
         .unwrap();
     assert_eq!(grant.lease().control_generation, 1);
     assert_eq!(grant.configure().target, state.target);
-    assert_eq!(grant.configure().viewport_generation, 3);
+    assert_eq!(grant.configure().viewport_generation, 2);
     let acknowledged = session
-        .presentation()
-        .configure(grant.configure().clone())
-        .await
+        .take_handoff_presentation_lease(grant.configure())
+        .unwrap()
         .unwrap();
-    session
-        .confirm_presentation_lease(grant.configure(), acknowledged)
-        .unwrap();
+    assert!(grant.configure().accepts(acknowledged));
+    assert_eq!(
+        session
+            .take_handoff_presentation_lease(grant.configure())
+            .unwrap(),
+        None
+    );
     let mut human = grant.configure().clone();
     human.viewport_generation += 1;
     human.control_generation = 0;

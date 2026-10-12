@@ -8,6 +8,8 @@ use colossus_runtime::{RuntimeNativeBrowserAuthority, RuntimeNativeBrowserSessio
 use std::sync::atomic::AtomicBool;
 use zeroize::Zeroizing;
 
+#[cfg(all(test, unix))]
+mod handoff_tests;
 mod lifecycle;
 mod platform;
 mod relay;

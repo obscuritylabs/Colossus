@@ -13,6 +13,7 @@ libc = "0.2.186"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10.1"
+sha2.workspace = true
 security-framework.workspace = true
 
 [dev-dependencies]

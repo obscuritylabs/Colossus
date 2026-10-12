@@ -129,7 +129,11 @@ pub fn verify_proxy_binding(
     let macos = executable.parent().ok_or(BrowserDriverError::Denied)?;
     let contents = macos.parent().ok_or(BrowserDriverError::Denied)?;
     let app = contents.parent().ok_or(BrowserDriverError::Denied)?;
-    if executable.file_name() != Some(OsStr::new("colossus-native-browser-host Body"))
+    #[cfg(feature = "macos-owned-process-development")]
+    let expected_entry = "colossus-native-browser-host";
+    #[cfg(not(feature = "macos-owned-process-development"))]
+    let expected_entry = "colossus-native-browser-host Body";
+    if executable.file_name() != Some(OsStr::new(expected_entry))
         || macos.file_name() != Some(OsStr::new("MacOS"))
         || contents.file_name() != Some(OsStr::new("Contents"))
         || app.extension() != Some(OsStr::new("app"))

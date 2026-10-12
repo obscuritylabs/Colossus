@@ -21,7 +21,8 @@ use anyhow::{Context as _, ensure};
 use colossus_contracts::{BrowserDocumentId, BrowserTabId, BrowserTarget};
 use colossus_native_browser::{
     BrowserError, BrowserView,
-    remote::{RemoteAcceptanceProbe, RemoteSurface},
+    presentation::AcceptanceFocusState,
+    remote::{RemoteAcceptanceProbe, RemoteAcceptedFrame, RemoteSurface},
 };
 use colossus_sdk::{
     ApiMajor, ApiScope, AppPrivateInstanceDir, CancelRunRequest, Colossus, CreateRunRequest,
@@ -44,8 +45,13 @@ use super::{
     action,
 };
 
+mod native_input;
+mod owned_tabs;
+mod viewport_heartbeat;
+use viewport_heartbeat::ViewportHeartbeat;
+
 const SPACE: &str = "mac-contained-acceptance";
-const TOOLS: [&str; 7] = [
+const TOOLS: [&str; 11] = [
     "browser.open",
     "browser.status",
     "browser.snapshot",
@@ -53,11 +59,17 @@ const TOOLS: [&str; 7] = [
     "browser.navigate",
     "browser.screenshot",
     "browser.close",
+    "browser.tabs",
+    "browser.tab.open",
+    "browser.tab.select",
+    "browser.tab.close",
 ];
 const MODEL_TIMEOUT: Duration = Duration::from_secs(20);
 const VISUAL_MODEL_TIMEOUT: Duration = Duration::from_secs(90);
 const PAGE_TIMEOUT: Duration = Duration::from_secs(15);
-const MAX_VISUAL_HOLD_MS: u64 = 60_000;
+// The existing agent writer lease is sixty seconds. Reserve twenty seconds
+// for tool latency, viewer detachment, Core close and acknowledged shutdown.
+const MAX_VISUAL_HOLD_MS: u64 = 40_000;
 
 struct Fixture {
     origin: String,
@@ -73,6 +85,12 @@ impl Drop for Fixture {
 
 #[derive(Default)]
 struct FixtureState {
+    native_input: bool,
+    native_tabs: bool,
+    tabs_begin: AtomicBool,
+    tabs_ack: AtomicUsize,
+    tab_event: Mutex<Option<(usize, BrowserTarget)>>,
+    second_tab: Mutex<Option<BrowserTarget>>,
     model_timeout: Duration,
     phase: AtomicUsize,
     model_seen: AtomicBool,
@@ -156,7 +174,14 @@ impl Fixture {
             .context("diagnostic fixture requires a fixed port")?;
         let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).await?;
         let origin = url.origin().ascii_serialization();
+        let native_tabs = owned_tabs::enabled()?;
+        ensure!(
+            !native_tabs || visual_hold <= Duration::from_secs(20),
+            "owned-tab acceptance reserves the existing writer lease by limiting the visual hold to 20000ms"
+        );
         let state = Arc::new(FixtureState {
+            native_input: native_input::enabled()?,
+            native_tabs,
             model_timeout: if visual_hold.is_zero() {
                 MODEL_TIMEOUT
             } else {
@@ -277,12 +302,25 @@ async fn serve(
     };
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/first") => {
-            let page = br#"<!doctype html><html><head><title>Human fixture</title></head><body style="background:#e7f1ff"><h1>Human fixture</h1><button onclick="document.title='Agent click received';document.querySelector('output').textContent='Agent clicked'">Agent click</button><output>Waiting for Core</output></body></html>"#;
+            let page: &[u8] = if state.native_input {
+                include_bytes!("native_input.html")
+            } else {
+                br#"<!doctype html><html><head><title>Human fixture</title></head><body style="background:#e7f1ff"><h1>Human fixture</h1><button onclick="document.title='Agent click received';document.querySelector('output').textContent='Agent clicked'">Agent click</button><output>Waiting for Core</output></body></html>"#
+            };
             respond(&mut stream, 200, "text/html; charset=utf-8", page).await?;
         }
         ("GET", "/agent") => {
             let page = br#"<!doctype html><html><head><title>Agent controlled page</title></head><body style="background:#d9f7d8"><h1>Agent controlled page</h1><p>Core navigated this page after native handoff.</p></body></html>"#;
             respond(&mut stream, 200, "text/html; charset=utf-8", page).await?;
+        }
+        ("GET", "/tab-second") => {
+            respond(
+                &mut stream,
+                200,
+                "text/html; charset=utf-8",
+                owned_tabs::PAGE,
+            )
+            .await?;
         }
         ("GET", "/favicon.ico") => {
             respond(&mut stream, 200, "image/x-icon", &[]).await?;
@@ -294,7 +332,10 @@ async fn serve(
                 "fixture requires non-streaming model"
             );
             let phase = state.phase.fetch_add(1, Ordering::AcqRel);
-            ensure!(phase <= 6, "unexpected extra model turn {phase}");
+            ensure!(
+                phase <= if state.native_tabs { 11 } else { 7 },
+                "unexpected extra model turn {phase}"
+            );
             state.signal(&state.model_seen);
             if phase == 0 {
                 state
@@ -306,8 +347,8 @@ async fn serve(
                     .wait(&state.click_observed, "visible Core click")
                     .await?;
             }
-            if phase == 4 {
-                let result = tool_result(&body, "fixture-3")?;
+            if phase == 5 {
+                let result = tool_result(&body, "fixture-4")?;
                 let target = browser_target(&result["tab"])?;
                 *state.navigated_target.lock().unwrap() = Some(target);
                 state.changed.notify_waiters();
@@ -338,7 +379,46 @@ fn tool_result(body: &Value, call_id: &str) -> anyhow::Result<Value> {
     let content = message["content"]
         .as_str()
         .context("tool evidence is not scalar text")?;
-    serde_json::from_str(content).context("tool evidence is not JSON")
+    let result: Value = serde_json::from_str(content).context("tool evidence is not JSON")?;
+    if result.get("error").is_some() {
+        let code = categorical_tool_failure(&result);
+        eprintln!(
+            "EVIDENCE core-tool-failure code={code} browser_error={}",
+            categorical_browser_failure(&result)
+        );
+    }
+    Ok(result)
+}
+
+fn categorical_tool_failure(result: &Value) -> &'static str {
+    match result["error"]["code"]
+        .as_str()
+        .or_else(|| result["error"]["type"].as_str())
+    {
+        Some("tool.denied" | "denied") => "tool.denied",
+        Some("tool.outcome_unknown" | "outcome_unknown") => "tool.outcome_unknown",
+        Some("unknown_tool") => "tool.unknown",
+        Some("invalid_arguments") => "tool.invalid_arguments",
+        Some("execution_error") => "tool.execution_error",
+        Some("validation_error") => "tool.validation_error",
+        _ => "tool.unclassified",
+    }
+}
+
+fn categorical_browser_failure(result: &Value) -> &'static str {
+    match result["error"]["message"].as_str() {
+        Some("browser requires a fresh snapshot") => "snapshot_required",
+        Some("browser document or element is stale" | "browser target is stale") => {
+            "stale_document"
+        }
+        Some("browser control lease is stale") => "stale_control",
+        Some("browser destination denied" | "browser native boundary denied operation") => "denied",
+        Some("browser native host failed") => "native_failed",
+        Some(
+            "browser outcome unknown" | "browser outcome unknown; automatic retry is prohibited",
+        ) => "outcome_unknown",
+        _ => "unclassified",
+    }
 }
 
 fn browser_target(tab: &Value) -> anyhow::Result<BrowserTarget> {
@@ -465,11 +545,23 @@ async fn model_response(
             let mut args = session.context("missing owned target")?;
             args["tab_id"] = clicked["tab"]["tab_id"].clone();
             args["document_id"] = clicked["tab"]["document_id"].clone();
+            args["max_nodes"] = json!(128);
+            Ok(model_tool(phase, &alias(body, "browser.snapshot")?, &args))
+        }
+        4 => {
+            let observed = tool_result(body, "fixture-3")?;
+            ensure!(
+                observed["snapshot"]["snapshot_id"].is_string(),
+                "Core fresh snapshot after click is missing"
+            );
+            let mut args = session.context("missing owned target")?;
+            args["tab_id"] = observed["tab"]["tab_id"].clone();
+            args["document_id"] = observed["tab"]["document_id"].clone();
             args["url"] = json!(format!("{origin}/agent"));
             Ok(model_tool(phase, &alias(body, "browser.navigate")?, &args))
         }
-        4 => {
-            let navigated = tool_result(body, "fixture-3")?;
+        5 => {
+            let navigated = tool_result(body, "fixture-4")?;
             ensure!(
                 navigated["tab"]["origin"].is_object() || navigated["tab"]["origin"].is_string(),
                 "Core navigate did not return an owned browser observation"
@@ -483,8 +575,8 @@ async fn model_response(
                 &args,
             ))
         }
-        5 => {
-            let screenshot = tool_result(body, "fixture-4")?;
+        6 => {
+            let screenshot = tool_result(body, "fixture-5")?;
             ensure!(
                 screenshot["artifact"]["media_type"] == "image/png"
                     && screenshot["artifact"]["width_pixels"]
@@ -499,6 +591,9 @@ async fn model_response(
                 "Core screenshot did not publish verified PNG artifact metadata"
             );
             state.signal(&state.screenshot_seen);
+            if state.native_tabs {
+                return owned_tabs::response(phase, body, origin, state).await;
+            }
             state
                 .wait(&state.viewer_detached, "native viewer detachment")
                 .await?;
@@ -512,8 +607,9 @@ async fn model_response(
                 }),
             ))
         }
-        6 => {
-            let closed = tool_result(body, "fixture-5")?;
+        7..=11 if state.native_tabs => owned_tabs::response(phase, body, origin, state).await,
+        7 => {
+            let closed = tool_result(body, "fixture-6")?;
             let expected_session = session
                 .as_ref()
                 .and_then(|target| target["session_id"].as_str())
@@ -570,7 +666,11 @@ fn managed_runtime(origin: &str, visual_hold: Duration) -> ManagedRuntimeConfig 
                 "browser.click",
                 "browser.navigate",
                 "browser.screenshot",
-                "browser.close"
+                "browser.close",
+                "browser.tabs",
+                "browser.tab.open",
+                "browser.tab.select",
+                "browser.tab.close"
             ]),
         },
         ManagedFieldOverride {
@@ -672,11 +772,31 @@ fn bounds(app: &tauri::AppHandle) -> anyhow::Result<BrowserRect> {
 
 async fn present(app: &tauri::AppHandle, id: &str, rect: BrowserRect) -> anyhow::Result<()> {
     let state = app.state::<AppState>();
-    let generation = state
-        .browser
-        .lock()
-        .map_err(|error| anyhow::anyhow!(error.message))?
-        .generation;
+    let controller = app
+        .get_webview("main")
+        .context("Desktop controller missing")?;
+    super::super::commands::require_controller(&controller)
+        .map_err(|error| anyhow::anyhow!(error.message))?;
+    let generation = {
+        let registry = state
+            .browser
+            .lock()
+            .map_err(|error| anyhow::anyhow!(error.message))?;
+        ensure!(
+            !registry.draining
+                && registry.scope.as_deref() == Some(SPACE)
+                && registry
+                    .selected
+                    .get(SPACE)
+                    .is_some_and(|selected| selected == id)
+                && registry
+                    .tabs
+                    .iter()
+                    .any(|tab| tab.scope == SPACE && tab.dto.id == id),
+            "fixture viewport lost its exact selected native tab"
+        );
+        registry.generation
+    };
     state
         .browser
         .viewport(
@@ -703,16 +823,9 @@ fn remote(app: &tauri::AppHandle, id: &str) -> anyhow::Result<RemoteSurface> {
     }
 }
 
-async fn title(
-    app: &tauri::AppHandle,
-    id: &str,
-    view: &RemoteSurface,
-    rect: BrowserRect,
-    expected: &str,
-) -> anyhow::Result<()> {
+async fn title(view: &RemoteSurface, expected: &str) -> anyhow::Result<()> {
     let deadline = tokio::time::Instant::now() + PAGE_TIMEOUT;
     loop {
-        present(app, id, rect).await?;
         if let Ok(page) = view.inspect().await
             && page.title == expected
             && !page.loading
@@ -733,6 +846,100 @@ struct ExpectedFrame<'a> {
     center_bgra: [u8; 4],
     core_target: Option<&'a BrowserTarget>,
     previous: Option<&'a RemoteAcceptanceProbe>,
+    after: Option<RemoteAcceptedFrame>,
+}
+
+fn same_document_frame_after(frame: RemoteAcceptedFrame, prior: RemoteAcceptedFrame) -> bool {
+    frame.lease.tab == prior.lease.tab
+        && frame.lease.session_generation == prior.lease.session_generation
+        && frame.lease.control_generation == prior.lease.control_generation
+        && frame.lease.document_generation == prior.lease.document_generation
+        && frame.lease.pixel_width == prior.lease.pixel_width
+        && frame.lease.pixel_height == prior.lease.pixel_height
+        && frame.sequence > 0
+        && frame.count > 0
+        && (frame.lease.viewport_generation > prior.lease.viewport_generation
+            || (frame.lease.viewport_generation == prior.lease.viewport_generation
+                && frame.sequence > prior.sequence
+                && frame.count > prior.count))
+}
+
+async fn frame_timeout_evidence(
+    app: &tauri::AppHandle,
+    id: &str,
+    rect: BrowserRect,
+    expected: &ExpectedFrame<'_>,
+    probe: Option<&RemoteAcceptanceProbe>,
+    last_probe_error: &str,
+    activation_requests: u8,
+) {
+    let frame = probe.and_then(|observed| observed.frame);
+    let color_match = frame.is_some_and(|accepted| accepted.center_bgra == expected.center_bgra);
+    let target_match = probe.is_some_and(|observed| {
+        expected
+            .core_target
+            .is_none_or(|target| observed.page.target == *target)
+            && observed.page.title == expected.title
+            && observed.page.url == expected.url
+    });
+    let appkit = if let Some(window) = app.get_window("main") {
+        colossus_native_browser::presentation::acceptance_focus_state(&window, false)
+            .await
+            .ok()
+    } else {
+        None
+    };
+    let controller_active = if let Some(controller) = app.get_webview("main") {
+        colossus_native_browser::is_active(&controller).await.ok()
+    } else {
+        None
+    };
+    let valid_bounds = app
+        .get_window("main")
+        .and_then(|window| {
+            let scale = window.scale_factor().ok()?;
+            let size = window.inner_size().ok()?.to_logical::<f64>(scale);
+            Some(super::super::viewport::valid_rect(
+                rect,
+                size.width,
+                size.height,
+            ))
+        })
+        .unwrap_or(false);
+    let state = app.state::<AppState>();
+    let registry = state.browser.lock().ok();
+    let registry_observed = registry.is_some();
+    let registry_draining = registry.as_ref().is_some_and(|registry| registry.draining);
+    let registry_scope_match = registry
+        .as_ref()
+        .is_some_and(|registry| registry.scope.as_deref() == Some(SPACE));
+    let registry_selected = registry.as_ref().is_some_and(|registry| {
+        registry
+            .selected
+            .get(SPACE)
+            .is_some_and(|selected| selected == id)
+    });
+    let tab = registry
+        .as_ref()
+        .and_then(|registry| registry.tabs.iter().find(|tab| tab.dto.id == id));
+    let registry_tab_present = tab.is_some();
+    let registry_tab_scope_match = tab.is_some_and(|tab| tab.scope == SPACE);
+    let registry_tab_error = tab.is_some_and(|tab| tab.dto.error.is_some());
+    eprintln!(
+        "EVIDENCE mac-remote-frame timeout probe_present={} last_probe_error={last_probe_error} frame_present={} count={} color_match={color_match} target_match={target_match} visible={} width={} height={} focus_observed={} app_active={} window_key={} app_key_matches={} controller_observed={} controller_active={} valid_bounds={valid_bounds} registry_observed={registry_observed} registry_draining={registry_draining} registry_scope_match={registry_scope_match} registry_selected={registry_selected} registry_tab_present={registry_tab_present} registry_tab_scope_match={registry_tab_scope_match} registry_tab_error={registry_tab_error} activation_requests={activation_requests}",
+        probe.is_some(),
+        frame.is_some(),
+        frame.map_or(0, |accepted| accepted.count.min(1_000_000)),
+        probe.is_some_and(|observed| observed.visible),
+        probe.map_or(0, |observed| observed.width.min(16_384)),
+        probe.map_or(0, |observed| observed.height.min(16_384)),
+        appkit.is_some(),
+        appkit.is_some_and(AcceptanceFocusState::app_active),
+        appkit.is_some_and(AcceptanceFocusState::window_key),
+        appkit.is_some_and(AcceptanceFocusState::app_key_matches),
+        controller_active.is_some(),
+        controller_active.unwrap_or(false),
+    );
 }
 
 async fn accepted_frame(
@@ -742,18 +949,49 @@ async fn accepted_frame(
     rect: BrowserRect,
     expected: ExpectedFrame<'_>,
 ) -> anyhow::Result<RemoteAcceptanceProbe> {
+    let window = app.get_window("main").context("Desktop window missing")?;
+    let controller = app
+        .get_webview("main")
+        .context("Desktop controller missing")?;
     let deadline = tokio::time::Instant::now() + PAGE_TIMEOUT;
+    let mut next_focus_sample = tokio::time::Instant::now();
+    let mut next_activation = tokio::time::Instant::now();
+    let mut activation_requests = 0_u8;
     loop {
-        present(app, id, rect).await?;
-        let probe = match view.acceptance_probe().await {
-            Ok(probe) => Some(probe),
-            Err(BrowserError::Stale | BrowserError::Unavailable) => None,
+        if tokio::time::Instant::now() >= next_focus_sample {
+            let controller_active = colossus_native_browser::is_active(&controller)
+                .await
+                .unwrap_or(false);
+            let appkit =
+                colossus_native_browser::presentation::acceptance_focus_state(&window, false)
+                    .await
+                    .ok();
+            if !(controller_active && appkit.is_some_and(AcceptanceFocusState::foreground))
+                && tokio::time::Instant::now() >= next_activation
+            {
+                // Only the diagnostic fixture's own window is activated. The
+                // frame still needs independently observed foreground state.
+                let _ = window.set_focus();
+                let _ =
+                    colossus_native_browser::presentation::acceptance_focus_state(&window, true)
+                        .await;
+                activation_requests = activation_requests.saturating_add(1);
+                next_activation = tokio::time::Instant::now() + Duration::from_secs(2);
+            }
+            next_focus_sample = tokio::time::Instant::now() + Duration::from_millis(500);
+        }
+        let (probe, last_probe_error) = match view.acceptance_probe().await {
+            Ok(probe) => (Some(probe), "none"),
+            Err(BrowserError::Stale) => (None, "stale"),
+            Err(BrowserError::Unavailable) => (None, "unavailable"),
             Err(error) => return Err(error.into()),
         };
-        if let Some(probe) = probe {
+        if let Some(probe) = probe.as_ref() {
             let target_matches = expected
                 .core_target
-                .is_none_or(|target| probe.page.target == *target);
+                .is_none_or(|target| probe.page.target == *target)
+                && probe.page.title == expected.title
+                && probe.page.url == expected.url;
             if let Some(frame) = probe.frame {
                 let new_document = expected.previous.is_none_or(|previous| {
                     previous.frame.is_some_and(|prior| {
@@ -771,20 +1009,175 @@ async fn accepted_frame(
                     && probe.page.url == expected.url
                     && target_matches
                     && new_document
+                    && expected
+                        .after
+                        .is_none_or(|prior| same_document_frame_after(frame, prior))
                     && frame.sequence > 0
                     && frame.count > 0
                     && frame.center_bgra == expected.center_bgra
                 {
-                    return Ok(probe);
+                    let controller_active = colossus_native_browser::is_active(&controller)
+                        .await
+                        .unwrap_or(false);
+                    let appkit = colossus_native_browser::presentation::acceptance_focus_state(
+                        &window, false,
+                    )
+                    .await
+                    .ok();
+                    if controller_active && appkit.is_some_and(AcceptanceFocusState::foreground) {
+                        return Ok(probe.clone());
+                    }
                 }
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            frame_timeout_evidence(
+                app,
+                id,
+                rect,
+                &expected,
+                probe.as_ref(),
+                last_probe_error,
+                activation_requests,
+            )
+            .await;
+            anyhow::bail!(
+                "native NSView did not accept an authenticated frame for the expected current document and fixture color"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn next_viewport_frame(
+    app: &tauri::AppHandle,
+    view: &RemoteSurface,
+    previous: &RemoteAcceptanceProbe,
+) -> anyhow::Result<RemoteAcceptanceProbe> {
+    let window = app.get_window("main").context("Desktop window missing")?;
+    let scale = window.scale_factor()?;
+    ensure!(
+        scale.is_finite() && (2.0..=4.0).contains(&scale),
+        "Mac Retina acceptance requires an active 2x-or-greater display"
+    );
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let scale_milli = (scale * 1000.0).round() as u32;
+    let previous_frame = previous.frame.context("previous native frame missing")?;
+    let deadline = tokio::time::Instant::now() + PAGE_TIMEOUT;
+    loop {
+        let probe = match view.acceptance_probe().await {
+            Ok(probe) => Some(probe),
+            Err(BrowserError::Stale | BrowserError::Unavailable) => None,
+            Err(error) => return Err(error.into()),
+        };
+        if let Some(probe) = probe
+            && let Some(frame) = probe.frame
+        {
+            let width = (u64::from(probe.width) * u64::from(scale_milli)).div_ceil(1000);
+            let height = (u64::from(probe.height) * u64::from(scale_milli)).div_ceil(1000);
+            let width = u32::try_from(width).context("Retina width exceeds frame bound")?;
+            let height = u32::try_from(height).context("Retina height exceeds frame bound")?;
+            if probe.visible
+                && !probe.page.loading
+                && probe.page.target == previous.page.target
+                && probe.page.url == previous.page.url
+                && probe.page.title == previous.page.title
+                && frame.lease.document_generation == previous_frame.lease.document_generation
+                && frame.lease.control_generation == previous_frame.lease.control_generation
+                && frame.lease.viewport_generation > previous_frame.lease.viewport_generation
+                && frame.lease.pixel_width == width
+                && frame.lease.pixel_height == height
+                && frame.sequence > 0
+                && frame.count > 0
+                && frame.center_bgra == previous_frame.center_bgra
+            {
+                return Ok(probe);
             }
         }
         ensure!(
             tokio::time::Instant::now() < deadline,
-            "native NSView did not accept an authenticated frame for the expected current document and fixture color"
+            "Retina resize did not submit a new authenticated native viewport frame"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+async fn resize_and_occlude(
+    app: &tauri::AppHandle,
+    id: &str,
+    view: &RemoteSurface,
+    previous: &RemoteAcceptanceProbe,
+    heartbeat: &ViewportHeartbeat,
+) -> anyhow::Result<(BrowserRect, RemoteAcceptanceProbe)> {
+    heartbeat.pause().await?;
+    let window = app.get_window("main").context("Desktop window missing")?;
+    window.set_size(tauri::LogicalSize::new(1050.0, 760.0))?;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    focus(app).await?;
+    let rect = bounds(app)?;
+    heartbeat.resume(id, rect).await?;
+    let resized = next_viewport_frame(app, view, previous).await?;
+    ensure!(
+        resized.width != previous.width || resized.height != previous.height,
+        "Desktop resize did not change the authenticated native viewport"
+    );
+    let resized_frame = resized.frame.context("resized native frame missing")?;
+    println!(
+        "PASS authenticated Retina Desktop resize: logical={}x{} pixels={}x{} viewport_generation={}",
+        resized.width,
+        resized.height,
+        resized_frame.lease.pixel_width,
+        resized_frame.lease.pixel_height,
+        resized_frame.lease.viewport_generation
+    );
+
+    let controller = app
+        .get_webview("main")
+        .context("Desktop controller missing")?;
+    heartbeat.pause().await?;
+    controller.eval("const overlay = document.createElement('div'); overlay.id = 'contained-acceptance-overlay'; overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:var(--surface-primary,#fff)'; document.body.appendChild(overlay);")?;
+    let state = app.state::<AppState>();
+    let generation = state
+        .browser
+        .lock()
+        .map_err(|error| anyhow::anyhow!(error.message))?
+        .generation;
+    state
+        .browser
+        .viewport(
+            app,
+            &BrowserViewportRequest {
+                generation,
+                tab_id: None,
+                rect: None,
+            },
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!(error.message))?;
+    let deadline = tokio::time::Instant::now() + PAGE_TIMEOUT;
+    loop {
+        ensure!(
+            colossus_native_browser::is_active(&controller).await?
+                && colossus_native_browser::presentation::acceptance_focus_state(&window, false)
+                    .await?
+                    .foreground(),
+            "overlay acceptance lost the foreground Desktop window"
+        );
+        if view.acceptance_hidden_after(resized_frame).await? {
+            break;
+        }
+        ensure!(
+            tokio::time::Instant::now() < deadline,
+            "overlay did not hide the exact native view and clear its pixels"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    println!("PASS Desktop overlay revoked the authenticated native view and cleared pixels");
+    controller.eval("document.getElementById('contained-acceptance-overlay')?.remove();")?;
+    heartbeat.resume(id, rect).await?;
+    let restored = next_viewport_frame(app, view, &resized).await?;
+    println!("PASS authenticated page returned after Desktop overlay removal");
+    Ok((rect, restored))
 }
 
 fn visual_hold_duration() -> anyhow::Result<Duration> {
@@ -810,10 +1203,7 @@ fn visual_hold_duration() -> anyhow::Result<Duration> {
 }
 
 async fn hold_visual_checkpoint(
-    app: &tauri::AppHandle,
-    tab: &str,
     view: &RemoteSurface,
-    rect: BrowserRect,
     core_target: &BrowserTarget,
     agent_url: &str,
     hold: Duration,
@@ -828,9 +1218,6 @@ async fn hold_visual_checkpoint(
     std::io::stdout().flush()?;
     let deadline = tokio::time::Instant::now() + hold;
     loop {
-        // The native view's heartbeat is intentionally short. Continue the
-        // ordinary viewport path while the Mac foreground screenshot is taken.
-        present(app, tab, rect).await?;
         let probe = view.acceptance_probe().await?;
         let frame = probe.frame.context("visual checkpoint lost native frame")?;
         ensure!(
@@ -860,16 +1247,38 @@ async fn focus(app: &tauri::AppHandle) -> anyhow::Result<()> {
         .context("Desktop controller missing")?;
     window.show()?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let mut attempt = 0_u32;
+    let mut activation_requests = 0_u8;
     loop {
-        if colossus_native_browser::is_active(&controller).await? {
+        let controller_key = colossus_native_browser::is_active(&controller).await?;
+        let appkit =
+            colossus_native_browser::presentation::acceptance_focus_state(&window, false).await?;
+        if controller_key && appkit.foreground() {
             return Ok(());
         }
-        window.set_focus()?;
-        ensure!(
-            tokio::time::Instant::now() < deadline,
-            "contained browser acceptance requires a foreground Desktop window"
-        );
+        if attempt.is_multiple_of(20) {
+            window.set_focus()?;
+            // AppKit may register a LaunchServices window without activating it.
+            // This request targets only this fixture's own controller window;
+            // the loop still waits for independently observed foreground state.
+            let _ = colossus_native_browser::presentation::acceptance_focus_state(&window, true)
+                .await?;
+            activation_requests = activation_requests.saturating_add(1);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            eprintln!(
+                "EVIDENCE mac-foreground-focus controller_key={controller_key} parent_attached={} own_window={} window_visible={} app_active={} window_key={} app_key_matches={} activation_requests={activation_requests}",
+                appkit.parent_attached(),
+                appkit.own_window(),
+                appkit.window_visible(),
+                appkit.app_active(),
+                appkit.window_key(),
+                appkit.app_key_matches(),
+            );
+            anyhow::bail!("contained browser acceptance requires a foreground Desktop window");
+        }
         tokio::time::sleep(Duration::from_millis(100)).await;
+        attempt = attempt.saturating_add(1);
     }
 }
 
@@ -888,7 +1297,7 @@ fn request(conversation_id: String) -> anyhow::Result<CreateRunRequest> {
         research_sources: Vec::new(),
         plan_action: None,
         branch: None,
-        max_turns: 8,
+        max_turns: 12,
         idempotency_key: IdempotencyKey::new(format!(
             "mac-contained-browser-{}",
             uuid::Uuid::now_v7()
@@ -928,6 +1337,7 @@ async fn exercise_owned(
     client: &Colossus,
     fixture: &Fixture,
     visual_hold: Duration,
+    heartbeat: &mut ViewportHeartbeat,
 ) -> anyhow::Result<()> {
     let state = app.state::<AppState>();
     state.select_target(Some(SPACE.into())).await;
@@ -938,7 +1348,8 @@ async fn exercise_owned(
             url: format!("{}/first", fixture.origin),
         },
     )
-    .await?;
+    .await
+    .context("stage=desktop-new-native-admission")?;
     ensure!(
         snapshot.engine.kind == "contained_chromium"
             && snapshot.engine.ready
@@ -956,7 +1367,7 @@ async fn exercise_owned(
         .clone()
         .context("Core did not bind a canonical conversation")?;
     let session = record.session_id.clone();
-    let view = remote(app, &tab)?;
+    let view = remote(app, &tab).context("stage=desktop-remote-surface-lookup")?;
     ensure!(
         view.session_id() == session && view.conversation_id() == conversation,
         "Desktop RemoteSurface did not retain Core's exact native admission"
@@ -965,9 +1376,12 @@ async fn exercise_owned(
         app.webviews().len() == 1,
         "contained page created a Tauri WebView"
     );
-    focus(app).await?;
-    let rect = bounds(app)?;
-    title(app, &tab, &view, rect, "Human fixture").await?;
+    focus(app).await.context("stage=desktop-foreground-focus")?;
+    let rect = bounds(app).context("stage=desktop-viewport-bounds")?;
+    heartbeat.resume(&tab, rect).await?;
+    title(&view, "Human fixture")
+        .await
+        .context("stage=desktop-human-page-title-and-viewport")?;
     let human = accepted_frame(
         app,
         &tab,
@@ -979,9 +1393,11 @@ async fn exercise_owned(
             center_bgra: [255, 241, 231, 255],
             core_target: None,
             previous: None,
+            after: None,
         },
     )
-    .await?;
+    .await
+    .context("stage=desktop-human-frame-acceptance")?;
     ensure!(
         human
             .frame
@@ -989,7 +1405,40 @@ async fn exercise_owned(
         "human page was not submitted under its native human lease"
     );
     println!("PASS authenticated Core human page submitted to Desktop RemoteSurface");
+    let (rect, human) = resize_and_occlude(app, &tab, &view, &human, heartbeat)
+        .await
+        .context("stage=desktop-retina-resize-overlay-occlusion")?;
 
+    if !visual_hold.is_zero() {
+        println!(
+            "HUMAN_VISUAL_CHECKPOINT authenticated human page submitted to Desktop NSView; hold_ms=10000"
+        );
+        std::io::stdout().flush()?;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let probe = view.acceptance_probe().await?;
+            let frame = probe
+                .frame
+                .context("human visual checkpoint lost native frame")?;
+            ensure!(
+                probe.visible
+                    && probe.page.title == "Human fixture"
+                    && probe.page.url == format!("{}/first", fixture.origin)
+                    && frame.lease.control_generation == 0
+                    && frame.center_bgra == [255, 241, 231, 255],
+                "human visual checkpoint lost its authenticated page"
+            );
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            tokio::time::sleep(remaining.min(Duration::from_millis(100))).await;
+        }
+    }
+
+    if fixture.state.native_input {
+        native_input::checkpoint(app, &tab, &view, rect, &fixture.origin).await?;
+    }
     let run = client.create_run(request(conversation)?).await?.run;
     *fixture.state.run_id.lock().unwrap() = Some(run.run_id.clone());
     fixture
@@ -1013,10 +1462,10 @@ async fn exercise_owned(
     fixture.state.signal(&fixture.state.handoff_done);
     println!("PASS authenticated native human-to-agent handoff");
 
-    title(app, &tab, &view, rect, "Agent click received").await?;
+    title(&view, "Agent click received").await?;
     fixture.state.signal(&fixture.state.click_observed);
     println!("PASS Core browser.snapshot and browser.click changed the visible page");
-    title(app, &tab, &view, rect, "Agent controlled page").await?;
+    title(&view, "Agent controlled page").await?;
     let page = view.inspect().await?;
     ensure!(
         page.url == format!("{}/agent", fixture.origin),
@@ -1035,6 +1484,7 @@ async fn exercise_owned(
             center_bgra: [216, 247, 217, 255],
             core_target: Some(&core_target),
             previous: Some(&human),
+            after: None,
         },
     )
     .await?;
@@ -1046,7 +1496,7 @@ async fn exercise_owned(
     fixture.state.signal(&fixture.state.navigation_observed);
     let deadline = tokio::time::Instant::now() + PAGE_TIMEOUT;
     loop {
-        present(app, &tab, rect).await?;
+        heartbeat.check()?;
         fixture.state.check()?;
         if fixture.state.screenshot_seen.load(Ordering::Acquire) {
             break;
@@ -1058,16 +1508,44 @@ async fn exercise_owned(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     println!("PASS Core browser.screenshot published verified PNG artifact metadata");
-    hold_visual_checkpoint(
+    // Screenshot capture intentionally retires the presentation lease. Its
+    // published PNG is not evidence that a new frame has reached the NSView.
+    // Keep the independent trusted heartbeat active and require a subsequent
+    // exact-document native acknowledgement before exposing the visual marker.
+    let recovered = accepted_frame(
         app,
         &tab,
         &view,
         rect,
+        ExpectedFrame {
+            title: "Agent controlled page",
+            url: &format!("{}/agent", fixture.origin),
+            center_bgra: [216, 247, 217, 255],
+            core_target: Some(&core_target),
+            previous: None,
+            after: Some(agent_frame),
+        },
+    )
+    .await
+    .context("stage=agent-frame-recovery-after-screenshot")?;
+    let recovered_frame = recovered.frame.context("recovered agent frame missing")?;
+    println!(
+        "PASS authenticated agent frame recovered after Core screenshot: document_generation={} viewport_generation={} sequence={}",
+        recovered_frame.lease.document_generation,
+        recovered_frame.lease.viewport_generation,
+        recovered_frame.sequence
+    );
+    hold_visual_checkpoint(
+        &view,
         &core_target,
         &format!("{}/agent", fixture.origin),
         visual_hold,
     )
     .await?;
+    if fixture.state.native_tabs {
+        owned_tabs::checkpoint(app, &tab, &view, rect, fixture).await?;
+    }
+    heartbeat.stop().await?;
     action(app, BrowserAction::Close { tab_id: tab }).await?;
     ensure!(
         state
@@ -1112,7 +1590,12 @@ pub(super) async fn exercise(
             crate::state::TargetConsentContext::ManagedLocal,
         )
         .await;
-    let exercise = exercise_owned(app, &client, &fixture, visual_hold).await;
+    let mut heartbeat = ViewportHeartbeat::start(app.clone());
+    let exercise = exercise_owned(app, &client, &fixture, visual_hold, &mut heartbeat).await;
+    // Settle every trusted pulse before cancellation, native hide or viewer drain,
+    // including when an assertion returns early. No background show can revive it.
+    let heartbeat_exit = heartbeat.stop().await;
+    let exercise = exercise.and(heartbeat_exit);
     let failed_run_id = if exercise.is_err() {
         fixture.state.run_id.lock().unwrap().take()
     } else {
@@ -1159,9 +1642,124 @@ pub(super) async fn exercise(
 
 #[cfg(test)]
 mod tests {
-    use super::{grant, managed_runtime};
+    use super::{
+        FixtureState, categorical_browser_failure, categorical_tool_failure, grant,
+        managed_runtime, model_response, same_document_frame_after,
+    };
     use colossus_sdk::SidecarBootstrapConfig;
     use std::time::Duration;
+
+    #[test]
+    fn tool_failure_trace_releases_only_a_fixed_category() {
+        assert_eq!(
+            categorical_tool_failure(
+                &serde_json::json!({"error":{"code":"tool.outcome_unknown","message":"private-page-and-secret"}})
+            ),
+            "tool.outcome_unknown"
+        );
+        assert_eq!(
+            categorical_tool_failure(
+                &serde_json::json!({"error":{"type":"execution_error","message":"private-page-and-secret"}})
+            ),
+            "tool.execution_error"
+        );
+        assert_eq!(
+            categorical_tool_failure(
+                &serde_json::json!({"error":{"code":"private-page-and-secret","type":"private-page-and-secret"}})
+            ),
+            "tool.unclassified"
+        );
+        assert_eq!(
+            categorical_browser_failure(
+                &serde_json::json!({"error":{"message":"browser requires a fresh snapshot"}})
+            ),
+            "snapshot_required"
+        );
+        assert_eq!(
+            categorical_browser_failure(
+                &serde_json::json!({"error":{"message":"private-page-and-secret"}})
+            ),
+            "unclassified"
+        );
+    }
+
+    #[test]
+    fn screenshot_recovery_requires_new_ack_for_the_same_document_and_controller() {
+        use colossus_native_browser::remote::RemoteAcceptedFrame;
+        let prior = RemoteAcceptedFrame {
+            lease: serde_json::from_value(serde_json::json!({"tab":3,"session_generation":1,"control_generation":2,"viewport_generation":8,"document_generation":5,"pixel_width":2004,"pixel_height":1280})).unwrap(),
+            sequence: 16,
+            center_bgra: [216,247,217,255],
+            count: 19,
+        };
+        assert!(!same_document_frame_after(prior, prior));
+        let fresh = RemoteAcceptedFrame {
+            sequence: 17,
+            count: 20,
+            ..prior
+        };
+        assert!(same_document_frame_after(fresh, prior));
+        let mut changed = fresh;
+        changed.lease.viewport_generation += 1;
+        changed.sequence = 1;
+        changed.count = 1;
+        assert!(same_document_frame_after(changed, prior));
+        for field in 0..5 {
+            let mut foreign = changed;
+            match field {
+                0 => foreign.lease.tab += 1,
+                1 => foreign.lease.session_generation += 1,
+                2 => foreign.lease.control_generation += 1,
+                3 => foreign.lease.document_generation += 1,
+                _ => foreign.lease.viewport_generation = 7,
+            }
+            assert!(!same_document_frame_after(foreign, prior));
+        }
+    }
+
+    #[tokio::test]
+    async fn fixture_observes_fresh_document_after_click_before_navigation() {
+        use serde_json::{Value, json};
+        let state = FixtureState::default();
+        *state.target.lock().unwrap() = Some(
+            json!({"session_id":"session-owned", "control_generation":7, "tab_id":"tab-old", "document_id":"doc-old"}),
+        );
+        let body = |call_id: &str, observation: Value| {
+            json!({
+                "tools":[{"function":{"name":"browser_snapshot"}}, {"function":{"name":"browser_navigate"}}],
+                "messages":[{"role":"tool", "tool_call_id":call_id, "content":observation.to_string()}]
+            })
+        };
+        let clicked = body(
+            "fixture-2",
+            json!({"tab":{"tab_id":"tab-owned", "document_id":"doc-clicked"}}),
+        );
+        let observed = model_response(3, &clicked, "http://127.0.0.1:12345", &state)
+            .await
+            .unwrap();
+        let function = &observed["choices"][0]["message"]["tool_calls"][0]["function"];
+        assert_eq!(function["name"], "browser_snapshot");
+        let args: Value = serde_json::from_str(function["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(args["tab_id"], "tab-owned");
+        assert_eq!(args["document_id"], "doc-clicked");
+        assert_eq!(args["max_nodes"], 128);
+        assert!(args.get("url").is_none());
+        let fresh = body(
+            "fixture-3",
+            json!({"tab":{"tab_id":"tab-owned", "document_id":"doc-fresh"}, "snapshot":{"snapshot_id":"snapshot-fresh"}}),
+        );
+        let navigate = model_response(4, &fresh, "http://127.0.0.1:12345", &state)
+            .await
+            .unwrap();
+        let function = &navigate["choices"][0]["message"]["tool_calls"][0]["function"];
+        assert_eq!(function["name"], "browser_navigate");
+        let args: Value = serde_json::from_str(function["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(args["session_id"], "session-owned");
+        assert_eq!(args["control_generation"], 7);
+        assert_eq!(args["tab_id"], "tab-owned");
+        assert_eq!(args["document_id"], "doc-fresh");
+        assert_eq!(args["url"], "http://127.0.0.1:12345/agent");
+    }
 
     #[test]
     fn contained_fixture_bootstrap_passes_protocol_validation() {

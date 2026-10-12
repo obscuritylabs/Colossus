@@ -16,7 +16,12 @@ export interface BrowserTab {
 }
 
 export interface BrowserEngine {
-  kind: "embedded_chromium" | "webview2" | "webkit" | "unavailable";
+  kind:
+    | "embedded_chromium"
+    | "contained_chromium"
+    | "webview2"
+    | "webkit"
+    | "unavailable";
   preview: boolean;
   ready: boolean;
   message: string | null;

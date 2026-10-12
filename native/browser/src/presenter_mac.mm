@@ -208,7 +208,59 @@ ColossusOwnedPixels* Lookup(uintptr_t handle) {
   if (![NSThread isMainThread]) return nil;
   const auto found = views.find(handle); return found == views.end() ? nil : found->second;
 }
+#ifndef NDEBUG
+NSWindow* AcceptanceWindow(uintptr_t parent) {
+  if (![NSThread isMainThread] || !parent || !NSApp) return nil;
+  // The pointer comes only from the fixture's retained Tauri window on this
+  // main thread. Refuse any view that does not belong to this application.
+  NSView* native_parent = reinterpret_cast<NSView*>(parent);
+  if (![native_parent isKindOfClass:[NSView class]]) return nil;
+  NSWindow* window = native_parent.window;
+  return window && [NSApp.windows containsObject:window] ? window : nil;
 }
+#endif
+}
+#ifndef NDEBUG
+extern "C" int32_t colossus_presenter_acceptance_activate_parent(uintptr_t parent) {
+  if (![NSThread isMainThread]) return COLOSSUS_CEF_WRONG_THREAD;
+  NSWindow* window = AcceptanceWindow(parent);
+  if (!window || !window.visible) return COLOSSUS_CEF_CLOSED;
+  // A direct LaunchServices start can be registered yet inactive. Request only
+  // this process/window; a separate query still has to observe OS acceptance.
+  [[NSRunningApplication currentApplication] activateWithOptions:NSApplicationActivateAllWindows];
+  if (@available(macOS 14.0, *)) [NSApp activate];
+  else [NSApp activateIgnoringOtherApps:YES];
+  [window makeKeyAndOrderFront:nil];
+  return COLOSSUS_CEF_OK;
+}
+extern "C" int32_t colossus_presenter_acceptance_focus_state(uintptr_t parent, uint32_t* flags) {
+  if (![NSThread isMainThread]) return COLOSSUS_CEF_WRONG_THREAD;
+  if (!parent || !flags || !NSApp) return COLOSSUS_CEF_INVALID;
+  NSView* native_parent = reinterpret_cast<NSView*>(parent);
+  if (![native_parent isKindOfClass:[NSView class]]) return COLOSSUS_CEF_INVALID;
+  NSWindow* window = native_parent.window;
+  uint32_t state = 0;
+  if (window) {
+    state |= 1u;  // The retained Tauri parent is attached to a window.
+    if ([NSApp.windows containsObject:window]) state |= 2u;
+    if (window.visible) state |= 4u;
+    if (window.keyWindow) state |= 16u;
+    if (NSApp.keyWindow == window) state |= 32u;
+  }
+  if (NSApp.active) state |= 8u;
+  *flags = state;
+  return COLOSSUS_CEF_OK;
+}
+extern "C" int32_t colossus_presenter_acceptance_hidden(uintptr_t view) {
+  if (![NSThread isMainThread]) return COLOSSUS_CEF_WRONG_THREAD;
+  ColossusOwnedPixels* native_view = Lookup(view);
+  if (!native_view) return COLOSSUS_CEF_CLOSED;
+  // Explicit viewport revocation resets the deadline; passive lease expiry
+  // hides pixels but leaves its expired deadline for this probe to reject.
+  return native_view.hidden && native_view->pixels.empty() &&
+      native_view->deadline == std::chrono::steady_clock::time_point{} ? 1 : 0;
+}
+#endif
 extern "C" uintptr_t colossus_presenter_create(uintptr_t parent, void* owner,
     colossus_presenter_input_fn input, colossus_presenter_focus_fn focus) {
   if (![NSThread isMainThread] || !parent || !owner || !input || !focus || !next_handle) return 0;

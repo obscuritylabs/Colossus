@@ -250,7 +250,24 @@ impl NativeBrowserClient {
                     enrollment_digest,
                 })
             }
-            _ => Err(SdkError::SidecarFailed),
+            reply => {
+                #[cfg(all(target_os = "macos", debug_assertions))]
+                if std::env::var_os("COLOSSUS_BROWSER_ACCEPTANCE_TRACE").as_deref()
+                    == Some(std::ffi::OsStr::new("1"))
+                {
+                    let category = match reply {
+                        NativeBrowserReply::Denied => "denied",
+                        NativeBrowserReply::Unavailable => "unavailable",
+                        NativeBrowserReply::OutcomeUnknown => "outcome_unknown",
+                        NativeBrowserReply::Granted { .. } => "grant_rejected",
+                        _ => "unexpected_reply",
+                    };
+                    eprintln!("EVIDENCE native browser handoff reply={category}");
+                }
+                #[cfg(not(all(target_os = "macos", debug_assertions)))]
+                let _ = reply;
+                Err(SdkError::SidecarFailed)
+            }
         }
     }
 }

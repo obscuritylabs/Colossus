@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-exclude = ["native/browser/driver", "native/browser/pki"]
+exclude = ["native/browser/driver", "native/browser/pki", "native/browser/process-broker", "native/browser/tls-broker"]
 members = [
     "crates/colossus-cloud",
     "crates/colossus-cloud-postgres",
@@ -280,3 +280,9 @@ strip = "symbols"
 # platform-specific linker debug-section size.
 [profile.test]
 strip = "debuginfo"
+
+# Retina frames cross independently authenticated native boundaries. Unoptimized
+# SHA-256 consumed about 245ms per 6.9MiB frame on the Mac acceptance machine;
+# keep full authentication within the unchanged visibility/control deadlines.
+[profile.dev.package.sha2]
+opt-level = 3

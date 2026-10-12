@@ -10,8 +10,7 @@ namespace colossus {
 // executable. Never an ABI, command, renderer/model input or arbitrary setter.
 struct MacHelperPrograms {
   std::array<std::string, 5> paths;
-  std::optional<std::string> GpuProgram(std::string_view process,
-                                        std::string_view current) const;
+  std::optional<std::string> Program(std::string_view process) const;
 };
 std::optional<MacHelperPrograms> PrepareMacHelperPrograms(const char* base);
 int MacChildProcessClass(std::string_view process);

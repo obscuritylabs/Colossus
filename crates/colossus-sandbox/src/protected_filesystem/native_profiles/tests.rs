@@ -156,6 +156,40 @@ fn replaced_cache_leaf_or_root_cannot_reuse_snapshot() {
     assert!(protection.snapshot().is_err());
 }
 
+#[tokio::test]
+async fn sibling_native_custody_overrides_real_broad_grants_and_inode_aliases() {
+    let directory = tempfile::tempdir().expect("fixture");
+    let parent = fs::canonicalize(directory.path()).expect("parent");
+    let allocation = ConfinedRoot::bind(parent.join("allocation")).expect("allocation");
+    let custody = ConfinedRoot::bind(parent.join("custody")).expect("sibling custody");
+    let secret = custody.path().join("reviewed-client");
+    fs::write(&secret, "synthetic custody bytes").expect("plain marker");
+    let protection = ProtectedFilesystem::new(Vec::new())
+        .unwrap()
+        .with_native_profile_roots(vec![allocation, custody.clone()])
+        .unwrap();
+    for action in ["filesystem.read", "filesystem.metadata", "filesystem.write"] {
+        assert!(
+            granted_effect(&parent, &secret, action, protection.clone())
+                .await
+                .is_err()
+        );
+    }
+    let alias = parent.join("workspace-granted-alias");
+    fs::hard_link(&secret, &alias).unwrap();
+    for action in ["filesystem.read", "filesystem.metadata", "filesystem.write"] {
+        assert!(
+            granted_effect(&parent, &alias, action, protection.clone())
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(&secret).unwrap(),
+        "synthetic custody bytes"
+    );
+}
+
 #[test]
 fn native_cache_masks_process_ancestor_grants_and_rejects_ambient_launch() {
     let (_directory, root, protection, _listener) = fixture();

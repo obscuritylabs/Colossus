@@ -1,6 +1,7 @@
 //! Trusted Desktop attachment to an independently supervised offscreen host.
 mod actor;
 mod handoff;
+mod input_queue;
 mod lifecycle;
 mod viewport;
 use crate::{
@@ -14,6 +15,8 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
+#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+use std::time::Duration;
 use std::time::Instant;
 use tauri::{Rect, Window};
 use tokio::sync::mpsc;
@@ -57,6 +60,65 @@ struct Owner {
     updating: AtomicBool,
     read_only: AtomicBool,
     operation: tokio::sync::Mutex<()>,
+}
+
+// Source-only, closed-vocabulary attach evidence. These enum variants contain
+// no URL, enrollment material, path, native pointer or channel payload.
+#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+enum AttachFailure {
+    Configure(PresentationError),
+    NativeView(BrowserError),
+}
+#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+impl AttachFailure {
+    const fn token(self) -> &'static str {
+        match self {
+            Self::Configure(PresentationError::Invalid) => "configure_invalid",
+            Self::Configure(PresentationError::Stale) => "configure_stale",
+            Self::Configure(PresentationError::Unauthenticated) => "configure_unauthenticated",
+            Self::Configure(PresentationError::Hidden) => "configure_hidden",
+            Self::Configure(PresentationError::LimitExceeded) => "configure_limit_exceeded",
+            Self::Configure(PresentationError::OutcomeUnknown) => "configure_outcome_unknown",
+            Self::NativeView(BrowserError::InvalidAddress) => "native_view_invalid_address",
+            Self::NativeView(BrowserError::Unavailable) => "native_view_unavailable",
+            Self::NativeView(BrowserError::Closed) => "native_view_closed",
+            Self::NativeView(BrowserError::Stale) => "native_view_stale",
+            Self::NativeView(BrowserError::TimedOut) => "native_view_timed_out",
+            Self::NativeView(BrowserError::ComponentMissing) => "native_view_component_missing",
+            Self::NativeView(BrowserError::BootstrapRequired) => "native_view_bootstrap_required",
+            Self::NativeView(BrowserError::NativeAcceptanceRequired) => {
+                "native_view_acceptance_required"
+            }
+        }
+    }
+}
+#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+fn trace_attach_failure(failure: AttachFailure) {
+    eprintln!("EVIDENCE mac-remote-attach failure={}", failure.token());
+}
+#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+fn trace_frame_channel_failure(stage: &'static str, error: PresentationError, elapsed: Duration) {
+    let failure = match error {
+        PresentationError::Invalid => "invalid",
+        PresentationError::Stale => "stale",
+        PresentationError::Unauthenticated => "unauthenticated",
+        PresentationError::Hidden => "hidden",
+        PresentationError::LimitExceeded => "limit_exceeded",
+        PresentationError::OutcomeUnknown => "outcome_unknown",
+    };
+    let timing = if elapsed >= Duration::from_millis(700) {
+        "after_700ms"
+    } else {
+        "before_700ms"
+    };
+    eprintln!("EVIDENCE mac-remote-frame stage={stage} failure={failure} timing={timing}");
+}
+#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+fn trace_frame_browser_failure(stage: &'static str, error: BrowserError) {
+    eprintln!(
+        "EVIDENCE mac-remote-frame stage={stage} failure={}",
+        AttachFailure::NativeView(error).token()
+    );
 }
 /// Cloneable human guest handle; page pixels travel only on the private native channel.
 pub struct RemoteSurface(Arc<Owner>);
@@ -105,15 +167,16 @@ impl RemoteSurface {
     #[cfg(all(target_os = "macos", feature = "native-test-driver"))]
     pub async fn acceptance_probe(&self) -> Result<RemoteAcceptanceProbe, BrowserError> {
         let lease = self.0.state.lock().map_err(|_| BrowserError::Closed)?.lease;
-        let page = self
-            .0
-            .client
-            .observe(lease)
-            .await
-            .map_err(|error| match error {
+        #[cfg(debug_assertions)]
+        let observed_at = Instant::now();
+        let page = self.0.client.observe(lease).await.map_err(|error| {
+            #[cfg(debug_assertions)]
+            trace_frame_channel_failure("probe_observe", error, observed_at.elapsed());
+            match error {
                 PresentationError::Stale | PresentationError::Hidden => BrowserError::Stale,
                 _ => BrowserError::Closed,
-            })?;
+            }
+        })?;
         let state = self.0.state.lock().map_err(|_| BrowserError::Closed)?;
         if state.lease != lease || state.configure.target != page.target {
             return Err(BrowserError::Stale);
@@ -140,6 +203,35 @@ impl RemoteSurface {
             height: bounds.height,
             frame,
         })
+    }
+
+    /// Observe native pixel removal from the same view that accepted a frame
+    /// before the Desktop viewport was occluded. A local hide request alone is
+    /// insufficient evidence.
+    ///
+    /// # Errors
+    /// Rejects a missing or retired native presenter.
+    #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+    pub async fn acceptance_hidden_after(
+        &self,
+        previous: RemoteAcceptedFrame,
+    ) -> Result<bool, BrowserError> {
+        let surface = {
+            let state = self.0.state.lock().map_err(|_| BrowserError::Closed)?;
+            if state.visible {
+                return Ok(false);
+            }
+            state.surface.clone().ok_or(BrowserError::Unavailable)?
+        };
+        let accepted = surface.acceptance_accepted_frame()?;
+        if !accepted.is_some_and(|accepted| {
+            accepted.lease == previous.lease
+                && accepted.sequence == previous.sequence
+                && accepted.count == previous.count
+        }) {
+            return Ok(false);
+        }
+        surface.acceptance_hidden().await
     }
     /// Attach a supervisor-admitted human session to the actual Desktop native window.
     ///
@@ -194,10 +286,30 @@ impl RemoteSurface {
         let lease = client
             .configure(configure.clone())
             .await
-            .map_err(|_| BrowserError::Closed)?;
-        let (events, receiver) = mpsc::channel(32);
-        let surface =
-            actor::create_surface(window, &client, &events, lease, digest, !read_only).await?;
+            .map_err(|failure| {
+                #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+                trace_attach_failure(AttachFailure::Configure(failure));
+                #[cfg(not(all(
+                    target_os = "macos",
+                    feature = "native-test-driver",
+                    debug_assertions
+                )))]
+                let _ = failure;
+                BrowserError::Closed
+            })?;
+        let (events, receiver) = mpsc::channel(input_queue::CAPACITY);
+        let surface = actor::create_surface(window, &client, &events, lease, digest, !read_only)
+            .await
+            .inspect_err(|failure| {
+                #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+                trace_attach_failure(AttachFailure::NativeView(*failure));
+                #[cfg(not(all(
+                    target_os = "macos",
+                    feature = "native-test-driver",
+                    debug_assertions
+                )))]
+                let _ = failure;
+            })?;
         let viewport = configure.viewport_generation;
         let owner = Arc::new(Owner {
             window: window.clone(),
@@ -244,10 +356,15 @@ impl RemoteSurface {
         }
         {
             let mut state = self.0.state.lock().map_err(|_| BrowserError::Closed)?;
+            // A fresh pulse for unchanged visibility must not invalidate a
+            // configuration already awaiting native acknowledgement. Bounds
+            // and visibility transitions independently advance the revision.
+            if !state.visible {
+                self.0.revision.fetch_add(1, Ordering::AcqRel);
+            }
             state.visible = true;
             state.heartbeat = Instant::now();
         }
-        self.0.revision.fetch_add(1, Ordering::AcqRel);
         viewport::update(&self.0);
         Ok(())
     }
@@ -286,11 +403,11 @@ impl RemoteSurface {
             height: size.height.round() as u32,
             scale_milli: (scale * 1000.0).round() as u32,
         };
-        self.0
-            .state
-            .lock()
-            .map_err(|_| BrowserError::Closed)?
-            .bounds = Some(bounds);
+        let mut state = self.0.state.lock().map_err(|_| BrowserError::Closed)?;
+        if state.bounds != Some(bounds) {
+            state.bounds = Some(bounds);
+            self.0.revision.fetch_add(1, Ordering::AcqRel);
+        }
         Ok(())
     }
     /// Submit an explicitly human navigation without changing origin or agent grants.

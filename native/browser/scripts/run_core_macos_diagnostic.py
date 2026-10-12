@@ -32,6 +32,12 @@ CORE_TEST = (
     "browser_tools::tests::native_macos::"
     "real_mac_chromium_executes_core_tools_and_paints_authenticated_frames"
 )
+TRANSFER_TEST = (
+    "browser_tools::tests::native_macos::transfer::"
+    "real_mac_chromium_transfers_actual_core_artifacts_and_denies_unreviewed_paths"
+)
+CORE_CASES = {"page": CORE_TEST, "transfers": TRANSFER_TEST}
+TRANSFER_RECEIPT = b"Core Mac transfer diagnostic: actual HTTP multipart upload,"
 BUILD_TIMEOUT = 1800
 MAX_TEST_LOG = 32 * 1024 * 1024
 
@@ -51,6 +57,8 @@ def parser() -> argparse.ArgumentParser:
                         help="prepare a fresh signed allocation and Desktop compiler seal without launching a browser")
     result.add_argument("--fixture-origin",
                         help="stage-only Desktop fixture: one canonical http://127.0.0.1:<nondefault-port>; otherwise choose a free port")
+    result.add_argument("--case", choices=tuple(CORE_CASES), default="page",
+                        help="one fixed native Core acceptance case; no arbitrary test filters")
     return result
 
 
@@ -213,25 +221,29 @@ def stage_command(cef_root: Path, native_build: Path, host: Path, app: Path,
     ]
 
 
-def core_command() -> list[str]:
+def core_command(case: str = "page") -> list[str]:
     return [
         "cargo", "test", "--locked", "-p", "colossus-runtime", "--features",
-        "macos-browser-host-acceptance", "--lib", CORE_TEST,
+        "macos-browser-host-acceptance", "--lib", CORE_CASES[case],
         "--", "--ignored", "--exact", "--nocapture", "--color", "never",
     ]
 
 
-def verify_core_result(evidence: Path) -> None:
+def verify_core_result(evidence: Path, case: str = "page") -> None:
     # Rust's test harness exits successfully when an exact filter matches zero
     # tests. A source diagnostic must prove that its one named fixture ran.
     with (evidence / "core-test.log").open("rb") as source:
         log = source.read(MAX_TEST_LOG + 1)
     if (len(log) > MAX_TEST_LOG or
-            re.search(rb"^test " + re.escape(CORE_TEST.encode()) + rb" \.\.\. ok\r?$",
+            re.search(rb"^test " + re.escape(CORE_CASES[case].encode()) + rb" \.\.\. ok\r?$",
                       log, re.MULTILINE) is None or
             re.search(rb"^test result: ok\. 1 passed; 0 failed; 0 ignored;", log,
                       re.MULTILINE) is None):
         raise DiagnosticError("the exact Core fixture did not produce a successful test receipt")
+    if case == "transfers":
+        if TRANSFER_RECEIPT not in log or b"direct-child shutdown passed; production acceptance false" not in log:
+            raise DiagnosticError("the transfer fixture did not preserve its completed assertion receipt")
+        return
     with (evidence / "mac-core.png").open("rb") as source:
         if source.read(8) != b"\x89PNG\r\n\x1a\n":
             raise DiagnosticError("the successful fixture did not preserve its PNG evidence")
@@ -319,7 +331,7 @@ def prepare(options: argparse.Namespace) -> tuple[Path, dict[str, str]]:
             "schema_version": 1, "development_only": True, "production_accepted": False,
             "whole_helper_cleanup_accepted": False, "certificate_custody_accepted": False,
             "platform": target, "allocation_root": str(allocation), "broker_root": str(broker),
-            "app_bundle": str(app), "core_test": CORE_TEST,
+            "app_bundle": str(app), "core_test": CORE_CASES[options.case],
             "stage_only": options.stage_only,
         })
     # The sealed listeners must be released before Core binds its exact proxy;
@@ -337,8 +349,8 @@ def main(arguments: list[str] | None = None) -> int:
             print(f"Fresh Desktop compiler seal: {evidence / 'desktop-compiler-seal.json'}")
             print("Stage only; no browser launched, no native acceptance established.")
             return 0
-        run_logged(core_command(), environment, evidence / "core-test.log", timeout=BUILD_TIMEOUT)
-        verify_core_result(evidence)
+        run_logged(core_command(options.case), environment, evidence / "core-test.log", timeout=BUILD_TIMEOUT)
+        verify_core_result(evidence, options.case)
         print(f"Exact Core diagnostic exited successfully; inspect {evidence / 'core-test.log'}")
         print("Production automation and whole-helper/crash/PKI acceptance remain disabled.")
         return 0

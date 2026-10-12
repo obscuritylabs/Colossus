@@ -38,10 +38,66 @@ struct Configuration {
     #[serde(default)]
     persistent_profile: Option<colossus_contracts::BrowserProfileId>,
     proxy: ProxyConfiguration,
+    #[serde(default)]
+    broker_tls: Option<BrokerTlsConfiguration>,
     pki: Option<provision::Configuration>,
     presentation: Option<PresentationConfiguration>,
     #[cfg(all(target_os = "linux", feature = "native-custody-test"))]
     custody_test_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BrokerTlsConfiguration {
+    origin: colossus_contracts::BrowserOrigin,
+    leaf_der: Vec<u8>,
+    leaf_sha256: [u8; 32],
+    lifetime_ms: u32,
+}
+
+fn configure_broker_tls(configuration: &Configuration) -> Result<(), BrowserDriverError> {
+    let Some(tls) = &configuration.broker_tls else {
+        return Ok(());
+    };
+    if !cfg!(all(
+        target_os = "macos",
+        feature = "macos-owned-process-development"
+    )) {
+        return Err(BrowserDriverError::Unsupported);
+    }
+    validate_broker_tls(configuration, tls)?;
+    let origin = CString::new(tls.origin.as_str()).map_err(|_| BrowserDriverError::Denied)?;
+    // SAFETY: native-only authenticated bootstrap, bounded public DER and exact
+    // canonical origin live through this synchronous copy before CEF starts.
+    if unsafe {
+        ffi::colossus_cef_broker_tls_configure(
+            origin.as_ptr(),
+            tls.leaf_der.as_ptr(),
+            tls.leaf_der.len(),
+            tls.lifetime_ms,
+        )
+    } != 0
+    {
+        return Err(BrowserDriverError::Denied);
+    }
+    Ok(())
+}
+
+fn validate_broker_tls(
+    configuration: &Configuration,
+    tls: &BrokerTlsConfiguration,
+) -> Result<(), BrowserDriverError> {
+    if configuration.enrollment.allowed_origins.as_slice() != [tls.origin.clone()]
+        || !tls.origin.as_str().starts_with("https://")
+        || tls.leaf_der.is_empty()
+        || tls.leaf_der.len() > 8192
+        || tls.leaf_sha256 == [0; 32]
+        || <[u8; 32]>::from(Sha256::digest(&tls.leaf_der)) != tls.leaf_sha256
+        || !(1..=300_000).contains(&tls.lifetime_ms)
+    {
+        return Err(BrowserDriverError::Denied);
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -136,7 +192,15 @@ fn synthetic_diagnostic_admission(configuration: &Configuration) -> Result<(), B
     }
     let origin = url::Url::parse(enrollment.allowed_origins[0].as_str())
         .map_err(|_| BrowserDriverError::Denied)?;
-    if origin.scheme() != "http"
+    let scheme_admitted = match origin.scheme() {
+        "http" => configuration.broker_tls.is_none(),
+        "https" if cfg!(feature = "macos-owned-process-development") => configuration
+            .broker_tls
+            .as_ref()
+            .is_some_and(|tls| validate_broker_tls(configuration, tls).is_ok()),
+        _ => false,
+    };
+    if !scheme_admitted
         || origin.host_str() != Some("127.0.0.1")
         || origin.port().is_none()
         || !origin.username().is_empty()
@@ -381,6 +445,8 @@ pub fn run() -> Result<(), BrowserDriverError> {
     if let Some(stream) = &presentation_stream {
         kept.push(stream.as_raw_fd());
     }
+    #[cfg(all(target_os = "macos", feature = "macos-owned-process-development"))]
+    kept.push(7); // Creator-owned launch stream, installed before this bootstrap.
     platform::close_unrelated_descriptors(&kept)?;
     // try_clone produces a close-on-exec fd for this same private channel,
     // after closing unrelated fds and before any native/helper thread exists.
@@ -507,6 +573,7 @@ pub fn run() -> Result<(), BrowserDriverError> {
         None
     };
     configure_proxy(&configuration.proxy)?;
+    configure_broker_tls(&configuration)?;
     // SAFETY: fixed native-only opt-in before CEF starts; root cache path is the
     // verified supervisor-owned directory, never a model or renderer selection.
     if unsafe {
@@ -690,6 +757,7 @@ mod tests {
                 password: "fixture".into(),
             },
             pki: None,
+            broker_tls: None,
             presentation: Some(PresentationConfiguration { human_input: true }),
         }
     }

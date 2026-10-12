@@ -1,6 +1,7 @@
 use super::{
     Installation,
     lifecycle::{Driver, Resources},
+    startup::Startup,
 };
 use crate::BrowserEgressLease;
 use colossus_browser_bridge::{
@@ -72,7 +73,8 @@ pub(super) async fn owned(
             return Err(BrowserDriverError::Denied);
         }
     }
-    let result = start(&resource, &enrollment).await;
+    let startup = Startup::new(&control, &stopped);
+    let result = startup.wait(start(&resource, &enrollment, &startup)).await;
     match result {
         Ok(bridge) if !control.is_cancelled() && !stopped.load(Ordering::Acquire) => {
             Ok(Arc::new(Driver::new(bridge, resource, request, fenced)))
@@ -100,6 +102,19 @@ fn validate_request(
         return Err(BrowserDriverError::Unsupported);
     }
     let value = request.options.allowed_origins[0].as_str();
+    #[cfg(feature = "macos-browser-tls-development")]
+    if let Some(registry) = &installation.pki_registry {
+        registry
+            .enroll(request)?
+            .ok_or(BrowserDriverError::Denied)?;
+    }
+    if let Some(tls) = &installation.tls_config {
+        if request.options.allowed_origins[0] != tls.origin || installation.owned_process.is_none()
+        {
+            return Err(BrowserDriverError::Denied);
+        }
+        return super::validate_tls(tls);
+    }
     let Some(port) = value
         .strip_prefix("http://127.0.0.1:")
         .and_then(|value| value.parse::<u16>().ok())
@@ -121,24 +136,13 @@ fn validate_request(
 async fn start(
     resource: &Arc<Mutex<Resources>>,
     enrollment: &BrowserBridgeEnrollment,
+    startup: &Startup<'_>,
 ) -> Result<Arc<BrowserBridgeDriver>, BrowserDriverError> {
     let mut resource = resource.lock().await;
+    startup.check()?;
     resource.installation.revalidate()?;
+    startup.check()?;
     prepare_profile(&resource.installation.allocation)?;
-    let stdout_capture =
-        diagnostic_capture(&resource.installation.allocation, "native-stdout.log")?;
-    let stderr_capture =
-        diagnostic_capture(&resource.installation.allocation, "native-stderr.log")?;
-    resource.egress = Some(
-        BrowserEgressLease::start_at_port(
-            resource.request.session_id.clone(),
-            resource.request.options.allowed_origins.clone(),
-            resource.installation.egress,
-            resource.installation.proxy_port,
-        )
-        .await
-        .map_err(|_| BrowserDriverError::Unavailable)?,
-    );
     let profile = resource.installation.allocation.join("profile");
     let home = profile.join("home");
     let environment = [
@@ -152,84 +156,106 @@ async fn start(
         "MallocNanoZone=0".into(),
     ]
     .map(OsString::from);
-    let arguments = ["3", "4", "5", "6"].map(OsString::from);
-    resource.spawn_attempted = true;
-    let spawned = spawn_suspended_private_channels(
-        &resource.installation.executable,
-        &arguments,
-        &environment,
-    )
-    .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-    let child_pid = spawned.child.pid();
-    resource.child = Some(spawned.child);
-    let identity =
-        DarwinProcessIdentity::bind(child_pid).map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-    if identity.audit_session_id() != resource.installation.audit_session {
-        return Err(BrowserDriverError::Denied);
+    #[cfg(feature = "macos-browser-tls-development")]
+    let tls_ready = if resource.installation.tls_config.is_some() {
+        resource.tls = Some(super::tls::Owner::new(
+            &resource.installation,
+            &resource.request,
+        )?);
+        Some(
+            resource
+                .tls
+                .as_mut()
+                .ok_or(BrowserDriverError::OutcomeUnknown)?
+                .start(&environment, startup)
+                .await?,
+        )
+    } else {
+        None
+    };
+    if resource.installation.tls_config.is_none() {
+        startup.check()?;
+        resource.egress = Some(
+            BrowserEgressLease::start_at_port(
+                resource.request.session_id.clone(),
+                resource.request.options.allowed_origins.clone(),
+                resource.installation.egress,
+                resource.installation.proxy_port,
+            )
+            .await
+            .map_err(|_| BrowserDriverError::Unavailable)?,
+        );
     }
-    resource.peer = Some(
-        DarwinAuditPeer::enroll(&identity, resource.installation.front_cdhash)
-            .map_err(|_| BrowserDriverError::Denied)?,
-    );
-    resource
-        .child
-        .as_mut()
-        .ok_or(BrowserDriverError::OutcomeUnknown)?
-        .resume()
+    startup.check()?;
+    let streams = spawn(
+        &mut resource,
+        enrollment.instance_nonce,
+        &environment,
+        startup,
+    )?;
+    for (index, output) in streams.output.into_iter().enumerate() {
+        let name = match index {
+            0 => "native-stdout.log".into(),
+            1 => "native-stderr.log".into(),
+            _ => format!("native-output-{index}.log"),
+        };
+        let capture = diagnostic_capture(&resource.installation.allocation, &name)?;
+        resource.drains.push(tokio::task::spawn_blocking(move || {
+            drain_diagnostic(output, capture)
+        }));
+    }
+    for stream in [
+        &streams.bootstrap,
+        &streams.data,
+        &streams.control,
+        &streams.presentation,
+    ] {
+        stream
+            .set_nonblocking(true)
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+    }
+    let mut bootstrap = tokio::net::UnixStream::from_std(streams.bootstrap)
         .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-    let stdout = spawned.stdout;
-    let stderr = spawned.stderr;
-    spawned
-        .bootstrap
-        .set_nonblocking(true)
+    let data = tokio::net::UnixStream::from_std(streams.data)
         .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-    spawned
-        .data
-        .set_nonblocking(true)
+    let control = tokio::net::UnixStream::from_std(streams.control)
         .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-    spawned
-        .control
-        .set_nonblocking(true)
+    let presentation = tokio::net::UnixStream::from_std(streams.presentation)
         .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-    spawned
-        .presentation
-        .set_nonblocking(true)
-        .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-    let mut bootstrap = tokio::net::UnixStream::from_std(spawned.bootstrap)
-        .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-    let data = tokio::net::UnixStream::from_std(spawned.data)
-        .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-    let control = tokio::net::UnixStream::from_std(spawned.control)
-        .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-    let presentation = tokio::net::UnixStream::from_std(spawned.presentation)
-        .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-    resource.drains.push(tokio::task::spawn_blocking(move || {
-        drain_diagnostic(stdout, stdout_capture)
-    }));
-    resource.drains.push(tokio::task::spawn_blocking(move || {
-        drain_diagnostic(stderr, stderr_capture)
-    }));
     receipt_phase(&mut bootstrap, 1).await?;
-    let body_identity = DarwinProcessIdentity::bind(identity.pid())
-        .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-    resource.peer = Some(
-        DarwinAuditPeer::enroll(&body_identity, resource.installation.body_cdhash)
-            .map_err(|_| BrowserDriverError::Denied)?,
-    );
-    let egress = resource
-        .egress
-        .as_ref()
-        .ok_or(BrowserDriverError::OutcomeUnknown)?;
+    if let Some(identity) = streams.main_identity {
+        let body_identity = DarwinProcessIdentity::bind(identity.pid())
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        resource.peer = Some(
+            DarwinAuditPeer::enroll(&body_identity, resource.installation.body_cdhash)
+                .map_err(|_| BrowserDriverError::Denied)?,
+        );
+    }
+    let (port, password) = proxy(
+        &resource,
+        #[cfg(feature = "macos-browser-tls-development")]
+        tls_ready.as_ref(),
+    )?;
     let bootstrap_value = Bootstrap {
         enrollment,
         profile_path: &profile,
         proxy: Proxy {
             address: "127.0.0.1",
-            port: egress.address().port(),
+            port,
             username: "colossus",
-            password: egress.credential().expose(),
+            password,
         },
         pki: None,
+        broker_tls: {
+            #[cfg(feature = "macos-browser-tls-development")]
+            {
+                tls_ready.as_ref().map(|ready| &ready.pin)
+            }
+            #[cfg(not(feature = "macos-browser-tls-development"))]
+            {
+                None
+            }
+        },
         presentation: Presentation {
             human_input: resource.request.run_id.is_none(),
         },
@@ -242,11 +268,15 @@ async fn start(
     }
     let mut key = Zeroizing::new([0; 32]);
     getrandom::fill(key.as_mut()).map_err(|_| BrowserDriverError::Unavailable)?;
+    startup.check()?;
     tokio::time::timeout(Duration::from_secs(5), async {
+        startup.check_io()?;
         bootstrap.write_all(key.as_ref()).await?;
+        startup.check_io()?;
         bootstrap
             .write_all(&(bytes.len() as u32).to_be_bytes())
             .await?;
+        startup.check_io()?;
         bootstrap.write_all(&bytes).await?;
         bootstrap.shutdown().await
     })
@@ -294,6 +324,86 @@ async fn start(
     resource.bridge = Some(Arc::clone(&bridge));
     resource.presentation = Some((presenter, digest));
     Ok(bridge)
+}
+
+struct NativeStreams {
+    bootstrap: std::os::unix::net::UnixStream,
+    data: std::os::unix::net::UnixStream,
+    control: std::os::unix::net::UnixStream,
+    presentation: std::os::unix::net::UnixStream,
+    output: Vec<std::fs::File>,
+    main_identity: Option<DarwinProcessIdentity>,
+}
+
+fn spawn(
+    resource: &mut Resources,
+    nonce: [u8; 16],
+    environment: &[OsString],
+    startup: &Startup<'_>,
+) -> Result<NativeStreams, BrowserDriverError> {
+    startup.check()?;
+    if let Some(owned) = &resource.installation.owned_process {
+        let owner = owned.owner(
+            &resource.installation.executable,
+            resource.installation.front_cdhash,
+            nonce,
+            resource.installation.policy_sha256,
+            environment,
+        )?;
+        // Retain before start: failure at any native creation transition must
+        // leave the exact process obligations with the session resource.
+        resource.process_owner = Some(owner);
+        resource.spawn_attempted = true;
+        let channels = resource
+            .process_owner
+            .as_mut()
+            .ok_or(BrowserDriverError::OutcomeUnknown)?
+            .start_with_admission(|| startup.check_io())
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        return Ok(NativeStreams {
+            bootstrap: channels.bootstrap,
+            data: channels.data,
+            control: channels.control,
+            presentation: channels.presentation,
+            output: channels.output,
+            main_identity: None,
+        });
+    }
+    let arguments = ["3", "4", "5", "6"].map(OsString::from);
+    resource.spawn_attempted = true;
+    let spawned = spawn_suspended_private_channels(
+        &resource.installation.executable,
+        &arguments,
+        environment,
+    )
+    .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+    let pid = spawned.child.pid();
+    resource.child = Some(spawned.child);
+    let identity =
+        DarwinProcessIdentity::bind(pid).map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+    if identity.audit_session_id() != resource.installation.audit_session {
+        return Err(BrowserDriverError::Denied);
+    }
+    resource.peer = Some(
+        DarwinAuditPeer::enroll(&identity, resource.installation.front_cdhash)
+            .map_err(|_| BrowserDriverError::Denied)?,
+    );
+    startup.check()?;
+    resource
+        .child
+        .as_mut()
+        .ok_or(BrowserDriverError::OutcomeUnknown)?
+        .resume()
+        .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+    startup.check()?;
+    Ok(NativeStreams {
+        bootstrap: spawned.bootstrap,
+        data: spawned.data,
+        control: spawned.control,
+        presentation: spawned.presentation,
+        output: vec![spawned.stdout, spawned.stderr],
+        main_identity: Some(identity),
+    })
 }
 
 fn prepare_profile(allocation: &std::path::Path) -> Result<(), BrowserDriverError> {
@@ -394,7 +504,39 @@ struct Bootstrap<'a> {
     profile_path: &'a std::path::Path,
     proxy: Proxy<'a>,
     pki: Option<()>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    broker_tls: Option<&'a BrokerTls>,
     presentation: Presentation,
+}
+
+#[derive(Serialize)]
+pub(super) struct BrokerTls {
+    pub origin: colossus_contracts::BrowserOrigin,
+    pub leaf_der: Vec<u8>,
+    pub leaf_sha256: [u8; 32],
+    pub lifetime_ms: u32,
+}
+
+#[cfg(feature = "macos-browser-tls-development")]
+fn proxy<'a>(
+    resource: &'a Resources,
+    tls: Option<&'a super::tls::HostBootstrap>,
+) -> Result<(u16, &'a str), BrowserDriverError> {
+    if let Some(tls) = tls {
+        return Ok((tls.port, tls.credential.as_str()));
+    }
+    http_proxy(resource)
+}
+#[cfg(not(feature = "macos-browser-tls-development"))]
+fn proxy(resource: &Resources) -> Result<(u16, &str), BrowserDriverError> {
+    http_proxy(resource)
+}
+fn http_proxy(resource: &Resources) -> Result<(u16, &str), BrowserDriverError> {
+    let egress = resource
+        .egress
+        .as_ref()
+        .ok_or(BrowserDriverError::OutcomeUnknown)?;
+    Ok((egress.address().port(), egress.credential().expose()))
 }
 #[derive(Serialize)]
 struct Proxy<'a> {

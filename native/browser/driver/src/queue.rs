@@ -153,6 +153,7 @@ impl BrowserDriver for Driver {
         command: BrowserDriverCommand,
         control: &BrowserDriverControl,
     ) -> Result<BrowserObservation, BrowserDriverError> {
+        let action = command.action.kind();
         if control.is_cancelled() || self.cancelled.load(Ordering::Acquire) {
             return Err(BrowserDriverError::Cancelled);
         }
@@ -161,9 +162,16 @@ impl BrowserDriver for Driver {
             .send(Data::Execute(command, control.clone(), sender))
             .await
             .map_err(|_| BrowserDriverError::Unavailable)?;
-        receiver
+        let result = receiver
             .await
-            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)
+            .and_then(|value| value);
+        crate::execution_diagnostic::trace(
+            crate::execution_diagnostic::Stage::Queue,
+            action,
+            &result,
+        );
+        result
     }
     async fn capture(
         &self,

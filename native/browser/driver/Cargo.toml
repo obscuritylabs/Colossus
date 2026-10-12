@@ -14,6 +14,7 @@ crate-type = ["cdylib"]
 native-custody-test = []
 macos-owned-profile-development = []
 macos-synthetic-profile-diagnostic = []
+macos-owned-process-development = []
 
 [workspace]
 resolver = "3"
@@ -47,3 +48,7 @@ unsafe_op_in_unsafe_fn = "deny"
 [lints.clippy]
 all = { level = "deny", priority = -1 }
 undocumented_unsafe_blocks = "deny"
+
+# The native frame producer uses the same fully authenticated Debug wire as Core.
+[profile.dev.package.sha2]
+opt-level = 3

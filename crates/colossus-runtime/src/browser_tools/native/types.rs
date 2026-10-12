@@ -198,6 +198,37 @@ impl RuntimeNativeBrowserSession {
             .clone()
             .ok_or(RuntimeNativeBrowserError::Stale)
     }
+    /// Redeem the exact private native lease acknowledged during Core handoff.
+    ///
+    /// Native relay composition may bind its outer frame codec once without
+    /// sending the same Configure to Chromium again. No wire request supplies
+    /// a lease or acknowledgement. Wrong plans preserve the pending receipt;
+    /// success consumes it and later repeats cannot reset a codec.
+    pub fn take_handoff_presentation_lease(
+        &self,
+        config: &Configure,
+    ) -> Result<Option<Lease>, RuntimeNativeBrowserError> {
+        config.validate()?;
+        let mut state = self
+            .entry
+            .view
+            .lock()
+            .map_err(|_| RuntimeNativeBrowserError::OutcomeUnknown)?;
+        if state.closed
+            || state.retired
+            || state.configure.as_ref() != Some(config)
+            || state.agent_generation != Some(config.control_generation)
+        {
+            return Err(RuntimeNativeBrowserError::Stale);
+        }
+        let Some((expected, lease)) = &state.handoff_relay_lease else {
+            return Ok(None);
+        };
+        if expected != config || state.lease != Some(*lease) || !config.accepts(*lease) {
+            return Err(RuntimeNativeBrowserError::Stale);
+        }
+        Ok(state.handoff_relay_lease.take().map(|(_, lease)| lease))
+    }
     /// Register only an actual authenticated Configure acknowledgement from this client.
     /// Worker composition calls this after its native relay receives Configured.
     pub fn confirm_presentation_lease(
@@ -212,6 +243,10 @@ impl RuntimeNativeBrowserSession {
             .view
             .lock()
             .map_err(|_| RuntimeNativeBrowserError::OutcomeUnknown)?;
+        let retarget = state
+            .retarget_lease
+            .as_ref()
+            .is_some_and(|(prior, target)| state.lease == Some(*prior) && target == &config.target);
         if state.closed
             || state.fenced && state.agent_generation.is_none()
             || config.session != self.session_id
@@ -219,9 +254,9 @@ impl RuntimeNativeBrowserSession {
             || config.control_generation != state.agent_generation.unwrap_or(0)
             || state.lease.is_some_and(|old| {
                 config.viewport_generation <= old.viewport_generation
-                    || lease.tab != old.tab
+                    || lease.tab != old.tab && !retarget
                     || lease.session_generation != old.session_generation
-                    || lease.document_generation < old.document_generation
+                    || lease.document_generation < old.document_generation && !retarget
             })
         {
             return Err(RuntimeNativeBrowserError::Stale);
@@ -237,6 +272,9 @@ impl RuntimeNativeBrowserSession {
         }
         state.configure = Some(config.clone());
         state.lease = Some(lease);
+        state.leased_target = Some(config.target.clone());
+        state.retarget_lease = None;
+        state.handoff_relay_lease = None;
         Ok(())
     }
 
@@ -255,9 +293,7 @@ impl RuntimeNativeBrowserSession {
             .map_err(|_| RuntimeNativeBrowserError::OutcomeUnknown)?;
         let original = request.as_ref().ok_or(RuntimeNativeBrowserError::Stale)?;
         let url = BrowserUrl::parse(&page.url).map_err(|_| RuntimeNativeBrowserError::Stale)?;
-        if !original.options.allowed_origins.contains(&url.origin())
-            || page.target.tab_id != original.tab_id
-        {
+        if !original.options.allowed_origins.contains(&url.origin()) {
             return Err(RuntimeNativeBrowserError::Stale);
         }
         let mut state = self
@@ -269,6 +305,22 @@ impl RuntimeNativeBrowserSession {
             || state.fenced && state.agent_generation.is_none()
             || state.lease != Some(prior)
         {
+            return Err(RuntimeNativeBrowserError::Stale);
+        }
+        if let Some(expected) = &state.agent_target {
+            if expected != &page.target {
+                return Err(RuntimeNativeBrowserError::Stale);
+            }
+            if state
+                .leased_target
+                .as_ref()
+                .is_some_and(|old| old.tab_id != page.target.tab_id)
+            {
+                state.retarget_lease = Some((prior, page.target.clone()));
+            } else {
+                state.retarget_lease = None;
+            }
+        } else if page.target.tab_id != original.tab_id || state.agent_generation.is_some() {
             return Err(RuntimeNativeBrowserError::Stale);
         }
         state
@@ -354,6 +406,10 @@ pub(in crate::browser_tools) struct Entry {
 pub(in crate::browser_tools) struct View {
     pub(in crate::browser_tools) configure: Option<Configure>,
     pub(in crate::browser_tools) lease: Option<Lease>,
+    pub(in crate::browser_tools) handoff_relay_lease: Option<(Configure, Lease)>,
+    pub(in crate::browser_tools) leased_target: Option<BrowserTarget>,
+    pub(in crate::browser_tools) agent_target: Option<BrowserTarget>,
+    pub(in crate::browser_tools) retarget_lease: Option<(Lease, BrowserTarget)>,
     pub(in crate::browser_tools) client: Option<PresentationClient>,
     pub(in crate::browser_tools) digest: Option<[u8; 32]>,
     pub(in crate::browser_tools) fenced: bool,

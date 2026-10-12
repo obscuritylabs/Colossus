@@ -8,7 +8,7 @@ type: concept
 # ADR 0008: Owned Chromium browser
 
 - Status: shared control and native Desktop composition implemented; functional and release gaps remain
-- Date: 2026-10-10
+- Date: 2026-10-11
 - Related decision: [Desktop browser boundary](0003-desktop-browser-boundary.md)
 
 ## Context
@@ -186,17 +186,67 @@ accept persistent profiles, certificate custody, complete helper cleanup or
 parent-crash recovery. Managed Core-to-Desktop foreground acceptance remains
 separate. Reproduce the fixture with the [native component instructions](https://github.com/obscuritylabs/Colossus/blob/main/native/browser/README.md#run-the-debug-core-mac-http-diagnostic).
 
+The managed Desktop diagnostic has also submitted actual authenticated human
+page pixels to its native NSView at 2× Retina scale, hidden and cleared the view
+for an overlay, restored it, transferred the page to an authenticated Core run,
+and observed Core snapshots, a click, navigation and published PNG metadata.
+The connected HTTP diagnostic passed recovery of a fresh native frame after
+screenshot capture, a bounded visible-page interval, viewer detachment, Core run
+completion, browser close and verified sidecar shutdown. CEF acknowledged closing
+and the direct host exited zero. OS window inspection captured the green
+agent-controlled page during a complete passing 40-second visual run, and a
+separate capture showed the human fixture. These results retain the temporary HTTP diagnostic scope;
+they do not establish whole-helper cleanup, native keyboard/IME acceptance, HTTPS
+custody or signed installed automation.
+
+The full pinned CEF build now passes the private-export and completed native-image
+checks. Actual owned Core HTTPS launches reach `CefInitialize`, but page opening
+still fails: Apple's framework URL uses the `/tmp` alias, and the delegated
+launcher rejects CEF's unreviewed descriptor/process-requirement combinations.
+The private diagnostic retains those failures and the known-roster cleanup facts;
+it does not report a real-helper or page-rendering pass. A separate Desktop run
+confirmed that the repaired bounded input queue survives native typing bursts,
+but Unicode and Mac shortcut acceptance still failed. Neither result enables
+production automation.
+
+The Mac development process owner now composes independent creator and keeper
+processes with signed fixed front/body images. Five actual signed, sandboxed
+fronts passed the pre-body custody diagnostic: main, renderer, GPU, network and
+utility roles denied the tested custody file operations, extension issuance and
+use, and SecurityServer/securityd/trustd routes before loading any body. Each
+front exited zero and was reaped by its actual parent. This standalone diagnostic
+loads no CEF or Keychain. The signed no-CEF supervisor fixture also passed
+cancellation, Core-channel EOF, abrupt Core exit without destructors, and abrupt
+Core exit with lost diagnostic readers. The creator reaped Main and four fixed
+helpers; an independent observer confirmed creator and keeper exit after Core
+crashed. This accepts the tested known roster, not the unresolved creator
+spawn-to-enrollment crash window or a complete Chromium process domain.
+
+The independent signed TLS broker passed four native cases: authenticated HTTPS
+and graceful direct-child shutdown, owner EOF, rejection of the wrong signed
+parent, and observed broker exit after an admitted parent crash. The live HTTPS
+cases verified the normal certificate chain and hostname, exact downstream leaf
+pin and upstream request without proxy credentials. Both listeners and a held
+partial socket closed. These results cover the broker's tested process and
+sockets. A separate signed native custody fixture subsequently passed
+server-observed mTLS with its reviewed client identity, normal TLS validation,
+tracked socket drainage, durable exact-generation Keychain removal and a
+nonforced zero-exit reap. Default and search-list metadata remained unchanged.
+That fixture loads no CEF; Core certificate enrollment, Core/CEF HTTPS composition
+and custody crash recovery remain unaccepted. Reproduction and evidence scope are documented in the
+[TLS broker instructions](https://github.com/obscuritylabs/Colossus/blob/main/native/browser/tls-broker/README.md#signed-two-process-acceptance-fixture).
+
 ![Actual Core-controlled macOS Chromium fixture after its button click](../images/owned-chromium-core-macos.png)
 
 | Area | Implemented or demonstrated | Remaining requirement |
 | --- | --- | --- |
 | Shared authority and artifacts | Typed tools, one writer, stale-reference fencing, authenticated private channels, retained cleanup, screenshot/upload/download gateway release | Native action and cleanup acceptance must match the exact installed component and image |
 | macOS human preview | Native rendering, AppKit coexistence and preview lifecycle acceptance. Separate Debug host staging signs a fixed main entry and five paired helper entries; bounded native Seatbelt checks deny unselected loopback ports for the main/network helper and all tested helper traffic for renderer, proxy-resolver and print roles | Implement the independent separate-host process owner, complete request-origin enforcement and owned certificate custody, then accept Core/Desktop native composition; preview or policy-fixture success does not enable automation |
-| macOS Core diagnostic | Signed separate-host launch, authenticated page control, decoded screenshots, native Retina frames, viewer detachment and graceful direct-host exit passed for a temporary HTTP loopback fixture | Independent complete helper cleanup and parent-crash recovery, authenticated HTTPS origin/TLS broker, owned certificate custody, managed Desktop foreground/input and installed-package acceptance. Production discovery remains disabled |
+| macOS Core diagnostic | Signed separate-host launch, authenticated page control, decoded screenshots, native Retina frames, overlays, human-to-agent handoff, viewer detachment and verified Core/Desktop direct-host shutdown passed for a temporary HTTP loopback fixture | Independent complete helper cleanup and parent-crash recovery, authenticated HTTPS origin/TLS broker, owned certificate custody, native keyboard/IME and installed-package acceptance. Production discovery remains disabled |
 | Native Desktop attachment | Managed SDK/sidecar/worker admission, canonical conversation ownership, native human fence and atomic human-to-agent handoff, read-only native frames | Connected Windows/macOS OS acceptance; same-page agent-to-human takeover is absent. Terminal cancellation and run completion close the owned context; human access requires a fresh session |
 | Linux contained host | Networkless OCI supervisor, authenticated egress relay, exact process identity and cleanup ownership; actual Core open/snapshot, read-only frames/detach, profile restart/reset and per-request PKI fixtures with graceful physical cleanup | Broker/socket denial, crash/reaping and installed-package acceptance |
 | Windows contained host | AppContainer/Job/WFP supervisor, private I/O, pinned helper/client staging and native frame/input fixtures; source checks | Actual Windows SDK/OS execution, browser/network-service/helper denial, full-tree cleanup, native input and installed signing acceptance |
-| PKI | Native exact-origin reviewed identity selection; Linux owned NSS provisioning, server-observed TLS and actual Core per-request enrollment/consent/cleanup fixtures. A Mac Debug store-only fixture created and removed one isolated file Keychain and derived lock while ordinary profile use remained denied and default/search metadata stayed unchanged | Linux direct-key-denial and broker custody are unaccepted; macOS item-generation ownership, certificate import, broker key isolation and live TLS are unaccepted; Windows owned-store and broker acceptance remain incomplete. Existing OS-user stores are not isolated by a temporary browser profile |
+| PKI | Native exact-origin reviewed identity selection; Linux owned NSS provisioning and actual Core per-request fixtures. A signed Mac no-CEF fixture passed private Keychain import, server-observed native mTLS, socket drainage and durable exact-generation removal while default/search metadata stayed unchanged | Linux broker custody remains unaccepted. Mac Core enrollment, full-component key isolation and custody crash recovery require acceptance; Windows owned-store and broker acceptance remain incomplete. Existing OS-user stores are not isolated by a temporary browser profile |
 | Persistent profiles | Linux native store, exclusive lease, compatibility/dirty/reset behavior and independent tool filesystem denial; actual five-host cookie restart/reset/temporary-isolation proof | Encryption and disk quota, native management and Desktop controls. Production configuration remains disabled |
 | Human multi-origin login | Native human admission binds the initial URL's exact origin | Trusted review/admission of additional origins; cross-origin SSO redirects are currently denied in an owned human context |
 | Shipping package | Shared verifier, compiler-bound publisher seal and offline Linux package builder | Independently reviewed signed component/image receipts and accepted distribution. Headless and Embedded modes stay disabled until their own acceptance passes |

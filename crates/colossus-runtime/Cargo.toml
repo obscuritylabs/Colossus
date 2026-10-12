@@ -9,7 +9,7 @@ license.workspace = true
 [features]
 # Source-only macOS composition seam for the separate-host acceptance harness. This
 # feature does not participate in installed-package discovery or release builds.
-macos-browser-host-acceptance = []
+macos-browser-host-acceptance = ["colossus-sandbox/macos-browser-tls-development"]
 
 [dependencies]
 zeroize.workspace = true
@@ -70,6 +70,10 @@ uuid.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+ed25519-dalek.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+time.workspace = true
 image.workspace = true
 colossus-testkit.workspace = true
 opentelemetry.workspace = true
