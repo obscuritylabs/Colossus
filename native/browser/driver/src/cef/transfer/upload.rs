@@ -134,6 +134,17 @@ impl Host {
             .ok_or(BrowserDriverError::Unavailable)?
             .upload(&upload.bytes, &upload.descriptor.file_name)?;
         let path = staged.path().to_str().ok_or(BrowserDriverError::Denied)?;
+        // Chromium's DOM file selection uses ordinary Windows drive/UNC paths.
+        // Retained filesystem bindings keep their native verbatim paths; only
+        // the closed browser operation receives this equivalent spelling.
+        #[cfg(windows)]
+        let native_path = if let Some(path) = path.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{path}")
+        } else {
+            path.strip_prefix(r"\\?\").unwrap_or(path).to_owned()
+        };
+        #[cfg(windows)]
+        let path = native_path.as_str();
         self.file_input(&upload.owner, element, control)?;
         self.method(
             upload.owner.native,

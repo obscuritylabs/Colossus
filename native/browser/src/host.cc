@@ -72,6 +72,10 @@ void BootstrapDiagnostic(const char* stage, int32_t status, int32_t detail = 0) 
 #endif
 }
 }
+
+#if defined(OS_WIN)
+bool WindowsDiagnosticEnabled() { return windows_startup_diagnostic; }
+#endif
 colossus_cef_callbacks callbacks{};
 std::map<colossus_cef_tab, Tab> tabs;
 std::map<uint64_t, CefRefPtr<CefRequestContext>> contexts;

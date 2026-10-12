@@ -184,6 +184,8 @@ pub struct PresentationInput {
     pub text_units: usize,
 }
 unsafe extern "C" {
+    #[cfg(windows)]
+    pub fn colossus_cef_automation_activate(tab: u64, generation: u64, document: u64) -> i32;
     pub fn colossus_cef_presentation_document(tab: u64, generation: u64, document: *mut u64)
     -> i32;
     pub fn colossus_cef_presentation_configure(

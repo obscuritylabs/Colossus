@@ -6,6 +6,19 @@
 #[cfg(target_os = "linux")]
 pub mod files;
 pub mod manifest;
+#[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
+mod windows_development;
+#[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
+pub use windows_development::WindowsDevelopmentBrowserOwner;
+
+/// Compose the compiler-selected non-admin Windows development browser.
+/// This explicit Debug path never promotes ordinary publisher discovery.
+#[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
+pub async fn windows_development_from_compiler_selection(
+    selection: &'static [u8],
+) -> Result<Arc<WindowsDevelopmentBrowserOwner>, BrowserPackageError> {
+    windows_development::install(selection).await
+}
 
 use crate::RuntimeBrowserHost;
 use colossus_ports::BrowserDriverError;

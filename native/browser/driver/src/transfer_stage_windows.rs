@@ -33,6 +33,7 @@ impl Reservation {
 struct Directory {
     creation: PrivateDirectoryCreation,
     bound: Option<BoundPath>,
+    user_development: bool,
 }
 struct Slot {
     directory: Directory,
@@ -49,14 +50,23 @@ pub struct Stage {
 }
 
 impl Directory {
-    fn create(parent: &BoundPath, prefix: &str) -> Result<Self, BrowserDriverError> {
-        let creation =
-            PrivateDirectoryCreation::create_in_appcontainer_profile(parent, &random(prefix)?)
-                .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+    fn create(
+        parent: &BoundPath,
+        prefix: &str,
+        user_development: bool,
+    ) -> Result<Self, BrowserDriverError> {
+        let basename = random(prefix)?;
+        let creation = if user_development {
+            PrivateDirectoryCreation::create(&parent.canonical_path().join(basename))
+        } else {
+            PrivateDirectoryCreation::create_in_appcontainer_profile(parent, &basename)
+        }
+        .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
         // Preserve the allocation owner even when metadata binding fails.
         let mut directory = Self {
             creation,
             bound: None,
+            user_development,
         };
         directory.bound = Some(
             directory
@@ -79,6 +89,25 @@ impl Directory {
     fn path(&self) -> &Path {
         self.creation.path()
     }
+    fn open_file(&self, path: &Path) -> Result<BoundPath, BrowserDriverError> {
+        self.bound()?;
+        if path.parent() != Some(self.path()) {
+            return Err(BrowserDriverError::Denied);
+        }
+        let bound = if self.user_development {
+            let bound =
+                BoundPath::open_file(path).map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+            bound
+                .validate_private_owner_dacl()
+                .map_err(|_| BrowserDriverError::Denied)?;
+            bound
+        } else {
+            self.bound()?
+                .open_appcontainer_file_beneath(path)
+                .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+        };
+        Ok(bound)
+    }
     fn finish(&mut self) -> Result<(), BrowserDriverError> {
         self.bound = None;
         self.creation
@@ -91,8 +120,21 @@ impl Stage {
         profile
             .validate_private_appcontainer_dacl()
             .map_err(|_| BrowserDriverError::Denied)?;
+        Self::create_inner(profile, false)
+    }
+    #[cfg(debug_assertions)]
+    pub fn create_development(profile: &BoundPath) -> Result<Self, BrowserDriverError> {
+        profile
+            .validate_private_owner_dacl()
+            .map_err(|_| BrowserDriverError::Denied)?;
+        Self::create_inner(profile, true)
+    }
+    fn create_inner(
+        profile: &BoundPath,
+        user_development: bool,
+    ) -> Result<Self, BrowserDriverError> {
         Ok(Self {
-            directory: Directory::create(profile, "transfer-")?,
+            directory: Directory::create(profile, "transfer-", user_development)?,
             nonce: random("stage-")?,
             slots: Vec::new(),
             bytes: 0,
@@ -119,7 +161,11 @@ impl Stage {
         {
             return Err(BrowserDriverError::Denied);
         }
-        let directory = Directory::create(self.directory.bound()?, "upload-")?;
+        let directory = Directory::create(
+            self.directory.bound()?,
+            "upload-",
+            self.directory.user_development,
+        )?;
         self.slots.push(Slot {
             directory,
             name: name.to_owned(),
@@ -136,18 +182,10 @@ impl Stage {
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
             .open(&path)
             .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-        slot.held.push(
-            file.try_clone()
-                .map_err(|_| BrowserDriverError::OutcomeUnknown)?,
-        );
         file.write_all(bytes)
             .and_then(|()| file.sync_all())
             .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-        let bound = slot
-            .directory
-            .bound()?
-            .open_appcontainer_file_beneath(&path)
-            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        let bound = slot.directory.open_file(&path)?;
         if bound.identity()
             != colossus_windows_native::FileIdentity::of(&file)
                 .map_err(|_| BrowserDriverError::OutcomeUnknown)?
@@ -159,13 +197,49 @@ impl Stage {
         {
             return Err(BrowserDriverError::OutcomeUnknown);
         }
+        // Chromium opens uploads without sharing existing writers. Keeping a
+        // cloned write handle made Windows reject the real network-service read.
+        // Close the writer, then retain only read handles that deny new writers.
+        drop(file);
+        let mut frozen = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&path)
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        if colossus_windows_native::FileIdentity::of(&frozen)
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+            != bound.identity()
+        {
+            return Err(BrowserDriverError::OutcomeUnknown);
+        }
+        let mut observed = Zeroizing::new(Vec::with_capacity(bytes.len()));
+        std::io::Read::by_ref(&mut frozen)
+            .take(MAX_BYTES as u64 + 1)
+            .read_to_end(&mut observed)
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        if observed.as_slice() != bytes {
+            return Err(BrowserDriverError::OutcomeUnknown);
+        }
+        slot.held.push(
+            frozen
+                .try_clone()
+                .map_err(|_| BrowserDriverError::OutcomeUnknown)?,
+        );
         slot.files.push(bound);
         self.bytes += bytes.len();
-        Ok(OwnedFile { path, _file: file })
+        Ok(OwnedFile {
+            path,
+            _file: frozen,
+        })
     }
     pub fn reserve_download(&mut self) -> Result<Reservation, BrowserDriverError> {
         self.capacity(0)?;
-        let directory = Directory::create(self.directory.bound()?, "download-")?;
+        let directory = Directory::create(
+            self.directory.bound()?,
+            "download-",
+            self.directory.user_development,
+        )?;
         let path = directory.path().join("download");
         let index = self.slots.len();
         self.slots.push(Slot {
@@ -205,11 +279,7 @@ impl Stage {
         if !slot.pending || reservation.path != slot.directory.path().join("download") {
             return Err(BrowserDriverError::Denied);
         }
-        let bound = slot
-            .directory
-            .bound()?
-            .open_appcontainer_file_beneath(&reservation.path)
-            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        let bound = slot.directory.open_file(&reservation.path)?;
         // A retained no-write-sharing reader freezes bytes after CEF's actual
         // completion; the separate binding proves exact package ACL/identity.
         let mut file = OpenOptions::new()
@@ -277,13 +347,16 @@ impl Stage {
                 {
                     return Err(BrowserDriverError::OutcomeUnknown);
                 }
-                let file = slot
-                    .directory
-                    .bound()?
-                    .open_appcontainer_file_beneath(&row.path())
-                    .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-                file.remove_appcontainer_file()
-                    .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+                let file = slot.directory.open_file(&row.path())?;
+                if slot.directory.user_development {
+                    file.revalidate()
+                        .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+                    std::fs::remove_file(file.canonical_path())
+                        .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+                } else {
+                    file.remove_appcontainer_file()
+                        .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+                }
             }
             slot.files.clear();
             slot.directory.finish()?;

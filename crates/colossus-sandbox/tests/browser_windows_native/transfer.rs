@@ -91,6 +91,21 @@ pub async fn check(
         .await
         .expect("native package may create and freeze the upload file");
     target.document_id = observed.tab.document_id;
+    for index in 300..=325 {
+        let observed = super::exercise::snapshot(driver, opened, target, control, index).await;
+        target.document_id = observed.tab.document_id;
+        let visible = observed.snapshot.as_ref().and_then(|snapshot| {
+            snapshot.nodes.iter().find(|node| {
+                node.name.starts_with("Owned file read ")
+                    || node.name.starts_with("Owned file failed ")
+            })
+        });
+        if let Some(node) = visible {
+            eprintln!("native Windows uploaded file self-read {}", node.name);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
     let submit = element(driver, opened, target, control, 102, "Submit owned upload").await;
     let submitted = driver
         .execute(
@@ -105,6 +120,17 @@ pub async fn check(
         .await
         .expect("ordinary form submits the staged native file");
     target.document_id = submitted.tab.document_id;
+    // A navigation initiated by a real multipart submission is still pending
+    // when input dispatch acknowledges. Wait for the server's byte receipt
+    // before observing the settled form, without replaying the mutation.
+    let delivered = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while uploaded.load(Ordering::SeqCst) == 0 {
+        assert!(
+            tokio::time::Instant::now() < delivered,
+            "actual multipart upload byte receipt missing"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
     for index in 104..=128 {
         let observed = super::exercise::snapshot(driver, opened, target, control, index).await;
         target.document_id = observed.tab.document_id;
@@ -118,9 +144,21 @@ pub async fn check(
         {
             break;
         }
+        if index == 128 {
+            for state in ["waiting", "submitting", "rejected", "failed"] {
+                let visible = observed.snapshot.as_ref().is_some_and(|snapshot| {
+                    snapshot
+                        .nodes
+                        .iter()
+                        .any(|node| node.name.contains(&format!("Owned upload {state}")))
+                });
+                eprintln!("native Windows upload page state={state} visible={visible}");
+            }
+        }
         assert!(
             index < 128,
-            "HTTP must receive the exact actual uploaded file bytes"
+            "HTTP must receive the exact actual uploaded file bytes; accepted_requests={}",
+            uploaded.load(Ordering::SeqCst)
         );
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }

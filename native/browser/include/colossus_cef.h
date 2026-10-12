@@ -180,6 +180,9 @@ int32_t colossus_cef_acceptance_activate(colossus_cef_tab tab, uint64_t generati
 /* Test-only native application close request with a live guest. */
 int32_t colossus_cef_acceptance_terminate(colossus_cef_tab tab, uint64_t generation);
 #ifdef _WIN32
+/* Private agent-only activation of the exact offscreen document. */
+int32_t colossus_cef_automation_activate(colossus_cef_tab tab, uint64_t generation,
+                                        uint64_t document);
 /* Fixed OS mouse/keyboard fixture input; no caller-selected bytes or coordinates. */
 int32_t colossus_cef_acceptance_input(colossus_cef_tab tab, uint64_t generation);
 #endif

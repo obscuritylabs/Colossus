@@ -1,5 +1,7 @@
 //! Optional publisher seal for the managed worker's own adjacent browser payload.
 use std::{env, error::Error, fs, io::Read as _, path::Path};
+#[path = "build/windows_browser_development.rs"]
+mod windows_browser_development;
 
 #[allow(dead_code)]
 #[path = "../colossus-runtime/src/browser_package/manifest.rs"]
@@ -32,6 +34,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         bytes,
     )?;
     seal_mac_diagnostic()?;
+    windows_browser_development::embed()?;
     Ok(())
 }
 

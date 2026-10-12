@@ -49,6 +49,17 @@ impl Host {
         self.transfer.stage = None;
         Ok(())
     }
+    #[cfg(all(windows, debug_assertions))]
+    pub fn configure_development_transfers(
+        &mut self,
+        profile: &colossus_windows_native::BoundPath,
+    ) -> Result<(), BrowserDriverError> {
+        if self.transfer.stage.is_some() || self.session.is_some() {
+            return Err(BrowserDriverError::Denied);
+        }
+        self.transfer.stage = Some(crate::transfer_stage::Stage::create_development(profile)?);
+        Ok(())
+    }
     fn transfer_owner(
         &mut self,
         command: BrowserDriverCommand,

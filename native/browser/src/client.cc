@@ -12,6 +12,7 @@
 #include "include/cef_task.h"
 #include <vector>
 #include <limits>
+#include <cstdio>
 #if defined(COLOSSUS_CEF_TEST_CUSTODY)
 #include "custody_linux.h"
 #endif
@@ -67,9 +68,13 @@ class ContextBoundary final : public CefRequestContextHandler,
     CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefRequest>, bool, bool,
     const CefString&, bool&) override { return this; }
   ReturnValue OnBeforeResourceLoad(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>,
-    CefRefPtr<CefRequest>, CefRefPtr<CefCallback>) override {
+    CefRefPtr<CefRequest> request, CefRefPtr<CefCallback>) override {
     // Requests lacking the tab-owned client (e.g. detached service/shared
     // workers) have no exact tab policy here. Deny until context egress is proved.
+#if defined(OS_WIN)
+    if (WindowsDiagnosticEnabled() && request->GetMethod() == "POST")
+      std::fprintf(stderr, "native cef resource rejection category=context_without_tab\n");
+#endif
     return RV_CANCEL;
   }
  private:
@@ -104,6 +109,12 @@ class Client final : public CefClient, public CefLifeSpanHandler,
   void OnBeforeContextMenu(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>,
     CefRefPtr<CefContextMenuParams>, CefRefPtr<CefMenuModel> model) override { model->Clear(); }
   bool OnSetFocus(CefRefPtr<CefBrowser>, FocusSource source) override {
+#if defined(OS_WIN)
+    const auto automation = tabs.find(tab_);
+    if (headless && source != FOCUS_SOURCE_NAVIGATION && automation != tabs.end() &&
+        automation->second.generation == generation_ && automation->second.automation_focus)
+      return false;
+#endif
     if (headless) return !PresentationFocused(tab_, generation_);
     const auto it = tabs.find(tab_);
     return source == FOCUS_SOURCE_NAVIGATION || it == tabs.end() || !it->second.visible;
@@ -224,6 +235,15 @@ class Client final : public CefClient, public CefLifeSpanHandler,
     if (Allow(tab_, generation_, request->GetURL(), false)) return RV_CONTINUE;
     Emit(tab_, generation_, COLOSSUS_CEF_BLOCKED); return RV_CANCEL;
   }
+#if defined(OS_WIN)
+  void OnResourceLoadComplete(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>,
+      CefRefPtr<CefRequest> request, CefRefPtr<CefResponse> response,
+      URLRequestStatus status, int64_t) override {
+    if (WindowsDiagnosticEnabled() && request->GetMethod() == "POST" && status != UR_SUCCESS)
+      std::fprintf(stderr, "native cef upload failure status=%d error=%d\n",
+                   static_cast<int>(status), response ? static_cast<int>(response->GetError()) : 0);
+  }
+#endif
   void OnResourceRedirect(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>,
     CefRefPtr<CefRequest>, CefRefPtr<CefResponse>, CefString& new_url) override {
     // This callback runs on IO and cannot cancel synchronously. A fixed local

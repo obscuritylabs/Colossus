@@ -4,9 +4,11 @@ use std::{fmt, sync::Arc};
 
 /// Native-composition browser driver binding. It carries no model-facing authority.
 ///
-/// Construct this only after verifying the component, private transport, engine
-/// sandbox, and egress containment. Drivers remain unavailable unless they report
-/// those capabilities. No executable path or certificate material enters runtime YAML.
+/// Construct this only after verifying the component, private transport and engine
+/// sandbox. A trusted source-development host may explicitly report no OS egress
+/// containment; availability does not promote that separate capability. Ordinary
+/// package discovery still requires accepted containment. No executable path or
+/// certificate material enters runtime YAML.
 #[derive(Clone)]
 pub struct RuntimeBrowserHost {
     pub(super) driver: Arc<dyn BrowserDriver>,

@@ -1,4 +1,7 @@
 #include "host_internal.h"
+#if defined(OS_WIN)
+#include "colossus_cef_presentation.h"
+#endif
 #include "include/wrapper/cef_helpers.h"
 #include <cstring>
 #include <limits>
@@ -112,6 +115,25 @@ extern "C" int32_t colossus_cef_focus(colossus_cef_tab tab, uint64_t generation)
   if (!status) t->browser->GetHost()->SetFocus(true);
   return status;
 }
+#if defined(OS_WIN)
+// Internal agent input remains usable after the human viewer has been fenced
+// or detached. This activates only an offscreen CEF widget; it does not renew
+// a presentation lease, expose a window, or admit any human input message.
+extern "C" int32_t colossus_cef_automation_activate(colossus_cef_tab tab,
+    uint64_t generation, uint64_t document) {
+  colossus::Tab* t;
+  auto status = colossus::Resolve(tab, generation, &t);
+  if (status) return status;
+  if (!colossus::headless) return COLOSSUS_CEF_DENIED;
+  uint64_t actual = 0;
+  status = colossus_cef_presentation_document(tab, generation, &actual);
+  if (status || actual != document) return status ? status : COLOSSUS_CEF_DENIED;
+  t->automation_focus = true;
+  t->browser->GetHost()->WasHidden(false);
+  t->browser->GetHost()->SetFocus(true);
+  return COLOSSUS_CEF_OK;
+}
+#endif
 extern "C" int32_t colossus_cef_close(colossus_cef_tab tab, uint64_t generation) {
   using namespace colossus;
   if (!initialized) return COLOSSUS_CEF_UNAVAILABLE;

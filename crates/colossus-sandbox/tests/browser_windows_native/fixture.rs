@@ -31,17 +31,21 @@ impl Fixture {
 <body style="background:#c8e6ee"><h1>Owned Windows fixture</h1>
 <input aria-label="Ordinary native input" style="position:absolute;left:40px;top:80px;width:300px;height:40px" autocomplete="off">
 <input aria-label="Private test field" type="password" value="synthetic-protected-value">
+<select aria-label="Native Windows choice" onchange="document.title='Owned Windows selection '+this.value"><option value="one">First choice</option><option value="two">Second choice</option></select>
 <img src="{denied_url}/blocked"><img src="http://unreviewed-dns.invalid/blocked">
-<form id="owned-upload" method="post" action="/upload" enctype="multipart/form-data">
+<div style="position:absolute;left:40px;top:170px">
+<form id="owned-upload" method="post" action="/upload" target="owned-upload-target" enctype="multipart/form-data">
 <input type="file" name="owned_file" aria-label="Owned native file input">
 <button type="submit">Submit owned upload</button></form>
-<a href="/download-redirect">Owned binary download</a>
-<a href="/download-empty">Owned empty download</a>
-<a href="{denied_url}/download">Forbidden binary download</a>
-<output id="uploaded">Owned upload waiting</output>
-<script>document.querySelector('#owned-upload').addEventListener('submit', async event => {{
-event.preventDefault(); const response = await fetch('/upload', {{method:'POST', body:new FormData(event.target)}});
-document.querySelector('#uploaded').textContent = response.ok ? 'Owned upload received' : 'Owned upload rejected';
+<a style="display:block" href="/download-redirect">Owned binary download</a>
+<a style="display:block" href="/download-empty">Owned empty download</a>
+<a style="display:block" href="{denied_url}/download">Forbidden binary download</a>
+<output id="uploaded">Owned upload waiting</output></div>
+<output id="file-read">Owned file waiting</output>
+<iframe name="owned-upload-target" style="display:none" onload="const result=this.contentDocument.querySelector('#uploaded');if(result)document.querySelector('#uploaded').textContent=result.textContent"></iframe>
+<script>document.querySelector('input[type=file]').addEventListener('change', async event => {{
+try {{ const file = event.target.files[0]; const bytes = await file.arrayBuffer(); document.querySelector('#file-read').textContent = 'Owned file read ' + bytes.byteLength; }}
+catch(error) {{ document.querySelector('#file-read').textContent = 'Owned file failed ' + error.name; }}
 }});</script>
 </body></html>"#
         );
@@ -156,6 +160,7 @@ fn serve(
                 continue;
             }
             if method == "POST" && path == "/upload" {
+                eprintln!("native Windows upload fixture post_received=true");
                 let content_length = text.lines().find_map(|line| {
                     let (name, value) = line.split_once(':')?;
                     name.eq_ignore_ascii_case("Content-Length")
@@ -197,16 +202,34 @@ fn serve(
                         .as_deref()
                         .is_some_and(|boundary| multipart(&header[header_end..], boundary))
                     && transfers.is_some();
+                eprintln!(
+                    "native Windows upload fixture body_complete={} multipart_accepted={} received_bytes={} expected_body_bytes={length}",
+                    header.len() == header_end + length,
+                    accepted,
+                    header.len().saturating_sub(header_end)
+                );
                 if accepted {
                     transfers.as_ref().unwrap().1.fetch_add(1, Ordering::SeqCst);
                 }
-                let response = if accepted {
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".as_slice()
-                } else {
-                    b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                        .as_slice()
-                };
-                let _ = connection.write_all(response).await;
+                let body = page.replace(
+                    "Owned upload waiting",
+                    if accepted {
+                        "Owned upload received"
+                    } else {
+                        "Owned upload rejected"
+                    },
+                );
+                let response = format!(
+                    "HTTP/1.1 {}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    if accepted {
+                        "200 OK"
+                    } else {
+                        "400 Bad Request"
+                    },
+                    body.len()
+                );
+                let _ = connection.write_all(response.as_bytes()).await;
+                let _ = connection.write_all(body.as_bytes()).await;
                 let _ = connection.shutdown().await;
                 continue;
             }

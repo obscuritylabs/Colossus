@@ -213,6 +213,8 @@ fn managed_session_is_established() -> bool {
 
 async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<(), FailureCode> {
     let mut browser = None;
+    #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
+    let mut windows_browser = None;
     #[cfg(all(
         target_os = "macos",
         debug_assertions,
@@ -223,6 +225,8 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         request,
         input,
         &mut browser,
+        #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
+        &mut windows_browser,
         #[cfg(all(
             target_os = "macos",
             debug_assertions,
@@ -232,6 +236,13 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     )
     .await;
     if let Some(owner) = browser {
+        owner
+            .shutdown()
+            .await
+            .map_err(|_| FailureCode::RuntimeFailed)?;
+    }
+    #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
+    if let Some(owner) = windows_browser {
         owner
             .shutdown()
             .await
@@ -280,6 +291,8 @@ async fn run_with_browser_owner(
     request: BootstrapRequest,
     input: &mut std::io::Stdin,
     browser: &mut Option<Arc<colossus_runtime::browser_package::InstalledBrowserOwner>>,
+    #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
+    windows_browser: &mut Option<Arc<colossus_runtime::browser_package::WindowsDevelopmentBrowserOwner>>,
     #[cfg(all(
         target_os = "macos",
         debug_assertions,
@@ -310,6 +323,22 @@ async fn run_with_browser_owner(
     )
     .await
     .map_err(|_| FailureCode::InvalidConfiguration)?;
+    #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
+    {
+        if browser.is_some() {
+            return Err(FailureCode::InvalidConfiguration);
+        }
+        *windows_browser = Some(
+            colossus_runtime::browser_package::windows_development_from_compiler_selection(
+                include_bytes!(concat!(
+                    env!("OUT_DIR"),
+                    "/windows-browser-development.json"
+                )),
+            )
+            .await
+            .map_err(|_| FailureCode::InvalidConfiguration)?,
+        );
+    }
     #[cfg(all(
         target_os = "macos",
         debug_assertions,
@@ -371,6 +400,10 @@ async fn run_with_browser_owner(
         runtime_options,
         request.suppress_automatic_agent_instructions,
     );
+    #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
+    if let Some(owner) = windows_browser.as_ref() {
+        runtime_options = runtime_options.with_browser_host(owner.host());
+    }
     #[cfg(all(
         target_os = "macos",
         debug_assertions,

@@ -69,8 +69,13 @@ impl Resources {
             true
         };
         for drain in &mut self.drains {
-            drain.abort();
-            let _ = drain.await;
+            if tokio::time::timeout(Duration::from_secs(2), &mut *drain)
+                .await
+                .is_err()
+            {
+                drain.abort();
+                let _ = drain.await;
+            }
         }
         self.drains.clear();
         let leases = self.io.clone();

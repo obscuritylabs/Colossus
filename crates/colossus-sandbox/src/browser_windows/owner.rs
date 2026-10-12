@@ -32,14 +32,16 @@ struct Native {
     profile: Option<ExclusiveAppContainerProfile>,
     profile_directory: Option<std::fs::File>,
     forced: bool,
+    user_development: bool,
 }
 impl Native {
     fn attest_tree(&self) -> Result<u16, BrowserDriverError> {
         let child = self.child.as_ref().ok_or(BrowserDriverError::Stale)?;
-        let profile = self.profile.as_ref().ok_or(BrowserDriverError::Stale)?;
-        let processes = child
-            .observe_process_tree()
-            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        let processes = child.observe_process_tree().map_err(|error| {
+            #[cfg(debug_assertions)]
+            eprintln!("Windows browser Job observation rejected: {error}");
+            BrowserDriverError::OutcomeUnknown
+        })?;
         if processes.is_empty()
             || !processes
                 .iter()
@@ -47,10 +49,14 @@ impl Native {
         {
             return Err(BrowserDriverError::OutcomeUnknown);
         }
-        for process in &processes {
-            profile
-                .verify_process(process.process_handle())
-                .map_err(|_| BrowserDriverError::Denied)?;
+        if let Some(profile) = &self.profile {
+            for process in &processes {
+                profile
+                    .verify_process(process.process_handle())
+                    .map_err(|_| BrowserDriverError::Denied)?;
+            }
+        } else if !self.user_development {
+            return Err(BrowserDriverError::Denied);
         }
         u16::try_from(processes.len()).map_err(|_| BrowserDriverError::LimitExceeded)
     }
@@ -129,20 +135,10 @@ impl Owner {
                     profile: None,
                     profile_directory: None,
                     forced: false,
+                    user_development: request.installation.user_development,
                 };
                 let mut result = allocate(&request, &mut native).and_then(|channels| {
-                    native
-                        .profile
-                        .as_ref()
-                        .expect("retained package")
-                        .verify_process(
-                            native
-                                .child
-                                .as_ref()
-                                .expect("retained process")
-                                .process_handle(),
-                        )
-                        .and_then(|principal| principal.create_directory(&request.profile))
+                    prepare_profile(&request, &native)
                         .map_err(|_error| {
                             #[cfg(debug_assertions)]
                             {
@@ -171,10 +167,18 @@ impl Owner {
                             native.profile_directory = Some(directory);
                             let directory = native.profile_directory.as_ref().expect("retained allocation");
                             let identity = colossus_windows_native::FileIdentity::of(directory)
-                                .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-                            let profile_handle = native.child.as_ref().expect("retained child")
-                                .enroll_profile_directory(directory)
-                                .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+                                .map_err(|error| {
+                                    #[cfg(debug_assertions)]
+                                    eprintln!("Windows browser profile identity rejected: {error}");
+                                    BrowserDriverError::OutcomeUnknown
+                                })?;
+                            let profile_handle = if native.user_development { Ok(0) } else { native.child.as_ref().expect("retained child")
+                                .enroll_profile_directory(directory) }
+                                .map_err(|error| {
+                                    #[cfg(debug_assertions)]
+                                    eprintln!("Windows browser profile handle rejected: {error}");
+                                    BrowserDriverError::OutcomeUnknown
+                                })?;
                             Ok(SupervisedChildChannels {
                                 channels,
                                 profile_handle,
@@ -283,28 +287,47 @@ fn allocate(
     native: &mut Native,
 ) -> Result<Vec<PrivateProcessChannel>, BrowserDriverError> {
     request.installation.revalidate()?;
-    let profile = ExclusiveAppContainerProfile::create(&format!(
-        "colossus.browser.{}",
-        hex::encode(request.nonce)
-    ))
-    .map_err(|_| BrowserDriverError::Unavailable)?;
-    native.profile = Some(profile);
-    let profile = native.profile.as_mut().expect("retained package");
-    let package = profile
-        .sid_string()
+    let package = if request.installation.user_development {
+        String::new()
+    } else {
+        let profile = ExclusiveAppContainerProfile::create(&format!(
+            "colossus.browser.{}",
+            hex::encode(request.nonce)
+        ))
         .map_err(|_| BrowserDriverError::Unavailable)?;
-    profile
-        .enable_loopback()
-        .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        native.profile = Some(profile);
+        let profile = native.profile.as_mut().expect("retained package");
+        let package = profile
+            .sid_string()
+            .map_err(|_| BrowserDriverError::Unavailable)?;
+        profile
+            .enable_loopback()
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        package
+    };
     let system = system_windows_directory()
         .map_err(|_| BrowserDriverError::Unavailable)?
         .into_os_string()
         .into_string()
         .map_err(|_| BrowserDriverError::Unavailable)?;
-    let private_home = request.profile.to_string_lossy().into_owned();
+    // Shell/Chromium path services expect an ordinary absolute drive path in
+    // environment variables. The retained no-follow binding remains canonical.
+    let private_home = request.profile.to_string_lossy();
+    let private_home = private_home
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&private_home)
+        .to_owned();
+    let system_drive = PathBuf::from(&system)
+        .ancestors()
+        .last()
+        .ok_or(BrowserDriverError::Unavailable)?
+        .to_string_lossy()
+        .trim_end_matches('\\')
+        .to_owned();
     let environment = BTreeMap::from([
         ("SystemRoot".into(), system.clone()),
         ("windir".into(), system.clone()),
+        ("SystemDrive".into(), system_drive),
         (
             "PATH".into(),
             PathBuf::from(&system)
@@ -316,31 +339,42 @@ fn allocate(
         ("USERPROFILE".into(), private_home.clone()),
         ("APPDATA".into(), private_home.clone()),
         ("LOCALAPPDATA".into(), private_home.clone()),
+        ("ProgramData".into(), private_home.clone()),
         ("TEMP".into(), private_home.clone()),
         ("TMP".into(), private_home),
     ]);
+    let spawn_request = SpawnRequest {
+        executable: request
+            .installation
+            .component
+            .canonical_path()
+            .join("colossus-native-browser-host.exe"),
+        arguments: Vec::new(),
+        cwd: request.installation.component.canonical_path().to_owned(),
+        environment,
+        appcontainer_sid: package,
+        max_processes: request.installation.limits.max_processes,
+        max_memory_bytes: request.installation.limits.memory_bytes,
+        proxy_port: (!request.installation.user_development).then_some(request.proxy_port),
+        network_filter_id: (!request.installation.user_development)
+            .then_some(u128::from_be_bytes(request.nonce)),
+    };
+    let spawned = if request.installation.user_development {
+        #[cfg(debug_assertions)]
+        {
+            colossus_windows_process::spawn_user_browser_with_private_channels(&spawn_request, 4)
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            return Err(BrowserDriverError::Unsupported);
+        }
+    } else {
+        colossus_windows_process::spawn_with_private_channels(&spawn_request, 4)
+    };
     let SupervisedChild {
         mut child,
         channels,
-    } = colossus_windows_process::spawn_with_private_channels(
-        &SpawnRequest {
-            executable: request
-                .installation
-                .component
-                .canonical_path()
-                .join("colossus-native-browser-host.exe"),
-            arguments: Vec::new(),
-            cwd: request.installation.component.canonical_path().to_owned(),
-            environment,
-            appcontainer_sid: package,
-            max_processes: request.installation.limits.max_processes,
-            max_memory_bytes: request.installation.limits.memory_bytes,
-            proxy_port: Some(request.proxy_port),
-            network_filter_id: Some(u128::from_be_bytes(request.nonce)),
-        },
-        4,
-    )
-    .map_err(|_error| {
+    } = spawned.map_err(|_error| {
         #[cfg(debug_assertions)]
         if let colossus_windows_process::WindowsProcessError::Win32 { operation, source } = &_error
         {
@@ -354,4 +388,29 @@ fn allocate(
     child.stdin.take();
     native.child = Some(child);
     Ok(channels)
+}
+
+fn prepare_profile(
+    request: &Request,
+    native: &Native,
+) -> Result<std::fs::File, colossus_windows_native::WindowsNativeError> {
+    if let Some(profile) = &native.profile {
+        return profile
+            .verify_process(
+                native
+                    .child
+                    .as_ref()
+                    .expect("retained child")
+                    .process_handle(),
+            )?
+            .create_directory(&request.profile);
+    }
+    if !native.user_development {
+        return Err(colossus_windows_native::WindowsNativeError::InvalidInput);
+    }
+    colossus_windows_native::create_private_directory(&request.profile)?;
+    let bound = colossus_windows_native::BoundPath::open_directory(&request.profile)?;
+    bound.validate_private_owner_dacl()?;
+    bound.validate_ancestor_namespace_authority()?;
+    bound.try_clone_file()
 }

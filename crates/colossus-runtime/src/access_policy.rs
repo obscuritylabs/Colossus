@@ -149,11 +149,8 @@ pub(super) fn compose_access_policy(
         model_network_tools,
         agent_search_route: searches.resolve("agent").is_ok(),
         interactive,
-        browser_available: browser_capabilities.is_some_and(|capabilities| {
-            capabilities.available
-                && capabilities.restrictive_egress
-                && !capabilities.modes.is_empty()
-        }),
+        browser_available: browser_capabilities
+            .is_some_and(|capabilities| capabilities.available && !capabilities.modes.is_empty()),
         mcp_configured: !active_plugin_extensions.mcp.servers.is_empty()
             || config
                 .plugins

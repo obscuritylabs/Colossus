@@ -17,6 +17,7 @@ pub(super) struct Installation {
     pub digest: [u8; 32],
     pub capabilities: BrowserCapabilities,
     pub limits: WindowsBrowserConfig,
+    pub user_development: bool,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -53,9 +54,24 @@ pub(super) fn bind(
     config: WindowsBrowserConfig,
     diagnostic: bool,
 ) -> Result<Installation, BrowserDriverError> {
+    bind_inner(config, diagnostic, false)
+}
+
+#[cfg(debug_assertions)]
+pub(super) fn bind_development(
+    config: WindowsBrowserConfig,
+) -> Result<Installation, BrowserDriverError> {
+    bind_inner(config, true, true)
+}
+
+fn bind_inner(
+    config: WindowsBrowserConfig,
+    diagnostic: bool,
+    user_development: bool,
+) -> Result<Installation, BrowserDriverError> {
     if config.manifest_sha256 == [0; 32]
         || !config.capabilities.available
-        || !config.capabilities.restrictive_egress
+        || config.capabilities.restrictive_egress == user_development
         || config.capabilities.private_ca_trust
         || config.capabilities.client_identities
         || config.capabilities.modes != [BrowserMode::Embedded]
@@ -170,6 +186,7 @@ pub(super) fn bind(
         digest: digest.finalize().into(),
         capabilities: config.capabilities.clone(),
         limits: config,
+        user_development,
     })
 }
 impl Installation {

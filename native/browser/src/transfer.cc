@@ -141,6 +141,14 @@ void DownloadUpdated(colossus_cef_tab tab, uint64_t generation,
   }
   const bool accepted = state.started && Item(tab, state, item);
   if (!accepted) {
+#if defined(OS_WIN)
+    if (WindowsDiagnosticEnabled())
+      std::fprintf(stderr, "native Windows download phase=native-item accepted=0 bound=%d current=%d original_match=%d path_match=%d interrupted=%d reason=%d received=%lld total=%lld\n",
+          state.bound, Current(tab, state), item->GetOriginalUrl().ToString() == state.original_url,
+          item->GetFullPath().ToString() == state.path || item->GetFullPath().ToString() == state.path + ".crdownload",
+          item->IsInterrupted(), static_cast<int>(item->GetInterruptReason()),
+          static_cast<long long>(item->GetReceivedBytes()), static_cast<long long>(item->GetTotalBytes()));
+#endif
     if (callback) callback->Cancel();
     // A page-originated download with another original URL cannot consume or
     // overwrite the armed command's intent or quiescence state.
@@ -154,7 +162,12 @@ void DownloadUpdated(colossus_cef_tab tab, uint64_t generation,
     state.final_url = item->GetURL().ToString();
   }
   if (item->IsCanceled()) state.status = COLOSSUS_CEF_DOWNLOAD_CANCELLED;
-  else if (item->IsInterrupted()) state.status = COLOSSUS_CEF_DOWNLOAD_FAILED;
+  else if (item->IsInterrupted()) {
+#if defined(OS_WIN)
+    if (WindowsDiagnosticEnabled()) std::fprintf(stderr, "native Windows download phase=interrupted reason=%d\n", static_cast<int>(item->GetInterruptReason()));
+#endif
+    state.status = COLOSSUS_CEF_DOWNLOAD_FAILED;
+  }
   else if (item->IsComplete()) {
     state.status = accepted && state.continued && !state.cancel_requested
       ? COLOSSUS_CEF_DOWNLOAD_COMPLETE : COLOSSUS_CEF_DOWNLOAD_FAILED;

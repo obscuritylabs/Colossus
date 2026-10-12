@@ -19,6 +19,9 @@ use crate::{ffi, windows_io};
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Configuration {
+    #[cfg(debug_assertions)]
+    #[serde(default)]
+    user_development: bool,
     pub enrollment: BrowserBridgeEnrollment,
     pub profile_path: PathBuf,
     profile_handle: u64,
@@ -76,6 +79,17 @@ pub(super) async fn read(
 }
 
 impl Configuration {
+    pub(super) fn user_development(&self) -> bool {
+        #[cfg(debug_assertions)]
+        {
+            self.user_development
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            false
+        }
+    }
+
     pub(super) fn validate(&self, presentation: bool) -> Result<(), BrowserDriverError> {
         self.enrollment.validate()?;
         // These OSR hosts require a Windows desktop and an independently admitted
@@ -88,6 +102,7 @@ impl Configuration {
             || self.enrollment.capabilities.private_ca_trust
             || self.enrollment.capabilities.client_identities
             || self.pki.is_some()
+            || self.enrollment.capabilities.restrictive_egress == self.user_development()
         {
             return Err(BrowserDriverError::Unsupported);
         }
@@ -106,6 +121,30 @@ impl Configuration {
     }
 
     pub(super) fn profile(&mut self) -> Result<(BoundPath, CString), BrowserDriverError> {
+        if self.user_development() {
+            if self.profile_handle != 0 {
+                return Err(BrowserDriverError::Denied);
+            }
+            let bound = BoundPath::open_directory(&self.profile_path)
+                .map_err(|error| profile_error("development-open", error))?;
+            if bound.identity()
+                != (FileIdentity {
+                    volume_serial_number: self.profile_volume,
+                    file_id: self.profile_file_id,
+                })
+            {
+                return Err(profile_error(
+                    "development-identity",
+                    WindowsNativeError::IdentityChanged,
+                ));
+            }
+            bound
+                .validate_private_owner_dacl()
+                .and_then(|()| bound.validate_ancestor_namespace_authority())
+                .and_then(|()| bound.revalidate())
+                .map_err(|error| profile_error("development-dacl", error))?;
+            return self.finish_profile(bound);
+        }
         let handle = usize::try_from(std::mem::take(&mut self.profile_handle))
             .ok()
             .filter(|value| *value > 4 && *value != usize::MAX)
@@ -114,44 +153,61 @@ impl Configuration {
         // non-inherited directory into us after token attestation. Verify native
         // type before transferring ownership; it cannot be inherited by helpers.
         if unsafe { GetFileType(handle) } != FILE_TYPE_DISK
+            // SAFETY: same uniquely enrolled live handle; removing inheritance
+            // prevents Chromium helpers from receiving this profile capability.
             || unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0
         {
+            #[cfg(debug_assertions)]
+            eprintln!("native Windows profile rejection phase=handle category=invalid");
             return Err(BrowserDriverError::Denied);
         }
         // SAFETY: this is the uniquely transferred live disk handle in private
         // bootstrap. The numeric value is consumed once and never exposed in IPC.
         let file = unsafe { std::fs::File::from_raw_handle(handle.cast()) };
-        let profile = BoundPath::from_enrolled_appcontainer_directory(
-            file,
-            &self.profile_path,
-            FileIdentity {
-                volume_serial_number: self.profile_volume,
-                file_id: self.profile_file_id,
-            },
-        )
-        .map_err(|error| profile_error("open", error))?;
+        let identity = FileIdentity {
+            volume_serial_number: self.profile_volume,
+            file_id: self.profile_file_id,
+        };
+        let profile =
+            BoundPath::from_enrolled_appcontainer_directory(file, &self.profile_path, identity)
+                .map_err(|error| profile_error("open", error))?;
         // Current token and exact kernel package SID are queried here; no input
         // SID or a parent's capability flag can substitute for actual ownership.
         profile
             .validate_private_appcontainer_dacl()
             .map_err(|error| profile_error("dacl", error))?;
+        self.finish_profile(profile)
+    }
+    fn finish_profile(
+        &self,
+        profile: BoundPath,
+    ) -> Result<(BoundPath, CString), BrowserDriverError> {
         profile
             .revalidate()
             .map_err(|error| profile_error("identity", error))?;
         if std::fs::read_dir(profile.canonical_path())
-            .map_err(|_| BrowserDriverError::Denied)?
+            .map_err(|source| {
+                profile_error(
+                    "list",
+                    WindowsNativeError::Io {
+                        operation: "read owned profile contents",
+                        source,
+                    },
+                )
+            })?
             .next()
             .is_some()
         {
+            #[cfg(debug_assertions)]
+            eprintln!("native Windows profile rejection phase=empty category=not_empty");
             return Err(BrowserDriverError::Denied);
         }
-        let cache = CString::new(
-            profile
-                .canonical_path()
-                .to_str()
-                .ok_or(BrowserDriverError::Denied)?,
-        )
-        .map_err(|_| BrowserDriverError::Denied)?;
+        let canonical = profile
+            .canonical_path()
+            .to_str()
+            .ok_or(BrowserDriverError::Denied)?;
+        let native_path = canonical.strip_prefix(r"\\?\").unwrap_or(canonical);
+        let cache = CString::new(native_path).map_err(|_| BrowserDriverError::Denied)?;
         // SAFETY: Windows implements environment updates with synchronized native
         // operations. This process owns these paths and runs before CEF startup.
         unsafe {
@@ -160,10 +216,11 @@ impl Configuration {
                 "USERPROFILE",
                 "APPDATA",
                 "LOCALAPPDATA",
+                "ProgramData",
                 "TEMP",
                 "TMP",
             ] {
-                std::env::set_var(name, profile.canonical_path());
+                std::env::set_var(name, native_path);
             }
         }
         Ok((profile, cache))

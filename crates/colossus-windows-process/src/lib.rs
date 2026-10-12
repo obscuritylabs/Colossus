@@ -13,6 +13,8 @@ use thiserror::Error;
 mod api;
 pub use api::*;
 mod channels;
+#[cfg(all(windows, debug_assertions))]
+pub use channels::spawn_user_browser_with_private_channels;
 pub use channels::{PrivateProcessChannel, SupervisedChild, spawn_with_private_channels};
 
 #[cfg(windows)]

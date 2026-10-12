@@ -44,9 +44,7 @@ impl Runtime {
                 && browser.native.presenter.is_some()
                 && {
                     let caps = browser.coordinator.capabilities();
-                    caps.available
-                        && caps.restrictive_egress
-                        && caps.modes.contains(&BrowserMode::Embedded)
+                    caps.available && caps.modes.contains(&BrowserMode::Embedded)
                 }
         })
     }

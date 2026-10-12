@@ -176,6 +176,7 @@ pub async fn run(
         &uploaded,
     )
     .await;
+    super::actions::check(&*driver, &request, &mut configure.target, &control, &origin).await;
     assert!(
         attachment
             .client

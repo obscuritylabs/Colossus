@@ -25,6 +25,9 @@ struct Tab {
   CefRefPtr<CefRegistration> observer_registration;
   bool closing = false;
   bool visible = false;
+#if defined(OS_WIN)
+  bool automation_focus = false;
+#endif
   bool acceptance_probe_pending = false;
   uint64_t identity_request = 0;
   CefRefPtr<CefSelectClientCertificateCallback> identity_callback;
@@ -36,6 +39,9 @@ extern std::map<colossus_cef_tab, Tab> tabs;
 extern std::map<uint64_t, CefRefPtr<CefRequestContext>> contexts;
 extern bool initialized;
 extern bool headless;
+#if defined(OS_WIN)
+bool WindowsDiagnosticEnabled();
+#endif
 void Emit(colossus_cef_tab tab, uint64_t generation, uint32_t event,
           int32_t command = 0, int32_t success = 1,
           const void* data = nullptr, size_t size = 0);

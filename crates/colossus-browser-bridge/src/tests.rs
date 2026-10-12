@@ -790,21 +790,27 @@ async fn categorical_open_failure_cannot_erase_in_flight_cancel_identity_fence()
 }
 
 #[tokio::test]
-async fn unavailable_or_uncontained_installation_never_constructs_driver() {
-    for uncontained in [false, true] {
-        let (data, _) = channel_pair();
-        let (control, _) = channel_pair();
-        let mut enrollment = enrollment();
-        if uncontained {
-            enrollment.capabilities.restrictive_egress = false;
-        } else {
-            enrollment.capabilities.available = false;
-        }
-        assert!(matches!(
-            BrowserBridgeDriver::connect(data, control, enrollment, test_key([7; 32])).await,
-            Err(BrowserDriverError::Unavailable)
-        ));
-    }
+async fn unavailable_installation_never_constructs_driver() {
+    let (data, _) = channel_pair();
+    let (control, _) = channel_pair();
+    let mut enrollment = enrollment();
+    enrollment.capabilities.available = false;
+    assert!(matches!(
+        BrowserBridgeDriver::connect(data, control, enrollment, test_key([7; 32])).await,
+        Err(BrowserDriverError::Unavailable)
+    ));
+}
+
+#[test]
+fn development_enrollment_preserves_explicit_absence_of_os_egress_containment() {
+    let mut value = enrollment();
+    value.capabilities.restrictive_egress = false;
+    value
+        .validate()
+        .expect("capability shape is independent of platform acceptance");
+    assert!(!value.capabilities.restrictive_egress);
+    value.capabilities.available = false;
+    assert_eq!(value.validate(), Err(BrowserDriverError::Unavailable));
 }
 
 #[tokio::test]

@@ -5,6 +5,41 @@ use colossus_windows_process::PrivateReader;
 use serde::Serialize;
 use tokio::io::AsyncReadExt as _;
 
+pub(super) async fn drain(mut reader: PrivateReader) -> std::io::Result<u64> {
+    #[cfg(not(debug_assertions))]
+    return tokio::io::copy(&mut reader, &mut tokio::io::sink()).await;
+    #[cfg(debug_assertions)]
+    {
+        let mut total = 0u64;
+        let mut bytes = [0u8; 1024];
+        let mut line = Vec::new();
+        loop {
+            let count = reader.read(&mut bytes).await?;
+            if count == 0 {
+                return Ok(total);
+            }
+            total = total.saturating_add(count as u64);
+            for byte in &bytes[..count] {
+                if *byte == b'\n' {
+                    if let Ok(text) = std::str::from_utf8(&line)
+                        && (text.starts_with("native Windows profile rejection ")
+                            || text.starts_with("native cef bootstrap ")
+                            || text.starts_with("native cef startup breakpoint ")
+                            || text.starts_with("native cef upload failure ")
+                            || text.starts_with("native cef resource rejection ")
+                            || text.starts_with("native Windows download "))
+                    {
+                        eprintln!("{text}");
+                    }
+                    line.clear();
+                } else if line.len() < 4096 {
+                    line.push(*byte);
+                }
+            }
+        }
+    }
+}
+
 pub(super) async fn receipt(reader: &mut PrivateReader) -> Result<(), BrowserDriverError> {
     for expected in 1..=7 {
         let mut record = [0; 5];
@@ -21,6 +56,8 @@ pub(super) async fn receipt(reader: &mut PrivateReader) -> Result<(), BrowserDri
             );
             return Err(BrowserDriverError::Denied);
         }
+        #[cfg(debug_assertions)]
+        eprintln!("Windows browser startup receipt phase={expected}");
     }
     let mut byte = [0];
     if reader
@@ -35,6 +72,8 @@ pub(super) async fn receipt(reader: &mut PrivateReader) -> Result<(), BrowserDri
 }
 #[derive(Serialize)]
 pub(super) struct Bootstrap<'a> {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub user_development: bool,
     pub enrollment: &'a BrowserBridgeEnrollment,
     pub profile_path: &'a std::path::Path,
     pub profile_handle: u64,

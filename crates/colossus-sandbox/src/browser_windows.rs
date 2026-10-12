@@ -111,6 +111,24 @@ impl WindowsBrowserSupervisor {
     ) -> Result<Self, BrowserDriverError> {
         Self::install_inner(config, true).await
     }
+    /// Explicit non-admin Debug automation. The standard-user CEF broker retains
+    /// Chromium's sandbox, atomic Job ownership and authenticated channels, but
+    /// has no outer AppContainer/WFP containment. `restrictive_egress` must be
+    /// false. Ordinary installed discovery never calls this constructor.
+    #[cfg(debug_assertions)]
+    pub async fn install_for_development(
+        config: WindowsBrowserConfig,
+    ) -> Result<Self, BrowserDriverError> {
+        let installation =
+            tokio::task::spawn_blocking(move || installation::bind_development(config))
+                .await
+                .map_err(|_| BrowserDriverError::Unavailable)??;
+        Ok(Self {
+            installation: Arc::new(installation),
+            sessions: Arc::new(Mutex::new(BTreeMap::new())),
+            stopped: Arc::new(AtomicBool::new(false)),
+        })
+    }
     async fn install_inner(
         config: WindowsBrowserConfig,
         diagnostic: bool,

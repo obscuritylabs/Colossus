@@ -23,6 +23,8 @@ mod native_pki;
 mod native_presentation;
 #[cfg(all(target_os = "linux", debug_assertions))]
 mod native_profiles;
+#[cfg(all(windows, debug_assertions))]
+mod native_windows;
 mod screenshot;
 mod transfer;
 

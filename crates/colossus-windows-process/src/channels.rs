@@ -33,6 +33,18 @@ pub fn spawn_with_private_channels(
     count: usize,
 ) -> Result<SupervisedChild, WindowsProcessError> {
     super::api::validate_request(request)?;
+    validate_channels(request, count)?;
+    #[cfg(windows)]
+    {
+        super::windows_impl::spawn_with_channels(request, count)
+    }
+    #[cfg(not(windows))]
+    {
+        Err(WindowsProcessError::UnsupportedPlatform)
+    }
+}
+
+fn validate_channels(request: &SpawnRequest, count: usize) -> Result<(), WindowsProcessError> {
     if !(3..=4).contains(&count)
         || request.arguments.len() + 1 + count * 2 > 256
         || request
@@ -44,12 +56,28 @@ pub fn spawn_with_private_channels(
             "private browser channel enrollment must contain three or four fresh channels".into(),
         ));
     }
-    #[cfg(windows)]
+    Ok(())
+}
+
+/// Explicit Debug browser launch with atomic Job ownership and private channels.
+/// The broker uses the caller's Windows token. It has no outer AppContainer or
+/// OS network fence; this cannot satisfy production containment acceptance.
+/// Empty `appcontainer_sid` and absent WFP fields are required so there is no
+/// fallback from a rejected contained launch. Chromium must retain its sandbox.
+#[cfg(all(windows, debug_assertions))]
+pub fn spawn_user_browser_with_private_channels(
+    request: &SpawnRequest,
+    count: usize,
+) -> Result<SupervisedChild, WindowsProcessError> {
+    super::api::validate_launch(request)?;
+    validate_channels(request, count)?;
+    if !request.appcontainer_sid.is_empty()
+        || request.proxy_port.is_some()
+        || request.network_filter_id.is_some()
     {
-        super::windows_impl::spawn_with_channels(request, count)
+        return Err(WindowsProcessError::Invalid(
+            "user browser development launch cannot request AppContainer or WFP".into(),
+        ));
     }
-    #[cfg(not(windows))]
-    {
-        Err(WindowsProcessError::UnsupportedPlatform)
-    }
+    super::windows_impl::spawn_user_browser(request, count)
 }

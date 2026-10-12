@@ -268,21 +268,29 @@ pub fn spawn(request: &SpawnRequest) -> Result<SandboxedChild, WindowsProcessErr
 }
 
 pub(super) fn validate_request(request: &SpawnRequest) -> Result<(), WindowsProcessError> {
+    validate_launch(request)?;
+    if request.appcontainer_sid.is_empty() || request.appcontainer_sid.contains('\0') {
+        return Err(WindowsProcessError::Invalid(
+            "AppContainer SID is required".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_launch(request: &SpawnRequest) -> Result<(), WindowsProcessError> {
     if !request.executable.is_absolute() || !request.cwd.is_absolute() {
         return Err(WindowsProcessError::Invalid(
             "executable and cwd must be absolute".into(),
         ));
     }
-    if request.appcontainer_sid.is_empty()
-        || request.appcontainer_sid.contains('\0')
-        || request.max_processes == 0
+    if request.max_processes == 0
         || request.max_memory_bytes == 0
         || request.proxy_port.is_some() != request.network_filter_id.is_some()
         || request.proxy_port == Some(0)
         || request.network_filter_id == Some(0)
     {
         return Err(WindowsProcessError::Invalid(
-            "SID and resource limits must be present".into(),
+            "resource limits and paired network fields must be valid".into(),
         ));
     }
     if request.arguments.len() > 256

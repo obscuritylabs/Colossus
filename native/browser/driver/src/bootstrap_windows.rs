@@ -104,6 +104,13 @@ pub fn run() -> Result<(), BrowserDriverError> {
     }
     let mut initialized = Initialized(cef::Host::new(callbacks, Arc::clone(&cancelled)));
     let host = &mut initialized.0;
+    #[cfg(debug_assertions)]
+    if configuration.user_development() {
+        host.configure_development_transfers(&profile)?;
+    } else {
+        host.configure_transfers(&profile)?;
+    }
+    #[cfg(not(debug_assertions))]
     host.configure_transfers(&profile)?;
     let started = receipt(&mut bootstrap.writer, 7);
     drop(bootstrap);

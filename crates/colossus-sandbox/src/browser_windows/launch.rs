@@ -161,6 +161,8 @@ async fn start(
         .await
         .map_err(|_| BrowserDriverError::OutcomeUnknown)?
         .map_err(|_| BrowserDriverError::OutcomeUnknown)??;
+    #[cfg(debug_assertions)]
+    eprintln!("Windows browser launch owner_ready=true");
     let mut pipes = Vec::new();
     for channel in child.channels {
         let pipe = match PrivatePipe::from_files(channel.reader, channel.writer) {
@@ -176,12 +178,10 @@ async fn start(
         pipes.push(pipe);
     }
     for file in [child.stdout, child.stderr].into_iter().flatten() {
-        let (mut reader, lease) =
+        let (reader, lease) =
             PrivateReader::from_file(file).map_err(|_| BrowserDriverError::Unavailable)?;
         resource.io.push(lease);
-        resource.drains.push(tokio::spawn(async move {
-            tokio::io::copy(&mut reader, &mut tokio::io::sink()).await
-        }));
+        resource.drains.push(tokio::spawn(bootstrap::drain(reader)));
     }
     let mut pipes = pipes.into_iter();
     let mut bootstrap = pipes.next().ok_or(BrowserDriverError::Denied)?;
@@ -197,6 +197,7 @@ async fn start(
         .ok_or(BrowserDriverError::OutcomeUnknown)?;
     let bytes = Zeroizing::new(
         serde_json::to_vec(&Bootstrap {
+            user_development: installation.user_development,
             enrollment,
             profile_path: &resource.profile,
             profile_handle: child.profile_handle,
@@ -223,6 +224,8 @@ async fn start(
             .into();
     let mut key = Zeroizing::new([0; 32]);
     getrandom::fill(key.as_mut()).map_err(|_| BrowserDriverError::Unavailable)?;
+    #[cfg(debug_assertions)]
+    eprintln!("Windows browser launch bootstrap_send=true");
     tokio::time::timeout(Duration::from_secs(5), async {
         bootstrap.writer.write_all(key.as_ref()).await?;
         bootstrap
@@ -235,6 +238,8 @@ async fn start(
     .await
     .map_err(|_| BrowserDriverError::OutcomeUnknown)?
     .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+    #[cfg(debug_assertions)]
+    eprintln!("Windows browser launch bootstrap_sent=true");
     tokio::time::timeout(
         Duration::from_millis(u64::from(
             installation.capabilities.limits.navigation_timeout_ms,

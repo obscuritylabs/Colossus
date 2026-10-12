@@ -434,6 +434,23 @@ pub(super) fn spawn_with_channels(
         }
     };
 
+    spawn_owned(request, count, Some(sid.0), network)
+}
+
+#[cfg(debug_assertions)]
+pub(super) fn spawn_user_browser(
+    request: &SpawnRequest,
+    count: usize,
+) -> Result<crate::SupervisedChild, WindowsProcessError> {
+    spawn_owned(request, count, None, None)
+}
+
+fn spawn_owned(
+    request: &SpawnRequest,
+    count: usize,
+    package: Option<PSID>,
+    network: Option<NetworkGuard>,
+) -> Result<crate::SupervisedChild, WindowsProcessError> {
     // SAFETY: zero is the documented initial state for these Win32 structures.
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_ACTIVE_PROCESS
@@ -533,19 +550,21 @@ pub(super) fn spawn_with_channels(
         }
     }
     let mut capabilities = SECURITY_CAPABILITIES {
-        AppContainerSid: sid.0,
+        AppContainerSid: package.unwrap_or(null_mut()),
         Capabilities: null_mut(),
         CapabilityCount: 0,
         Reserved: 0,
     };
     let job_list = [job.raw()];
-    let mut attributes = AttributeList::new(3)?;
-    attributes.set(
-        PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
-        (&raw mut capabilities).cast(),
-        size_of::<SECURITY_CAPABILITIES>(),
-        "UpdateProcThreadAttribute(security capabilities)",
-    )?;
+    let mut attributes = AttributeList::new(2 + u32::from(package.is_some()))?;
+    if package.is_some() {
+        attributes.set(
+            PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
+            (&raw mut capabilities).cast(),
+            size_of::<SECURITY_CAPABILITIES>(),
+            "UpdateProcThreadAttribute(security capabilities)",
+        )?;
+    }
     attributes.set(
         PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
         job_list.as_ptr().cast(),

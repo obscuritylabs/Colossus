@@ -32,8 +32,7 @@ pub(super) fn supports_tool(
     let Some(capabilities) = capabilities else {
         return false;
     };
-    if !capabilities.available || !capabilities.restrictive_egress || capabilities.modes.is_empty()
-    {
+    if !capabilities.available || capabilities.modes.is_empty() {
         return false;
     }
     let kind = match name {

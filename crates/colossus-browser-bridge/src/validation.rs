@@ -32,10 +32,12 @@ pub(crate) fn binding(value: &BrowserSessionBinding) -> Result<(), BrowserDriver
 }
 
 pub(crate) fn capabilities(value: &BrowserCapabilities) -> Result<(), BrowserDriverError> {
+    // Availability and OS egress containment are separate facts. A trusted
+    // development supervisor can admit a working browser while honestly reporting
+    // restrictive_egress=false. Installation and mode admission belong to that owner.
     let hard = BrowserLimits::default();
     let limits = &value.limits;
     if !value.available
-        || !value.restrictive_egress
         || value.modes.is_empty()
         || value
             .engine_version

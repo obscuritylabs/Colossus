@@ -383,6 +383,13 @@ impl Host {
             return Err(BrowserDriverError::Cancelled);
         }
         self.check_document_fence()?;
+        #[cfg(windows)]
+        if method.starts_with("Input.") || method == "DOM.focus" {
+            let document = self.native_document(tab)?;
+            // SAFETY: this fixed agent operation follows the current document
+            // fence on CEF's owning thread. Native human leases stay revoked.
+            status_result(unsafe { ffi::colossus_cef_automation_activate(tab, 1, document) })?;
+        }
         let command = self.next_command;
         self.next_command = self
             .next_command

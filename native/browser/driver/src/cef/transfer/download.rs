@@ -50,18 +50,20 @@ impl Host {
             .as_mut()
             .ok_or(BrowserDriverError::Unavailable)?
             .reserve_download()?;
-        let path = CString::new(
-            reservation
-                .path()
-                .to_str()
-                .ok_or(BrowserDriverError::Denied)?,
-        )
-        .map_err(|_| BrowserDriverError::Denied)?;
+        let path = reservation
+            .path()
+            .to_str()
+            .ok_or(BrowserDriverError::Denied)?;
+        #[cfg(windows)]
+        let native_path = path.strip_prefix(r"\\?\").unwrap_or(path).to_owned();
+        #[cfg(windows)]
+        let path = native_path.as_str();
+        let path = CString::new(path).map_err(|_| BrowserDriverError::Denied)?;
         let url = CString::new(url.as_str()).map_err(|_| BrowserDriverError::Denied)?;
         let nonce = CString::new(owner.token.as_str()).map_err(|_| BrowserDriverError::Failed)?;
         self.check_document_fence()?;
         // SAFETY: exact owned UI-thread tab/doc; path comes only from retained private stage.
-        status_result(unsafe {
+        let arm = unsafe {
             ffi::colossus_cef_download_arm(
                 owner.native,
                 1,
@@ -72,7 +74,12 @@ impl Host {
                 u64::from(max_bytes),
                 30_000,
             )
-        })?;
+        };
+        #[cfg(windows)]
+        if arm != 0 {
+            eprintln!("native Windows download phase=arm status={arm}");
+        }
+        status_result(arm)?;
         // SAFETY: same exact one-shot cached arm, with no new URL or path authority.
         status_result(unsafe {
             ffi::colossus_cef_download_start(owner.native, 1, owner.document, nonce.as_ptr())
@@ -112,6 +119,11 @@ impl Host {
                 || state.total_bytes > u64::from(max_bytes)
                 || matches!(state.status, 3 | 4)
             {
+                #[cfg(windows)]
+                eprintln!(
+                    "native Windows download phase=poll status={} received={} total={}",
+                    state.status, state.received_bytes, state.total_bytes
+                );
                 return Err(BrowserDriverError::OutcomeUnknown);
             }
             if state.status == 2 {
@@ -142,7 +154,11 @@ impl Host {
             .stage
             .as_mut()
             .ok_or(BrowserDriverError::Unavailable)?
-            .completed(reservation, finished.received_bytes as u32)?;
+            .completed(reservation, finished.received_bytes as u32)
+            .inspect_err(|_| {
+                #[cfg(windows)]
+                eprintln!("native Windows download phase=completed-file category=unavailable");
+            })?;
         if bytes.len() > max_bytes as usize || !self.transfer_current(&owner) {
             return Err(BrowserDriverError::OutcomeUnknown);
         }

@@ -1,5 +1,7 @@
 //! Explicit real Windows source acceptance. Missing prerequisites fail categorically.
 #![cfg(windows)]
+#[path = "browser_windows_native/actions.rs"]
+mod actions;
 #[path = "browser_windows_native/capture.rs"]
 mod capture;
 #[path = "browser_windows_native/exercise.rs"]
@@ -30,6 +32,17 @@ use std::{
 #[tokio::test]
 #[ignore = "requires native Windows x64 MSVC, pinned source host, AppContainer/WFP privileges and owner-private state"]
 async fn owned_windows_chromium_frames_input_viewer_and_full_cleanup() {
+    run(false).await;
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+#[ignore = "requires the pinned Windows source host and an owner-private state parent; no administrator token or outer containment"]
+async fn user_windows_chromium_automation_frames_input_transfers_and_cleanup() {
+    run(true).await;
+}
+
+async fn run(user_development: bool) {
     let component = PathBuf::from(
         std::env::var_os("COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_COMPONENT")
             .expect("select the explicit false-mode Windows native host stage"),
@@ -45,10 +58,9 @@ async fn owned_windows_chromium_frames_input_viewer_and_full_cleanup() {
         serde_json::from_slice(&manifest).expect("source inventory shape");
     let mut nonce = [0u8; 16];
     getrandom::fill(&mut nonce).expect("native fixture nonce");
-    let mut state = PrivateDirectoryCreation::create(
-        &parent.join(format!("windows-browser-native-{}", hex::encode(nonce))),
-    )
-    .expect("owner-private exact state allocation");
+    let mut state =
+        PrivateDirectoryCreation::create(&parent.join(format!("win-{}", hex::encode(nonce))))
+            .expect("owner-private exact state allocation");
     let state_path = state.path().to_owned();
     let state_binding = colossus_windows_native::BoundPath::open_directory(&state_path)
         .expect("native state root binding");
@@ -85,44 +97,67 @@ async fn owned_windows_chromium_frames_input_viewer_and_full_cleanup() {
             initial_url: Some(BrowserUrl::parse(format!("{}/fixture", fixture.origin)).unwrap()),
         },
     };
+    let config = WindowsBrowserConfig {
+        component_root: component,
+        manifest_sha256: Sha256::digest(&manifest).into(),
+        state_root: state_path.clone(),
+        capabilities: BrowserCapabilities {
+            available: true,
+            engine_version: Some(
+                metadata["cef_version"]
+                    .as_str()
+                    .expect("exact CEF version")
+                    .into(),
+            ),
+            modes: vec![BrowserMode::Embedded],
+            actions: vec![
+                BrowserActionKind::Navigate,
+                BrowserActionKind::Snapshot,
+                BrowserActionKind::Screenshot,
+                BrowserActionKind::Click,
+                BrowserActionKind::Upload,
+                BrowserActionKind::Download,
+                BrowserActionKind::Fill,
+                BrowserActionKind::Select,
+                BrowserActionKind::Press,
+                BrowserActionKind::Scroll,
+                BrowserActionKind::Wait,
+                BrowserActionKind::Back,
+                BrowserActionKind::Forward,
+                BrowserActionKind::Reload,
+                BrowserActionKind::Stop,
+                BrowserActionKind::TabOpen,
+                BrowserActionKind::TabSelect,
+                BrowserActionKind::TabClose,
+            ],
+            limits: BrowserLimits::default(),
+            private_ca_trust: false,
+            client_identities: false,
+            restrictive_egress: !user_development,
+        },
+        memory_bytes: 1024 * 1024 * 1024,
+        max_processes: 64,
+        egress: BrowserEgressLimits {
+            max_connections: 16,
+            lifetime: Duration::from_secs(120),
+            connection_timeout: Duration::from_secs(10),
+            max_connection_bytes: 1024 * 1024,
+        },
+    };
+    let installed = if user_development {
+        #[cfg(debug_assertions)]
+        {
+            WindowsBrowserSupervisor::install_for_development(config).await
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            panic!("standard-user browser development is Debug-only");
+        }
+    } else {
+        WindowsBrowserSupervisor::install_for_acceptance(config).await
+    };
     let supervisor = Arc::new(
-        WindowsBrowserSupervisor::install_for_acceptance(WindowsBrowserConfig {
-            component_root: component,
-            manifest_sha256: Sha256::digest(&manifest).into(),
-            state_root: state_path.clone(),
-            capabilities: BrowserCapabilities {
-                available: true,
-                engine_version: Some(
-                    metadata["cef_version"]
-                        .as_str()
-                        .expect("exact CEF version")
-                        .into(),
-                ),
-                modes: vec![BrowserMode::Embedded],
-                actions: vec![
-                    BrowserActionKind::Navigate,
-                    BrowserActionKind::Snapshot,
-                    BrowserActionKind::Screenshot,
-                    BrowserActionKind::Click,
-                    BrowserActionKind::Upload,
-                    BrowserActionKind::Download,
-                ],
-                limits: BrowserLimits::default(),
-                private_ca_trust: false,
-                client_identities: false,
-                restrictive_egress: true,
-            },
-            memory_bytes: 1024 * 1024 * 1024,
-            max_processes: 64,
-            egress: BrowserEgressLimits {
-                max_connections: 16,
-                lifetime: Duration::from_secs(120),
-                connection_timeout: Duration::from_secs(10),
-                max_connection_bytes: 1024 * 1024,
-            },
-        })
-        .await
-        .expect("native diagnostic installation prerequisite; no production acceptance"),
+        installed.expect("native diagnostic installation prerequisite; no production acceptance"),
     );
     let runner = Arc::clone(&supervisor);
     let denied = fixture.denied.clone();
@@ -187,6 +222,15 @@ async fn owned_windows_chromium_frames_input_viewer_and_full_cleanup() {
         "forced Job cleanup cannot masquerade as graceful CEF shutdown"
     );
     eprintln!(
-        "{{\"native_windows_factory\":true,\"low_appcontainer_token\":true,\"low_package_profile_label\":true,\"authenticated_bgra\":true,\"native_input\":true,\"read_only_viewer_detach\":true,\"exact_origin_denial\":true,\"native_upload_actual_http_bytes\":true,\"native_download_actual_http_bytes\":true,\"full_job_and_io_cleanup\":true,\"cef_shutdown\":true,\"whole_host_network_acceptance\":false,\"production_containment\":false}}"
+        "{}",
+        serde_json::json!({"native_windows_factory":true,
+        "standard_user_development":user_development,
+        "low_appcontainer_token":!user_development,
+        "low_package_profile_label":!user_development,
+        "authenticated_bgra":true,"native_input":true,"read_only_viewer_detach":true,
+        "exact_origin_denial":true,"native_upload_actual_http_bytes":true,
+        "native_download_actual_http_bytes":true,"full_job_and_io_cleanup":true,
+        "native_typed_automation":true,"native_tabs":true,
+        "cef_shutdown":true,"whole_host_network_acceptance":false,"production_containment":false})
     );
 }
