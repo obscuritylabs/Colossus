@@ -189,6 +189,12 @@ extern "C" int32_t colossus_cef_presentation_configure(colossus_cef_tab tab,
   auto host = browser->browser->GetHost();
   host->SetFocus(false); host->ImeCancelComposition(); host->WasHidden(false);
   host->NotifyScreenInfoChanged(); host->WasResized();
+#if defined(OS_WIN)
+  // A viewer may attach after the page has already painted for automation or
+  // screenshot capture. An unchanged offscreen size need not schedule another
+  // OnPaint; explicitly request fresh pixels for this newly admitted lease.
+  host->Invalidate(PET_VIEW);
+#endif
   return COLOSSUS_CEF_OK;
 }
 extern "C" int32_t colossus_cef_presentation_visible(colossus_cef_tab tab,

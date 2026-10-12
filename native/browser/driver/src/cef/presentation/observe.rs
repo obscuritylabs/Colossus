@@ -45,7 +45,14 @@ impl Host {
             .tabs
             .get_mut(&identity)
             .ok_or(PresentationError::Stale)?;
-        if revision != tab.revision || native_document != tab.native_document {
+        let metadata_changed = revision != tab.revision;
+        #[cfg(windows)]
+        let metadata_changed = metadata_changed && self.presentation.control_generation == 0;
+        // Windows Chrome can resume subframe loading after history restoration.
+        // A read-only viewer may report that metadata while the committed main
+        // document is unchanged. Keep the agent's revision, references and opaque
+        // document untouched; only its normal Snapshot can refresh those fences.
+        if metadata_changed || native_document != tab.native_document {
             // A viewer cannot invent the agent writer's next opaque document.
             // Only Snapshot's coordinator ticket may recover that ledger.
             if !crate::document::presentation_adoption(

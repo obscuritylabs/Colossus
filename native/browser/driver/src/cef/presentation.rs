@@ -153,13 +153,14 @@ impl Host {
             .tabs
             .get(&configuration.target.tab_id)
             .ok_or(PresentationError::Stale)?;
-        if tab.summary.document_id != configuration.target.document_id
-            || self
-                .metadata(tab.native)
-                .map_err(|_| PresentationError::OutcomeUnknown)?
-                .2
-                != tab.revision
-        {
+        let metadata_changed = self
+            .metadata(tab.native)
+            .map_err(|_| PresentationError::OutcomeUnknown)?
+            .2
+            != tab.revision;
+        #[cfg(windows)]
+        let metadata_changed = metadata_changed && configuration.control_generation == 0;
+        if tab.summary.document_id != configuration.target.document_id || metadata_changed {
             return Err(PresentationError::Stale);
         }
         let mut document = 0;

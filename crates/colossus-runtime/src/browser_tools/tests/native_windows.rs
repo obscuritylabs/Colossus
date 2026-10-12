@@ -11,13 +11,21 @@ use colossus_sandbox::{
     WindowsBrowserSupervisor,
 };
 use sha2::Digest as _;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 const PAGE: &str = r#"<!doctype html><html><head><title>Core Windows fixture</title></head>
 <body style="background:rgb(231,241,255)"><h1>Core Windows fixture</h1>
 <button onclick="document.querySelector('output').textContent='Core click received'">Core click</button>
-<output>Waiting for Core</output></body></html>"#;
+<output>Waiting for Core</output><script>
+addEventListener('resize', () => {
+  if (innerWidth >= 1000 || window.startedFrame) return;
+  window.startedFrame = true;
+  const frame = document.createElement('iframe');
+  frame.hidden = true; frame.src = '/metadata-frame'; document.body.append(frame);
+});
+</script></body></html>"#;
 
 struct CapturedHost {
     supervisor: Arc<WindowsBrowserSupervisor>,
@@ -129,9 +137,11 @@ async fn observe(
     }
 }
 
-async fn fixture() -> (String, tokio::task::JoinHandle<()>) {
+async fn fixture() -> (String, tokio::task::JoinHandle<()>, Arc<AtomicBool>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
+    let frame_requested = Arc::new(AtomicBool::new(false));
+    let pending_frame = Arc::clone(&frame_requested);
     let task = tokio::spawn(async move {
         loop {
             let (mut connection, _) = listener.accept().await.unwrap();
@@ -149,7 +159,11 @@ async fn fixture() -> (String, tokio::task::JoinHandle<()>) {
                 header.extend_from_slice(&block[..count]);
                 assert!(header.len() <= 8192);
             }
-            let page = if header.starts_with(b"GET /second") {
+            let page = if header.starts_with(b"GET /metadata-frame") {
+                pending_frame.store(true, Ordering::Release);
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                "<!doctype html><title>Background frame</title>".into()
+            } else if header.starts_with(b"GET /second") {
                 PAGE.replace("Core Windows fixture", "Core Windows navigation")
             } else {
                 PAGE.into()
@@ -163,7 +177,7 @@ async fn fixture() -> (String, tokio::task::JoinHandle<()>) {
             connection.shutdown().await.unwrap();
         }
     });
-    (origin, task)
+    (origin, task, frame_requested)
 }
 
 async fn painted(
@@ -216,7 +230,7 @@ async fn real_windows_chromium_executes_core_tools_and_paints_authenticated_fram
     .unwrap();
     let allocation = state.path().to_owned();
     let workspace = private_tempdir();
-    let (origin, fixture_task) = fixture().await;
+    let (origin, fixture_task, frame_requested) = fixture().await;
     let limits = BrowserLimits {
         max_sessions: 1,
         max_tabs: 1,
@@ -335,6 +349,37 @@ async fn real_windows_chromium_executes_core_tools_and_paints_authenticated_fram
             .unwrap();
         assert_eq!((lease.pixel_width, lease.pixel_height), (801, 601));
         painted(&presenter, digest, lease).await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while !frame_requested.load(Ordering::Acquire) {
+            presenter.renew(lease, 1500).await.unwrap();
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "native resize did not start the background frame"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let state = presenter.observe(lease).await.unwrap();
+        assert_eq!(state.target.document_id, observed.tab.document_id);
+        assert!(
+            call(
+                &executor,
+                &context,
+                "browser.screenshot",
+                observed_target(&opened, &observed)
+            )
+            .await
+            .is_err(),
+            "read-only observation refreshed the agent's stale action revision"
+        );
+        let refreshed = observe(
+            &executor,
+            &context,
+            observed_target(&opened, &observed),
+            "Core click received",
+        )
+        .await;
+        assert_ne!(refreshed.tab.document_id, observed.tab.document_id);
+        let observed = refreshed;
         let retina_lease = presenter
             .configure(Configure {
                 session: request.session_id.clone(),
