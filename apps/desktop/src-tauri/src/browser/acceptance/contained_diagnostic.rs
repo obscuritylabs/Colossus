@@ -1,4 +1,4 @@
-//! Debug-only, real Core -> managed sidecar -> contained Mac Desktop acceptance.
+//! Debug-only, real Core -> managed sidecar -> native Desktop acceptance.
 //! The fixture is bound to one compiler-sealed loopback origin and grants only
 //! the browser actions exercised here. A failed assertion never reports a pass.
 
@@ -43,8 +43,15 @@ use super::{
     super::dto::{BrowserAction, BrowserRect, BrowserViewportRequest},
     action,
 };
+#[cfg(windows)]
+#[path = "windows_remote.rs"]
+mod windows;
 
-const SPACE: &str = "mac-contained-acceptance";
+const SPACE: &str = if cfg!(windows) {
+    "windows-owned-acceptance"
+} else {
+    "mac-contained-acceptance"
+};
 const TOOLS: [&str; 7] = [
     "browser.open",
     "browser.status",
@@ -277,7 +284,11 @@ async fn serve(
     };
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/first") => {
-            let page = br#"<!doctype html><html><head><title>Human fixture</title></head><body style="background:#e7f1ff"><h1>Human fixture</h1><button onclick="document.title='Agent click received';document.querySelector('output').textContent='Agent clicked'">Agent click</button><output>Waiting for Core</output></body></html>"#;
+            let page: &[u8] = if cfg!(windows) {
+                br#"<!doctype html><html><head><title>Human fixture</title></head><body style="background:#e7f1ff"><h1>Human fixture</h1><input aria-label="Native Windows input" autocomplete="off" style="position:absolute;left:40px;top:80px;width:300px;height:40px" oninput="document.title='Human input '+this.value"><button style="position:absolute;left:40px;top:160px" onclick="document.title='Agent click received';document.querySelector('output').textContent='Agent clicked'">Agent click</button><output>Waiting for Core</output></body></html>"#
+            } else {
+                br#"<!doctype html><html><head><title>Human fixture</title></head><body style="background:#e7f1ff"><h1>Human fixture</h1><button onclick="document.title='Agent click received';document.querySelector('output').textContent='Agent clicked'">Agent click</button><output>Waiting for Core</output></body></html>"#
+            };
             respond(&mut stream, 200, "text/html; charset=utf-8", page).await?;
         }
         ("GET", "/agent") => {
@@ -294,7 +305,7 @@ async fn serve(
                 "fixture requires non-streaming model"
             );
             let phase = state.phase.fetch_add(1, Ordering::AcqRel);
-            ensure!(phase <= 6, "unexpected extra model turn {phase}");
+            ensure!(phase <= 7, "unexpected extra model turn {phase}");
             state.signal(&state.model_seen);
             if phase == 0 {
                 state
@@ -306,8 +317,14 @@ async fn serve(
                     .wait(&state.click_observed, "visible Core click")
                     .await?;
             }
-            if phase == 4 {
-                let result = tool_result(&body, "fixture-3")?;
+            if phase == 5 {
+                let result = tool_result(&body, "fixture-4")?;
+                if result["tab"].is_null() {
+                    eprintln!(
+                        "native Desktop fixture navigation reply {}",
+                        serde_json::to_string(&result)?
+                    );
+                }
                 let target = browser_target(&result["tab"])?;
                 *state.navigated_target.lock().unwrap() = Some(target);
                 state.changed.notify_waiters();
@@ -465,11 +482,23 @@ async fn model_response(
             let mut args = session.context("missing owned target")?;
             args["tab_id"] = clicked["tab"]["tab_id"].clone();
             args["document_id"] = clicked["tab"]["document_id"].clone();
+            args["max_nodes"] = json!(128);
+            Ok(model_tool(phase, &alias(body, "browser.snapshot")?, &args))
+        }
+        4 => {
+            let refreshed = tool_result(body, "fixture-3")?;
+            ensure!(
+                refreshed["snapshot"]["nodes"].is_array(),
+                "Core did not refresh the snapshot after the visible click"
+            );
+            let mut args = session.context("missing owned target")?;
+            args["tab_id"] = refreshed["tab"]["tab_id"].clone();
+            args["document_id"] = refreshed["tab"]["document_id"].clone();
             args["url"] = json!(format!("{origin}/agent"));
             Ok(model_tool(phase, &alias(body, "browser.navigate")?, &args))
         }
-        4 => {
-            let navigated = tool_result(body, "fixture-3")?;
+        5 => {
+            let navigated = tool_result(body, "fixture-4")?;
             ensure!(
                 navigated["tab"]["origin"].is_object() || navigated["tab"]["origin"].is_string(),
                 "Core navigate did not return an owned browser observation"
@@ -483,8 +512,8 @@ async fn model_response(
                 &args,
             ))
         }
-        5 => {
-            let screenshot = tool_result(body, "fixture-4")?;
+        6 => {
+            let screenshot = tool_result(body, "fixture-5")?;
             ensure!(
                 screenshot["artifact"]["media_type"] == "image/png"
                     && screenshot["artifact"]["width_pixels"]
@@ -512,8 +541,8 @@ async fn model_response(
                 }),
             ))
         }
-        6 => {
-            let closed = tool_result(body, "fixture-5")?;
+        7 => {
+            let closed = tool_result(body, "fixture-6")?;
             let expected_session = session
                 .as_ref()
                 .and_then(|target| target["session_id"].as_str())
@@ -527,7 +556,7 @@ async fn model_response(
                 "object": "chat.completion",
                 "choices": [{
                     "index": 0,
-                    "message": {"role": "assistant", "content": "Mac contained browser diagnostic complete."},
+                    "message": {"role": "assistant", "content": "Owned browser automation acceptance complete."},
                     "finish_reason": "stop"
                 }]
             }))
@@ -537,8 +566,13 @@ async fn model_response(
 }
 
 fn private_directory(path: &Path) -> anyhow::Result<()> {
-    use std::os::unix::fs::DirBuilderExt as _;
-    std::fs::DirBuilder::new().mode(0o700).create(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new().mode(0o700).create(path)?;
+    }
+    #[cfg(windows)]
+    colossus_windows_native::create_private_directory(path)?;
     Ok(())
 }
 
@@ -711,17 +745,18 @@ async fn title(
     expected: &str,
 ) -> anyhow::Result<()> {
     let deadline = tokio::time::Instant::now() + PAGE_TIMEOUT;
+    let mut last = String::from("no native title receipt");
     loop {
         present(app, id, rect).await?;
-        if let Ok(page) = view.inspect().await
-            && page.title == expected
-            && !page.loading
-        {
-            return Ok(());
+        if let Ok(page) = view.inspect().await {
+            last.clone_from(&page.title);
+            if page.title == expected && !page.loading {
+                return Ok(());
+            }
         }
         ensure!(
             tokio::time::Instant::now() < deadline,
-            "native RemoteSurface did not show title {expected:?}"
+            "native RemoteSurface did not show title {expected:?}; last title {last:?}"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -781,7 +816,7 @@ async fn accepted_frame(
         }
         ensure!(
             tokio::time::Instant::now() < deadline,
-            "native NSView did not accept an authenticated frame for the expected current document and fixture color"
+            "native presenter did not accept an authenticated frame for the expected current document and fixture color"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -822,14 +857,14 @@ async fn hold_visual_checkpoint(
         return Ok(());
     }
     println!(
-        "VISUAL_CHECKPOINT authenticated green agent page submitted to Desktop NSView; hold_ms={}",
+        "VISUAL_CHECKPOINT authenticated green agent page submitted to Desktop native presenter; hold_ms={}",
         hold.as_millis()
     );
     std::io::stdout().flush()?;
     let deadline = tokio::time::Instant::now() + hold;
     loop {
         // The native view's heartbeat is intentionally short. Continue the
-        // ordinary viewport path while the Mac foreground screenshot is taken.
+        // ordinary viewport path while a foreground screenshot is taken.
         present(app, tab, rect).await?;
         let probe = view.acceptance_probe().await?;
         let frame = probe.frame.context("visual checkpoint lost native frame")?;
@@ -928,6 +963,7 @@ async fn exercise_owned(
     client: &Colossus,
     fixture: &Fixture,
     visual_hold: Duration,
+    home: &Path,
 ) -> anyhow::Result<()> {
     let state = app.state::<AppState>();
     state.select_target(Some(SPACE.into())).await;
@@ -940,9 +976,14 @@ async fn exercise_owned(
     )
     .await?;
     ensure!(
-        snapshot.engine.kind == "contained_chromium"
+        snapshot.engine.kind
+            == if cfg!(windows) {
+                "owned_chromium"
+            } else {
+                "contained_chromium"
+            }
             && snapshot.engine.ready
-            && snapshot.engine.preview,
+            && snapshot.engine.preview != cfg!(windows),
         "Desktop did not report the Debug contained Chromium diagnostic"
     );
     let tab = snapshot.selected_tab_id.context("contained tab missing")?;
@@ -989,6 +1030,10 @@ async fn exercise_owned(
         "human page was not submitted under its native human lease"
     );
     println!("PASS authenticated Core human page submitted to Desktop RemoteSurface");
+    #[cfg(windows)]
+    windows::human(app, &tab, &view, rect, home).await?;
+    #[cfg(not(windows))]
+    let _ = home;
 
     let run = client.create_run(request(conversation)?).await?.run;
     *fixture.state.run_id.lock().unwrap() = Some(run.run_id.clone());
@@ -1040,10 +1085,15 @@ async fn exercise_owned(
     .await?;
     let agent_frame = probe.frame.context("accepted agent frame missing")?;
     println!(
-        "PASS Core browser.navigate submitted authenticated agent-page BGRA to Desktop NSView: document_generation={} sequence={} center_bgra={:?}",
-        agent_frame.lease.document_generation, agent_frame.sequence, agent_frame.center_bgra,
+        "PASS Core browser.navigate submitted authenticated agent-page BGRA to Desktop {}: document_generation={} sequence={} center_bgra={:?}",
+        if cfg!(windows) { "HWND" } else { "NSView" },
+        agent_frame.lease.document_generation,
+        agent_frame.sequence,
+        agent_frame.center_bgra,
     );
     fixture.state.signal(&fixture.state.navigation_observed);
+    #[cfg(windows)]
+    windows::agent(app, &tab, &view, rect, home).await?;
     let deadline = tokio::time::Instant::now() + PAGE_TIMEOUT;
     loop {
         present(app, &tab, rect).await?;
@@ -1097,7 +1147,8 @@ pub(super) async fn exercise(
     let visual_hold = visual_hold_duration()?;
     let fixture = Fixture::bind(address, visual_hold).await?;
     println!(
-        "EVIDENCE contained Mac diagnostic origin {}",
+        "EVIDENCE owned {} diagnostic origin {}",
+        if cfg!(windows) { "Windows" } else { "macOS" },
         fixture.origin
     );
     let (client, native) = start_sidecar(home, &fixture.origin, visual_hold).await?;
@@ -1112,7 +1163,7 @@ pub(super) async fn exercise(
             crate::state::TargetConsentContext::ManagedLocal,
         )
         .await;
-    let exercise = exercise_owned(app, &client, &fixture, visual_hold).await;
+    let exercise = exercise_owned(app, &client, &fixture, visual_hold, home).await;
     let failed_run_id = if exercise.is_err() {
         fixture.state.run_id.lock().unwrap().take()
     } else {

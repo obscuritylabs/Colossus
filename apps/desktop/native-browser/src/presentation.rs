@@ -3,6 +3,8 @@
 mod callbacks;
 mod ffi;
 mod lifecycle;
+#[cfg(all(windows, feature = "native-test-driver"))]
+mod windows_acceptance;
 use crate::BrowserError;
 #[cfg(feature = "native-test-driver")]
 use colossus_browser_presentation::Frame;
@@ -16,6 +18,8 @@ use std::{
 };
 use tauri::Window;
 use tokio::sync::oneshot;
+#[cfg(all(windows, feature = "native-test-driver"))]
+pub use windows_acceptance::WindowsScreenEvidence;
 use zeroize::Zeroizing;
 
 struct Owner {

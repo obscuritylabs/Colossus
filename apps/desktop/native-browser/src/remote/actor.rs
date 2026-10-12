@@ -70,7 +70,10 @@ pub(super) fn start(owner: &Arc<Owner>, mut events: mpsc::Receiver<Event>) {
             let current = owner.state.lock().ok().and_then(|state| {
                 (state.visible
                     && state.applied.is_some()
-                    && !owner.updating.load(Ordering::Acquire)
+                    // The operation lock excludes applying a viewport change.
+                    // A queued renewal must not discard focus/key events for
+                    // the still-current geometry and exact native lease.
+                    && state.applied == state.bounds
                     && state.heartbeat.elapsed() < Duration::from_millis(1500))
                 .then_some(state.lease)
             });

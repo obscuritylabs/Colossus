@@ -1,4 +1,5 @@
 #include "colossus_browser_presenter.h"
+#include "colossus_presenter_acceptance_win.h"
 #include <windows.h>
 #include <windowsx.h>
 #include <imm.h>
@@ -154,9 +155,14 @@ extern "C" uintptr_t colossus_presenter_create(uintptr_t parent, void* owner,
   registration.hInstance = GetModuleHandleW(nullptr); registration.lpszClassName = kClass;
   registration.hCursor = LoadCursorW(nullptr, IDC_ARROW);
   if (!RegisterClassW(&registration) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return 0;
-  HWND window = CreateWindowExW(0, kClass, L"", WS_CHILD | WS_TABSTOP, 0, 0, 16, 16,
+  HWND window = CreateWindowExW(WS_EX_LAYERED, kClass, L"", WS_CHILD | WS_TABSTOP | WS_CLIPSIBLINGS, 0, 0, 16, 16,
       native_parent, nullptr, registration.hInstance, nullptr);
   if (!window) return 0;
+  // WebView2 uses a compositor surface. Give the GDI pixel child its own opaque
+  // redirected surface so DWM can compose it above the controller's surface.
+  if (!SetLayeredWindowAttributes(window, 0, 255, LWA_ALPHA)) {
+    DestroyWindow(window); return 0;
+  }
   const uintptr_t handle = next_handle++;
   auto* view = new View{}; view->window = window; view->thread = GetCurrentThreadId();
   view->owner = owner; view->input = input; view->focus = focus;
@@ -196,8 +202,12 @@ extern "C" int32_t colossus_presenter_visible(uintptr_t handle, int32_t visible)
     if (view) view->focus(view->owner, 0);
     return COLOSSUS_CEF_OK;
   }
-  ShowWindow(window, SW_SHOWNA);
-  return COLOSSUS_CEF_OK;
+  // The Tauri controller owns another native child. Put the admitted browser
+  // above that sibling only while its trusted viewport lease is visible.
+  // Overlay/workspace revocation hides this HWND before it can occlude shell UI.
+  return SetWindowPos(window, HWND_TOP, 0, 0, 0, 0,
+    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)
+      ? COLOSSUS_CEF_OK : COLOSSUS_CEF_CLOSED;
 }
 extern "C" int32_t colossus_presenter_destroy(uintptr_t handle) {
   auto* view = Lookup(handle);
@@ -213,4 +223,17 @@ extern "C" int32_t colossus_presenter_lease(uintptr_t handle, uint64_t epoch, ui
   if (epoch != view->epoch) view->high_surrogate = 0;
   view->epoch = epoch; view->deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ttl);
   return COLOSSUS_CEF_OK;
+}
+extern "C" int32_t colossus_presenter_screen_probe(uintptr_t handle, colossus_presenter_screen* screen) {
+  auto* view = Lookup(handle);
+  return view ? colossus::PresenterScreenProbe(reinterpret_cast<uintptr_t>(view->window), screen) : COLOSSUS_CEF_CLOSED;
+}
+extern "C" int32_t colossus_presenter_screen_capture(uintptr_t handle, uint32_t width, uint32_t height,
+    uint8_t* bgra, size_t bytes) {
+  auto* view = Lookup(handle);
+  return view ? colossus::PresenterScreenCapture(reinterpret_cast<uintptr_t>(view->window), width, height, bgra, bytes) : COLOSSUS_CEF_CLOSED;
+}
+extern "C" int32_t colossus_presenter_fixture_input(uintptr_t handle) {
+  auto* view = Lookup(handle);
+  return view && Live(*view) ? colossus::PresenterFixtureInput(reinterpret_cast<uintptr_t>(view->window)) : COLOSSUS_CEF_DENIED;
 }

@@ -4,14 +4,20 @@ use std::path::PathBuf;
 
 #[cfg(not(any(
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic"
+    any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    )
 )))]
 use colossus_native_browser::BrowserEvent;
 use colossus_native_browser::{self as engine, BrowserView, EventSink, NavigationPolicy};
 use tauri::{AppHandle, Manager as _, Webview};
 #[cfg(not(any(
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic"
+    any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    )
 )))]
 use tauri::{
     WebviewUrl,
@@ -53,7 +59,10 @@ pub(super) async fn create(
     let window = app
         .get_window("main")
         .ok_or_else(|| error("The Desktop window has closed."))?;
-    #[cfg(feature = "macos-contained-browser-diagnostic")]
+    #[cfg(any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    ))]
     {
         let _ = (directory, source);
         let composition = app
@@ -118,7 +127,10 @@ pub(super) async fn create(
     }
     #[cfg(not(any(
         feature = "embedded-chromium-preview",
-        feature = "macos-contained-browser-diagnostic"
+        any(
+            feature = "macos-contained-browser-diagnostic",
+            feature = "windows-browser-development"
+        )
     )))]
     {
         let _ = (generation, scope, initial_url, conversation_id);

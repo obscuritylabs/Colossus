@@ -21,6 +21,18 @@ pub(super) struct Input {
     pub text: *const u16,
     pub text_units: usize,
 }
+#[cfg(all(windows, feature = "native-test-driver"))]
+#[derive(Default)]
+#[repr(C)]
+pub(super) struct WindowsScreen {
+    pub width: u32,
+    pub height: u32,
+    pub dpi: u32,
+    pub foreground: u32,
+    pub visible: u32,
+    pub hit_test: u32,
+    pub center_bgra: [u8; 4],
+}
 unsafe extern "C" {
     pub(super) fn colossus_presenter_create(
         parent: usize,
@@ -39,4 +51,16 @@ unsafe extern "C" {
     pub(super) fn colossus_presenter_visible(view: usize, visible: i32) -> i32;
     pub(super) fn colossus_presenter_lease(view: usize, epoch: u64, lease_ms: u32) -> i32;
     pub(super) fn colossus_presenter_destroy(view: usize) -> i32;
+    #[cfg(all(windows, feature = "native-test-driver"))]
+    pub(super) fn colossus_presenter_screen_probe(view: usize, screen: *mut WindowsScreen) -> i32;
+    #[cfg(all(windows, feature = "native-test-driver"))]
+    pub(super) fn colossus_presenter_screen_capture(
+        view: usize,
+        width: u32,
+        height: u32,
+        pixels: *mut u8,
+        bytes: usize,
+    ) -> i32;
+    #[cfg(all(windows, feature = "native-test-driver"))]
+    pub(super) fn colossus_presenter_fixture_input(view: usize) -> i32;
 }

@@ -13,7 +13,10 @@ use super::{
     inspection::{SNAPSHOT_BUDGET, collect_pages},
     registry::{DRAINING_MESSAGE, MAX_TABS, Registry, Tab},
 };
-#[cfg(not(feature = "macos-contained-browser-diagnostic"))]
+#[cfg(not(any(
+    feature = "macos-contained-browser-diagnostic",
+    feature = "windows-browser-development"
+)))]
 use crate::desktop_settings::SettingsStore;
 use crate::dto::CommandErrorDto;
 
@@ -161,7 +164,10 @@ impl BrowserManager {
     #[cfg(all(
         feature = "browser-test-bridge",
         not(feature = "embedded-chromium-preview"),
-        not(feature = "macos-contained-browser-diagnostic")
+        not(any(
+            feature = "macos-contained-browser-diagnostic",
+            feature = "windows-browser-development"
+        ))
     ))]
     pub(super) fn legacy_tab(
         &self,
@@ -427,7 +433,10 @@ impl BrowserManager {
         &self,
         scope: &str,
     ) -> Result<(std::path::PathBuf, Option<Webview>), CommandErrorDto> {
-        #[cfg(feature = "macos-contained-browser-diagnostic")]
+        #[cfg(any(
+            feature = "macos-contained-browser-diagnostic",
+            feature = "windows-browser-development"
+        ))]
         {
             let state = self.lock()?;
             if state.draining || state.tabs.len() >= MAX_TABS {
@@ -438,7 +447,10 @@ impl BrowserManager {
             // create a second local browser profile for a remote pixel view.
             Ok((std::path::PathBuf::new(), None))
         }
-        #[cfg(not(feature = "macos-contained-browser-diagnostic"))]
+        #[cfg(not(any(
+            feature = "macos-contained-browser-diagnostic",
+            feature = "windows-browser-development"
+        )))]
         {
             let mut state = self.lock()?;
             if state.draining {
@@ -571,7 +583,10 @@ impl BrowserManager {
         // The managed sidecar already opened the exact initial address before
         // returning the RemoteSurface. Sending a second human navigation here
         // could race the authenticated presentation's first frame.
-        #[cfg(not(feature = "macos-contained-browser-diagnostic"))]
+        #[cfg(not(any(
+            feature = "macos-contained-browser-diagnostic",
+            feature = "windows-browser-development"
+        )))]
         if let Some(url) = url
             && view.navigate(url).is_err()
         {

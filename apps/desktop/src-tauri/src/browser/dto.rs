@@ -48,12 +48,19 @@ impl BrowserEngineDto {
                 agent_control_available: false,
             }
         }
-        #[cfg(feature = "macos-contained-browser-diagnostic")]
+        #[cfg(any(
+            feature = "macos-contained-browser-diagnostic",
+            feature = "windows-browser-development"
+        ))]
         {
             let ready = colossus_native_browser::contained::native_presentation_available();
             Self {
-                kind: "contained_chromium",
-                preview: true,
+                kind: if cfg!(feature = "windows-browser-development") {
+                    "owned_chromium"
+                } else {
+                    "contained_chromium"
+                },
+                preview: !cfg!(feature = "windows-browser-development"),
                 ready,
                 message: (!ready).then(|| "The native pixel adapter is unavailable.".into()),
                 agent_control_available: false,
@@ -61,7 +68,10 @@ impl BrowserEngineDto {
         }
         #[cfg(not(any(
             feature = "embedded-chromium-preview",
-            feature = "macos-contained-browser-diagnostic"
+            any(
+                feature = "macos-contained-browser-diagnostic",
+                feature = "windows-browser-development"
+            )
         )))]
         Self {
             kind: if cfg!(windows) {

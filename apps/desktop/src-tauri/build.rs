@@ -182,6 +182,12 @@ fn main() {
             println!("cargo:rustc-link-arg=/DELAYLOAD:libcef.dll");
         }
         println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        // Windows child compositor surfaces require an OS compatibility manifest.
+        // Explicit asInvoker preserves ordinary-user installation and app use.
+        let manifest =
+            PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("windows.manifest");
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
         println!(
             "cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
         );

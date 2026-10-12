@@ -828,6 +828,15 @@ or JavaScript command. Each allocation retains an independently supervised proce
 and egress obligation before launch. Context-destroying cancellation interrupts the
 session and requires a fresh allocation rather than renewing control of a closed page.
 
+The explicitly selected Windows Debug development composition admits functional
+automation without AppContainer/WFP containment. It retains Chromium's built-in
+sandbox, an owned Job and the authenticated boundaries above, while reporting
+`restrictive_egress: false` and no owned CA/client-identity capability. It never
+retries a failed contained launch in this mode. Standard installation and app use
+remain non-admin; the executable requests `asInvoker`. Source acceptance cannot
+enable publisher release modes or substitute for installed signed-package and
+certificate-custody acceptance.
+
 The Linux OCI adapter runs the entire host tree in a networkless namespace, with
 read-only verified component bytes, bounded cgroups and a private exact-origin
 egress relay. Its supervisor verifies native process identity before delivering

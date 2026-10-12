@@ -3,12 +3,14 @@ mod actor;
 mod handoff;
 mod lifecycle;
 mod viewport;
+#[cfg(all(windows, feature = "native-test-driver"))]
+mod windows_acceptance;
 use crate::{
     BrowserError, EventSink, NavigationAction, PageState, contained::PresentationRole,
     presentation::PresentationSurface,
 };
 use colossus_browser_presentation::{Configure, HumanCommand, Input, Lease, PresentationClient};
-#[cfg(all(target_os = "macos", feature = "native-test-driver"))]
+#[cfg(all(any(windows, target_os = "macos"), feature = "native-test-driver"))]
 use colossus_browser_presentation::{PageState as NativePageState, PresentationError};
 use std::sync::{
     Arc, Mutex,
@@ -63,7 +65,7 @@ pub struct RemoteSurface(Arc<Owner>);
 
 /// Debug evidence that a supervised remote view submitted authenticated pixels
 /// to a live native presenter. Foreground OS compositing needs separate evidence.
-#[cfg(all(target_os = "macos", feature = "native-test-driver"))]
+#[cfg(all(any(windows, target_os = "macos"), feature = "native-test-driver"))]
 #[derive(Clone, Debug)]
 pub struct RemoteAcceptanceProbe {
     /// Metadata and exact document target from the authenticated native channel.
@@ -78,8 +80,8 @@ pub struct RemoteAcceptanceProbe {
     pub frame: Option<RemoteAcceptedFrame>,
 }
 
-/// Debug-only per-document pixels accepted by the native `NSView`; not OS-compositor evidence.
-#[cfg(all(target_os = "macos", feature = "native-test-driver"))]
+/// Debug-only per-document pixels accepted by the native view; not OS-compositor evidence.
+#[cfg(all(any(windows, target_os = "macos"), feature = "native-test-driver"))]
 #[derive(Clone, Copy, Debug)]
 pub struct RemoteAcceptedFrame {
     /// Exact authenticated lease, including native document and viewport generations.
@@ -102,7 +104,7 @@ impl RemoteSurface {
     ///
     /// # Errors
     /// Reports closed or poisoned native view state.
-    #[cfg(all(target_os = "macos", feature = "native-test-driver"))]
+    #[cfg(all(any(windows, target_os = "macos"), feature = "native-test-driver"))]
     pub async fn acceptance_probe(&self) -> Result<RemoteAcceptanceProbe, BrowserError> {
         let lease = self.0.state.lock().map_err(|_| BrowserError::Closed)?.lease;
         let page = self

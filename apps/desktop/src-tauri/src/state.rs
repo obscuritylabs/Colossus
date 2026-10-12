@@ -931,7 +931,10 @@ impl AppState {
 
     #[cfg(any(
         feature = "embedded-chromium-preview",
-        feature = "macos-contained-browser-diagnostic"
+        any(
+            feature = "macos-contained-browser-diagnostic",
+            feature = "windows-browser-development"
+        )
     ))]
     pub(crate) async fn managed_browser_for(&self, space_id: &str) -> Option<NativeBrowserClient> {
         self.existing_managed_space_runtime(space_id)

@@ -268,6 +268,55 @@ complete browser containment remain distinct requirements in
 
 ### Desktop Chromium development acceptance on Windows
 
+#### Non-admin owned Windows browser automation
+
+Use native Windows x64, PowerShell 7, Rust MSVC, Visual Studio C++ desktop tools,
+CMake, Python, the repository Node toolchain and an interactive desktop session.
+Run from an ordinary non-elevated shell; the launcher rejects an administrator
+token. Prepare the normal Desktop frontend dependencies and assets first as
+described in [source setup](setup-testing.md).
+
+```powershell
+./scripts/desktop-browser-windows.ps1
+```
+
+The command builds a fresh pinned CEF component and verifies its complete
+inventory, creates private development state and embeds the explicit selection
+in the Debug sidecar. It exercises real typed browser actions, native uploads and
+downloads with exact server-observed bytes, tab allocation/selection/close and
+full Job/pipe/profile cleanup. The Core fixture separately requires real semantic
+observations, clicks, navigation and a released PNG artifact.
+
+The actual Desktop fixture uses a deterministic local model provider through
+the ordinary authenticated SDK/sidecar/worker channels. It authorizes the real
+controller document, hands its human page to an agent and requires native click,
+navigation, screenshot, read-only viewer detachment and shutdown receipts.
+Windows screen probes read the foreground desktop DC for the exact owned HWND;
+an accepted frame buffer alone is insufficient. Native resize/current display
+DPI, overlay occlusion, mouse/key dispatch, Unicode surrogate commits and IME
+cancel use the real native presenter. This does not assert that every installed
+IME or a different monitor's DPI has been accepted.
+
+Fresh logs, three foreground viewport PNGs and `acceptance.json` are preserved
+under the printed `.local/` evidence directory. Failed state remains available
+for inspection. `-Component <absolute-private-stage>` selects a previously built
+verified source component; `-Launch` opens the resulting development Desktop
+after acceptance. Neither option imports personal certificates or requests UAC.
+
+For the native host tier alone:
+
+```powershell
+./scripts/ci/browser-windows-native.ps1 -Mode Development
+```
+
+Both component release modes remain false. This functional development lane
+retains Chromium's built-in sandbox and reports no outer containment or private
+certificate capability. AppContainer/WFP, owned CA/client-key custody, additional
+IME/DPI coverage and installed signed-package acceptance remain separate gates.
+The existing `-Mode Containment` CI diagnostic remains independently selected;
+it does not make standard Colossus install or use require administrator access.
+
+
 Use an interactive Windows x64 session with Visual Studio C++ desktop tools,
 PowerShell 7, Python, CMake, Node.js and the repository Rust toolchain. Prepare
 the pinned component in the same PowerShell terminal:

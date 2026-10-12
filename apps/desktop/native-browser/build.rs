@@ -48,7 +48,14 @@ fn main() {
     } else {
         directory.join("libcef_dll_wrapper").join(wrapper_name)
     };
-    for archive in [&shim, &wrapper] {
+    let presenter = directory.join(
+        if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+            "colossus_browser_presenter.lib"
+        } else {
+            "libcolossus_browser_presenter.a"
+        },
+    );
+    for archive in [&shim, &wrapper, &presenter] {
         println!("cargo:rerun-if-changed={}", archive.display());
     }
     println!("cargo:rustc-link-search=native={}", directory.display());
@@ -88,7 +95,7 @@ fn main() {
             println!("cargo:rustc-link-lib=static=colossus_browser_presenter");
             println!("cargo:rustc-link-lib=libcef");
             for library in [
-                "delayimp", "comctl32", "crypt32", "gdi32", "imm32", "rpcrt4", "shlwapi",
+                "delayimp", "comctl32", "crypt32", "dwmapi", "gdi32", "imm32", "rpcrt4", "shlwapi",
                 "wintrust", "ws2_32",
             ] {
                 println!("cargo:rustc-link-lib={library}");

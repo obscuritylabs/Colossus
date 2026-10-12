@@ -8,23 +8,34 @@ use std::sync::{
 };
 #[cfg(not(any(
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic"
+    any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    )
 )))]
 use std::time::Duration;
 use tauri::Manager as _;
 #[cfg(not(any(
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic"
+    any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    )
 )))]
 use tauri::Webview;
 
 #[cfg(feature = "embedded-chromium-preview")]
 mod chromium;
-#[cfg(feature = "macos-contained-browser-diagnostic")]
+#[cfg(any(
+    feature = "macos-contained-browser-diagnostic",
+    feature = "windows-browser-development"
+))]
 mod contained_diagnostic;
 #[cfg(feature = "embedded-chromium-preview")]
 mod pki;
 
+// Keep platform-exclusive native lifecycle branches in one source-only harness.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn run() -> i32 {
     println!("NATIVE_BROWSER_HOST_PID {}", std::process::id());
     println!("Starting native browser acceptance");
@@ -70,7 +81,10 @@ pub(crate) fn run() -> i32 {
             println!("Native app initialized");
             super::bootstrap::start_pump(app.handle())?;
             super::start_watchdog(app.handle().clone());
-            #[cfg(feature = "macos-contained-browser-diagnostic")]
+            #[cfg(any(
+                feature = "macos-contained-browser-diagnostic",
+                feature = "windows-browser-development"
+            ))]
             super::contained::install(app.handle())?;
             let app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -80,13 +94,19 @@ pub(crate) fn run() -> i32 {
                     {
                         chromium::exercise(&app, &address).await
                     }
-                    #[cfg(feature = "macos-contained-browser-diagnostic")]
+                    #[cfg(any(
+                        feature = "macos-contained-browser-diagnostic",
+                        feature = "windows-browser-development"
+                    ))]
                     {
                         contained_diagnostic::exercise(&app, &address, &home).await
                     }
                     #[cfg(not(any(
                         feature = "embedded-chromium-preview",
-                        feature = "macos-contained-browser-diagnostic"
+                        any(
+                            feature = "macos-contained-browser-diagnostic",
+                            feature = "windows-browser-development"
+                        )
                     )))]
                     {
                         exercise(&app, &address).await
@@ -216,14 +236,15 @@ fn run_lifecycle(application: tauri::App, completed: &AtomicBool) -> i32 {
                 }
             }
         } else if matches!(event, tauri::RunEvent::Exit) {
-            #[cfg(feature = "macos-contained-browser-diagnostic")]
+            #[cfg(any(feature = "macos-contained-browser-diagnostic", feature = "windows-browser-development"))]
             {
                 // The contained host was already closed by the diagnostic.
                 // No in-process CEF engine was initialized in Desktop.
                 shutdown_result.store(true, Ordering::Release);
-                println!("PASS Desktop AppKit event loop exited after contained host shutdown");
+                println!("PASS Desktop {} event loop exited after supervised host shutdown",
+                    if cfg!(windows) { "Windows" } else { "AppKit" });
             }
-            #[cfg(not(feature = "macos-contained-browser-diagnostic"))]
+            #[cfg(not(any(feature = "macos-contained-browser-diagnostic", feature = "windows-browser-development")))]
             match super::bootstrap::shutdown() {
                 Ok(()) => {
                     shutdown_result.store(true, Ordering::Release);
@@ -274,7 +295,10 @@ async fn action(
 #[cfg(all(
     target_os = "macos",
     not(feature = "embedded-chromium-preview"),
-    not(feature = "macos-contained-browser-diagnostic")
+    not(any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    ))
 ))]
 async fn evaluate(view: &Webview, script: &'static str) -> anyhow::Result<serde_json::Value> {
     let value = colossus_native_browser::acceptance::evaluate(view, script).await?;
@@ -284,7 +308,10 @@ async fn evaluate(view: &Webview, script: &'static str) -> anyhow::Result<serde_
 #[cfg(all(
     not(target_os = "macos"),
     not(feature = "embedded-chromium-preview"),
-    not(feature = "macos-contained-browser-diagnostic")
+    not(any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    ))
 ))]
 async fn evaluate(view: &Webview, script: &'static str) -> anyhow::Result<serde_json::Value> {
     let (send, receive) = tokio::sync::oneshot::channel();
@@ -300,7 +327,10 @@ async fn evaluate(view: &Webview, script: &'static str) -> anyhow::Result<serde_
 
 #[cfg(not(any(
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic"
+    any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    )
 )))]
 async fn wait_title(view: &Webview, title: &str) -> anyhow::Result<()> {
     for _ in 0..100 {
@@ -314,7 +344,10 @@ async fn wait_title(view: &Webview, title: &str) -> anyhow::Result<()> {
 
 #[cfg(not(any(
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic"
+    any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    )
 )))]
 async fn exercise(app: &tauri::AppHandle, address: &str) -> anyhow::Result<()> {
     println!("Creating first native browser tab");
@@ -356,7 +389,10 @@ async fn exercise(app: &tauri::AppHandle, address: &str) -> anyhow::Result<()> {
 
 #[cfg(not(any(
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic"
+    any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    )
 )))]
 async fn history(
     app: &tauri::AppHandle,
@@ -414,7 +450,10 @@ async fn history(
 
 #[cfg(not(any(
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic"
+    any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    )
 )))]
 async fn sessions(app: &tauri::AppHandle, address: &str, generation: u64) -> anyhow::Result<()> {
     let state = app.state::<AppState>();
@@ -492,7 +531,10 @@ async fn sessions(app: &tauri::AppHandle, address: &str, generation: u64) -> any
 
 #[cfg(not(any(
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic"
+    any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    )
 )))]
 fn acceptance_bounds(view: &Webview) -> anyhow::Result<super::dto::BrowserRect> {
     let window = view.window();
@@ -513,7 +555,10 @@ fn acceptance_bounds(view: &Webview) -> anyhow::Result<super::dto::BrowserRect> 
 
 #[cfg(not(any(
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic"
+    any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    )
 )))]
 async fn permissions(view: &Webview) -> anyhow::Result<()> {
     let rect = acceptance_bounds(view)?;
@@ -551,7 +596,10 @@ async fn permissions(view: &Webview) -> anyhow::Result<()> {
 
 #[cfg(not(any(
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic"
+    any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    )
 )))]
 async fn viewport(app: &tauri::AppHandle, view: &Webview) -> anyhow::Result<()> {
     use super::dto::BrowserViewportRequest;
@@ -606,7 +654,10 @@ async fn viewport(app: &tauri::AppHandle, view: &Webview) -> anyhow::Result<()> 
 
 #[cfg(not(any(
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic"
+    any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    )
 )))]
 async fn guest_denial(
     app: &tauri::AppHandle,
@@ -648,7 +699,10 @@ async fn guest_denial(
 
 #[cfg(not(any(
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic"
+    any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    )
 )))]
 async fn handoffs(
     app: &tauri::AppHandle,
@@ -701,7 +755,10 @@ async fn handoffs(
 
 #[cfg(not(any(
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic"
+    any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    )
 )))]
 async fn cleanup(app: &tauri::AppHandle, address: &str) -> anyhow::Result<()> {
     let state = app.state::<AppState>();

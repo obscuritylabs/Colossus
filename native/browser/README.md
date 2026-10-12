@@ -963,6 +963,23 @@ process-wide browser containment remain required before production support.
 
 ## Dedicated Windows host and native presentation
 
+The ordinary-user functional lane is `scripts/desktop-browser-windows.ps1`.
+It composes this real separate host into Runtime/Core and Desktop's native HWND
+presenter, with the existing authenticated SDK/sidecar/worker channels. It runs
+typed automation and exact-byte uploads/downloads, then exercises actual Desktop
+agent handoff, navigation, screenshots, viewer detachment and shutdown. Foreground
+Windows screen pixels are checked independently of authenticated frame submission.
+See [non-admin Windows automation acceptance](../../docs/develop/testing.md#non-admin-owned-windows-browser-automation)
+for prerequisites, evidence and the optional development app launch.
+
+This explicit Debug-only mode preserves Chromium's sandbox and the owned Job but
+does not allocate AppContainer/WFP policy or import CA/client identities. It is
+selected at compilation, reports `restrictive_egress: false`, and never serves as
+a fallback from contained startup. Standard install and normal app use require
+no Windows administration. Both publisher release modes and installed signed
+acceptance remain disabled until their independent requirements pass.
+
+
 Build the standalone private Windows host from a native x64 MSVC developer
 PowerShell terminal:
 

@@ -141,6 +141,25 @@ publisher-accepted browser payload currently ships, so ordinary CLI and worker
 discovery remain unavailable instead of choosing an ambient browser or downloading
 one.
 
+Windows also has an explicit, compiler-selected `windows-browser-development`
+Debug composition for functional automation under an ordinary user token. It
+keeps Chromium's built-in sandbox, the owned Job and authenticated action,
+cancellation and presentation channels. It reports `restrictive_egress: false`;
+AppContainer/WFP containment and owned certificate custody are deferred in this
+composition. There is no automatic fallback from a failed contained launch.
+The standard installer and normal browser use must not require administrator
+access. A future privileged containment edition must be selected separately.
+
+The development sidecar injects the actual Windows supervisor into Runtime and
+Desktop attaches that same Core-owned page through its native pixel presenter.
+Run lifecycle registration now receives the qualified tool catalog after turn
+preparation, so native handoff checks the current offered tools without changing
+the registered run's identity or bypassing effect policy. The reproducible
+[Windows automation acceptance](../testing.md#non-admin-owned-windows-browser-automation)
+uses the existing SDK/sidecar/worker channels. This exception does not enable
+publisher release modes, private CA/client identity capabilities or installed
+signed-package acceptance.
+
 Temporary profiles remain the default. The Linux native store implements explicit
 opaque workspace/application profiles, one retained kernel writer lease, exact
 CEF/Chromium/protocol compatibility, durable active/dirty state, and reset after

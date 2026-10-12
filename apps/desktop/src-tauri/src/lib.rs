@@ -8,6 +8,16 @@ compile_error!("the contained Mac browser diagnostic is Debug-only on macOS");
     feature = "embedded-chromium-preview"
 ))]
 compile_error!("the contained diagnostic cannot enable the in-process Chromium preview");
+#[cfg(all(
+    feature = "windows-browser-development",
+    any(not(windows), not(debug_assertions))
+))]
+compile_error!("Windows browser development is Debug-only on Windows");
+#[cfg(all(
+    feature = "windows-browser-development",
+    feature = "embedded-chromium-preview"
+))]
+compile_error!("Windows browser development uses the separate host, not the in-process preview");
 
 mod cloud_connector;
 mod control_plane_profiles;
@@ -210,7 +220,8 @@ pub fn run() {
             browser::bootstrap::start_pump(app.handle())?;
             #[cfg(any(
                 feature = "embedded-chromium-preview",
-                feature = "macos-contained-browser-diagnostic"
+                feature = "macos-contained-browser-diagnostic",
+                feature = "windows-browser-development"
             ))]
             browser::contained::install(app.handle())?;
             #[cfg(windows)]

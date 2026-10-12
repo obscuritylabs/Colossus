@@ -7,7 +7,10 @@ pub(crate) mod certificates;
 pub(crate) mod commands;
 #[cfg(any(
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic"
+    any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development"
+    )
 ))]
 pub(crate) mod contained;
 pub(crate) mod dto;

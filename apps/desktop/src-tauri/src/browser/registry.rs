@@ -40,7 +40,10 @@ impl Registry {
         }) {
             // A source-only Mac diagnostic remains a preview even when the
             // independently supervised native surface is actually attached.
-            #[cfg(not(feature = "macos-contained-browser-diagnostic"))]
+            #[cfg(not(any(
+                feature = "macos-contained-browser-diagnostic",
+                feature = "windows-browser-development"
+            )))]
             {
                 engine.preview = false;
             }

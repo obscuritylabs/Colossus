@@ -1,6 +1,7 @@
 param(
     [string]$EvidenceDirectory = '.local/windows-owned-browser-evidence',
-    [string]$Component = ''
+    [string]$Component = '',
+    [ValidateSet('Containment', 'Development')][string]$Mode = 'Containment'
 )
 
 # Reviewed premerge diagnostic only. This script never accepts a release mode or
@@ -17,12 +18,18 @@ $null = New-Item -ItemType Directory -Path $Evidence
 $Parent = $null
 $Passed = $false
 $ManifestHash = $null
+$Development = $Mode -eq 'Development'
+$Principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+if ($Development -and $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'Standard-user development acceptance must run without an elevated Windows token.'
+}
 $Checks = @(
-    "native_windows_factory", "low_appcontainer_token", "low_package_profile_label",
+    "native_windows_factory",
     "authenticated_bgra", "native_input", "read_only_viewer_detach",
     "exact_origin_denial", "native_upload_actual_http_bytes", "native_download_actual_http_bytes",
-    "full_job_and_io_cleanup", "cef_shutdown"
+    "full_job_and_io_cleanup", "cef_shutdown", "native_typed_automation", "native_tabs"
 )
+if (-not $Development) { $Checks += @('low_appcontainer_token', 'low_package_profile_label') }
 $Checked = @{}
 foreach ($Check in $Checks) { $Checked[$Check] = $false }
 Push-Location $Repository
@@ -50,12 +57,19 @@ try {
     & python -B -c 'import sys; from pathlib import Path; sys.path.insert(0, "native/browser/scripts"); from pki_fixture_private import private_directory; private_directory(Path(sys.argv[1]))' $Parent
     if ($LASTEXITCODE -ne 0) { throw "Private fixture state allocation failed." }
     $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_STATE_PARENT = $Parent
+    $SavedPaths = @{}
+    foreach ($Name in @('LOCALAPPDATA', 'TEMP', 'TMP')) {
+        $SavedPaths[$Name] = [Environment]::GetEnvironmentVariable($Name, 'Process')
+        [Environment]::SetEnvironmentVariable($Name, $Parent, 'Process')
+    }
     # A rolling categorical log stays bounded even on a noisy compiler failure.
     $Lines = [Collections.Generic.Queue[string]]::new()
     $Bytes = 0
     $Receipt = $null
-    & cargo test --locked -p colossus-sandbox --test browser_windows_native `
-        owned_windows_chromium_frames_input_viewer_and_full_cleanup `
+    $Fixture = if ($Development) { 'user_windows_chromium_automation_frames_input_transfers_and_cleanup' } else {
+        'owned_windows_chromium_frames_input_viewer_and_full_cleanup'
+    }
+    & cargo test --locked -p colossus-sandbox --test browser_windows_native $Fixture `
         -- --ignored --exact --nocapture 2>&1 | ForEach-Object {
         $Line = [string]$_
         Write-Host $Line
@@ -65,8 +79,11 @@ try {
         while ($Bytes -gt 256KB -and $Lines.Count -gt 0) {
             $Bytes -= [Text.Encoding]::UTF8.GetByteCount($Lines.Dequeue()) + 1
         }
-        if ($Line.StartsWith('{"native_windows_factory":')) {
-            try { $Receipt = $Line | ConvertFrom-Json } catch { $Receipt = $null }
+        if ($Line.StartsWith('{') -and $Line.Contains('"native_windows_factory"')) {
+            try {
+                $Candidate = $Line | ConvertFrom-Json
+                if ($Candidate.native_windows_factory -eq $true) { $Receipt = $Candidate }
+            } catch { $Receipt = $null }
         }
     }
     $TestStatus = $LASTEXITCODE
@@ -85,6 +102,11 @@ try {
             throw "A source diagnostic cannot accept production containment."
         }
     }
+    if ($Receipt.standard_user_development -ne $Development -or
+        $Receipt.low_appcontainer_token -ne (-not $Development) -or
+        $Receipt.low_package_profile_label -ne (-not $Development)) {
+        throw 'Native receipt described a different execution mode.'
+    }
     # The actual fixture removes its owned subtree only after the complete native
     # shutdown receipt. Nonrecursive removal refuses any unknown surviving state.
     [IO.Directory]::Delete($Parent)
@@ -95,6 +117,7 @@ try {
         schema = 1
         passed = $Passed
         sourceDiagnostic = $true
+        standardUserDevelopment = $Development
         componentManifestSha256 = $ManifestHash
         checks = $Checked
         privateStatePreserved = $null -ne $Parent
@@ -103,5 +126,8 @@ try {
         productionContainment = $false
     }
     [IO.File]::WriteAllText((Join-Path $Evidence "native-factory.json"), ($Report | ConvertTo-Json -Depth 4) + "`n", [Text.UTF8Encoding]::new($false))
+    if (Get-Variable -Name SavedPaths -ErrorAction SilentlyContinue) {
+        foreach ($Name in $SavedPaths.Keys) { [Environment]::SetEnvironmentVariable($Name, $SavedPaths[$Name], 'Process') }
+    }
     Pop-Location
 }
