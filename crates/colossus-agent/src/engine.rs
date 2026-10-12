@@ -399,6 +399,9 @@ impl AgentService {
             .iter()
             .map(|name| (*name).to_owned())
             .collect();
+        if let Some(lifecycle) = &self.lifecycle {
+            lifecycle.tools_offered(&context)?;
+        }
         let mut stream_version = 0_u64;
         let mut recovery_attempts = 0_u8;
         self.append(
@@ -457,6 +460,9 @@ impl AgentService {
                 .iter()
                 .map(|name| (*name).to_owned())
                 .collect();
+            if let Some(lifecycle) = &self.lifecycle {
+                lifecycle.tools_offered(&context)?;
+            }
             if control.is_some_and(RunControl::is_cancelled) {
                 return self
                     .finish_cancelled_run(

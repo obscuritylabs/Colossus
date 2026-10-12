@@ -368,6 +368,55 @@ fn begin(runtime: &Runtime, session: &RuntimeNativeBrowserSession, run_id: &str)
 }
 
 #[tokio::test]
+async fn native_handoff_receives_the_current_offered_tools_after_run_registration() {
+    let home = private_tempdir();
+    let fixture = Arc::new(Fixture::default());
+    let runtime = fixture_runtime(home.path(), fixture, true);
+    let role = role(&runtime);
+    let session = runtime
+        .open_native_browser(&role, input(None))
+        .await
+        .unwrap();
+    configured(&session).await;
+    let browser = runtime.browser.as_ref().unwrap();
+    let mut context = ExecutionContext {
+        run_id: Some("offered-run".into()),
+        session_id: Some(session.conversation_id().into()),
+        ..ExecutionContext::default()
+    };
+    browser
+        .begin_run(
+            &context,
+            &Actor {
+                actor_type: ActorType::Application,
+                id: "desktop".into(),
+            },
+            RunControl::default(),
+        )
+        .unwrap();
+    assert!(
+        runtime
+            .handoff_native_browser(&role, session.session_id(), "offered-run", 3000)
+            .await
+            .is_err()
+    );
+    context.offered_tools = vec!["browser.open".into(), "browser.snapshot".into()];
+    let mut forged = context.clone();
+    forged.session_id = Some("foreign-conversation".into());
+    assert!(browser.tools_offered(&forged).is_err());
+    browser.tools_offered(&context).unwrap();
+    let granted = runtime
+        .handoff_native_browser(&role, session.session_id(), "offered-run", 3000)
+        .await
+        .unwrap();
+    assert_eq!(granted.lease().control_generation, 1);
+    runtime
+        .close_native_browser(&role, session.session_id())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn native_probe_requires_presenter_and_does_not_create_conversations() {
     let home = private_tempdir();
     let fixture = Arc::new(Fixture::default());

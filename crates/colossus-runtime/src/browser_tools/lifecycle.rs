@@ -11,6 +11,9 @@ pub(crate) struct RuntimeRunLifecycle {
 
 #[async_trait]
 impl AgentRunLifecycle for RuntimeRunLifecycle {
+    fn tools_offered(&self, context: &ExecutionContext) -> Result<(), ToolError> {
+        self.browser.tools_offered(context)
+    }
     fn begin_run(
         &self,
         context: &ExecutionContext,
@@ -43,6 +46,24 @@ impl AgentRunLifecycle for RuntimeRunLifecycle {
 
 #[async_trait]
 impl AgentRunLifecycle for RuntimeBrowserTools {
+    fn tools_offered(&self, context: &ExecutionContext) -> Result<(), ToolError> {
+        self.identity.revalidate().map_err(|_| denied())?;
+        let id = context.run_id.as_deref().ok_or_else(denied)?;
+        let mut runs = self.runs.lock().map_err(|_| denied())?;
+        let run = runs.get_mut(id).ok_or_else(denied)?;
+        let mut expected = run.context.clone();
+        expected.offered_tools.clone_from(&context.offered_tools);
+        if expected != *context {
+            return Err(denied());
+        }
+        // Cancellation may race trusted turn preparation. The engine must still
+        // finish its cancellation path; a revoked run never regains a tool ceiling.
+        if run.control.is_cancelled() {
+            return Ok(());
+        }
+        run.context.offered_tools.clone_from(&context.offered_tools);
+        Ok(())
+    }
     fn begin_run(
         &self,
         context: &ExecutionContext,
