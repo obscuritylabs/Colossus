@@ -1,13 +1,23 @@
 param(
     [string]$Component = '',
     [string]$EvidenceDirectory = '',
-    [switch]$Launch
+    [switch]$Launch,
+    [switch]$Relaunch
 )
 
 # Explicit ordinary-user Debug composition. No UAC, WFP, loopback exemptions,
 # personal certificates, in-process preview or release-mode promotion.
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($Launch -and $Relaunch) { throw 'Select -Launch or -Relaunch.' }
+$Repository = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+if ($Relaunch) {
+    & (Join-Path $PSScriptRoot 'desktop-browser-windows-launch.ps1') -Repository $Repository
+    return
+}
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    throw 'Build/acceptance requires PowerShell 7: pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\desktop-browser-windows.ps1 -Launch. Use -Relaunch to reopen an already prepared app from Windows PowerShell.'
+}
 if (-not $IsWindows -or [Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'X64') {
     throw 'Use PowerShell 7 on native Windows x64.'
 }
@@ -15,7 +25,6 @@ $Principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.Wind
 if ($Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Run this acceptance from an ordinary, non-elevated Windows shell.'
 }
-$Repository = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $Allocation = [Guid]::NewGuid().ToString('N')
 $Evidence = if ($EvidenceDirectory) { [IO.Path]::GetFullPath($EvidenceDirectory, $Repository) } else {
     Join-Path $Repository ".local/windows-browser-development-$Allocation"
@@ -28,7 +37,7 @@ foreach ($Name in @('PATH', 'COLOSSUS_HOME', 'LOCALAPPDATA', 'TEMP', 'TMP',
     'COLOSSUS_SIDECAR_WINDOWS_BROWSER_DEVELOPMENT', 'COLOSSUS_CEF_ROOT', 'COLOSSUS_CEF_NATIVE_LIB_DIR',
     'COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_COMPONENT', 'COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_STATE_PARENT',
     'COLOSSUS_BROWSER_ACCEPTANCE_OWNED_TABS', 'COLOSSUS_BROWSER_ACCEPTANCE_NATIVE_INPUT',
-    'COLOSSUS_BROWSER_ACCEPTANCE_VISUAL_HOLD_MS')) {
+    'COLOSSUS_BROWSER_ACCEPTANCE_VISUAL_HOLD_MS', 'TAURI_CONFIG')) {
     $SavedEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name, 'Process')
 }
 function Invoke-Logged([string]$Command, [string[]]$Arguments, [string]$Log) {
@@ -90,12 +99,20 @@ try {
     }
     $Passed = $true
     if ($Launch) {
+        # The installed app may already own its single-instance identifier.
+        # Keep this source test window independently launchable.
+        $env:TAURI_CONFIG = '{"identifier":"com.obscuritylabs.colossus.desktop.windows-browser-development","productName":"Colossus Browser Test"}'
         Invoke-Logged cargo @('build', '--locked', '--manifest-path', 'apps/desktop/src-tauri/Cargo.toml',
             '--no-default-features', '--features', 'windows-browser-development', '--bin', 'colossus-desktop') 'application-build.log'
-        # Development state remains available to the explicitly launched app.
-        $env:COLOSSUS_HOME = Join-Path $Development 'application-home'
-        & apps/desktop/src-tauri/target/debug/colossus-desktop.exe
-        if ($LASTEXITCODE -ne 0) { throw 'Windows Desktop development exited unsuccessfully.' }
+        $Application = Join-Path $Repository 'apps/desktop/src-tauri/target/debug/colossus-desktop.exe'
+        [ordered]@{
+            schema = 1
+            application_sha256 = (Get-FileHash -LiteralPath $Application -Algorithm SHA256).Hash.ToLowerInvariant()
+            component = $Component
+            development_root = $Development
+            home = Join-Path $Development 'application-home'
+        } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Repository '.local/windows-browser-launch.json') -Encoding UTF8
+        & (Join-Path $PSScriptRoot 'desktop-browser-windows-launch.ps1') -Repository $Repository
     }
 } finally {
     [IO.File]::WriteAllText((Join-Path $Evidence 'acceptance.json'), (([ordered]@{

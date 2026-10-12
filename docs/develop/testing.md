@@ -277,8 +277,12 @@ token. Prepare the normal Desktop frontend dependencies and assets first as
 described in [source setup](setup-testing.md).
 
 ```powershell
-./scripts/desktop-browser-windows.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/desktop-browser-windows.ps1
 ```
+
+`powershell.exe` starts Windows PowerShell 5.1. Build and acceptance require
+PowerShell 7 (`pwsh`). `-ExecutionPolicy Bypass` applies only to this invocation;
+the launcher does not change the machine or user execution policy.
 
 The command builds a fresh pinned CEF component and verifies its complete
 inventory, creates private development state and embeds the explicit selection
@@ -304,6 +308,16 @@ under the printed `.local/` evidence directory. Failed state remains available
 for inspection. `-Component <absolute-private-stage>` selects a previously built
 verified source component; `-Launch` opens the resulting development Desktop
 after acceptance. Neither option imports personal certificates or requests UAC.
+
+Once `-Launch` has prepared the app, reopen the same test profile without a rebuild
+or another acceptance run. This option also supports Windows PowerShell 5.1:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/desktop-browser-windows.ps1 -Relaunch
+```
+
+The saved source-app hash must still match. A normal Desktop rebuild replaces
+that executable, so a changed binary requires another `-Launch` preparation.
 
 For the native host tier alone:
 

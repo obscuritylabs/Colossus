@@ -77,6 +77,28 @@ const PRIMARY_SCOPES: [&str; 15] = [
 ];
 
 const TRUSTED_BUILTIN_TOOL_GRANT: &[&str] = &[
+    "browser.open",
+    "browser.status",
+    "browser.tabs",
+    "browser.tab.open",
+    "browser.tab.select",
+    "browser.tab.close",
+    "browser.navigate",
+    "browser.back",
+    "browser.forward",
+    "browser.reload",
+    "browser.stop",
+    "browser.snapshot",
+    "browser.screenshot",
+    "browser.click",
+    "browser.fill",
+    "browser.select",
+    "browser.press",
+    "browser.scroll",
+    "browser.wait",
+    "browser.upload",
+    "browser.download",
+    "browser.close",
     "workflow.definition.list",
     "workflow.definition.get",
     "workflow.schedule.list",
@@ -1384,7 +1406,9 @@ fn managed_worker_endpoint(
     worker_ipc_endpoint(&canonical.join("state.redb"))
 }
 
-fn application_grant(profile: AccessProfileSetting) -> Result<SidecarApplicationGrant, SdkError> {
+pub(crate) fn application_grant(
+    profile: AccessProfileSetting,
+) -> Result<SidecarApplicationGrant, SdkError> {
     application_grant_for(profile, APPLICATION_ID, false)
 }
 
@@ -1660,6 +1684,14 @@ mod tests {
         let grant = application_grant(AccessProfileSetting::Development).expect("grant");
         let debug = format!("{grant:?}");
         for required in [
+            "browser.open",
+            "browser.snapshot",
+            "browser.screenshot",
+            "browser.tab.open",
+            "browser.tab.select",
+            "browser.tab.close",
+            "browser.upload",
+            "browser.download",
             "agent.delegate",
             "filesystem.read",
             "shell.run",
