@@ -28,8 +28,10 @@ impl Host {
         self.screenshot = None;
         self.transfer.upload = None;
         self.transfer.download = None;
-        let BrowserAction::Screenshot { max_bytes } = command.action else {
-            return Err(BrowserDriverError::Denied);
+        let (max_bytes, annotated) = match command.action {
+            BrowserAction::Screenshot { max_bytes } => (max_bytes, false),
+            BrowserAction::AnnotatedScreenshot { max_bytes } => (max_bytes, true),
+            _ => return Err(BrowserDriverError::Denied),
         };
         if max_bytes == 0
             || max_bytes > MAX_BROWSER_SCREENSHOT_BYTES
@@ -92,6 +94,16 @@ impl Host {
         if width == 0 || height == 0 || u64::from(width) * u64::from(height) > 16_777_216 {
             return Err(BrowserDriverError::LimitExceeded);
         }
+        let bytes = if annotated {
+            #[cfg(windows)]
+            {
+                Zeroizing::new(self.annotated_png(native, &bytes, max_bytes)?)
+            }
+            #[cfg(not(windows))]
+            return Err(BrowserDriverError::Unsupported);
+        } else {
+            bytes
+        };
         let mut random = [0_u8; 16];
         getrandom::fill(&mut random).map_err(|_| BrowserDriverError::Failed)?;
         let descriptor = BrowserScreenshotDescriptor {

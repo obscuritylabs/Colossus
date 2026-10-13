@@ -124,6 +124,35 @@ Then use `cargo xtask dev`, `cargo xtask check rust`, and finally
 `cargo xtask pr --base origin/main`. See [Source setup and test tiers](setup-testing.md)
 for prerequisites and CI mapping.
 
+### Portable CI contract prerequisites
+
+`scripts/ci/test-contracts.sh` runs the release, classification and offline native-browser
+fixtures as part of the repository gates. Select the repository Node toolchain and a
+Python 3.11+ environment with `cryptography` 50.x; set `NODE` and `PYTHON` to those
+executables when they differ from the ambient tools. The native fixture prerequisite
+is separate from the SDK's Python pin in the [toolchain inventory](toolchain-inventory.md).
+A missing cryptographic dependency is a setup failure, not permission to skip the suite.
+
+The Linux PR **Classify PR changes** job owns the complete POSIX fixture contracts.
+Tests requiring Unix executable modes, owner/private-mode checks, no-follow descriptors,
+descriptor-relative retirement or file symlinks declare that prerequisite explicitly.
+These tests also run when the same suite is invoked on macOS. ELF parsing, image/export
+metadata, compiler output, origin validation, evidence validation and other portable
+contracts remain enabled on Windows. Node release fixtures use real Windows junctions
+for link rejection while retaining file symlinks on POSIX.
+
+Windows native staging, handle/Job cleanup and input acceptance remain owned by the
+[Windows browser tiers](#desktop-chromium-development-acceptance-on-windows).
+POSIX fixture results do not substitute for those native checks or establish Windows
+certificate custody. Native Mac supervisor and PKI acceptance remain separate operator
+tiers documented in the [process-broker guide](https://github.com/obscuritylabs/Colossus/blob/main/native/browser/process-broker/README.md).
+
+When Git Bash supplies GNU tar on Windows, set `$env:TAR_OPTIONS = '--force-local'`
+in the PowerShell process running the gates. This makes drive-letter archive paths
+local filenames rather than remote-host requests. It changes no archive verification
+assertions or machine settings. Use the same selected Python environment for both
+native-browser and TLS-broker fixture discovery.
+
 ### Desktop provider setup acceptance
 
 Prepare current bundled binaries with `cargo xtask desktop prepare --profile debug`,
@@ -334,6 +363,32 @@ IME/DPI coverage and installed signed-package acceptance remain separate gates.
 The existing `-Mode Containment` CI diagnostic remains independently selected;
 it does not make standard Colossus install or use require administrator access.
 
+#### Windows rich interactions and annotations
+
+After preparing a verified component, run the maintained interaction tier from an
+ordinary-user PowerShell 7 shell:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/ci/browser-windows-interactions.ps1 -Component 'C:\Users\you\ColossusBrowserComponent-<id>\component' -EvidenceDirectory .local/windows-browser-interactions-attempt-1
+```
+
+Use a fresh evidence directory for every attempt. The runner verifies the component
+inventory and requires both production modes to remain false. It executes the ignored
+native Runtime fixture through the effect gateway, checking guest hover, double/right
+click, coordinate input at 200% scaling, canvas and HTML drag-and-drop, live native
+annotations, clean and annotated PNGs, constrained developer inspection, and protected
+field rejection. It also checks stale/resize fences and owned browser-state cleanup.
+A successful attempt retains a bounded `native.log`, `annotations.png` and
+`acceptance.json`; failed attempts retain available evidence and their private state
+for diagnosis.
+
+These are Core source results. Live Desktop agent acceptance, whole-host containment,
+certificate custody and installed signed-package acceptance remain separate gates.
+The runner keeps production availability and all three release acceptance flags false.
+See the [native component instructions](https://github.com/obscuritylabs/Colossus/blob/main/native/browser/README.md#windows-interaction-and-annotation-acceptance)
+for action limits and component preparation.
+
+#### Native Windows Chromium preview
 
 Use an interactive Windows x64 session with Visual Studio C++ desktop tools,
 PowerShell 7, Python, CMake, Node.js and the repository Rust toolchain. Prepare

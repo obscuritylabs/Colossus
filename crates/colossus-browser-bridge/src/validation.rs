@@ -148,6 +148,7 @@ pub(crate) fn command_for_open(
             return Err(BrowserDriverError::LimitExceeded);
         }
         BrowserAction::Screenshot { max_bytes }
+        | BrowserAction::AnnotatedScreenshot { max_bytes }
             if *max_bytes < 33 || *max_bytes > colossus_ports::MAX_BROWSER_SCREENSHOT_BYTES =>
         {
             return Err(BrowserDriverError::LimitExceeded);
@@ -203,8 +204,10 @@ pub(crate) fn screenshot_descriptor(
     value: &colossus_ports::BrowserScreenshotDescriptor,
     command: &BrowserDriverCommand,
 ) -> Result<(), BrowserDriverError> {
-    let BrowserAction::Screenshot { max_bytes } = command.action else {
-        return Err(BrowserDriverError::Unsupported);
+    let max_bytes = match command.action {
+        BrowserAction::Screenshot { max_bytes }
+        | BrowserAction::AnnotatedScreenshot { max_bytes } => max_bytes,
+        _ => return Err(BrowserDriverError::Unsupported),
     };
     if value.session_id != command.session_id
         || value.target != command.target

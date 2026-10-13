@@ -26,7 +26,10 @@ impl Host {
         &self,
         command: BrowserDriverCommand,
     ) -> Result<BrowserScreenshotDescriptor, BrowserDriverError> {
-        if !matches!(command.action, BrowserAction::Screenshot { .. }) {
+        if !matches!(
+            command.action,
+            BrowserAction::Screenshot { .. } | BrowserAction::AnnotatedScreenshot { .. }
+        ) {
             return Err(BrowserDriverError::Unsupported);
         }
         let session = self.existing(&command.session_id)?;

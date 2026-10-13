@@ -972,6 +972,28 @@ fn released_screenshot_images_keep_tool_provenance_and_exact_call_pairing() {
 }
 
 #[test]
+fn annotated_screenshot_is_a_released_image_observation_without_trusting_page_json() {
+    let image = screenshot_image();
+    let mut annotated = result(
+        "browser.screenshot.annotated",
+        "annotated-capture",
+        "{}".into(),
+    );
+    annotated.images.push(image.clone());
+    let projected = tool_result_observation_messages(&[annotated]);
+    assert_eq!(projected.len(), 2);
+    assert_eq!(projected[1].role, ModelMessageRole::ToolObservation);
+    assert_eq!(
+        projected[1].tool_call_id.as_deref(),
+        Some("annotated-capture")
+    );
+    assert_eq!(
+        projected[1].content.images().collect::<Vec<_>>(),
+        vec![&image]
+    );
+}
+
+#[test]
 fn tool_text_failed_effects_and_other_tools_cannot_mint_image_observations() {
     let image = screenshot_image();
     let text_only = result(

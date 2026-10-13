@@ -192,6 +192,15 @@ pub struct PresentationInput {
 }
 unsafe extern "C" {
     #[cfg(windows)]
+    pub fn colossus_cef_automation_pointer_reset(
+        tab: u64,
+        generation: u64,
+        document: u64,
+        x: f64,
+        y: f64,
+        button: u32,
+    ) -> i32;
+    #[cfg(windows)]
     pub fn colossus_cef_automation_activate(tab: u64, generation: u64, document: u64) -> i32;
     #[cfg(windows)]
     pub fn colossus_cef_presentation_agent_indicator(
@@ -199,6 +208,26 @@ unsafe extern "C" {
         generation: u64,
         document: u64,
         indicator: *const AgentIndicator,
+    ) -> i32;
+    #[cfg(windows)]
+    pub fn colossus_cef_presentation_annotations(
+        tab: u64,
+        generation: u64,
+        document: u64,
+        marks: *const Annotation,
+        count: usize,
+        ttl_ms: u32,
+    ) -> i32;
+    #[cfg(windows)]
+    pub fn colossus_cef_annotation_png(
+        png: *const u8,
+        bytes: usize,
+        marks: *const Annotation,
+        count: usize,
+        scale: f64,
+        output: *mut u8,
+        capacity: usize,
+        written: *mut usize,
     ) -> i32;
     pub fn colossus_cef_presentation_document(tab: u64, generation: u64, document: *mut u64)
     -> i32;
@@ -256,6 +285,18 @@ pub struct AgentIndicator {
     pub top: f64,
     pub width: f64,
     pub height: f64,
+}
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone)]
+pub struct Annotation {
+    pub left: f64,
+    pub top: f64,
+    pub width: f64,
+    pub height: f64,
+    pub color: u32,
+    pub label_units: u32,
+    pub label: [u16; 160],
 }
 unsafe extern "C" {
     pub fn colossus_cef_bootstrap(options: *const Options, subprocess_exit: *mut i32) -> i32;

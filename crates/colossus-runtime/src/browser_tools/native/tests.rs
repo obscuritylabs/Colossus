@@ -213,6 +213,7 @@ impl BrowserDriver for Fixture {
         }
         let current = tab(&data);
         Ok(BrowserObservation {
+            inspection: None,
             session_id: c.session_id,
             tab: current.clone(),
             snapshot: c.snapshot_id.map(|id| BrowserSnapshot {

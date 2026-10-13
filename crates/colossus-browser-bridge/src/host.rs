@@ -256,6 +256,7 @@ impl Host {
         if matches!(
             command.action,
             BrowserAction::Screenshot { .. }
+                | BrowserAction::AnnotatedScreenshot { .. }
                 | BrowserAction::Upload { .. }
                 | BrowserAction::Download { .. }
         ) {

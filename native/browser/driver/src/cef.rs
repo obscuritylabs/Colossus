@@ -23,7 +23,13 @@ use crate::{ffi, identity, semantic};
 
 #[cfg(windows)]
 mod agent_indicator_windows;
+#[cfg(windows)]
+mod annotation_windows;
 mod capture;
+#[cfg(windows)]
+mod developer_windows;
+#[cfg(windows)]
+mod interaction_windows;
 mod presentation;
 mod transfer;
 
@@ -40,6 +46,10 @@ struct State {
     history: HashMap<u64, (bool, bool)>,
     expected: Option<i32>,
     result: Option<Result<Value, BrowserDriverError>>,
+    #[cfg(windows)]
+    drag_data: HashMap<u64, Value>,
+    #[cfg(windows)]
+    inspection_paused: HashSet<u64>,
 }
 pub struct Callbacks {
     state: Mutex<State>,
@@ -171,6 +181,11 @@ unsafe extern "C" fn event(
             state.created.remove(&tab);
             state.generations.remove(&tab);
             state.loading.remove(&tab);
+            #[cfg(windows)]
+            {
+                state.drag_data.remove(&tab);
+                state.inspection_paused.remove(&tab);
+            }
         }
         11 if state.expected == Some(command) => {
             state.result = Some(if success != 0 {
@@ -178,6 +193,23 @@ unsafe extern "C" fn event(
             } else {
                 Err(BrowserDriverError::Failed)
             });
+        }
+        #[cfg(windows)]
+        12 if payload.len() <= 64 * 1024 && state.generations.get(&tab) == Some(&generation) => {
+            if let Ok(value) = serde_json::from_slice::<Value>(payload) {
+                match value["method"].as_str() {
+                    Some("Input.dragIntercepted") => {
+                        state.drag_data.insert(tab, value["params"]["data"].clone());
+                    }
+                    Some("Debugger.paused") => {
+                        state.inspection_paused.insert(tab);
+                    }
+                    Some("Debugger.resumed") => {
+                        state.inspection_paused.remove(&tab);
+                    }
+                    _ => {}
+                }
+            }
         }
         #[cfg(all(target_os = "linux", feature = "native-custody-test"))]
         19 if state.generations.get(&tab) == Some(&generation) && payload.len() == 1 => {
@@ -962,12 +994,53 @@ impl Host {
             return Err(BrowserDriverError::Stale);
         }
         self.expected_revision = Some((native, actual_revision, actual_native_document));
+        #[cfg(windows)]
+        if !matches!(
+            command.action,
+            BrowserAction::Annotate { .. }
+                | BrowserAction::AnnotationClear {}
+                | BrowserAction::Evaluate { .. }
+                | BrowserAction::Cdp { .. }
+        ) {
+            self.clear_annotations(native);
+        }
         let mut snapshot = None;
+        #[cfg(windows)]
+        let mut inspection = None;
+        #[cfg(not(windows))]
+        let inspection = None;
         let mut selected = identity.clone();
         match &command.action {
+            BrowserAction::Evaluate { .. } | BrowserAction::Cdp { .. } => {
+                #[cfg(windows)]
+                {
+                    inspection = Some(self.developer_inspection(
+                        native,
+                        &identity,
+                        &command.action,
+                        control,
+                    )?);
+                }
+                #[cfg(not(windows))]
+                return Err(BrowserDriverError::Unsupported);
+            }
             BrowserAction::Screenshot { .. }
+            | BrowserAction::AnnotatedScreenshot { .. }
             | BrowserAction::Upload { .. }
             | BrowserAction::Download { .. } => return Err(BrowserDriverError::Unsupported),
+            BrowserAction::Hover { .. }
+            | BrowserAction::DoubleClick { .. }
+            | BrowserAction::RightClick { .. }
+            | BrowserAction::Drag { .. }
+            | BrowserAction::ClickAt { .. }
+            | BrowserAction::DragAt { .. }
+            | BrowserAction::Annotate { .. }
+            | BrowserAction::AnnotationClear {} => {
+                #[cfg(windows)]
+                self.rich_interaction(native, &identity, &command.action, control)?;
+                #[cfg(not(windows))]
+                return Err(BrowserDriverError::Unsupported);
+            }
             BrowserAction::Navigate { url } => {
                 self.expected_revision = None;
                 let completed =
@@ -1193,6 +1266,7 @@ impl Host {
                     self.presentation.selected_tab = self.tab_order.first().cloned();
                 }
                 return Ok(BrowserObservation {
+                    inspection: None,
                     session_id: command.session_id,
                     tab: summary,
                     snapshot: None,
@@ -1202,7 +1276,14 @@ impl Host {
         }
         // Drain immediate native document changes before committing opaque state.
         self.pump()?;
-        if recovering_snapshot {
+        if recovering_snapshot
+            || matches!(
+                command.action,
+                BrowserAction::Evaluate { .. } | BrowserAction::Cdp { .. }
+            )
+        {
+            // Inspection resumes page tasks before this final pump. Never
+            // rebind a guarded old-document value to a navigation observed here.
             self.check_document_fence()?;
         }
         let selected_native = self
@@ -1237,6 +1318,10 @@ impl Host {
             BrowserAction::Snapshot { .. }
                 | BrowserAction::Wait { .. }
                 | BrowserAction::TabSelect { .. }
+                | BrowserAction::Annotate { .. }
+                | BrowserAction::AnnotationClear {}
+                | BrowserAction::Evaluate { .. }
+                | BrowserAction::Cdp { .. }
         ) {
             tab.snapshot = None;
             tab.elements.clear();
@@ -1252,6 +1337,7 @@ impl Host {
             self.presentation.selected_tab = Some(selected);
         }
         Ok(BrowserObservation {
+            inspection,
             session_id: command.session_id,
             tab: tab.summary.clone(),
             truncated: snapshot.as_ref().is_some_and(|snapshot| snapshot.truncated),
@@ -1266,6 +1352,11 @@ impl Host {
         self.shutdown()
     }
     pub fn close_all(&mut self) -> Result<(), BrowserDriverError> {
+        #[cfg(windows)]
+        {
+            self.presentation.annotations = None;
+            self.presentation.agent_indicator = None;
+        }
         self.presentation.handoff.revoke();
         self.screenshot = None;
         self.transfer.upload = None;

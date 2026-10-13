@@ -14,18 +14,74 @@ use sha2::Digest as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+mod rich_interactions;
 
 const PAGE: &str = r#"<!doctype html><html><head><title>Core Windows fixture</title></head>
 <body style="background:rgb(231,241,255)"><h1>Core Windows fixture</h1>
 <button onclick="document.querySelector('output').textContent='Core click received'">Core click</button>
 <output>Waiting for Core</output><script>
-addEventListener('resize', () => {
-  if (innerWidth >= 1000 || window.startedFrame) return;
-  window.startedFrame = true;
-  const frame = document.createElement('iframe');
-  frame.hidden = true; frame.src = '/metadata-frame'; document.body.append(frame);
-});
-</script></body></html>"#;
+function addMetadataFrame(){
+  if(!window.startedFrame){
+    window.startedFrame=true;
+    const frame=document.createElement('iframe');
+    frame.hidden=true;frame.src='/metadata-frame';document.body.append(frame);
+  }
+  const status=document.getElementById('child-frame-result');
+  if(status)status.textContent='Background frame added';
+}
+addEventListener('resize',()=>{if(innerWidth<1000)addMetadataFrame();});
+function addInspectionFrame(){
+  const status=document.getElementById('child-frame-result');
+  status.textContent='Child frame loading';
+  const frame=document.createElement('iframe');
+  frame.hidden=true;
+  frame.onload=()=>{status.textContent='Child frame added';};
+  frame.src='about:blank';
+  document.body.append(frame);
+}
+</script>
+<button onmouseenter="document.getElementById('hover-result').textContent='Hover received'">Hover target</button><output id="hover-result">Hover waiting</output>
+<button ondblclick="document.getElementById('double-result').textContent='Double received'">Double target</button><output id="double-result">Double waiting</output>
+<button oncontextmenu="event.preventDefault();document.getElementById('right-result').textContent='Right received'">Context target</button><output id="right-result">Right waiting</output>
+<button id="coordinate-button" style="position:absolute;left:100px;top:250px;width:100px;height:40px" onclick="document.getElementById('pixel-result').textContent='Coordinate received'">Coordinate target</button><output id="pixel-result">Coordinate waiting</output>
+<div role="button" aria-label="Pointer drag surface" style="position:absolute;left:100px;top:310px;width:150px;height:60px;background:lightblue" onpointerdown="this.setPointerCapture(event.pointerId)" onpointerup="document.getElementById('pointer-result').textContent='Pointer drag received'">Drag canvas</div><output id="pointer-result">Pointer waiting</output>
+<div draggable="true" role="button" aria-label="HTML drag source" style="position:absolute;left:300px;top:310px;width:100px;height:60px;background:lightgreen" ondragstart="event.dataTransfer.setData('text/plain','owned-drag')">Drag source</div>
+<div role="button" aria-label="HTML drop target" style="position:absolute;left:450px;top:310px;width:120px;height:60px;background:pink" ondragover="event.preventDefault()" ondrop="event.preventDefault();document.getElementById('html-result').textContent=event.dataTransfer.getData('text/plain')==='owned-drag'?'HTML drop received':'HTML drop failed'">Drop target</div><output id="html-result">HTML waiting</output>
+<button onclick="addInspectionFrame()">Add child frame</button><output id="child-frame-result">Child frame waiting</output>
+<button onclick="document.querySelectorAll('iframe').forEach(frame=>frame.remove())">Remove child frame</button>
+</body></html>"#;
+
+const INSPECTION_TIMER: &str = r#"<!doctype html><title>Inspection timer</title>
+<h1>Inspection timer</h1><input id="race-field" type="text" value="public" hidden>
+<h2 id="race-ticks">Race tick 0</h2>
+<output id="race-mode">Race running</output>
+<button onclick="clearInterval(window.raceTimer);ordinary();document.getElementById('race-mode').textContent='Frozen ordinary'">Freeze ordinary</button>
+<button onclick="clearInterval(window.raceTimer);protectedField();document.getElementById('race-mode').textContent='Frozen protected'">Freeze protected</button>
+<button onclick="window.raceTimer=setInterval(tick,5);document.getElementById('race-mode').textContent='Race running'">Resume race</button>
+<script>
+window.raceTicks=0;
+let raceType='text',raceValue='public';
+function ordinary(){const field=document.getElementById('race-field');raceValue='public';field.value='public';raceType='text';field.type='text';}
+function protectedField(){const field=document.getElementById('race-field');field.type='password';raceType='password';field.value='owned-race-secret';raceValue='owned-race-secret';}
+function tick(){
+  ++window.raceTicks;
+  if(window.raceTicks%2) protectedField(); else ordinary();
+  document.getElementById('race-ticks').textContent='Race tick '+window.raceTicks;
+}
+window.raceTimer=setInterval(tick,5);
+</script>"#;
+const INSPECTION_SHADOW: &str = r#"<!doctype html><title>Inspection shadow</title>
+<h1>Inspection shadow</h1><div id="closed-host"></div><script>
+const root=document.getElementById('closed-host').attachShadow({mode:'closed'});
+window.closedCredential=document.createElement('input');
+window.closedCredential.type='password';window.closedCredential.value='owned-shadow-secret';
+root.append(window.closedCredential);
+</script>"#;
+const INSPECTION_DORMANT: &str =
+    "<!doctype html><title>Inspection dormant</title><h1>Inspection dormant</h1>";
+const INSPECTION_NAVIGATION: &str = r#"<!doctype html><title>Inspection navigation</title>
+<h1>Inspection navigation ready</h1>
+<script>setTimeout(()=>location.href='/inspection-dormant',250);</script>"#;
 
 struct CapturedHost {
     supervisor: Arc<WindowsBrowserSupervisor>,
@@ -111,15 +167,46 @@ async fn observe(
 ) -> BrowserObservation {
     target["max_nodes"] = json!(128);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut timer_state = Vec::new();
     loop {
-        let value = tokio::time::timeout_at(
+        let result = tokio::time::timeout_at(
             deadline,
             call(executor, context, "browser.snapshot", target.clone()),
         )
         .await
-        .expect("real Windows AX observation deadline")
-        .unwrap();
+        .unwrap_or_else(|_| {
+            panic!(
+                "real Windows AX observation deadline for {text:?}; timer markers: {timer_state:?}"
+            )
+        });
+        let value = match result {
+            Ok(value) => value,
+            // Only a known no-effect stale result from this read-only snapshot
+            // may be retried while a child document settles. Mutations and
+            // outcome-unknown failures never pass through this fixture helper.
+            Err(ToolError::Failed(message))
+                if message == "effect failed: browser document or element is stale" =>
+            {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                continue;
+            }
+            Err(error) => panic!("real Windows AX observation of {text:?} failed: {error}"),
+        };
         let observation: BrowserObservation = serde_json::from_value(value).unwrap();
+        timer_state = observation
+            .snapshot
+            .as_ref()
+            .into_iter()
+            .flat_map(|snapshot| &snapshot.nodes)
+            .filter(|node| {
+                node.name == "Race running"
+                    || node.name.starts_with("Frozen ")
+                    || node.name.starts_with("Race tick ")
+                    || node.name.starts_with("Child frame ")
+            })
+            .take(8)
+            .map(|node| node.name.clone())
+            .collect::<Vec<_>>();
         if observation
             .snapshot
             .as_ref()
@@ -131,7 +218,7 @@ async fn observe(
         target["document_id"] = json!(observation.tab.document_id);
         assert!(
             tokio::time::Instant::now() < deadline,
-            "real Windows page never exposed the fixture text"
+            "real Windows page never exposed {text:?}; timer markers: {timer_state:?}"
         );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
@@ -163,6 +250,16 @@ async fn fixture() -> (String, tokio::task::JoinHandle<()>, Arc<AtomicBool>) {
                 pending_frame.store(true, Ordering::Release);
                 tokio::time::sleep(Duration::from_millis(250)).await;
                 "<!doctype html><title>Background frame</title>".into()
+            } else if header.starts_with(b"GET /protected") {
+                PAGE.replace("</body>","<input type='password' name='password' value='owned-fixture-secret' hidden></body>")
+            } else if header.starts_with(b"GET /inspection-timer") {
+                INSPECTION_TIMER.into()
+            } else if header.starts_with(b"GET /inspection-shadow") {
+                INSPECTION_SHADOW.into()
+            } else if header.starts_with(b"GET /inspection-dormant") {
+                INSPECTION_DORMANT.into()
+            } else if header.starts_with(b"GET /inspection-navigation") {
+                INSPECTION_NAVIGATION.into()
             } else if header.starts_with(b"GET /second") {
                 PAGE.replace("Core Windows fixture", "Core Windows navigation")
             } else {
@@ -250,6 +347,17 @@ async fn real_windows_chromium_executes_core_tools_and_paints_authenticated_fram
                     BrowserActionKind::Navigate,
                     BrowserActionKind::Click,
                     BrowserActionKind::Screenshot,
+                    BrowserActionKind::Evaluate,
+                    BrowserActionKind::Cdp,
+                    BrowserActionKind::Hover,
+                    BrowserActionKind::DoubleClick,
+                    BrowserActionKind::RightClick,
+                    BrowserActionKind::Drag,
+                    BrowserActionKind::ClickAt,
+                    BrowserActionKind::DragAt,
+                    BrowserActionKind::Annotate,
+                    BrowserActionKind::AnnotationClear,
+                    BrowserActionKind::AnnotatedScreenshot,
                 ],
                 limits,
                 private_ca_trust: false,
@@ -426,6 +534,55 @@ async fn real_windows_chromium_executes_core_tools_and_paints_authenticated_fram
             assert_eq!(image.dimensions(), (1280, 960));
             assert_eq!(image.get_pixel(640, 480).0, [231, 241, 255, 255]);
         }
+        let mut viewport_generation = 3;
+        let observed = rich_interactions::inspect_adversarial(
+            &executor,
+            &context,
+            &opened,
+            observed,
+            &origin,
+            &presenter,
+            &request,
+            digest,
+            &mut viewport_generation,
+        )
+        .await;
+        let mut navigate = observed_target(&opened, &observed);
+        navigate["url"] = json!(format!("{origin}/"));
+        let observed: BrowserObservation = serde_json::from_value(
+            call(&executor, &context, "browser.navigate", navigate)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let observed = observe(
+            &executor,
+            &context,
+            observed_target(&opened, &observed),
+            "Core Windows fixture",
+        )
+        .await;
+        rich_interactions::current_fixture_view(
+            &presenter,
+            &request,
+            &opened,
+            &observed,
+            digest,
+            &mut viewport_generation,
+        )
+        .await;
+        let observed = rich_interactions::run(
+            &executor,
+            &context,
+            &opened,
+            observed,
+            &presenter,
+            digest,
+            &request,
+            &task_publisher,
+            &mut viewport_generation,
+        )
+        .await;
         presenter.disconnect();
         let mut navigate = observed_target(&opened, &observed);
         navigate["url"] = json!(format!("{origin}/second"));
@@ -433,11 +590,45 @@ async fn real_windows_chromium_executes_core_tools_and_paints_authenticated_fram
             .await
             .unwrap();
         let navigated: BrowserObservation = serde_json::from_value(navigation).unwrap();
-        observe(
+        let observed = observe(
             &executor,
             &context,
             observed_target(&opened, &navigated),
             "Core Windows navigation",
+        )
+        .await;
+        let mut protected = observed_target(&opened, &observed);
+        protected["url"] = json!(format!("{origin}/protected"));
+        let protected: BrowserObservation = serde_json::from_value(
+            call(&executor, &context, "browser.navigate", protected)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let protected = observe(
+            &executor,
+            &context,
+            observed_target(&opened, &protected),
+            "Core Windows fixture",
+        )
+        .await;
+        let mut inspect = observed_target(&opened, &protected);
+        inspect["snapshot_id"] = json!(protected.snapshot.as_ref().unwrap().snapshot_id);
+        inspect["expression"] = json!("document.querySelector('input[type=password]').value");
+        let error = call(&executor, &context, "browser.evaluate", inspect.clone())
+            .await
+            .unwrap_err();
+        assert!(!error.to_string().contains("owned-fixture-secret"));
+        inspect.as_object_mut().unwrap().remove("expression");
+        inspect["method"] = json!("DOM.getDocument");
+        inspect["params"] = json!({});
+        assert!(
+            call(&executor, &context, "browser.cdp", inspect)
+                .await
+                .is_err()
+        );
+        rich_interactions::inspect_navigation_restoration(
+            &executor, &context, &opened, protected, &origin,
         )
         .await;
         runtime
@@ -448,7 +639,7 @@ async fn real_windows_chromium_executes_core_tools_and_paints_authenticated_fram
             .await;
         assert!(!runtime.browser_active_work());
     });
-    let result = tokio::time::timeout(Duration::from_secs(60), &mut check).await;
+    let result = tokio::time::timeout(Duration::from_secs(90), &mut check).await;
     if result.is_err() {
         check.abort();
         let _ = check.await;

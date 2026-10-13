@@ -29,7 +29,10 @@ impl ToolExecutor for BrowserToolExecutor {
         let invocation = BrowserInvocation::from_call(&call)?;
         if matches!(
             call.name.as_str(),
-            "browser.screenshot" | "browser.upload" | "browser.download"
+            "browser.screenshot"
+                | "browser.screenshot.annotated"
+                | "browser.upload"
+                | "browser.download"
         ) && self
             .browser
             .artifacts
@@ -74,7 +77,10 @@ impl ToolExecutor for BrowserToolExecutor {
             )
             .await
             .map_err(crate::tool_gateway_error)?;
-        if call.name == "browser.screenshot" {
+        if matches!(
+            call.name.as_str(),
+            "browser.screenshot" | "browser.screenshot.annotated"
+        ) {
             let receipt = screenshot
                 .into_inner()
                 .map_err(|_| ToolError::Failed("browser capture receipt unavailable".into()))?

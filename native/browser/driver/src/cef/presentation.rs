@@ -25,6 +25,8 @@ pub(super) struct State {
     pub(super) selected_tab: Option<BrowserTabId>,
     #[cfg(windows)]
     pub(super) agent_indicator: Option<super::agent_indicator_windows::Pending>,
+    #[cfg(windows)]
+    pub(super) annotations: Option<super::annotation_windows::Pending>,
     active: Option<(Configure, LeaseGuard)>,
 }
 fn status(status: i32) -> Result<(), PresentationError> {
@@ -202,6 +204,8 @@ impl Host {
         self.presentation.active = Some((configuration, guard));
         #[cfg(windows)]
         self.replay_agent_indicator(lease);
+        #[cfg(windows)]
+        self.replay_annotations(lease);
         Ok(lease)
     }
     pub fn presentation_command(

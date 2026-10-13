@@ -44,12 +44,14 @@ impl BrowserBridgeDriver {
         if command.binding != self.enrollment.binding || command.control_generation == 0 {
             return Err(BrowserDriverError::Denied);
         }
-        if !matches!(command.action, BrowserAction::Screenshot { .. })
-            || !self
-                .enrollment
-                .capabilities
-                .actions
-                .contains(&command.action.kind())
+        if !matches!(
+            command.action,
+            BrowserAction::Screenshot { .. } | BrowserAction::AnnotatedScreenshot { .. }
+        ) || !self
+            .enrollment
+            .capabilities
+            .actions
+            .contains(&command.action.kind())
         {
             return Err(BrowserDriverError::Unsupported);
         }

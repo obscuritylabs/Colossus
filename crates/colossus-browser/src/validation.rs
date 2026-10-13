@@ -100,6 +100,7 @@ pub(crate) fn action(
     options: &BrowserOpenOptions,
     limits: &BrowserLimits,
 ) -> Result<(), BrowserError> {
+    interactions(action)?;
     match action {
         BrowserAction::Navigate { url } | BrowserAction::TabOpen { url: Some(url) } => {
             destination(options, url)
@@ -151,6 +152,76 @@ pub(crate) fn action(
     }
 }
 
+fn interactions(action: &BrowserAction) -> Result<(), BrowserError> {
+    use colossus_contracts::{BrowserAnnotationTarget, BrowserPoint, BrowserViewport};
+    let valid_viewport = |viewport: &BrowserViewport| {
+        viewport.width > 0
+            && viewport.height > 0
+            && viewport.width <= 4096
+            && viewport.height <= 4096
+    };
+    let valid_point = |point: &BrowserPoint, viewport: &BrowserViewport| {
+        point.x < viewport.width && point.y < viewport.height
+    };
+    let valid = match action {
+        BrowserAction::Evaluate { expression, .. } => {
+            !expression.is_empty() && expression.len() <= 8192
+        }
+        BrowserAction::Cdp { params, .. } => {
+            params.is_object()
+                && serde_json::to_vec(params).is_ok_and(|bytes| bytes.len() <= 16 * 1024)
+        }
+        BrowserAction::ClickAt {
+            viewport,
+            point,
+            click_count,
+            ..
+        } => {
+            valid_viewport(viewport)
+                && valid_point(point, viewport)
+                && (1..=2).contains(click_count)
+        }
+        BrowserAction::DragAt { viewport, path, .. } => {
+            valid_viewport(viewport)
+                && (2..=64).contains(&path.len())
+                && path.iter().all(|point| valid_point(point, viewport))
+        }
+        BrowserAction::Annotate {
+            viewport,
+            annotations,
+            ttl_ms,
+            snapshot_id,
+        } => {
+            valid_viewport(viewport)
+                && (1..=16).contains(&annotations.len())
+                && (1..=300000).contains(ttl_ms)
+                && annotations.iter().all(|annotation| {
+                    annotation.label.len() <= 160
+                        && !annotation.label.chars().any(char::is_control)
+                        && match &annotation.target {
+                            BrowserAnnotationTarget::Element { element } => {
+                                &element.snapshot_id == snapshot_id
+                            }
+                            BrowserAnnotationTarget::Rectangle { rect } => {
+                                rect.width > 0
+                                    && rect.height > 0
+                                    && u32::from(rect.x) + u32::from(rect.width)
+                                        <= u32::from(viewport.width)
+                                    && u32::from(rect.y) + u32::from(rect.height)
+                                        <= u32::from(viewport.height)
+                            }
+                        }
+                })
+        }
+        _ => true,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(BrowserError::InvalidArguments)
+    }
+}
+
 pub(crate) fn tab(
     tab: &BrowserTabSummary,
     options: &BrowserOpenOptions,
@@ -172,6 +243,11 @@ pub(crate) fn observation(
     value: &BrowserObservation,
     limits: &BrowserLimits,
 ) -> Result<(), BrowserError> {
+    if value.inspection.as_ref().is_some_and(|value| {
+        serde_json::to_vec(value).map_or(true, |bytes| bytes.len() > 32 * 1024)
+    }) {
+        return Err(BrowserError::LimitExceeded);
+    }
     if value.tab.title.len() > 1024 {
         return Err(BrowserError::LimitExceeded);
     }

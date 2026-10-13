@@ -180,6 +180,7 @@ impl Host {
             .get(&upload.owner.command.target.tab_id)
             .ok_or(BrowserDriverError::Stale)?;
         Ok(BrowserObservation {
+            inspection: None,
             session_id: upload.owner.command.session_id,
             tab: tab.summary.clone(),
             snapshot: None,

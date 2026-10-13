@@ -220,13 +220,16 @@ impl EffectExecutor for BrowserEffect<'_> {
                         }
                     }
                 };
-                if let BrowserAction::Screenshot { max_bytes } = action {
+                if matches!(
+                    action,
+                    BrowserAction::Screenshot { .. } | BrowserAction::AnnotatedScreenshot { .. }
+                ) {
                     return super::screenshot::capture(
                         self.browser,
                         &run,
                         &lease,
                         &target,
-                        max_bytes,
+                        &action,
                         obligations.max_output_bytes,
                         self.screenshot,
                     )

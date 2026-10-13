@@ -57,6 +57,7 @@ impl BrowserDriver for Native {
             sleep(Duration::from_millis(5)).await;
         }
         Ok(BrowserObservation {
+            inspection: None,
             session_id: command.session_id,
             tab: BrowserTabSummary {
                 tab_id: command.target.tab_id,

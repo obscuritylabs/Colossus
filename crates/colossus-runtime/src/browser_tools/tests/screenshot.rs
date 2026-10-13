@@ -83,12 +83,21 @@ async fn actual_png_is_quarantined_then_published_and_only_metadata_is_returned(
 
 #[tokio::test]
 async fn screenshot_post_denial_never_publishes_actual_png() {
+    for (name, kind) in [
+        ("browser.screenshot", BrowserActionKind::Screenshot),
+        (
+            "browser.screenshot.annotated",
+            BrowserActionKind::AnnotatedScreenshot,
+        ),
+    ] {
+        capture_post_denial(name, kind).await;
+    }
+}
+
+async fn capture_post_denial(name: &str, kind: BrowserActionKind) {
     let workspace = private_tempdir();
     let mut fixture = Driver::verified();
-    fixture
-        .capabilities
-        .actions
-        .push(BrowserActionKind::Screenshot);
+    fixture.capabilities.actions.push(kind);
     let driver = Arc::new(fixture);
     let runtime = runtime(
         workspace.path(),
@@ -106,14 +115,14 @@ async fn screenshot_post_denial_never_publishes_actual_png() {
         runtime.journal(),
         Arc::new(PostDeny(
             BuiltInPolicy::offline_default()
-                .with_action("browser.screenshot", DecisionOutcome::Allow)
+                .with_action(name, DecisionOutcome::Allow)
                 .with_network_destination("https://example.org"),
         )),
         Arc::new(DenyApproval),
-        SafetyKernel::new(["browser.screenshot".into()]),
+        SafetyKernel::new([name.into()]),
         [9; 32],
     ));
-    let error = call(&executor, &context, "browser.screenshot", target(&opened))
+    let error = call(&executor, &context, name, target(&opened))
         .await
         .unwrap_err();
     assert!(matches!(error, ToolError::Denied(_)));

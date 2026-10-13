@@ -90,7 +90,18 @@ const TRUSTED_BUILTIN_TOOL_GRANT: &[&str] = &[
     "browser.stop",
     "browser.snapshot",
     "browser.screenshot",
+    "browser.screenshot.annotated",
     "browser.click",
+    "browser.evaluate",
+    "browser.cdp",
+    "browser.hover",
+    "browser.double_click",
+    "browser.right_click",
+    "browser.drag",
+    "browser.click_at",
+    "browser.drag_at",
+    "browser.annotate",
+    "browser.annotation.clear",
     "browser.fill",
     "browser.select",
     "browser.press",
@@ -1775,6 +1786,38 @@ mod tests {
         let debug = format!("{grant:?}");
         assert!(debug.contains("echo"));
         assert!(!debug.contains("filesystem.read"));
+        assert!(!debug.contains("browser."));
+    }
+
+    #[test]
+    fn nonminimal_grants_admit_rich_browser_tools() {
+        for profile in [
+            AccessProfileSetting::Pinned,
+            AccessProfileSetting::Development,
+            AccessProfileSetting::AllowAll,
+        ] {
+            for grant in [
+                application_grant(profile).expect("Desktop grant"),
+                connector_application_grant(profile).expect("connector grant"),
+            ] {
+                let debug = format!("{grant:?}");
+                for tool in [
+                    "browser.evaluate",
+                    "browser.cdp",
+                    "browser.hover",
+                    "browser.double_click",
+                    "browser.right_click",
+                    "browser.drag",
+                    "browser.click_at",
+                    "browser.drag_at",
+                    "browser.annotate",
+                    "browser.annotation.clear",
+                    "browser.screenshot.annotated",
+                ] {
+                    assert!(debug.contains(tool), "{profile:?} grant missing {tool}");
+                }
+            }
+        }
     }
 
     #[test]

@@ -1,5 +1,7 @@
 //! Authority, cancellation, and freshness invariants at the browser service boundary.
 
+#[path = "coordinator/interactions.rs"]
+mod interactions;
 mod support;
 
 use colossus_browser::{BrowserCoordinator, BrowserError};

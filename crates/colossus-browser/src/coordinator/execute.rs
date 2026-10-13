@@ -19,6 +19,7 @@ impl BrowserCoordinator {
         if matches!(
             action,
             BrowserAction::Screenshot { .. }
+                | BrowserAction::AnnotatedScreenshot { .. }
                 | BrowserAction::Upload { .. }
                 | BrowserAction::Download { .. }
         ) {
@@ -122,15 +123,24 @@ impl BrowserCoordinator {
                 return Err(BrowserError::StaleDocument);
             }
             validation::action(&action, &session.options, &self.capabilities.limits)?;
-            if let Some(element) = action.element()
-                && (element.document_id != target.document_id
+            for element in action.elements() {
+                if element.document_id != target.document_id
                     || session
                         .snapshots
                         .get(&target.tab_id)
                         .is_none_or(|(snapshot, elements)| {
                             snapshot != &element.snapshot_id
                                 || !elements.contains(&element.element_id)
-                        }))
+                        })
+                {
+                    return Err(BrowserError::StaleDocument);
+                }
+            }
+            if let Some(snapshot_id) = action.coordinate_snapshot()
+                && session
+                    .snapshots
+                    .get(&target.tab_id)
+                    .is_none_or(|(current, _)| current != snapshot_id)
             {
                 return Err(BrowserError::StaleDocument);
             }
@@ -139,6 +149,8 @@ impl BrowserCoordinator {
                     action,
                     BrowserAction::Snapshot { .. }
                         | BrowserAction::Screenshot { .. }
+                        | BrowserAction::AnnotatedScreenshot { .. }
+                        | BrowserAction::AnnotationClear {}
                         | BrowserAction::Wait { .. }
                         | BrowserAction::Stop {}
                         | BrowserAction::TabOpen { .. }
@@ -211,7 +223,10 @@ impl BrowserCoordinator {
             self.await_driver(self.collect_download(command, &control), &control, timeout)
                 .await
                 .map(capture::Evidence::Download)
-        } else if matches!(action, BrowserAction::Screenshot { .. }) {
+        } else if matches!(
+            action,
+            BrowserAction::Screenshot { .. } | BrowserAction::AnnotatedScreenshot { .. }
+        ) {
             self.await_driver(self.collect_capture(command, &control), &control, timeout)
                 .await
                 .map(capture::Evidence::Screenshot)

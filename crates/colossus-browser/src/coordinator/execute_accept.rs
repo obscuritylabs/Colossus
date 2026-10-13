@@ -21,6 +21,14 @@ impl BrowserCoordinator {
             return Err(BrowserError::OutcomeUnknown);
         }
         validation::observation(&value, &self.capabilities.limits)?;
+        if value.inspection.is_some()
+            != matches!(
+                action,
+                BrowserAction::Evaluate { .. } | BrowserAction::Cdp { .. }
+            )
+        {
+            return Err(BrowserError::InvalidEvidence);
+        }
         let mut state = lock(&self.state)?;
         let session = owned(&mut state, &actor.binding, &lease.session_id)
             .map_err(|_| BrowserError::OutcomeUnknown)?;
@@ -94,7 +102,15 @@ impl BrowserCoordinator {
                 ),
             );
             session.needs_snapshot = false;
-        } else if !matches!(action, BrowserAction::Wait { .. } | BrowserAction::Stop {}) {
+        } else if !matches!(
+            action,
+            BrowserAction::Wait { .. }
+                | BrowserAction::Stop {}
+                | BrowserAction::Annotate { .. }
+                | BrowserAction::AnnotationClear {}
+                | BrowserAction::Evaluate { .. }
+                | BrowserAction::Cdp { .. }
+        ) {
             session.snapshots.remove(&target.tab_id);
             session.needs_snapshot = true;
         }

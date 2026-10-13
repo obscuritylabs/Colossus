@@ -8,6 +8,7 @@
 #include <limits>
 #if defined(OS_WIN)
 #include "agent_indicator_win.h"
+#include "annotation_win.h"
 #endif
 
 namespace colossus {
@@ -21,6 +22,7 @@ struct Presentation {
   std::vector<uint8_t> frame;
 #if defined(OS_WIN)
   AgentIndicator indicator;
+  AnnotationOverlay annotations;
 #endif
 };
 std::map<colossus_cef_tab, Presentation> presentations;
@@ -96,6 +98,7 @@ void PresentationPaint(colossus_cef_tab tab, uint64_t generation,
                      static_cast<const uint8_t*>(pixels) + size);
 #if defined(OS_WIN)
   state.indicator.Paint(state.frame, width, height, state.scale, std::chrono::steady_clock::now());
+  state.annotations.Paint(state.frame, width, height, state.scale, std::chrono::steady_clock::now());
 #endif
   retained += state.frame.size();
   state.pixel_width = width; state.pixel_height = height;
@@ -108,6 +111,9 @@ void PresentationExpire() {
     if (state.indicator.Expire(std::chrono::steady_clock::now()) && Lease(state) &&
         browser != tabs.end() && browser->second.browser)
       browser->second.browser->GetHost()->Invalidate(PET_VIEW);
+    if (state.annotations.Expire(std::chrono::steady_clock::now()) && Lease(state) &&
+        browser != tabs.end() && browser->second.browser)
+      browser->second.browser->GetHost()->Invalidate(PET_VIEW);
 #endif
     if (browser == tabs.end() || browser->second.generation != state.generation ||
         browser->second.closing || (state.visible && !Lease(state))) {
@@ -118,6 +124,7 @@ void PresentationExpire() {
       state.visible = false; state.focused = false; Clear(state);
 #if defined(OS_WIN)
       state.indicator.Clear();
+      state.annotations.Clear();
 #endif
     }
   }
@@ -132,6 +139,7 @@ void PresentationDocument(colossus_cef_tab tab, uint64_t generation) {
     state.visible = false; state.focused = false; Clear(state);
 #if defined(OS_WIN)
     state.indicator.Clear();
+    state.annotations.Clear();
 #endif
     const auto browser = tabs.find(tab);
     if (browser != tabs.end() && browser->second.browser) {
@@ -181,6 +189,7 @@ extern "C" int32_t colossus_cef_presentation_configure(colossus_cef_tab tab,
   Clear(state);
 #if defined(OS_WIN)
   state.indicator.Clear();
+  state.annotations.Clear();
 #endif
   state.generation = generation; state.viewport = viewport; state.document = document;
   state.width = width; state.height = height; state.scale = scale;
@@ -217,7 +226,7 @@ extern "C" int32_t colossus_cef_presentation_visible(colossus_cef_tab tab,
   auto host = browser->browser->GetHost();
   if (!visible) { state->focused = false; host->SetFocus(false); host->ImeCancelComposition(); Clear(*state); }
 #if defined(OS_WIN)
-  if (!visible) state->indicator.Clear();
+  if (!visible) { state->indicator.Clear(); state->annotations.Clear(); }
 #endif
   host->WasHidden(!visible);
   return COLOSSUS_CEF_OK;
@@ -251,6 +260,27 @@ extern "C" int32_t colossus_cef_presentation_frame(colossus_cef_tab tab,
   return COLOSSUS_CEF_OK;
 }
 #if defined(OS_WIN)
+extern "C" int32_t colossus_cef_presentation_annotations(colossus_cef_tab tab,
+    uint64_t generation, uint64_t document, const colossus_cef_annotation* marks,
+    size_t count, uint32_t ttl_ms) {
+  using namespace colossus;
+  Tab* browser = nullptr;
+  const auto status = Resolve(tab, generation, &browser);
+  if (status) return status;
+  const auto found = presentations.find(tab);
+  const auto current = documents.find(tab);
+  if (!headless || found == presentations.end() || current == documents.end() ||
+      current->second != std::pair{generation, document}) return COLOSSUS_CEF_DENIED;
+  auto& state = found->second;
+  if (state.generation != generation || state.document != document || (count && !Lease(state))) return COLOSSUS_CEF_DENIED;
+  if (count > 16 || (count && !marks)) return COLOSSUS_CEF_INVALID;
+  for (size_t i = 0; i < count; ++i)
+    if (marks[i].left + marks[i].width > state.width || marks[i].top + marks[i].height > state.height)
+      return COLOSSUS_CEF_INVALID;
+  if (!state.annotations.Set(marks,count,ttl_ms,std::chrono::steady_clock::now())) return COLOSSUS_CEF_INVALID;
+  browser->browser->GetHost()->Invalidate(PET_VIEW);
+  return COLOSSUS_CEF_OK;
+}
 extern "C" int32_t colossus_cef_presentation_agent_indicator(colossus_cef_tab tab,
     uint64_t generation, uint64_t document, const colossus_cef_agent_indicator* indicator) {
   using namespace colossus;

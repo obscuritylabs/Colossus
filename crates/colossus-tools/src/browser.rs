@@ -1,6 +1,9 @@
 use colossus_contracts::ToolSpec;
 use serde_json::{Value, json};
 
+#[path = "browser_interactions.rs"]
+mod interactions;
+
 /// First-party browser tools retain distinct effect identities. Availability is
 /// resolved by trusted host composition; listing these schemas grants no access.
 pub(super) fn browser_specs() -> Vec<ToolSpec> {
@@ -178,6 +181,7 @@ pub(super) fn browser_specs() -> Vec<ToolSpec> {
     ] {
         specs.push(tool(name, description, document_schema(json!({}), &[])));
     }
+    specs.extend(interactions::specs());
     specs
 }
 
@@ -188,7 +192,10 @@ fn tool(name: &str, description: &str, input_schema: Value) -> ToolSpec {
         input_schema,
         effect_action: Some(name.into()),
         capability: Some(name.into()),
-        max_output_bytes: if matches!(name, "browser.screenshot" | "browser.download") {
+        max_output_bytes: if matches!(
+            name,
+            "browser.screenshot" | "browser.screenshot.annotated" | "browser.download"
+        ) {
             4 * 1024 * 1024
         } else {
             64 * 1024

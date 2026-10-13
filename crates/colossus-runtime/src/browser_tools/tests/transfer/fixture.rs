@@ -62,6 +62,7 @@ impl Driver {
         }
         assert_eq!(bytes, CONTENT);
         Ok(BrowserObservation {
+            inspection: None,
             session_id: command.session_id,
             tab: BrowserTabSummary {
                 tab_id: command.target.tab_id,

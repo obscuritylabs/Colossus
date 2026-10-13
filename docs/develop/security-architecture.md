@@ -823,8 +823,8 @@ Owned Chromium automation has a separate typed effect boundary described in
 [ADR 0008](adr/0008-owned-chromium-browser.md). Core derives the application,
 workspace, scope and run from authenticated state; each effect consumes its permit
 before native dispatch, and observations require post-effect release. Private
-authenticated action, cancellation and presentation channels carry no generic CDP
-or JavaScript command. Each allocation retains an independently supervised process
+authenticated action, cancellation and presentation channels carry only closed
+typed browser contracts. Each allocation retains an independently supervised process
 and egress obligation before launch. Context-destroying cancellation interrupts the
 session and requires a fresh allocation rather than renewing control of a closed page.
 
@@ -836,6 +836,26 @@ retries a failed contained launch in this mode. Standard installation and app us
 remain non-admin; the executable requests `asInvoker`. Source acceptance cannot
 enable publisher release modes or substitute for installed signed-package and
 certificate-custody acceptance.
+
+That Windows development composition also supports snapshot-bound developer
+inspection through the same effect gateway. `browser.evaluate` accepts an expression
+of at most 8 KiB with Chromium's mandatory native side-effect checking, a one-second
+evaluation deadline and JSON value output. `browser.cdp` accepts only the closed DOM,
+layout, style and performance inspection methods in the browser contract, with
+method-specific parameter admission. Neither tool grants target or network control,
+file access or a debugging endpoint. Inspection results are bounded to 32 KiB and
+remain quarantined until post-effect policy releases them. Host capability advertisement
+and the application's tool ceiling independently govern their availability.
+
+Before either inspection read, the native driver requires an observed private
+`Debugger.paused` receipt and checks the document's complete native attribute
+snapshot while page JavaScript is paused. Protected fields, including hidden and
+shadow-tree fields, are rejected. Child documents and `iframe`, `frame`, `object`
+or `embed` elements are also rejected because one renderer pause does not establish
+cross-process coverage. Every exit requires acknowledged `Debugger.disable`
+cleanup before any result can return. Uncertain restoration releases no value,
+fences the session and reports an unknown outcome. These internal lifecycle commands
+are fixed native operations and cannot be selected through `browser.cdp`.
 
 The Linux OCI adapter runs the entire host tree in a networkless namespace, with
 read-only verified component bytes, bounded cgroups and a private exact-origin

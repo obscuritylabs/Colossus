@@ -1,6 +1,27 @@
 #include "host_internal.h"
+#include <cmath>
+#include <limits>
 #if defined(OS_WIN)
 #include "colossus_cef_presentation.h"
+#endif
+#if defined(OS_WIN)
+extern "C" int32_t colossus_cef_automation_pointer_reset(colossus_cef_tab tab,
+    uint64_t generation, uint64_t document, double x, double y, uint32_t button) {
+  colossus::Tab* browser = nullptr;
+  const auto status = colossus::Resolve(tab,generation,&browser);
+  if (status) return status;
+  uint64_t current = 0;
+  if (colossus_cef_presentation_document(tab,generation,&current) || current!=document ||
+      button>2 || !std::isfinite(x) || !std::isfinite(y) || x<0 || y<0 || x>4096 || y>4096)
+    return COLOSSUS_CEF_DENIED;
+  auto host = browser->browser->GetHost();
+  CefMouseEvent mouse; mouse.x=static_cast<int>(x); mouse.y=static_cast<int>(y);
+  host->SendMouseClickEvent(mouse,static_cast<cef_mouse_button_type_t>(button),true,1);
+  host->ExecuteDevToolsMethod(std::numeric_limits<int32_t>::max()-2,"Input.cancelDragging",nullptr);
+  auto params=CefDictionaryValue::Create(); params->SetBool("enabled",false);
+  host->ExecuteDevToolsMethod(std::numeric_limits<int32_t>::max()-1,"Input.setInterceptDrags",params);
+  return COLOSSUS_CEF_OK;
+}
 #endif
 #include "include/wrapper/cef_helpers.h"
 #include <cstring>

@@ -74,6 +74,10 @@ pub enum BrowserWaitCondition {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BrowserActionKind {
+    /// Evaluate a bounded expression with native side-effect checking enabled.
+    Evaluate,
+    /// Inspect a current owned page through a closed CDP method list.
+    Cdp,
     /// Navigate to a permitted HTTP(S) destination.
     Navigate,
     /// Read a semantic snapshot.
@@ -86,6 +90,24 @@ pub enum BrowserActionKind {
     Download,
     /// Activate an element.
     Click,
+    /// Move the guest pointer over a current element.
+    Hover,
+    /// Double-click a current element.
+    DoubleClick,
+    /// Right-click a current element.
+    RightClick,
+    /// Drag between two current elements.
+    Drag,
+    /// Click screenshot-relative coordinates in a current viewport.
+    ClickAt,
+    /// Drag a bounded screenshot-relative path.
+    DragAt,
+    /// Replace native presentation annotations.
+    Annotate,
+    /// Remove native presentation annotations.
+    AnnotationClear,
+    /// Capture the current viewport with its admitted annotations.
+    AnnotatedScreenshot,
     /// Fill an ordinary noncredential field.
     Fill,
     /// Select bounded options.
@@ -116,6 +138,22 @@ pub enum BrowserActionKind {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BrowserAction {
+    /// Evaluate a side-effect-free expression in the current owned document.
+    Evaluate {
+        /// Exact latest semantic snapshot.
+        snapshot_id: BrowserSnapshotId,
+        /// JavaScript expression, bounded to8KiB.
+        expression: String,
+    },
+    /// Execute one bounded page-inspection CDP method.
+    Cdp {
+        /// Exact latest semantic snapshot.
+        snapshot_id: BrowserSnapshotId,
+        /// Closed page-inspection method.
+        method: super::BrowserCdpMethod,
+        /// Bounded JSON object of native method parameters.
+        params: serde_json::Value,
+    },
     /// Navigate. The coordinator checks the immutable exact-origin envelope.
     Navigate {
         /// Validated web destination.
@@ -151,6 +189,69 @@ pub enum BrowserAction {
     Click {
         /// Exact element reference.
         element: BrowserElementRef,
+    },
+    /// Move the guest pointer over a fresh semantic target.
+    Hover {
+        /// Exact element reference.
+        element: BrowserElementRef,
+    },
+    /// Emit a real double-click sequence for a fresh semantic target.
+    DoubleClick {
+        /// Exact element reference.
+        element: BrowserElementRef,
+    },
+    /// Emit a secondary click for a fresh semantic target.
+    RightClick {
+        /// Exact element reference.
+        element: BrowserElementRef,
+    },
+    /// Drag with the primary pointer button between two fresh targets.
+    Drag {
+        /// Exact source reference.
+        element: BrowserElementRef,
+        /// Exact destination reference in the same snapshot.
+        to: BrowserElementRef,
+    },
+    /// Click only inside the exact supplied screenshot viewport.
+    ClickAt {
+        /// Current accepted semantic snapshot.
+        snapshot_id: BrowserSnapshotId,
+        /// Physical dimensions of the inspected screenshot.
+        viewport: super::BrowserViewport,
+        /// Screenshot-relative point.
+        point: super::BrowserPoint,
+        /// Guest pointer button.
+        #[serde(default)]
+        button: super::BrowserMouseButton,
+        /// One or two clicks.
+        click_count: u8,
+    },
+    /// Drag a finite path inside the exact supplied screenshot viewport.
+    DragAt {
+        /// Current accepted semantic snapshot.
+        snapshot_id: BrowserSnapshotId,
+        /// Physical dimensions of the inspected screenshot.
+        viewport: super::BrowserViewport,
+        /// Two to 64 bounded points, from press to release.
+        path: Vec<super::BrowserPoint>,
+    },
+    /// Replace native marks without modifying the DOM or browser input.
+    Annotate {
+        /// Current accepted semantic snapshot.
+        snapshot_id: BrowserSnapshotId,
+        /// Physical dimensions of the inspected screenshot.
+        viewport: super::BrowserViewport,
+        /// One to 16 marks in the same document and snapshot.
+        annotations: Vec<super::BrowserAnnotation>,
+        /// Original mark lifetime, from one to 300,000 milliseconds.
+        ttl_ms: u32,
+    },
+    /// Clear native marks without modifying the document.
+    AnnotationClear {},
+    /// Capture annotated pixels through the same private artifact custody.
+    AnnotatedScreenshot {
+        /// Complete PNG byte ceiling.
+        max_bytes: u32,
     },
     /// Fill an ordinary field; native drivers must reject credential/password targets.
     Fill {
@@ -214,12 +315,23 @@ impl BrowserAction {
     /// Exact capability identity; observation does not authorize later mutation.
     pub fn kind(&self) -> BrowserActionKind {
         match self {
+            Self::Evaluate { .. } => BrowserActionKind::Evaluate,
+            Self::Cdp { .. } => BrowserActionKind::Cdp,
             Self::Navigate { .. } => BrowserActionKind::Navigate,
             Self::Snapshot { .. } => BrowserActionKind::Snapshot,
             Self::Screenshot { .. } => BrowserActionKind::Screenshot,
             Self::Upload { .. } => BrowserActionKind::Upload,
             Self::Download { .. } => BrowserActionKind::Download,
             Self::Click { .. } => BrowserActionKind::Click,
+            Self::Hover { .. } => BrowserActionKind::Hover,
+            Self::DoubleClick { .. } => BrowserActionKind::DoubleClick,
+            Self::RightClick { .. } => BrowserActionKind::RightClick,
+            Self::Drag { .. } => BrowserActionKind::Drag,
+            Self::ClickAt { .. } => BrowserActionKind::ClickAt,
+            Self::DragAt { .. } => BrowserActionKind::DragAt,
+            Self::Annotate { .. } => BrowserActionKind::Annotate,
+            Self::AnnotationClear {} => BrowserActionKind::AnnotationClear,
+            Self::AnnotatedScreenshot { .. } => BrowserActionKind::AnnotatedScreenshot,
             Self::Fill { .. } => BrowserActionKind::Fill,
             Self::Select { .. } => BrowserActionKind::Select,
             Self::Press { .. } => BrowserActionKind::Press,
@@ -239,6 +351,10 @@ impl BrowserAction {
     pub fn element(&self) -> Option<&BrowserElementRef> {
         match self {
             Self::Click { element }
+            | Self::Hover { element }
+            | Self::DoubleClick { element }
+            | Self::RightClick { element }
+            | Self::Drag { element, .. }
             | Self::Upload { element, .. }
             | Self::Download { element, .. }
             | Self::Fill { element, .. }
@@ -247,6 +363,33 @@ impl BrowserAction {
                 condition: BrowserWaitCondition::ElementVisible { element },
                 ..
             } => Some(element),
+            _ => None,
+        }
+    }
+
+    /// Every reference that must belong to the current accepted snapshot.
+    pub fn elements(&self) -> Vec<&BrowserElementRef> {
+        match self {
+            Self::Drag { element, to } => vec![element, to],
+            Self::Annotate { annotations, .. } => annotations
+                .iter()
+                .filter_map(|annotation| match &annotation.target {
+                    super::BrowserAnnotationTarget::Element { element } => Some(element),
+                    super::BrowserAnnotationTarget::Rectangle { .. } => None,
+                })
+                .collect(),
+            _ => self.element().into_iter().collect(),
+        }
+    }
+
+    /// Coordinate-based effects also retain the current semantic observation fence.
+    pub fn coordinate_snapshot(&self) -> Option<&BrowserSnapshotId> {
+        match self {
+            Self::ClickAt { snapshot_id, .. }
+            | Self::Evaluate { snapshot_id, .. }
+            | Self::Cdp { snapshot_id, .. }
+            | Self::DragAt { snapshot_id, .. }
+            | Self::Annotate { snapshot_id, .. } => Some(snapshot_id),
             _ => None,
         }
     }

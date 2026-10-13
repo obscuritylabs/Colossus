@@ -35,8 +35,9 @@ policy. Tool availability is a separate fact from action permission.
 
 Implement native Chromium presentation through a pinned CEF component behind
 `colossus-native-browser`, preserving the Tauri shell. The native host uses private
-in-process DevTools methods; it does not open a remote-debugging TCP endpoint or
-expose raw CDP or arbitrary JavaScript to web IPC. The component's archive checksums,
+in-process DevTools methods. Its private action contract exposes bounded typed page
+inspection when the host advertises it; web IPC receives no debugging endpoint or
+general command transport. The component's archive checksums,
 file inventory, licensing notices, sandbox startup, and platform bootstrap are part
 of its distribution contract.
 
@@ -149,6 +150,20 @@ AppContainer/WFP containment and owned certificate custody are deferred in this
 composition. There is no automatic fallback from a failed contained launch.
 The standard installer and normal browser use must not require administrator
 access. A future privileged containment edition must be selected separately.
+
+This Windows development composition advertises richer guest pointer actions,
+native presentation annotations and bounded developer inspection as distinct tools.
+Element and coordinate input retain current snapshot and document fences; coordinate
+input also requires the exact physical screenshot dimensions. Annotations do not
+modify the DOM or dispatch input. Clean and annotated screenshots use the existing
+private transfer, output policy and owner-bound artifact publication. Developer
+inspection uses native side-effect-checked JavaScript evaluation or a closed list of
+page-scoped CDP methods, and its bounded results require post-effect release. The
+native host's advertised actions and the authenticated application grant both constrain
+the offered tool catalog. Inspection rejects protected-field and child-document
+pages; the [security architecture](../security-architecture.md) describes its private
+pause, guard and acknowledged restoration boundary. Reproduce the source tier with the
+[Windows interaction acceptance](../testing.md#windows-rich-interactions-and-annotations).
 
 The development sidecar injects the actual Windows supervisor into Runtime and
 Desktop attaches that same Core-owned page through its native pixel presenter.

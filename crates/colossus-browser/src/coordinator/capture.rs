@@ -32,18 +32,53 @@ impl BrowserCoordinator {
         max_bytes: u32,
         request_control: &RunControl,
     ) -> Result<CapturedBrowserScreenshot, BrowserError> {
+        self.capture_view(
+            actor,
+            lease,
+            target,
+            BrowserAction::Screenshot { max_bytes },
+            request_control,
+        )
+        .await
+    }
+
+    /// Capture native annotations without changing the ownership or release boundary.
+    pub async fn annotated_screenshot(
+        &self,
+        actor: &BrowserActor,
+        lease: &BrowserControlLease,
+        target: &BrowserTarget,
+        max_bytes: u32,
+        request_control: &RunControl,
+    ) -> Result<CapturedBrowserScreenshot, BrowserError> {
+        self.capture_view(
+            actor,
+            lease,
+            target,
+            BrowserAction::AnnotatedScreenshot { max_bytes },
+            request_control,
+        )
+        .await
+    }
+
+    async fn capture_view(
+        &self,
+        actor: &BrowserActor,
+        lease: &BrowserControlLease,
+        target: &BrowserTarget,
+        action: BrowserAction,
+        request_control: &RunControl,
+    ) -> Result<CapturedBrowserScreenshot, BrowserError> {
+        let max_bytes = match action {
+            BrowserAction::Screenshot { max_bytes }
+            | BrowserAction::AnnotatedScreenshot { max_bytes } => max_bytes,
+            _ => return Err(BrowserError::InvalidArguments),
+        };
         if max_bytes == 0 || max_bytes > MAX_BROWSER_SCREENSHOT_BYTES {
             return Err(BrowserError::InvalidArguments);
         }
         match self
-            .execute_inner(
-                actor,
-                lease,
-                target,
-                BrowserAction::Screenshot { max_bytes },
-                None,
-                request_control,
-            )
+            .execute_inner(actor, lease, target, action, None, request_control)
             .await?
         {
             Evidence::Screenshot(value) => Ok(value),
@@ -56,8 +91,10 @@ impl BrowserCoordinator {
         command: BrowserDriverCommand,
         control: &BrowserDriverControl,
     ) -> Result<CapturedBrowserScreenshot, BrowserDriverError> {
-        let BrowserAction::Screenshot { max_bytes } = command.action else {
-            return Err(BrowserDriverError::Denied);
+        let max_bytes = match command.action {
+            BrowserAction::Screenshot { max_bytes }
+            | BrowserAction::AnnotatedScreenshot { max_bytes } => max_bytes,
+            _ => return Err(BrowserDriverError::Denied),
         };
         let descriptor = self.driver.capture(command.clone(), control).await?;
         if descriptor.session_id != command.session_id

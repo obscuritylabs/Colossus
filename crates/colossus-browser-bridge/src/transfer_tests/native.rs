@@ -145,6 +145,7 @@ impl BrowserDriver for Native {
 }
 pub(super) fn observation(command: BrowserDriverCommand, rotate: bool) -> BrowserObservation {
     BrowserObservation {
+        inspection: None,
         session_id: command.session_id,
         tab: BrowserTabSummary {
             tab_id: command.target.tab_id,

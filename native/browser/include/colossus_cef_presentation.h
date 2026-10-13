@@ -59,6 +59,23 @@ typedef struct colossus_cef_agent_indicator {
 } colossus_cef_agent_indicator;
 int32_t colossus_cef_presentation_agent_indicator(colossus_cef_tab tab,
   uint64_t generation, uint64_t document_generation, const colossus_cef_agent_indicator* indicator);
+/* Private annotations are plain UTF-16 labels and logical page rectangles.
+ * Replacement only, at most16marks, ttl<=300000ms. Never injected into the DOM.
+ */
+typedef struct colossus_cef_annotation {
+  double left, top, width, height;
+  uint32_t color, label_units;
+  uint16_t label[160];
+} colossus_cef_annotation;
+int32_t colossus_cef_presentation_annotations(colossus_cef_tab tab,
+  uint64_t generation, uint64_t document_generation,
+  const colossus_cef_annotation* marks, size_t count, uint32_t ttl_ms);
+int32_t colossus_cef_annotation_png(const uint8_t* png, size_t bytes,
+  const colossus_cef_annotation* marks, size_t count, double scale,
+  uint8_t* output, size_t capacity, size_t* written);
+/* Cancellation cleanup for an already admitted owned pointer gesture only. */
+int32_t colossus_cef_automation_pointer_reset(colossus_cef_tab tab,
+  uint64_t generation, uint64_t document_generation, double x, double y, uint32_t button);
 #endif
 #ifdef __cplusplus
 }

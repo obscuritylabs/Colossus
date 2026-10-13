@@ -1313,3 +1313,50 @@ the complete containment and authenticated host boundary pass acceptance.
 The Desktop preview remains explicitly gated. Both desktop platforms must render
 and automate the same actual native page in signed installed builds before the
 integrated system browser is replaced by default.
+
+## Windows interaction and annotation acceptance
+
+The explicit ordinary-user Windows development host supports `browser.hover`,
+`browser.double_click`, `browser.right_click`, `browser.drag`, `browser.click_at`
+and `browser.drag_at`. Element actions use current semantic references. Pixel
+actions require the current snapshot ID and exact physical screenshot dimensions;
+the host converts them to Chromium's logical coordinates and rejects resizing or
+out-of-bounds input. Both drag endpoints must fit the same viewport. HTML drag
+data remains private to the owned tab; external file drag paths are rejected.
+
+`browser.annotate` replaces up to 16 native rectangles or referenced-element
+highlights, with plain-text labels, a closed color palette and a lifetime of at
+most five minutes. It changes neither page DOM nor input. Marks expire on
+navigation, resizing, writer changes, new snapshots, subsequent input or explicit
+`browser.annotation.clear`. Viewer renewal preserves the original deadline.
+`browser.screenshot.annotated` captures admitted marks through the same private
+transfer, output policy and owner-bound artifact publication as ordinary screenshots.
+`browser.screenshot` stays unmarked. Both captures become typed model images.
+
+`browser.evaluate` provides bounded JavaScript inspection with Chromium's native
+side-effect checking, a one-second evaluation timeout and JSON values only.
+`browser.cdp` accepts a closed list of DOM, layout, style and performance inspection
+methods. Both require a current snapshot and return bounded JSON under
+`inspection.value`. The native driver observes a private debugger pause before its
+protected-field guard and read, then acknowledges debugger restoration before any
+value can return. It rejects hidden and shadow-tree protected fields, child documents,
+and frame/object/embed elements; one renderer pause cannot establish coverage of
+separately executing child renderers. Uncertain restoration releases no value and
+fences the session with an unknown outcome. Node IDs issued by CDP
+remain scoped to this owned document; browser/target control, file injection,
+network reconfiguration and debugging endpoints are unavailable.
+
+After building a verified component with `scripts/browser-native-host-windows.ps1`,
+run the maintained source acceptance without an elevated token:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/ci/browser-windows-interactions.ps1 -Component 'C:\Users\you\ColossusBrowserComponent-<id>\component' -EvidenceDirectory .local/windows-browser-interactions-attempt-1
+```
+
+Use a fresh evidence directory each time. The test executes actual CEF through
+Runtime's effect gateway, verifies page event receipts and authenticated native
+frames at 200% scaling, compares clean and annotated PNGs, checks inspection and
+protected-field denial, and verifies graceful Job, private I/O and browser-state
+cleanup. Its receipt and PNG are source evidence. Live Desktop agent acceptance
+and signed installed-package acceptance remain separate requirements; this runner
+keeps production availability, outer containment and certificate acceptance false.

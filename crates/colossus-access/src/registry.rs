@@ -82,6 +82,17 @@ pub fn builtin_tool_descriptor(name: &str) -> Result<ToolDescriptor, AccessError
         | "browser.screenshot" | "browser.click" | "browser.fill" | "browser.select"
         | "browser.upload" | "browser.download" | "browser.press" | "browser.scroll"
         | "browser.wait" | "browser.close" => ("browser", vec![ToolPrerequisite::BrowserAvailable]),
+        "browser.evaluate"
+        | "browser.cdp"
+        | "browser.hover"
+        | "browser.double_click"
+        | "browser.right_click"
+        | "browser.drag"
+        | "browser.click_at"
+        | "browser.drag_at"
+        | "browser.annotate"
+        | "browser.annotation.clear"
+        | "browser.screenshot.annotated" => ("browser", vec![ToolPrerequisite::BrowserAvailable]),
         _ => return Err(AccessError::Unclassified(format!("tool {name}"))),
     };
     let source = if family == "mcp" {
@@ -159,6 +170,9 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "browser.tabs",
             "browser.snapshot",
             "browser.screenshot",
+            "browser.screenshot.annotated",
+            "browser.evaluate",
+            "browser.cdp",
             "browser.wait",
         ],
     );
@@ -201,6 +215,8 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "workflow.webhook.ingest",
             "workflow.subscription.dispatch",
             "browser.tab.select",
+            "browser.annotate",
+            "browser.annotation.clear",
             "browser.tab.close",
             "browser.stop",
             "browser.close",
@@ -254,6 +270,12 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "browser.forward",
             "browser.reload",
             "browser.click",
+            "browser.hover",
+            "browser.double_click",
+            "browser.right_click",
+            "browser.drag",
+            "browser.click_at",
+            "browser.drag_at",
             "browser.upload",
             "browser.download",
             "browser.fill",

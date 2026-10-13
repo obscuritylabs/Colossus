@@ -74,6 +74,7 @@ impl BrowserHostPool {
         if !matches!(
             command.action,
             colossus_contracts::BrowserAction::Screenshot { .. }
+                | colossus_contracts::BrowserAction::AnnotatedScreenshot { .. }
         ) {
             return Err(BrowserDriverError::Unsupported);
         }

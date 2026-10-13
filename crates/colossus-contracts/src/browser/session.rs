@@ -298,6 +298,9 @@ pub struct BrowserSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserObservation {
+    /// Optional policy-staged developer inspection. Never a public debugging endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inspection: Option<serde_json::Value>,
     /// Exact owned browser session.
     pub session_id: BrowserSessionId,
     /// Updated tab metadata with current document identity.

@@ -222,6 +222,7 @@ impl BrowserDriver for Driver {
             _ => target.unwrap(),
         };
         Ok(BrowserObservation {
+            inspection: None,
             session_id: command.session_id,
             tab: tab.clone(),
             truncated: false,

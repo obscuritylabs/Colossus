@@ -62,6 +62,14 @@ impl BrowserDriver for TestDriver {
                 BrowserActionKind::Navigate,
                 BrowserActionKind::Snapshot,
                 BrowserActionKind::Click,
+                BrowserActionKind::Hover,
+                BrowserActionKind::DoubleClick,
+                BrowserActionKind::RightClick,
+                BrowserActionKind::Drag,
+                BrowserActionKind::ClickAt,
+                BrowserActionKind::DragAt,
+                BrowserActionKind::Annotate,
+                BrowserActionKind::AnnotationClear,
                 BrowserActionKind::Fill,
                 BrowserActionKind::Select,
                 BrowserActionKind::Press,
@@ -163,6 +171,7 @@ impl BrowserDriver for TestDriver {
             self.commit_human_document(&command.session_id, tab.clone());
         }
         Ok(BrowserObservation {
+            inspection: None,
             session_id: command.session_id,
             tab,
             snapshot,

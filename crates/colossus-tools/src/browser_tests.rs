@@ -76,6 +76,53 @@ fn browser_tools_accept_typed_operations_and_have_exact_effect_identity() {
             extend(document(), json!({"max_nodes": 1024})),
         ),
         ("browser.click", element()),
+        ("browser.hover", element()),
+        ("browser.double_click", element()),
+        ("browser.right_click", element()),
+        (
+            "browser.drag",
+            extend(
+                element(),
+                json!({"to":{"document_id":opaque("bd"),"snapshot_id":opaque("bn"),"element_id":opaque("be")}}),
+            ),
+        ),
+        (
+            "browser.click_at",
+            extend(
+                document(),
+                json!({"snapshot_id":opaque("bn"),"viewport":{"width":1280,"height":800},"point":{"x":300,"y":400}}),
+            ),
+        ),
+        (
+            "browser.drag_at",
+            extend(
+                document(),
+                json!({"snapshot_id":opaque("bn"),"viewport":{"width":1280,"height":800},"path":[{"x":300,"y":400},{"x":500,"y":400}]}),
+            ),
+        ),
+        (
+            "browser.annotate",
+            extend(
+                document(),
+                json!({"snapshot_id":opaque("bn"),"viewport":{"width":1280,"height":800},"ttl_ms":5000,"annotations":[{"target":{"kind":"rectangle","rect":{"x":100,"y":100,"width":200,"height":80}},"label":"<script>plain text</script>","color":"red"}]}),
+            ),
+        ),
+        ("browser.annotation.clear", document()),
+        ("browser.screenshot.annotated", document()),
+        (
+            "browser.evaluate",
+            extend(
+                document(),
+                json!({"snapshot_id":opaque("bn"),"expression":"document.title"}),
+            ),
+        ),
+        (
+            "browser.cdp",
+            extend(
+                document(),
+                json!({"snapshot_id":opaque("bn"),"method":"Page.getLayoutMetrics","params":{}}),
+            ),
+        ),
         (
             "browser.upload",
             extend(
@@ -111,7 +158,10 @@ fn browser_tools_accept_typed_operations_and_have_exact_effect_identity() {
         assert_eq!(spec.capability.as_deref(), Some(name));
         assert_eq!(
             spec.max_output_bytes,
-            if matches!(name, "browser.screenshot" | "browser.download") {
+            if matches!(
+                name,
+                "browser.screenshot" | "browser.screenshot.annotated" | "browser.download"
+            ) {
                 4 * 1024 * 1024
             } else {
                 64 * 1024
@@ -243,12 +293,16 @@ fn browser_schemas_reject_protocol_escape_credentials_and_unowned_handle_shapes(
             "reject {name}"
         );
     }
-    for name in ["browser.evaluate", "browser.cdp"] {
-        assert!(
-            StaticToolRegistry::builtins(&[name.into()]).is_err(),
-            "unsupported {name}"
-        );
-    }
+    assert!(
+        validate(
+            "browser.cdp",
+            extend(
+                document(),
+                json!({"snapshot_id":opaque("bn"),"method":"Browser.close","params":{}})
+            )
+        )
+        .is_err()
+    );
     for field in ["path", "data", "transfer_id", "method", "endpoint"] {
         assert!(
             validate(

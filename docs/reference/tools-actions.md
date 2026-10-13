@@ -32,6 +32,9 @@ and output bounds.
 | Plugins | `plugin.list`, `plugin.inspect`, `plugin.skill.read`, `plugin.resource.list`, `plugin.resource.read` | Bounded metadata, selected Agent Skill instructions, and contained resources from the run snapshot |
 | Search and fetch | `web.search`, `web.fetch`, `docs.fetch`, `network.http` | Search needs an explicit route; generic fetch needs host activation plus declared or ambient HTTP(S) authority; quarantined output |
 | Browser | `browser.open`, `browser.status`, `browser.tabs`, `browser.tab.open`, `browser.tab.select`, `browser.tab.close`, `browser.navigate`, `browser.back`, `browser.forward`, `browser.reload`, `browser.stop`, `browser.snapshot`, `browser.screenshot`, `browser.click`, `browser.upload`, `browser.download`, `browser.fill`, `browser.select`, `browser.press`, `browser.scroll`, `browser.wait`, `browser.close` | Owned run-scoped sessions; exact origin ceilings, generation-bound control and fresh document/element handles; unavailable without an accepted host backend |
+| Browser interactions | `browser.hover`, `browser.double_click`, `browser.right_click`, `browser.drag`, `browser.click_at`, `browser.drag_at` | Current owned document and snapshot; coordinate input also binds exact physical viewport dimensions |
+| Browser annotations | `browser.annotate`, `browser.annotation.clear`, `browser.screenshot.annotated` | Native presentation marks; annotated PNGs use the ordinary screenshot custody and release boundary |
+| Browser inspection | `browser.evaluate`, `browser.cdp` | Bounded native side-effect-checked evaluation or closed page-inspection methods; current snapshot, native admission and post-effect release |
 | MCP | `mcp.servers`, `mcp.search`, `mcp.tools`, `mcp.call` | Configured stdio or Streamable HTTP servers and exact-name or star-pattern tool allowlists |
 | Integrations | Connected operation names | Configured, trusted, and selected only |
 | Workflows | `workflow.definition.list`, `workflow.definition.get`, `workflow.schedule.list`, `workflow.schedule.get`, `workflow.schedule.create`, `workflow.task.schedule`, `workflow.schedule.set_enabled`, `workflow.schedule.delete` | Registered hash-pinned definitions; caller-owned calendar/interval workflow schedules and plain-language tasks; persistent mutations use policy, review, one-use permits, and quarantined results |
@@ -75,9 +78,11 @@ tools. The remaining native integration and release gates are recorded in the
 [owned Chromium browser ADR](../develop/adr/0008-owned-chromium-browser.md).
 
 Each browser tool uses its exact tool name as both effect action and capability.
-`browser.status`, `browser.tabs`, `browser.snapshot`, `browser.screenshot`, and
-`browser.wait` are Read actions. `browser.tab.select`, `browser.tab.close`, `browser.stop`, and `browser.close`
-are Local state actions. All remaining browser tools are External network actions,
+`browser.status`, `browser.tabs`, `browser.snapshot`, `browser.screenshot`,
+`browser.screenshot.annotated`, `browser.evaluate`, `browser.cdp` and `browser.wait`
+are Read actions. `browser.tab.select`, `browser.tab.close`, `browser.stop`,
+`browser.close`, `browser.annotate` and `browser.annotation.clear` are Local state
+actions. All remaining browser tools are External network actions,
 including key input and scrolling, which can invoke page handlers. All outputs pass
 through quarantine and post-effect release. Ordinary observations have a 64 KiB
 ceiling; screenshot and download tool output ceilings are 4 MiB.
@@ -108,7 +113,9 @@ control transfer, cancellation, expiry, and uncertain effects invalidate old con
 | `browser.status`, `browser.tabs` | `session_id` |
 | `browser.close`, `browser.tab.open`, `browser.tab.select`, `browser.tab.close` | `session_id`, `control_generation`; tab select/close also require `tab_id` |
 | `browser.navigate`, `browser.back`, `browser.forward`, `browser.reload`, `browser.stop`, `browser.snapshot`, `browser.screenshot`, `browser.press`, `browser.scroll`, `browser.wait` | `session_id`, `control_generation`, `tab_id`, `document_id` |
-| `browser.click`, `browser.upload`, `browser.download`, `browser.fill`, `browser.select` | The document arguments plus fresh `snapshot_id` and `element_id` |
+| `browser.annotation.clear`, `browser.screenshot.annotated` | The document arguments |
+| `browser.click`, `browser.hover`, `browser.double_click`, `browser.right_click`, `browser.drag`, `browser.upload`, `browser.download`, `browser.fill`, `browser.select` | The document arguments plus fresh `snapshot_id` and `element_id` |
+| `browser.evaluate`, `browser.cdp`, `browser.click_at`, `browser.drag_at`, `browser.annotate` | The document arguments plus fresh `snapshot_id` |
 
 `browser.tab.open` accepts an optional `url`; `browser.navigate` requires `url`.
 `browser.snapshot` requires `max_nodes` from one to 1024. `browser.fill` requires
@@ -131,6 +138,40 @@ continuations consume a typed image reference. No path or encoded bytes appear i
 its arguments or JSON result; private transfer chunks never exceed 64 KiB. Screenshot
 availability requires installed native capture evidence and a trusted artifact publisher.
 
+The Windows Debug development host additionally advertises rich interactions,
+annotations and inspection. `browser.hover`, `browser.double_click` and
+`browser.right_click` use fresh element references and may invoke page handlers.
+`browser.drag` also requires `to`, an element reference from the same document and
+snapshot; both endpoints must fit the viewport. `browser.click_at` takes `viewport`
+(`width`, `height` from one to 4096), a `point` (`x`, `y` inside that viewport), an
+optional `button` (`left`, `middle`, `right`) and optional `click_count` (one or two).
+`browser.drag_at` takes the same viewport and a `path` of two to 64 points. These
+dimensions must match the current screenshot's physical pixels; resizing is rejected.
+
+`browser.annotate` takes that viewport, one to 16 `annotations`, and `ttl_ms` from
+one to 300000. Each mark has a plain `label` of at most 160 UTF-8 bytes, optional
+`color` (`blue`, `red`, `green`, `yellow`), and a `target` of either
+`{"kind":"element","element":{"document_id":"…","snapshot_id":"…","element_id":"…"}}`
+or `{"kind":"rectangle","rect":{"x":0,"y":0,"width":100,"height":50}}`.
+Rectangles must fit the viewport. Marks change neither DOM nor input;
+`browser.annotation.clear` removes them. `browser.screenshot.annotated` requires
+current admitted marks and publishes an annotated PNG through the same custody,
+policy and model-image path. Ordinary screenshots remain clean.
+
+`browser.evaluate` requires `expression` of at most 8192 UTF-8 bytes. Native V8
+side-effect checking is mandatory, evaluation has a one-second deadline, and only
+JSON values return. `browser.cdp` requires `method` and a JSON-object `params` of at
+most 16 KiB. The closed method list is `Page.getLayoutMetrics`,
+`Performance.getMetrics`, `DOM.getDocument`, `DOM.querySelector`,
+`DOM.querySelectorAll`, `DOM.getAttributes`, `DOM.getBoxModel`, `DOM.getOuterHTML`,
+`CSS.getComputedStyleForNode` and `CSS.getMediaQueries`. Native admission rejects
+parameters outside each method's allowed fields. Results are bounded to 32 KiB
+under `inspection.value` and require ordinary post-effect release. Inspection rejects
+documents with protected fields, child documents or frame/object/embed elements.
+Node IDs remain scoped to the current owned document. The
+[security architecture](../develop/security-architecture.md)
+describes native inspection admission.
+
 `browser.upload` requires an `artifact_id` of `artifact-` followed by 64 lowercase
 hexadecimal digits, plus a fresh ordinary file-input element. Trusted composition
 resolves an authorized nonempty RunInput or RunOutput artifact of at most 4 MiB
@@ -145,8 +186,8 @@ Empty downloads are supported. Unsolicited page downloads and save dialogs remai
 blocked. Released download artifacts can be upload inputs under fresh authorization;
 private ordered transfer chunks never exceed 64 KiB.
 
-Browser schemas reject unknown fields and expose no JavaScript execution, raw CDP,
-engine endpoint, certificate/key material, or password input. Profile management
+Browser tool schemas reject unknown top-level fields. The catalog exposes no general
+CDP transport, engine endpoint, certificate/key material or password input. Profile management
 and cross-run attachment have no model tool in this catalog. Same-page return from
 agent to human control is not implemented; terminal cancellation and run completion
 close the owned native context.

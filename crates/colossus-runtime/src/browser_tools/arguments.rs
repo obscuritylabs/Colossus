@@ -85,6 +85,9 @@ impl BrowserInvocation {
             "browser.screenshot" => BrowserAction::Screenshot {
                 max_bytes: colossus_ports::MAX_BROWSER_SCREENSHOT_BYTES,
             },
+            "browser.screenshot.annotated" => BrowserAction::AnnotatedScreenshot {
+                max_bytes: colossus_ports::MAX_BROWSER_SCREENSHOT_BYTES,
+            },
             "browser.upload" => BrowserAction::Upload {
                 element: element()?,
                 artifact_id: field(call, "artifact_id")?,
@@ -97,6 +100,47 @@ impl BrowserInvocation {
             "browser.click" => BrowserAction::Click {
                 element: element()?,
             },
+            "browser.evaluate" => BrowserAction::Evaluate {
+                snapshot_id: field(call, "snapshot_id")?,
+                expression: field(call, "expression")?,
+            },
+            "browser.cdp" => BrowserAction::Cdp {
+                snapshot_id: field(call, "snapshot_id")?,
+                method: field(call, "method")?,
+                params: field(call, "params")?,
+            },
+            "browser.hover" => BrowserAction::Hover {
+                element: element()?,
+            },
+            "browser.double_click" => BrowserAction::DoubleClick {
+                element: element()?,
+            },
+            "browser.right_click" => BrowserAction::RightClick {
+                element: element()?,
+            },
+            "browser.drag" => BrowserAction::Drag {
+                element: element()?,
+                to: field(call, "to")?,
+            },
+            "browser.click_at" => BrowserAction::ClickAt {
+                snapshot_id: field(call, "snapshot_id")?,
+                viewport: field(call, "viewport")?,
+                point: field(call, "point")?,
+                button: optional(call, "button")?.unwrap_or_default(),
+                click_count: optional(call, "click_count")?.unwrap_or(1),
+            },
+            "browser.drag_at" => BrowserAction::DragAt {
+                snapshot_id: field(call, "snapshot_id")?,
+                viewport: field(call, "viewport")?,
+                path: field(call, "path")?,
+            },
+            "browser.annotate" => BrowserAction::Annotate {
+                snapshot_id: field(call, "snapshot_id")?,
+                viewport: field(call, "viewport")?,
+                annotations: field(call, "annotations")?,
+                ttl_ms: field(call, "ttl_ms")?,
+            },
+            "browser.annotation.clear" => BrowserAction::AnnotationClear {},
             "browser.fill" => {
                 let text: String = field(call, "text")?;
                 if text.len() > 8192 {
@@ -166,12 +210,23 @@ impl BrowserInvocation {
             } => "browser.tabs",
             Self::Close { .. } => "browser.close",
             Self::Action { action, .. } => match action {
+                BrowserAction::Evaluate { .. } => "browser.evaluate",
+                BrowserAction::Cdp { .. } => "browser.cdp",
                 BrowserAction::Navigate { .. } => "browser.navigate",
                 BrowserAction::Snapshot { .. } => "browser.snapshot",
                 BrowserAction::Screenshot { .. } => "browser.screenshot",
+                BrowserAction::AnnotatedScreenshot { .. } => "browser.screenshot.annotated",
                 BrowserAction::Upload { .. } => "browser.upload",
                 BrowserAction::Download { .. } => "browser.download",
                 BrowserAction::Click { .. } => "browser.click",
+                BrowserAction::Hover { .. } => "browser.hover",
+                BrowserAction::DoubleClick { .. } => "browser.double_click",
+                BrowserAction::RightClick { .. } => "browser.right_click",
+                BrowserAction::Drag { .. } => "browser.drag",
+                BrowserAction::ClickAt { .. } => "browser.click_at",
+                BrowserAction::DragAt { .. } => "browser.drag_at",
+                BrowserAction::Annotate { .. } => "browser.annotate",
+                BrowserAction::AnnotationClear {} => "browser.annotation.clear",
                 BrowserAction::Fill { .. } => "browser.fill",
                 BrowserAction::Select { .. } => "browser.select",
                 BrowserAction::Press { .. } => "browser.press",

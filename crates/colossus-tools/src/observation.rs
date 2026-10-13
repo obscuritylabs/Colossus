@@ -106,7 +106,12 @@ pub fn tool_result_observation_messages(results: &[ToolResult]) -> Vec<ModelMess
 }
 
 fn released_tool_image_message(result: &ToolResult) -> Option<ModelMessage> {
-    if result.name != "browser.screenshot" || result.exit_code != 0 || result.images.len() != 1 {
+    if !matches!(
+        result.name.as_str(),
+        "browser.screenshot" | "browser.screenshot.annotated"
+    ) || result.exit_code != 0
+        || result.images.len() != 1
+    {
         return None;
     }
     let image = result.images.first()?;

@@ -3,7 +3,9 @@ use super::{
     service::{BrowserRun, RuntimeBrowserTools, execution_error},
 };
 use crate::prelude::*;
-use colossus_contracts::{BrowserControlLease, BrowserSessionBinding, BrowserTarget};
+use colossus_contracts::{
+    BrowserAction, BrowserControlLease, BrowserSessionBinding, BrowserTarget,
+};
 use colossus_ports::{BrowserArtifactPublication, BrowserScreenshotDescriptor};
 use zeroize::Zeroizing;
 
@@ -18,20 +20,36 @@ pub(super) async fn capture(
     run: &BrowserRun,
     lease: &BrowserControlLease,
     target: &BrowserTarget,
-    max_bytes: u32,
+    action: &BrowserAction,
     policy_bound: u64,
     receipt: &StdMutex<Option<Receipt>>,
 ) -> Result<QuarantinedEffectResult, ExecutionError> {
+    let (max_bytes, annotated) = match action {
+        BrowserAction::Screenshot { max_bytes } => (*max_bytes, false),
+        BrowserAction::AnnotatedScreenshot { max_bytes } => (*max_bytes, true),
+        _ => {
+            return Err(ExecutionError::Failed(
+                "invalid browser capture action".into(),
+            ));
+        }
+    };
     if u64::from(max_bytes) > policy_bound {
         return Err(ExecutionError::Failed(
             "browser screenshot exceeds policy output ceiling".into(),
         ));
     }
-    let mut captured = browser
-        .coordinator
-        .screenshot(&run.actor, lease, target, max_bytes, &run.control)
-        .await
-        .map_err(execution_error)?;
+    let mut captured = if annotated {
+        browser
+            .coordinator
+            .annotated_screenshot(&run.actor, lease, target, max_bytes, &run.control)
+            .await
+    } else {
+        browser
+            .coordinator
+            .screenshot(&run.actor, lease, target, max_bytes, &run.control)
+            .await
+    }
+    .map_err(execution_error)?;
     let verified =
         validate_image_bytes("browser-screenshot.png", Some("image/png"), &captured.bytes)
             .map_err(|_| {

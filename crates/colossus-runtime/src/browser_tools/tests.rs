@@ -220,6 +220,7 @@ impl BrowserDriver for Driver {
             truncated: false,
         });
         Ok(BrowserObservation {
+            inspection: None,
             session_id: command.session_id,
             tab,
             snapshot,
