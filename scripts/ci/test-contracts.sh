@@ -298,8 +298,9 @@ trap - EXIT HUP INT TERM
 "${NODE:-node}" --test "$script_dir/release-notes.test.mjs"
 "${NODE:-node}" --test "$script_dir/../development-launch.test.mjs"
 
-# These stdlib-only integrity and harness tests use synthetic archives and
-# executable fixtures. Ordinary CI never downloads CEF or launches Chromium.
+# These offline integrity and harness tests use synthetic archives and executable
+# fixtures. The selected Python needs cryptography for PKI input contracts; see
+# docs/develop/testing.md. Ordinary CI never downloads CEF or launches Chromium.
 "${PYTHON:-python3}" -B -m unittest discover \
     -s "$script_dir/../../native/browser/scripts" -p 'test_*.py'
 "${PYTHON:-python3}" -B -m unittest discover \

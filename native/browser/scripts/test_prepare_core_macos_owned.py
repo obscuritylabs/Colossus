@@ -13,6 +13,7 @@ import prepare_core_macos_owned as owned
 
 
 class PreparationContracts(unittest.TestCase):
+    @unittest.skipUnless(os.name == "posix", "POSIX ownership/private-mode contracts run on Linux/macOS CI")
     def test_preparation_seals_native_parent_after_core_compile_and_never_launches_core(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -96,6 +97,7 @@ class PreparationContracts(unittest.TestCase):
             self.assertIn("macos-process-output-diagnostic", process_command[process_command.index("--features") + 1])
             self.assertEqual(receipt["command"][1], owned.CORE_TEST)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX no-follow private logs run on Linux/macOS CI")
     def test_failed_compiler_json_diagnostics_are_preserved_without_a_native_launch(self):
         with tempfile.TemporaryDirectory() as temporary:
             log = Path(temporary) / "compile.log"
@@ -118,13 +120,14 @@ class PreparationContracts(unittest.TestCase):
                 owned.fixture_port(value)
 
     def test_compiler_identifies_exact_runtime_lib_test_not_another_executable(self):
+        executable = Path(__file__).resolve().parent / "core-test"
         artifact = {"reason": "compiler-artifact", "target": {
             "name": "colossus_runtime", "kind": ["lib"]},
-            "profile": {"test": True}, "executable": "/private/tmp/core-test"}
+            "profile": {"test": True}, "executable": str(executable)}
         self.assertEqual(owned.core_executable(json.dumps(artifact).encode()),
-                         Path("/private/tmp/core-test"))
+                         executable)
         self.assertEqual(owned.core_executable(
-            b"compiler diagnostic\n" + json.dumps(artifact).encode()), Path("/private/tmp/core-test"))
+            b"compiler diagnostic\n" + json.dumps(artifact).encode()), executable)
         for changes in ({"reason": "build-script-executed"},
                         {"profile": {"test": False}}, {"profile": {"test": 1}},
                         {"target": {"name": "colossus_sidecar", "kind": ["bin"]}},
@@ -135,7 +138,7 @@ class PreparationContracts(unittest.TestCase):
             owned.core_executable(b"{}\n")
         with self.assertRaises(owned.common.DiagnosticError):
             owned.core_executable((json.dumps(artifact) + "\n" + json.dumps({
-                **artifact, "executable": "/private/tmp/other-core-test"})).encode())
+                **artifact, "executable": str(executable.with_name("other-core-test"))})).encode())
 
     def test_build_commands_cannot_launch_or_filter_other_native_tests(self):
         command = owned.core_build_command()
@@ -165,6 +168,7 @@ class PreparationContracts(unittest.TestCase):
         # and differ only by the authenticated native CBOOT role.
         self.assertEqual(owned.HELPER_SUFFIXES, (" (Renderer)", " (GPU)", "", ""))
 
+    @unittest.skipUnless(os.name == "posix", "POSIX no-follow private executable modes run on Linux/macOS CI")
     def test_frozen_core_survives_later_compiler_output_replacement(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -195,6 +199,7 @@ class PreparationContracts(unittest.TestCase):
                 owned.descriptor(Path("/a"), Path("/a/App.app"),
                                  "https://127.0.0.1:19431", root, facts, ["b"] * 4)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX ownership/private-mode seed custody runs on Linux/macOS CI")
     def test_only_exact_preparer_seed_inode_can_be_removed(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -210,6 +215,7 @@ class PreparationContracts(unittest.TestCase):
             owned.remove_owned_seed(seed, owned.seed_identity(seed))
             self.assertFalse(seed.exists())
 
+    @unittest.skipUnless(os.name == "posix", "POSIX ownership/private-mode seed custody runs on Linux/macOS CI")
     def test_seed_alias_and_public_permissions_are_retained(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -225,6 +231,7 @@ class PreparationContracts(unittest.TestCase):
             self.assertTrue(seed.exists())
 
     @unittest.skipUnless(importlib.util.find_spec("cryptography"), "cryptography prerequisite absent")
+    @unittest.skipUnless(os.name == "posix", "POSIX no-follow private certificate files run on Linux/macOS CI")
     def test_synthetic_fixture_has_exact_ip_san_private_pkcs8_and_normal_chain(self):
         from cryptography import x509
         from cryptography.hazmat.primitives import hashes, serialization

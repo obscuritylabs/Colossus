@@ -222,6 +222,14 @@ async fn postgres_oidc_to_runtime_and_recover() {
 
 async fn acceptance(postgres: bool) {
     let (auth, issuer, oidc) = fixture().await;
+    // Protected native state requires an owner-controlled ancestor namespace.
+    // Windows' shared temporary directory does not establish that authority.
+    #[cfg(windows)]
+    let directory = tempfile::Builder::new()
+        .prefix("colossus-cloud-transport-")
+        .tempdir_in(std::env::var_os("USERPROFILE").expect("test user profile"))
+        .unwrap();
+    #[cfg(not(windows))]
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let home = ColossusHome::ensure_at(root.join("native")).unwrap();

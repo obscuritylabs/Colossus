@@ -1,5 +1,6 @@
 """Portable contracts only: no native image, subprocess, Mach or store is used."""
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -14,6 +15,7 @@ class SupervisorFixtureContracts(unittest.TestCase):
             path=root/'custody'/name
             path.write_bytes(b'colossus public custody probe v1\n')
             path.chmod(0o600)
+    @unittest.skipUnless(os.name == "posix", "POSIX ownership/private-mode and no-follow markers run on Linux/macOS CI")
     def test_only_reviewed_public_markers_are_retired_before_real_creator(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp).resolve(); self.markers(root)
@@ -21,6 +23,7 @@ class SupervisorFixtureContracts(unittest.TestCase):
             fixture.retire_front_probe_markers(root)
             self.assertTrue(all(not (root/'custody'/name).exists() for name in fixture.fronts.MARKERS))
             self.assertEqual(retained.read_bytes(),b'retain arbitrary file')
+    @unittest.skipUnless(os.name == "posix", "POSIX ownership/private-mode and no-follow markers run on Linux/macOS CI")
     def test_changed_marker_bytes_or_symlink_prevent_any_marker_removal(self):
         for invalid in ('bytes','symlink'):
             with tempfile.TemporaryDirectory() as temp:

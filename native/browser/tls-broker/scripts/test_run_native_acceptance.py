@@ -13,6 +13,7 @@ from unittest.mock import patch
 import run_native_acceptance as runner
 
 
+@unittest.skipUnless(os.name == "posix", "POSIX private evidence and no-follow files; Linux/macOS CI contracts")
 class PreparerTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="tls-preparer-pure-")
@@ -46,8 +47,6 @@ class PreparerTests(unittest.TestCase):
             return runner.prepare(output)
 
     def test_default_preparation_never_selects_native_launch(self):
-        args = runner.parser().parse_args(["--output-root", str(self.directory)])
-        self.assertFalse(args.run)
         receipt = self.prepare()
         value = runner.load_prepared(receipt)
         self.assertFalse(value["native_cases_executed"])
@@ -107,6 +106,10 @@ class PreparerTests(unittest.TestCase):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_parser_defaults_to_preparation_without_native_launch(self):
+        args = runner.parser().parse_args(["--output-root", str(Path(__file__).resolve().parent)])
+        self.assertFalse(args.run)
+
     def result(self):
         return dict(accepted=True, broker_exit_observed=True, listener_v4_closed=True, listener_v6_closed=True,
                     stdout_empty=True, forced=False, full_helper_cleanup_proven=False, production_enabled=False,

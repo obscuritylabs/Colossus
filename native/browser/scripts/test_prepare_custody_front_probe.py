@@ -31,6 +31,7 @@ class SourceContract(unittest.TestCase):
         self.assertFalse(probe.accepted_receipt(dict(valid, unreviewed=True), 2))
         self.assertFalse(probe.accepted_receipt(None, 2))
 
+@unittest.skipUnless(os.name == "posix", "POSIX ownership/private-mode and no-follow markers run on Linux/macOS CI")
 class MarkerContract(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

@@ -24,6 +24,7 @@ class OwnedInputs(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
+    @unittest.skipUnless(os.name == "posix", "POSIX private custody and no-follow writes; Linux/macOS CI contracts")
     def test_exact_catalog_scope_hashes_and_native_compatible_container(self):
         facts = inputs.prepare(self.broker, self.fixture, self.workspace, "https://127.0.0.1:4433")
         registry_bytes = (self.broker / "owned-pki-registry.json").read_bytes()
@@ -57,6 +58,7 @@ class OwnedInputs(unittest.TestCase):
             self.assertEqual(path.stat().st_nlink, 1)
         self.assertFalse(facts["native_acceptance"])
 
+    @unittest.skipUnless(os.name == "posix", "POSIX private custody and symlink identity; Linux/macOS CI contracts")
     def test_prior_native_duty_symlink_and_foreign_workspace_remain_untouched(self):
         orphan = self.broker / "colossus-custody-generation.jsonl"
         orphan.write_bytes(b"retained-duty")

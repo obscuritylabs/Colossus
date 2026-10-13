@@ -108,6 +108,7 @@ class NativeBuildReceiptTests(unittest.TestCase):
             owned.verify_build(self.root, self.native, "macosarm64")
         run.assert_not_called()
 
+    @unittest.skipUnless(os.name == "posix", "POSIX executable modes; Linux/macOS CI contracts")
     def test_completed_receipt_binds_twelve_outputs_without_the_external_rust_main(self):
         receipt = owned.write_native_build(self.root, self.native, "macosarm64")
         metadata = owned.verify_build(self.root, self.native, "macosarm64")
@@ -120,6 +121,7 @@ class NativeBuildReceiptTests(unittest.TestCase):
         self.assertFalse(completed["production_accepted"])
         self.assertFalse(completed["native_acceptance"])
 
+    @unittest.skipUnless(os.name == "posix", "POSIX executable modes; Linux/macOS CI contracts")
     def test_modified_archive_or_any_front_or_helper_body_is_rejected(self):
         owned.write_native_build(self.root, self.native, "macosarm64")
         for relative, _kind in owned.NATIVE_ARTIFACTS:
@@ -131,6 +133,7 @@ class NativeBuildReceiptTests(unittest.TestCase):
                     owned.verify_build(self.root, self.native, "macosarm64")
                 image.write_bytes(original)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX executable modes; Linux/macOS CI contracts")
     def test_wrong_front_or_body_type_cannot_receive_a_completed_receipt(self):
         for relative, kind in owned.NATIVE_ARTIFACTS:
             if kind == "archive":
@@ -149,17 +152,20 @@ class NativeBuildReceiptTests(unittest.TestCase):
             owned.write_native_build(self.root, self.native, "macosarm64")
         self.assertFalse((self.native / owned.NATIVE_BUILD_RECEIPT).exists())
 
+    @unittest.skipUnless(os.name == "posix", "POSIX executable modes; Linux/macOS CI contracts")
     def test_stock_front_cannot_substitute_for_the_owned_loader(self):
         self.missing_symbols.add(("envelope/colossus-native-browser-host", owned.FRONT_EXPORTS[0]))
         with self.assertRaises(component.ComponentError):
             owned.write_native_build(self.root, self.native, "macosarm64")
         self.assertFalse((self.native / owned.NATIVE_BUILD_RECEIPT).exists())
 
+    @unittest.skipUnless(os.name == "posix", "POSIX executable modes; Linux/macOS CI contracts")
     def test_native_source_change_invalidates_the_configuration(self):
         owned.write_native_build(self.root, self.native, "macosarm64")
         with patch.object(owned, "native_source_hashes", return_value={"changed": "b" * 64}), self.assertRaises(component.ComponentError):
             owned.verify_build(self.root, self.native, "macosarm64")
 
+    @unittest.skipUnless(os.name == "posix", "POSIX executable modes; Linux/macOS CI contracts")
     def test_rebuilt_outputs_need_a_new_complete_receipt(self):
         receipt = owned.write_native_build(self.root, self.native, "macosarm64")
         before = receipt.read_bytes()

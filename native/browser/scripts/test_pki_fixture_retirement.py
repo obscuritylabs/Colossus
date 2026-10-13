@@ -14,6 +14,7 @@ from pki_fixture_retirement import FixtureInputs, startup_receipt
 from run_probe import ProbeError
 
 
+@unittest.skipUnless(os.name == "posix", "POSIX descriptor-relative private retirement; Linux/macOS CI contracts")
 class RetirementTests(unittest.TestCase):
     def test_retirement_removes_exact_created_sources_and_is_idempotent(self):
         with tempfile.TemporaryDirectory() as allocation:

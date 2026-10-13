@@ -871,10 +871,25 @@ test("Managed Local trusted tool ceiling exactly matches declared built-ins", ()
       .map((match) => match[1]),
   );
   assert.match(builtinSource, /specs\.extend\(super::browser::browser_specs\(\)\)/u);
-  builtinNames.push(
-    ...[...read("crates/colossus-tools/src/browser.rs").matchAll(/(?:tool)?\(\s*"(browser\.[a-z_.]+)"/gu)]
-      .map((match) => match[1]),
+  const browserSource = read("crates/colossus-tools/src/browser.rs");
+  assert.match(
+    browserSource,
+    /#\[path = "browser_interactions\.rs"\]\s*mod interactions;/u,
   );
+  const browserSpecs = browserSource.match(
+    /fn browser_specs\(\)[^{]*\{(?<body>[\s\S]*?)\n\}/u,
+  );
+  assert.notEqual(browserSpecs, null);
+  assert.match(browserSpecs.groups.body, /specs\.extend\(interactions::specs\(\)\)/u);
+  for (const source of [
+    browserSource,
+    read("crates/colossus-tools/src/browser_interactions.rs"),
+  ]) {
+    builtinNames.push(
+      ...[...source.matchAll(/(?:tool)?\(\s*"(browser\.[a-z_.]+)"/gu)]
+        .map((match) => match[1]),
+    );
+  }
 
   const runtimeSource = read("apps/desktop/src-tauri/src/managed_runtime.rs");
   const grantStart = runtimeSource.indexOf("const TRUSTED_BUILTIN_TOOL_GRANT");

@@ -1,6 +1,7 @@
 """Installer ownership and artifact-integrity tests using harmless synthetic bytes."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -41,7 +42,7 @@ class StageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             stage_nss_tools.stage(destination)
 
-    def test_changed_artifact_relative_destination_and_symlink_are_rejected(self):
+    def test_changed_artifact_and_relative_destination_are_rejected(self):
         with self.assertRaises(ValueError):
             stage_nss_tools.stage(Path("relative-stage"))
         self.source.chmod(0o755)
@@ -49,6 +50,9 @@ class StageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             stage_nss_tools.stage(self.root / "changed")
         self.assertFalse((self.root / "changed").exists())
+
+    @unittest.skipUnless(os.name == "posix", "POSIX file symlink prerequisite; Linux/macOS CI contracts")
+    def test_symlink_source_is_rejected(self):
         linked = self.root / "linked"
         linked.symlink_to(self.source)
         lock = json.loads(self.lock.read_text())

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -103,7 +103,10 @@ test("verification binds checksum sidecars and rejects extra, missing, linked or
   await assert.rejects(verifyAssets(root, inventory), /integrity/u);
   await rm(join(root, main.name));
   await assert.rejects(verifyAssets(root, inventory), /Asset set/u);
-  await symlink(join(root, sum.name), join(root, main.name));
+  // Windows junctions exercise real link rejection without requiring symlink privileges.
+  const linkTarget = process.platform === "win32" ? await fixture(t) : join(root, sum.name);
+  await symlink(linkTarget, join(root, main.name), process.platform === "win32" ? "junction" : "file");
+  assert.ok((await lstat(join(root, main.name))).isSymbolicLink());
   await assert.rejects(verifyAssets(root, inventory), /regular/u);
   await rm(join(root, main.name));
   await mkdir(join(root, main.name));

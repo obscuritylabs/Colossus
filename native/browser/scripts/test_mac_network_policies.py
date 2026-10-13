@@ -1,4 +1,5 @@
 import importlib.util
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -26,6 +27,7 @@ class PolicyPins(unittest.TestCase):
             with self.assertRaises(ValueError):
                 MODULE.generate(root)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX file symlink prerequisite; Linux/macOS CI contracts")
     def test_symlink_policy_fails_closed(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "policies"

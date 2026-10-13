@@ -75,6 +75,7 @@ class ElfDependencyOrder(unittest.TestCase):
         with self.assertRaises(ElfOrderError):
             self.inspect(image)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX executable modes; Linux/macOS CI contracts")
     def test_bad_host_cannot_get_a_component_inventory(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -85,6 +86,7 @@ class ElfDependencyOrder(unittest.TestCase):
                 component.installed_inventory(root, "linux64", host.name)
             self.assertFalse((root / component.MANIFEST).exists())
 
+    @unittest.skipUnless(os.name == "posix", "POSIX executable modes; Linux/macOS CI contracts")
     def test_consistent_hashes_alone_cannot_verify_unusable_host_order(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
