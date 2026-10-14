@@ -227,21 +227,22 @@ impl Runtime {
                     )
                 });
             let result = match state {
-                Ok((Some(_), Some(client), Some(lease), false)) => client
-                    .hide(lease)
-                    .await
-                    .map_err(RuntimeNativeBrowserError::from)
-                    .and_then(|()| {
-                        #[cfg(windows)]
-                        {
-                            owned
-                                .view
-                                .lock()
-                                .map_err(|_| RuntimeNativeBrowserError::OutcomeUnknown)?
-                                .viewer_detached = true;
-                        }
+                Ok((Some(_), Some(client), Some(lease), false)) => {
+                    let result = client
+                        .hide(lease)
+                        .await
+                        .map_err(RuntimeNativeBrowserError::from);
+                    #[cfg(windows)]
+                    let result = result.and_then(|()| {
+                        owned
+                            .view
+                            .lock()
+                            .map_err(|_| RuntimeNativeBrowserError::OutcomeUnknown)?
+                            .viewer_detached = true;
                         Ok(())
-                    }),
+                    });
+                    result
+                }
                 Ok((Some(_), _, _, false)) => Err(RuntimeNativeBrowserError::Stale),
                 Ok(_) => {
                     drop(operation);
