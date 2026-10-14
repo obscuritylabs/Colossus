@@ -104,6 +104,9 @@ class ProofContracts(unittest.TestCase):
                 owned.marker_state(root, profile)
             self.assertTrue(path.exists())
             path.write_bytes(owned.CONTENT)
+            # Make the metadata generation change explicit on coarse timestamp filesystems.
+            restored = path.stat()
+            os.utime(path, ns=(restored.st_atime_ns, restored.st_mtime_ns + 1_000_000_000))
             self.assertNotEqual(owned.marker_state(root, profile), original)
             (profile / ".colossus-custody-probe-alias").symlink_to(path)
             with self.assertRaises(owned.common.DiagnosticError):

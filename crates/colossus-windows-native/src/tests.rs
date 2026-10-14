@@ -12,15 +12,17 @@ const BOOTSTRAP_PARENT_FIXTURE_ENVIRONMENT: &str =
     "COLOSSUS_WINDOWS_NATIVE_BOOTSTRAP_PARENT_FIXTURE_V1";
 
 #[cfg(windows)]
-fn local_app_data_tempdir(prefix: &str) -> tempfile::TempDir {
-    let local_app_data = std::env::var_os("LOCALAPPDATA")
+fn user_profile_tempdir(prefix: &str) -> tempfile::TempDir {
+    // Packaged hosts may redirect new LocalAppData children into a different
+    // canonical hierarchy. Protected native fixtures need trusted, stable ancestry.
+    let user_profile = std::env::var_os("USERPROFILE")
         .map(std::path::PathBuf::from)
         .filter(|path| path.is_absolute())
-        .expect("absolute Windows LocalAppData");
+        .expect("absolute Windows user profile");
     tempfile::Builder::new()
         .prefix(prefix)
-        .tempdir_in(local_app_data)
-        .expect("temporary directory under LocalAppData")
+        .tempdir_in(user_profile)
+        .expect("temporary directory under the user profile")
 }
 
 #[cfg(windows)]
@@ -263,7 +265,7 @@ fn directories_directly_beneath_the_volume_root_retain_and_validate_the_root() {
 #[cfg(windows)]
 #[test]
 fn private_directory_creation_protects_the_directory_and_children() {
-    let parent = local_app_data_tempdir("colossus-native-private-directory-");
+    let parent = user_profile_tempdir("colossus-native-private-directory-");
     let directory = parent.path().join("private");
 
     create_private_directory(&directory).expect("create private directory");
@@ -287,9 +289,13 @@ fn private_directory_creation_protects_the_directory_and_children() {
 #[cfg(windows)]
 #[test]
 fn untrusted_ancestor_delete_child_authority_is_rejected() {
-    let parent = tempfile::tempdir().expect("temporary parent");
+    let parent = user_profile_tempdir("colossus-native-untrusted-ancestor-");
     let directory = parent.path().join("private");
     create_private_directory(&directory).expect("create private directory");
+    BoundPath::open_directory(&directory)
+        .expect("bind private directory before the untrusted grant")
+        .validate_ancestor_namespace_authority()
+        .expect("ancestors have safe namespace authority before the untrusted grant");
 
     let status = std::process::Command::new("icacls.exe")
         .arg(parent.path())
@@ -308,7 +314,7 @@ fn untrusted_ancestor_delete_child_authority_is_rejected() {
 #[cfg(windows)]
 #[test]
 fn private_file_creation_is_exclusive_and_owner_private() {
-    let parent = local_app_data_tempdir("colossus-native-private-file-");
+    let parent = user_profile_tempdir("colossus-native-private-file-");
     let path = parent.path().join("secret");
 
     create_private_file(&path, b"colossus").expect("create private file");
@@ -327,7 +333,7 @@ fn private_file_creation_is_exclusive_and_owner_private() {
 fn private_file_replacement_is_atomic_and_preserves_private_access() {
     use std::io::Read as _;
 
-    let parent = local_app_data_tempdir("colossus-native-private-replace-");
+    let parent = user_profile_tempdir("colossus-native-private-replace-");
     let directory = parent.path().join("private");
     create_private_directory(&directory).expect("create private directory");
     let destination = directory.join("settings.json");
@@ -381,13 +387,17 @@ fn private_file_replacement_is_atomic_and_preserves_private_access() {
 #[cfg(windows)]
 #[test]
 fn private_file_replacement_rejects_untrusted_ancestor_authority() {
-    let ancestor = tempfile::tempdir().expect("temporary ancestor");
+    let ancestor = user_profile_tempdir("colossus-native-untrusted-replace-");
     let directory = ancestor.path().join("private");
     create_private_directory(&directory).expect("create private directory");
     let destination = directory.join("settings.json");
     let source = directory.join(".settings.next");
     create_private_file(&destination, b"old").expect("private destination");
     create_private_file(&source, b"new").expect("private source");
+    BoundPath::open_directory(&directory)
+        .expect("bind private directory before the untrusted grant")
+        .validate_ancestor_namespace_authority()
+        .expect("ancestors have safe namespace authority before the untrusted grant");
 
     let status = std::process::Command::new("icacls.exe")
         .arg(ancestor.path())
@@ -572,7 +582,7 @@ fn immutable_component_directory_accepts_protected_ancestry_on_an_ordinary_windo
 #[cfg(windows)]
 #[test]
 fn allocation_owner_survives_failed_binding_and_retires_only_its_original_object() {
-    let temporary = tempfile::tempdir().expect("temporary parent");
+    let temporary = user_profile_tempdir("colossus-native-allocation-owner-");
     let parent = temporary.path().join("owned-parent");
     create_private_directory(&parent).unwrap();
     let path = parent.join("new-context");
