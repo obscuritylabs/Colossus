@@ -21,9 +21,10 @@ impl EffectExecutor for PluginInventoryExecutor {
                 "invalid live plugin inventory request".into(),
             ));
         }
-        let inventory = self
-            .catalog
-            .live_inventory()
+        let catalog = Arc::clone(&self.catalog);
+        let inventory = tokio::task::spawn_blocking(move || catalog.live_inventory())
+            .await
+            .map_err(|_| ExecutionError::Failed("plugin inventory task failed".into()))?
             .map_err(|error| ExecutionError::Failed(error.to_string()))?;
         Ok(QuarantinedEffectResult {
             media_type: "application/json".into(),

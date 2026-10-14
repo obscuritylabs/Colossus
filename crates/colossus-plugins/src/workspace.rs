@@ -5,7 +5,14 @@ use colossus_contracts::PluginOrigin;
 use colossus_home::{WorkspaceIdentity, detect_workspace_identity};
 
 mod discovery;
-pub use discovery::{discover_workspace_plugins, discover_workspace_plugins_with_icon_budget};
+pub use discovery::{
+    capture_registered_workspace_plugins_with_icon_budget, discover_workspace_plugins,
+    discover_workspace_plugins_with_icon_budget,
+};
+mod snapshot;
+pub use snapshot::WorkspacePluginSnapshot;
+pub(crate) use snapshot::{MAX_SNAPSHOT_MANIFEST_BYTES, SNAPSHOT_MANIFEST, SnapshotManifest};
+use snapshot::{SnapshotFile, set_snapshot_mode};
 
 #[cfg(test)]
 mod tests;
@@ -33,15 +40,15 @@ pub struct WorkspacePluginSource {
     pub identity_sha256: String,
 }
 
-/// A validated directory and its captured deterministic package bytes.
+/// A validated directory and its frozen local files.
 pub struct WorkspacePluginCandidate {
     /// Exact source identity presented for acceptance.
     pub source: WorkspacePluginSource,
     /// Discovery metadata. Instructions remain unavailable until accepted.
     pub record: AgentPluginRecord,
-    /// Immutable bytes to publish after source authorization.
-    pub artifact: BuiltPluginArtifact,
-    /// Conservative extracted-content, blob and filesystem-overhead cache cost.
+    /// Immutable local content to publish after source authorization.
+    pub snapshot: WorkspacePluginSnapshot,
+    /// Conservative content, manifest and filesystem-overhead cache cost.
     pub cache_bytes: u64,
     identity: WorkspaceIdentity,
 }
@@ -145,7 +152,8 @@ fn capture_with_budget(
     // Only validated captures spend the shared availability budget. Each attempt
     // retains its byte bound; discovery also limits the number of attempts.
     let mut candidate_remaining = *remaining;
-    let mut owned = Vec::new();
+    let captured = tempfile::tempdir().map_err(adapter)?;
+    let mut captured_files = Vec::new();
     for relative in files {
         let manifest = relative == Path::new("plugin.json");
         let file_limit = if manifest {
@@ -164,14 +172,35 @@ fn capture_with_budget(
         };
         #[cfg(not(unix))]
         let executable = false;
-        let mut bytes = Vec::new();
-        let read = (&file).take(limit).read_to_end(&mut bytes);
-        *inspection_remaining -= bytes.len() as u64;
-        read.map_err(adapter)?;
-        if file.metadata().map_err(adapter)?.len() != bytes.len() as u64 {
+        let target = captured.path().join(&relative);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(adapter)?;
+        }
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .map_err(adapter)?;
+        let mut input = (&file).take(limit);
+        let mut hash = Sha256::new();
+        let mut size = 0_u64;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = input.read(&mut buffer).map_err(adapter)?;
+            if read == 0 {
+                break;
+            }
+            *inspection_remaining -= read as u64;
+            size += read as u64;
+            output.write_all(&buffer[..read]).map_err(adapter)?;
+            hash.update(&buffer[..read]);
+        }
+        set_snapshot_mode(&output, executable)?;
+        if file.metadata().map_err(adapter)?.len() != size {
             return Err(adapter("workspace plugin changed during capture"));
         }
         if manifest {
+            let bytes = fs::read(&target).map_err(adapter)?;
             let (manifest, _) = parse_plugin_manifest(&bytes)?;
             if manifest.name == "colossus" {
                 return Err(adapter(
@@ -180,44 +209,31 @@ fn capture_with_budget(
             }
         }
         candidate_remaining = candidate_remaining
-            .checked_sub(bytes.len() as u64)
+            .checked_sub(size)
             .ok_or_else(|| adapter("workspace plugin discovery exceeds 256 MiB"))?;
-        owned.push((posix_path(&relative)?, bytes, executable));
+        captured_files.push(SnapshotFile {
+            path: posix_path(&relative)?,
+            size,
+            executable,
+            sha256: hex::encode(hash.finalize()),
+        });
     }
     reader.revalidate()?;
-    let files = owned
+    let snapshot = WorkspacePluginSnapshot::new(captured, captured_files)?;
+    let cache_bytes = snapshot
+        .files
         .iter()
-        .map(|(path, bytes, executable)| PluginFile {
-            path,
-            bytes,
-            executable: *executable,
-        })
-        .collect::<Vec<_>>();
-    let artifact = build_plugin_artifact_from_files(&files)?;
-    let cache_bytes = owned
-        .iter()
-        .fold(64 * 1024_u64, |total, (path, bytes, _)| {
+        .fold(64 * 1024_u64, |total, file| {
             total
-                .saturating_add(bytes.len() as u64)
-                .saturating_add(4096_u64.saturating_mul(path.split('/').count() as u64))
+                .saturating_add(file.size)
+                .saturating_add(4096_u64.saturating_mul(file.path.split('/').count() as u64))
         })
-        // A filesystem without hard links copies blobs into the retained layout.
-        .saturating_add(2_u64.saturating_mul(artifact.layer.len() as u64))
-        .saturating_add(2_u64.saturating_mul(artifact.manifest.len() as u64))
-        .saturating_add(2_u64.saturating_mul(artifact.config.len() as u64));
-    let temporary = tempfile::tempdir().map_err(adapter)?;
-    let captured = temporary.path().join("plugin");
-    extract_plugin_artifact(&artifact, &captured)?;
-    let mut record = load_plugin_with_icon_budget(&captured, icons)?;
+        .saturating_add(snapshot.manifest.len() as u64);
+    let mut record = load_plugin_metadata_with_digest(snapshot.root(), icons, snapshot.digest())?;
     if record.installation.manifest.name == "colossus" {
         return Err(adapter(
             "colossus is reserved for the executable-bundled plugin",
         ));
-    }
-    let config: colossus_contracts::AgentPluginOciConfig =
-        serde_json::from_slice(&artifact.config).map_err(adapter)?;
-    if config.name != record.installation.manifest.name {
-        return Err(adapter("workspace plugin changed during discovery"));
     }
     identity.revalidate().map_err(adapter)?;
     workspace_plugin_root(workspace, relative)?;
@@ -227,21 +243,20 @@ fn capture_with_budget(
             root.strip_prefix(workspace_binding.path())
                 .map_err(adapter)?,
         )?,
-        name: config.name,
+        name: record.installation.manifest.name.clone(),
         identity_version: identity.version(),
         identity_sha256: identity.sha256().into(),
     };
     workspace_binding.revalidate()?;
     record.installation.origin = PluginOrigin::Workspace;
     record.installation.root = root.display().to_string();
-    record.installation.digest = artifact.manifest_digest.clone();
     record.installation.source = source.path.clone();
     record.installation.trust.method = "workspace-directory".into();
     *remaining = candidate_remaining;
     Ok(WorkspacePluginCandidate {
         source,
         record,
-        artifact,
+        snapshot,
         cache_bytes,
         identity,
     })

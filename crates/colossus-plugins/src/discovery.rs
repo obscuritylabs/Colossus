@@ -9,17 +9,28 @@ pub(crate) fn load_plugin_with_icon_budget(
     root: &Path,
     budget: &mut crate::icons::IconBudget,
 ) -> Result<AgentPluginRecord, StoreError> {
+    let mut record = load_plugin_metadata_with_digest(root, budget, "")?;
+    let content_sha256 = hash_plugin_tree(Path::new(&record.installation.root))?.2;
+    record.installation.digest = format!("sha256:{content_sha256}");
+    Ok(record)
+}
+
+/// The caller has already proved the exact captured or retained content identity.
+pub(crate) fn load_plugin_metadata_with_digest(
+    root: &Path,
+    budget: &mut crate::icons::IconBudget,
+    digest: &str,
+) -> Result<AgentPluginRecord, StoreError> {
     let canonical_root = canonical_plugin_root(root)?;
     let (manifest, mut diagnostics) = load_manifest(&canonical_root)?;
     let icon_data_url =
         super::icons::load_icon(&canonical_root, &manifest, &mut diagnostics, budget);
     let skills = load_skills(&canonical_root, &manifest.name, &mut diagnostics)?;
     let mcp_servers = load_mcp(&canonical_root, &manifest, &mut diagnostics)?;
-    let content_sha256 = hash_plugin_tree(&canonical_root)?.2;
     let installation = PluginInstallation {
         origin: colossus_contracts::PluginOrigin::Installed,
         manifest,
-        digest: format!("sha256:{content_sha256}"),
+        digest: digest.into(),
         source: canonical_root.display().to_string(),
         root: canonical_root.display().to_string(),
         status: PluginStatus::Disabled,
@@ -43,7 +54,8 @@ pub(crate) fn load_plugin_with_icon_budget(
 
 /// Validate one Agent Plugin directory without returning instructions or resource bodies.
 pub fn validate_plugin(root: &Path) -> Result<PluginValidation, StoreError> {
-    let record = load_plugin(root)?;
+    let record =
+        load_plugin_metadata_with_digest(root, &mut crate::icons::IconBudget::default(), "")?;
     let (file_count, total_bytes, content_sha256) =
         hash_plugin_tree(Path::new(&record.installation.root))?;
     Ok(PluginValidation {

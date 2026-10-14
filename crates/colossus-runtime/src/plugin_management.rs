@@ -3,6 +3,7 @@
 use super::*;
 use colossus_contracts::{PluginInstallSource, PluginManagementRequest, PluginOrigin};
 
+#[derive(Clone)]
 struct PluginManagementExecutor {
     store: Option<Arc<PluginStore>>,
     configuration: Arc<PluginsConfig>,
@@ -211,7 +212,7 @@ impl PluginManagementExecutor {
                     .map_err(failed)?;
                 if digest
                     .as_ref()
-                    .is_some_and(|digest| *digest != candidate.artifact.manifest_digest)
+                    .is_some_and(|digest| *digest != candidate.snapshot.digest())
                 {
                     return Err(failed(
                         "workspace plugin changed; refresh and review its current snapshot",
@@ -349,7 +350,22 @@ impl EffectExecutor for PluginManagementExecutor {
         {
             enforce_management_path(&path, write, &permit)?;
         }
-        let value = self.execute_local(operation, request.actor.clone(), request)?;
+        let value = if matches!(
+            operation,
+            PluginManagementRequest::Inventory | PluginManagementRequest::Show { .. }
+        ) {
+            let executor = self.clone();
+            let request = request.clone();
+            tokio::task::spawn_blocking(move || {
+                let result = executor.execute_local(operation, request.actor.clone(), &request);
+                drop(permit);
+                result
+            })
+            .await
+            .map_err(|_| failed("plugin inventory task failed"))??
+        } else {
+            self.execute_local(operation, request.actor.clone(), request)?
+        };
         Ok(QuarantinedEffectResult {
             media_type: "application/json".into(),
             bytes: serde_json::to_vec(&value).map_err(failed)?,

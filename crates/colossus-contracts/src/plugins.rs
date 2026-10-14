@@ -234,7 +234,7 @@ pub struct PluginInstallation {
     pub origin: PluginOrigin,
     /// Validated portable manifest.
     pub manifest: AgentPluginManifest,
-    /// Canonical `sha256:<hex>` OCI manifest digest.
+    /// Exact `sha256:<hex>` content identity: OCI manifest or local file digest manifest.
     pub digest: String,
     /// Original local or registry source without credentials.
     pub source: String,
@@ -304,7 +304,7 @@ pub struct PluginInventoryEntry {
     pub actions: Vec<String>,
     /// Validated portable plugin manifest.
     pub manifest: AgentPluginManifest,
-    /// Canonical OCI manifest digest.
+    /// Exact OCI or local file-manifest digest, selected by the plugin origin.
     pub digest: String,
     /// Credential-free installation source.
     pub source: String,

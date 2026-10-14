@@ -2,6 +2,40 @@ use super::*;
 use crate::tests::write_plugin;
 
 #[test]
+fn run_capture_ignores_unaccepted_automatic_sources() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    write_plugin(&root.join("selected"));
+    write_plugin(&root.join(".agents/plugins/unaccepted"));
+    let result = capture_registered_workspace_plugins_with_icon_budget(
+        root,
+        &["selected".into()],
+        &mut crate::PluginIconBudget::default(),
+    );
+    assert_eq!(result.candidates.len(), 1);
+    assert_eq!(result.candidates[0].source.path, "selected");
+    assert!(result.issues.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn local_snapshot_identity_binds_normalized_executable_modes() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let source = root.join("source");
+    write_plugin(&source);
+    let path = source.join("tool");
+    fs::write(&path, "same bytes").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    let plain = capture_workspace_plugin(root, Path::new("source")).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    let executable = capture_workspace_plugin(root, Path::new("source")).unwrap();
+    assert_eq!(plain.source, executable.source);
+    assert_ne!(plain.snapshot.digest(), executable.snapshot.digest());
+}
+
+#[test]
 fn file_and_directory_work_is_shared_without_refunding_rejected_sources() {
     let temporary = tempfile::tempdir().expect("workspace");
     let root = temporary.path();
@@ -331,12 +365,12 @@ fn snapshot_uses_captured_bytes_and_replacement_requires_new_acceptance() {
     .expect("edit");
     let refreshed = capture_workspace_plugin(&root, relative).expect("recapture");
     assert_eq!(candidate.source, refreshed.source);
-    assert_ne!(
-        candidate.artifact.manifest_digest,
-        refreshed.artifact.manifest_digest
-    );
+    assert_ne!(candidate.snapshot.digest(), refreshed.snapshot.digest());
     let unpacked = root.join("frozen");
-    extract_plugin_artifact(&candidate.artifact, &unpacked).expect("immutable snapshot");
+    candidate
+        .snapshot
+        .copy_to(&unpacked)
+        .expect("immutable snapshot");
     assert!(
         fs::read_to_string(unpacked.join("skills/review/SKILL.md"))
             .expect("instructions")

@@ -599,7 +599,13 @@ async fn dispatch_general(
         WorkerOperation::McpAuthLogout { server } => Ok(serde_json::to_value(
             runtime.mcp_oauth_logout(&server).await?,
         )?),
-        WorkerOperation::PluginsInventory => Ok(serde_json::to_value(runtime.plugin_inventory()?)?),
+        WorkerOperation::PluginsInventory => {
+            let runtime = Arc::clone(runtime);
+            let inventory = tokio::task::spawn_blocking(move || runtime.plugin_inventory())
+                .await
+                .map_err(|_| WorkerError::Protocol("plugin inventory task failed".into()))??;
+            Ok(serde_json::to_value(inventory)?)
+        }
         WorkerOperation::PluginManage { .. } => Err(WorkerError::Protocol(
             "plugin operation requires plugin dispatch".into(),
         )),

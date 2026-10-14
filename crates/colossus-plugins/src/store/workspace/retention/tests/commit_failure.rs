@@ -47,7 +47,7 @@ fn failed_final_grant_event_rolls_back_receipt_and_cache_for_edits_replacements_
             assert_eq!(repository.workspace_cache()?, cache);
             assert_eq!(repository.journal.head()?, head);
             assert!(repository.reduce_installation(&candidate.source.name,
-                &candidate.artifact.manifest_digest)?.is_none());
+                candidate.snapshot.digest())?.is_none());
             assert!(Path::new(&installed.root).is_dir());
             Ok(())
         }).unwrap();
