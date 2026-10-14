@@ -18,7 +18,7 @@ mod owner_death;
 mod wire;
 
 mod deployment;
-#[cfg(unix)]
+#[cfg(any(target_os = "macos", all(unix, test)))]
 mod receipt_output;
 #[cfg(unix)]
 mod relay;
