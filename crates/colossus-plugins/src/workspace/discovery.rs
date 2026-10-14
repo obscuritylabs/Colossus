@@ -29,6 +29,23 @@ pub fn discover_workspace_plugins_with_icon_budget(
     discover_with_budget(workspace, registered, icons, MAX_WORKSPACE_PLUGIN_BYTES)
 }
 
+/// Capture only explicitly selected sources; unrelated automatic discoveries are not run inputs.
+pub fn capture_registered_workspace_plugins_with_icon_budget(
+    workspace: &Path,
+    registered: &[String],
+    icons: &mut crate::PluginIconBudget,
+) -> WorkspacePluginDiscovery {
+    discover_with_budgets_and_sources(
+        workspace,
+        registered,
+        icons,
+        MAX_WORKSPACE_PLUGIN_BYTES,
+        MAX_WORKSPACE_INSPECTION_BYTES,
+        MAX_WORKSPACE_PLUGIN_ENTRIES,
+        false,
+    )
+}
+
 pub(super) fn discover_with_budget(
     workspace: &Path,
     registered: &[String],
@@ -49,9 +66,29 @@ pub(super) fn discover_with_budgets(
     workspace: &Path,
     registered: &[String],
     icons: &mut crate::PluginIconBudget,
+    remaining: u64,
+    inspection_remaining: u64,
+    entries_remaining: usize,
+) -> WorkspacePluginDiscovery {
+    discover_with_budgets_and_sources(
+        workspace,
+        registered,
+        icons,
+        remaining,
+        inspection_remaining,
+        entries_remaining,
+        true,
+    )
+}
+
+fn discover_with_budgets_and_sources(
+    workspace: &Path,
+    registered: &[String],
+    icons: &mut crate::PluginIconBudget,
     mut remaining: u64,
     mut inspection_remaining: u64,
     mut entries_remaining: usize,
+    automatic_sources: bool,
 ) -> WorkspacePluginDiscovery {
     let mut result = WorkspacePluginDiscovery::default();
     if registered.len() > MAX_WORKSPACE_PLUGINS {
@@ -70,7 +107,7 @@ pub(super) fn discover_with_budgets(
         .collect::<Vec<_>>();
     let registered = paths.clone();
     let mut automatic = BTreeSet::new();
-    if fs::symlink_metadata(workspace.join(".agents")).is_ok() {
+    if automatic_sources && fs::symlink_metadata(workspace.join(".agents")).is_ok() {
         match workspace_plugin_root(workspace, Path::new(".agents")) {
             Ok(root) => {
                 let direct = fs::symlink_metadata(root.join("plugin.json")).is_ok();

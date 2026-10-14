@@ -79,7 +79,11 @@ Portable `mcp.json` values remain package data and cannot expand workspace autho
 
 For a workspace source, set `workspacePluginDigest` to its exact `sha256:` manifest digest
 shown by `plugins list`. Local connections require this binding before any tool, credential,
-or process authority is compiled. A changed local snapshot needs an explicit new binding.
+or process authority is compiled. Local snapshots identify ordinary immutable files through
+a versioned file digest manifest; they do not use the OCI archive identity. A changed local
+snapshot needs an explicit new binding. After upgrading from OCI-based local snapshots,
+review and update existing local MCP bindings to the digest now shown by `plugins list`.
+Source acceptance and recovery of pinned older snapshots are preserved.
 Installed and bundled connections use `null` (or omit the field). When switching sources,
 configure credentials and tool permissions for the chosen source explicitly.
 

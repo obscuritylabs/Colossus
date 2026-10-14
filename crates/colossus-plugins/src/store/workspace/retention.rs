@@ -120,7 +120,7 @@ impl PluginStore {
                 protected.insert(digest.clone());
             }
         }
-        protected.insert(candidate.artifact.manifest_digest.clone());
+        protected.insert(candidate.snapshot.digest().to_owned());
         let cache = plan_cache(&old, candidate, grants, &protected)?;
         // Free superseded bytes before publication. If publication fails, every
         // accepted source's previous current snapshot and every run pin survives.
@@ -149,8 +149,12 @@ fn plan_cache(
     protected: &BTreeSet<String>,
 ) -> Result<WorkspaceCache, StoreError> {
     let mut cache = old.clone();
-    let digest = &candidate.artifact.manifest_digest;
-    if cache.current.get(&candidate.source.path) != Some(digest)
+    let digest = candidate.snapshot.digest();
+    if cache
+        .current
+        .get(&candidate.source.path)
+        .map(String::as_str)
+        != Some(digest)
         || !cache.entries.contains_key(digest)
     {
         cache.generation = cache
@@ -158,7 +162,7 @@ fn plan_cache(
             .checked_add(1)
             .ok_or_else(|| adapter("workspace cache generation exhausted"))?;
         cache.entries.insert(
-            digest.clone(),
+            digest.to_owned(),
             CacheEntry {
                 name: candidate.source.name.clone(),
                 path: candidate.source.path.clone(),
@@ -169,7 +173,7 @@ fn plan_cache(
     }
     cache
         .current
-        .insert(candidate.source.path.clone(), digest.clone());
+        .insert(candidate.source.path.clone(), digest.to_owned());
     cache
         .current
         .retain(|path, _| grants.contains_key(path) || *path == candidate.source.path);

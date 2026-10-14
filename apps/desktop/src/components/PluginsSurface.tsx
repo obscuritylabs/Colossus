@@ -95,7 +95,10 @@ export function PluginsSurface({
     mounted.current = true;
     void refresh();
     const visibleRefresh = () => {
-      if (document.visibilityState === "visible") void refresh();
+      // Periodic/focus polling must not keep a slow inventory permanently busy.
+      // Lifecycle-triggered refreshes still queue one follow-up through refresh().
+      if (document.visibilityState === "visible" && !inFlight.current)
+        void refresh();
     };
     window.addEventListener("focus", visibleRefresh);
     const timer = window.setInterval(visibleRefresh, 15_000);

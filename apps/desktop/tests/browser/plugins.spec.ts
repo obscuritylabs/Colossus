@@ -618,6 +618,74 @@ test("core ownership, global lifecycle, untrusted activation, explicit digest, a
   });
 });
 
+test("periodic polling does not queue behind a slow inventory", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Refresh plugins" }),
+  ).toBeEnabled();
+  const before = await page.evaluate(() => {
+    const state = window as unknown as {
+      pluginHoldInventory: boolean;
+      pluginCalls: { command: string }[];
+    };
+    state.pluginHoldInventory = true;
+    return state.pluginCalls.filter(
+      ({ command }) => command === "get_plugin_inventory",
+    ).length;
+  });
+  await page.getByRole("button", { name: "Refresh plugins" }).click();
+  await page.waitForFunction(
+    () =>
+      typeof (window as unknown as { pluginReleaseInventory?: unknown })
+        .pluginReleaseInventory === "function",
+  );
+  await page.clock.runFor(45_000);
+  await page.evaluate(() => {
+    for (let index = 0; index < 4; index++)
+      window.dispatchEvent(new Event("focus"));
+    (
+      window as unknown as { pluginReleaseInventory: () => void }
+    ).pluginReleaseInventory();
+  });
+  await expect(
+    page.getByRole("button", { name: "Refresh plugins" }),
+  ).toBeEnabled();
+  expect(
+    await page.evaluate(
+      () =>
+        (
+          window as unknown as { pluginCalls: { command: string }[] }
+        ).pluginCalls.filter(
+          ({ command }) => command === "get_plugin_inventory",
+        ).length,
+    ),
+  ).toBe(before + 1);
+  for (const [theme, palette] of [
+    ["light", "colossus"],
+    ["dark", "neutral"],
+    ["dark", "hacker"],
+  ]) {
+    await page.evaluate(
+      ([theme, palette]) => {
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.dataset.palette = palette;
+        document.documentElement.dataset.textSize = "large";
+      },
+      [theme, palette],
+    );
+    await page.setViewportSize({ width: 620, height: 800 });
+    await expect(
+      page.getByRole("button", { name: "Refresh plugins" }),
+    ).toBeEnabled();
+    await page.screenshot({
+      path: `output/playwright/plugins-refresh-${theme}-${palette}.png`,
+    });
+  }
+});
+
 for (const failPending of [false, true]) {
   test(`activation queues a fresh inventory after a pending ${failPending ? "failed" : "stale"} read`, async ({
     page,
