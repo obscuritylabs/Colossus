@@ -42,7 +42,10 @@ async fn workspace_previews_preserve_origin_through_global_lifecycle_and_gc() {
         .into_iter()
         .find(|entry| entry.origin == PluginOrigin::Workspace)
         .unwrap();
-    assert_eq!(local.digest, installed.digest);
+    assert_ne!(
+        local.digest, installed.digest,
+        "local snapshots do not use the distribution archive identity"
+    );
     for lifecycle in 0..5 {
         match lifecycle {
             0 => {} // Initially installed and disabled.
@@ -62,7 +65,7 @@ async fn workspace_previews_preserve_origin_through_global_lifecycle_and_gc() {
         let skill = runtime
             .manage_plugin(Op::SkillRead {
                 skill_id: "review-tools/review".into(),
-                digest: installed.digest.clone(),
+                digest: local.digest.clone(),
             })
             .await
             .expect("workspace instructions remain available");
@@ -75,7 +78,7 @@ async fn workspace_previews_preserve_origin_through_global_lifecycle_and_gc() {
         let resource = runtime
             .manage_plugin(Op::ResourceRead {
                 skill_id: "review-tools/review".into(),
-                digest: installed.digest.clone(),
+                digest: local.digest.clone(),
                 path: "references/checklist.txt".into(),
             })
             .await
@@ -84,7 +87,7 @@ async fn workspace_previews_preserve_origin_through_global_lifecycle_and_gc() {
         let verification = runtime
             .manage_plugin(Op::VerifyInstalled {
                 name: "review-tools".into(),
-                digest: installed.digest.clone(),
+                digest: local.digest.clone(),
             })
             .await
             .expect("verify the workspace snapshot");

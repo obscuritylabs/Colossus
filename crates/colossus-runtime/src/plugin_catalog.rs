@@ -157,11 +157,10 @@ impl PluginCatalogSource {
             .map(|store| store.inventory_with_icon_budget(&mut icons))
             .transpose()?
             .unwrap_or_default();
-        inventory.extend(self.workspace_plugins.inventory(
-            self.configuration.workspace_discovery,
-            &grants,
-            &mut icons,
-        )?);
+        let local = self
+            .workspace_plugins
+            .inventory(&self.configuration, &grants, &mut icons)?;
+        inventory.extend(local.entries);
         let local_names = self.selected_workspace_names(&grants);
         for entry in &mut inventory {
             if entry.origin != colossus_contracts::PluginOrigin::Workspace
@@ -173,7 +172,22 @@ impl PluginCatalogSource {
             }
         }
         if self.configuration.enabled {
-            let (records, _leases) = self.snapshot_with_grants(&grants)?;
+            let (mut records, _lease) = self
+                .store
+                .as_ref()
+                .map(|store| {
+                    store
+                        .available_snapshot_with_icon_budget(
+                            &self.configuration.include,
+                            &self.configuration.exclude,
+                            &mut colossus_plugins::PluginIconBudget::exhausted(),
+                        )
+                        .map(|(records, lease)| (records, Some(lease)))
+                })
+                .transpose()?
+                .unwrap_or_default();
+            records.retain(|record| !local_names.contains(&record.installation.manifest.name));
+            records.extend(local.records);
             let extensions = compile_active_plugin_extensions(
                 &records,
                 &self.configuration,

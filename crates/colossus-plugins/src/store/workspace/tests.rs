@@ -81,13 +81,10 @@ fn selecting_replacement_for_the_same_name_can_reuse_its_slot_at_capacity() {
 fn publication_failure_does_not_evict_disabled_source_registration() {
     let (_temporary, store, candidate) = capacity_fixture(false);
     let previous = serde_json::to_value(store.workspace_plugin_grants().unwrap()).unwrap();
-    let blocked = store.root().join("content/sha256").join(
-        candidate
-            .artifact
-            .manifest_digest
-            .strip_prefix("sha256:")
-            .unwrap(),
-    );
+    let blocked = store
+        .root()
+        .join("content/sha256")
+        .join(candidate.snapshot.digest().strip_prefix("sha256:").unwrap());
     fs::write(&blocked, "publication blocked").unwrap();
     assert!(
         store
@@ -129,8 +126,8 @@ fn failed_publication_preserves_permissions_and_requires_acceptance_after_repair
     // depending on platform-specific permission changes or filling the test disk.
     let blocked = store.root().join("content/sha256").join(
         second
-            .artifact
-            .manifest_digest
+            .snapshot
+            .digest()
             .strip_prefix("sha256:")
             .expect("digest"),
     );

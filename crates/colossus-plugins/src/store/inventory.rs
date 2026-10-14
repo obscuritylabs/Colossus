@@ -75,12 +75,16 @@ impl PluginStore {
                 "installed plugin content is missing; restore the exact digest before use".into(),
             ));
         }
-        let artifact = verify_plugin_layout(
-            &self.root.join("layouts/sha256").join(hex),
-            Some(&installation.digest),
-        )?;
-        self.publish_artifact(&artifact)?;
-        let mut record = load_plugin_with_icon_budget(&expected_root, icons)?;
+        let layout = self.root.join("layouts/sha256").join(hex);
+        let local = installation.origin == PluginOrigin::Workspace
+            && self.verify_workspace_snapshot(&expected_root, &layout, &installation.digest)?;
+        if !local {
+            // Existing workspace OCI snapshots remain readable for pinned/recoverable runs.
+            let artifact = verify_plugin_layout(&layout, Some(&installation.digest))?;
+            self.publish_artifact(&artifact)?;
+        }
+        let mut record =
+            load_plugin_metadata_with_digest(&expected_root, icons, &installation.digest)?;
         if record.installation.manifest != installation.manifest {
             return Err(StoreError::Verification(
                 "installed manifest differs from journal identity".into(),

@@ -967,8 +967,10 @@ obligations; policy denials, tool grants, permits, and sandbox boundaries remain
 unchanged.
 
 Agent Plugin discovery is part of model input and therefore follows the same object-bound
-discipline. Portable paths resolve within an immutable content root selected by an OCI
-manifest digest. Fixed discovery admits only root `plugin.json`, immediate
+discipline. Portable paths resolve within an immutable content root selected by an exact
+content digest. Installed packages use their OCI manifest digest; local snapshots use
+a versioned, sorted manifest of file paths, sizes, executable modes and SHA-256 digests.
+Fixed discovery admits only root `plugin.json`, immediate
 `skills/NAME/SKILL.md`, and root `mcp.json`; invalid skills and MCP entries fail at their
 component boundary. Metadata is bounded for discovery, while instruction and resource
 bodies are loaded progressively. Only explicitly selected qualified skills add their
@@ -1006,7 +1008,11 @@ Workspace discovery adds no ambient authority: fixed `.agents` locations and reg
 directories are metadata-only until request-bound source acceptance. The host records
 acceptance outside the repository, scoped to workspace identity, relative source path,
 directory object identity, and manifest name. Accepted instruction edits are captured
-into immutable OCI snapshots in a separate workspace-owned store. Recovery retains
+as ordinary immutable files in a separate workspace-owned store, without archive
+compression or extraction. Capture hashes source files while copying them; reuse verifies
+retained content once against the file manifest. Inventory and run catalog assembly reuse
+that verified capture instead of repeating it. Previously retained OCI snapshots remain
+readable for recovery. Recovery retains
 `workspace:NAME` provenance keys and restores the original scoped cache rather than
 substituting global packages or live directories. Missing or replaced selected sources
 fail unavailable without silently falling back to a global name.

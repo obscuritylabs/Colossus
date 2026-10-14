@@ -5,7 +5,10 @@ use colossus_contracts::{EventClassification, ExecutionContext, NewEvent, Plugin
 
 const SOURCES_STREAM: &str = "plugin-workspace-sources";
 mod retention;
+mod snapshots;
 
+#[cfg(test)]
+mod snapshot_tests;
 #[cfg(test)]
 mod tests;
 
@@ -189,6 +192,26 @@ impl PluginStore {
         recoverable: &BTreeSet<String>,
         actor: Actor,
     ) -> Result<(PluginInstallation, PluginSnapshotLease), StoreError> {
+        let (record, lease) = self.snapshot_workspace_plugin_record(
+            candidate,
+            recoverable,
+            actor,
+            &mut crate::PluginIconBudget::exhausted(),
+        )?;
+        let mut installation = record.installation;
+        installation.status = PluginStatus::Disabled;
+        Ok((installation, lease))
+    }
+
+    /// Publish one accepted capture and return its verified metadata under the same lease.
+    /// This avoids opening, hashing and extracting the snapshot again during catalog assembly.
+    pub fn snapshot_workspace_plugin_record(
+        &self,
+        candidate: &WorkspacePluginCandidate,
+        recoverable: &BTreeSet<String>,
+        actor: Actor,
+        icons: &mut crate::PluginIconBudget,
+    ) -> Result<(AgentPluginRecord, PluginSnapshotLease), StoreError> {
         candidate.revalidate()?;
         self.with_write(|repository| {
             let grants = repository.workspace_grants()?;
@@ -206,7 +229,14 @@ impl PluginStore {
                 repository.journal.append_batch(events)?;
             }
             let lease = self.lease_digests(&BTreeSet::from([installation.digest.clone()]))?;
-            Ok((installation, lease))
+            let mut record = load_plugin_metadata_with_digest(
+                Path::new(&installation.root),
+                icons.for_origin(PluginOrigin::Workspace),
+                &installation.digest,
+            )?;
+            record.installation = installation;
+            record.installation.status = PluginStatus::Enabled;
+            Ok((record, lease))
         })
     }
 
@@ -225,8 +255,12 @@ impl PluginStore {
             recoverable,
             actor.clone(),
         )?;
-        let destination = self.publish_artifact(&candidate.artifact)?;
-        let record = load_plugin(&destination)?;
+        let destination = self.publish_workspace_snapshot(candidate)?;
+        let record = load_plugin_metadata_with_digest(
+            &destination,
+            &mut crate::icons::IconBudget::exhausted(),
+            candidate.snapshot.digest(),
+        )?;
         if record.installation.manifest.name != candidate.source.name {
             return Err(adapter(
                 "workspace source and captured manifest identity differ",
@@ -236,7 +270,7 @@ impl PluginStore {
         let mut installation = PluginInstallation {
             origin: PluginOrigin::Workspace,
             manifest: record.installation.manifest,
-            digest: candidate.artifact.manifest_digest.clone(),
+            digest: candidate.snapshot.digest().into(),
             source: candidate.source.path.clone(),
             root: destination.display().to_string(),
             status: PluginStatus::Disabled,

@@ -6,7 +6,8 @@ use colossus_contracts::{
     PluginStatus, PluginTrustEvidence,
 };
 use colossus_plugins::{
-    WorkspacePluginCandidate, WorkspacePluginGrant, capture_workspace_plugin,
+    WorkspacePluginCandidate, WorkspacePluginGrant,
+    capture_registered_workspace_plugins_with_icon_budget, capture_workspace_plugin,
     discover_workspace_plugins_with_icon_budget,
 };
 
@@ -15,6 +16,13 @@ pub(super) struct WorkspacePlugins {
     pub(super) store: Option<Arc<PluginStore>>,
     work: Arc<dyn WorkRepository>,
     instruction_snapshots: Arc<InstructionSnapshotStore>,
+}
+
+#[derive(Default)]
+pub(super) struct WorkspaceInventory {
+    pub(super) entries: Vec<PluginInventoryEntry>,
+    pub(super) records: Vec<AgentPluginRecord>,
+    _leases: Vec<PluginSnapshotLease>,
 }
 
 impl WorkspacePlugins {
@@ -147,12 +155,12 @@ impl WorkspacePlugins {
 
     pub(super) fn inventory(
         &self,
-        enabled: bool,
+        config: &PluginsConfig,
         grants: &BTreeMap<String, WorkspacePluginGrant>,
         icons: &mut colossus_plugins::PluginIconBudget,
-    ) -> Result<Vec<PluginInventoryEntry>, RuntimeError> {
-        if !enabled {
-            return Ok(Vec::new());
+    ) -> Result<WorkspaceInventory, RuntimeError> {
+        if !config.workspace_discovery {
+            return Ok(WorkspaceInventory::default());
         }
         let discovered = discover_workspace_plugins_with_icon_budget(
             &self.workspace,
@@ -160,17 +168,20 @@ impl WorkspacePlugins {
             icons,
         );
         let mut inventory = Vec::new();
+        let mut records = Vec::new();
+        let mut leases = Vec::new();
+        let mut recoverable = None;
         for candidate in discovered.candidates {
             let accepted = grants
                 .get(&candidate.source.path)
                 .is_some_and(|grant| grant.enabled && grant.source == candidate.source);
-            let mut record = candidate.record;
-            record.installation.status = if accepted {
+            let mut entry = candidate.record.inventory();
+            entry.status = if accepted {
                 PluginStatus::Enabled
             } else {
                 PluginStatus::Disabled
             };
-            let mut entry = record.inventory();
+            entry.available = accepted;
             entry.actions = vec!["inspect".into()];
             if !accepted {
                 entry.actions.push("workspace_accept".into());
@@ -191,6 +202,32 @@ impl WorkspacePlugins {
             };
             if self.store.is_none() {
                 entry.actions.clear();
+            }
+            if accepted
+                && config.enabled
+                && !config.exclude.contains(&entry.manifest.name)
+                && (config.include.is_empty() || config.include.contains(&entry.manifest.name))
+                && let Some(store) = &self.store
+            {
+                if recoverable.is_none() {
+                    recoverable = Some(self.recoverable_digests()?);
+                }
+                match store.snapshot_workspace_plugin_record(
+                    &candidate,
+                    recoverable.as_ref().expect("loaded recovery pins"),
+                    terminal_actor(),
+                    &mut colossus_plugins::PluginIconBudget::exhausted(),
+                ) {
+                    Ok((record, lease)) => {
+                        records.push(record);
+                        leases.push(lease);
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "workspace plugin snapshot unavailable");
+                        entry.available = false;
+                        entry.unavailable_reason = Some("Workspace snapshot unavailable; restore its retained content or complete pinned jobs before retrying".into());
+                    }
+                }
             }
             inventory.push(entry);
         }
@@ -218,7 +255,11 @@ impl WorkspacePlugins {
             }
             inventory.push(entry);
         }
-        Ok(inventory)
+        Ok(WorkspaceInventory {
+            entries: inventory,
+            records,
+            _leases: leases,
+        })
     }
 
     pub(super) fn capture(
@@ -226,21 +267,21 @@ impl WorkspacePlugins {
         config: &PluginsConfig,
         grants: &BTreeMap<String, WorkspacePluginGrant>,
         icons: &mut colossus_plugins::PluginIconBudget,
-    ) -> Result<(Vec<AgentPluginRecord>, Option<PluginSnapshotLease>), RuntimeError> {
+    ) -> Result<(Vec<AgentPluginRecord>, Vec<PluginSnapshotLease>), RuntimeError> {
         if !config.enabled || !config.workspace_discovery {
-            return Ok((Vec::new(), None));
+            return Ok((Vec::new(), Vec::new()));
         }
         let Some(store) = &self.store else {
-            return Ok((Vec::new(), None));
+            return Ok((Vec::new(), Vec::new()));
         };
         if !grants.values().any(|grant| {
             grant.enabled
                 && !config.exclude.contains(&grant.source.name)
                 && (config.include.is_empty() || config.include.contains(&grant.source.name))
         }) {
-            return Ok((Vec::new(), None));
+            return Ok((Vec::new(), Vec::new()));
         }
-        let discovered = discover_workspace_plugins_with_icon_budget(
+        let discovered = capture_registered_workspace_plugins_with_icon_budget(
             &self.workspace,
             &grants
                 .iter()
@@ -254,7 +295,7 @@ impl WorkspacePlugins {
                 .collect::<Vec<_>>(),
             &mut colossus_plugins::PluginIconBudget::exhausted(),
         );
-        let mut digests = BTreeMap::new();
+        let mut records = Vec::new();
         let recoverable = self.recoverable_digests()?;
         let mut publication_leases = Vec::new();
         for candidate in discovered.candidates {
@@ -269,20 +310,20 @@ impl WorkspacePlugins {
             }
             // Publication is internal snapshot custody under the remembered source
             // grant, never an implicit global installation or signature claim.
-            match store.snapshot_workspace_plugin(&candidate, &recoverable, terminal_actor()) {
-                Ok((installation, lease)) => {
+            match store.snapshot_workspace_plugin_record(
+                &candidate,
+                &recoverable,
+                terminal_actor(),
+                icons,
+            ) {
+                Ok((record, lease)) => {
                     publication_leases.push(lease);
-                    digests.insert(installation.manifest.name, installation.digest);
+                    records.push(record);
                 }
                 Err(error) => tracing::warn!(%error, "workspace plugin snapshot unavailable"),
             }
         }
-        if digests.is_empty() {
-            return Ok((Vec::new(), None));
-        }
-        let (records, lease) = store.snapshot_digests_with_icon_budget(&digests, icons)?;
-        drop(publication_leases);
-        Ok((records, Some(lease)))
+        Ok((records, publication_leases))
     }
 }
 

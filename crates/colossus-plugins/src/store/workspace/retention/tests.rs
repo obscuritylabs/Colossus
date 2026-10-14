@@ -40,13 +40,10 @@ fn reaccepting_case_renames_replaces_the_source_after_successful_publication() {
             first.source.identity_sha256
         );
         let before = serde_json::to_value(store.workspace_plugin_grants().unwrap()).unwrap();
-        let blocked = store.root().join("content/sha256").join(
-            candidate
-                .artifact
-                .manifest_digest
-                .strip_prefix("sha256:")
-                .unwrap(),
-        );
+        let blocked = store
+            .root()
+            .join("content/sha256")
+            .join(candidate.snapshot.digest().strip_prefix("sha256:").unwrap());
         fs::write(&blocked, "publication blocked").unwrap();
         assert!(
             store
@@ -101,13 +98,10 @@ fn source_churn_keeps_committed_grants_and_current_cache_mappings_bounded() {
         let candidate = capture_workspace_plugin(&root, Path::new(&path)).expect("capture");
         if index == MAX_WORKSPACE_PLUGINS {
             let previous = serde_json::to_value(store.workspace_plugin_grants().unwrap()).unwrap();
-            let blocked = store.root().join("content/sha256").join(
-                candidate
-                    .artifact
-                    .manifest_digest
-                    .strip_prefix("sha256:")
-                    .unwrap(),
-            );
+            let blocked = store
+                .root()
+                .join("content/sha256")
+                .join(candidate.snapshot.digest().strip_prefix("sha256:").unwrap());
             fs::write(&blocked, "publication blocked").unwrap();
             assert!(
                 store
@@ -176,7 +170,7 @@ fn old_copies_are_pruned_but_leases_and_durable_recovery_pins_survive_reopening(
         .expect("accept");
     let digests = BTreeMap::from([(
         first.source.name.clone(),
-        first.artifact.manifest_digest.clone(),
+        first.snapshot.digest().to_owned(),
     )]);
     let (_, lease) = store
         .snapshot_workspace_plugin(&first, &BTreeSet::new(), actor())
@@ -185,7 +179,7 @@ fn old_copies_are_pruned_but_leases_and_durable_recovery_pins_survive_reopening(
     for version in 1..=20 {
         let candidate = edit(&root, version);
         if version == 1 {
-            superseded = candidate.artifact.manifest_digest.clone();
+            superseded = candidate.snapshot.digest().to_owned();
         }
         store
             .snapshot_workspace_plugin(&candidate, &BTreeSet::new(), actor())
@@ -198,7 +192,7 @@ fn old_copies_are_pruned_but_leases_and_durable_recovery_pins_survive_reopening(
     assert!(
         Path::new(
             &store
-                .installation(&first.source.name, &first.artifact.manifest_digest)
+                .installation(&first.source.name, first.snapshot.digest())
                 .expect("receipt")
                 .expect("record")
                 .root
@@ -210,7 +204,7 @@ fn old_copies_are_pruned_but_leases_and_durable_recovery_pins_survive_reopening(
     drop(lease);
     drop(store);
     let reopened = PluginStore::new(root.join("store")).expect("reopen");
-    let pinned = BTreeSet::from([first.artifact.manifest_digest.clone()]);
+    let pinned = BTreeSet::from([first.snapshot.digest().to_owned()]);
     for version in 21..=30 {
         reopened
             .snapshot_workspace_plugin(&edit(&root, version), &pinned, actor())
@@ -288,7 +282,7 @@ fn workspace_cache_and_global_lifecycle_cannot_share_a_store() {
         local
             .enable(
                 &candidate.source.name,
-                &candidate.artifact.manifest_digest,
+                candidate.snapshot.digest(),
                 true,
                 actor()
             )
@@ -298,7 +292,7 @@ fn workspace_cache_and_global_lifecycle_cannot_share_a_store() {
         local
             .uninstall(
                 &candidate.source.name,
-                &candidate.artifact.manifest_digest,
+                candidate.snapshot.digest(),
                 true,
                 actor()
             )
@@ -320,7 +314,7 @@ fn cache_budget_failure_preserves_selected_source_and_exact_pinned_content() {
         .accept_workspace_plugin(&first, &BTreeSet::new(), actor())
         .expect("accept");
     let second = edit(&root, 1);
-    let pinned = BTreeSet::from([first.artifact.manifest_digest.clone()]);
+    let pinned = BTreeSet::from([first.snapshot.digest().to_owned()]);
     assert!(
         store
             .snapshot_workspace_plugin(&second, &pinned, actor())
@@ -334,17 +328,17 @@ fn cache_budget_failure_preserves_selected_source_and_exact_pinned_content() {
     assert!(store.workspace_plugin_grants().expect("permission")["source"].enabled);
     assert_eq!(
         store.list(10_000).expect("preserved cache")[0].digest,
-        first.artifact.manifest_digest
+        first.snapshot.digest()
     );
     assert!(
         store
-            .installation(&second.source.name, &second.artifact.manifest_digest)
+            .installation(&second.source.name, second.snapshot.digest())
             .expect("no receipt")
             .is_none()
     );
     let digests = BTreeMap::from([(
         first.source.name.clone(),
-        first.artifact.manifest_digest.clone(),
+        first.snapshot.digest().to_owned(),
     )]);
     store
         .snapshot_digests_with_lease(&digests)
@@ -374,14 +368,14 @@ fn total_count_is_bounded_even_when_all_history_is_pinned() {
         .entries
         .keys()
         .cloned()
-        .chain([candidate.artifact.manifest_digest.clone()])
+        .chain([candidate.snapshot.digest().to_owned()])
         .collect();
     assert!(plan_cache(&old, &candidate, &BTreeMap::new(), &protected).is_err());
     let cache = plan_cache(
         &old,
         &candidate,
         &BTreeMap::new(),
-        &BTreeSet::from([candidate.artifact.manifest_digest.clone()]),
+        &BTreeSet::from([candidate.snapshot.digest().to_owned()]),
     )
     .expect("prune");
     assert_eq!(cache.entries.len(), RECENT_PER_SOURCE);
@@ -395,7 +389,7 @@ fn a_crashed_unindexed_publication_is_collected_before_the_next_capture() {
     let first = edit(&root, 0);
     let store = PluginStore::new(root.join("store")).expect("store");
     let orphan = store
-        .publish_artifact(&first.artifact)
+        .publish_workspace_snapshot(&first)
         .expect("simulate interrupted publication");
     assert!(orphan.is_dir());
     let second = edit(&root, 1);
