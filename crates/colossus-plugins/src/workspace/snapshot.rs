@@ -3,7 +3,12 @@
 use super::*;
 
 pub(crate) const SNAPSHOT_MANIFEST: &str = "workspace-snapshot.json";
-pub(crate) const MAX_SNAPSHOT_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
+// Windows extended paths admit up to 32,767 UTF-16 units; supported Unix whole
+// paths are shorter. JSON needs at most six bytes per unit, including escapes.
+// Include the fixed per-file fields and envelope for every supported file.
+const MAX_SNAPSHOT_PATH_UNITS: usize = 32_768;
+pub(crate) const MAX_SNAPSHOT_MANIFEST_BYTES: u64 =
+    MAX_FILES as u64 * (6 * MAX_SNAPSHOT_PATH_UNITS as u64 + 128) + 128;
 const SNAPSHOT_FORMAT: &str = "colossus.workspace-plugin.snapshot.v1";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -37,6 +42,7 @@ impl SnapshotManifest {
         let mut total = 0_u64;
         for file in &manifest.files {
             if file.path.is_empty()
+                || file.path.encode_utf16().count() > MAX_SNAPSHOT_PATH_UNITS
                 || file.path.contains(['\\', ':'])
                 || posix_path(Path::new(&file.path))? != file.path
                 || previous.is_some_and(|path| path >= file.path.as_str())

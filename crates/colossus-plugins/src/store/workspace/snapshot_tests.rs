@@ -55,6 +55,46 @@ fn local_snapshots_store_files_without_oci_blobs_and_survive_reopening() {
 }
 
 #[test]
+fn long_shared_paths_fit_the_existing_file_and_payload_limits() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let source = root.join("source");
+    write_plugin(&source);
+    let mut relative = PathBuf::new();
+    for _ in 0..14 {
+        relative.push("long-directory-".repeat(12));
+    }
+    fs::create_dir_all(source.join(&relative)).unwrap();
+    for index in 0..4_000 {
+        fs::write(source.join(&relative).join(format!("file-{index}")), b"x").unwrap();
+    }
+    let candidate = capture_workspace_plugin(&root, Path::new("source")).unwrap();
+    assert!(candidate.snapshot.manifest.len() > 8 * 1024 * 1024);
+    let store = PluginStore::new(root.join("store")).unwrap();
+    let installed = store
+        .accept_workspace_plugin(&candidate, &BTreeSet::new(), actor())
+        .unwrap();
+    drop(store);
+    let reopened = PluginStore::new(root.join("store")).unwrap();
+    let (records, _lease) = reopened
+        .snapshot_digests_with_lease(&BTreeMap::from([(
+            installed.manifest.name,
+            installed.digest,
+        )]))
+        .unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        fs::read(
+            Path::new(&records[0].installation.root)
+                .join(relative)
+                .join("file-3999")
+        )
+        .unwrap(),
+        b"x"
+    );
+}
+
+#[test]
 fn local_snapshot_reuse_rejects_same_size_corruption_and_preserves_leased_content() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
