@@ -71,6 +71,8 @@ mod directory_creation;
 pub use directory_creation::PrivateDirectoryCreation;
 pub(super) mod enrolled;
 mod mandatory;
+mod window_station;
+pub use window_station::OwnedAppContainerWindowStation;
 
 pub(super) fn configure_suspended_process(command: &mut std::process::Command) {
     command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);

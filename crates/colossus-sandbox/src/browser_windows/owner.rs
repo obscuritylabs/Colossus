@@ -3,7 +3,8 @@ use super::installation::Installation;
 use colossus_ports::BrowserDriverError;
 use colossus_windows_native::{ExclusiveAppContainerProfile, system_windows_directory};
 use colossus_windows_process::{
-    PrivateProcessChannel, SandboxedChild, SpawnRequest, SupervisedChild,
+    ContextShutdown, PendingBrowserCleanup, PrivateProcessChannel, SandboxedChild, SpawnRequest,
+    SupervisedChild, WindowsProcessError,
 };
 use std::{
     collections::BTreeMap,
@@ -28,7 +29,9 @@ pub(super) struct Owner {
     closed: Arc<std::sync::atomic::AtomicU8>,
 }
 struct Native {
+    installation: Option<Arc<Installation>>,
     child: Option<SandboxedChild>,
+    pending: Option<PendingBrowserCleanup>,
     profile: Option<ExclusiveAppContainerProfile>,
     profile_directory: Option<std::fs::File>,
     forced: bool,
@@ -51,9 +54,15 @@ impl Native {
         }
         if let Some(profile) = &self.profile {
             for process in &processes {
-                profile
-                    .verify_process(process.process_handle())
-                    .map_err(|_| BrowserDriverError::Denied)?;
+                if process.process_id() == child.pid {
+                    profile
+                        .verify_process(process.process_handle())
+                        .map_err(|_| BrowserDriverError::Denied)?;
+                } else {
+                    profile
+                        .verify_descendant_process(process.process_handle())
+                        .map_err(|_| BrowserDriverError::Denied)?;
+                }
             }
         } else if !self.user_development {
             return Err(BrowserDriverError::Denied);
@@ -62,6 +71,18 @@ impl Native {
     }
 
     fn cleanup(&mut self) -> Result<bool, BrowserDriverError> {
+        if let Some(pending) = &mut self.pending {
+            // Startup did not reach a usable browser. Retain every enclosing
+            // lease until the exact partial allocation is positively retired.
+            self.forced = true;
+            if !pending
+                .cleanup_timeout(Duration::from_secs(5))
+                .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+            {
+                return Err(BrowserDriverError::OutcomeUnknown);
+            }
+        }
+        self.pending.take();
         if let Some(child) = &self.child {
             if !child
                 .wait_tree_timeout(Duration::from_secs(2))
@@ -80,6 +101,10 @@ impl Native {
             }
         }
         if let Some(child) = &mut self.child {
+            self.forced |= child
+                .close_browser_context(Duration::from_secs(2))
+                .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+                == ContextShutdown::Forced;
             child
                 .retire_network()
                 .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
@@ -109,6 +134,12 @@ impl Drop for Native {
             if let Some(directory) = self.profile_directory.take() {
                 std::mem::forget(directory);
             }
+            if let Some(pending) = self.pending.take() {
+                std::mem::forget(pending);
+            }
+            if let Some(installation) = self.installation.take() {
+                std::mem::forget(installation);
+            }
         }
     }
 }
@@ -129,9 +160,10 @@ impl Owner {
         std::thread::Builder::new()
             .name("colossus-browser-job-owner".into())
             .spawn(move || {
-                let _installation = Arc::clone(&request.installation);
                 let mut native = Native {
+                    installation: Some(Arc::clone(&request.installation)),
                     child: None,
+                    pending: None,
                     profile: None,
                     profile_directory: None,
                     forced: false,
@@ -374,20 +406,34 @@ fn allocate(
     let SupervisedChild {
         mut child,
         channels,
-    } = spawned.map_err(|_error| {
-        #[cfg(debug_assertions)]
-        if let colossus_windows_process::WindowsProcessError::Win32 { operation, source } = &_error
-        {
-            eprintln!(
-                "Windows browser process startup: operation={operation}, os_code={:?}",
-                source.raw_os_error()
-            );
+    } = match spawned {
+        Ok(supervised) => supervised,
+        Err(WindowsProcessError::BrowserSetup { source, cleanup }) => {
+            // This Native owns one attempt. Keep the partial native allocation
+            // before translating its error or releasing the caller's future.
+            debug_assert!(native.pending.is_none());
+            native.pending = Some(cleanup);
+            report_startup_error(&source);
+            return Err(BrowserDriverError::OutcomeUnknown);
         }
-        BrowserDriverError::Unavailable
-    })?;
+        Err(error) => {
+            report_startup_error(&error);
+            return Err(BrowserDriverError::Unavailable);
+        }
+    };
     child.stdin.take();
     native.child = Some(child);
     Ok(channels)
+}
+
+fn report_startup_error(_error: &WindowsProcessError) {
+    #[cfg(debug_assertions)]
+    if let WindowsProcessError::Win32 { operation, source } = _error {
+        eprintln!(
+            "Windows browser process startup: operation={operation}, os_code={:?}",
+            source.raw_os_error()
+        );
+    }
 }
 
 fn prepare_profile(

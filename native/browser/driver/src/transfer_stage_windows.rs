@@ -1,6 +1,6 @@
 //! Exact-package private transfer staging; paths never leave the native host.
 use colossus_ports::BrowserDriverError;
-use colossus_windows_native::{BoundPath, PrivateDirectoryCreation};
+use colossus_windows_native::{BoundPath, PrivateDirectoryCreation, WindowsNativeError};
 use std::{
     fs::{File, OpenOptions},
     io::{Read as _, Write as _},
@@ -61,7 +61,7 @@ impl Directory {
         } else {
             PrivateDirectoryCreation::create_in_appcontainer_profile(parent, &basename)
         }
-        .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        .map_err(|error| directory_error("allocate", error))?;
         // Preserve the allocation owner even when metadata binding fails.
         let mut directory = Self {
             creation,
@@ -72,7 +72,7 @@ impl Directory {
             directory
                 .creation
                 .bind()
-                .map_err(|_| BrowserDriverError::OutcomeUnknown)?,
+                .map_err(|error| directory_error("bind", error))?,
         );
         Ok(directory)
     }
@@ -363,6 +363,27 @@ impl Stage {
         }
         self.directory.finish()
     }
+}
+fn directory_error(_phase: &'static str, _error: WindowsNativeError) -> BrowserDriverError {
+    #[cfg(debug_assertions)]
+    {
+        let category = match &_error {
+            WindowsNativeError::UnsupportedPlatform => "UnsupportedPlatform",
+            WindowsNativeError::InvalidInput => "InvalidInput",
+            WindowsNativeError::ReparsePoint => "ReparsePoint",
+            WindowsNativeError::IdentityChanged => "IdentityChanged",
+            WindowsNativeError::UnsafePermissions => "UnsafePermissions",
+            WindowsNativeError::Io { .. } => "Io",
+        };
+        match _error {
+            WindowsNativeError::Io { operation, source } => eprintln!(
+                "native Windows transfer rejection phase={_phase} category={category} operation={operation} os_code={}",
+                source.raw_os_error().unwrap_or(0)
+            ),
+            _ => eprintln!("native Windows transfer rejection phase={_phase} category={category}"),
+        }
+    }
+    BrowserDriverError::OutcomeUnknown
 }
 fn random(prefix: &str) -> Result<String, BrowserDriverError> {
     let mut bytes = [0_u8; 16];

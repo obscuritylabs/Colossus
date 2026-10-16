@@ -6,6 +6,9 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_NAME_OPENED, GetFinalPathNameByHandleW, VOLUME_NAME_NONE,
 };
 
+#[cfg(test)]
+mod tests;
+
 fn volume_path(path: &Path) -> Result<PathBuf, WindowsNativeError> {
     let mut parts = path.components();
     match parts.next() {
@@ -138,13 +141,7 @@ pub(super) fn open(
     if let Some(leaf) = components.last() {
         candidate.push(leaf);
     }
-    let file = open_exact(
-        &candidate,
-        kind,
-        access,
-        immutable || matches!(kind, BoundKind::Directory),
-        true,
-    )?;
+    let file = open_leaf(&candidate, kind, access, immutable)?;
     validate_owner_dacl(
         &file,
         if matches!(kind, BoundKind::File) {
@@ -168,6 +165,19 @@ pub(super) fn open(
         appcontainer: true,
         appcontainer_scope: Some(root),
     })
+}
+
+fn open_leaf(
+    path: &Path,
+    kind: BoundKind,
+    access: u32,
+    immutable: bool,
+) -> Result<File, WindowsNativeError> {
+    // Mutable enrolled directories coexist with the supervisor's retained
+    // DELETE-capable allocation. Denying delete sharing would reject the reopen
+    // needed for relative child creation. No-follow and identity/DACL checks in
+    // the caller still bind the same exact enrolled tree.
+    open_exact(path, kind, access, immutable, true)
 }
 
 pub(crate) fn reopen(

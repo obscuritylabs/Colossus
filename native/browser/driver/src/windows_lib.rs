@@ -45,6 +45,11 @@ unsafe extern "C" fn RunWinMain(
     sandbox: *mut std::ffi::c_void,
     version: *mut std::ffi::c_void,
 ) -> i32 {
+    // The process crate validates its closed context-helper modes and pre-CEF
+    // admission before ordinary CEF startup reaches the native entry below.
+    if let Some(status) = colossus_windows_process::dispatch_browser_context_helper() {
+        return status;
+    }
     // SAFETY: CEF bootstrap owns each borrowed pointer through this synchronous
     // call. Native entry verifies the pinned version, sandbox, thread and loader,
     // and dispatches any helper before the private parent channels are parsed.

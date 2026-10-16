@@ -2,9 +2,11 @@
 use super::*;
 use std::os::windows::io::BorrowedHandle;
 use windows_sys::Win32::{
+    Foundation::{ERROR_INSUFFICIENT_BUFFER, GetLastError},
     Security::{
-        TOKEN_APPCONTAINER_INFORMATION, TokenAppContainerSid, TokenIntegrityLevel,
-        TokenIsAppContainer, WinLowLabelSid,
+        SID_AND_ATTRIBUTES, TOKEN_APPCONTAINER_INFORMATION, TOKEN_GROUPS, TokenAppContainerSid,
+        TokenCapabilities, TokenIntegrityLevel, TokenIsAppContainer, WinLowLabelSid,
+        WinUntrustedLabelSid,
     },
     Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ},
 };
@@ -31,44 +33,11 @@ impl AppContainerPrincipal {
     fn bind_process(
         process: windows_sys::Win32::Foundation::HANDLE,
     ) -> Result<Self, WindowsNativeError> {
-        let mut raw = null_mut();
-        // SAFETY: borrowed process stays alive, and raw receives one token handle.
-        if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut raw) } == 0 {
-            return Err(last_error("open enrolled AppContainer token"));
-        }
-        // SAFETY: OpenProcessToken transferred this uniquely owned token handle.
-        let token = unsafe { OwnedHandle::from_raw_handle(raw.cast()) };
-        let mut is_container: u32 = 0;
-        let mut returned = 0;
-        // SAFETY: exactly sized integer output, live retained token handle.
-        if unsafe {
-            GetTokenInformation(
-                token.as_raw_handle().cast(),
-                TokenIsAppContainer,
-                (&raw mut is_container).cast(),
-                size_of::<u32>() as u32,
-                &mut returned,
-            )
-        } == 0
-            || returned != size_of::<u32>() as u32
-            || is_container != 1
-        {
-            return Err(WindowsNativeError::UnsafePermissions);
-        }
-        let package = token_sid(&token, TokenAppContainerSid)?;
-        let user = token_sid(&token, TokenUser)?;
-        let integrity = token_sid(&token, TokenIntegrityLevel)?;
-        let current = current_user_sid()?;
-        if !sid_matches(
-            user.as_ptr().cast_mut().cast(),
-            current.as_ptr().cast_mut().cast(),
-        ) {
-            return Err(WindowsNativeError::UnsafePermissions);
-        }
+        let identity = KernelAppContainerIdentity::of_process(process)?;
         let principal = Self {
-            package,
-            user,
-            integrity,
+            package: identity.package,
+            user: identity.user,
+            integrity: identity.integrity,
         };
         principal.validate_low_integrity()?;
         Ok(principal)
@@ -97,6 +66,25 @@ impl AppContainerPrincipal {
         } else {
             Err(WindowsNativeError::UnsafePermissions)
         }
+    }
+
+    /// Create one fresh noninteractive station for this kernel-derived package.
+    /// The caller must have a fresh logon context and independently attest the
+    /// retained child's package, AuthenticationId, capabilities and Job membership.
+    /// An existing station is rejected. This borrowing guard stays on its creating
+    /// thread; retain it until full Job drainage, then explicitly close it.
+    pub fn create_window_station(
+        &self,
+    ) -> Result<super::OwnedAppContainerWindowStation<'_>, WindowsNativeError> {
+        self.validate_low_integrity()?;
+        let current = current_user_sid()?;
+        if !sid_matches(
+            current.as_ptr().cast_mut().cast(),
+            self.user.as_ptr().cast_mut().cast(),
+        ) {
+            return Err(WindowsNativeError::UnsafePermissions);
+        }
+        super::window_station::OwnedAppContainerWindowStation::create_for_process(self)
     }
 
     /// Create one fresh profile beneath a retained owner-private parent.
@@ -187,6 +175,151 @@ impl AppContainerPrincipal {
     }
 }
 
+// Kernel observations alone carry no filesystem allocation authority.
+struct KernelAppContainerIdentity {
+    token: OwnedHandle,
+    package: Box<[u8; SECURITY_MAX_SID_SIZE as usize]>,
+    user: Box<[u8; SECURITY_MAX_SID_SIZE as usize]>,
+    integrity: Box<[u8; SECURITY_MAX_SID_SIZE as usize]>,
+}
+impl KernelAppContainerIdentity {
+    fn of_process(
+        process: windows_sys::Win32::Foundation::HANDLE,
+    ) -> Result<Self, WindowsNativeError> {
+        let mut raw = null_mut();
+        // SAFETY: borrowed process stays alive, and raw receives one token handle.
+        if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut raw) } == 0 {
+            return Err(last_error("open enrolled AppContainer token"));
+        }
+        // SAFETY: OpenProcessToken transferred this uniquely owned token handle.
+        let token = unsafe { OwnedHandle::from_raw_handle(raw.cast()) };
+        let mut is_container: u32 = 0;
+        let mut returned = 0;
+        // SAFETY: exactly sized integer output, live retained token handle.
+        if unsafe {
+            GetTokenInformation(
+                token.as_raw_handle().cast(),
+                TokenIsAppContainer,
+                (&raw mut is_container).cast(),
+                size_of::<u32>() as u32,
+                &mut returned,
+            )
+        } == 0
+            || returned != size_of::<u32>() as u32
+            || is_container != 1
+        {
+            return Err(WindowsNativeError::UnsafePermissions);
+        }
+        let package = token_sid(&token, TokenAppContainerSid)?;
+        let user = token_sid(&token, TokenUser)?;
+        let integrity = token_sid(&token, TokenIntegrityLevel)?;
+        let current = current_user_sid()?;
+        if !sid_matches(
+            user.as_ptr().cast_mut().cast(),
+            current.as_ptr().cast_mut().cast(),
+        ) {
+            return Err(WindowsNativeError::UnsafePermissions);
+        }
+        Ok(Self {
+            token,
+            package,
+            user,
+            integrity,
+        })
+    }
+}
+
+pub(super) fn verify_descendant_process(
+    process: BorrowedHandle<'_>,
+    package: PSID,
+) -> Result<(), WindowsNativeError> {
+    let identity = KernelAppContainerIdentity::of_process(process.as_raw_handle().cast())?;
+    if !sid_matches(package, identity.package.as_ptr().cast_mut().cast()) {
+        return Err(WindowsNativeError::IdentityChanged);
+    }
+    validate_descendant_integrity(identity.integrity.as_ptr().cast_mut().cast())?;
+    validate_no_capabilities(&identity.token)
+}
+
+fn validate_descendant_integrity(integrity: PSID) -> Result<(), WindowsNativeError> {
+    let low = well_known_sid(WinLowLabelSid)?;
+    let untrusted = well_known_sid(WinUntrustedLabelSid)?;
+    if sid_matches(integrity, low.as_ptr().cast_mut().cast())
+        || sid_matches(integrity, untrusted.as_ptr().cast_mut().cast())
+    {
+        Ok(())
+    } else {
+        Err(WindowsNativeError::UnsafePermissions)
+    }
+}
+
+fn validate_no_capabilities(token: &OwnedHandle) -> Result<(), WindowsNativeError> {
+    let mut required = 0;
+    // SAFETY: sizing query borrows the exact retained token and writable length.
+    let sized = unsafe {
+        GetTokenInformation(
+            token.as_raw_handle().cast(),
+            TokenCapabilities,
+            null_mut(),
+            0,
+            &mut required,
+        )
+    };
+    // SAFETY: capture the error immediately after the failed sizing query.
+    let error = unsafe { GetLastError() };
+    if sized != 0 {
+        return Err(WindowsNativeError::UnsafePermissions);
+    }
+    if error != ERROR_INSUFFICIENT_BUFFER {
+        return Err(WindowsNativeError::Io {
+            operation: "size enrolled AppContainer capabilities",
+            source: std::io::Error::from_raw_os_error(error as i32),
+        });
+    }
+    if required < offset_of!(TOKEN_GROUPS, Groups) as u32 || required > 64 * 1024 {
+        return Err(WindowsNativeError::UnsafePermissions);
+    }
+    let mut bytes = vec![0_u8; required as usize];
+    // SAFETY: bounded writable output spans the advertised allocation; the exact
+    // token stays retained. Returned length is checked before inspecting bytes.
+    if unsafe {
+        GetTokenInformation(
+            token.as_raw_handle().cast(),
+            TokenCapabilities,
+            bytes.as_mut_ptr().cast(),
+            bytes.len() as u32,
+            &mut required,
+        )
+    } == 0
+    {
+        return Err(last_error("query enrolled AppContainer capabilities"));
+    }
+    if required as usize > bytes.len() {
+        return Err(WindowsNativeError::UnsafePermissions);
+    }
+    validate_no_capability_groups(&bytes[..required as usize])
+}
+
+fn validate_no_capability_groups(bytes: &[u8]) -> Result<(), WindowsNativeError> {
+    let header = offset_of!(TOKEN_GROUPS, Groups);
+    if bytes.len() < header || bytes.len() > 64 * 1024 {
+        return Err(WindowsNativeError::UnsafePermissions);
+    }
+    // SAFETY: the checked TOKEN_GROUPS header includes its DWORD count. No SID
+    // pointer is dereferenced; the complete declared array is bounded below.
+    let count = unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast::<u32>()) };
+    let complete = (count as usize)
+        .checked_mul(size_of::<SID_AND_ATTRIBUTES>())
+        .and_then(|entries| header.checked_add(entries));
+    if count > 4096 || complete.is_none_or(|required| required > bytes.len()) {
+        return Err(WindowsNativeError::UnsafePermissions);
+    }
+    if count != 0 {
+        return Err(WindowsNativeError::UnsafePermissions);
+    }
+    Ok(())
+}
+
 fn token_sid(
     token: &OwnedHandle,
     kind: windows_sys::Win32::Security::TOKEN_INFORMATION_CLASS,
@@ -245,3 +378,6 @@ fn token_sid(
     }
     Ok(copied)
 }
+
+#[cfg(test)]
+mod tests;

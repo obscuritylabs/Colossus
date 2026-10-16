@@ -828,6 +828,24 @@ typed browser contracts. Each allocation retains an independently supervised pro
 and egress obligation before launch. Context-destroying cancellation interrupts the
 session and requires a fresh allocation rather than renewing control of a closed page.
 
+The contained Windows launcher keeps its process Jobs, completion ports, egress fence
+and profile authority in Core. Two fixed trusted helper roles run before CEF: one
+obtains a fresh logon context, and that context creates one suspended AppContainer
+browser with the exact private pipe handles and inner Job. Core pulls and verifies the
+returned process and primary thread, including the fresh logon identity, package SID,
+Low integrity, absent capabilities and both Job memberships, before it alone resumes
+the browser. The context holds only reduced inner-Job authority and a query handle for
+the browser while it owns the token-derived window station; it receives no Core
+mutation handle or outer-Job handle.
+
+Failed startup returns an opaque cleanup owner that retains the same native resources.
+Cleanup stops and positively waits the browser's creator before accepting the final
+inner-Job drain, then joins private I/O before retiring the egress fence and profile.
+A pending logon-service creation result cannot be discharged by observing an empty
+Job or by terminating its launcher. Normal shutdown also requires the context's
+station-close receipt and exit. These source checks do not enable publisher release
+modes or establish whole-host network and parent-death containment.
+
 The explicitly selected Windows Debug development composition admits functional
 automation without AppContainer/WFP containment. It retains Chromium's built-in
 sandbox, an owned Job and the authenticated boundaries above, while reporting

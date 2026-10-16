@@ -62,6 +62,7 @@ use windows_sys::core::GUID;
 
 pub(super) mod bootstrap;
 mod channels;
+pub(crate) mod context;
 pub(super) mod tree;
 
 pub(super) struct OwnedHandle(HANDLE);
@@ -121,6 +122,12 @@ impl NetworkGuard {
         proxy_port: u16,
         identity: u128,
     ) -> Result<Self, WindowsProcessError> {
+        let guard = Self::open(identity)?;
+        guard.configure(appcontainer_sid, proxy_port, identity)?;
+        Ok(guard)
+    }
+
+    fn open(identity: u128) -> Result<Self, WindowsProcessError> {
         let session_name = wide(OsStr::new("Colossus AppContainer proxy-only session"));
         // SAFETY: zero is the documented initial state for an FWPM session.
         let mut session: FWPM_SESSION0 = unsafe { zeroed() };
@@ -145,9 +152,7 @@ impl NetworkGuard {
         if result != 0 {
             return Err(code_error("FwpmEngineOpen0", result));
         }
-        let guard = Self(engine);
-        guard.configure(appcontainer_sid, proxy_port, identity)?;
-        Ok(guard)
+        Ok(Self(engine))
     }
 
     fn configure(
@@ -417,6 +422,9 @@ pub(super) fn spawn_with_channels(
     request: &SpawnRequest,
     count: usize,
 ) -> Result<crate::SupervisedChild, WindowsProcessError> {
+    if count != 0 {
+        return context::spawn(request, count);
+    }
     let sid_wide = wide(OsStr::new(&request.appcontainer_sid));
     let mut sid: PSID = null_mut();
     // SAFETY: sid_wide is NUL terminated and sid receives a LocalAlloc-owned PSID.
@@ -445,12 +453,10 @@ pub(super) fn spawn_user_browser(
     spawn_owned(request, count, None, None)
 }
 
-fn spawn_owned(
+fn new_job(
     request: &SpawnRequest,
     count: usize,
-    package: Option<PSID>,
-    network: Option<NetworkGuard>,
-) -> Result<crate::SupervisedChild, WindowsProcessError> {
+) -> Result<(OwnedHandle, OwnedHandle), WindowsProcessError> {
     // SAFETY: zero is the documented initial state for these Win32 structures.
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_ACTIVE_PROCESS
@@ -531,6 +537,16 @@ fn spawn_owned(
         return Err(last_error("SetInformationJobObject(UI restrictions)"));
     }
 
+    Ok((job, completion_port))
+}
+
+fn spawn_owned(
+    request: &SpawnRequest,
+    count: usize,
+    package: Option<PSID>,
+    network: Option<NetworkGuard>,
+) -> Result<crate::SupervisedChild, WindowsProcessError> {
+    let (job, completion_port) = new_job(request, count)?;
     let pipes = PipeSet::new()?;
     let mut inherited = vec![
         pipes.child_stdin.raw(),
@@ -646,6 +662,7 @@ fn spawn_owned(
         job,
         completion_port,
         network,
+        context: None,
     });
     Ok(crate::SupervisedChild {
         child,
