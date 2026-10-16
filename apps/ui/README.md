@@ -18,6 +18,11 @@ Mobile keeps touch navigation and appearance preferences in its renderer, while 
 native Rust client owns human sessions and Control Plane transport. Execution remains
 on enrolled runtimes.
 
+Touch surfaces use `--font-size-touch-body`, `--font-size-touch-caption`, and
+`--control-height-touch` from the shared theme. `DropdownSelect` accepts
+`density="touch"` to keep both its trigger and portalled options readable and at
+least 44 pixels high. Compact consumers retain their existing control geometry.
+
 The app build and lockfiles remain separate. After changing this package, refresh
 all local file dependencies with `npm ci --ignore-scripts` in `apps/desktop`,
 `apps/vscode`, `apps/web`, and `apps/mobile`, then run their `check`, `build`, and affected browser

@@ -31,6 +31,7 @@ test("server selection, local sign-in, and browser SSO remain distinct", async (
   await expect(
     page.getByRole("heading", { name: "Recent work" }),
   ).toBeVisible();
+  await expect(page.locator(".mobile-row").nth(1)).toBeInViewport({ ratio: 1 });
   const storage = await page.evaluate(() =>
     JSON.stringify({
       local: { ...localStorage },
@@ -205,9 +206,11 @@ test("an uncertain submission reconciles the original operation after fleet chan
   await expect(
     page.getByRole("textbox", { name: "Message Colossus" }),
   ).toBeDisabled();
+  await page.getByRole("button", { name: "Task options · Execute" }).click();
   await expect(
-    page.getByRole("combobox", { name: "Agent role", exact: true }),
-  ).toContainText("reviewer", { timeout: 10000 });
+    page.getByRole("radio", { name: "reviewer", exact: true }),
+  ).toBeDisabled({ timeout: 10000 });
+  await page.getByRole("button", { name: "Done", exact: true }).click();
   expect(
     await page.evaluate(
       () => Reflect.get(globalThis, "__mobileAttempts").length,
@@ -365,6 +368,9 @@ test("sign-in keeps its hierarchy at phone width with Large text across palettes
 }) => {
   await page.setViewportSize({ width: 320, height: 844 });
   await page.goto("/?fixture=login");
+  await expect(
+    page.getByRole("heading", { name: "Connect to Colossus" }),
+  ).toBeVisible();
   for (const [theme, palette] of [
     ["dark", "black"],
     ["dark", "neutral"],
@@ -384,6 +390,12 @@ test("sign-in keeps its hierarchy at phone width with Large text across palettes
     await page.getByLabel("Server address").fill("https://colossus.example");
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     await expect(page.getByLabel("Username", { exact: true })).toBeVisible();
+    const serverName = page.locator(".mobile-server-selection strong");
+    expect((await serverName.boundingBox())!.height).toBeLessThanOrEqual(
+      await serverName.evaluate(
+        (element) => parseFloat(getComputedStyle(element).lineHeight) + 1,
+      ),
+    );
     await expect(page.locator("html")).toHaveAttribute(
       "data-text-size",
       "large",

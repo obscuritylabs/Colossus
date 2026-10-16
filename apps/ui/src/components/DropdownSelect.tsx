@@ -44,6 +44,7 @@ interface DropdownSelectProps {
   value?: string | number;
   defaultValue?: string | number;
   disabled?: boolean;
+  density?: "compact" | "touch";
   required?: boolean;
   className?: string;
   id?: string;
@@ -136,6 +137,7 @@ export function DropdownSelect({
   value,
   defaultValue,
   disabled = false,
+  density = "compact",
   required = false,
   className = "",
   id,
@@ -416,7 +418,7 @@ export function DropdownSelect({
 
   return (
     <span
-      className={`app-select${className === "" ? "" : ` ${className}`}`}
+      className={`app-select${density === "touch" ? " app-select--touch" : ""}${className === "" ? "" : ` ${className}`}`}
       data-disabled={disabled ? "true" : "false"}
       data-open={open ? "true" : "false"}
       ref={rootRef}
@@ -477,7 +479,7 @@ export function DropdownSelect({
       {open && typeof document !== "undefined"
         ? createPortal(
             <div
-              className="app-select-popover"
+              className={`app-select-popover${density === "touch" ? " app-select-popover--touch" : ""}`}
               id={listboxId}
               role="listbox"
               aria-label={ariaLabel}

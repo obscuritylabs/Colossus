@@ -72,6 +72,12 @@
   opacity: var(--disabled-opacity);
   cursor: not-allowed;
 }
+.ui-button--primary:disabled {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--muted);
+  opacity: 1;
+}
 .ui-input {
   width: 100%;
   min-width: 0;

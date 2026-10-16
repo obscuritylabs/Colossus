@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Button, RadioGroup, HostPlatformIcon } from "@colossus/ui";
 import {
-  Button,
-  ComposerModeSwitch,
-  DropdownSelect,
-  HostPlatformIcon,
-} from "@colossus/ui";
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetClose,
+} from "@colossus/ui/components/ui/sheet";
 import {
   ConversationComposer,
   ConversationEntry,
@@ -14,6 +17,7 @@ import {
   IconArrowLeft,
   IconArrowUpRight,
   IconRefresh,
+  IconAdjustmentsHorizontal,
 } from "@tabler/icons-react";
 import type {
   FleetNode,
@@ -23,6 +27,7 @@ import type {
   Thread,
   ThreadDetailResponse,
 } from "@colossus/control-plane-client";
+import { taskStatus, terminalStatuses } from "@colossus/control-plane-client";
 import {
   ClientFailure,
   messageOf,
@@ -31,6 +36,7 @@ import {
   type Operation,
 } from "./client";
 import { usePoll } from "./usePoll";
+import { TaskStatus } from "./TaskStatus";
 
 export function Conversation({
   client,
@@ -76,6 +82,11 @@ export function Conversation({
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const [uncertain, setUncertain] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const optionsTrigger = useRef<HTMLButtonElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const followLatest = useRef(true);
+  const bodyHeight = useRef(0);
   const attempt = useRef<{ signature: string; operation: Operation } | null>(
     null,
   );
@@ -87,6 +98,31 @@ export function Conversation({
   const active = thread
     ? detail.value?.tasks.find((t) => t.task_id === current?.active_task_id)
     : undefined;
+  const latestTask =
+    active ??
+    (current
+      ? [...(detail.value?.tasks ?? [])].sort((a, b) =>
+          (b.created_at ?? "").localeCompare(a.created_at ?? ""),
+        )[0]
+      : undefined);
+  useLayoutEffect(() => {
+    if (followLatest.current && scrollRef.current)
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [detail.value?.messages]);
+  useEffect(() => {
+    const body = scrollRef.current;
+    if (!body) return;
+    const observer = new ResizeObserver(() => {
+      bodyHeight.current = body.clientHeight;
+      if (followLatest.current) body.scrollTop = body.scrollHeight;
+    });
+    observer.observe(body);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (notice && latestTask && terminalStatuses.has(taskStatus(latestTask)))
+      setNotice("");
+  }, [notice, latestTask]);
   useEffect(() => {
     if (target && !target.node.roles.includes(role))
       setRole(target.node.roles[0] ?? "");
@@ -134,11 +170,11 @@ export function Conversation({
         attempt.current.operation,
       );
       setDraft("");
+      followLatest.current = true;
       attempt.current = null;
       setUncertain(false);
       if (!current) onCreated(result.thread);
       else detail.refresh();
-      setNotice("Task queued. Runtime progress will appear here.");
     } catch (failure) {
       setError(messageOf(failure));
       const unknown =
@@ -188,12 +224,24 @@ export function Conversation({
         </Button>
         <div>
           <h1>{current?.title ?? "New task"}</h1>
-          <p className="mobile-caption">
-            {[host?.label ?? target?.node.label, target?.node.workspace_label]
-              .filter(Boolean)
-              .join(" · ") || "Choose a workspace"}
-            {target?.presence?.ready ? " · Connected" : " · Offline"}
-          </p>
+          <div className="mobile-conversation-context" role="status">
+            <HostPlatformIcon
+              platform={host?.platform ?? "unknown"}
+              size={16}
+            />
+            <span>
+              {target?.node.workspace_label ??
+                target?.node.label ??
+                "Choose a workspace"}
+            </span>
+            {latestTask ? (
+              <TaskStatus task={latestTask} />
+            ) : (
+              <span className="mobile-muted">
+                {target?.presence?.ready ? "Connected" : "Offline"}
+              </span>
+            )}
+          </div>
         </div>
         <Button
           variant="tertiary"
@@ -218,11 +266,31 @@ export function Conversation({
           Loading conversation…
         </p>
       )}
-      <div className="mobile-conversation-body">
+      <div
+        className="mobile-conversation-body"
+        ref={scrollRef}
+        onScroll={() => {
+          const body = scrollRef.current;
+          if (body && body.clientHeight !== bodyHeight.current) {
+            bodyHeight.current = body.clientHeight;
+            if (followLatest.current) body.scrollTop = body.scrollHeight;
+          } else if (body)
+            followLatest.current =
+              body.scrollHeight - body.scrollTop - body.clientHeight < 64;
+        }}
+      >
         {!current && (
           <div className="mobile-empty">
-            <h2>What would you like to work on?</h2>
-            <p>Select a workspace. Colossus will run the task on that host.</p>
+            <h2>Start something new</h2>
+            <p>
+              Your task will run in{" "}
+              <strong>
+                {target?.node.workspace_label ??
+                  target?.node.label ??
+                  "your selected workspace"}
+              </strong>
+              . Change the workspace or run mode in Task options.
+            </p>
           </div>
         )}
         {current && (
@@ -265,14 +333,8 @@ export function Conversation({
             </Button>
           </p>
         )}
-        {active && (
-          <p role="status" className="mobile-status">
-            <HostPlatformIcon platform={host?.platform ?? "unknown"} />
-            {active.snapshot?.run.status.replaceAll("_", " ") ??
-              "Queued on assigned host"}
-          </p>
-        )}
         {active &&
+          !terminalStatuses.has(taskStatus(active)) &&
           !active.source_read_only &&
           permissions.includes("control") && (
             <Button
@@ -314,81 +376,138 @@ export function Conversation({
         disabled={!canSend || uncertain}
         busy={busy}
         label="Message Colossus"
-        placeholder="Continue this thread…"
+        placeholder={
+          current ? "Message Colossus…" : "What would you like to do?"
+        }
+        textareaProps={{ rows: 1 }}
         action={uncertain ? "Reconcile submission" : "Send"}
         shortcut="modEnter"
         onSubmit={(event) => {
           event.preventDefault();
           void send();
         }}
-        context={
-          <>
-            <span>
-              {target?.node.policy?.models.length
-                ? `Host models: ${target.node.policy.models.map((model) => model.label).join(" · ")}`
-                : "Host-configured model"}
-            </span>
-            <span className="mobile-caption">
-              {target?.node.policy
-                ? `Approvals: ${target.node.policy.approval_mode.replaceAll("_", " ")}`
-                : "Policy not reported"}
-            </span>
-          </>
-        }
         controls={
-          <>
-            <DropdownSelect
-              aria-label="Execution workspace"
-              value={current?.node_id ?? nodeId}
-              disabled={Boolean(current) || busy || uncertain}
-              onChange={(event) => {
-                setNodeId(event.target.value);
-                setRole(
-                  nodes.find((n) => n.node.node_id === event.target.value)?.node
-                    .roles[0] ?? "",
-                );
-              }}
-            >
-              {nodes
-                .filter((n) => !n.node.revoked)
-                .map((n) => (
-                  <option value={n.node.node_id} key={n.node.node_id}>
-                    {[
-                      hosts.find((h) => h.host_id === n.node.host_id)?.label ??
-                        n.node.label,
-                      n.node.workspace_label,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                    {n.presence?.ready ? "" : " · Offline"}
-                  </option>
-                ))}
-            </DropdownSelect>
-            <DropdownSelect
-              aria-label="Agent role"
-              value={role}
-              disabled={busy || uncertain}
-              onChange={(event) => setRole(event.target.value)}
-            >
-              {target?.node.roles.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </DropdownSelect>
-            <ComposerModeSwitch
-              value={mode}
-              onChange={(value) => setMode(value as "execute" | "plan")}
-              options={[
-                { value: "plan", label: "Plan" },
-                { value: "execute", label: "Execute" },
-              ]}
-              disabled={busy || uncertain}
-            />
-          </>
+          <Button
+            ref={optionsTrigger}
+            variant="tertiary"
+            aria-haspopup="dialog"
+            aria-label={`Task options · ${mode === "plan" ? "Plan" : "Execute"}`}
+            onClick={() => setOptionsOpen(true)}
+          >
+            <IconAdjustmentsHorizontal size={18} aria-hidden="true" />
+            {mode === "plan" ? "Plan" : "Execute"}
+          </Button>
         }
         stopping={busy}
       />
+      <Sheet open={optionsOpen} onOpenChange={setOptionsOpen}>
+        <SheetContent
+          side="bottom"
+          className="mobile-task-options"
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            optionsTrigger.current?.focus();
+          }}
+        >
+          <SheetHeader>
+            <SheetTitle>Task options</SheetTitle>
+            <SheetDescription>
+              Choose how your next message runs.
+            </SheetDescription>
+          </SheetHeader>
+          <div className="mobile-options-body">
+            <section>
+              <h2>Workspace</h2>
+              {current ? (
+                <div className="mobile-selected-workspace">
+                  <strong>
+                    {target?.node.workspace_label ?? target?.node.label}
+                  </strong>
+                  <p>
+                    {host?.label ?? target?.node.label} ·{" "}
+                    {target?.presence?.ready ? "Connected" : "Offline"}
+                  </p>
+                  <p className="mobile-muted">
+                    This conversation stays on its original workspace.
+                  </p>
+                </div>
+              ) : (
+                <RadioGroup
+                  aria-label="Execution workspace"
+                  value={nodeId}
+                  disabled={busy || uncertain}
+                  onValueChange={(value) => {
+                    setNodeId(value);
+                    setRole(
+                      nodes.find((n) => n.node.node_id === value)?.node
+                        .roles[0] ?? "",
+                    );
+                  }}
+                  options={nodes
+                    .filter((n) => !n.node.revoked)
+                    .map((n) => ({
+                      value: n.node.node_id,
+                      label: n.node.workspace_label ?? n.node.label,
+                      description: `${hosts.find((h) => h.host_id === n.node.host_id)?.label ?? n.node.label} · ${n.presence?.ready ? "Connected" : "Offline"}`,
+                    }))}
+                />
+              )}
+            </section>
+            <section>
+              <h2>Run mode</h2>
+              <RadioGroup
+                aria-label="Run mode"
+                value={mode}
+                disabled={busy || uncertain}
+                onValueChange={(value) => setMode(value as "execute" | "plan")}
+                options={[
+                  {
+                    value: "plan",
+                    label: "Plan",
+                    description: "Ask for a plan.",
+                  },
+                  {
+                    value: "execute",
+                    label: "Execute",
+                    description: "Run the requested work.",
+                  },
+                ]}
+              />
+            </section>
+            <section>
+              <h2>Agent role</h2>
+              <RadioGroup
+                aria-label="Agent role"
+                value={role}
+                disabled={busy || uncertain}
+                onValueChange={setRole}
+                options={(target?.node.roles ?? []).map((r) => ({
+                  value: r,
+                  label: r === "primary" ? "Primary agent" : r,
+                }))}
+              />
+            </section>
+            <section className="mobile-policy-summary">
+              <h2>Host configuration</h2>
+              <p>
+                {target?.node.policy?.models.length
+                  ? `Models: ${target.node.policy.models.map((model) => model.label).join(" · ")}`
+                  : "Model configured on the host"}
+              </p>
+              <p>
+                {target?.node.policy
+                  ? `Approvals: ${target.node.policy.approval_mode.replaceAll("_", " ")}`
+                  : "Approval policy not reported"}
+              </p>
+            </section>
+          </div>
+          <div className="mobile-options-footer">
+            <SheetClose asChild>
+              <Button variant="primary">Done</Button>
+            </SheetClose>
+          </div>
+        </SheetContent>
+      </Sheet>
       {uncertain && (
         <Button variant="tertiary" disabled={busy} onClick={onBack}>
           Leave and inspect recent work

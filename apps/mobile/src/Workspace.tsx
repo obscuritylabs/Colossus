@@ -162,7 +162,6 @@ export function Workspace({
   if (selection !== null && tab === "work")
     return (
       <Conversation
-        key={selection === "new" ? "new" : selection.thread_id}
         client={client}
         project={project}
         thread={selection === "new" ? null : selection}
@@ -189,26 +188,44 @@ export function Workspace({
           <h1>
             {tab === "fleet" ? "Fleet" : tab === "inbox" ? "Inbox" : "Work"}
           </h1>
-          <p className="mobile-muted">
-            {tab === "fleet"
-              ? "Your connected hosts and workspaces."
-              : tab === "inbox"
-                ? "Approvals and questions from your tasks."
-                : "Continue work across your hosts."}
-          </p>
+          {tab !== "work" && (
+            <p className="mobile-muted">
+              {tab === "fleet"
+                ? "Your connected hosts and workspaces."
+                : tab === "inbox"
+                  ? "Approvals and questions from your tasks."
+                  : "Continue work across your hosts."}
+            </p>
+          )}
         </div>
-        <Button
-          variant="tertiary"
-          aria-label="Refresh"
-          onClick={() => {
-            fleet.refresh();
-            hostPage.refresh();
-            threads.refresh();
-            tasks.refresh();
-          }}
-        >
-          <IconRefresh size={20} />
-        </Button>
+        <div className="mobile-page-actions">
+          {tab === "work" && (
+            <Button
+              className="mobile-new-task"
+              variant="primary"
+              disabled={
+                !permissions.includes("execute") ||
+                !nodes.some((n) => n.presence?.ready && !n.node.revoked)
+              }
+              onClick={() => setSelection("new")}
+            >
+              <IconPlus size={18} aria-hidden="true" />
+              New task
+            </Button>
+          )}
+          <Button
+            variant="tertiary"
+            aria-label="Refresh"
+            onClick={() => {
+              fleet.refresh();
+              hostPage.refresh();
+              threads.refresh();
+              tasks.refresh();
+            }}
+          >
+            <IconRefresh size={20} />
+          </Button>
+        </div>
       </header>
       {(fleet.error ||
         hostPage.error ||
@@ -225,18 +242,6 @@ export function Workspace({
       )}
       {tab === "work" && (
         <>
-          <Button
-            className="mobile-new-task"
-            variant="primary"
-            disabled={
-              !permissions.includes("execute") ||
-              !nodes.some((n) => n.presence?.ready && !n.node.revoked)
-            }
-            onClick={() => setSelection("new")}
-          >
-            <IconPlus size={20} />
-            New task
-          </Button>
           <div
             className="mobile-work-switch"
             role="group"
@@ -264,21 +269,21 @@ export function Workspace({
             </Button>
           </div>
           {workView === "conversations" && pending[0] && (
-            <div className="mobile-attention">
-              <h2>Needs your review</h2>
+            <div className="mobile-review-strip">
               <p>
-                {pending[0].snapshot?.pending_interactions[0]?.content.approval
-                  ? "Review a requested action"
-                  : "Answer an agent’s question"}
+                {pending.length}{" "}
+                {pending.length === 1 ? "task needs" : "tasks need"} your review
               </p>
               <Button
+                variant="tertiary"
+                aria-label="Review in Control Plane"
                 onClick={() =>
                   void client
                     .openBrowser(project, pending[0]!.task_id)
                     .catch((failure) => setBrowserError(messageOf(failure)))
                 }
               >
-                Review in Control Plane <IconArrowUpRight size={16} />
+                Review <IconArrowUpRight size={16} />
               </Button>
             </div>
           )}

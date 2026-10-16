@@ -148,7 +148,30 @@ export function App({
       <header className="mobile-app-header">
         <div className="mobile-brand">
           <img src={mark} alt="" />
-          <strong>Colossus</strong>
+          <strong className="shared-sr-only">Colossus</strong>
+        </div>
+        <div className="mobile-project-picker">
+          <IconFolder size={18} aria-hidden="true" />
+          <label className="shared-sr-only" htmlFor="project">
+            Project
+          </label>
+          <DropdownSelect
+            density="touch"
+            id="project"
+            disabled={locked}
+            value={projectId}
+            onChange={(event) => {
+              setProjectId(event.target.value);
+              setTab("work");
+            }}
+          >
+            {identity.projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+                {p.archived ? " · Archived" : ""}
+              </option>
+            ))}
+          </DropdownSelect>
         </div>
         <span className="mobile-avatar" title={identity.user.display_name}>
           {identity.user.display_name
@@ -158,28 +181,6 @@ export function App({
             .join("")}
         </span>
       </header>
-      <div className="mobile-project-picker">
-        <IconFolder size={20} />
-        <label className="shared-sr-only" htmlFor="project">
-          Project
-        </label>
-        <DropdownSelect
-          id="project"
-          disabled={locked}
-          value={projectId}
-          onChange={(event) => {
-            setProjectId(event.target.value);
-            setTab("work");
-          }}
-        >
-          {identity.projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-              {p.archived ? " · Archived" : ""}
-            </option>
-          ))}
-        </DropdownSelect>
-      </div>
       <div className="mobile-main" key={`${projectId}:${tab}`}>
         {tab === "settings" ? (
           <main className="mobile-settings">
@@ -194,6 +195,7 @@ export function App({
             <h2>Appearance</h2>
             <label htmlFor="theme">Color theme</label>
             <DropdownSelect
+              density="touch"
               id="theme"
               value={theme}
               onChange={(event) => setTheme(event.target.value)}
@@ -203,6 +205,7 @@ export function App({
             </DropdownSelect>
             <label htmlFor="palette">Dark palette</label>
             <DropdownSelect
+              density="touch"
               id="palette"
               value={palette}
               onChange={(event) => setPalette(event.target.value)}
@@ -214,6 +217,7 @@ export function App({
             </DropdownSelect>
             <label htmlFor="text-size">Text size</label>
             <DropdownSelect
+              density="touch"
               id="text-size"
               value={textSize}
               onChange={(event) => setTextSize(event.target.value)}

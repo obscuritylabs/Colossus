@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "@colossus/ui/styles/theme.css";
 import "@colossus/ui/styles/shadcn.css";
+import "@colossus/ui/styles/foundations.css";
 import "@colossus/ui/styles/controls.css";
 import "@colossus/ui/styles/select.css";
 import "@colossus/ui/styles/composer.css";
