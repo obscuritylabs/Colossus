@@ -80,6 +80,31 @@ fn native_endpoint_projection_and_usage() {
 }
 
 #[test]
+fn nullable_cache_usage_preserves_absence_and_rejects_invalid_counters() {
+    for value in [
+        json!({"input_tokens":10,"output_tokens":3}),
+        json!({"input_tokens":10,"output_tokens":3,"cache_read_input_tokens":null,"cache_creation_input_tokens":null}),
+    ] {
+        let normalized = usage(&value).unwrap();
+        assert_eq!(normalized.input_tokens, 10);
+        assert_eq!(normalized.total_tokens, 13);
+        assert_eq!(normalized.cached_input_tokens, None);
+    }
+    let zero = usage(&json!({"input_tokens":10,"output_tokens":3,
+        "cache_read_input_tokens":0,"cache_creation_input_tokens":0}))
+    .unwrap();
+    assert_eq!(zero.cached_input_tokens, Some(0));
+    assert_eq!(zero.total_tokens, 13);
+    for field in ["cache_read_input_tokens", "cache_creation_input_tokens"] {
+        for invalid in [json!(-1), json!(1.5), json!("0"), json!(true)] {
+            let mut value = json!({"input_tokens":10,"output_tokens":3});
+            value[field] = invalid;
+            assert!(usage(&value).is_err());
+        }
+    }
+}
+
+#[test]
 fn opaque_thinking_is_preserved_but_never_released_as_text() {
     let names = ProviderToolNames::from_request(&request()).unwrap();
     let blocks = json!([{"type":"thinking","thinking":"private","signature":"signed"},

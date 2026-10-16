@@ -1988,36 +1988,93 @@ fn configure_compaction(
 }
 
 fn retain_opaque_redactions(value: &Value, secrets: &mut RequestSecrets) {
-    match value {
-        Value::Object(object) => {
-            if matches!(
-                object.get("type").and_then(Value::as_str),
+    retain_encrypted_redactions(value, secrets);
+    // Only projected assistant content contains native private replay blocks.
+    // Tool arguments and schemas can contain ordinary objects with the same keys.
+    let Some(messages) = value.get("messages").and_then(Value::as_array) else {
+        return;
+    };
+    for message in messages {
+        if message["role"] != "assistant" {
+            continue;
+        }
+        let Some(content) = message.get("content").and_then(Value::as_array) else {
+            continue;
+        };
+        for block in content {
+            if !matches!(
+                block["type"].as_str(),
                 Some("thinking" | "redacted_thinking")
             ) {
-                for field in ["thinking", "signature", "data"] {
-                    if let Some(text) = object
-                        .get(field)
-                        .and_then(Value::as_str)
-                        .filter(|s| !s.is_empty())
-                    {
-                        secrets.retain(text);
-                    }
+                continue;
+            }
+            for field in ["thinking", "signature", "data"] {
+                if let Some(text) = block[field].as_str().filter(|text| !text.is_empty()) {
+                    secrets.retain(text);
                 }
             }
+        }
+    }
+}
+
+fn retain_encrypted_redactions(value: &Value, secrets: &mut RequestSecrets) {
+    match value {
+        Value::Object(object) => {
             for (key, value) in object {
                 if key == "encrypted_content"
                     && let Some(secret) = value.as_str()
                 {
                     secrets.retain(secret);
                 } else {
-                    retain_opaque_redactions(value, secrets);
+                    retain_encrypted_redactions(value, secrets);
                 }
             }
         }
         Value::Array(values) => values
             .iter()
-            .for_each(|value| retain_opaque_redactions(value, secrets)),
+            .for_each(|value| retain_encrypted_redactions(value, secrets)),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod opaque_redaction_tests {
+    use super::*;
+
+    #[test]
+    fn thinking_secret_collection_ignores_tool_arguments_and_schemas() {
+        let mut secrets = RequestSecrets::default();
+        retain_opaque_redactions(
+            &json!({
+                "messages":[{"role":"assistant","content":[
+                    {"type":"thinking","thinking":"PRIVATE_THOUGHT","signature":"PRIVATE_SIGNATURE"},
+                    {"type":"redacted_thinking","data":"PRIVATE_REDACTED"},
+                    {"type":"tool_use","id":"call-1","name":"lookup","input":{
+                        "location":{"type":"thinking","thinking":"Paris","signature":"ordinary-signature"}}}
+                ]}],
+                "tools":[{"name":"lookup","input_schema":{"type":"object","properties":{
+                    "location":{"const":{"type":"redacted_thinking","data":"Rome"}}}}}]
+            }),
+            &mut secrets,
+        );
+        retain_opaque_redactions(
+            &json!({"input":[{
+                "type":"compaction","encrypted_content":"PRIVATE_COMPACTION"
+            }]}),
+            &mut secrets,
+        );
+        let mut response = json!({
+            "text":"Paris Rome ordinary-signature PRIVATE_THOUGHT PRIVATE_SIGNATURE PRIVATE_REDACTED PRIVATE_COMPACTION",
+            "arguments":{"location":"Paris"}
+        });
+        secrets.redact_value(&mut response);
+        assert_eq!(
+            response,
+            json!({
+                "text":"Paris Rome ordinary-signature [REDACTED] [REDACTED] [REDACTED] [REDACTED]",
+                "arguments":{"location":"Paris"}
+            })
+        );
     }
 }
 

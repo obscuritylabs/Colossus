@@ -20,7 +20,8 @@ fn gateway(profile: &ProviderProfile, post: bool) -> EffectGateway {
 async fn anthropic_json_uses_native_headers_and_policy_release() {
     let (url, server) = one_response_server(json!({"id":"msg-test","type":"message","role":"assistant",
         "content":[{"type":"thinking","thinking":"PRIVATE_THOUGHT","signature":"unit-secret"},{"type":"text","text":"hello"}],
-        "stop_reason":"end_turn","usage":{"input_tokens":4,"output_tokens":2}})).await;
+        "stop_reason":"end_turn","usage":{"input_tokens":4,"output_tokens":2,
+            "cache_read_input_tokens":null,"cache_creation_input_tokens":null}})).await;
     let profile = ProviderProfile::new(
         "native",
         ProviderKind::AnthropicMessages,
@@ -50,11 +51,11 @@ async fn anthropic_json_uses_native_headers_and_policy_release() {
 #[tokio::test]
 async fn anthropic_sse_crosses_gateway_with_exact_text_and_cumulative_usage() {
     let frames = [
-        json!({"type":"message_start","message":{"id":"msg-stream","type":"message","role":"assistant","usage":{"input_tokens":5,"output_tokens":1}}}),
+        json!({"type":"message_start","message":{"id":"msg-stream","type":"message","role":"assistant","usage":{"input_tokens":5,"output_tokens":1,"cache_read_input_tokens":null,"cache_creation_input_tokens":null}}}),
         json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
         json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello 🌍"}}),
         json!({"type":"content_block_stop","index":0}),
-        json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}),
+        json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3,"cache_read_input_tokens":null,"cache_creation_input_tokens":null}}),
         json!({"type":"message_stop"}),
     ];
     let body = frames

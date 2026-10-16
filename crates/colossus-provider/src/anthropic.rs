@@ -283,6 +283,7 @@ fn usage(value: &Value) -> Result<ProviderUsage, ProviderError> {
 fn optional_tokens(value: &Value, field: &str) -> Result<Option<u64>, ProviderError> {
     value
         .get(field)
+        .filter(|value| !value.is_null())
         .map(|v| v.as_u64().ok_or_else(|| invalid("invalid Messages usage")))
         .transpose()
 }
