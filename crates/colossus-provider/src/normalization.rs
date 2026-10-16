@@ -1,11 +1,23 @@
 use super::*;
 
 #[derive(Default)]
-pub(super) struct ProviderResolvedImages {
+pub(super) struct ProviderResolvedMedia {
     by_artifact: BTreeMap<String, (ModelImageReference, String)>,
+    pub(super) files: BTreeMap<String, (ModelFileReference, String)>,
 }
 
-impl ProviderResolvedImages {
+impl ProviderResolvedMedia {
+    fn file_id(&self, reference: &ModelFileReference) -> Result<&str, ProviderError> {
+        self.files
+            .get(&reference.artifact_id)
+            .filter(|(resolved, _)| resolved == reference)
+            .map(|(_, id)| id.as_str())
+            .ok_or_else(|| {
+                ProviderError::Configuration(
+                    "verified PDF upload is unavailable for provider projection".into(),
+                )
+            })
+    }
     pub(super) fn insert(
         &mut self,
         reference: &ModelImageReference,
@@ -39,14 +51,14 @@ impl ProviderResolvedImages {
 
 pub(super) struct ProviderProjection<'a> {
     tool_names: &'a ProviderToolNames,
-    images: &'a ProviderResolvedImages,
+    images: &'a ProviderResolvedMedia,
     continuation: Option<&'a colossus_contracts::ProviderContinuation>,
 }
 
 impl<'a> ProviderProjection<'a> {
     pub(super) fn new(
         tool_names: &'a ProviderToolNames,
-        images: &'a ProviderResolvedImages,
+        images: &'a ProviderResolvedMedia,
     ) -> Self {
         Self {
             tool_names,
@@ -246,7 +258,7 @@ pub(super) fn responses_payload(
     streaming: bool,
     tool_names: &ProviderToolNames,
 ) -> Result<Value, ProviderError> {
-    let images = ProviderResolvedImages::default();
+    let images = ProviderResolvedMedia::default();
     responses_payload_with_images(
         request,
         provider_kind,
@@ -334,7 +346,7 @@ pub(super) fn responses_payload_with_images(
 fn responses_messages_with_images(
     message: &ModelMessage,
     tool_names: &ProviderToolNames,
-    images: &ProviderResolvedImages,
+    images: &ProviderResolvedMedia,
 ) -> Result<Vec<Value>, ProviderError> {
     match message.role {
         ModelMessageRole::System => Ok(vec![json!({
@@ -379,7 +391,7 @@ fn responses_messages_with_images(
 
 fn responses_user_content(
     content: &ModelContent,
-    images: &ProviderResolvedImages,
+    images: &ProviderResolvedMedia,
 ) -> Result<Value, ProviderError> {
     match content {
         ModelContent::Text(text) => Ok(Value::String(text.clone())),
@@ -394,6 +406,9 @@ fn responses_user_content(
                         "type": "input_image",
                         "image_url": images.data_url(image)?,
                         "detail": "auto",
+                    })),
+                    ModelContentPart::File { file } => Ok(json!({
+                        "type": "input_file", "file_id": images.file_id(file)?,
                     })),
                 })
                 .collect::<Result<Vec<_>, ProviderError>>()?,
@@ -423,7 +438,7 @@ pub(super) fn chat_payload(
     streaming: bool,
     tool_names: &ProviderToolNames,
 ) -> Result<Value, ProviderError> {
-    let images = ProviderResolvedImages::default();
+    let images = ProviderResolvedMedia::default();
     chat_payload_with_images(
         request,
         model,
@@ -498,7 +513,7 @@ fn validate_request_transcript(request: &ModelRequest) -> Result<(), ProviderErr
 fn chat_message_with_images(
     message: &ModelMessage,
     tool_names: &ProviderToolNames,
-    images: &ProviderResolvedImages,
+    images: &ProviderResolvedMedia,
 ) -> Result<Value, ProviderError> {
     let role = match message.role {
         ModelMessageRole::System => "system",
@@ -532,7 +547,7 @@ fn chat_message_with_images(
 
 fn chat_user_content(
     content: &ModelContent,
-    images: &ProviderResolvedImages,
+    images: &ProviderResolvedMedia,
 ) -> Result<Value, ProviderError> {
     match content {
         ModelContent::Text(text) => Ok(Value::String(text.clone())),
@@ -547,6 +562,9 @@ fn chat_user_content(
                             "url": images.data_url(image)?,
                             "detail": "auto",
                         },
+                    })),
+                    ModelContentPart::File { file } => Ok(json!({
+                        "type": "file", "file": { "file_id": images.file_id(file)? },
                     })),
                 })
                 .collect::<Result<Vec<_>, ProviderError>>()?,

@@ -22,6 +22,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 url.workspace = true
 zeroize.workspace = true
 
@@ -32,6 +33,7 @@ colossus-tools.workspace = true
 colossus-windows-native.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
+sha2.workspace = true
 tokio-rustls.workspace = true
 tempfile.workspace = true
 

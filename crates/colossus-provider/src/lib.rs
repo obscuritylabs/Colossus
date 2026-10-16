@@ -12,10 +12,10 @@ use colossus_codex_auth::{
 };
 use colossus_contracts::{
     CredentialReference, EffectRequest, ModelCapabilities, ModelContent, ModelContentPart,
-    ModelImageReference, ModelLimits, ModelMessage, ModelMessageRole, ModelRequest, ModelRoute,
-    ModelToolCall, ModelToolDefinition, ProviderEvent, ProviderModelInfo, ProviderReadiness,
-    ProviderReadinessCheck, ProviderResponseDiagnostic, ProviderStreamItem, ProviderTurn,
-    ProviderUsage, QuarantinedEffectResult, ReasoningEffort, ResourceAuthority,
+    ModelFileReference, ModelImageReference, ModelLimits, ModelMessage, ModelMessageRole,
+    ModelRequest, ModelRoute, ModelToolCall, ModelToolDefinition, ProviderEvent, ProviderModelInfo,
+    ProviderReadiness, ProviderReadinessCheck, ProviderResponseDiagnostic, ProviderStreamItem,
+    ProviderTurn, ProviderUsage, QuarantinedEffectResult, ReasoningEffort, ResourceAuthority,
     validate_model_message_content, validate_model_transcript,
 };
 use colossus_network::AdditionalRootCertificates;
@@ -64,6 +64,7 @@ mod profile;
 pub use profile::*;
 
 mod executor;
+mod files;
 pub use executor::*;
 mod continuation;
 pub use continuation::{ProviderAdapterStreamItem, ProviderAdapterTurn};

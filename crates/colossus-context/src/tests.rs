@@ -403,6 +403,89 @@ fn image_accounting_covers_documented_patch_tile_and_unknown_families() {
     assert!(image_token_cost("unknown-compatible", 1_024, 1_024) >= 25_501);
 }
 
+fn pdf_message(index: usize, size_bytes: u64) -> ModelMessage {
+    ModelMessage {
+        role: ModelMessageRole::User,
+        content: ModelContent::Parts(vec![ModelContentPart::File {
+            file: colossus_contracts::ModelFileReference {
+                artifact_id: format!("artifact-{index:064x}"),
+                file_name: format!("report-{index}.pdf"),
+                media_type: "application/pdf".into(),
+                size_bytes,
+                sha256: format!("{:064x}", index + 1),
+            },
+        }]),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+    }
+}
+
+#[test]
+fn pdf_context_reserves_tokens_and_compacts_old_files_without_mutating_history() {
+    let canonical = (0..5)
+        .map(|index| pdf_message(index, 10 * 1_048_576))
+        .collect::<Vec<_>>();
+    let prepared = compact_excess_images(&canonical);
+    assert_eq!(
+        canonical
+            .iter()
+            .flat_map(|message| message.content.files())
+            .count(),
+        5
+    );
+    assert_eq!(
+        prepared
+            .iter()
+            .flat_map(|message| message.content.files())
+            .count(),
+        3
+    );
+    assert!(prepared[0].content.contains("Compacted PDF: report-0.pdf"));
+    assert_eq!(
+        prepared[4]
+            .content
+            .files()
+            .next()
+            .expect("newest PDF")
+            .file_name,
+        "report-4.pdf"
+    );
+    assert!(estimate_tokens("", &prepared, &[]) > 1024);
+    assert!(validate_newest_image_turn(&canonical).is_ok());
+    let mut oversized = pdf_message(0, 1);
+    oversized.content = ModelContent::Parts(
+        canonical
+            .into_iter()
+            .flat_map(|message| match message.content {
+                ModelContent::Parts(parts) => parts,
+                ModelContent::Text(_) => unreachable!(),
+            })
+            .collect(),
+    );
+    assert!(validate_newest_image_turn(&[oversized]).is_err());
+}
+
+#[tokio::test]
+async fn ordinary_pdf_fits_a_vision_model_context_without_treating_binary_bytes_as_text() {
+    let provider: Arc<dyn ModelProvider> = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let (_, _, _, service) = fixture(ContextConfig::default(), provider);
+    let mut request = preparation_request(vec![pdf_message(0, 1_048_576)], false);
+    request.route.capabilities.image_inputs = true;
+    request.route.limits = ModelLimits {
+        context_window_tokens: 128_000,
+        max_output_tokens: 8192,
+        safety_margin_tokens: 8192,
+        input_budget_tokens: 111_616,
+    };
+    let prepared = service.prepare(request).await.expect("ordinary PDF fits");
+    assert_eq!(prepared.messages[0].content.files().count(), 1);
+    assert!(prepared.token_estimate > 1024);
+    assert!(prepared.token_estimate < prepared.input_budget_tokens);
+}
+
 #[test]
 fn image_compaction_deterministically_keeps_newest_images_without_mutating_history() {
     let canonical = vec![image_message((0..17).map(|index| image(index, 1)))];

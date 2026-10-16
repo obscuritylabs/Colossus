@@ -105,6 +105,12 @@ pub(super) fn apply_snapshot(
         .iter()
         .flat_map(|message| message.content.images())
         .map(image_compaction_marker)
+        .chain(
+            messages[..source_end]
+                .iter()
+                .flat_map(|message| message.content.files())
+                .map(file_compaction_marker),
+        )
         .collect::<Vec<_>>();
     let marker_block = if markers.is_empty() {
         String::new()
@@ -230,6 +236,14 @@ pub(super) fn estimate_tokens_for_model(
         .flat_map(|message| message.content.images())
         .map(|image| image_token_cost(model, image.width_pixels, image.height_pixels))
         .fold(0_u64, u64::saturating_add);
+    // PDF parsing is provider-owned. This heuristic reserves context for text and
+    // page images without charging every binary PDF byte as a UTF-8 text byte.
+    // The provider remains authoritative for the actual parsed token count.
+    let file_tokens = messages
+        .iter()
+        .flat_map(|message| message.content.files())
+        .map(|file| file.size_bytes.div_ceil(64).max(1024))
+        .fold(0_u64, u64::saturating_add);
     u64::try_from(total.div_ceil(3))
         .unwrap_or(u64::MAX)
         .saturating_add(16)
@@ -244,6 +258,7 @@ pub(super) fn estimate_tokens_for_model(
                 .saturating_mul(16),
         )
         .saturating_add(image_tokens)
+        .saturating_add(file_tokens)
         .max(1)
 }
 
@@ -411,11 +426,28 @@ pub(super) fn compact_excess_images(messages: &[ModelMessage]) -> Vec<ModelMessa
     let mut retained_count = 0_usize;
     let mut retained_bytes = 0_u64;
     let mut prepared = messages.to_vec();
+    let mut file_count = 0_usize;
+    let mut file_bytes = 0_u64;
     for message in prepared.iter_mut().rev() {
         let ModelContent::Parts(parts) = &mut message.content else {
             continue;
         };
         for part in parts.iter_mut().rev() {
+            if let ModelContentPart::File { file } = part {
+                if file_count < 4
+                    && file_bytes
+                        .checked_add(file.size_bytes)
+                        .is_some_and(|bytes| bytes <= 32 * 1_048_576)
+                {
+                    file_count += 1;
+                    file_bytes += file.size_bytes;
+                } else {
+                    *part = ModelContentPart::Text {
+                        text: file_compaction_marker(file),
+                    };
+                }
+                continue;
+            }
             let ModelContentPart::Image { image } = part else {
                 continue;
             };
@@ -445,6 +477,18 @@ pub(super) fn validate_newest_image_turn(messages: &[ModelMessage]) -> Result<()
         return Ok(());
     };
     let images = message.content.images().collect::<Vec<_>>();
+    let files = message.content.files().collect::<Vec<_>>();
+    let file_bytes = files
+        .iter()
+        .try_fold(0_u64, |total, file| total.checked_add(file.size_bytes));
+    if files.len() > 4
+        || files.iter().any(|file| file.size_bytes > 16 * 1_048_576)
+        || file_bytes.is_none_or(|bytes| bytes > 32 * 1_048_576)
+    {
+        return Err(ContextError::Configuration(
+            "the newest user turn exceeds the PDF input bounds and cannot be compacted".into(),
+        ));
+    }
     let combined = images
         .iter()
         .try_fold(0_u64, |total, image| total.checked_add(image.size_bytes));
@@ -457,6 +501,15 @@ pub(super) fn validate_newest_image_turn(messages: &[ModelMessage]) -> Result<()
         ));
     }
     Ok(())
+}
+
+fn file_compaction_marker(file: &colossus_contracts::ModelFileReference) -> String {
+    format!(
+        "[Compacted PDF: {} | {} bytes | sha256:{}]",
+        truncate_chars(&file.file_name, 120),
+        file.size_bytes,
+        file.sha256.chars().take(12).collect::<String>()
+    )
 }
 
 pub(super) fn image_compaction_marker(image: &ModelImageReference) -> String {

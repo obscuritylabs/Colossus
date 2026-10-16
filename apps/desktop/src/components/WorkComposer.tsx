@@ -857,7 +857,7 @@ export function WorkComposer({
                   !canCompose || attachmentBusy || attachments.length >= 16
                 }
                 aria-label="Attach a file"
-                title="Attach a PNG, JPEG, WebP, UTF-8 text, or source file"
+                title="Attach a PDF, PNG, JPEG, WebP, UTF-8 text, or source file"
                 onClick={onChooseAttachment}
               >
                 <IconPaperclip size={19} stroke={1.7} aria-hidden="true" />

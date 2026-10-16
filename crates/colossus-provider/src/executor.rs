@@ -279,7 +279,7 @@ pub struct ProviderExecutor {
     tls_roots: AdditionalRootCertificates,
     codex_auth: Option<CodexAuthStore>,
     codex_refresh: tokio::sync::Mutex<()>,
-    media: Option<Arc<dyn RunInputMediaResolver>>,
+    pub(super) media: Option<Arc<dyn RunInputMediaResolver>>,
 }
 
 impl ProviderExecutor {
@@ -502,7 +502,7 @@ impl ProviderExecutor {
         })?;
         validate_model_request(&model_request, max_output_tokens)
             .map_err(provider_execution_error)?;
-        let resolved_images =
+        let mut resolved_images =
             tokio::time::timeout_at(deadline, self.resolve_images(&model_request))
                 .await
                 .map_err(|_| generation_deadline_error())?
@@ -562,51 +562,59 @@ impl ProviderExecutor {
         }
         self.validate_resource(effect, &endpoint, permit)
             .map_err(provider_execution_error)?;
-        let tool_names =
-            ProviderToolNames::from_request(&model_request).map_err(provider_execution_error)?;
-        let mut payload = match self.profile.kind {
-            ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => {
-                responses_payload_with_images(
+        self.upload_files(&model_request, &mut resolved_images, permit, deadline)
+            .await
+            .map_err(provider_execution_error)?;
+        let result = async {
+            let tool_names = ProviderToolNames::from_request(&model_request)
+                .map_err(provider_execution_error)?;
+            let mut payload = match self.profile.kind {
+                ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => {
+                    responses_payload_with_images(
+                        &model_request,
+                        self.profile.kind,
+                        &model,
+                        max_output_tokens,
+                        reasoning_effort,
+                        stream_response,
+                        ProviderProjection::new(&tool_names, &resolved_images)
+                            .with_continuation(continuation.as_ref()),
+                    )
+                }
+                ProviderKind::OpenAiCompatible => chat_payload_with_images(
                     &model_request,
-                    self.profile.kind,
                     &model,
                     max_output_tokens,
+                    self.profile.chat_completions_output_token_parameter,
                     reasoning_effort,
                     stream_response,
-                    ProviderProjection::new(&tool_names, &resolved_images)
-                        .with_continuation(continuation.as_ref()),
-                )
+                    ProviderProjection::new(&tool_names, &resolved_images),
+                ),
+                ProviderKind::Echo => unreachable!("handled above"),
             }
-            ProviderKind::OpenAiCompatible => chat_payload_with_images(
-                &model_request,
-                &model,
-                max_output_tokens,
-                self.profile.chat_completions_output_token_parameter,
-                reasoning_effort,
-                stream_response,
-                ProviderProjection::new(&tool_names, &resolved_images),
-            ),
-            ProviderKind::Echo => unreachable!("handled above"),
-        }
-        .map_err(provider_execution_error)?;
-        configure_compaction(&mut payload, self.profile.kind, server_compaction_threshold)
             .map_err(provider_execution_error)?;
-        self.stream_generation(
-            &endpoint,
-            payload,
-            ProviderStreamMetadata {
-                model_profile: &model_profile,
-                model: &model,
-                include_response_diagnostics,
-                generation_deadline: deadline,
-                continuation_plan,
-                candidate_id: effect.request_id.clone(),
-            },
-            tool_names,
-            permit,
-            observer,
-        )
-        .await
+            configure_compaction(&mut payload, self.profile.kind, server_compaction_threshold)
+                .map_err(provider_execution_error)?;
+            self.stream_generation(
+                &endpoint,
+                payload,
+                ProviderStreamMetadata {
+                    model_profile: &model_profile,
+                    model: &model,
+                    include_response_diagnostics,
+                    generation_deadline: deadline,
+                    continuation_plan,
+                    candidate_id: effect.request_id.clone(),
+                },
+                tool_names,
+                permit,
+                observer,
+            )
+            .await
+        }
+        .await;
+        self.delete_uploaded_files(&resolved_images, permit).await;
+        result
     }
 }
 
@@ -781,7 +789,7 @@ impl ProviderExecutor {
             ProviderError::Configuration("provider generation request is absent".into())
         })?;
         validate_model_request(&model_request, max_output_tokens)?;
-        let resolved_images = self.resolve_images(&model_request).await?;
+        let mut resolved_images = self.resolve_images(&model_request).await?;
         let endpoint = self.profile.generation_endpoint()?;
         if self.profile.kind == ProviderKind::Echo {
             if effect.resource != endpoint {
@@ -811,90 +819,104 @@ impl ProviderExecutor {
             );
         }
         self.validate_resource(effect, &endpoint, permit)?;
-        let tool_names = ProviderToolNames::from_request(&model_request)?;
-        let mut payload = match self.profile.kind {
-            ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => {
-                responses_payload_with_images(
+        let deadline = tokio::time::Instant::now()
+            + Duration::from_millis(provider_generation_budget_ms(
+                self.profile.timeout_ms,
+                permit.obligations().timeout_ms,
+            ));
+        self.upload_files(&model_request, &mut resolved_images, permit, deadline)
+            .await?;
+        let result = tokio::time::timeout_at(deadline, async {
+            let tool_names = ProviderToolNames::from_request(&model_request)?;
+            let mut payload = match self.profile.kind {
+                ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => {
+                    responses_payload_with_images(
+                        &model_request,
+                        self.profile.kind,
+                        &model,
+                        max_output_tokens,
+                        reasoning_effort,
+                        false,
+                        ProviderProjection::new(&tool_names, &resolved_images)
+                            .with_continuation(continuation.as_ref()),
+                    )
+                }
+                ProviderKind::OpenAiCompatible => chat_payload_with_images(
                     &model_request,
-                    self.profile.kind,
                     &model,
                     max_output_tokens,
+                    self.profile.chat_completions_output_token_parameter,
                     reasoning_effort,
                     false,
-                    ProviderProjection::new(&tool_names, &resolved_images)
-                        .with_continuation(continuation.as_ref()),
+                    ProviderProjection::new(&tool_names, &resolved_images),
+                ),
+                ProviderKind::Echo => unreachable!("handled above"),
+            }?;
+            configure_compaction(&mut payload, self.profile.kind, server_compaction_threshold)?;
+            let request_payload = payload.clone();
+            let response = self
+                .request_json(
+                    &endpoint,
+                    Some(payload),
+                    permit,
+                    include_response_diagnostics,
                 )
-            }
-            ProviderKind::OpenAiCompatible => chat_payload_with_images(
-                &model_request,
-                &model,
-                max_output_tokens,
-                self.profile.chat_completions_output_token_parameter,
-                reasoning_effort,
-                false,
-                ProviderProjection::new(&tool_names, &resolved_images),
-            ),
-            ProviderKind::Echo => unreachable!("handled above"),
-        }?;
-        configure_compaction(&mut payload, self.profile.kind, server_compaction_threshold)?;
-        let request_payload = payload.clone();
-        let bytes = match self
-            .request_json(
-                &endpoint,
-                Some(payload),
-                permit,
-                include_response_diagnostics,
-            )
-            .await?
-        {
-            ProviderJsonResponse::Success(bytes) => bytes,
-            ProviderJsonResponse::FeatureRejected(rejection) => {
-                return bounded_result(&rejection, permit);
-            }
-            ProviderJsonResponse::HttpError(diagnostic) => {
-                return bounded_result(&diagnostic, permit);
-            }
-        };
-        let turn = match self.profile.kind {
-            ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => {
-                normalize_responses(&self.profile, &model_profile, &model, &bytes, &tool_names)
-            }
-            ProviderKind::OpenAiCompatible => {
-                normalize_chat(&self.profile, &model_profile, &model, &bytes, &tool_names)
-            }
-            ProviderKind::Echo => unreachable!("handled above"),
-        }?;
-        let response = serde_json::from_slice::<Value>(&bytes).ok();
-        let continuation_id = if response
-            .as_ref()
-            .is_some_and(|value| value["status"] == "completed")
-        {
-            let output = response
+                .await;
+            let bytes = match response? {
+                ProviderJsonResponse::Success(bytes) => bytes,
+                ProviderJsonResponse::FeatureRejected(rejection) => {
+                    return bounded_result(&rejection, permit);
+                }
+                ProviderJsonResponse::HttpError(diagnostic) => {
+                    return bounded_result(&diagnostic, permit);
+                }
+            };
+            let turn = match self.profile.kind {
+                ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => {
+                    normalize_responses(&self.profile, &model_profile, &model, &bytes, &tool_names)
+                }
+                ProviderKind::OpenAiCompatible => {
+                    normalize_chat(&self.profile, &model_profile, &model, &bytes, &tool_names)
+                }
+                ProviderKind::Echo => unreachable!("handled above"),
+            }?;
+            let response = serde_json::from_slice::<Value>(&bytes).ok();
+            let continuation_id = if response
                 .as_ref()
-                .and_then(|value| value["output"].as_array())
-                .cloned()
-                .unwrap_or_default();
-            self.stage_continuation(
-                &effect.request_id,
-                continuation_plan.as_ref(),
-                &request_payload,
-                &output,
-                &turn,
-            )?
-        } else {
-            None
-        };
-        if continuation_id.is_some() {
-            bounded_result(
-                &crate::ProviderAdapterTurn {
-                    turn,
-                    continuation_id,
-                },
-                permit,
-            )
-        } else {
-            bounded_result(&turn, permit)
-        }
+                .is_some_and(|value| value["status"] == "completed")
+            {
+                let output = response
+                    .as_ref()
+                    .and_then(|value| value["output"].as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                self.stage_continuation(
+                    &effect.request_id,
+                    continuation_plan.as_ref(),
+                    &request_payload,
+                    &output,
+                    &turn,
+                )?
+            } else {
+                None
+            };
+            if continuation_id.is_some() {
+                bounded_result(
+                    &crate::ProviderAdapterTurn {
+                        turn,
+                        continuation_id,
+                    },
+                    permit,
+                )
+            } else {
+                bounded_result(&turn, permit)
+            }
+        })
+        .await
+        .map_err(|_| ProviderError::Transport("provider generation exceeded its deadline".into()))
+        .and_then(std::convert::identity);
+        self.delete_uploaded_files(&resolved_images, permit).await;
+        result
     }
 
     fn validate_resource(
@@ -925,14 +947,27 @@ impl ProviderExecutor {
     async fn resolve_images(
         &self,
         request: &ModelRequest,
-    ) -> Result<ProviderResolvedImages, ProviderError> {
+    ) -> Result<ProviderResolvedMedia, ProviderError> {
+        if request
+            .messages
+            .iter()
+            .any(|message| message.content.files().next().is_some())
+            && !matches!(
+                self.profile.kind,
+                ProviderKind::OpenAiResponses | ProviderKind::OpenAiCompatible
+            )
+        {
+            return Err(ProviderError::Configuration(
+                "PDF inputs require a Responses or Chat Completions provider".into(),
+            ));
+        }
         let references = request
             .messages
             .iter()
             .flat_map(|message| message.content.images())
             .collect::<Vec<_>>();
         if references.is_empty() {
-            return Ok(ProviderResolvedImages::default());
+            return Ok(ProviderResolvedMedia::default());
         }
         if references.len() > 16 {
             return Err(ProviderError::Configuration(
@@ -943,7 +978,7 @@ impl ProviderExecutor {
             ProviderError::Configuration("run-input image resolver is unavailable".into())
         })?;
         let mut combined = 0_u64;
-        let mut resolved = ProviderResolvedImages::default();
+        let mut resolved = ProviderResolvedMedia::default();
         for reference in references {
             let image = resolver
                 .resolve_image(reference)
@@ -1173,7 +1208,7 @@ impl ProviderExecutor {
         Ok((response, secrets))
     }
 
-    async fn client_for_url(
+    pub(super) async fn client_for_url(
         &self,
         url: &Url,
         permit: &ExecutionPermit,
@@ -1686,7 +1721,9 @@ pub(super) fn redacted_image_payload(value: &Value) -> Value {
                 .map(|(key, value)| {
                     (
                         key.clone(),
-                        if key == "encrypted_content" {
+                        if key == "file_id" {
+                            Value::String("[REDACTED_PROVIDER_FILE_ID]".into())
+                        } else if key == "encrypted_content" {
                             Value::String("[REDACTED_PROVIDER_STATE]".into())
                         } else {
                             redacted_image_payload(value)
@@ -1834,7 +1871,7 @@ fn retain_opaque_redactions(value: &Value, secrets: &mut RequestSecrets) {
     match value {
         Value::Object(object) => {
             for (key, value) in object {
-                if key == "encrypted_content"
+                if matches!(key.as_str(), "encrypted_content" | "file_id")
                     && let Some(secret) = value.as_str()
                 {
                     secrets.retain(secret);

@@ -414,6 +414,7 @@ impl RuntimeAgentRunApi {
         let mut text_bytes = 0_usize;
         let mut image_count = 0_usize;
         let mut image_bytes = 0_u64;
+        let mut files = Vec::new();
         for part in &request.input {
             let part = match part {
                 ContentPart::Text { text } => ModelContentPart::Text { text: text.clone() },
@@ -444,6 +445,29 @@ impl RuntimeAgentRunApi {
                                 download.artifact.file_name, download.artifact.media_type, text
                             ),
                         }
+                    } else if artifact.media_type == "application/pdf" {
+                        if request.mode == RunMode::Research {
+                            return Err(ApiError::failed_precondition(
+                                ApiErrorReason::InvalidRunTransition,
+                                "Research mode does not accept PDF inputs",
+                            ));
+                        }
+                        let file = self
+                            .runtime
+                            .run_input_file_reference(
+                                caller.principal().application_id(),
+                                artifact_id,
+                            )
+                            .map_err(|_| {
+                                ApiError::invalid(
+                                    ApiErrorReason::InvalidArgument,
+                                    "input.artifact",
+                                    "PDF run-input artifact failed bounded validation",
+                                )
+                                .with_correlation_id(caller.request_id().clone())
+                            })?;
+                        files.push(file.clone());
+                        ModelContentPart::File { file }
                     } else if artifact.media_type.starts_with("image/") {
                         if request.mode == RunMode::Research {
                             return Err(ApiError::failed_precondition(
@@ -478,7 +502,7 @@ impl RuntimeAgentRunApi {
                     } else {
                         return Err(ApiError::failed_precondition(
                             ApiErrorReason::ArtifactUnavailable,
-                            "the artifact is not a supported text or image run input",
+                            "the artifact is not a supported text, image, or PDF run input",
                         )
                         .with_correlation_id(caller.request_id().clone()));
                     }
@@ -514,12 +538,18 @@ impl RuntimeAgentRunApi {
             )
             .with_correlation_id(caller.request_id().clone()));
         }
-        if image_count == 0 {
+        colossus_media::validate_pdf_references(&files).map_err(|_| {
+            ApiError::bounded_resource_exhausted(
+                ApiErrorReason::CapacityExceeded,
+                "PDF inputs exceed the 4-file or 32 MiB bound",
+            )
+        })?;
+        if image_count == 0 && files.is_empty() {
             let text = parts
                 .into_iter()
                 .find_map(|part| match part {
                     ModelContentPart::Text { text } => Some(text),
-                    ModelContentPart::Image { .. } => None,
+                    ModelContentPart::Image { .. } | ModelContentPart::File { .. } => None,
                 })
                 .unwrap_or_default();
             Ok(ModelContent::Text(text))

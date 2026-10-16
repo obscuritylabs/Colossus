@@ -634,10 +634,16 @@ the complete bytes match the reservation. Metadata and downloads require
 `artifacts:read` and the same authenticated application ID. Original paths, partial
 uploads, and another application's artifacts are never released. Run-input
 attachments are accepted only from available `run_input` artifacts with supported
-bounded UTF-8 media types or validated static PNG, JPEG, and WebP content. Durable model
-history contains only verified image metadata. Exact bytes remain encrypted artifacts
+bounded UTF-8 media types, validated static PNG, JPEG, and WebP content, or bounded PDF
+envelopes. Durable model history contains only verified image/PDF metadata. Exact bytes remain encrypted artifacts
 and are re-resolved and reverified only after the provider permit is issued; policy,
-audit, diagnostics, logs, and released errors never receive the bytes or data URL.
+audit, diagnostics, logs, and released errors never receive attachment bytes or data
+URLs. PDFs are limited to four files per provider context, 16 MiB each, and 32 MiB
+combined. Their contents are parsed at the provider after an authorized Files API
+upload, using the same exact origin and credential as generation. Returned file IDs
+are transient, redacted from request diagnostics, and excluded from Responses
+continuation state. Uploaded files receive bounded best-effort deletion after success
+or failure; cancellation or termination can leave remote state requiring cleanup.
 
 Public run listing is owner-indexed and never scans the shared global journal. The
 idempotency claim, run creation, and per-application index entry commit atomically.

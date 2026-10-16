@@ -673,6 +673,7 @@ pub(super) fn validate_route_image_inputs(
     request: &ModelRequest,
 ) -> Result<(), ModelProviderError> {
     let mut images = Vec::new();
+    let mut files = Vec::new();
     for message in &request.messages {
         colossus_contracts::validate_model_message_content(message).map_err(|error| {
             ModelProviderError::Configuration(format!("model content is invalid: {error}"))
@@ -680,16 +681,29 @@ pub(super) fn validate_route_image_inputs(
         for image in message.content.images() {
             images.push(image.clone());
         }
+        files.extend(message.content.files());
     }
-    if images.is_empty() {
+    if images.is_empty() && files.is_empty() {
         return Ok(());
     }
     if !route.capabilities.image_inputs {
         return Err(ModelProviderError::Configuration(format!(
-            "model profile `{}` does not enable image inputs",
+            "model profile `{}` does not enable image inputs required for images and PDFs",
             route.model_profile
         )));
     }
+    if !files.is_empty()
+        && !matches!(
+            provider_kind,
+            ProviderKind::OpenAiResponses | ProviderKind::OpenAiCompatible
+        )
+    {
+        return Err(ModelProviderError::Configuration(
+            "PDF inputs require a Responses or Chat Completions provider".into(),
+        ));
+    }
+    colossus_media::validate_pdf_references(files)
+        .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
     if provider_kind == ProviderKind::Echo {
         return Err(ModelProviderError::Configuration(
             "the Echo provider does not accept image inputs".into(),

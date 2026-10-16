@@ -551,8 +551,9 @@ async fn caller_owned_text_artifacts_are_rendered_as_bounded_run_input(runtime: 
     wait_inactive(&service).await;
 }
 
-async fn caller_owned_images_preserve_public_part_order_and_owner_boundaries(
+async fn caller_owned_media_preserve_public_part_order_and_owner_boundaries(
     runtime: Arc<Runtime>,
+    pdf: bool,
 ) {
     use colossus_api::{ArtifactApi as _, ArtifactChunk, ArtifactPurpose};
 
@@ -573,13 +574,17 @@ async fn caller_owned_images_preserve_public_part_order_and_owner_boundaries(
     DynamicImage::new_rgba8(3, 2)
         .write_to(&mut encoded, ImageFormat::Png)
         .expect("PNG fixture");
-    let bytes = encoded.into_inner();
+    let bytes = if pdf {
+        b"%PDF-1.4\nordered-pdf-content\n%%EOF\n".to_vec()
+    } else {
+        encoded.into_inner()
+    };
     let reservation = artifacts
         .create_upload(
             &owner,
             CreateArtifactUploadRequest {
-                file_name: "ordered.png".into(),
-                media_type: "image/png".into(),
+                file_name: if pdf { "ordered.pdf" } else { "ordered.png" }.into(),
+                media_type: if pdf { "application/pdf" } else { "image/png" }.into(),
                 size_bytes: u64::try_from(bytes.len()).expect("artifact length"),
                 sha256: format!("{:x}", Sha256::digest(&bytes)),
                 purpose: ArtifactPurpose::RunInput,
@@ -634,14 +639,20 @@ async fn caller_owned_images_preserve_public_part_order_and_owner_boundaries(
         panic!("image input must be multipart");
     };
     assert!(matches!(&parts[0], ModelContentPart::Text { text } if text == "before"));
-    assert!(matches!(
-        &parts[1],
-        ModelContentPart::Image { image }
-            if image.artifact_id == artifact.artifact_id
-                && image.file_name == "ordered.png"
-                && image.width_pixels == 3
-                && image.height_pixels == 2
-    ));
+    if pdf {
+        assert!(
+            matches!(&parts[1], ModelContentPart::File { file } if file.artifact_id == artifact.artifact_id && file.file_name == "ordered.pdf")
+        );
+    } else {
+        assert!(matches!(
+            &parts[1],
+            ModelContentPart::Image { image }
+                if image.artifact_id == artifact.artifact_id
+                    && image.file_name == "ordered.png"
+                    && image.width_pixels == 3
+                    && image.height_pixels == 2
+        ));
+    }
     assert!(matches!(&parts[2], ModelContentPart::Text { text } if text == "after"));
 
     let error = service
@@ -1607,9 +1618,15 @@ fn runtime_service_conformance() {
                 &fixture.runtime,
             ))
             .await;
-            caller_owned_images_preserve_public_part_order_and_owner_boundaries(Arc::clone(
-                &fixture.runtime,
-            ))
+            caller_owned_media_preserve_public_part_order_and_owner_boundaries(
+                Arc::clone(&fixture.runtime),
+                false,
+            )
+            .await;
+            caller_owned_media_preserve_public_part_order_and_owner_boundaries(
+                Arc::clone(&fixture.runtime),
+                true,
+            )
             .await;
             plan_continuation_is_bound_to_owner_source_session_and_exact_revision(Arc::clone(
                 &fixture.runtime,
