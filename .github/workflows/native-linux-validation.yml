@@ -1,4 +1,4 @@
-name: Exact-source native Linux validation
+name: Exact-source native Linux and macOS driver validation
 
 on:
   push:
@@ -12,7 +12,341 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  macos-driver:
+    if: github.repository == 'obscuritylabs/Colossus' && github.event_name == 'push' && github.ref == 'refs/heads/codex/native-linux-validation-82170e5a'
+    runs-on: macos-14
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUST_TEST_THREADS: "2"
+    steps:
+      - name: Check out exact fixture-fix source and complete history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 2927348dbcc8f21b5e9464a7db33fe40cfaf7262
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20
+        with:
+          toolchain: 1.96.0
+          components: clippy,rustfmt
+      - name: Run the unchanged unfiltered macOS driver tier with bounded evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          git update-ref refs/remotes/origin/main e8f25d21c5693c5790055d0db2ff77abb8263d3a
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/native-macos-driver-target"
+          mkdir "$CARGO_TARGET_DIR"
+          cat > "$RUNNER_TEMP/native-macos-driver-guard.py" <<'PY'
+          """Bound the unchanged macOS driver tier; never wrap SDK lifecycle suites."""
+          import json
+          import os
+          from pathlib import Path
+          import platform
+          import re
+          import selectors
+          import signal
+          import stat
+          import subprocess
+          import sys
+          import tempfile
+          import time
+
+          HEAD = '2927348dbcc8f21b5e9464a7db33fe40cfaf7262'
+          PREVIOUS = '7230dd828316dc2c4c9ab4cedc937d09292fa6ff'
+          BASE = 'e8f25d21c5693c5790055d0db2ff77abb8263d3a'
+          PATHS = ['native/browser/driver/src/owned_directory/tests.rs', 'native/browser/driver/src/transfer_stage_unix/tests.rs']
+          MANIFEST = 'native/browser/driver/Cargo.toml'
+          COMMANDS = [
+              ['cargo', 'fmt', '--manifest-path', MANIFEST, '--all', '--', '--check'],
+              ['cargo', 'metadata', '--locked', '--manifest-path', MANIFEST, '--no-deps', '--format-version', '1'],
+              ['cargo', 'test', '--locked', '--manifest-path', MANIFEST, '--all-targets'],
+              ['cargo', 'clippy', '--locked', '--manifest-path', MANIFEST, '--all-targets', '--', '-D', 'warnings'],
+          ]
+          LOG_LIMIT = 16 * 1024**2
+
+
+          def save(path, value):
+              temporary = path.with_suffix('.temporary')
+              with temporary.open('x') as output:
+                  json.dump(value, output, indent=2)
+                  output.write('\n')
+                  output.flush()
+                  os.fsync(output.fileno())
+              os.replace(temporary, path)
+
+
+          def small_json(path):
+              assert path.is_file() and not path.is_symlink() and path.stat().st_size <= 65536
+              return json.loads(path.read_text())
+
+
+          def group_members(pgid):
+              rows = subprocess.check_output(['/bin/ps', '-axo', 'pid=,pgid=,stat='], text=True)
+              members = {}
+              for line in rows.splitlines():
+                  fields = line.split(None, 2)
+                  if len(fields) == 3 and int(fields[1]) == pgid:
+                      members[int(fields[0])] = fields[2]
+              return members
+
+
+          def cleanup_group(anchor):
+              if anchor is None:
+                  return {'owned_process_group_stopped': True, 'anchor_reaped': True}
+              # Do not poll/wait/reap the leader before the final signal. Even an exited
+              # unreaped child pins its PID, so this new-session PGID cannot be reused.
+              assert anchor.returncode is None
+              children_gone = False
+              inspection_error = None
+              for action, seconds in [(signal.SIGTERM, 15), (signal.SIGKILL, 8)]:
+                  try:
+                      if not (set(group_members(anchor.pid)) - {anchor.pid}):
+                          children_gone = True
+                          break
+                  except BaseException as error:
+                      inspection_error = str(error)
+                  try:
+                      os.killpg(anchor.pid, action)
+                  except ProcessLookupError:
+                      pass
+                  deadline = time.monotonic() + seconds
+                  while time.monotonic() < deadline:
+                      try:
+                          if not (set(group_members(anchor.pid)) - {anchor.pid}):
+                              children_gone = True
+                              break
+                      except BaseException as error:
+                          inspection_error = str(error)
+                          break
+                      time.sleep(0.2)
+                  if children_gone:
+                      break
+              try:
+                  anchor.stdin.write(b'release\n')
+                  anchor.stdin.flush()
+              except (BrokenPipeError, ValueError):
+                  pass
+              finally:
+                  try:
+                      anchor.stdin.close()
+                  except BrokenPipeError:
+                      pass
+              reaped = False
+              try:
+                  anchor.wait(timeout=5)
+                  reaped = True
+              except subprocess.TimeoutExpired:
+                  # Still unreaped: its exact PID remains pinned. Never signal after wait.
+                  os.kill(anchor.pid, signal.SIGKILL)
+                  anchor.wait(timeout=5)
+                  reaped = True
+              return {'owned_process_group_stopped': children_gone and reaped and inspection_error is None, 'anchor_reaped': reaped, 'cleanup_inspection_error': inspection_error}
+
+
+          def anchor_main(root, evidence):
+              cancelled = False
+
+              def stopping(_signal, _frame):
+                  nonlocal cancelled
+                  cancelled = True
+
+              signal.signal(signal.SIGTERM, stopping)
+              signal.signal(signal.SIGINT, stopping)
+              assert os.getpid() == os.getpgrp() == os.getsid(0)
+              save(evidence / 'anchor-ready.json', {'pid': os.getpid(), 'pgid': os.getpgrp(), 'uid': os.getuid()})
+              if sys.stdin.readline() != 'start\n':
+                  return
+              results = []
+              failure = None
+              try:
+                  for command in COMMANDS:
+                      if cancelled:
+                          break
+                      print('+ ' + ' '.join(command), flush=True)
+                      result = subprocess.run(command, cwd=root, stdin=subprocess.DEVNULL)
+                      results.append({'command': command, 'exit': result.returncode})
+                      if result.returncode != 0:
+                          break
+              except BaseException as error:
+                  failure = type(error).__name__ + ': ' + str(error)
+              sys.stdout.flush()
+              save(evidence / 'anchor-result.json', {'pid': os.getpid(), 'results': results, 'cancelled': cancelled, 'error': failure})
+              # Hold the session leader until its parent has inspected/stopped this group.
+              while sys.stdin.readline() not in ('release\n', ''):
+                  pass
+
+
+          def main():
+              root = Path(os.environ['GITHUB_WORKSPACE']).resolve(strict=True)
+              evidence = Path(os.environ['RUNNER_TEMP']).resolve(strict=True) / 'native-macos-driver-evidence'
+              evidence.mkdir(mode=0o700)
+              receipt = evidence / 'macos-driver.json'
+              log_path = evidence / 'macos-driver.log'
+              record = {'source_head': HEAD, 'base_head': BASE, 'previous_source': PREVIOUS, 'commands': COMMANDS, 'status': 'initializing', 'owner_pid': os.getpid(), 'owner_uid': os.getuid(), 'native_host': True, 'admission_bytes': 10 * 1024**3, 'stop_floor_bytes': 5 * 1024**3, 'log_limit_bytes': LOG_LIMIT}
+              started = time.monotonic()
+              lowest = None
+              anchor = None
+              selector = selectors.DefaultSelector()
+              reason = None
+              result = None
+              cleanup = {'owned_process_group_stopped': True, 'anchor_reaped': True}
+              interrupted = None
+
+              def on_signal(number, _frame):
+                  nonlocal interrupted, reason
+                  interrupted = 'interrupted_by_signal_' + str(number)
+                  reason = reason or interrupted
+
+              signal.signal(signal.SIGTERM, on_signal)
+              signal.signal(signal.SIGINT, on_signal)
+
+              def git(*args):
+                  return subprocess.check_output(['git', *args], cwd=root, text=True, env={**os.environ, 'GIT_OPTIONAL_LOCKS': '0'}).strip()
+
+              def source_ok():
+                  return git('rev-parse', 'HEAD') == HEAD and git('rev-parse', 'origin/main') == BASE and not git('status', '--porcelain')
+
+              def available():
+                  return min(os.statvfs(path).f_bavail * os.statvfs(path).f_frsize for path in [root, evidence])
+
+              save(receipt, record)
+              with log_path.open('xb') as log:
+                  try:
+                      assert platform.system() == 'Darwin' and platform.machine() == 'arm64' and os.getuid() != 0
+                      assert sys.version_info >= (3, 9)
+                      assert 'COLOSSUS_CEF_ROOT' not in os.environ and 'COLOSSUS_CEF_NATIVE_LIB_DIR' not in os.environ
+                      assert source_ok()
+                      for ancestor in [PREVIOUS, BASE]:
+                          subprocess.run(['git', 'merge-base', '--is-ancestor', ancestor, HEAD], cwd=root, check=True)
+                      assert git('diff', '--name-only', PREVIOUS, HEAD).splitlines() == PATHS
+                      lowest = available()
+                      proof = {'source_head': HEAD, 'base_head': BASE, 'kernel': platform.release(), 'machine': platform.machine(), 'python': sys.version, 'available_bytes': lowest, 'TMPDIR_raw': os.environ.get('TMPDIR'), 'TMPDIR_resolved': str(Path(os.environ['TMPDIR']).resolve(strict=True)) if os.environ.get('TMPDIR') else None, 'tempfile_dir_raw': tempfile.gettempdir(), 'tempfile_dir_canonical': str(Path(tempfile.gettempdir()).resolve(strict=True))}
+                      allocation = Path(tempfile.mkdtemp(prefix='colossus-macos-driver-alias-'))
+                      identity = allocation.lstat()
+                      try:
+                          assert stat.S_ISDIR(identity.st_mode) and identity.st_uid == os.getuid()
+                          proof.update(tempfile_allocation_raw=str(allocation), tempfile_allocation_canonical=str(allocation.resolve(strict=True)), tempfile_allocation_device=identity.st_dev, tempfile_allocation_inode=identity.st_ino)
+                      finally:
+                          current = allocation.lstat()
+                          assert (current.st_dev, current.st_ino) == (identity.st_dev, identity.st_ino) and not allocation.is_symlink()
+                          allocation.rmdir()  # Exact newly created empty diagnostic allocation only.
+                      save(evidence / 'macos-preflight.json', proof)
+                      print(json.dumps(proof), flush=True)
+                      assert lowest >= 10 * 1024**3, 'Need10GiB before this standalone driver tier.'
+                      if interrupted:
+                          raise RuntimeError(interrupted)
+                      anchor = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '--anchor', str(root), str(evidence)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=False, start_new_session=True)
+                      selector.register(anchor.stdout, selectors.EVENT_READ)
+                      deadline = time.monotonic() + 10
+                      while not (evidence / 'anchor-ready.json').exists():
+                          assert time.monotonic() < deadline, 'Owned group startup timed out.'
+                          if interrupted:
+                              raise RuntimeError(interrupted)
+                          time.sleep(0.05)
+                      ready = small_json(evidence / 'anchor-ready.json')
+                      assert ready == {'pid': anchor.pid, 'pgid': anchor.pid, 'uid': os.getuid()}
+                      assert os.getpgid(anchor.pid) == anchor.pid and os.getsid(anchor.pid) == anchor.pid
+                      record.update(status='running', anchor_pid=anchor.pid, owned_pgid=anchor.pid, anchor_held_unreaped=True, initial_available_bytes=lowest)
+                      save(receipt, record)
+                      anchor.stdin.write(b'start\n')
+                      anchor.stdin.flush()
+                      checkpoint = started
+
+                      def drain(timeout):
+                          nonlocal reason
+                          events = selector.select(timeout)
+                          for key, _ in events:
+                              data = os.read(key.fileobj.fileno(), 65536)
+                              if not data:
+                                  selector.unregister(key.fileobj)
+                                  continue
+                              remaining = LOG_LIMIT - log.tell()
+                              log.write(data[:remaining])
+                              if len(data) > remaining:
+                                  reason = 'bounded_log_limit'
+                          return bool(events)
+
+                      while True:
+                          lowest = min(lowest, available())
+                          if interrupted:
+                              reason = interrupted
+                          if lowest < 5 * 1024**3:
+                              reason = 'runner_disk_below_5GiB'
+                          if time.monotonic() - started > 25 * 60:
+                              reason = 'driver_time_bound_25min'
+                          if reason:
+                              break
+                          drain(0.2)
+                          if (evidence / 'anchor-result.json').exists():
+                              while not reason and drain(0):
+                                  pass
+                              result = small_json(evidence / 'anchor-result.json')
+                              assert result['pid'] == anchor.pid
+                              break
+                          if not selector.get_map():
+                              raise RuntimeError('Owned anchor exited without a result.')
+                          if time.monotonic() >= checkpoint:
+                              record.update(elapsed_seconds=round(time.monotonic() - started, 1), lowest_available_bytes=lowest)
+                              save(receipt, record)
+                              print(json.dumps(record), flush=True)
+                              checkpoint = time.monotonic() + 30
+                  except BaseException as error:
+                      reason = reason or type(error).__name__ + ': ' + str(error)
+                  finally:
+                      try:
+                          cleanup = cleanup_group(anchor)
+                      except BaseException as error:
+                          cleanup = {'owned_process_group_stopped': False, 'anchor_reaped': False, 'cleanup_error': type(error).__name__ + ': ' + str(error)}
+                          reason = reason or 'owned_group_cleanup_failed'
+                      selector.close()
+                      if anchor is not None:
+                          anchor.stdout.close()
+                      log.flush()
+                      os.fsync(log.fileno())
+              final_available = available()
+              lowest = min(lowest, final_available) if lowest is not None else final_available
+              if lowest < 5 * 1024**3:
+                  reason = reason or 'runner_disk_below_5GiB_at_exit'
+              clean = source_ok()
+              text = log_path.read_text(errors='replace')
+              suite_passed = bool(re.search(r'test result: ok\. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out', text))
+              commands_passed = result is not None and result.get('results') == [{'command': command, 'exit': 0} for command in COMMANDS] and not result.get('cancelled') and result.get('error') is None
+              final_head = git('rev-parse', 'HEAD')
+              final_base = git('rev-parse', 'origin/main')
+              passed = reason is None and clean and commands_passed and suite_passed and cleanup['owned_process_group_stopped']
+              record.update(status='passed' if passed else 'failed', reason=reason, command_results=result, driver_25_tests_passed=suite_passed, final_source_head=final_head, final_base_head=final_base, final_source_clean=clean, elapsed_seconds=round(time.monotonic() - started, 1), lowest_available_bytes=lowest, final_available_bytes=final_available, log_bytes=log_path.stat().st_size, **cleanup)
+              save(receipt, record)
+              print(json.dumps(record, indent=2), flush=True)
+              if not passed:
+                  print(text[-20000:], flush=True)
+              return 0 if passed else 1
+
+
+          if __name__ == '__main__':
+              if len(sys.argv) == 4 and sys.argv[1] == '--anchor':
+                  anchor_main(Path(sys.argv[2]), Path(sys.argv[3]))
+              else:
+                  assert len(sys.argv) == 1
+                  raise SystemExit(main())
+          PY
+          python3 -B "$RUNNER_TEMP/native-macos-driver-guard.py"
+      - name: Retain bounded macOS driver evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-macos-driver-2927348d-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-macos-driver-evidence
+          if-no-files-found: error
+          retention-days: 3
+
   native-validation:
+    needs: macos-driver
     if: github.repository == 'obscuritylabs/Colossus' && github.event_name == 'push' && github.ref == 'refs/heads/codex/native-linux-validation-82170e5a'
     runs-on: ubuntu-24.04
     timeout-minutes: 240
@@ -29,7 +363,7 @@ jobs:
       - name: Check out exact validated source and complete history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 7230dd828316dc2c4c9ab4cedc937d09292fa6ff
+          ref: 2927348dbcc8f21b5e9464a7db33fe40cfaf7262
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
@@ -38,7 +372,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 7230dd828316dc2c4c9ab4cedc937d09292fa6ff
+          test "$(git rev-parse HEAD)" = 2927348dbcc8f21b5e9464a7db33fe40cfaf7262
           git cat-file -e e8f25d21c5693c5790055d0db2ff77abb8263d3a^{commit}
           git update-ref refs/remotes/origin/main e8f25d21c5693c5790055d0db2ff77abb8263d3a
           git merge-base --is-ancestor origin/main HEAD
@@ -51,7 +385,7 @@ jobs:
           libc = ctypes.CDLL(None, use_errno=True)
           abi = libc.syscall(444, None, 0, 1)
           capacities = {name: os.statvfs(path).f_bavail * os.statvfs(path).f_frsize for name, path in [('workspace', os.environ['GITHUB_WORKSPACE']), ('runner_temp', os.environ['RUNNER_TEMP'])]}
-          proof = {'source_head': '7230dd828316dc2c4c9ab4cedc937d09292fa6ff', 'base_head': 'e8f25d21c5693c5790055d0db2ff77abb8263d3a', 'kernel': platform.release(), 'landlock_abi': abi, 'probe_errno': ctypes.get_errno(), 'available_bytes': capacities, 'runner_kind': 'standard native ubuntu-24.04'}
+          proof = {'source_head': '2927348dbcc8f21b5e9464a7db33fe40cfaf7262', 'base_head': 'e8f25d21c5693c5790055d0db2ff77abb8263d3a', 'kernel': platform.release(), 'landlock_abi': abi, 'probe_errno': ctypes.get_errno(), 'available_bytes': capacities, 'runner_kind': 'standard native ubuntu-24.04'}
           (Path(os.environ['RUNNER_TEMP']) / 'native-validation-evidence' / 'native-preflight.json').write_text(json.dumps(proof, indent=2) + '\n')
           print(json.dumps(proof, indent=2))
           assert platform.machine() == 'x86_64' and abi >= 4, 'Native TCP isolation requires actual Landlock ABI4+.'
@@ -137,7 +471,7 @@ jobs:
           import sys
           import time
 
-          HEAD = '7230dd828316dc2c4c9ab4cedc937d09292fa6ff'
+          HEAD = '2927348dbcc8f21b5e9464a7db33fe40cfaf7262'
           BASE = 'e8f25d21c5693c5790055d0db2ff77abb8263d3a'
           COMMANDS = {
               'prepare-cli': ['cargo', 'build', '--locked', '-p', 'colossus-cli', '--bin', 'colossus'],
@@ -324,7 +658,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: native-linux-validation-7230dd82-${{ github.run_attempt }}
+          name: native-linux-validation-2927348d-${{ github.run_attempt }}
           path: ${{ runner.temp }}/native-validation-evidence
           if-no-files-found: error
           retention-days: 3
