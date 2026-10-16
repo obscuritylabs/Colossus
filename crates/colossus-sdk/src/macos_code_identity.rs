@@ -29,9 +29,6 @@ const CS_HASHTYPE_SHA256_TRUNCATED: u8 = 3;
 const MAX_FAT_ARCHITECTURES: usize = 32;
 const MAX_LOAD_COMMAND_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CODE_SIGNATURE_BYTES: usize = 16 * 1024 * 1024;
-// Darwin's linker may round the LC_CODE_SIGNATURE range up to its next
-// 16-byte boundary even though the embedded superblob records its exact length.
-const MAX_SUPERBLOB_PADDING_BYTES: usize = 15;
 
 #[cfg(target_arch = "aarch64")]
 const NATIVE_CPU_TYPE: u32 = 0x0100_000c;
@@ -171,14 +168,22 @@ fn code_signature_range(
 }
 
 fn parse_superblob(signature: &[u8]) -> SdkResult<CodeDirectoryHash> {
+    if signature.len() > MAX_CODE_SIGNATURE_BYTES {
+        return Err(SdkError::IdentityMismatch);
+    }
     if be_u32(signature, 0)? != CSMAGIC_EMBEDDED_SIGNATURE {
         return Err(SdkError::IdentityMismatch);
     }
     let declared_len =
         usize::try_from(be_u32(signature, 4)?).map_err(|_| SdkError::IdentityMismatch)?;
-    if signature.get(declared_len..).is_none_or(|padding| {
-        padding.len() > MAX_SUPERBLOB_PADDING_BYTES || padding.iter().any(|byte| *byte != 0)
-    }) {
+    // Apple's signer can reserve signing space after the declared superblob, even
+    // for ad-hoc signatures (observed 18,006 zero bytes). The entire image is
+    // already SHA-256-bound. Permit only zero reservation bytes within the same
+    // total signature bound; never include them in the CodeDirectory hash.
+    if signature
+        .get(declared_len..)
+        .is_none_or(|padding| padding.iter().any(|byte| *byte != 0))
+    {
         return Err(SdkError::IdentityMismatch);
     }
     let signature = signature
@@ -290,6 +295,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn current_test_image_has_a_bounded_code_directory_identity() {
         let mut executable = File::open(std::env::current_exe().expect("test executable"))
             .expect("open test executable");
@@ -298,41 +304,65 @@ mod tests {
         assert_eq!(identity.requirement().len(), 50);
     }
 
-    #[test]
-    fn bounded_zero_alignment_padding_is_accepted() {
-        let mut executable = File::open(std::env::current_exe().expect("test executable"))
-            .expect("open test executable");
-        let file_len = executable.metadata().expect("image metadata").len();
-        let (slice_offset, slice_len) =
-            native_slice(&mut executable, file_len).expect("native slice");
-        let (signature_offset, signature_len) =
-            code_signature_range(&mut executable, slice_offset, slice_len)
-                .expect("signature range");
-        let mut signature = read_bounded_range(
-            &mut executable,
-            signature_offset,
-            signature_len,
-            MAX_CODE_SIGNATURE_BYTES,
-        )
-        .expect("signature bytes");
-        let declared_len = usize::try_from(be_u32(&signature, 4).expect("declared length"))
-            .expect("bounded declared length");
-        signature.truncate(declared_len);
-        let expected = parse_superblob(&signature).expect("exact superblob");
-
-        signature.extend([0_u8; MAX_SUPERBLOB_PADDING_BYTES]);
-        assert_eq!(
-            parse_superblob(&signature).expect("zero alignment padding"),
-            expected
+    fn signature_fixture() -> Vec<u8> {
+        let identifier = b"colossus-fixture\0";
+        let length = 44 + identifier.len();
+        let mut directory = vec![0_u8; length];
+        directory[..4].copy_from_slice(&CSMAGIC_CODEDIRECTORY.to_be_bytes());
+        directory[4..8]
+            .copy_from_slice(&u32::try_from(length).expect("fixture length").to_be_bytes());
+        directory[8..12].copy_from_slice(&0x20001_u32.to_be_bytes());
+        directory[12..16].copy_from_slice(&2_u32.to_be_bytes()); // ad-hoc
+        directory[16..20]
+            .copy_from_slice(&u32::try_from(length).expect("hash offset").to_be_bytes());
+        directory[20..24].copy_from_slice(&44_u32.to_be_bytes());
+        directory[36] = 32;
+        directory[37] = CS_HASHTYPE_SHA256;
+        directory[39] = 12;
+        directory[44..].copy_from_slice(identifier);
+        let mut signature = vec![0_u8; 20];
+        signature[..4].copy_from_slice(&CSMAGIC_EMBEDDED_SIGNATURE.to_be_bytes());
+        signature[4..8].copy_from_slice(
+            &u32::try_from(20 + length)
+                .expect("superblob length")
+                .to_be_bytes(),
         );
+        signature[8..12].copy_from_slice(&1_u32.to_be_bytes());
+        signature[16..20].copy_from_slice(&20_u32.to_be_bytes());
+        signature.extend(directory);
+        signature
+    }
 
-        signature.push(0);
-        assert!(matches!(
-            parse_superblob(&signature),
-            Err(SdkError::IdentityMismatch)
-        ));
-        signature.truncate(declared_len + 1);
-        *signature.last_mut().expect("padding byte") = 1;
+    #[test]
+    fn bounded_zero_signature_reservations_preserve_the_code_identity() {
+        let mut signature = signature_fixture();
+        let declared_len = signature.len();
+        let expected = parse_superblob(&signature).expect("exact superblob");
+        let identity = MacosCodeIdentity(expected);
+        assert_eq!(identity.0.requirement().len(), 50);
+        for padding in [0, 15, 16, 18_005, 18_006, 64 * 1024] {
+            signature.resize(declared_len + padding, 0);
+            assert_eq!(
+                parse_superblob(&signature).expect("bounded zero reservation"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn nonzero_or_oversized_signature_reservations_fail_closed() {
+        let mut signature = signature_fixture();
+        let declared_len = signature.len();
+        signature.resize(declared_len + 18_006, 0);
+        for position in [declared_len, signature.len() - 1] {
+            signature[position] = 1;
+            assert!(matches!(
+                parse_superblob(&signature),
+                Err(SdkError::IdentityMismatch)
+            ));
+            signature[position] = 0;
+        }
+        signature.resize(MAX_CODE_SIGNATURE_BYTES + 1, 0);
         assert!(matches!(
             parse_superblob(&signature),
             Err(SdkError::IdentityMismatch)

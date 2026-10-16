@@ -25,7 +25,13 @@ mod grpc;
 mod keyring_provider;
 #[cfg(all(feature = "sidecar", target_os = "linux"))]
 mod linux_credential_session;
-#[cfg(all(feature = "sidecar", target_os = "macos"))]
+#[cfg(all(
+    feature = "sidecar",
+    any(
+        target_os = "macos",
+        all(test, any(target_arch = "x86_64", target_arch = "aarch64"))
+    )
+))]
 mod macos_code_identity;
 #[cfg(all(feature = "sidecar", target_os = "macos"))]
 mod macos_verified_process;
