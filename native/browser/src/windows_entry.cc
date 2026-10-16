@@ -10,6 +10,7 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <cstdio>
 
 namespace {
 uintptr_t entry_instance = 0;
@@ -45,9 +46,13 @@ extern "C" int32_t colossus_cef_windows_run(uintptr_t instance, void* sandbox,
   if (!instance || !sandbox || !run || !VersionMatches(version)) return 1;
   bool expected = false;
   if (!entered.compare_exchange_strong(expected, true)) return 1;
+  std::fputs("native cef bootstrap entry_stage=native-entry\n", stderr);
+  std::fflush(stderr);
   CefScopedLibraryLoader loader;
   {
     cef::logging::ScopedEarlySupport logging({});
+    std::fputs("native cef bootstrap entry_stage=library-loader-enter\n", stderr);
+    std::fflush(stderr);
     if (!loader.LoadInSubProcessAssert(version)) {
       // Installed auto-download/installer paths are deliberately ignored. This
       // developer entry accepts only the adjacent, inventoried pinned engine.
@@ -57,11 +62,21 @@ extern "C" int32_t colossus_cef_windows_run(uintptr_t instance, void* sandbox,
       const auto path = std::filesystem::path(executable).parent_path() / L"libcef.dll";
       // Unsigned bytes are permitted only in this Rust debug-only preview lane.
       // The CEF bootstrap separately verifies EXE/client DLL signature parity.
+      std::fputs("native cef bootstrap entry_stage=main-library-loader-enter\n", stderr);
+      std::fflush(stderr);
       if (!loader.LoadInMainAssert(path.c_str(), nullptr, true, version)) return 1;
+      std::fputs("native cef bootstrap entry_stage=main-library-loader-exit\n", stderr);
+      std::fflush(stderr);
     }
   }
+  std::fputs("native cef bootstrap entry_stage=library-loader-exit\n", stderr);
+  std::fflush(stderr);
+  std::fputs("native cef bootstrap entry_stage=execute-process-enter\n", stderr);
+  std::fflush(stderr);
   const int subprocess = CefExecuteProcess(
       CefMainArgs(reinterpret_cast<HINSTANCE>(instance)), nullptr, sandbox);
+  std::fputs("native cef bootstrap entry_stage=execute-process-exit\n", stderr);
+  std::fflush(stderr);
   if (subprocess >= 0) return subprocess;
   {
     std::lock_guard lock(entry_mutex);
