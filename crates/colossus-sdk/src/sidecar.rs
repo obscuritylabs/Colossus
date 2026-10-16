@@ -250,6 +250,16 @@ pub struct SidecarBootstrapConfig {
     connector_grant: Option<SidecarApplicationGrant>,
     host_credentials: Vec<SidecarHostCredential>,
     worker_ipc_authentication: Option<SecretString>,
+    connection_observer: Option<Arc<dyn SidecarConnectionObserver>>,
+}
+
+/// Trusted native-host transport handoff for hosts whose public SDK runs in another
+/// process. Called only after credential activation and the authenticated handshake.
+/// Implementations must use a private inherited channel: the response includes live
+/// credentials and must never reach logs, files, arguments, or a renderer.
+pub trait SidecarConnectionObserver: Send + Sync {
+    /// Accept the current connection; a supervised restart supplies fresh credentials.
+    fn connected(&self, connection: &colossus_sidecar_protocol::ReadyResponse) -> SdkResult<()>;
 }
 
 impl SidecarBootstrapConfig {
@@ -282,7 +292,28 @@ impl SidecarBootstrapConfig {
             connector_grant: None,
             host_credentials: Vec::new(),
             worker_ipc_authentication: None,
+            connection_observer: None,
         })
+    }
+
+    /// Hand activated transport authority to a trusted native host over private IPC.
+    #[must_use]
+    pub fn with_connection_observer(
+        mut self,
+        observer: Arc<dyn SidecarConnectionObserver>,
+    ) -> Self {
+        self.connection_observer = Some(observer);
+        self
+    }
+
+    pub(crate) fn notify_connection(
+        &self,
+        ready: &colossus_sidecar_protocol::ReadyResponse,
+    ) -> SdkResult<()> {
+        if let Some(observer) = &self.connection_observer {
+            observer.connected(ready)?;
+        }
+        Ok(())
     }
 
     /// Require launch and every supervised restart to use the exact workspace object

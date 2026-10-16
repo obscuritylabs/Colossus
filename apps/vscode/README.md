@@ -1,7 +1,10 @@
 # Colossus for VS Code
 
-The first VS Code MVP connects to an enrolled local Colossus worker through the
-public TypeScript SDK. It provides Plan/Execute/Research chat, streamed responses, tool activity,
+Colossus opens in the sidebar and manages a bundled local runtime by default.
+No separate Colossus installation, worker terminal, or application enrollment is needed.
+Choose **Start Colossus**, configure a provider and model once, and start a conversation.
+Configured workspaces start when the sidebar opens again. The extension uses the
+public TypeScript SDK for Plan/Execute/Research chat, streamed responses, tool activity,
 native approval and question dialogs, cancellation, recent conversations, and recovery
 after disconnect or an extension reload. Explicit selection/file context captures the
 current editor buffer, including unsaved text. **Review changes** opens VS Code's Source
@@ -27,13 +30,35 @@ worker routing. Research keeps its own configured routes. Older workers retain
 their existing composer without the picker.
 
 Models, tools, plugins, policy, sandboxing, and canonical state remain in the runtime.
-This extension does not start a worker or connect to Desktop's private Managed Local
-instance. Use a separately enrolled worker for the selected workspace. Desktop and
-CLI/worker state remain governed by their existing interface partitions.
+The extension owns its Managed Local instance through the same native Rust SDK and
+verified sidecar lifecycle as Desktop. Its private state, provider credentials, and
+writer lease are independent of Desktop and CLI instances. Closing a webview does
+not stop the runtime; **Colossus: Stop or Disconnect**, extension unload, and VS Code
+exit close the owned runtime. An unexpected restart never resends a task.
+
+**Configure Local Runtime** under **Workspace → Connections** adds providers and model
+profiles, changes the default model, replaces a provider key, or changes access.
+Responses and Chat Completions providers support HTTPS APIs and loopback HTTP servers.
+API keys are entered in native password prompts and stored in VS Code SecretStorage.
+Model capabilities start at Auto. Minimal access allows chat; Development adds the
+bounded filesystem, Git, patch, shell, question, and Plan tools after native confirmation.
+Development uses Full access, which can reach resources beyond the workspace; runtime
+policy and native approvals still govern individual effects. MCP and advanced runtime
+configuration remain available through the external-worker connection.
+
+macOS Managed Local is explicitly a Developer Preview. Its manifest-pinned native
+host and sidecar are ad-hoc signed; the SDK checks their live code identity. This
+preview does not assert an Apple publisher identity. Windows release packages include
+Authenticode-signed native executables. Remote SSH and devcontainers run the native
+runtime on the extension host, with that host's credential store.
+
+**Colossus: Connect External Worker** retains the separately enrolled worker workflow
+below. Use **Colossus: Start Managed Local** to return to the bundled runtime.
 
 ## Build and install
 
-From the repository root, with Node.js 22 or newer:
+From the repository root, with Node.js 22 or newer, Rust 1.96, and the native build
+tools in [Source setup](../../docs/develop/setup-testing.md):
 
 ```sh
 cd sdk/typescript
@@ -45,9 +70,11 @@ npm run package
 ```
 
 The package command produces a platform-specific VSIX in `artifacts/`, including the
-native OS-keyring binding. Supported build targets are x64/ARM64 Linux, macOS, and
+native OS-keyring binding, native lifecycle host, and runtime sidecar. Supported build targets are x64/ARM64 Linux, macOS, and
 Windows. To cross-package after building, run `node scripts/package.mjs darwin-arm64`
-(or another supported target). The package script fetches the target binding from the
+(or another supported target), after staging that target's built native executables
+with `node scripts/stage-native.mjs <target> <binary-directory>`. macOS runtime binaries
+must be ad-hoc signed with `codesign --force --sign -` before staging. The package script fetches the target binding from the
 locked registry URL and verifies its SHA-512 integrity before staging it. On Windows,
 replace shell directory commands as appropriate; packaging needs `tar` on PATH.
 VS Code 1.104 or newer is required for the secondary-sidebar contribution. Install the VSIX using **Extensions: Install from
@@ -60,6 +87,8 @@ the SDK. The extension runs in the workspace extension host; with Remote SSH or 
 devcontainer, the worker and credential store must be available on that remote host.
 
 ## Enroll and connect a worker
+
+This is optional. Managed Local does not require these steps.
 
 Install and configure Colossus for the same repository that VS Code opens. See
 [application connection and enrollment](../../docs/develop/application-sdk.md#connection-and-enrollment)

@@ -275,6 +275,20 @@ jobs:
         run: |
           npm exec -- playwright install --with-deps chromium
           npm run test:browser
+      - name: Build the VS Code managed runtime
+        run: |
+          cargo build --locked -p colossus-app-host -p colossus-sidecar
+          cd apps/vscode
+          node scripts/stage-native.mjs
+      - name: Exercise the bundled VS Code lifecycle
+        working-directory: apps/vscode
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dbus-x11 gnome-keyring
+          dbus-run-session -- bash -euo pipefail -c '
+            printf "colossus-ci-only\n" | gnome-keyring-daemon --unlock --components=secrets
+            npm run test:managed
+          '
       - name: Package the VS Code MVP
         working-directory: apps/vscode
         run: node scripts/package.mjs

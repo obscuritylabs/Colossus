@@ -2,7 +2,7 @@
   "name": "colossus",
   "displayName": "Colossus",
   "description": "Work with the Colossus agent runtime from VS Code.",
-  "version": "0.1.14",
+  "version": "0.2.0",
   "publisher": "obscuritylabs",
   "icon": "media/colossus.png",
   "type": "module",
@@ -30,13 +30,14 @@
     },
     "virtualWorkspaces": {
       "supported": false,
-      "description": "A local filesystem and an enrolled Colossus worker are required."
+      "description": "A filesystem workspace and supported native extension host are required."
     }
   },
   "main": "./dist/extension.cjs",
   "activationEvents": [
     "onView:colossus.work",
-    "onView:colossus.workspace"
+    "onView:colossus.workspace",
+    "onStartupFinished"
   ],
   "contributes": {
     "commands": [
@@ -46,11 +47,11 @@
       },
       {
         "command": "colossus.connect",
-        "title": "Colossus: Connect Worker"
+        "title": "Colossus: Start or Reconnect"
       },
       {
         "command": "colossus.disconnect",
-        "title": "Colossus: Disconnect Worker"
+        "title": "Colossus: Stop or Disconnect"
       },
       {
         "command": "colossus.forgetConnection",
@@ -84,6 +85,18 @@
       {
         "command": "colossus.openWorkspace",
         "title": "Colossus: Open Workspace"
+      },
+      {
+        "command": "colossus.startManaged",
+        "title": "Colossus: Start Managed Local"
+      },
+      {
+        "command": "colossus.configureManaged",
+        "title": "Colossus: Configure Local Runtime"
+      },
+      {
+        "command": "colossus.connectExternal",
+        "title": "Colossus: Connect External Worker"
       }
     ],
     "viewsContainers": {
@@ -204,8 +217,10 @@
     "format": "prettier --write src webview test scripts *.json *.md .vscode ../ui",
     "format:check": "prettier --check src webview test scripts *.json *.md .vscode ../ui",
     "check": "npm run typecheck && npm test && npm run format:check",
-    "package": "npm run check && npm run build && node scripts/package.mjs",
-    "preview:capture": "node scripts/capture-preview.mjs"
+    "package": "npm run check && npm run build && npm run build:native && node scripts/package.mjs",
+    "preview:capture": "node scripts/capture-preview.mjs",
+    "build:native": "cargo build --manifest-path ../../Cargo.toml --locked -p colossus-app-host -p colossus-sidecar && node scripts/stage-native.mjs",
+    "test:managed": "tsc -p tsconfig.test.json && node .test-dist/test/managed-live.js"
   },
   "dependencies": {
     "@colossus/ui": "file:../ui",

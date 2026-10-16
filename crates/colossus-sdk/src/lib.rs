@@ -119,9 +119,10 @@ pub use sidecar::{
     ManagedOtlpProtocol, ManagedProviderConfig, ManagedProviderKind, ManagedReasoningEffort,
     ManagedRuntimeConfig, ManagedSearchConfig, ManagedSearchKind, ManagedTelemetryConfig,
     NativeSidecarFailure, NativeSidecarStatus, REMOTE_PROVIDER_TIMEOUT_MS, SidecarApplicationGrant,
-    SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarHostCredential, SidecarLifecycle,
-    SidecarOptions, WorkspaceIdentity, default_managed_provider_timeout_ms,
-    validate_managed_model_identifier, validate_managed_provider_base_url,
+    SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarConnectionObserver,
+    SidecarHostCredential, SidecarLifecycle, SidecarOptions, WorkspaceIdentity,
+    default_managed_provider_timeout_ms, validate_managed_model_identifier,
+    validate_managed_provider_base_url,
 };
 pub use stream::RunUpdates;
 pub use types::{

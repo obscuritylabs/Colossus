@@ -295,7 +295,7 @@ export function initialView(workspace: string): WorkView {
     context: [],
     busy: false,
     watching: false,
-    status: "Connect a Colossus worker to start.",
+    status: "Start Colossus to work in this workspace.",
     error: "",
     mode: "plan",
   };

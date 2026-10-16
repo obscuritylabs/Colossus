@@ -265,6 +265,28 @@ with an active shell is busy for idle-eviction purposes even after its agent run
 
 ## Managed Local bootstrap and lifecycle
 
+The VS Code extension ships `colossus-app-host` and `colossus-sidecar` in each
+platform VSIX. The native host uses this Rust SDK lifecycle and passes activated,
+pinned gRPC transport material to the trusted TypeScript extension host over bounded
+inherited pipes. `SidecarConnectionObserver` is a native-host handoff, including live
+credentials; implementations must never forward it to a renderer, logs, or storage.
+It runs only after activation and the authenticated SDK handshake, including after a
+supervised restart. Callback failure fails launch closed. Provider keys travel from
+VS Code SecretStorage through the same private channel into zeroizing SDK credentials.
+The sidebar receives only safe connection and run projections.
+
+VS Code uses a private home under extension global storage and a separate `vscode`
+workspace surface. It does not attach to Desktop's private instance or borrow worker
+enrollment. Workspace trust, persisted folder identity, native SDK identity checks,
+and the existing writer lease fence startup. The native host returns its full
+workspace fingerprint over the private pipe; the extension persists it and supplies
+it as a strict restart ceiling, in addition to its inexpensive editor-folder guard.
+Explicit native folder reselection resets access to Minimal. The extension closes its parent pipe on
+unload; native drain/checkpoint and process supervision own shutdown. The extension
+never automatically replays a create or effect request. macOS VSIX native components
+are explicitly labeled Developer Preview and use the existing ad-hoc preview signing
+requirement; Windows release binaries pass the normal Authenticode signing gate.
+
 Managed hosts carry an explicit `ManagedExecutionBoundary` independently from access
 profile and approval mode:
 

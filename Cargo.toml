@@ -22,6 +22,7 @@ members = [
     "crates/colossus-darwin-process",
     "crates/colossus-sidecar-protocol",
     "crates/colossus-sidecar",
+    "crates/colossus-app-host",
     "crates/colossus-ports",
     "crates/colossus-journal-redb",
     "crates/colossus-journal-postgres",

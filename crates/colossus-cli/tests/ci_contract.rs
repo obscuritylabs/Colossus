@@ -629,6 +629,24 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "the required gate must fail closed on synchronize and non-ci:full label events"
     );
     let gate_needs = strings(field(job(jobs, "gate"), "needs"), "pre-merge gate needs");
+    assert!(gate_needs.contains("vscode-native"));
+    let vscode = job(jobs, "vscode-native");
+    assert_eq!(field(vscode, "needs").as_str(), Some("eligibility"));
+    let native_source = serde_json::to_string(vscode).expect("serialize native VSIX acceptance");
+    for required in [
+        "colossus-app-host",
+        "colossus-sidecar",
+        "test:managed",
+        "stage-native.mjs",
+        "package.mjs",
+        "macos-14",
+        "windows-latest",
+    ] {
+        assert!(
+            native_source.contains(required),
+            "native VSIX gate must include {required}"
+        );
+    }
     for name in [
         "linux-rust-integration",
         "linux-desktop",
