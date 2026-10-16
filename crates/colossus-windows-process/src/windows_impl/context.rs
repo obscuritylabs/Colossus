@@ -1,4 +1,5 @@
 //! Core-owned fresh browser context. No helper receives Core mutation or outer Job authority.
+mod diagnostics;
 mod helper;
 mod identity;
 mod ipc;
@@ -98,20 +99,26 @@ fn member(process: &OwnedHandle, job: &OwnedHandle) -> Result<(), WindowsProcess
 /// Dispatch only the two fixed internal helper modes, before the driver enters CEF.
 /// Ordinary arguments return None; malformed/mixed helper arguments fail closed.
 pub fn dispatch_browser_context_helper() -> Option<i32> {
+    diagnostics::clear_native();
     let parsed = launch::parse()?;
-    Some(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let arguments = parsed?;
-            let cef = super::wide(OsStr::new("libcef.dll"));
-            // SAFETY: observation only; this never loads CEF to inspect availability.
-            require(
-                unsafe { GetModuleHandleW(cef.as_ptr()) }.is_null(),
-                "browser helper entered after CEF was loaded",
-            )?;
-            helper::run(arguments)
-        }))
-        .map_or(1, |result| if result.is_ok() { 0 } else { 1 }),
-    )
+    let mut role = None;
+    let mut phase = diagnostics::Phase::Dispatch;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let arguments = parsed?;
+        role = Some(arguments.role);
+        let cef = super::wide(OsStr::new("libcef.dll"));
+        // SAFETY: observation only; this never loads CEF to inspect availability.
+        require(
+            unsafe { GetModuleHandleW(cef.as_ptr()) }.is_null(),
+            "browser helper entered after CEF was loaded",
+        )?;
+        helper::run(arguments, &mut phase)
+    }));
+    Some(match result {
+        Ok(Ok(())) => 0,
+        Ok(Err(error)) => diagnostics::exit_code(role, phase, Some(&error)),
+        Err(_) => diagnostics::exit_code(role, phase, None),
+    })
 }
 
 pub(crate) struct BrowserContextOwner {
@@ -367,6 +374,7 @@ impl BrowserContextOwner {
 }
 
 pub(crate) struct BrowserSetupOwner {
+    diagnostic_phase: &'static str,
     #[cfg(test)]
     test_control: Option<startup_tests::StartupControl>,
     context: Option<BrowserContextOwner>,
@@ -383,6 +391,7 @@ pub(crate) struct BrowserSetupOwner {
 impl BrowserSetupOwner {
     fn empty() -> Self {
         Self {
+            diagnostic_phase: "prepare",
             #[cfg(test)]
             test_control: None,
             context: Some(BrowserContextOwner::empty()),
@@ -492,6 +501,7 @@ impl BrowserSetupOwner {
             return Err(last_error("parse browser package SID"));
         }
         let sid = LocalSid(raw_sid);
+        self.diagnostic_phase = "security";
         if let (Some(port), Some(id)) = (request.proxy_port, request.network_filter_id) {
             self.network = Some(NetworkGuard::open(id)?);
             held(&self.network)?.configure(sid.0, port, id)?;
@@ -509,6 +519,7 @@ impl BrowserSetupOwner {
             nonce,
             &owner,
         )?);
+        self.diagnostic_phase = "launcher-create";
         context.launcher = Some(launch::helper(
             request,
             &arguments,
@@ -529,6 +540,7 @@ impl BrowserSetupOwner {
         member(&launcher.process, &held(&context.outer)?.0)?;
         identity::resume(&launcher.thread)?;
         let launcher_pipe = held_mut(&mut context.launcher_pipe)?;
+        self.diagnostic_phase = "launcher-connect";
         launcher_pipe.connect(&launcher.process, deadline)?;
         // SAFETY: the Pipe owns this connected native handle during validation.
         let borrowed = unsafe { BorrowedHandle::borrow_raw(launcher_pipe.raw().cast()) };
@@ -536,11 +548,13 @@ impl BrowserSetupOwner {
             &borrowed,
             launcher.pid,
         ))?;
+        self.diagnostic_phase = "launcher-hello";
         fields(
             launcher_pipe.receive(&launcher.process, Some(deadline))?,
             1,
             0,
         )?;
+        self.diagnostic_phase = "cpwl-request";
         context.cpwl_pending = true; // Set BEFORE any possibly delivered start request.
         launcher_pipe.send(10, &[], &launcher.process, deadline)?;
         #[cfg(test)]
@@ -549,10 +563,12 @@ impl BrowserSetupOwner {
             startup_tests::Point::RequestQueued,
             &[],
         )?;
+        self.diagnostic_phase = "cpwl-return";
         require(
             context.receive_cpwl(deadline)?,
             "basic CPWL returned failure",
         )?;
+        self.diagnostic_phase = "context-attest";
         context.pull_context()?;
         let process = held(&context.process)?;
         let birth = identity::birth(process.raw())?;
@@ -567,6 +583,7 @@ impl BrowserSetupOwner {
             startup_tests::Point::ReturnedContextBound,
             &[(1, &held(&context.launcher)?.process), (2, process)],
         )?;
+        self.diagnostic_phase = "launcher-ack";
         held_mut(&mut context.launcher_pipe)?.send(
             13,
             &[],
@@ -580,6 +597,7 @@ impl BrowserSetupOwner {
         )?;
         identity::resume(held(&context.thread)?)?;
         let control = held_mut(&mut context.control)?;
+        self.diagnostic_phase = "context-connect";
         control.connect(process, deadline)?;
         // SAFETY: the connected control pipe remains retained through validation.
         let borrowed = unsafe { BorrowedHandle::borrow_raw(control.raw().cast()) };
@@ -587,7 +605,9 @@ impl BrowserSetupOwner {
             &borrowed,
             context.pid,
         ))?;
+        self.diagnostic_phase = "context-hello";
         fields(control.receive(process, Some(deadline))?, 1, 0)?;
+        self.diagnostic_phase = "endpoints";
         self.pipes = Some(PipeSet::new()?);
         for _ in 0..count {
             self.channels.push(ChannelPipes::new()?);
@@ -634,6 +654,7 @@ impl BrowserSetupOwner {
             startup_tests::Point::EndpointsRegistered,
             &[],
         )?;
+        self.diagnostic_phase = "envelope";
         let envelope = launch::BrowserValues::encode(request)?;
         let job = identity::duplicate(
             held(&self.inner)?.0.raw(),
@@ -651,6 +672,7 @@ impl BrowserSetupOwner {
             control.send(27, chunk, process, deadline)?;
         }
         // Set BEFORE possibly delivering the only command allowed to create.
+        self.diagnostic_phase = "browser-commit";
         context.browser_create_pending = true;
         control.send(28, &[], process, deadline)?;
         #[cfg(test)]
@@ -659,6 +681,7 @@ impl BrowserSetupOwner {
             startup_tests::Point::BrowserCommitQueued,
             &[],
         )?;
+        self.diagnostic_phase = "browser-return";
         let returned = fields(control.receive(process, Some(deadline))?, 29, 5)?;
         context.browser_returned = Some(returned);
         let returned = held(&context.browser_returned)?;
@@ -670,6 +693,7 @@ impl BrowserSetupOwner {
             pid != 0 && tid != 0 && returned[4] != 0 && returned[0] != returned[1],
             "returned browser identity absent or aliased",
         )?;
+        self.diagnostic_phase = "browser-attest";
         self.partial_browser = Some(identity::pull(
             process,
             returned[0],
@@ -715,6 +739,7 @@ impl BrowserSetupOwner {
             startup_tests::Point::BrowserPulled,
             &[],
         )?;
+        self.diagnostic_phase = "station";
         control.send(30, &[], process, deadline)?;
         control.send(22, &[], process, deadline)?;
         fields(control.receive(process, Some(deadline))?, 23, 0)?;
@@ -726,6 +751,7 @@ impl BrowserSetupOwner {
             startup_tests::Point::StationReady,
             &[(2, process), (3, &browser.process)],
         )?;
+        self.diagnostic_phase = "resume";
         // Core alone resumes only after exact token/dual-Job and station/EOF barrier.
         identity::browser(
             &identity::token(browser.process.raw())?,
@@ -806,6 +832,7 @@ fn run_setup(
     request: &SpawnRequest,
     count: usize,
 ) -> Result<SupervisedChild, WindowsProcessError> {
+    diagnostics::clear_native();
     let result =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| setup.start(request, count)));
     match result {
@@ -817,6 +844,31 @@ fn run_setup(
                     "browser startup panicked with native custody retained".into(),
                 ),
             };
+            // Observe before cleanup mutates state or terminates helpers. Failure
+            // of diagnostics cannot replace the original error or its exact owner.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                use std::io::Write as _;
+                if let Some(context) = &setup.context {
+                    let _ = writeln!(
+                        std::io::stderr().lock(),
+                        "native Windows startup rejection phase={} cpwl_pending={} context_bound={} context_returned={} pulled_ack={} browser_pending={} browser_returned={} browser_owned={} station_ready={}",
+                        setup.diagnostic_phase,
+                        context.cpwl_pending,
+                        context.bound,
+                        context.returned.is_some(),
+                        context.pulled_ack,
+                        context.browser_create_pending,
+                        context.browser_returned.is_some(),
+                        setup.browser.is_some(),
+                        context.station_ready
+                    );
+                    diagnostics::observe(
+                        "launcher",
+                        context.launcher.as_ref().map(|child| &child.process),
+                    );
+                    diagnostics::observe("context", context.process.as_ref());
+                }
+            }));
             Err(WindowsProcessError::BrowserSetup {
                 source: Box::new(source),
                 cleanup: PendingBrowserCleanup { owner: Some(setup) },

@@ -40,40 +40,52 @@ use zeroize::{Zeroize as _, Zeroizing};
 
 const OBSERVE_CORE: u32 = PROCESS_QUERY_LIMITED_INFORMATION | 0x0010_0000;
 
-pub(super) fn run(arguments: Arguments) -> Result<(), WindowsProcessError> {
+pub(super) fn run(
+    arguments: Arguments,
+    phase: &mut super::diagnostics::Phase,
+) -> Result<(), WindowsProcessError> {
+    use super::diagnostics::Phase;
+    *phase = Phase::Image;
     // SAFETY: current-process pseudo handle is observation-only and never owned.
     let own = identity::image(unsafe { GetCurrentProcess() })?;
     launch::fixed_executable(own.canonical_path())?;
+    *phase = Phase::Pipe;
     let mut pipe = super::ipc::client(&arguments.pipe_name(arguments.role), arguments.nonce)?;
+    *phase = Phase::Peer;
     // SAFETY: pipe owns its live native handle through this borrow.
     let borrowed = unsafe { BorrowedHandle::borrow_raw(pipe.raw().cast()) };
     identity::native(colossus_windows_native::validate_named_pipe_server(
         &borrowed,
         arguments.core_pid,
     ))?;
+    *phase = Phase::CoreOpen;
     // SAFETY: only the kernel pipe-server PID, with query/synchronization rights;
     // birth/image are independently bound before any request or process creation.
     let core = OwnedHandle::new(
         unsafe { OpenProcess(OBSERVE_CORE, 0, arguments.core_pid) },
         "OpenProcess(observe exact Core)",
     )?;
+    *phase = Phase::CoreIdentity;
     identity::verify_process(
         &core,
         arguments.core_pid,
         arguments.core_birth,
         arguments.core_image,
     )?;
+    *phase = Phase::Tokens;
     let core_token = identity::token(core.raw())?;
+    *phase = Phase::Policy;
     // SAFETY: observes this trusted role's actual token, not an input identity.
     identity::ordinary(
         &identity::token(unsafe { GetCurrentProcess() })?,
         &core_token,
         arguments.role == Role::Context,
     )?;
+    *phase = Phase::Hello;
     pipe.send(1, &[], &core, Instant::now() + Duration::from_secs(10))?;
     match arguments.role {
-        Role::Launcher => launcher(&arguments, &own, &core, &mut pipe),
-        Role::Context => context(&own, &core, &mut pipe),
+        Role::Launcher => launcher(&arguments, &own, &core, &mut pipe, phase),
+        Role::Context => context(&own, &core, &mut pipe, phase),
     }
 }
 
@@ -95,12 +107,16 @@ fn launcher(
     executable: &colossus_windows_native::BoundPath,
     core: &OwnedHandle,
     pipe: &mut Pipe,
+    phase: &mut super::diagnostics::Phase,
 ) -> Result<(), WindowsProcessError> {
+    use super::diagnostics::Phase;
+    *phase = Phase::Request;
     fields(
         pipe.receive(core, Some(Instant::now() + Duration::from_secs(10)))?,
         10,
         0,
     )?;
+    *phase = Phase::Create;
     let result = cpwl(arguments, executable.canonical_path());
     let child = match result {
         Ok(child) => child,
@@ -125,6 +141,7 @@ fn launcher(
         .0
         .as_ref()
         .ok_or_else(|| WindowsProcessError::Invalid("missing returned context".into()))?;
+    *phase = Phase::Return;
     pipe.send(
         11,
         &payload(&[
@@ -138,8 +155,10 @@ fn launcher(
     )?;
     // Keep exact PROCESS_INFORMATION available for Core's bounded retries while
     // Core lives. A public spawn timeout does not destroy this return channel.
+    *phase = Phase::Ack;
     fields(pipe.receive(core, None)?, 13, 0)?;
     child.0.take(); // Core positively pulled and bound both handles before this ACK.
+    *phase = Phase::Drain;
     identity::require(pipe.finish(), "launcher private I/O remains pending")
 }
 
@@ -228,7 +247,10 @@ fn context(
     executable: &colossus_windows_native::BoundPath,
     core: &OwnedHandle,
     pipe: &mut Pipe,
+    phase: &mut super::diagnostics::Phase,
 ) -> Result<(), WindowsProcessError> {
+    use super::diagnostics::Phase;
+    *phase = Phase::Request;
     let values = fields(
         pipe.receive(core, Some(Instant::now() + Duration::from_secs(15)))?,
         20,
@@ -305,6 +327,7 @@ fn context(
     // No process creation may begin until this exact final commit frame arrives.
     fields(pipe.receive(core, None)?, 28, 0)?;
     let raw_endpoints: Vec<_> = endpoints.iter().map(OwnedHandle::raw).collect();
+    *phase = Phase::Create;
     let mut returned = ReturnedChild(Some(launch::browser(
         &values,
         executable.canonical_path(),
@@ -344,6 +367,7 @@ fn context(
         windows_sys::Win32::System::SystemServices::JOB_OBJECT_QUERY,
         false,
     )?)?);
+    *phase = Phase::Return;
     pipe.send(
         29,
         &payload(&[
@@ -357,10 +381,12 @@ fn context(
         Instant::now() + Duration::from_secs(10),
     )?;
     // Keep both exact suspended outputs available until Core pulled and attested them.
+    *phase = Phase::Ack;
     fields(pipe.receive(core, None)?, 30, 0)?;
     drop(returned.0.take());
     drop(job);
     let job = query_job;
+    *phase = Phase::Station;
     fields(pipe.receive(core, None)?, 22, 0)?;
     let principal = identity::native(AppContainerPrincipal::of_process(child.borrow()))?;
     let mut station = identity::native(principal.create_window_station())?;
@@ -373,6 +399,7 @@ fn context(
         }
     }
     pipe.send(23, &[], core, Instant::now() + Duration::from_secs(5))?;
+    *phase = Phase::Drain;
     fields(pipe.receive(core, None)?, 24, 0)?;
     // SAFETY: exact query-only Job handle and correctly sized initialized output.
     let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { zeroed() };

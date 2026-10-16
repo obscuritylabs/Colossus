@@ -29,7 +29,8 @@ pub(super) fn require(value: bool, label: &'static str) -> Result<(), WindowsPro
 pub(super) fn native<T>(
     result: Result<T, colossus_windows_native::WindowsNativeError>,
 ) -> Result<T, WindowsProcessError> {
-    result.map_err(|_| {
+    result.map_err(|error| {
+        super::diagnostics::record_native(&error);
         WindowsProcessError::Invalid("native browser context identity rejected".into())
     })
 }
