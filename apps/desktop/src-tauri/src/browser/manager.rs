@@ -184,7 +184,17 @@ impl BrowserManager {
 
     /// Revoke controller generations, hide, then settle native teardown before
     /// temporary profiles are dropped. Failed cleanup keeps profile ownership.
-    #[cfg(any(test, feature = "browser-test-bridge"))]
+    #[cfg(any(
+        test,
+        all(
+            feature = "browser-test-bridge",
+            any(
+                feature = "embedded-chromium-preview",
+                feature = "macos-contained-browser-diagnostic",
+                feature = "windows-browser-development"
+            )
+        )
+    ))]
     pub(crate) async fn close_all_settled(&self) -> Result<u64, CommandErrorDto> {
         let operation = self.operation.lock().await;
         self.close_all_locked(&operation, None).await
