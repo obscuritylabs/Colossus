@@ -7,6 +7,7 @@ function fixture(): WorkView {
     ...initialView("model-picker-workspace"),
     connected: true,
     status: "Ready",
+    modelSelectionContext: "picker-context",
     capabilities: [
       { name: "agent_runs.model_selection", enabled: true, detail: "" },
       { name: "research.create", enabled: true, detail: "" },
@@ -37,19 +38,32 @@ async function open(page: Page, view = fixture()) {
       acquireVsCodeApi: () => unknown;
       actions: unknown[];
       view: WorkView;
+      pendingModelAcks: number;
     };
     host.actions = [];
+    host.pendingModelAcks = 0;
     host.acquireVsCodeApi = () => ({
       getState() {},
       setState() {},
       postMessage(message: {
         type: string;
         selection?: WorkView["modelSelection"];
+        revision?: number;
       }) {
         host.actions.push(message);
         if (message.type === "setModelSelection") {
-          host.view = { ...host.view, modelSelection: message.selection! };
-          window.postMessage({ type: "state", view: host.view }, "*");
+          host.view = {
+            ...host.view,
+            modelSelection: message.selection!,
+            modelSelectionRevision: message.revision!,
+          };
+          const snapshot = structuredClone(host.view);
+          host.pendingModelAcks++;
+          // A real webview crosses an asynchronous extension-host boundary.
+          setTimeout(() => {
+            window.postMessage({ type: "state", view: snapshot }, "*");
+            host.pendingModelAcks--;
+          }, 250);
         }
       },
     });
@@ -93,6 +107,15 @@ test("one shared bubble searches providers, focuses reasoning, snapshots sends a
   );
   await slider.press("Home");
   for (let i = 0; i < 3; i++) await slider.press("ArrowRight");
+  await expect(slider).toHaveAttribute("aria-valuetext", "low");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { pendingModelAcks: number }).pendingModelAcks,
+      ),
+    )
+    .toBe(0);
   await expect(slider).toHaveAttribute("aria-valuetext", "low");
   await page.getByRole("option", { name: /Deep model/ }).click();
   await expect(slider).toHaveAttribute("aria-valuetext", "low");

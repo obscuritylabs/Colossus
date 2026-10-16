@@ -67,6 +67,11 @@ export interface ModelSelection {
   modelProfile?: string;
   reasoningEffort?: ReasoningEffort;
 }
+export interface ModelSelectionUpdate {
+  context: string;
+  sessionId: string;
+  revision: number;
+}
 export interface ModelProfileView {
   profile: string;
   model: string;
@@ -120,6 +125,8 @@ export interface WorkView {
   capabilities: CapabilityView[];
   modelProfiles: ModelProfileView[];
   modelSelection: ModelSelection;
+  modelSelectionContext: string;
+  modelSelectionRevision: number;
   historyHasMore: boolean;
   historyLoading: boolean;
   inspection?: InspectionView | undefined;
@@ -163,7 +170,10 @@ export type ViewAction =
       modelSelection?: ModelSelection;
     }
   | ({ type: "send"; text: string; mode: "research" } & ResearchOptions)
-  | { type: "setModelSelection"; selection: ModelSelection }
+  | ({
+      type: "setModelSelection";
+      selection: ModelSelection;
+    } & ModelSelectionUpdate)
   | { type: "selectSession" | "inspectRun" | "inspectPlan"; id: string }
   | { type: "respond"; id: string };
 
@@ -173,10 +183,23 @@ export function parseAction(value: unknown): ViewAction | undefined {
   const input = value as Record<string, unknown>;
   if (
     input.type === "setModelSelection" &&
-    Object.keys(input).length === 2 &&
-    isModelSelection(input.selection)
+    Object.keys(input).length === 5 &&
+    isModelSelection(input.selection) &&
+    typeof input.context === "string" &&
+    /^[A-Za-z0-9-]{1,64}$/u.test(input.context) &&
+    typeof input.sessionId === "string" &&
+    /^[A-Za-z0-9:_-]{0,256}$/u.test(input.sessionId) &&
+    typeof input.revision === "number" &&
+    Number.isSafeInteger(input.revision) &&
+    input.revision > 0
   )
-    return { type: "setModelSelection", selection: { ...input.selection } };
+    return {
+      type: "setModelSelection",
+      selection: { ...input.selection },
+      context: input.context,
+      sessionId: input.sessionId,
+      revision: input.revision,
+    };
   const simple = [
     "ready",
     "connect",
@@ -261,6 +284,8 @@ export function initialView(workspace: string): WorkView {
     capabilities: [],
     modelProfiles: [],
     modelSelection: {},
+    modelSelectionContext: "",
+    modelSelectionRevision: 0,
     historyHasMore: false,
     historyLoading: false,
     inspectionLoading: false,

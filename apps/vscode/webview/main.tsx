@@ -135,9 +135,21 @@ function renderComposer() {
               {view && mode.value !== "research" ? (
                 <ComposerModelPicker
                   view={view}
-                  onChange={(selection) =>
-                    post({ type: "setModelSelection", selection })
-                  }
+                  onChange={(selection) => {
+                    if (!view) return;
+                    const update = {
+                      context: view.modelSelectionContext,
+                      sessionId: view.sessionId,
+                      revision: view.modelSelectionRevision + 1,
+                    };
+                    view = {
+                      ...view,
+                      modelSelection: selection,
+                      modelSelectionRevision: update.revision,
+                    };
+                    renderComposer();
+                    post({ type: "setModelSelection", selection, ...update });
+                  }}
                 />
               ) : null}
             </div>
@@ -304,6 +316,20 @@ const conversation = new Conversation(
 );
 let interactionSignature = "";
 function render(next: WorkView) {
+  // Keep immediate keyboard/drag feedback while older host acknowledgments arrive.
+  // A different connection or conversation always takes its own host selection.
+  if (
+    view &&
+    view.modelSelectionContext === next.modelSelectionContext &&
+    view.sessionId === next.sessionId &&
+    next.modelSelectionRevision < view.modelSelectionRevision
+  ) {
+    next = {
+      ...next,
+      modelSelection: view.modelSelection,
+      modelSelectionRevision: view.modelSelectionRevision,
+    };
+  }
   const changingSession = view?.sessionId !== next.sessionId;
   if (view?.sessionId && !next.sessionId && !next.busy) {
     mode.value = preferences.defaultMode;

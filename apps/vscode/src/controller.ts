@@ -21,6 +21,7 @@ import {
   supportsResearch,
   type ContextView,
   type ModelSelection,
+  type ModelSelectionUpdate,
   type ResearchOptions,
   type WorkMode,
   type WorkView,
@@ -97,6 +98,7 @@ export class WorkController {
     this.view.connected = true;
     this.view.connecting = false;
     this.view.version = client.info.serverVersion;
+    this.view.modelSelectionContext = randomUUID();
     this.view.capabilities = client.info.capabilities.map(
       ({ name, enabled, detail }) => ({ name, enabled, detail }),
     );
@@ -134,6 +136,8 @@ export class WorkController {
     this.view.capabilities = [];
     this.view.modelProfiles = [];
     this.view.modelSelection = {};
+    this.view.modelSelectionContext = "";
+    this.view.modelSelectionRevision = 0;
     this.modelSelections.clear();
     this.view.inspection = undefined;
     this.view.inspectionLoading = false;
@@ -389,6 +393,7 @@ export class WorkController {
     this.view.sessionId = "";
     this.modelSelections.delete("");
     this.view.modelSelection = {};
+    this.view.modelSelectionRevision++;
     this.view.messages = [];
     this.view.tools = [];
     this.view.interactions = [];
@@ -429,6 +434,7 @@ export class WorkController {
               : "execute";
       this.view.sessionId = id;
       this.view.modelSelection = { ...this.modelSelections.get(id) };
+      this.view.modelSelectionRevision++;
       this.view.tools = [];
       for (const run of listed) this.recordRun(run);
       await this.loadMessages(client, epoch, listed);
@@ -470,11 +476,25 @@ export class WorkController {
     }
   }
 
-  setModelSelection(selection: ModelSelection) {
+  setModelSelection(selection: ModelSelection, update?: ModelSelectionUpdate) {
+    if (
+      update &&
+      (update.context !== this.view.modelSelectionContext ||
+        update.sessionId !== this.view.sessionId ||
+        update.revision <= this.view.modelSelectionRevision)
+    )
+      return;
     this.requireClient();
+    if (
+      update &&
+      (!Number.isSafeInteger(update.revision) || update.revision < 1)
+    )
+      throw new UserError("Invalid model preference revision.");
     const next = this.validModelSelection(selection);
     this.rememberModelSelection(this.view.sessionId, next);
     this.view.modelSelection = next;
+    this.view.modelSelectionRevision =
+      update?.revision ?? this.view.modelSelectionRevision + 1;
     this.publish();
   }
 
@@ -522,10 +542,6 @@ export class WorkController {
     if (mode === "research" && Object.keys(selection).length)
       throw new UserError("Research uses its configured model routes.");
     const modelSelection = this.validModelSelection(selection);
-    if (mode !== "research") {
-      this.view.modelSelection = modelSelection;
-      this.rememberModelSelection(this.view.sessionId, modelSelection);
-    }
     const prompt = text.trim();
     if (!prompt || Buffer.byteLength(prompt, "utf8") > 64 * 1024)
       throw new UserError("Enter a task of at most 64 KiB.");

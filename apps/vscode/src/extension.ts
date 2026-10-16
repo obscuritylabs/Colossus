@@ -908,8 +908,9 @@ export function activate(context: vscode.ExtensionContext) {
                   await send(action);
                   break;
                 case "setModelSelection":
-                  await guard();
-                  controller.setModelSelection(action.selection);
+                  // Draft preferences are local state. Send retains the workspace
+                  // guard and validates its captured snapshot before any RPC.
+                  controller.setModelSelection(action.selection, action);
                   break;
                 case "addSelection":
                   await addContext(true);

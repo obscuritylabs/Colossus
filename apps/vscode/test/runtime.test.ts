@@ -528,6 +528,50 @@ test("model preferences are captured over pinned gRPC and retained per conversat
   }
 });
 
+test("stale preference acknowledgments cannot change another connection, session or captured request", async () => {
+  const f = await fixture(true, true);
+  try {
+    const controller = await f.controller();
+    const context = controller.view.modelSelectionContext;
+    const revision = controller.view.modelSelectionRevision + 2;
+    const selected = { modelProfile: "deep", reasoningEffort: "high" as const };
+    controller.setModelSelection(selected, {
+      context,
+      sessionId: "",
+      revision,
+    });
+    controller.setModelSelection(
+      { modelProfile: "fast" },
+      { context, sessionId: "", revision: revision - 1 },
+    );
+    controller.setModelSelection(
+      {},
+      { context, sessionId: "foreign-session", revision: revision + 1 },
+    );
+    assert.deepEqual(controller.view.modelSelection, selected);
+    // A send captured before a dialog must not roll back newer draft preferences.
+    await controller.send("Earlier captured selection", "execute", undefined, {
+      modelProfile: "fast",
+      reasoningEffort: "low",
+    });
+    assert.deepEqual(controller.view.modelSelection, selected);
+    assert.equal(f.createRequests[0]?.modelProfile, "fast");
+    assert.equal(f.createRequests[0]?.reasoningEffort, "low");
+    f.finish();
+    await until(() => !controller.view.busy);
+    await controller.attach(await f.connect(), "primary");
+    assert.notEqual(controller.view.modelSelectionContext, context);
+    controller.setModelSelection(selected, {
+      context,
+      sessionId: controller.view.sessionId,
+      revision: revision + 100,
+    });
+    assert.deepEqual(controller.view.modelSelection, {});
+  } finally {
+    await f.close();
+  }
+});
+
 test("unavailable or unconfigured model preferences fail before creating a run", async () => {
   for (const capability of [undefined, false, true]) {
     const f = await fixture(true, capability);

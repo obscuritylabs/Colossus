@@ -95,10 +95,14 @@ test("model preferences accept bounded choices without granting connection or to
     modelSelection: selection,
   };
   assert.deepEqual(parseAction(send), send);
-  assert.deepEqual(parseAction({ type: "setModelSelection", selection }), {
+  const update = {
     type: "setModelSelection",
     selection,
-  });
+    context: "connection-1",
+    sessionId: "",
+    revision: 1,
+  };
+  assert.deepEqual(parseAction(update), update);
   for (const invalid of [
     null,
     [],
@@ -115,11 +119,19 @@ test("model preferences accept bounded choices without granting connection or to
     { role: "admin" },
   ]) {
     assert.equal(parseAction({ ...send, modelSelection: invalid }), undefined);
-    assert.equal(
-      parseAction({ type: "setModelSelection", selection: invalid }),
-      undefined,
-    );
+    assert.equal(parseAction({ ...update, selection: invalid }), undefined);
   }
+  for (const invalid of [
+    { revision: 0 },
+    { revision: -1 },
+    { revision: 1.5 },
+    { revision: Number.MAX_SAFE_INTEGER + 1 },
+    { context: "" },
+    { context: "x".repeat(65) },
+    { sessionId: "bad\nsession" },
+    { role: "admin" },
+  ])
+    assert.equal(parseAction({ ...update, ...invalid }), undefined);
   assert.equal(
     parseAction({
       ...send,
