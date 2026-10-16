@@ -274,3 +274,9 @@ strip = "symbols"
 # platform-specific linker debug-section size.
 [profile.test]
 strip = "debuginfo"
+
+# Runnable VSIX binaries keep assertions without producing large MSVC symbol files.
+[profile.vscode]
+inherits = "dev"
+debug = 0
+strip = "debuginfo"

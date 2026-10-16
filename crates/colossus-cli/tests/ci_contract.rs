@@ -673,7 +673,8 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "colossus-app-host",
         "colossus-sidecar",
         "stage-native.mjs",
-        "link-arg=/DEBUG:NONE",
+        "nativeExecutables",
+        "vscode",
     ] {
         assert!(
             native_builder.contains(required),

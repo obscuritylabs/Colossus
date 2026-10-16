@@ -103,10 +103,12 @@ const controller = new WorkController("Managed fixture", {
   },
 });
 try {
+  console.log("Managed Local E2E: initial native startup");
   const first = await runtime.start(options);
   assert.ok(runtime.alive);
   assert.ok(runtime.workspaceIdentity);
   setup.nativeWorkspaceIdentity = runtime.workspaceIdentity;
+  console.log("Managed Local E2E: reject a changed native workspace identity");
   await assert.rejects(
     other.start({
       ...options,
@@ -121,6 +123,7 @@ try {
     /workspace changed/u,
   );
   const pid = runtime.pid;
+  console.log("Managed Local E2E: authenticated echo turn");
   await controller.attach(await connectManaged(first, pid), "primary");
   assert.equal(controller.view.modelProfiles.length, 1);
   assert.equal(controller.view.modelProfiles[0]?.profile, "echo");
@@ -141,12 +144,14 @@ try {
   );
   assert.ok(remembered);
   // A second editor owner must fail without taking over the first writer lease.
+  console.log("Managed Local E2E: reject a concurrent owner");
   await assert.rejects(other.start(options));
   assert.ok(runtime.alive);
   controller.detach();
   await runtime.stop();
   assert.equal(runtime.alive, false);
   assert.throws(() => process.kill(pid, 0));
+  console.log("Managed Local E2E: graceful restart and durable restore");
   const next = await runtime.start(options);
   assert.equal(next.instance_id, first.instance_id);
   assert.ok(
@@ -164,6 +169,7 @@ try {
     ),
   );
   // A host crash closes the native process job/guardian; the extension detects it.
+  console.log("Managed Local E2E: supervisor crash and recovery");
   process.kill(runtime.pid);
   const crashDeadline = Date.now() + 10000;
   while (runtime.alive && Date.now() < crashDeadline)
@@ -205,6 +211,9 @@ try {
       reasoning_effort: profile === "fast" ? "low" : "high",
     })),
   };
+  console.log(
+    "Managed Local E2E: provider credentials and model/reasoning selection",
+  );
   const providerConnection = await runtime.start({
     ...options,
     setup: providerSetup,

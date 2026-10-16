@@ -1,37 +1,44 @@
 import { spawnSync } from "node:child_process";
+import { nativeExecutables } from "./cargo-native.mjs";
 
 const packages = ["colossus-app-host", "colossus-sidecar"];
-const common = [
-  "--manifest-path",
-  "../../Cargo.toml",
-  "--locked",
-  "--profile",
-  "test",
-];
-const run = (program, args) => {
-  const result = spawnSync(program, args, { stdio: "inherit" });
-  if (result.status !== 0) throw new Error("Native runtime build failed.");
-};
-if (process.platform === "win32") {
-  // MSVC still creates large temporary PDBs with strip=debuginfo. Disable the
-  // final executables' PDB output without changing dependency compiler flags.
-  for (const name of packages)
-    run("cargo", [
-      "rustc",
-      ...common,
-      "-p",
-      name,
-      "--bin",
-      name,
-      "--",
-      "-C",
-      "link-arg=/DEBUG:NONE",
-    ]);
-} else {
-  run("cargo", [
+const built = spawnSync(
+  "cargo",
+  [
     "build",
-    ...common,
+    "--manifest-path",
+    "../../Cargo.toml",
+    "--locked",
+    "--profile",
+    "vscode",
+    "--message-format=json",
     ...packages.flatMap((name) => ["-p", name]),
-  ]);
-}
-run(process.execPath, ["scripts/stage-native.mjs"]);
+  ],
+  {
+    env: { ...process.env, CARGO_INCREMENTAL: "0" },
+    stdio: ["inherit", "pipe", "inherit"],
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  },
+);
+if (built.error) throw new Error("Native runtime build failed.");
+const messages = built.stdout
+  .split(/\r?\n/u)
+  .filter(Boolean)
+  .map((line) => JSON.parse(line));
+for (const message of messages)
+  if (message.reason === "compiler-message" && message.message?.rendered)
+    process.stderr.write(message.message.rendered);
+if (built.status !== 0) throw new Error("Native runtime build failed.");
+const artifacts = nativeExecutables(messages, packages);
+const staged = spawnSync(
+  process.execPath,
+  [
+    "scripts/stage-native.mjs",
+    `${process.platform}-${process.arch}`,
+    "--cargo-artifacts",
+    JSON.stringify(artifacts),
+  ],
+  { stdio: "inherit" },
+);
+if (staged.status !== 0) throw new Error("Native runtime staging failed.");
