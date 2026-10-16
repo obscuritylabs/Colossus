@@ -844,6 +844,12 @@ pub struct RunBranch {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateRunRequest {
+    /// Configured model override for this operation; absent uses the logical role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_profile: Option<String>,
+    /// Reasoning override for this operation; absent uses the model's saved default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<colossus_contracts::ReasoningEffort>,
     /// Ordered initial visible content.
     pub input: Vec<ContentPart>,
     /// Existing session, or absent to create a session.
@@ -986,6 +992,18 @@ impl CreateRunRequest {
 
     /// Validate bounded public request fields.
     pub fn validate(&self) -> ApiResult<()> {
+        if let Some(profile) = &self.model_profile {
+            token(profile, "model_profile", 128)?;
+        }
+        if self.mode == RunMode::Research
+            && (self.model_profile.is_some() || self.reasoning_effort.is_some())
+        {
+            return Err(ApiError::invalid(
+                ApiErrorReason::InvalidArgument,
+                "model_profile",
+                "Research uses its independently configured model roles",
+            ));
+        }
         if self.input.is_empty() {
             return Err(ApiError::invalid(
                 ApiErrorReason::InvalidArgument,

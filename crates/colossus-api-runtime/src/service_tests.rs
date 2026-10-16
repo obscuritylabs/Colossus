@@ -518,6 +518,8 @@ async fn caller_owned_text_artifacts_are_rendered_as_bounded_run_input(runtime: 
         .await
         .expect("upload artifact");
     let request = CreateRunRequest {
+        model_profile: None,
+        reasoning_effort: None,
         input: vec![
             ContentPart::Text {
                 text: "Inspect the attachment".into(),
@@ -608,6 +610,8 @@ async fn caller_owned_images_preserve_public_part_order_and_owner_boundaries(
         .await
         .expect("upload image artifact");
     let request = CreateRunRequest {
+        model_profile: None,
+        reasoning_effort: None,
         input: vec![
             ContentPart::Text {
                 text: "before".into(),
@@ -668,6 +672,8 @@ async fn caller_owned_images_preserve_public_part_order_and_owner_boundaries(
 
 fn request(idempotency_key: &str, prompt: &str) -> CreateRunRequest {
     CreateRunRequest {
+        model_profile: None,
+        reasoning_effort: None,
         input: vec![ContentPart::Text {
             text: prompt.into(),
         }],

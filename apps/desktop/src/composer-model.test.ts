@@ -50,6 +50,25 @@ const context: ComposerModelContext = {
 };
 
 describe("composer model identity", () => {
+  it("resolves per-message preferences without changing the saved role", () => {
+    const selection = {
+      modelProfile: "review",
+      reasoningEffort: "low" as const,
+    };
+    expect(composerModelIdentity(context, "primary", selection)).toMatchObject({
+      model: "vendor/review-model",
+      providerLabel: "OpenRouter",
+      reasoningEffort: "low",
+    });
+    expect(context.configuration.roles.primary).toBe("main");
+    expect(composerModelIdentity(context, "primary").reasoningEffort).toBe(
+      "high",
+    );
+    expect(
+      composerModelIdentity(context, "primary", { modelProfile: "missing" })
+        .model,
+    ).toBe("Model not configured");
+  });
   it("shows the next message's model, provider and reasoning instead of a role name", () => {
     expect(composerModelIdentity(context, "primary")).toMatchObject({
       model: "gpt-6-astra",

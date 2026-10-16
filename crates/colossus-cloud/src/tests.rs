@@ -57,6 +57,8 @@ async fn fixture() -> (CloudRepository, CloudCaller, CloudNode) {
 }
 pub(crate) fn request() -> CreateRunRequest {
     CreateRunRequest {
+        model_profile: None,
+        reasoning_effort: None,
         plugin_skill_ids: vec![],
         input: vec![InputContentPart::Text("hello".into())],
         session_id: None,

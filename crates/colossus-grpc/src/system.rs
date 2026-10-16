@@ -11,9 +11,9 @@ use colossus_api::{
     CallerContext, PLAN_CONTINUATION_CAPABILITY, SESSION_ACTIVITY_CAPABILITY, scopes,
 };
 use colossus_api_proto::v1alpha1::{
-    ApiLimit, Capability, DeploymentMode, GetReadinessRequest, GetReadinessResponse,
-    GetServerInfoRequest, GetServerInfoResponse, ReadinessCheck, ReadinessStatus, ServerInfo,
-    system_service_server::SystemService,
+    ApiLimit, Capability, ConfiguredModelProfile, DeploymentMode, GetReadinessRequest,
+    GetReadinessResponse, GetServerInfoRequest, GetServerInfoResponse, ReadinessCheck,
+    ReadinessStatus, ServerInfo, system_service_server::SystemService,
 };
 use prost_types::Timestamp;
 use std::{
@@ -48,6 +48,12 @@ pub struct PublicReadiness {
 pub trait ReadinessProvider: Send + Sync {
     /// Return a caller-authorized readiness snapshot.
     fn readiness(&self, caller: &CallerContext) -> PublicReadiness;
+}
+
+/// Supplies configured model metadata without resolving credentials or making effects.
+pub trait ModelCatalogProvider: Send + Sync {
+    /// Return at most 256 profiles, with only the caller's authorized default roles.
+    fn model_profiles(&self, caller: &CallerContext) -> Vec<ConfiguredModelProfile>;
 }
 
 /// Fixed readiness provider useful for tests, sidecars, and embedded composition.
@@ -89,6 +95,7 @@ pub struct SystemServiceAdapter {
     workflows: bool,
     policy_posture: bool,
     agent_communication: bool,
+    model_catalog: Option<Arc<dyn ModelCatalogProvider>>,
 }
 
 impl SystemServiceAdapter {
@@ -102,12 +109,19 @@ impl SystemServiceAdapter {
             workflows: false,
             policy_posture: false,
             agent_communication: false,
+            model_catalog: None,
         }
     }
 
     /// Replace application-resource limits with values enforced by the host.
     pub fn with_application_limits(mut self, limits: Vec<ApiLimit>) -> Self {
         self.application_limits = limits;
+        self
+    }
+
+    /// Add safe, caller-scoped model discovery to authenticated compatibility metadata.
+    pub fn with_model_catalog(mut self, catalog: Arc<dyn ModelCatalogProvider>) -> Self {
+        self.model_catalog = Some(catalog);
         self
     }
 
@@ -138,6 +152,7 @@ impl SystemService for SystemServiceAdapter {
         let caller = caller_context(&request)?;
         let capabilities = [
             ("agent_runs.create", scopes::RUNS_EXECUTE),
+            ("agent_runs.model_selection", scopes::RUNS_EXECUTE),
             ("agent_runs.read", scopes::RUNS_READ),
             (
                 colossus_api::AGENT_COMMUNICATION_READ_CAPABILITY,
@@ -330,6 +345,20 @@ impl SystemService for SystemServiceAdapter {
             limits,
             deprecations: Vec::new(),
             server_time: Some(now_timestamp()?),
+            model_profiles: if caller.principal().has_scope(scopes::RUNS_EXECUTE) {
+                self.model_catalog
+                    .as_ref()
+                    .map(|catalog| {
+                        catalog
+                            .model_profiles(caller)
+                            .into_iter()
+                            .take(256)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            },
         };
         Ok(Response::new(GetServerInfoResponse {
             server_info: Some(info),
@@ -667,6 +696,62 @@ mod tests {
                     .any(|c| c.name == name && c.enabled)
             );
         }
+    }
+
+    #[tokio::test]
+    async fn model_discovery_requires_execute_scope_and_is_bounded() {
+        struct Catalog;
+        impl ModelCatalogProvider for Catalog {
+            fn model_profiles(&self, caller: &CallerContext) -> Vec<ConfiguredModelProfile> {
+                assert!(caller.principal().has_scope(scopes::RUNS_EXECUTE));
+                vec![
+                    ConfiguredModelProfile {
+                        profile: "deep".into(),
+                        model: "test-model".into(),
+                        provider: "open_ai_compatible".into(),
+                        provider_profile: "local".into(),
+                        reasoning_effort: Some("high".into()),
+                        default_roles: caller
+                            .principal()
+                            .allowed_roles()
+                            .map(str::to_owned)
+                            .collect(),
+                    };
+                    257
+                ]
+            }
+        }
+        let service = service().with_model_catalog(Arc::new(Catalog));
+        let read_only = service
+            .get_server_info(request(GetServerInfoRequest {}))
+            .await
+            .unwrap()
+            .into_inner()
+            .server_info
+            .unwrap();
+        assert!(read_only.model_profiles.is_empty());
+        let executor = service
+            .get_server_info(request_with(
+                GetServerInfoRequest {},
+                [scopes::RUNS_EXECUTE],
+                Vec::new(),
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+            .server_info
+            .unwrap();
+        assert_eq!(executor.model_profiles.len(), 256);
+        assert_eq!(executor.model_profiles[0].default_roles, ["primary"]);
+        assert_eq!(
+            executor.model_profiles[0].reasoning_effort.as_deref(),
+            Some("high")
+        );
+        let error = service
+            .get_server_info(Request::new(GetServerInfoRequest {}))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unauthenticated);
     }
 
     #[tokio::test]

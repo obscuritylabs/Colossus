@@ -392,6 +392,9 @@ pub enum WorkerOperation {
     },
     /// Execute any current-protocol interactive operation with authenticated duplex control.
     RunInteractive {
+        /// Immutable configured model preferences for root user-facing agent turns.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model_options: Option<colossus_contracts::WorkflowAgentOptions>,
         /// Strict application request carried by the interactive channel.
         request: InteractiveWorkerRequest,
         /// Optional client-scoped approval handling for this one interactive operation.

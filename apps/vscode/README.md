@@ -17,6 +17,15 @@ selection follows VS Code, with a native high contrast bridge. The composer grow
 controls, and retains a draft while a run is active. Replies support bounded Markdown
 including scrollable tables; model HTML, links, and images remain inert. Drafts are sent only by the user.
 
+The composer uses the shared shadcn model bubble for workers advertising
+`agent_runs.model_selection`. Open it to search configured models and providers,
+then adjust the reasoning slider. Changing models restores its saved reasoning
+default; choosing the same model keeps an explicit level. Preferences stay with
+the conversation for the current connection. Each submission captures its choices,
+so changing the picker during a run affects the next turn. Role default restores
+worker routing. Research keeps its own configured routes. Older workers retain
+their existing composer without the picker.
+
 Models, tools, plugins, policy, sandboxing, and canonical state remain in the runtime.
 This extension does not start a worker or connect to Desktop's private Managed Local
 instance. Use a separately enrolled worker for the selected workspace. Desktop and

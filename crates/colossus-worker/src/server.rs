@@ -770,6 +770,7 @@ async fn handle_interactive_connection<S>(
     request: InteractiveWorkerRequest,
     approval_mode: Option<WorkerApprovalMode>,
     sandbox_boundary_acknowledgement: Option<SandboxBoundaryAcknowledgement>,
+    model_options: Option<colossus_contracts::WorkflowAgentOptions>,
 ) -> Result<bool, WorkerError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -787,7 +788,22 @@ where
                 .as_ref()
                 .map(|acknowledgement| acknowledgement.expose().to_owned()),
             Box::pin(async {
-                dispatch_interactive(runtime, request, &mut observer, &control).await
+                let options = model_options.unwrap_or_default();
+                let role = match &request {
+                    InteractiveWorkerRequest::Run { role, .. }
+                    | InteractiveWorkerRequest::PlanExecute { role, .. }
+                    | InteractiveWorkerRequest::GoalResume { role, .. } => role.as_str(),
+                    _ => "primary",
+                };
+                if options.model_profile.is_some() || options.reasoning_effort.is_some() {
+                    runtime.model_route_with_options(role, &options)?;
+                }
+                runtime
+                    .with_model_selection(
+                        options,
+                        dispatch_interactive(runtime, request, &mut observer, &control),
+                    )
+                    .await
             }),
         ),
     );
@@ -1010,6 +1026,7 @@ where
     match request.operation {
         WorkerOperation::RunInteractive {
             request,
+            model_options,
             approval_mode,
             sandbox_boundary_acknowledgement,
         } => {
@@ -1024,6 +1041,7 @@ where
                 request,
                 approval_mode,
                 sandbox_boundary_acknowledgement,
+                model_options,
             )
             .await
         }

@@ -12,6 +12,7 @@ const mark = `data:image/svg+xml;base64,${(await readFile("dist/colossus-mark.sv
 let style = `${await readFile("dist/theme.css", "utf8")}
 ${await readFile("dist/shadcn.css", "utf8")}\n${await readFile("dist/style.css", "utf8")}
 ${await readFile("dist/composer.css", "utf8")}
+${await readFile("dist/model-picker.css", "utf8")}
 ${await readFile("dist/select.css", "utf8")}`;
 for (const name of await readdir("dist/icons")) {
   const uri = `data:image/svg+xml;base64,${(await readFile(`dist/icons/${name}`)).toString("base64")}`;

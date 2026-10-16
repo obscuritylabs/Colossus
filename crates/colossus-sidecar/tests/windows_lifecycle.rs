@@ -227,6 +227,8 @@ async fn verified_sidecar_bootstraps_pinned_grpc_runs_echo_and_closes() {
     );
     let created = client
         .create_run(CreateRunRequest {
+            model_profile: None,
+            reasoning_effort: None,
             plugin_skill_ids: Vec::new(),
             input: vec![InputContentPart::Text("managed sidecar self-test".into())],
             session_id: None,
@@ -261,6 +263,8 @@ async fn verified_sidecar_bootstraps_pinned_grpc_runs_echo_and_closes() {
     );
     let cloud_run = connector
         .create_run(CreateRunRequest {
+            model_profile: None,
+            reasoning_effort: None,
             plugin_skill_ids: vec![],
             input: vec![InputContentPart::Text(
                 "Windows cloud grant self-test".into(),

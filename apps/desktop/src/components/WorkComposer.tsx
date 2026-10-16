@@ -40,7 +40,10 @@ import type { QueuedMessage } from "../message-queue";
 import { DropdownSelect } from "./DropdownSelect";
 import { NextUpQueue } from "./NextUpQueue";
 import { PluginIcon } from "./PluginIcon";
-import type { ComposerModelContext } from "../composer-model";
+import type {
+  ComposerModelContext,
+  ComposerModelSelection,
+} from "../composer-model";
 import {
   ComposerInput,
   ComposerModeSwitch,
@@ -87,6 +90,9 @@ interface WorkComposerProps {
   approvalModeAvailable: boolean;
   approvalModeChanging: boolean;
   modelContext?: ComposerModelContext;
+  modelSelection?: ComposerModelSelection;
+  onModelSelectionChange?:
+    ((selection: ComposerModelSelection) => void) | undefined;
   onOpenModelSettings?: () => void;
   canCompose: boolean;
   submitting: boolean;
@@ -152,6 +158,8 @@ export function WorkComposer({
   approvalModeAvailable,
   approvalModeChanging,
   modelContext,
+  modelSelection,
+  onModelSelectionChange,
   onOpenModelSettings,
   canCompose,
   submitting,
@@ -341,8 +349,13 @@ export function WorkComposer({
             }
           >
             <ComposerModelChip
+              disabled={submitting}
               context={modelContext}
               role={role}
+              selection={mode === "research" ? undefined : modelSelection}
+              onSelectionChange={
+                mode === "research" ? undefined : onModelSelectionChange
+              }
               onOpenSettings={onOpenModelSettings}
             />
           </Suspense>

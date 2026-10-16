@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -49,8 +56,13 @@ async function until(condition: () => boolean) {
   }
 }
 
-async function fixture(researchCapability?: boolean) {
-  const home = await mkdtemp(join(tmpdir(), "colossus-vscode-runtime-"));
+async function fixture(
+  researchCapability?: boolean,
+  modelCapability?: boolean,
+) {
+  const home = await realpath(
+    await mkdtemp(join(tmpdir(), "colossus-vscode-runtime-")),
+  );
   const workspace = join(home, "workspace");
   const discovery = join(home, "api");
   await mkdir(workspace);
@@ -174,6 +186,45 @@ async function fixture(researchCapability?: boolean) {
                     detail: "",
                   },
                 ],
+          ...(modelCapability !== undefined
+            ? {
+                capabilities: [
+                  {
+                    name: "agent_runs.model_selection",
+                    enabled: modelCapability,
+                    detail: "",
+                  },
+                  {
+                    name: "research.create",
+                    enabled: !!researchCapability,
+                    detail: "",
+                  },
+                ],
+                modelProfiles: [
+                  {
+                    profile: "fast",
+                    model: "live-fast",
+                    provider: "open_ai_compatible",
+                    providerProfile: "first",
+                    reasoningEffort: "low",
+                    defaultRoles: ["primary"],
+                  },
+                  {
+                    profile: "deep",
+                    model: "live-deep",
+                    provider: "open_ai_compatible",
+                    providerProfile: "second",
+                    reasoningEffort: "high",
+                  },
+                  {
+                    profile: "offline",
+                    model: "echo",
+                    provider: "echo",
+                    providerProfile: "offline",
+                  },
+                ],
+              }
+            : {}),
         }),
       });
     },
@@ -429,6 +480,135 @@ async function fixture(researchCapability?: boolean) {
     },
   };
 }
+
+test("model preferences are captured over pinned gRPC and retained per conversation", async () => {
+  const f = await fixture(true, true);
+  try {
+    const controller = await f.controller();
+    assert.equal(controller.view.modelProfiles.length, 3);
+    controller.setModelSelection({ modelProfile: "deep" });
+    await controller.newSession();
+    assert.deepEqual(controller.view.modelSelection, {});
+    controller.setModelSelection({
+      modelProfile: "deep",
+      reasoningEffort: "high",
+    });
+    const captured = { ...controller.view.modelSelection };
+    await controller.send(
+      "Use the selected model",
+      "execute",
+      undefined,
+      captured,
+    );
+    controller.setModelSelection({
+      modelProfile: "fast",
+      reasoningEffort: "low",
+    });
+    assert.equal(f.createRequests[0]?.modelProfile, "deep");
+    assert.equal(f.createRequests[0]?.reasoningEffort, "high");
+    assert.equal(f.createRequests[0]?.role, "primary");
+    assert.equal(f.createRequests[0]?.sessionId, undefined);
+    f.finish();
+    await until(() => !controller.view.busy);
+    const session = controller.view.sessionId;
+    await controller.newSession();
+    assert.deepEqual(controller.view.modelSelection, {});
+    await controller.selectSession(session);
+    assert.deepEqual(controller.view.modelSelection, {
+      modelProfile: "fast",
+      reasoningEffort: "low",
+    });
+    controller.setModelSelection({});
+    await controller.send("Use the saved worker defaults", "plan");
+    assert.equal(f.createRequests[1]?.modelProfile, undefined);
+    assert.equal(f.createRequests[1]?.reasoningEffort, undefined);
+    assert.equal(f.createRequests[1]?.sessionId, session);
+  } finally {
+    await f.close();
+  }
+});
+
+test("stale preference acknowledgments cannot change another connection, session or captured request", async () => {
+  const f = await fixture(true, true);
+  try {
+    const controller = await f.controller();
+    const context = controller.view.modelSelectionContext;
+    const revision = controller.view.modelSelectionRevision + 2;
+    const selected = { modelProfile: "deep", reasoningEffort: "high" as const };
+    controller.setModelSelection(selected, {
+      context,
+      sessionId: "",
+      revision,
+    });
+    controller.setModelSelection(
+      { modelProfile: "fast" },
+      { context, sessionId: "", revision: revision - 1 },
+    );
+    controller.setModelSelection(
+      {},
+      { context, sessionId: "foreign-session", revision: revision + 1 },
+    );
+    assert.deepEqual(controller.view.modelSelection, selected);
+    // A send captured before a dialog must not roll back newer draft preferences.
+    await controller.send("Earlier captured selection", "execute", undefined, {
+      modelProfile: "fast",
+      reasoningEffort: "low",
+    });
+    assert.deepEqual(controller.view.modelSelection, selected);
+    assert.equal(f.createRequests[0]?.modelProfile, "fast");
+    assert.equal(f.createRequests[0]?.reasoningEffort, "low");
+    f.finish();
+    await until(() => !controller.view.busy);
+    await controller.attach(await f.connect(), "primary");
+    assert.notEqual(controller.view.modelSelectionContext, context);
+    controller.setModelSelection(selected, {
+      context,
+      sessionId: controller.view.sessionId,
+      revision: revision + 100,
+    });
+    assert.deepEqual(controller.view.modelSelection, {});
+  } finally {
+    await f.close();
+  }
+});
+
+test("unavailable or unconfigured model preferences fail before creating a run", async () => {
+  for (const capability of [undefined, false, true]) {
+    const f = await fixture(true, capability);
+    try {
+      const controller = await f.controller();
+      const invalid = capability
+        ? [
+            { modelProfile: "unknown" },
+            { modelProfile: "offline", reasoningEffort: "high" as const },
+          ]
+        : [{ modelProfile: "deep" }, { reasoningEffort: "high" as const }];
+      for (const selection of invalid) {
+        assert.throws(() => controller.setModelSelection(selection));
+        await assert.rejects(
+          controller.send("Task", "execute", undefined, selection),
+        );
+        assert.equal(controller.view.busy, false);
+        assert.equal(f.creates, 0);
+      }
+      if (capability)
+        await assert.rejects(
+          controller.send(
+            "Investigate",
+            "research",
+            {
+              researchDepth: "quick",
+              researchSources: ["repo"],
+            },
+            { modelProfile: "deep" },
+          ),
+          /configured model routes/,
+        );
+    } finally {
+      await f.close();
+    }
+  }
+});
 
 test("Research carries its depth and MCP lanes over pinned gRPC and restores its active mode", async () => {
   for (const [depth, expectedDepth, sources, expectedSources] of [

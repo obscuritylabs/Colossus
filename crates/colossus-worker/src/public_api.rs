@@ -291,7 +291,10 @@ impl PreparedPublicApi {
             },
             readiness,
         )
-        .with_application_limits(advertised_limits);
+        .with_application_limits(advertised_limits)
+        .with_model_catalog(Arc::new(crate::model_catalog::RuntimeModelCatalog(
+            Arc::clone(&runtime),
+        )));
         let server = BoundPublicGrpcServer::bind(
             options.bind,
             options.tls_identity,

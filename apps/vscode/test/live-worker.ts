@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { fstatSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { Socket } from "node:net";
 import { connectWorker, workspaceIdentity } from "../src/connection.js";
 import { WorkController } from "../src/controller.js";
 
@@ -9,7 +10,15 @@ const [descriptor, _certificate, instanceId, certificateSha256, prompt] =
   process.argv.slice(2);
 if (!descriptor || !instanceId || !certificateSha256 || !prompt)
   throw new Error("Missing live-fixture enrollment metadata.");
-if (!fstatSync(0).isFIFO() && !fstatSync(0).isSocket())
+const stdinInfo = fstatSync(0);
+// Windows Stats does not classify pipe handles. Node wraps inherited pipes in
+// Socket; regular-file and terminal stdin remain rejected before reading bytes.
+const windowsPipe =
+  process.platform === "win32" &&
+  process.stdin instanceof Socket &&
+  !process.stdin.isTTY &&
+  !stdinInfo.isFile();
+if (!stdinInfo.isFIFO() && !stdinInfo.isSocket() && !windowsPipe)
   throw new Error(
     "The fixture credential must arrive through an anonymous pipe.",
   );
@@ -41,7 +50,23 @@ const controller = new WorkController("Live workspace", {
 });
 try {
   await controller.attach(client, "primary");
-  await controller.send(prompt, "execute");
+  assert.equal(controller.view.modelProfiles.length, 2);
+  assert.ok(
+    controller.view.modelProfiles.some(
+      (model) =>
+        model.profile === "fast" && model.defaultRoles.includes("primary"),
+    ),
+  );
+  controller.setModelSelection({
+    modelProfile: "deep",
+    reasoningEffort: "low",
+  });
+  await controller.send(
+    prompt,
+    "execute",
+    undefined,
+    controller.view.modelSelection,
+  );
   const deadline = Date.now() + 20_000;
   while (controller.view.busy) {
     if (Date.now() > deadline || controller.view.error)
@@ -63,7 +88,16 @@ try {
     ),
   );
   const existingSession = controller.view.sessionId;
-  await controller.send("VS_CODE_FOLLOW_UP", "execute");
+  controller.setModelSelection({
+    modelProfile: "fast",
+    reasoningEffort: "high",
+  });
+  await controller.send(
+    "VS_CODE_FOLLOW_UP",
+    "execute",
+    undefined,
+    controller.view.modelSelection,
+  );
   const followUpDeadline = Date.now() + 20_000;
   while (controller.view.busy) {
     if (Date.now() > followUpDeadline || controller.view.error)
@@ -90,7 +124,13 @@ try {
   // The real API clamps history pages to three entries. Restore a longer
   // conversation to prove older turns survive worker pagination.
   for (let i = 3; i <= 5; i++) {
-    await controller.send(`VS_CODE_HISTORY_${i}`, "execute");
+    controller.setModelSelection(i === 4 ? { modelProfile: "deep" } : {});
+    await controller.send(
+      `VS_CODE_HISTORY_${i}`,
+      "execute",
+      undefined,
+      controller.view.modelSelection,
+    );
     const historyDeadline = Date.now() + 20_000;
     while (controller.view.busy) {
       if (Date.now() > historyDeadline || controller.view.error)

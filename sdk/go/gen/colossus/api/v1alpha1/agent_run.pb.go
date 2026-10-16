@@ -1525,8 +1525,13 @@ type CreateRunRequest struct {
 	PluginSkillIds []string `protobuf:"bytes,13,rep,name=plugin_skill_ids,json=pluginSkillIds,proto3" json:"plugin_skill_ids,omitempty"`
 	// goal_max_iterations must be 1..50 for Goal mode and zero otherwise.
 	GoalMaxIterations uint32 `protobuf:"varint,14,opt,name=goal_max_iterations,json=goalMaxIterations,proto3" json:"goal_max_iterations,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// model_profile selects an existing configured model without changing role or tools.
+	ModelProfile *string `protobuf:"bytes,15,opt,name=model_profile,json=modelProfile,proto3,oneof" json:"model_profile,omitempty"`
+	// reasoning_effort is none, minimal, low, medium, high, xhigh, max, or ultra.
+	// Omission uses the configured model's default. Research uses its own model roles.
+	ReasoningEffort *string `protobuf:"bytes,16,opt,name=reasoning_effort,json=reasoningEffort,proto3,oneof" json:"reasoning_effort,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *CreateRunRequest) Reset() {
@@ -1648,6 +1653,20 @@ func (x *CreateRunRequest) GetGoalMaxIterations() uint32 {
 		return x.GoalMaxIterations
 	}
 	return 0
+}
+
+func (x *CreateRunRequest) GetModelProfile() string {
+	if x != nil && x.ModelProfile != nil {
+		return *x.ModelProfile
+	}
+	return ""
+}
+
+func (x *CreateRunRequest) GetReasoningEffort() string {
+	if x != nil && x.ReasoningEffort != nil {
+		return *x.ReasoningEffort
+	}
+	return ""
 }
 
 // RunBranch identifies a canonical prefix without accepting transcript text.
@@ -5832,7 +5851,7 @@ const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"\barchived\x18\x12 \x01(\bR\barchived\x12(\n" +
 	"\x10plugin_skill_ids\x18\x13 \x03(\tR\x0epluginSkillIdsB\n" +
 	"\n" +
-	"\bterminalJ\x04\b\x10\x10\x11R\x0fselected_skills\"\xd7\x05\n" +
+	"\bterminalJ\x04\b\x10\x10\x11R\x0fselected_skills\"\xd8\x06\n" +
 	"\x10CreateRunRequest\x128\n" +
 	"\x05input\x18\x01 \x03(\v2\".colossus.api.v1alpha1.ContentPartR\x05input\x12\"\n" +
 	"\n" +
@@ -5849,9 +5868,13 @@ const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"\x0eresearch_depth\x18\v \x01(\x0e2$.colossus.api.v1alpha1.ResearchDepthR\rresearchDepth\x12T\n" +
 	"\x10research_sources\x18\f \x03(\x0e2).colossus.api.v1alpha1.ResearchSourceKindR\x0fresearchSources\x12(\n" +
 	"\x10plugin_skill_ids\x18\r \x03(\tR\x0epluginSkillIds\x12.\n" +
-	"\x13goal_max_iterations\x18\x0e \x01(\rR\x11goalMaxIterationsB\r\n" +
+	"\x13goal_max_iterations\x18\x0e \x01(\rR\x11goalMaxIterations\x12(\n" +
+	"\rmodel_profile\x18\x0f \x01(\tH\x02R\fmodelProfile\x88\x01\x01\x12.\n" +
+	"\x10reasoning_effort\x18\x10 \x01(\tH\x03R\x0freasoningEffort\x88\x01\x01B\r\n" +
 	"\v_session_idB\x0e\n" +
-	"\f_end_user_idJ\x04\b\x05\x10\x06R\x0fselected_skills\"\xb1\x01\n" +
+	"\f_end_user_idB\x10\n" +
+	"\x0e_model_profileB\x13\n" +
+	"\x11_reasoning_effortJ\x04\b\x05\x10\x06R\x0fselected_skills\"\xb1\x01\n" +
 	"\tRunBranch\x12\"\n" +
 	"\rsource_run_id\x18\x01 \x01(\tR\vsourceRunId\x120\n" +
 	"\x14source_message_count\x18\x02 \x01(\x04R\x12sourceMessageCount\x12N\n" +

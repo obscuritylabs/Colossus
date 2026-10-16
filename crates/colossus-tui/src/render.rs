@@ -34,6 +34,12 @@ pub(super) fn render(
     }
 
     match state.overlay.as_ref() {
+        Some(Overlay::Prompt { request, .. })
+            if request.kind == InteractivePromptKind::ModelSelection =>
+        {
+            render_model_picker(frame, state, area);
+            return;
+        }
         Some(Overlay::SessionBrowser(browser)) => {
             render_session_browser(frame, state, browser, area);
             return;

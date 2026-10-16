@@ -43,7 +43,8 @@ pub use journal_credentials::JournalCredentialRepository;
 pub use server::{BoundPublicGrpcServer, PublicGrpcServerError, RESERVED_UNARY_REQUEST_HEADROOM};
 pub use status::api_status;
 pub use system::{
-    FixedReadiness, PublicReadiness, ReadinessProvider, SystemMetadata, SystemServiceAdapter,
+    FixedReadiness, ModelCatalogProvider, PublicReadiness, ReadinessProvider, SystemMetadata,
+    SystemServiceAdapter,
 };
 pub use tls_identity::{TlsIdentity, TlsIdentityError, TlsKeySeed};
 pub use workflows::AutomationServiceAdapter;

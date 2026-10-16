@@ -80,6 +80,8 @@ async fn dispatch(client: &Colossus, message: &Value) -> anyhow::Result<Value> {
 pub(super) async fn run(client: &Colossus, session_id: Option<String>) -> anyhow::Result<Value> {
     let created = client
         .create_run(CreateRunRequest {
+            model_profile: None,
+            reasoning_effort: None,
             input: vec![InputContentPart::Text(
                 "Execute the next isolated process acceptance case.".into(),
             )],

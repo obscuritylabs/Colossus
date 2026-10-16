@@ -97,6 +97,8 @@ async fn plan_continuation_requires_an_advertised_runtime_capability() {
     let client = Colossus::from_backend(TestBackend::new(BackendKind::Daemon));
     let error = client
         .create_run(CreateRunRequest {
+            model_profile: None,
+            reasoning_effort: None,
             plugin_skill_ids: Vec::new(),
             input: vec![InputContentPart::Text("Run the approved Plan".into())],
             session_id: Some("session-1".into()),
@@ -1412,6 +1414,8 @@ fn legacy_run_requests_keep_exact_storage_shape_and_goal_budgets_remain_explicit
     assert_eq!(request.goal_max_iterations, 0);
     assert_eq!(serde_json::to_value(&request).unwrap(), legacy);
     let goal = CreateRunRequest {
+        model_profile: None,
+        reasoning_effort: None,
         mode: RunMode::Goal,
         goal_max_iterations: 5,
         ..request

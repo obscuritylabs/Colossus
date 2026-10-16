@@ -35,6 +35,8 @@ pub(super) fn value(kind: EntityKind, id: &str, overrides: serde_json::Value) ->
         }),
         EntityKind::Task => {
             let request = CreateRunRequest {
+                model_profile: None,
+                reasoning_effort: None,
                 plugin_skill_ids: Vec::new(),
                 input: vec![InputContentPart::Text("fixture".into())],
                 session_id: None,

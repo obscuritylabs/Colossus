@@ -106,11 +106,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     drop(issued);
 
-    let discovery = TempDir::new()?;
+    // Discovery requires an owner-private leaf and non-writable ancestors. The
+    // ordinary Windows Temp directory can be shared or use an 8.3 alias.
+    #[cfg(windows)]
+    let discovery_root =
+        TempDir::new_in(env::var_os("USERPROFILE").ok_or("Windows user profile is unavailable")?)?;
+    #[cfg(not(windows))]
+    let discovery_root = TempDir::new()?;
+    let discovery = discovery_root.path().join("api");
+    #[cfg(windows)]
+    colossus_windows_native::create_private_directory(&discovery)?;
     #[cfg(unix)]
-    fs::set_permissions(discovery.path(), fs::Permissions::from_mode(0o700))?;
-    let descriptor_path = discovery.path().join("endpoint.json");
-    let certificate_path = discovery.path().join("certificate.pem");
+    {
+        fs::create_dir(&discovery)?;
+        fs::set_permissions(&discovery, fs::Permissions::from_mode(0o700))?;
+    }
+    let descriptor_path = discovery.join("endpoint.json");
+    let certificate_path = discovery.join("certificate.pem");
     let mut tls_seed = [0_u8; 32];
     getrandom::fill(&mut tls_seed)?;
     let tls_identity = TlsIdentity::from_seed(TlsKeySeed::new(tls_seed))?;
@@ -187,6 +199,8 @@ async fn run_rust_prompt(
     let client = Colossus::connect_installed(connect).await?;
     let created = client
         .create_run(CreateRunRequest {
+            model_profile: None,
+            reasoning_effort: None,
             plugin_skill_ids: Vec::new(),
             input: vec![InputContentPart::Text(prompt)],
             session_id: None,
