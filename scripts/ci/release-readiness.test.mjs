@@ -81,6 +81,7 @@ test("release readiness permits maintained SDK, build, and plugin Python sources
     "native/browser/scripts/test_launcher_macos.py",
     "native/browser/scripts/stage_windows.py",
     "native/browser/scripts/test_stage_windows.py",
+    "native/browser/scripts/windows_development.py",
     "native/browser/scripts/pki_fixture.py",
     "native/browser/scripts/pki_fixture_material.py",
     "native/browser/scripts/pki_fixture_private.py",

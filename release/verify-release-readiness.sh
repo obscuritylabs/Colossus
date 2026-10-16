@@ -81,6 +81,7 @@ legacy_python_sources=$(git ls-files -- '*.py' ':(exclude)sdk/python/**' \
     ':(exclude)native/browser/scripts/test_launcher_macos.py' \
     ':(exclude)native/browser/scripts/stage_windows.py' \
     ':(exclude)native/browser/scripts/test_stage_windows.py' \
+    ':(exclude)native/browser/scripts/windows_development.py' \
     ':(exclude)native/browser/scripts/pki_fixture.py' \
     ':(exclude)native/browser/scripts/pki_fixture_material.py' \
     ':(exclude)native/browser/scripts/pki_fixture_private.py' \
