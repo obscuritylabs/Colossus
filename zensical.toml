@@ -77,6 +77,7 @@ nav = [
       { "Choose a provider" = "use/providers/index.md" },
       { "Codex or ChatGPT subscription" = "use/providers/codex-chatgpt.md" },
       { "OpenAI API" = "use/providers/openai-api.md" },
+      { "Anthropic API" = "use/providers/anthropic.md" },
       { "OpenRouter" = "use/providers/openrouter.md" },
       { "Local models" = "use/providers/local-models.md" },
       { "Other OpenAI-compatible endpoints" = "use/providers/openai-compatible.md" },

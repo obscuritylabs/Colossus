@@ -48,6 +48,7 @@ mod error;
 pub use error::{ProviderError, classify_response_diagnostic};
 use error::{chat_finish_error, terminal_provider_error};
 
+mod anthropic;
 mod normalization;
 use normalization::*;
 

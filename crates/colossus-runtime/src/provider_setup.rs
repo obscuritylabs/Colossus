@@ -106,6 +106,7 @@ impl RuntimeConfig {
             let kind = match preset.protocol {
                 ProviderSetupProtocol::ChatCompletions => ProviderKind::OpenAiCompatible,
                 ProviderSetupProtocol::Responses => ProviderKind::OpenAiResponses,
+                ProviderSetupProtocol::AnthropicMessages => ProviderKind::AnthropicMessages,
                 ProviderSetupProtocol::Codex => unreachable!(),
             };
             (
@@ -257,6 +258,25 @@ mod tests {
             config.sandbox.network_destinations,
             ["https://openrouter.ai"]
         );
+        RuntimeConfig::from_yaml(&config.to_yaml().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn anthropic_setup_uses_messages_and_roundtrips_without_selecting_a_model() {
+        let config = RuntimeConfig::offline_template("state.redb")
+            .with_setup_provider(&connection("anthropic"))
+            .unwrap();
+        let profile = &config.providers.profiles[SETUP_PROVIDER_PROFILE];
+        assert_eq!(profile.kind, ProviderKind::AnthropicMessages);
+        assert_eq!(
+            profile.base_url.as_deref(),
+            Some("https://api.anthropic.com/v1")
+        );
+        assert_eq!(
+            profile.credential_reference.as_deref(),
+            Some("env:ANTHROPIC_API_KEY")
+        );
+        assert_eq!(config.models.roles["primary"], "echo");
         RuntimeConfig::from_yaml(&config.to_yaml().unwrap()).unwrap();
     }
 

@@ -20,6 +20,26 @@ const configured: ManagedModelConfiguration = {
 };
 
 describe("provider catalog selection", () => {
+  it("keeps native Anthropic selection separate from Chat Completions", () => {
+    const preset = {
+      id: "anthropic",
+      label: "Anthropic",
+      protocol: "anthropic_messages" as const,
+      baseUrl: "https://api.anthropic.com/v1",
+      credentialEnv: "ANTHROPIC_API_KEY",
+    };
+    expect(presetProviderKind(preset)).toBe("anthropic_messages");
+    expect(
+      matchingProviderPreset(
+        [preset],
+        "anthropic_messages",
+        "https://api.anthropic.com/v1/",
+      ),
+    ).toBe(preset);
+    expect(
+      matchingProviderPreset([preset], "openai_compatible", preset.baseUrl),
+    ).toBeUndefined();
+  });
   it("maps a shared preset to its adapter and matches URL trailing slashes", () => {
     const preset = {
       id: "example",

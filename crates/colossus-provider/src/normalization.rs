@@ -24,7 +24,7 @@ impl ProviderResolvedImages {
         Ok(())
     }
 
-    fn data_url(&self, reference: &ModelImageReference) -> Result<&str, ProviderError> {
+    pub(super) fn data_url(&self, reference: &ModelImageReference) -> Result<&str, ProviderError> {
         self.by_artifact
             .get(&reference.artifact_id)
             .filter(|(resolved, _)| resolved == reference)
@@ -38,9 +38,9 @@ impl ProviderResolvedImages {
 }
 
 pub(super) struct ProviderProjection<'a> {
-    tool_names: &'a ProviderToolNames,
-    images: &'a ProviderResolvedImages,
-    continuation: Option<&'a colossus_contracts::ProviderContinuation>,
+    pub(super) tool_names: &'a ProviderToolNames,
+    pub(super) images: &'a ProviderResolvedImages,
+    pub(super) continuation: Option<&'a colossus_contracts::ProviderContinuation>,
 }
 
 impl<'a> ProviderProjection<'a> {

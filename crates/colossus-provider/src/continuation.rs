@@ -14,7 +14,7 @@ pub struct ProviderAdapterTurn {
     pub continuation_id: Option<String>,
 }
 
-/// Safe stream extension owned by the Responses adapter.
+/// Safe stream extension; opaque provider state stays in the private repository.
 #[derive(Serialize, Deserialize)]
 pub struct ProviderAdapterStreamItem {
     /// Existing provider-neutral stream item.
@@ -34,8 +34,10 @@ impl ProviderExecutor {
         let Some(plan) = plan else {
             return Ok(None);
         };
-        if self.profile.kind != ProviderKind::OpenAiResponses
-            || session_id != Some(plan.session_id.as_str())
+        if !matches!(
+            self.profile.kind,
+            ProviderKind::OpenAiResponses | ProviderKind::AnthropicMessages
+        ) || session_id != Some(plan.session_id.as_str())
         {
             return Err(ProviderError::Configuration(
                 "Responses state does not belong to this provider session".into(),
@@ -54,6 +56,7 @@ impl ProviderExecutor {
             .map_err(|_| ProviderError::Configuration("Responses state unavailable".into()))?
             .filter(|state| {
                 state.view == *view
+                    && state.view.replay == (self.profile.kind == ProviderKind::AnthropicMessages)
                     && state.plan.binding == plan.binding
                     && state.plan.context_binding_hash == plan.context_binding_hash
                     && state.plan.snapshot_epoch == plan.snapshot_epoch
@@ -72,34 +75,63 @@ impl ProviderExecutor {
         output: &[Value],
         turn: &ProviderTurn,
     ) -> Result<Option<String>, ProviderError> {
-        if self.profile.kind != ProviderKind::OpenAiResponses {
+        let replay = self.profile.kind == ProviderKind::AnthropicMessages;
+        if !replay && self.profile.kind != ProviderKind::OpenAiResponses {
+            return Ok(None);
+        }
+        if replay
+            && !turn
+                .events
+                .iter()
+                .any(|e| matches!(e, ProviderEvent::ToolCallRequested { .. }))
+        {
             return Ok(None);
         }
         let (Some(repository), Some(plan)) = (&self.continuations, plan) else {
+            if replay {
+                return Err(ProviderError::Configuration(
+                    "Messages tool calls require private replay storage".into(),
+                ));
+            }
             return Ok(None);
         };
         if plan.context_binding_hash.len() != 64 {
+            if replay {
+                return Err(ProviderError::Configuration(
+                    "Messages replay has no context binding".into(),
+                ));
+            }
             return Ok(None);
         }
-        let mut items = payload["input"].as_array().cloned().unwrap_or_default();
-        items.extend_from_slice(output);
-        let Some(start) = items.iter().rposition(|item| {
-            item["type"] == "compaction"
-                && item["encrypted_content"]
-                    .as_str()
-                    .is_some_and(|s| !s.is_empty())
-        }) else {
-            return Ok(None);
+        let mut items = if replay {
+            self.resolve_continuation(Some(plan), Some(&plan.session_id))?
+                .map_or_else(
+                    || vec![json!({"type":"anthropic_replay"})],
+                    |s| s.hidden_reasoning,
+                )
+        } else {
+            let mut items = payload["input"].as_array().cloned().unwrap_or_default();
+            items.extend_from_slice(output);
+            items
         };
-        let items = items.split_off(start);
+        if !replay {
+            let Some(start) = items.iter().rposition(|item| {
+                item["type"] == "compaction"
+                    && item["encrypted_content"]
+                        .as_str()
+                        .is_some_and(|s| !s.is_empty())
+            }) else {
+                return Ok(None);
+            };
+            items = items.split_off(start);
+        }
         // Never retain resolved image bytes in provider continuation state.
         if contains_image_data(&items) {
-            return Ok(None);
-        }
-        let bytes = serde_json::to_vec(&items)
-            .map_err(|_| ProviderError::Malformed("invalid Responses state".into()))?
-            .len();
-        if items.len() > 512 || bytes > 512 * 1024 {
+            if replay {
+                return Err(ProviderError::Configuration(
+                    "Messages replay cannot contain image bytes".into(),
+                ));
+            }
             return Ok(None);
         }
         let mut text = String::new();
@@ -133,8 +165,23 @@ impl ProviderExecutor {
             tool_calls: calls,
             tool_call_id: None,
         };
+        if replay {
+            items.push(json!({"message":assistant, "content":output}));
+        }
+        let bytes = serde_json::to_vec(&items)
+            .map_err(|_| ProviderError::Malformed("invalid provider state".into()))?
+            .len();
+        if items.len() > 512 || bytes > 512 * 1024 {
+            if replay {
+                return Err(ProviderError::Configuration(
+                    "Messages replay exceeds its bounded storage".into(),
+                ));
+            }
+            return Ok(None);
+        }
         let state = ProviderContinuation {
             view: ProviderContinuationView {
+                replay,
                 id: id.into(),
                 covered_count: plan.source_count.saturating_add(1),
                 context_binding_hash: plan.context_binding_hash.clone(),
@@ -153,6 +200,11 @@ impl ProviderExecutor {
             .saturating_add(64)
             > 512 * 1024
         {
+            if replay {
+                return Err(ProviderError::Configuration(
+                    "Messages replay exceeds its bounded storage".into(),
+                ));
+            }
             return Ok(None);
         }
         repository.stage(state).map_err(|_| {

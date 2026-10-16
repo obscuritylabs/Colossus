@@ -19,7 +19,10 @@ impl GatewayModelProvider {
             .providers
             .resolve(role)
             .map_err(|e| ModelProviderError::Configuration(e.to_string()))?;
-        if !self.providers.server_compaction_enabled(&resolved) {
+        if !self.providers.server_compaction_enabled(&resolved)
+            && resolved.provider().profile().kind
+                != colossus_provider::ProviderKind::AnthropicMessages
+        {
             return Ok(None);
         }
         let Some(session_id) = &context.session_id else {
@@ -57,7 +60,14 @@ impl GatewayModelProvider {
                 ModelProviderError::Failed("unable to load protected Responses state".into())
             })?
             .filter(|state| {
-                state.plan.binding == binding
+                state.view.replay
+                    == (resolved.provider().profile().kind
+                        == colossus_provider::ProviderKind::AnthropicMessages)
+                    && (!state.view.replay
+                        || !canonical[state.view.covered_count.min(canonical.len())..]
+                            .iter()
+                            .any(|m| m.begins_user_turn()))
+                    && state.plan.binding == binding
                     && state.plan.snapshot_epoch == snapshot_epoch
                     && state.view.covered_count <= canonical.len()
                     && fingerprint(&canonical[..state.view.covered_count].to_vec())

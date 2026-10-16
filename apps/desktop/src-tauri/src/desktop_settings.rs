@@ -97,6 +97,8 @@ pub(crate) enum ProviderKindSetting {
     Responses,
     #[serde(rename = "openai_compatible", alias = "open_ai_compatible")]
     Compatible,
+    #[serde(rename = "anthropic_messages")]
+    Anthropic,
     #[serde(rename = "open_ai_codex")]
     Codex,
 }
@@ -105,6 +107,7 @@ pub(crate) const fn provider_base_url(kind: ProviderKindSetting) -> &'static str
     match kind {
         ProviderKindSetting::Responses => OPENAI_BASE_URL,
         ProviderKindSetting::Compatible => OPENROUTER_BASE_URL,
+        ProviderKindSetting::Anthropic => "https://api.anthropic.com/v1",
         ProviderKindSetting::Codex => CODEX_BASE_URL,
     }
 }

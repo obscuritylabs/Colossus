@@ -325,7 +325,7 @@ impl ProviderExecutor {
         self
     }
 
-    /// Resolve private Responses state within the permit-bearing adapter.
+    /// Resolve private provider state within the permit-bearing adapter.
     #[must_use]
     pub fn with_continuations(
         mut self,
@@ -586,6 +586,15 @@ impl ProviderExecutor {
                 stream_response,
                 ProviderProjection::new(&tool_names, &resolved_images),
             ),
+            ProviderKind::AnthropicMessages => crate::anthropic::payload(
+                &model_request,
+                &model,
+                max_output_tokens,
+                reasoning_effort,
+                stream_response,
+                ProviderProjection::new(&tool_names, &resolved_images)
+                    .with_continuation(continuation.as_ref()),
+            ),
             ProviderKind::Echo => unreachable!("handled above"),
         }
         .map_err(provider_execution_error)?;
@@ -749,20 +758,80 @@ impl ProviderExecutor {
                 .models_endpoint()?
                 .ok_or_else(|| ProviderError::Configuration("provider has no catalog".into()))?;
             self.validate_resource(effect, &endpoint, permit)?;
-            let bytes = match self
-                .request_json(&endpoint, None, permit, include_response_diagnostics)
-                .await?
-            {
-                ProviderJsonResponse::Success(bytes) => bytes,
-                ProviderJsonResponse::FeatureRejected(rejection) => {
-                    return bounded_result(&rejection, permit);
+            let mut catalog_endpoint = endpoint.clone();
+            let mut catalog_models = BTreeMap::new();
+            let mut cursors = BTreeSet::new();
+            let mut total_catalog_bytes = 0_usize;
+            for page in 0..32 {
+                let bytes = match self
+                    .request_json(
+                        &catalog_endpoint,
+                        None,
+                        permit,
+                        include_response_diagnostics,
+                    )
+                    .await?
+                {
+                    ProviderJsonResponse::Success(bytes) => bytes,
+                    ProviderJsonResponse::FeatureRejected(rejection) => {
+                        return bounded_result(&rejection, permit);
+                    }
+                    ProviderJsonResponse::HttpError(diagnostic) => {
+                        return bounded_result(&diagnostic, permit);
+                    }
+                };
+                total_catalog_bytes = total_catalog_bytes.saturating_add(bytes.len());
+                if total_catalog_bytes as u64 > permit.obligations().max_output_bytes {
+                    return Err(ProviderError::Malformed(
+                        "model catalog exceeds the permitted output bound".into(),
+                    ));
                 }
-                ProviderJsonResponse::HttpError(diagnostic) => {
-                    return bounded_result(&diagnostic, permit);
+                if self.profile.kind != ProviderKind::AnthropicMessages {
+                    return bounded_result(&normalize_models(&bytes)?, permit);
                 }
-            };
-            let models = normalize_models(&bytes)?;
-            return bounded_result(&models, permit);
+                let data: Value = serde_json::from_slice(&bytes)
+                    .map_err(|_| ProviderError::Malformed("invalid Messages catalog".into()))?;
+                for model in normalize_anthropic_models(&bytes)? {
+                    catalog_models.entry(model.id.clone()).or_insert(model);
+                }
+                if catalog_models.len() > 4096 {
+                    return Err(ProviderError::Malformed(
+                        "Messages catalog model count exceeded".into(),
+                    ));
+                }
+                match data["has_more"].as_bool() {
+                    Some(false) => {
+                        return bounded_result(
+                            &catalog_models.into_values().collect::<Vec<_>>(),
+                            permit,
+                        );
+                    }
+                    Some(true) if page < 31 => {}
+                    _ => {
+                        return Err(ProviderError::Malformed(
+                            "Messages catalog pagination is incomplete or exceeds its page bound"
+                                .into(),
+                        ));
+                    }
+                }
+                let cursor = data["last_id"]
+                    .as_str()
+                    .filter(|s| !s.is_empty() && s.len() <= 512)
+                    .ok_or_else(|| {
+                        ProviderError::Malformed("Messages catalog has no valid cursor".into())
+                    })?;
+                if !cursors.insert(cursor.to_owned()) {
+                    return Err(ProviderError::Malformed(
+                        "Messages catalog repeated its cursor".into(),
+                    ));
+                }
+                let mut next = Url::parse(&endpoint)?;
+                next.query_pairs_mut().append_pair("after_id", cursor);
+                catalog_endpoint = next.to_string();
+            }
+            return Err(ProviderError::Malformed(
+                "Messages catalog page bound exceeded".into(),
+            ));
         }
         if effect.action != self.profile.kind.generation_action() {
             return Err(ProviderError::Configuration(
@@ -834,6 +903,15 @@ impl ProviderExecutor {
                 false,
                 ProviderProjection::new(&tool_names, &resolved_images),
             ),
+            ProviderKind::AnthropicMessages => crate::anthropic::payload(
+                &model_request,
+                &model,
+                max_output_tokens,
+                reasoning_effort,
+                false,
+                ProviderProjection::new(&tool_names, &resolved_images)
+                    .with_continuation(continuation.as_ref()),
+            ),
             ProviderKind::Echo => unreachable!("handled above"),
         }?;
         configure_compaction(&mut payload, self.profile.kind, server_compaction_threshold)?;
@@ -862,16 +940,31 @@ impl ProviderExecutor {
             ProviderKind::OpenAiCompatible => {
                 normalize_chat(&self.profile, &model_profile, &model, &bytes, &tool_names)
             }
+            ProviderKind::AnthropicMessages => crate::anthropic::normalize(
+                &self.profile,
+                &model_profile,
+                &model,
+                &bytes,
+                &tool_names,
+            ),
             ProviderKind::Echo => unreachable!("handled above"),
         }?;
         let response = serde_json::from_slice::<Value>(&bytes).ok();
-        let continuation_id = if response
-            .as_ref()
-            .is_some_and(|value| value["status"] == "completed")
-        {
+        let continuation_id = if response.as_ref().is_some_and(|value| {
+            value["status"] == "completed"
+                || (self.profile.kind == ProviderKind::AnthropicMessages
+                    && value["type"] == "message")
+        }) {
             let output = response
                 .as_ref()
-                .and_then(|value| value["output"].as_array())
+                .and_then(|value| {
+                    value[if self.profile.kind == ProviderKind::AnthropicMessages {
+                        "content"
+                    } else {
+                        "output"
+                    }]
+                    .as_array()
+                })
                 .cloned()
                 .unwrap_or_default();
             self.stage_continuation(
@@ -1126,6 +1219,9 @@ impl ProviderExecutor {
         if streaming {
             builder = builder.header(reqwest::header::ACCEPT, "text/event-stream");
         }
+        if self.profile.kind == ProviderKind::AnthropicMessages {
+            builder = builder.header("anthropic-version", "2023-06-01");
+        }
         let mut secrets = RequestSecrets::default();
         if self.profile.kind == ProviderKind::OpenAiCodex {
             let authorization = self.codex_authorization(permit).await?;
@@ -1150,7 +1246,11 @@ impl ProviderExecutor {
                     "resolved provider credential is empty".into(),
                 ));
             }
-            builder = builder.bearer_auth(secret.as_str());
+            builder = if self.profile.kind == ProviderKind::AnthropicMessages {
+                builder.header("x-api-key", secret.as_str())
+            } else {
+                builder.bearer_auth(secret.as_str())
+            };
             secrets.0.push(secret);
         }
         if let Some(payload) = payload {
@@ -1291,7 +1391,8 @@ impl ProviderExecutor {
             body.extend_from_slice(&chunk);
         }
         secret.redact_bytes(&mut body);
-        if let Ok(value) = serde_json::from_slice::<Value>(&body) {
+        if let Ok(mut value) = serde_json::from_slice::<Value>(&body) {
+            secret.redact_value(&mut value);
             body = serde_json::to_vec(&redacted_image_payload(&value))
                 .map_err(|_| ProviderError::Malformed("invalid diagnostic JSON".into()))?;
         }
@@ -1371,16 +1472,31 @@ impl ProviderExecutor {
                 &bytes,
                 &tool_names,
             ),
+            ProviderKind::AnthropicMessages => crate::anthropic::normalize(
+                &self.profile,
+                metadata.model_profile,
+                metadata.model,
+                &bytes,
+                &tool_names,
+            ),
             ProviderKind::Echo => unreachable!("echo handled before HTTP dispatch"),
         }
         .map_err(provider_execution_error)?;
-        let continuation_id = if response_value
-            .as_ref()
-            .is_some_and(|value| value["status"] == "completed")
-        {
+        let continuation_id = if response_value.as_ref().is_some_and(|value| {
+            value["status"] == "completed"
+                || (self.profile.kind == ProviderKind::AnthropicMessages
+                    && value["type"] == "message")
+        }) {
             let output = response_value
                 .as_ref()
-                .and_then(|value| value["output"].as_array())
+                .and_then(|value| {
+                    value[if self.profile.kind == ProviderKind::AnthropicMessages {
+                        "content"
+                    } else {
+                        "output"
+                    }]
+                    .as_array()
+                })
                 .cloned()
                 .unwrap_or_default();
             self.stage_continuation(
@@ -1577,14 +1693,22 @@ impl ProviderExecutor {
                     secret.redact_value(&mut value);
                     for event in state.ingest(value).map_err(provider_execution_error)? {
                         continuation_events.push(event.clone());
-                        emitter.push(event).await?;
+                        if self.profile.kind != ProviderKind::AnthropicMessages
+                            || matches!(event, ProviderEvent::ModelDelta { .. })
+                        {
+                            emitter.push(event).await?;
+                        }
                     }
                 }
             }
             decoder.finish().map_err(provider_execution_error)?;
             for event in state.finish().map_err(provider_execution_error)? {
                 continuation_events.push(event.clone());
-                emitter.push(event).await?;
+                if self.profile.kind != ProviderKind::AnthropicMessages
+                    || matches!(event, ProviderEvent::ModelDelta { .. })
+                {
+                    emitter.push(event).await?;
+                }
             }
             Ok(())
         }
@@ -1617,6 +1741,13 @@ impl ProviderExecutor {
                 &turn,
             )
             .map_err(provider_execution_error)?;
+        if self.profile.kind == ProviderKind::AnthropicMessages {
+            for event in turn.events {
+                if !matches!(event, ProviderEvent::ModelDelta { .. }) {
+                    emit_stream_item(ProviderStreamItem::Event { event }, permit, observer).await?;
+                }
+            }
+        }
         tokio::time::timeout_at(
             generation_deadline,
             emit_stream_item(
@@ -1667,6 +1798,15 @@ pub(super) fn validate_serialized_provider_request(
 
 fn payload_contains_image_data_url(value: &Value) -> bool {
     match value {
+        Value::Object(object)
+            if object.get("type").and_then(Value::as_str) == Some("base64")
+                && object
+                    .get("media_type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| s.starts_with("image/")) =>
+        {
+            true
+        }
         Value::String(text) => text.starts_with("data:image/"),
         Value::Array(values) => values.iter().any(payload_contains_image_data_url),
         Value::Object(object) => object.values().any(payload_contains_image_data_url),
@@ -1676,6 +1816,23 @@ fn payload_contains_image_data_url(value: &Value) -> bool {
 
 pub(super) fn redacted_image_payload(value: &Value) -> Value {
     match value {
+        Value::Object(object)
+            if matches!(
+                object.get("type").and_then(Value::as_str),
+                Some("thinking" | "redacted_thinking" | "thinking_delta" | "signature_delta")
+            ) =>
+        {
+            json!({"type":"private_reasoning_omitted"})
+        }
+        Value::Object(object)
+            if object.get("type").and_then(Value::as_str) == Some("base64")
+                && object
+                    .get("media_type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| s.starts_with("image/")) =>
+        {
+            json!({"type":"base64", "media_type":object.get("media_type"), "data":"[REDACTED_IMAGE_DATA]"})
+        }
         Value::String(text) if text.starts_with("data:image/") => {
             Value::String("[REDACTED_IMAGE_DATA_URL]".into())
         }
@@ -1833,6 +1990,20 @@ fn configure_compaction(
 fn retain_opaque_redactions(value: &Value, secrets: &mut RequestSecrets) {
     match value {
         Value::Object(object) => {
+            if matches!(
+                object.get("type").and_then(Value::as_str),
+                Some("thinking" | "redacted_thinking")
+            ) {
+                for field in ["thinking", "signature", "data"] {
+                    if let Some(text) = object
+                        .get(field)
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                    {
+                        secrets.retain(text);
+                    }
+                }
+            }
             for (key, value) in object {
                 if key == "encrypted_content"
                     && let Some(secret) = value.as_str()

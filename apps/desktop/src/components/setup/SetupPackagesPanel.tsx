@@ -166,9 +166,11 @@ export function SetupPackagesPanel({
             <dd>
               {provider.kind === "open_ai_codex"
                 ? "Codex / ChatGPT"
-                : provider.kind === "openai_responses"
-                  ? "Responses"
-                  : "Chat Completions"}
+                : provider.kind === "anthropic_messages"
+                  ? "Anthropic Messages"
+                  : provider.kind === "openai_responses"
+                    ? "Responses"
+                    : "Chat Completions"}
             </dd>
           </div>
           <div>

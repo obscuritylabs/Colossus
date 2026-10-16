@@ -8,6 +8,8 @@ use serde::Serialize;
 pub enum ProviderSetupProtocol {
     /// OpenAI-compatible Chat Completions.
     ChatCompletions,
+    /// Native Anthropic Messages.
+    AnthropicMessages,
     /// OpenAI-compatible Responses.
     Responses,
     /// Subscription-backed Codex with its fixed endpoint and native account flow.
@@ -32,7 +34,7 @@ pub struct ProviderPreset {
 
 /// Built-in setup choices. Runtime discovery is the authority for available models.
 pub fn provider_presets() -> &'static [ProviderPreset] {
-    use ProviderSetupProtocol::{ChatCompletions, Codex, Responses};
+    use ProviderSetupProtocol::{AnthropicMessages, ChatCompletions, Codex, Responses};
     &[
         ProviderPreset {
             id: "codex",
@@ -47,6 +49,13 @@ pub fn provider_presets() -> &'static [ProviderPreset] {
             protocol: Responses,
             base_url: Some("https://api.openai.com/v1"),
             credential_env: Some("OPENAI_API_KEY"),
+        },
+        ProviderPreset {
+            id: "anthropic",
+            label: "Anthropic",
+            protocol: AnthropicMessages,
+            base_url: Some("https://api.anthropic.com/v1"),
+            credential_env: Some("ANTHROPIC_API_KEY"),
         },
         ProviderPreset {
             id: "openrouter",

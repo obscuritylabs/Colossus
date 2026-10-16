@@ -32,6 +32,8 @@ use tokio::{
 };
 use tokio_rustls::TlsAcceptor;
 
+#[path = "anthropic/gateway_tests.rs"]
+mod anthropic_gateway_tests;
 #[path = "error/gateway_tests.rs"]
 mod failure_tests;
 #[path = "retry_tests.rs"]
@@ -2760,7 +2762,9 @@ async fn dense_sse_deltas_are_coalesced_before_policy_release_and_audit() {
         ));
     }
     body.push_str("data: [DONE]\n\n");
-    let (base_url, server) = one_sse_server(body).await;
+    // Deliver the dense event burst without pacing it through thousands of tiny
+    // socket writes; the other SSE fixtures cover fragmented transport frames.
+    let (base_url, server) = one_sse_server_with_chunk_size(body, 64 * 1024).await;
     let profile = ProviderProfile::new(
         "local",
         ProviderKind::OpenAiCompatible,

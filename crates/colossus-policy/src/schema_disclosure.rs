@@ -54,6 +54,7 @@ fn schema_paths(request: &EffectRequest) -> Vec<String> {
             | "provider.openai.responses"
             | "provider.openai.codex"
             | "provider.openai.chat"
+            | "provider.anthropic.messages"
     ) && let Some(tools) = request
         .content
         .pointer("/request/tools")

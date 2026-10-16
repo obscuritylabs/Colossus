@@ -9,6 +9,50 @@ const MAX_LABEL_BYTES: usize = 256;
 const MAX_DESCRIPTION_BYTES: usize = 4_096;
 const MAX_ADVERTISED_TOKENS: u64 = 1_000_000_000;
 
+pub(super) fn normalize_anthropic_models(
+    bytes: &[u8],
+) -> Result<Vec<ProviderModelInfo>, ProviderError> {
+    let mut value: Value = serde_json::from_slice(bytes)
+        .map_err(|_| ProviderError::Malformed("invalid Messages catalog JSON".into()))?;
+    let models = value["data"]
+        .as_array_mut()
+        .ok_or_else(|| ProviderError::Malformed("missing Messages model data".into()))?;
+    if models.len() > MAX_CATALOG_MODELS {
+        return Err(ProviderError::Malformed(
+            "Messages catalog model count exceeded".into(),
+        ));
+    }
+    for model in models {
+        if !model.is_object() {
+            continue;
+        }
+        // Treat the declared input ceiling as a conservative combined budget:
+        // ordinary route validation additionally reserves output and safety tokens.
+        model["context_window_tokens"] = model["max_input_tokens"].clone();
+        model["max_output_tokens"] = model["max_tokens"].clone();
+        model["image_inputs"] = model
+            .pointer("/capabilities/image_input/supported")
+            .cloned()
+            .unwrap_or(Value::Null);
+        model["supported_reasoning_efforts"] = Value::Array(
+            ["low", "medium", "high", "xhigh", "max"]
+                .into_iter()
+                .filter(|effort| {
+                    model.pointer(&format!("/capabilities/effort/{effort}/supported"))
+                        == Some(&Value::Bool(true))
+                })
+                .map(|effort| Value::String(effort.into()))
+                .collect(),
+        );
+        // Native compaction has a different protocol and is not implemented here.
+        model["server_compaction"] = Value::Bool(false);
+    }
+    normalize_models(
+        &serde_json::to_vec(&value)
+            .map_err(|_| ProviderError::Malformed("invalid Messages catalog".into()))?,
+    )
+}
+
 pub(super) fn normalize_models(bytes: &[u8]) -> Result<Vec<ProviderModelInfo>, ProviderError> {
     let data: Value = serde_json::from_slice(bytes)
         .map_err(|error| ProviderError::Malformed(error.to_string()))?;
