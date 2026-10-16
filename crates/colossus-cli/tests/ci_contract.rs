@@ -629,9 +629,27 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "the required gate must fail closed on synchronize and non-ci:full label events"
     );
     let gate_needs = strings(field(job(jobs, "gate"), "needs"), "pre-merge gate needs");
+    assert!(gate_needs.contains("vscode-sdk"));
     assert!(gate_needs.contains("vscode-native"));
+    let bindings = job(jobs, "vscode-sdk");
+    assert_eq!(field(bindings, "needs").as_str(), Some("eligibility"));
+    let bindings_source = serde_json::to_string(bindings).expect("serialize VSIX SDK generation");
+    for required in [
+        "sdk/scripts/install-codegen-tools",
+        "sdk/scripts/generate",
+        "vscode-sdk-bindings",
+        "sdk/typescript/src/gen",
+    ] {
+        assert!(
+            bindings_source.contains(required),
+            "clean native VSIX jobs require generated SDK bindings: {required}"
+        );
+    }
     let vscode = job(jobs, "vscode-native");
-    assert_eq!(field(vscode, "needs").as_str(), Some("eligibility"));
+    assert_eq!(
+        strings(field(vscode, "needs"), "native VSIX prerequisites"),
+        BTreeSet::from(["eligibility".to_owned(), "vscode-sdk".to_owned()])
+    );
     let native_source = serde_json::to_string(vscode).expect("serialize native VSIX acceptance");
     for required in [
         "test:managed",
@@ -639,6 +657,9 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "package.mjs",
         "macos-14",
         "windows-latest",
+        "vscode-sdk-bindings",
+        "sdk/typescript/src/gen",
+        "sdk/scripts/check-generated typescript",
     ] {
         assert!(
             native_source.contains(required),
