@@ -98,6 +98,13 @@ fn provider(replies: &'static [&'static str]) -> (String, thread::JoinHandle<Vec
     (origin, task)
 }
 
+fn open_picker(terminal: &Terminal, command: &str, title: &str) {
+    terminal.send(format!("\x1b[200~{command}\x1b[201~").as_bytes());
+    terminal.wait_for_composer("picker command is ready", |draft| draft == command);
+    terminal.send(b"\r");
+    terminal.wait(title);
+}
+
 #[test]
 fn embedded_and_worker_tui_switch_models_and_reasoning_without_losing_history() {
     for worker_host in [false, true] {
@@ -184,18 +191,33 @@ fn embedded_and_worker_tui_switch_models_and_reasoning_without_losing_history() 
         }
         let terminal = Terminal::start(command);
         terminal.wait("Enter sends");
-        terminal.send(b"\x1b[200~/model\x1b[201~\r");
-        terminal.wait("Choose model");
+        open_picker(&terminal, "/model", "Choose model");
         terminal.send(b"\x1b[200~deep\x1b[201~");
-        terminal.wait("live-deep");
+        // The unfiltered list already contains live-deep. Observe the pasted
+        // query and its single match before resizing or applying a choice.
+        terminal.wait_until("filtered model picker", |screen| {
+            screen.contains("Choose model · 1 choices")
+                && screen.contains("/ deep")
+                && !screen.contains("fast ·")
+        });
         terminal.resize_frame(24, 55);
-        terminal.wait("Choose model");
+        // A clipped wide frame still contains the title. The browser moves its
+        // left margin from two columns to one only after the narrow redraw.
+        terminal.wait_until_visual_rows("narrow filtered model picker", |screen, rows| {
+            screen.contains("/ deep")
+                && rows
+                    .iter()
+                    .any(|row| row.starts_with(" Choose model · 1 choices"))
+        });
         terminal.send(b"\r");
         terminal.wait("Enter sends");
         terminal.resize(40, 140);
-        terminal.send(b"\x1b[200~/effort\x1b[201~\r");
-        terminal.wait("Choose reasoning effort");
-        terminal.send(b"low\r");
+        open_picker(&terminal, "/effort", "Choose reasoning effort");
+        terminal.send(b"low");
+        terminal.wait_until("filtered reasoning picker", |screen| {
+            screen.contains("Choose reasoning effort · 1 choices") && screen.contains("/ low")
+        });
+        terminal.send(b"\r");
         terminal.wait("Enter sends");
         terminal.command("Remember this first turn", "MODEL_TUI_TURN_1_OK");
         terminal.command("/effort high", "high reasoning");
