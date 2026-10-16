@@ -186,7 +186,7 @@ fn embedded_and_worker_tui_switch_models_and_reasoning_without_losing_history() 
         terminal.wait("Enter sends");
         terminal.send(b"\x1b[200~/model\x1b[201~\r");
         terminal.wait("Choose model");
-        terminal.send(b"deep");
+        terminal.send(b"\x1b[200~deep\x1b[201~");
         terminal.wait("live-deep");
         terminal.resize_frame(24, 55);
         terminal.wait("Choose model");

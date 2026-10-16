@@ -2,6 +2,8 @@
 
 #![allow(clippy::missing_errors_doc)]
 
+mod model_catalog;
+
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_api::ArtifactPurpose;

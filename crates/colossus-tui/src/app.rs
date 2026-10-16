@@ -978,6 +978,20 @@ pub(super) fn insert_active_text(state: &mut TuiState, text: &str) {
     let mut theme_preview = None;
     if let Some(overlay) = state.overlay.as_mut() {
         match overlay {
+            Overlay::Prompt {
+                request,
+                input,
+                selected,
+                ..
+            } if request.kind == InteractivePromptKind::ModelSelection => {
+                for character in text.chars() {
+                    if input.len() + character.len_utf8() > 128 {
+                        break;
+                    }
+                    input.push(character);
+                }
+                reconcile_model_picker_selection(request, input, selected);
+            }
             Overlay::Prompt { request, input, .. } if !request.kind.uses_decision_dock() => {
                 input.push_str(&text);
             }

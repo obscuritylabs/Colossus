@@ -4,6 +4,7 @@ import { cp, mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { npmInvocation } from "./npm.mjs";
 
 const manifest = JSON.parse(await readFile("package.json", "utf8"));
 validateViewContributions(manifest);
@@ -30,15 +31,14 @@ if (!entry?.resolved || !entry.integrity?.startsWith("sha512-"))
 const temporary = await mkdtemp(join(tmpdir(), "colossus-vsix-"));
 try {
   const packed = spawnSync(
-    process.platform === "win32" ? "npm.cmd" : "npm",
-    [
+    ...npmInvocation([
       "pack",
       entry.resolved,
       "--ignore-scripts",
       "--json",
       "--pack-destination",
       temporary,
-    ],
+    ]),
     { encoding: "utf8" },
   );
   if (packed.status !== 0)

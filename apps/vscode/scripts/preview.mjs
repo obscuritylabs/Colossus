@@ -11,6 +11,7 @@ const paths = new Map([
   ["/shadcn.css", ["dist/shadcn.css", "text/css"]],
   ["/style.css", ["dist/style.css", "text/css"]],
   ["/composer.css", ["dist/composer.css", "text/css"]],
+  ["/model-picker.css", ["dist/model-picker.css", "text/css"]],
   ["/select.css", ["dist/select.css", "text/css"]],
   ["/settings-frame.css", ["dist/settings-frame.css", "text/css"]],
   ["/settings.js", ["dist/settings.js", "text/javascript"]],
@@ -40,7 +41,7 @@ const server = createServer(async (request, response) => {
     const css =
       page === "settings" ? "settings" : page === "webview" ? "" : "workspace";
     response.end(
-      `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Colossus ${page} preview</title><link rel="stylesheet" href="/theme.css"><link rel="stylesheet" href="/shadcn.css"><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/composer.css"><link rel="stylesheet" href="/select.css">${page === "inspector" ? '<link rel="stylesheet" href="/inspector.css">' : ""}${page === "settings" ? '<link rel="stylesheet" href="/settings-frame.css">' : ""}${css ? `<link rel="stylesheet" href="/${css}.css">` : ""}</head><body data-colossus-mark="/colossus-mark.svg"><div id="app"></div><script src="/${page}.js"></script></body></html>`,
+      `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Colossus ${page} preview</title><link rel="stylesheet" href="/theme.css"><link rel="stylesheet" href="/shadcn.css"><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/composer.css"><link rel="stylesheet" href="/model-picker.css"><link rel="stylesheet" href="/select.css">${page === "inspector" ? '<link rel="stylesheet" href="/inspector.css">' : ""}${page === "settings" ? '<link rel="stylesheet" href="/settings-frame.css">' : ""}${css ? `<link rel="stylesheet" href="/${css}.css">` : ""}</head><body data-colossus-mark="/colossus-mark.svg"><div id="app"></div><script src="/${page}.js"></script></body></html>`,
     );
   } catch {
     response.writeHead(500).end();

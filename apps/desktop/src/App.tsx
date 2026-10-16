@@ -2397,6 +2397,11 @@ export default function App() {
       ...current,
       [pluginSelectionKey(desktop.selectedTargetId, undefined)]: [],
     }));
+    setConversationModels((current) => {
+      const next = { ...current };
+      delete next[pluginSelectionKey(desktop.selectedTargetId, undefined)];
+      return next;
+    });
     setSurface("work");
     dispatch({ type: "select_run", runId: null });
     setRunLoadError("");
@@ -2559,11 +2564,13 @@ export default function App() {
         }
         targetRoutes.current.bindRun(run.runId, route);
         if (submission.sessionId === undefined) {
-          setConversationModels((current) => ({
-            ...current,
-            [pluginSelectionKey(route.targetId, run.sessionId)]:
-              submission.modelSelection ?? {},
-          }));
+          setConversationModels((current) => {
+            const next = { ...current };
+            delete next[pluginSelectionKey(route.targetId, undefined)];
+            next[pluginSelectionKey(route.targetId, run.sessionId)] =
+              submission.modelSelection ?? {};
+            return next;
+          });
           setConversationSkills((current) => ({
             ...current,
             [pluginSelectionKey(route.targetId, run.sessionId)]:

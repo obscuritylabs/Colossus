@@ -10,6 +10,17 @@ fn matching_choices(request: &InteractivePrompt, query: &str) -> Vec<usize> {
         .collect()
 }
 
+pub(super) fn reconcile_model_picker_selection(
+    request: &InteractivePrompt,
+    query: &str,
+    selected: &mut Option<usize>,
+) {
+    let indices = matching_choices(request, query);
+    if !selected.is_some_and(|index| indices.contains(&index)) {
+        *selected = indices.first().copied();
+    }
+}
+
 pub(super) fn handle_model_picker_key(state: &mut TuiState, key: KeyEvent) {
     let Some(Overlay::Prompt {
         request,
@@ -29,6 +40,7 @@ pub(super) fn handle_model_picker_key(state: &mut TuiState, key: KeyEvent) {
         return;
     }
     if key.code == KeyCode::Enter {
+        reconcile_model_picker_selection(request, input, selected);
         let answer = selected
             .and_then(|index| request.choices.get(index))
             .cloned();

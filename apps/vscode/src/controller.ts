@@ -13,12 +13,14 @@ import {
 } from "@obscuritylabs/colossus-sdk/gen/colossus/api/v1alpha1/agent_run";
 
 import { safeError, type WorkerClient } from "./connection.js";
+import { modelProfiles, validateModelSelection } from "./model-selection.js";
 import {
   initialView,
   isResearchOptions,
   isWorkMode,
   supportsResearch,
   type ContextView,
+  type ModelSelection,
   type ResearchOptions,
   type WorkMode,
   type WorkView,
@@ -70,6 +72,7 @@ export class WorkController {
   private historyCursor = "";
   private historyRevision = 0;
   private inspectionRevision = 0;
+  private modelSelections = new Map<string, ModelSelection>();
 
   constructor(
     workspace: string,
@@ -97,6 +100,12 @@ export class WorkController {
     this.view.capabilities = client.info.capabilities.map(
       ({ name, enabled, detail }) => ({ name, enabled, detail }),
     );
+    this.view.modelProfiles = modelProfiles(client.info.modelProfiles).map(
+      (model) => ({
+        ...model,
+        defaultRoles: model.defaultRoles.filter((value) => value === role),
+      }),
+    );
     this.view.error = "";
     this.view.status = "Ready";
     this.publish();
@@ -123,6 +132,9 @@ export class WorkController {
     this.view.plans = [];
     this.view.sessions = [];
     this.view.capabilities = [];
+    this.view.modelProfiles = [];
+    this.view.modelSelection = {};
+    this.modelSelections.clear();
     this.view.inspection = undefined;
     this.view.inspectionLoading = false;
     this.view.historyHasMore = false;
@@ -375,6 +387,8 @@ export class WorkController {
     this.active = undefined;
     this.interactions.clear();
     this.view.sessionId = "";
+    this.modelSelections.delete("");
+    this.view.modelSelection = {};
     this.view.messages = [];
     this.view.tools = [];
     this.view.interactions = [];
@@ -414,6 +428,7 @@ export class WorkController {
               ? "plan"
               : "execute";
       this.view.sessionId = id;
+      this.view.modelSelection = { ...this.modelSelections.get(id) };
       this.view.tools = [];
       for (const run of listed) this.recordRun(run);
       await this.loadMessages(client, epoch, listed);
@@ -455,7 +470,37 @@ export class WorkController {
     }
   }
 
-  async send(text: string, mode: WorkMode, research?: ResearchOptions) {
+  setModelSelection(selection: ModelSelection) {
+    this.requireClient();
+    const next = this.validModelSelection(selection);
+    this.rememberModelSelection(this.view.sessionId, next);
+    this.view.modelSelection = next;
+    this.publish();
+  }
+
+  private validModelSelection(selection: ModelSelection) {
+    return validateModelSelection(
+      selection,
+      this.view.capabilities,
+      this.view.modelProfiles,
+      this.role,
+    );
+  }
+
+  private rememberModelSelection(sessionId: string, selection: ModelSelection) {
+    this.modelSelections.delete(sessionId);
+    if (!Object.keys(selection).length) return;
+    this.modelSelections.set(sessionId, { ...selection });
+    if (this.modelSelections.size > 128)
+      this.modelSelections.delete(this.modelSelections.keys().next().value!);
+  }
+
+  async send(
+    text: string,
+    mode: WorkMode,
+    research?: ResearchOptions,
+    selection: ModelSelection = {},
+  ) {
     if (this.view.busy || this.uncertain)
       throw new UserError(
         "Reconcile the current run before sending another task.",
@@ -473,6 +518,13 @@ export class WorkController {
         );
     } else if (research !== undefined) {
       throw new UserError("Research settings apply only in Research mode.");
+    }
+    if (mode === "research" && Object.keys(selection).length)
+      throw new UserError("Research uses its configured model routes.");
+    const modelSelection = this.validModelSelection(selection);
+    if (mode !== "research") {
+      this.view.modelSelection = modelSelection;
+      this.rememberModelSelection(this.view.sessionId, modelSelection);
     }
     const prompt = text.trim();
     if (!prompt || Buffer.byteLength(prompt, "utf8") > 64 * 1024)
@@ -523,6 +575,7 @@ export class WorkController {
               }
             : {}),
           idempotencyKey: randomUUID(),
+          ...modelSelection,
         }),
       );
       if (epoch !== this.epoch) return;
@@ -532,6 +585,14 @@ export class WorkController {
       this.active = response.run;
       this.recordRun(response.run);
       this.view.sessionId = response.run.sessionId;
+      // Changes made during a run affect the next submission only.
+      if (mode !== "research") {
+        this.rememberModelSelection(
+          response.run.sessionId,
+          this.view.modelSelection,
+        );
+        this.modelSelections.delete("");
+      }
       this.view.messages.push({
         id: `user:${response.run.runId}`,
         runId: response.run.runId,

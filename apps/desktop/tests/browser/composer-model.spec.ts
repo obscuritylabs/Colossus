@@ -99,6 +99,53 @@ test("model settings opens the workspace route and preserves an unsent draft", a
   ).toBeVisible();
 });
 
+test("a new thread starts with role defaults after another thread used overrides", async ({
+  page,
+}) => {
+  await page
+    .getByRole("button", { name: "Close tool pane", exact: true })
+    .click();
+  await page.setViewportSize({ width: 880, height: 950 });
+  async function newThread() {
+    await page.getByRole("button", { name: "Open work navigation" }).click();
+    await page.getByRole("button", { name: "New thread in Colossus" }).click();
+  }
+  await newThread();
+  const model = page.getByRole("button", {
+    name: "Choose model and reasoning: fixture",
+    exact: true,
+  });
+  await model.click();
+  await page
+    .getByRole("option", {
+      name: "fixture OpenRouter · primary (primary-provider)",
+      exact: true,
+    })
+    .click();
+  const slider = page.getByRole("slider", {
+    name: "Reasoning effort for next message",
+  });
+  await slider.press("End");
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await page
+    .getByRole("textbox", { name: "Prompt", exact: true })
+    .fill("Remember this thread's selected model");
+  await page.getByRole("button", { name: "Send prompt", exact: true }).click();
+  await expect(
+    page.getByRole("textbox", { name: "Prompt", exact: true }),
+  ).toHaveValue("");
+  await expect(model).toContainText("ultra");
+  await newThread();
+  await model.click();
+  await expect(
+    page.getByRole("option", {
+      name: "Role default fixture · OpenRouter",
+      exact: true,
+    }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(slider).toHaveAttribute("aria-valuetext", "Model default");
+});
+
 test("composer retains visible, accessible controls at narrow widths in both themes", async ({
   page,
 }) => {

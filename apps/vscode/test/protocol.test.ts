@@ -86,6 +86,51 @@ test("only deliberate public errors cross the webview boundary", () => {
   );
 });
 
+test("model preferences accept bounded choices without granting connection or tool authority", () => {
+  const selection = { modelProfile: "deep", reasoningEffort: "high" };
+  const send = {
+    type: "send",
+    text: "Continue",
+    mode: "execute",
+    modelSelection: selection,
+  };
+  assert.deepEqual(parseAction(send), send);
+  assert.deepEqual(parseAction({ type: "setModelSelection", selection }), {
+    type: "setModelSelection",
+    selection,
+  });
+  for (const invalid of [
+    null,
+    [],
+    { modelProfile: "" },
+    { modelProfile: "x".repeat(129) },
+    { modelProfile: "é".repeat(65) },
+    { modelProfile: "bad\nprofile" },
+    { reasoningEffort: "unlimited" },
+    { reasoningEffort: undefined },
+    { provider: "other" },
+    { model: "unconfigured" },
+    { tools: ["*"] },
+    { endpoint: "http://other" },
+    { role: "admin" },
+  ]) {
+    assert.equal(parseAction({ ...send, modelSelection: invalid }), undefined);
+    assert.equal(
+      parseAction({ type: "setModelSelection", selection: invalid }),
+      undefined,
+    );
+  }
+  assert.equal(
+    parseAction({
+      ...send,
+      mode: "research",
+      researchDepth: "quick",
+      researchSources: ["repo"],
+    }),
+    undefined,
+  );
+});
+
 test("connection diagnostics identify credential failures without exposing raw errors or retrying", async () => {
   for (const [code, reason] of [
     ["ENOENT", "missing-file"],
