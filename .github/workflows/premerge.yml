@@ -1001,12 +1001,8 @@ jobs:
           key: vscode-native-${{ runner.os }}
           cache-targets: false
       - name: Build the owned native runtime
-        run: cargo build --locked --profile test -p colossus-app-host -p colossus-sidecar
-      - name: Sign macOS preview executables
-        if: runner.os == 'macOS'
-        run: |
-          codesign --force --sign - target/debug/colossus-app-host
-          codesign --force --sign - target/debug/colossus-sidecar
+        working-directory: apps/vscode
+        run: node scripts/build-native.mjs
       - name: Build the extension and stage the native runtime
         shell: bash
         run: |
@@ -1014,8 +1010,6 @@ jobs:
           npm --prefix sdk/typescript run build
           npm --prefix apps/vscode ci --ignore-scripts
           npm --prefix apps/vscode run build
-          cd apps/vscode
-          node scripts/stage-native.mjs
       - name: Exercise the bundled lifecycle and provider selection
         working-directory: apps/vscode
         run: npm run test:managed

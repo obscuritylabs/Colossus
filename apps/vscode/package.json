@@ -219,7 +219,7 @@
     "check": "npm run typecheck && npm test && npm run format:check",
     "package": "npm run check && npm run build && npm run build:native && node scripts/package.mjs",
     "preview:capture": "node scripts/capture-preview.mjs",
-    "build:native": "cargo build --manifest-path ../../Cargo.toml --locked --profile test -p colossus-app-host -p colossus-sidecar && node scripts/stage-native.mjs",
+    "build:native": "node scripts/build-native.mjs",
     "test:managed": "tsc -p tsconfig.test.json && node .test-dist/test/managed-live.js"
   },
   "dependencies": {

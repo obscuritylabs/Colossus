@@ -276,10 +276,8 @@ jobs:
           npm exec -- playwright install --with-deps chromium
           npm run test:browser
       - name: Build the VS Code managed runtime
-        run: |
-          cargo build --locked --profile test -p colossus-app-host -p colossus-sidecar
-          cd apps/vscode
-          node scripts/stage-native.mjs
+        working-directory: apps/vscode
+        run: node scripts/build-native.mjs
       - name: Exercise the bundled VS Code lifecycle
         working-directory: apps/vscode
         run: |

@@ -634,10 +634,8 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     assert_eq!(field(vscode, "needs").as_str(), Some("eligibility"));
     let native_source = serde_json::to_string(vscode).expect("serialize native VSIX acceptance");
     for required in [
-        "colossus-app-host",
-        "colossus-sidecar",
         "test:managed",
-        "stage-native.mjs",
+        "build-native.mjs",
         "package.mjs",
         "macos-14",
         "windows-latest",
@@ -645,6 +643,20 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         assert!(
             native_source.contains(required),
             "native VSIX gate must include {required}"
+        );
+    }
+    let native_builder =
+        fs::read_to_string(repository_root().join("apps/vscode/scripts/build-native.mjs"))
+            .expect("read native VSIX builder");
+    for required in [
+        "colossus-app-host",
+        "colossus-sidecar",
+        "stage-native.mjs",
+        "link-arg=/DEBUG:NONE",
+    ] {
+        assert!(
+            native_builder.contains(required),
+            "native VSIX builder must include {required}"
         );
     }
     for name in [
