@@ -1,6 +1,6 @@
 /** Real bundled sidecar acceptance, without a daemon, enrollment, or bearer on disk. */
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve, join } from "node:path";
 import { createServer } from "node:http";
@@ -8,6 +8,7 @@ import { once } from "node:events";
 import { ManagedRuntime, type ManagedSetup } from "../src/managed.js";
 import { connectManaged } from "../src/connection.js";
 import { WorkController } from "../src/controller.js";
+import { removeManagedFixture } from "./managed-fixture.js";
 
 const root = await mkdtemp(join(homedir(), ".colossus-vscode-managed-test-"));
 const workspace = join(root, "workspace");
@@ -253,13 +254,13 @@ try {
   assert.ok(!projection.includes("managed-test-private-provider-key"));
   assert.ok(!projection.includes(providerConnection.bearer));
   assert.ok(!projection.includes(providerConnection.approval_broker_bearer));
-  console.log(
-    "Managed Local E2E passed: native start, authenticated turns, provider credential handoff, model/reasoning selection, writer conflict, graceful stop, durable restore, host crash, restart, and secret-free projections.",
-  );
 } finally {
   controller.detach();
   await Promise.all([runtime.stop(), other.stop()]);
   provider.close();
   // Only this test's newly-created owner-private home is removed.
-  await rm(root, { recursive: true, force: true });
+  await removeManagedFixture(root);
 }
+console.log(
+  "Managed Local E2E passed: native start, authenticated turns, provider credential handoff, model/reasoning selection, writer conflict, graceful stop, durable restore, host crash, restart, secret-free projections, and fixture cleanup.",
+);
