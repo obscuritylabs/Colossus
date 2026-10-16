@@ -5,7 +5,7 @@ use tokio::{
     net::TcpListener,
 };
 
-async fn round_trip(streamed: bool) {
+async fn round_trip(streamed: bool, selected: bool) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}/v1", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
@@ -90,11 +90,23 @@ async fn round_trip(streamed: bool) {
             chat_completions_output_token_parameter: None,
         },
     );
-    let model = config.models.profiles.get_mut("echo").unwrap();
+    let mut model = config.models.profiles.get("echo").unwrap().clone();
     model.provider_profile = "native".into();
     model.model = "native-test".into();
     model.capabilities = crate::ModelFeatureSettings::default();
     model.capabilities.streaming = streamed.into();
+    config.models.profiles.insert(
+        if selected { "native-choice" } else { "echo" }.into(),
+        model,
+    );
+    let options = if selected {
+        colossus_contracts::WorkflowAgentOptions {
+            model_profile: Some("native-choice".into()),
+            reasoning_effort: Some(colossus_contracts::ReasoningEffort::Low),
+        }
+    } else {
+        Default::default()
+    };
     config.memory.index_enabled = false;
     let runtime = Runtime::open_with_options(
         &config,
@@ -107,12 +119,15 @@ async fn round_trip(streamed: bool) {
         .create_session(Some("native thinking round trip"))
         .unwrap();
     let result = runtime
-        .run_model_in_session(
-            "primary",
-            "test instructions",
-            "List the workspace",
-            Some(5),
-            &session.id,
+        .with_model_selection(
+            options.clone(),
+            runtime.run_model_in_session(
+                "primary",
+                "test instructions",
+                "List the workspace",
+                Some(5),
+                &session.id,
+            ),
         )
         .await;
     if result.is_err() {
@@ -120,17 +135,27 @@ async fn round_trip(streamed: bool) {
     }
     result.unwrap();
     runtime
-        .run_model_in_session(
-            "primary",
-            "test instructions",
-            "New human turn",
-            Some(1),
-            &session.id,
+        .with_model_selection(
+            options,
+            runtime.run_model_in_session(
+                "primary",
+                "test instructions",
+                "New human turn",
+                Some(1),
+                &session.id,
+            ),
         )
         .await
         .unwrap();
     let requests = server.await.unwrap();
     assert!(requests.iter().all(|r| r["stream"] == streamed));
+    if selected {
+        assert!(
+            requests
+                .iter()
+                .all(|r| r["output_config"]["effort"] == "low")
+        );
+    }
     assert!(!requests[0].to_string().contains("EXACT_SIGNATURE"));
     for request in requests.iter().take(3).skip(1) {
         let wire = request.to_string();
@@ -152,10 +177,20 @@ async fn round_trip(streamed: bool) {
 
 #[tokio::test]
 async fn anthropic_json_thinking_parallel_tools_and_second_exchange() {
-    round_trip(false).await;
+    round_trip(false, false).await;
 }
 
 #[tokio::test]
 async fn anthropic_sse_thinking_parallel_tools_and_second_exchange() {
-    round_trip(true).await;
+    round_trip(true, false).await;
+}
+
+#[tokio::test]
+async fn anthropic_json_selected_model_and_effort_preserve_tool_replay() {
+    round_trip(false, true).await;
+}
+
+#[tokio::test]
+async fn anthropic_sse_selected_model_and_effort_preserve_tool_replay() {
+    round_trip(true, true).await;
 }

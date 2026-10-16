@@ -501,21 +501,17 @@ impl AgentService {
                 if let Some(batch) = &inbox_batch {
                     messages.extend(colossus_ports::agent_input_messages(batch));
                 }
-                let mut continuation_plan =
-                    if scope.agent_options == colossus_contracts::WorkflowAgentOptions::default() {
-                        self.provider.continuation_plan(
-                            role,
-                            &ModelRequest {
-                                instructions: instructions.clone(),
-                                messages: messages.clone(),
-                                tools: turn_definitions.clone(),
-                                max_output_tokens: None,
-                            },
-                            &context,
-                        )?
-                    } else {
-                        None
-                    };
+                let mut continuation_plan = self.provider.continuation_plan_with_options(
+                    role,
+                    &ModelRequest {
+                        instructions: instructions.clone(),
+                        messages: messages.clone(),
+                        tools: turn_definitions.clone(),
+                        max_output_tokens: None,
+                    },
+                    &context,
+                    &scope.agent_options,
+                )?;
                 let prepared = if let Some(preparer) = &self.context_preparer {
                     let prepared = preparer
                         .prepare(ContextPreparationRequest {

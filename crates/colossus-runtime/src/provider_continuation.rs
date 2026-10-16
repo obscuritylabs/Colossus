@@ -14,11 +14,10 @@ impl GatewayModelProvider {
         role: &str,
         request: &ModelRequest,
         context: &ExecutionContext,
+        options: &colossus_contracts::WorkflowAgentOptions,
     ) -> Result<Option<ProviderContinuationPlan>, ModelProviderError> {
-        let resolved = self
-            .providers
-            .resolve(role)
-            .map_err(|e| ModelProviderError::Configuration(e.to_string()))?;
+        let resolved = self.resolve_workflow_model(role, options)?;
+        let route = self.route_with_options(role, options)?;
         if !self.providers.server_compaction_enabled(&resolved)
             && resolved.provider().profile().kind
                 != colossus_provider::ProviderKind::AnthropicMessages
@@ -44,10 +43,10 @@ impl GatewayModelProvider {
             &resolved.provider().profile().base_url,
             &resolved.provider().profile().name,
             &resolved.provider().profile().credential_reference,
-            &resolved.route().model,
+            &route.model,
             &request.instructions,
             &request.tools,
-            resolved.route().reasoning_effort,
+            route.reasoning_effort,
         ))?;
         let snapshot_epoch = self
             .snapshots
