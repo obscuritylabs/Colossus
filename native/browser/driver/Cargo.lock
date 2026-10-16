@@ -210,6 +210,7 @@ dependencies = [
 name = "colossus-windows-process"
 version = "0.11.8"
 dependencies = [
+ "colossus-windows-native",
  "thiserror",
  "tokio",
  "windows-sys 0.61.2",

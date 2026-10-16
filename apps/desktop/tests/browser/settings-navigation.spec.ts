@@ -217,7 +217,7 @@ for (const width of [1586, 880, 700]) {
     await expect(
       page.getByRole("combobox", { name: "Execution boundary" }),
     ).toHaveAccessibleDescription(
-      "Choose how tools and processes are isolated. Full access disables filesystem and network isolation and requires native confirmation.",
+      "Choose how tools and processes are isolated. Full access disables filesystem and network isolation.",
     );
     await categories
       .getByRole("button", { name: "Sandbox", exact: true })

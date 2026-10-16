@@ -147,8 +147,12 @@ impl Configuration {
         }
         let handle = usize::try_from(std::mem::take(&mut self.profile_handle))
             .ok()
-            .filter(|value| *value > 4 && *value != usize::MAX)
-            .ok_or(BrowserDriverError::Denied)? as *mut std::ffi::c_void;
+            .filter(|value| *value != 0 && *value != usize::MAX)
+            .ok_or_else(|| {
+                #[cfg(debug_assertions)]
+                eprintln!("native Windows profile rejection phase=handle category=invalid_numeric");
+                BrowserDriverError::Denied
+            })? as *mut std::ffi::c_void;
         // SAFETY: the authenticated supervising parent duplicated this exact
         // non-inherited directory into us after token attestation. Verify native
         // type before transferring ownership; it cannot be inherited by helpers.

@@ -12,7 +12,9 @@ use colossus_ports::{BrowserDriver as _, RunControl};
 use colossus_windows_native::{
     ExclusiveAppContainerProfile, PrivateDirectoryCreation, system_windows_directory,
 };
-use colossus_windows_process::{PrivatePipe, PrivateReader, SpawnRequest};
+use colossus_windows_process::{
+    ContextShutdown, PrivatePipe, PrivateReader, SpawnRequest, WindowsProcessError,
+};
 use sha2::{Digest as _, Sha256};
 use std::{collections::BTreeMap, os::windows::fs::MetadataExt as _, time::Duration};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -33,8 +35,10 @@ fn no_reparse(path: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "current_thread")]
-#[ignore = "requires the explicit Windows pinned CEF stage and owner-private state parent; no administrator token required"]
+// Native ownership stays on block_on's caller thread. Separate workers must drop
+// aborted channel tasks while that caller synchronously waits for the CEF Job.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires a pinned CEF stage and owner-private state parent; networkless launcher diagnostic, no WFP or production containment acceptance"]
 async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
     let component = PathBuf::from(
         std::env::var_os("COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_COMPONENT")
@@ -102,7 +106,9 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
         ("TEMP".into(), home.clone()),
         ("TMP".into(), home),
     ]);
-    let supervised = colossus_windows_process::spawn_with_private_channels(
+    // Exercise the normal launcher from this ordinary test process. It owns the
+    // fresh logon context and station, including any partially failed setup.
+    let spawned = colossus_windows_process::spawn_with_private_channels(
         &SpawnRequest {
             executable: installation
                 .component
@@ -118,74 +124,117 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
             network_filter_id: None,
         },
         4,
-    )
-    .unwrap();
+    );
+    let supervised = match spawned {
+        Ok(supervised) => supervised,
+        Err(WindowsProcessError::BrowserSetup {
+            source,
+            mut cleanup,
+        }) => {
+            if !matches!(cleanup.cleanup_timeout(Duration::from_secs(5)), Ok(true)) {
+                std::mem::forget((cleanup, profile, state, installation));
+                panic!("networkless fixture retained partial startup owners: {source}");
+            }
+            profile.close().unwrap();
+            drop(installation);
+            state.remove_empty().unwrap();
+            panic!("networkless fixture startup failed after confirmed cleanup: {source}");
+        }
+        Err(error) => {
+            profile.close().unwrap();
+            drop(installation);
+            state.remove_empty().unwrap();
+            panic!("networkless fixture startup rejected before native allocation: {error}");
+        }
+    };
     let mut child = supervised.child;
-    let profile_directory = profile
-        .verify_process(child.process_handle())
-        .unwrap()
-        .create_directory(&profile_path)
-        .unwrap();
-    let profile_handle = child.enroll_profile_directory(&profile_directory).unwrap();
-    let profile_identity = colossus_windows_native::FileIdentity::of(&profile_directory).unwrap();
+    // Setup errors share the same full Job cleanup as protocol errors. Retain
+    // partial native allocations outside the future until that cleanup is known.
+    let mut profile_directory = None;
     let mut leases = Vec::new();
-    let mut pipes = Vec::new();
-    for channel in supervised.channels {
-        let pipe = PrivatePipe::from_files(channel.reader, channel.writer)
-            .unwrap_or_else(|_| panic!("networkless fixture private I/O allocation failed"));
-        leases.push(pipe.lease.clone());
-        pipes.push(pipe);
-    }
     let mut drains = Vec::new();
-    for file in [child.stdout.take(), child.stderr.take()]
-        .into_iter()
-        .flatten()
-    {
-        let (reader, lease) = PrivateReader::from_file(file).unwrap();
-        leases.push(lease);
-        drains.push(tokio::spawn(async move {
-            let mut output = Vec::new();
-            let _ = reader.take(64 * 1024).read_to_end(&mut output).await;
-            Ok::<_, std::io::Error>(output)
-        }));
-    }
-    let control = BrowserDriverControl::new(RunControl::default(), RunControl::default());
-    let binding = BrowserSessionBinding {
-        runtime_id: "windows-networkless-runtime".into(),
-        workspace_id: "windows-networkless-workspace".into(),
-        application_id: "windows-networkless-application".into(),
-        scope: BrowserScope::Conversation {
-            id: "windows-networkless-conversation".into(),
-        },
-    };
-    let enrollment = BrowserBridgeEnrollment {
-        binding: binding.clone(),
-        mode: BrowserMode::Embedded,
-        profile: Default::default(),
-        allowed_origins: vec![BrowserOrigin::parse("http://127.0.0.1:9").unwrap()],
-        instance_nonce: nonce,
-        component_digest: installation.digest,
-        cancellation_closes_context: true,
-        capabilities,
-    };
-    let digest = Sha256::digest(serde_json::to_vec(&enrollment).unwrap()).into();
-    let request = BrowserDriverOpenRequest {
-        binding,
-        run_id: Some("networkless-startup".into()),
-        session_id: BrowserSessionId::parse(format!("bs_{}", hex::encode(nonce))).unwrap(),
-        tab_id: BrowserTabId::parse(format!("bt_{}", hex::encode(nonce))).unwrap(),
-        document_id: BrowserDocumentId::parse(format!("bd_{}", hex::encode(nonce))).unwrap(),
-        options: BrowserOpenOptions {
-            profile: Default::default(),
-            mode: BrowserMode::Embedded,
-            allowed_origins: enrollment.allowed_origins.clone(),
-            initial_url: None,
-        },
-    };
-    let mut key = Zeroizing::new([0; 32]);
-    getrandom::fill(key.as_mut()).unwrap();
-    let data = Zeroizing::new(serde_json::to_vec(&serde_json::json!({"enrollment": enrollment, "profile_path":profile_path, "profile_handle":profile_handle, "profile_volume":profile_identity.volume_serial_number, "profile_file_id":profile_identity.file_id, "proxy":{"address":"127.0.0.1", "port":9, "username":"colossus", "password":"networkless-fixture-unused"}, "pki":null, "presentation":{"human_input":false}})).unwrap());
     let result = tokio::time::timeout(Duration::from_secs(45), async {
+        profile_directory = Some(
+            profile
+                .verify_process(child.process_handle())?
+                .create_directory(&profile_path)?,
+        );
+        let directory = profile_directory
+            .as_ref()
+            .expect("fixture directory was assigned");
+        let profile_handle = child.enroll_profile_directory(directory)?;
+        let profile_identity = colossus_windows_native::FileIdentity::of(directory)?;
+        let mut pipes = Vec::new();
+        for channel in supervised.channels {
+            let pipe = PrivatePipe::from_files(channel.reader, channel.writer).map_err(|_| {
+                std::io::Error::other("networkless fixture private I/O allocation failed")
+            })?;
+            leases.push(pipe.lease.clone());
+            pipes.push(pipe);
+        }
+        for file in [child.stdout.take(), child.stderr.take()]
+            .into_iter()
+            .flatten()
+        {
+            let (reader, lease) = PrivateReader::from_file(file)?;
+            leases.push(lease);
+            drains.push(tokio::spawn(async move {
+                let mut output = Vec::new();
+                let _ = reader.take(64 * 1024).read_to_end(&mut output).await;
+                Ok::<_, std::io::Error>(output)
+            }));
+        }
+        let control = BrowserDriverControl::new(RunControl::default(), RunControl::default());
+        let binding = BrowserSessionBinding {
+            runtime_id: "windows-networkless-runtime".into(),
+            workspace_id: "windows-networkless-workspace".into(),
+            application_id: "windows-networkless-application".into(),
+            scope: BrowserScope::Conversation {
+                id: "windows-networkless-conversation".into(),
+            },
+        };
+        let enrollment = BrowserBridgeEnrollment {
+            binding: binding.clone(),
+            mode: BrowserMode::Embedded,
+            profile: Default::default(),
+            allowed_origins: vec![BrowserOrigin::parse("http://127.0.0.1:9").unwrap()],
+            instance_nonce: nonce,
+            component_digest: installation.digest,
+            cancellation_closes_context: true,
+            capabilities,
+        };
+        let digest = Sha256::digest(serde_json::to_vec(&enrollment)?).into();
+        let request = BrowserDriverOpenRequest {
+            binding,
+            run_id: Some("networkless-startup".into()),
+            session_id: BrowserSessionId::parse(format!("bs_{}", hex::encode(nonce))).unwrap(),
+            tab_id: BrowserTabId::parse(format!("bt_{}", hex::encode(nonce))).unwrap(),
+            document_id: BrowserDocumentId::parse(format!("bd_{}", hex::encode(nonce))).unwrap(),
+            options: BrowserOpenOptions {
+                profile: Default::default(),
+                mode: BrowserMode::Embedded,
+                allowed_origins: enrollment.allowed_origins.clone(),
+                initial_url: None,
+            },
+        };
+        let mut key = Zeroizing::new([0; 32]);
+        getrandom::fill(key.as_mut())
+            .map_err(|_| std::io::Error::other("fixture bootstrap key unavailable"))?;
+        let data = Zeroizing::new(serde_json::to_vec(&serde_json::json!({
+            "enrollment": enrollment,
+            "profile_path": profile_path,
+            "profile_handle": profile_handle,
+            "profile_volume": profile_identity.volume_serial_number,
+            "profile_file_id": profile_identity.file_id,
+            "proxy": {
+                "address": "127.0.0.1",
+                "port": 9,
+                "username": "colossus",
+                "password": "networkless-fixture-unused"
+            },
+            "pki": null,
+            "presentation": { "human_input": false }
+        }))?);
         let mut pipes = pipes.into_iter();
         let mut bootstrap = pipes.next().unwrap();
         let action = pipes.next().unwrap();
@@ -236,10 +285,19 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
                 .map_err(|_| Box::<dyn std::error::Error>::from(BrowserDriverError::OutcomeUnknown))
             },
         )?;
+        eprintln!("networkless CEF authenticated_channels=true");
         bridge.open_session(request.clone(), &control).await?;
+        eprintln!("networkless CEF session_open=true");
         let tree = child.observe_process_tree()?;
+        if !tree.iter().any(|process| process.process_id() == child.pid) {
+            return Err(BrowserDriverError::Denied.into());
+        }
         for process in &tree {
-            profile.verify_process(process.process_handle())?;
+            if process.process_id() == child.pid {
+                profile.verify_process(process.process_handle())?;
+            } else {
+                profile.verify_descendant_process(process.process_handle())?;
+            }
         }
         eprintln!("networkless CEF retained_live_processes={}", tree.len());
         bridge.close_session(&request.session_id).await?;
@@ -248,16 +306,29 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
         Ok::<_, Box<dyn std::error::Error>>(())
     })
     .await;
-    let exit = child.wait_timeout(Duration::from_secs(5)).unwrap();
-    let graceful = child.wait_tree_timeout(Duration::from_secs(2)).unwrap();
-    if !graceful {
-        child.terminate(1).unwrap();
-    }
-    assert!(
-        child.wait_tree_timeout(Duration::from_secs(5)).unwrap(),
-        "networkless fixture's full Job cleanup unknown"
-    );
-    child.retire_network().unwrap();
+    let cleanup = (|| -> Result<(Option<u32>, bool), Box<dyn std::error::Error>> {
+        let exit = child.wait_timeout(Duration::from_secs(5))?;
+        let graceful = child.wait_tree_timeout(Duration::from_secs(2))?;
+        if !graceful {
+            child.terminate(1)?;
+        }
+        if !child.wait_tree_timeout(Duration::from_secs(5))? {
+            return Err("networkless fixture's full Job cleanup unknown".into());
+        }
+        let context = child.close_browser_context(Duration::from_secs(5))?;
+        child.retire_network()?;
+        Ok((exit, graceful && context == ContextShutdown::Graceful))
+    })();
+    let (exit, graceful) = match cleanup {
+        Ok(cleanup) => cleanup,
+        Err(error) => {
+            // Preserve native ownership beneath an unknown process tree. Unwind
+            // must not delete the context's package/profile allocation.
+            std::mem::forget(profile);
+            std::mem::forget((child, profile_directory, state, installation));
+            panic!("networkless fixture retained owners after unknown cleanup: {error}");
+        }
+    };
     for drain in &mut drains {
         let drain_result = tokio::time::timeout(Duration::from_secs(2), &mut *drain).await;
         if let Ok(Ok(Ok(output))) = drain_result {
@@ -270,7 +341,23 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
                     // This fixture has a cleared environment, an empty owned
                     // profile and only about:blank. No personal/browser content
                     // is loaded. Keep the native CHECK category for diagnosis.
-                    if line.contains("FATAL:")
+                    let rejection = [
+                        BrowserDriverError::Unavailable,
+                        BrowserDriverError::Unsupported,
+                        BrowserDriverError::Denied,
+                        BrowserDriverError::Stale,
+                        BrowserDriverError::Cancelled,
+                        BrowserDriverError::LimitExceeded,
+                        BrowserDriverError::AuthenticationRequired,
+                        BrowserDriverError::Failed,
+                        BrowserDriverError::OutcomeUnknown,
+                    ]
+                    .into_iter()
+                    .find(|error| line == error.to_string());
+                    if let Some(error) = rejection {
+                        eprintln!("networkless CEF driver rejection category={error:?}");
+                    } else if line.contains("FATAL:")
+                        || line.starts_with("native Windows transfer rejection ")
                         || line.starts_with("native cef bootstrap ")
                         || line.starts_with("native cef startup breakpoint ")
                     {

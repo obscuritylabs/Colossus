@@ -30,7 +30,8 @@ mod windows;
 pub use windows::AppContainerPrincipal;
 #[cfg(windows)]
 pub use windows::{
-    ExclusiveAppContainerProfile, PrivateDirectoryCreation, system_windows_directory,
+    ExclusiveAppContainerProfile, OwnedAppContainerWindowStation, PrivateDirectoryCreation,
+    system_windows_directory,
 };
 
 #[cfg(windows)]

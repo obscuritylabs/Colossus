@@ -941,22 +941,12 @@ export function ModelConfigurationEditor({
               )
             }
           >
-            <option value="full_access">Full access — unsafe</option>
+            <option value="full_access">Full access</option>
             <option value="workspace_isolated">Workspace isolated</option>
             <option value="offline_isolated">Offline isolated</option>
           </DropdownSelect>
         </label>
       </fieldset>
-
-      {executionBoundary === "full_access" ? (
-        <div className="unsafe-execution-note" role="alert">
-          <p>
-            <strong>Full access is unsafe.</strong> Commands can access files on
-            your computer, environment variables, and the network without
-            isolation. Approval settings still apply.
-          </p>
-        </div>
-      ) : null}
 
       <div className="provider-security-note">
         <p>

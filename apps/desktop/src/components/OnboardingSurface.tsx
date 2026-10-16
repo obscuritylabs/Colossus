@@ -1,7 +1,6 @@
 import { ModelFeatureControl } from "./ModelFeatureControl";
 import {
   IconArrowRight,
-  IconAlertTriangle,
   IconCloudLock,
   IconFolder,
   IconPlugConnected,
@@ -339,25 +338,6 @@ function WorkspaceOnboardingForm({
     setExecutionBoundary(draft.executionBoundary);
     setShowAdvanced(false);
   }
-  const accessRank = {
-    minimal: 0,
-    pinned: 0,
-    development: 1,
-    allow_all: 2,
-  } as const;
-  const boundaryRank = {
-    offline_isolated: 0,
-    workspace_isolated: 1,
-    full_access: 2,
-  } as const;
-  const accessConfirmationRequired =
-    (!desktop.provider.configured && accessProfile !== "minimal") ||
-    accessRank[accessProfile] > accessRank[desktop.accessProfile];
-  const boundaryConfirmationRequired =
-    (!desktop.provider.configured &&
-      executionBoundary !== "offline_isolated") ||
-    boundaryRank[executionBoundary] > boundaryRank[desktop.executionBoundary];
-
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy) return;
@@ -1080,7 +1060,7 @@ function WorkspaceOnboardingForm({
                       )
                     }
                   >
-                    <option value="full_access">Full access — unsafe</option>
+                    <option value="full_access">Full access</option>
                     <option value="workspace_isolated">
                       Workspace isolated
                     </option>
@@ -1088,35 +1068,6 @@ function WorkspaceOnboardingForm({
                   </DropdownSelect>
                 </label>
               </div>
-
-              {executionBoundary === "full_access" ? (
-                <div className="unsafe-execution-note" role="alert">
-                  <IconAlertTriangle
-                    size={20}
-                    stroke={1.8}
-                    aria-hidden="true"
-                  />
-                  <p>
-                    <strong>Full access is unsafe.</strong> Commands can access
-                    files on your computer, environment variables, and the
-                    network without isolation. Approval settings still apply.
-                  </p>
-                </div>
-              ) : null}
-
-              {accessConfirmationRequired || boundaryConfirmationRequired ? (
-                <div className="provider-security-note">
-                  <IconShieldCheck size={19} stroke={1.6} aria-hidden="true" />
-                  <p>
-                    {accessConfirmationRequired
-                      ? "You’ll be asked to confirm this level of tool access before it takes effect. "
-                      : ""}
-                    {boundaryConfirmationRequired
-                      ? "You’ll confirm the command isolation setting in a separate window."
-                      : ""}
-                  </p>
-                </div>
-              ) : null}
 
               <button
                 className="text-button"

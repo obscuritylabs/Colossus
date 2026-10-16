@@ -1027,17 +1027,11 @@ test("provider enrollment and external trust stay behind native UI", () => {
   assert.match(commands, /!request\.replace_credential/u);
   assert.match(commands, /provider\.kind == request\.provider_kind/u);
   assert.match(commands, /verify_reused_provider_credential/u);
-  assert.match(commands, /fn access_profile_elevation/u);
-  assert.match(commands, /confirm_access_profile\(&app/u);
-  assert.match(commands, /fn execution_boundary_elevation/u);
-  assert.match(commands, /confirm_execution_boundary\(&app/u);
   assert.match(commands, /fn confirm_provider_origins/u);
   assert.match(commands, /fn rollback_staged_provider_credentials/u);
   assert.match(commands, /fn reject_active_managed_runs/u);
   assert.match(commands, /request_provider_secret\(credential_parent/u);
   assert.match(commands, /DesktopCredentials::for_settings/u);
-  assert.match(commands, /Unsafe: Full access/u);
-  assert.match(commands, /approval mode is a separate setting/u);
   for (const action of ["Import", "Connect", "Select", "Remove"]) {
     assert.match(commands, new RegExp(`ExternalConsentAction::${action}`, "u"));
   }

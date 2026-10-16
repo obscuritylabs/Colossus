@@ -36,7 +36,7 @@ When Colossus is working, you can type another message without losing your draft
 
 The queue and its pause are part of the current Desktop session. For work that must survive an interruption, use a durable [plan or task](../use/tasks-decisions-plans.md) and return to its session later.
 
-The permission selector beside the composer controls what happens when an effect needs approval. **Ask** shows an approval card. **Deny** fails such effects closed. **Risk auto** evaluates eligible low-risk effects, while **Full access** satisfies approval obligations without prompting. Expanding authority requires a native operating-system confirmation. This selector does not change the workspace's access profile or execution boundary. [See the full access model](settings.md#approval-mode).
+The permission selector beside the composer controls what happens when an effect needs approval. **Ask** shows an approval card. **Deny** fails such effects closed. **Risk auto** evaluates eligible low-risk effects, while **Full access** satisfies approval obligations without prompting. Your selection applies directly between managed runs. This selector does not change the workspace's access profile or execution boundary. [See the full access model](settings.md#approval-mode).
 
 ## Return to a conversation
 

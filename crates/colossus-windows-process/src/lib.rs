@@ -24,6 +24,8 @@ pub use private_io::{PrivateIoLease, PrivatePipe, PrivatePipeError, PrivateReade
 
 #[cfg(windows)]
 mod windows_impl;
+#[cfg(windows)]
+pub use windows_impl::context::dispatch_browser_context_helper;
 
 #[cfg(test)]
 mod tests;

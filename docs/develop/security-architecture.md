@@ -828,6 +828,24 @@ typed browser contracts. Each allocation retains an independently supervised pro
 and egress obligation before launch. Context-destroying cancellation interrupts the
 session and requires a fresh allocation rather than renewing control of a closed page.
 
+The contained Windows launcher keeps its process Jobs, completion ports, egress fence
+and profile authority in Core. Two fixed trusted helper roles run before CEF: one
+obtains a fresh logon context, and that context creates one suspended AppContainer
+browser with the exact private pipe handles and inner Job. Core pulls and verifies the
+returned process and primary thread, including the fresh logon identity, package SID,
+Low integrity, absent capabilities and both Job memberships, before it alone resumes
+the browser. The context holds only reduced inner-Job authority and a query handle for
+the browser while it owns the token-derived window station; it receives no Core
+mutation handle or outer-Job handle.
+
+Failed startup returns an opaque cleanup owner that retains the same native resources.
+Cleanup stops and positively waits the browser's creator before accepting the final
+inner-Job drain, then joins private I/O before retiring the egress fence and profile.
+A pending logon-service creation result cannot be discharged by observing an empty
+Job or by terminating its launcher. Normal shutdown also requires the context's
+station-close receipt and exit. These source checks do not enable publisher release
+modes or establish whole-host network and parent-death containment.
+
 The explicitly selected Windows Debug development composition admits functional
 automation without AppContainer/WFP containment. It retains Chromium's built-in
 sandbox, an owned Job and the authenticated boundaries above, while reporting
@@ -960,9 +978,9 @@ retains inherited-channel delivery and never persists its worker bootstrap key. 
 native Desktop backend may use that same memory-only key through the narrow
 `colossus-worker-protocol` control client to read or change the worker-wide approval
 mode. The renderer receives only the four-value mode DTO and cannot access the key,
-endpoint, or generic worker operations. Elevation to `risk-auto` or `full-access`
-requires a fixed operating-system confirmation, and native code rejects mode changes
-while a managed run is active. This control changes only satisfaction of later approval
+endpoint, or generic worker operations. The permission-mode selector applies the chosen
+mode directly through the native backend, which rejects changes while a managed run is
+active. This control changes only satisfaction of later approval
 obligations; policy denials, tool grants, permits, and sandbox boundaries remain
 unchanged.
 
@@ -1148,11 +1166,12 @@ in setup exports. Workspace Access settings can clear it. Native watch/hydration
 each matching pending interaction and submits a fresh one-use answer through the same
 approval broker; normal policy re-evaluation, sandboxing, and audit still apply. Redacted,
 non-command, and External-target approvals remain one-time decisions.
-First-time non-Minimal access and every access-rank elevation, including
-Development-to-Allow-all, require a fixed native confirmation before the wider tool
-ceiling is persisted. Execution-boundary elevation is confirmed independently, including
-changes from either isolated boundary to Full access. A renderer can request key rotation
-but cannot suppress the native key prompt for first setup or a provider-kind change.
+Tool access and execution-boundary choices apply through the existing setup Save and
+start or Workspace Apply action. These explicit permission changes do not open a second
+native confirmation. Automatic adoption of broader Global permissions still waits for
+an explicit Workspace Apply action. Enabling full journal payloads in telemetry retains
+its separate sensitive-content confirmation. A renderer can request key rotation but
+cannot suppress the native key prompt for first setup or a provider-kind change.
 
 ## Evidence and uncertainty
 

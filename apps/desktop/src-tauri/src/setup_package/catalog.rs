@@ -292,7 +292,7 @@ pub(super) fn validate_resources(package: &SavedSetupPackage) -> Result<(), Comm
 }
 
 /// Defaults are a reviewed snapshot. Existing spaces remain pinned until their
-/// normal configuration review, including native authority confirmation.
+/// normal configuration review and explicit Apply action for broader permissions.
 pub(super) fn apply_defaults(
     settings: &mut DesktopSettings,
     package: &SavedSetupPackage,

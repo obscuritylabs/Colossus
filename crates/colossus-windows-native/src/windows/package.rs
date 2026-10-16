@@ -30,6 +30,20 @@ pub struct ExclusiveAppContainerProfile {
     _thread: PhantomData<Rc<()>>,
 }
 impl ExclusiveAppContainerProfile {
+    /// Create and retain a fresh noninteractive station for this exact package.
+    /// The current process must have a fresh logon context: an existing
+    /// system-derived station is rejected rather than opened or modified.
+    /// Keep the guard until the entire child Job is drained, explicitly close it,
+    /// then drop it before closing this profile. No process/thread station changes.
+    pub fn create_window_station(
+        &self,
+    ) -> Result<super::OwnedAppContainerWindowStation<'_>, WindowsNativeError> {
+        if self.closed || self.package.is_null() || unsafe { IsValidSid(self.package) } == 0 {
+            return Err(WindowsNativeError::IdentityChanged);
+        }
+        super::window_station::OwnedAppContainerWindowStation::create(self, self.package)
+    }
+
     /// Derive a filesystem principal from the exact retained spawned process and
     /// require its kernel package SID to equal this exclusive enrollment package.
     /// Child PID numbers or child self-reports cannot replace the borrowed handle.
@@ -49,6 +63,23 @@ impl ExclusiveAppContainerProfile {
         }
         Ok(principal)
     }
+
+    /// Attest a retained descendant's exact kernel package and current user.
+    /// Accept only Low or Untrusted integrity with no token capabilities. This
+    /// observation grants no filesystem principal; direct children and profile
+    /// allocation must continue to use the exact-Low `verify_process` boundary.
+    /// Job membership and process-handle provenance remain the supervisor's duty.
+    pub fn verify_descendant_process(
+        &self,
+        process: std::os::windows::io::BorrowedHandle<'_>,
+    ) -> Result<(), WindowsNativeError> {
+        // SAFETY: this owner retains the exact profile SID until close/drop.
+        if self.closed || self.package.is_null() || unsafe { IsValidSid(self.package) } == 0 {
+            return Err(WindowsNativeError::IdentityChanged);
+        }
+        super::appcontainer::verify_descendant_process(process, self.package)
+    }
+
     /// Create a nonce-derived profile exclusively. Names have a fixed browser
     /// prefix and exactly 128 bits of lowercase hex, with no OS-selected fallback.
     pub fn create(name: &str) -> Result<Self, WindowsNativeError> {

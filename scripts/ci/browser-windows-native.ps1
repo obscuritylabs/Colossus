@@ -32,6 +32,7 @@ $Checks = @(
 if (-not $Development) { $Checks += @('low_appcontainer_token', 'low_package_profile_label') }
 $Checked = @{}
 foreach ($Check in $Checks) { $Checked[$Check] = $false }
+$StartupChecked = [ordered]@{}
 Push-Location $Repository
 try {
     if ([string]::IsNullOrWhiteSpace($Component)) {
@@ -61,6 +62,57 @@ try {
     foreach ($Name in @('LOCALAPPDATA', 'TEMP', 'TMP')) {
         $SavedPaths[$Name] = [Environment]::GetEnvironmentVariable($Name, 'Process')
         [Environment]::SetEnvironmentVariable($Name, $Parent, 'Process')
+    }
+    if (-not $Development) {
+        $StartupCases = @(
+            @{
+                crate = 'colossus-sandbox'
+                test = 'browser_windows::startup_tests::real_cef_initializes_in_networkless_appcontainer_without_elevation'
+                evidence = 'networkless-startup'
+            }
+        )
+        $ProcessCases = @(
+            @{ test = 'networkless_request_queued_failure_retains_real_cpwl_cleanup_custody'; evidence = 'startup-request-queued' }
+            @{ test = 'networkless_returned_context_failure_retains_bound_process_custody'; evidence = 'startup-context-bound' }
+            @{ test = 'networkless_registered_endpoints_failure_drains_real_context_handles'; evidence = 'startup-endpoints' }
+            @{ test = 'networkless_browser_commit_queued_failure_retires_creator_before_final_job_zero'; evidence = 'startup-browser-queued' }
+            @{ test = 'networkless_pulled_browser_failure_retains_both_suspended_process_owners'; evidence = 'startup-browser-bound' }
+            @{ test = 'networkless_station_ready_failure_retires_owned_station_and_context'; evidence = 'startup-station-ready' }
+            @{ test = 'networkless_core_death_after_returned_context_binding_retires_both_helpers'; evidence = 'core-death-context-bound' }
+            @{ test = 'networkless_core_death_after_station_ready_retires_context_and_appcontainer'; evidence = 'core-death-station-ready' }
+        )
+        foreach ($Case in $ProcessCases) {
+            $StartupCases += @{
+                crate = 'colossus-windows-process'
+                test = 'windows_impl::context::startup_tests::' + $Case.test
+                evidence = $Case.evidence
+            }
+        }
+        foreach ($Case in $StartupCases) {
+            $StartupChecked[$Case.evidence] = $false
+        }
+        foreach ($Case in $StartupCases) {
+            $StartupLines = [Collections.Generic.Queue[string]]::new()
+            $StartupBytes = 0
+            & cargo test --locked -p $Case.crate --lib $Case.test `
+                -- --ignored --exact --nocapture --color never 2>&1 | ForEach-Object {
+                $Line = [string]$_
+                Write-Host $Line
+                if ($Line.Length -gt 16384) { $Line = $Line.Substring(0, 16384) }
+                $StartupLines.Enqueue($Line)
+                $StartupBytes += [Text.Encoding]::UTF8.GetByteCount($Line) + 1
+                while ($StartupBytes -gt 256KB -and $StartupLines.Count -gt 0) {
+                    $StartupBytes -= [Text.Encoding]::UTF8.GetByteCount($StartupLines.Dequeue()) + 1
+                }
+            }
+            $StartupStatus = $LASTEXITCODE
+            $StartupOutput = ($StartupLines -join "`n") + "`n"
+            [IO.File]::WriteAllText((Join-Path $Evidence ($Case.evidence + '.log')), $StartupOutput, [Text.UTF8Encoding]::new($false))
+            if ($StartupStatus -ne 0 -or $StartupOutput -notmatch '(?m)^test result: ok\. 1 passed; 0 failed; 0 ignored;') {
+                throw "The exact Windows browser startup check failed: $($Case.evidence)"
+            }
+            $StartupChecked[$Case.evidence] = $true
+        }
     }
     # A rolling categorical log stays bounded even on a noisy compiler failure.
     $Lines = [Collections.Generic.Queue[string]]::new()
@@ -120,6 +172,7 @@ try {
         standardUserDevelopment = $Development
         componentManifestSha256 = $ManifestHash
         checks = $Checked
+        startupChecks = $StartupChecked
         privateStatePreserved = $null -ne $Parent
         acceptedDesktop = $false
         acceptedHeadless = $false
