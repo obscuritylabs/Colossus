@@ -265,6 +265,7 @@ jobs:
                   save()
                   while child.poll() is None:
                       refresh()
+                      reap()
                       lowest = min(lowest, available())
                       if lowest < 10 * 1024**3:
                           reason = 'runner_disk_below_10GiB'
