@@ -393,7 +393,7 @@ pub(crate) async fn save_space_configuration(
     apply_space_edit(&mut settings, request)?;
     let after = resolved_for(&settings, &space_id)?;
     managed_runtime::preflight_runtime_configuration(&settings, &space_id)?;
-    confirm_authority_elevation(&app, &before, &after).await?;
+    confirm_sensitive_telemetry(&app, &before, &after).await?;
     let drain = managed_runtime::drain_active_runs_for_configuration(&state, &space_id).await?;
     persist_and_restart(&state, &store, &mut settings, previous, &space_id).await?;
     drop(drain);
@@ -414,7 +414,7 @@ pub(crate) async fn apply_space_configuration(
     advance_space_revision(&mut settings, &space_id)?;
     let after = resolved_for(&settings, &space_id)?;
     managed_runtime::preflight_runtime_configuration(&settings, &space_id)?;
-    confirm_authority_elevation(&app, &before, &after).await?;
+    confirm_sensitive_telemetry(&app, &before, &after).await?;
     let drain = managed_runtime::drain_active_runs_for_configuration(&state, &space_id).await?;
     persist_and_restart(&state, &store, &mut settings, previous, &space_id).await?;
     drop(drain);
@@ -1166,21 +1166,21 @@ fn runtime_projection(
     Ok(projected)
 }
 
-pub(crate) async fn confirm_authority_elevation(
+pub(crate) async fn confirm_sensitive_telemetry(
     app: &AppHandle,
     before: &ResolvedSpaceConfiguration,
     after: &ResolvedSpaceConfiguration,
 ) -> Result<(), CommandErrorDto> {
-    if !requires_authority_confirmation(before, after) {
+    if !sensitive_telemetry_enabled(before, after) {
         return Ok(());
     }
     let app = app.clone();
     let approved = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .message(
-                "This update changes runtime permissions or sensitive telemetry settings. Check the workspace settings before allowing the runtime to restart.",
+                "This update enables full journal payloads in telemetry. They may include sensitive content. Apply this telemetry setting?",
             )
-            .title("Approve Workspace authority change")
+            .title("Enable sensitive telemetry")
             .kind(MessageDialogKind::Warning)
             .buttons(MessageDialogButtons::OkCancelCustom(
                 "Approve and apply".into(),
@@ -1191,8 +1191,8 @@ pub(crate) async fn confirm_authority_elevation(
     .await
     .map_err(|_| {
         CommandErrorDto::local_sanitized(
-            "authority_confirmation",
-            "The native authority confirmation could not be opened.",
+            "telemetry_confirmation",
+            "The native telemetry confirmation could not be opened.",
             true,
         )
     })?;
@@ -1200,27 +1200,35 @@ pub(crate) async fn confirm_authority_elevation(
         Ok(())
     } else {
         Err(CommandErrorDto::local_sanitized(
-            "authority_confirmation",
-            "The authority change was not applied.",
+            "telemetry_confirmation",
+            "The telemetry change was not applied.",
             false,
         ))
     }
 }
 
-fn requires_authority_confirmation(
+fn sensitive_telemetry_enabled(
+    before: &ResolvedSpaceConfiguration,
+    after: &ResolvedSpaceConfiguration,
+) -> bool {
+    after.telemetry.as_ref().is_some_and(|telemetry| {
+        telemetry.journal_payloads == crate::managed_configuration::JournalPayloadSetting::Full
+            && before.telemetry.as_ref().is_none_or(|current| {
+                current.journal_payloads
+                    != crate::managed_configuration::JournalPayloadSetting::Full
+            })
+    })
+}
+
+/// Background updates wait for an explicit Apply action when they widen authority.
+/// Saving or applying permission choices does not open another native dialog.
+fn requires_explicit_apply(
     before: &ResolvedSpaceConfiguration,
     after: &ResolvedSpaceConfiguration,
 ) -> bool {
     let access_elevated = access_rank(after.access_profile) > access_rank(before.access_profile);
     let boundary_elevated =
         boundary_rank(after.execution_boundary) > boundary_rank(before.execution_boundary);
-    let sensitive_telemetry_enabled = after.telemetry.as_ref().is_some_and(|telemetry| {
-        telemetry.journal_payloads == crate::managed_configuration::JournalPayloadSetting::Full
-            && before.telemetry.as_ref().is_none_or(|current| {
-                current.journal_payloads
-                    != crate::managed_configuration::JournalPayloadSetting::Full
-            })
-    });
     let managed_authority_elevated = risky_field_authority_changed(before, after);
     let mcp_permissions_changed = after.mcp_servers.iter().any(|server| {
         before
@@ -1234,7 +1242,7 @@ fn requires_authority_confirmation(
     });
     access_elevated
         || boundary_elevated
-        || sensitive_telemetry_enabled
+        || sensitive_telemetry_enabled(before, after)
         || managed_authority_elevated
         || mcp_permissions_changed
         || (after.terminal_enabled && !before.terminal_enabled)
@@ -2312,6 +2320,43 @@ mod tests {
             },
         });
         settings
+    }
+
+    #[test]
+    fn explicit_permission_choices_only_prompt_when_enabling_sensitive_telemetry() {
+        let mut before = resolved_for(&settings(), "space-one").expect("configuration");
+        before.access_profile = AccessProfileSetting::Minimal;
+        before.execution_boundary = ExecutionBoundarySetting::OfflineIsolated;
+        let mut after = before.clone();
+        after.access_profile = AccessProfileSetting::AllowAll;
+        after.execution_boundary = ExecutionBoundarySetting::FullAccess;
+        after.terminal_enabled = true;
+        after.field_overrides.push(FieldOverrideSetting {
+            field_id: "access.tools.include".into(),
+            value: json!(["*"]),
+        });
+        assert!(requires_explicit_apply(&before, &after));
+        assert!(!sensitive_telemetry_enabled(&before, &after));
+
+        after.telemetry = Some(TelemetryProfileSetting {
+            name: "collector".into(),
+            endpoint: Some("https://collector.example.test".into()),
+            protocol: crate::managed_configuration::OtlpProtocolSetting::Grpc,
+            timeout_ms: 10_000,
+            traces_enabled: true,
+            trace_sample_ratio_millionths: 100_000,
+            metrics_enabled: true,
+            metric_export_interval_ms: 60_000,
+            logs_otlp: true,
+            logs_stdout_json: false,
+            journal_payloads: crate::managed_configuration::JournalPayloadSetting::Full,
+            acknowledge_sensitive_content: true,
+            acknowledge_insecure_transport: false,
+            resource_attributes: BTreeMap::new(),
+        });
+        assert!(sensitive_telemetry_enabled(&before, &after));
+        assert!(!sensitive_telemetry_enabled(&after, &after));
+        assert!(!sensitive_telemetry_enabled(&after, &before));
     }
 
     fn provider(base_url: &str) -> ProviderSetting {

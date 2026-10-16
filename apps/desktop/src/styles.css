@@ -6937,18 +6937,6 @@ textarea {
   line-height: 1.5;
 }
 
-.unsafe-execution-note {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid var(--red-border);
-  border-radius: 10px;
-  background: var(--red-soft);
-  color: var(--red-text);
-}
-
-.unsafe-execution-note p,
 .unsafe-settings-label {
   margin: 0;
   color: var(--red-text);

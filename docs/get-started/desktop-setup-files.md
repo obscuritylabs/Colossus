@@ -40,7 +40,8 @@ credential vault. A saved key is not a successful connection test.
 The **Model** step shows the chosen provider's bundled models, with the package's
 primary model selected when available. Limits and capabilities are displayed without
 contacting the provider. You can also discover other models or enter an ID manually.
-**Save and start** uses the existing native configuration and confirmation path.
+**Save and start** applies the selected model and access settings through native
+configuration validation.
 If the chosen provider needs a key, the secure prompt asks for it then and saves it
 for reuse with that imported provider. Cancelling leaves setup ready to retry.
 

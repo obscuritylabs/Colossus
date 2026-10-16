@@ -1569,7 +1569,7 @@ export function buildManagedSettingsFixture(
           : ("active" as const),
       statusMessage:
         fixture && index === 0
-          ? "Global changes saved. Applying them requires confirmation of increased permissions or sensitive telemetry."
+          ? "Global changes saved. Apply them in Workspace settings to update permissions or sensitive telemetry."
           : "Runtime configuration is active.",
       pendingGlobalRevision: fixture && index === 0 ? 4 : null,
       configuration: {
@@ -2079,7 +2079,7 @@ export function ManagedSettingsPane({
               draft.globalConfiguration.revision;
             configuredSpace.status = "update_confirmation";
             configuredSpace.statusMessage =
-              "Global changes saved. Apply them to this workspace to confirm the permission changes.";
+              "Global changes saved. Apply them in Workspace settings to update permissions.";
           }
         }),
       "Global changes saved.",
@@ -5531,7 +5531,7 @@ function AuthorityControls({
         </DropdownSelect>
         <small id={boundaryHelpId}>
           {explainPermissions
-            ? "Choose how tools and processes are isolated. Full access disables filesystem and network isolation and requires native confirmation."
+            ? "Choose how tools and processes are isolated. Full access disables filesystem and network isolation."
             : "Choose how strongly tool and process execution is isolated."}
         </small>
       </label>

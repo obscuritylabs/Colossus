@@ -78,10 +78,6 @@ pub(crate) enum DesktopApprovalModeDto {
 }
 
 impl DesktopApprovalModeDto {
-    pub(crate) const fn requires_native_confirmation_from(self, current: Self) -> bool {
-        self as u8 > current as u8 && matches!(self, Self::RiskAuto | Self::FullAccess)
-    }
-
     pub(crate) const fn worker_mode(self) -> colossus_worker_protocol::WorkerApprovalMode {
         match self {
             Self::Deny => colossus_worker_protocol::WorkerApprovalMode::Deny,
@@ -764,7 +760,7 @@ mod tests {
     }
 
     #[test]
-    fn approval_modes_round_trip_and_confirm_only_elevation() {
+    fn approval_modes_round_trip_to_the_worker() {
         for (mode, wire, worker) in [
             (
                 DesktopApprovalModeDto::Deny,
@@ -795,23 +791,6 @@ mod tests {
             assert_eq!(mode.worker_mode(), worker);
             assert_eq!(DesktopApprovalModeDto::from_worker_mode(worker), mode);
         }
-
-        assert!(
-            DesktopApprovalModeDto::RiskAuto
-                .requires_native_confirmation_from(DesktopApprovalModeDto::Ask)
-        );
-        assert!(
-            DesktopApprovalModeDto::FullAccess
-                .requires_native_confirmation_from(DesktopApprovalModeDto::RiskAuto)
-        );
-        assert!(
-            !DesktopApprovalModeDto::Ask
-                .requires_native_confirmation_from(DesktopApprovalModeDto::FullAccess)
-        );
-        assert!(
-            !DesktopApprovalModeDto::RiskAuto
-                .requires_native_confirmation_from(DesktopApprovalModeDto::FullAccess)
-        );
     }
 
     #[test]
