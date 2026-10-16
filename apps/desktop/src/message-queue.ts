@@ -12,6 +12,7 @@ export const MAX_QUEUED_MESSAGES_TOTAL = 32;
 export type QueuedMessageState = "pending" | "sending" | "failed";
 
 export interface QueuedMessage {
+  modelSelection?: import("./composer-model").ComposerModelSelection;
   id: string;
   idempotencyKey: string;
   targetId: string;

@@ -68,6 +68,27 @@ message ApiDeprecation {
   google.protobuf.Timestamp removal_not_before = 3;
 }
 
+// ConfiguredModelProfile is bounded, credential-free model selection metadata.
+message ConfiguredModelProfile {
+  // profile is an existing model profile accepted by CreateRun.
+  string profile = 1;
+
+  // model is the configured provider model identifier.
+  string model = 2;
+
+  // provider is the adapter kind, without a URL or credentials.
+  string provider = 3;
+
+  // provider_profile distinguishes configured connections to the same provider.
+  string provider_profile = 4;
+
+  // reasoning_effort is the configured default, when explicitly set.
+  optional string reasoning_effort = 5;
+
+  // default_roles lists only caller-authorized roles resolving to this profile.
+  repeated string default_roles = 6;
+}
+
 // ServerInfo contains credential-free compatibility information.
 message ServerInfo {
   // instance_id is the stable non-secret identity of this Colossus instance.
@@ -93,6 +114,10 @@ message ServerInfo {
 
   // server_time supports diagnostics without being an authentication primitive.
   google.protobuf.Timestamp server_time = 8;
+
+  // model_profiles lists up to 256 configured choices for callers with runs:execute.
+  // Older servers can omit it; clients must not infer model-selection support.
+  repeated ConfiguredModelProfile model_profiles = 9;
 }
 
 // GetServerInfoRequest requests compatibility metadata.

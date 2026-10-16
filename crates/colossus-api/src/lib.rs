@@ -34,7 +34,7 @@ pub use artifacts::{
     ArtifactReference, ArtifactState, ArtifactUploadReservation, CreateArtifactUploadRequest,
     EventSourcedArtifactApi, MAX_ARTIFACT_BYTES,
 };
-pub use colossus_contracts::CommandApprovalContext;
+pub use colossus_contracts::{CommandApprovalContext, ReasoningEffort};
 pub use error::{
     ApiError, ApiErrorCode, ApiErrorReason, ApiResult, FieldViolation, OutcomeCertainty,
 };

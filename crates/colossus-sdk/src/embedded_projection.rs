@@ -15,6 +15,8 @@ use colossus_api::{self as core, ApiError, ApiErrorReason, ApiResult, CallerCont
 
 pub(super) fn create_request(value: CreateRunRequest) -> core::CreateRunRequest {
     core::CreateRunRequest {
+        model_profile: value.model_profile,
+        reasoning_effort: value.reasoning_effort,
         input: value
             .input
             .into_iter()

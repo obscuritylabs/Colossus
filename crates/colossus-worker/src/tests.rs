@@ -108,6 +108,7 @@ fn approval_mode_control_is_an_explicit_authenticated_operation() {
 #[test]
 fn sandbox_boundary_acknowledgement_is_session_and_mode_bound() {
     let encoded = serde_json::to_value(WorkerOperation::RunInteractive {
+        model_options: None,
         request: InteractiveWorkerRequest::SandboxBoundaryAcknowledge {
             session_id: "session-1".into(),
             mode: SandboxBoundaryMode::External,
@@ -125,6 +126,7 @@ fn sandbox_boundary_acknowledgement_is_session_and_mode_bound() {
     assert!(matches!(
         decoded,
         WorkerOperation::RunInteractive {
+            model_options: None,
             request: InteractiveWorkerRequest::SandboxBoundaryAcknowledge {
                 session_id,
                 mode: SandboxBoundaryMode::External,
@@ -214,6 +216,7 @@ fn model_attachment_protocol_carries_paths_without_client_read_content() {
 fn interactive_run_diagnostics_are_explicit_and_backward_compatible() {
     const CAPABILITY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     let operation = WorkerOperation::RunInteractive {
+        model_options: None,
         request: InteractiveWorkerRequest::Run {
             mode: AgentRunMode::Execute,
             role: "primary".into(),
@@ -249,6 +252,7 @@ fn interactive_run_diagnostics_are_explicit_and_backward_compatible() {
     assert!(matches!(
         decoded,
         WorkerOperation::RunInteractive {
+            model_options: None,
             request: InteractiveWorkerRequest::Run {
                 include_provider_response_diagnostics: false,
                 ..
@@ -265,6 +269,7 @@ fn interactive_run_diagnostics_are_explicit_and_backward_compatible() {
 #[test]
 fn interactive_presentation_requests_bind_the_acknowledged_session() {
     let history = WorkerOperation::RunInteractive {
+        model_options: None,
         request: InteractiveWorkerRequest::PresentationHistoryAppend {
             session_id: "session-1".into(),
             entry: "hello".into(),
@@ -282,6 +287,7 @@ fn interactive_presentation_requests_bind_the_acknowledged_session() {
     assert!(matches!(
         serde_json::from_value::<WorkerOperation>(encoded).expect("history request"),
         WorkerOperation::RunInteractive {
+            model_options: None,
             request: InteractiveWorkerRequest::PresentationHistoryAppend {
                 session_id,
                 entry,
@@ -295,6 +301,7 @@ fn interactive_presentation_requests_bind_the_acknowledged_session() {
         ..TerminalPreferences::default()
     };
     let save = WorkerOperation::RunInteractive {
+        model_options: None,
         request: InteractiveWorkerRequest::PresentationSave {
             session_id: "session-1".into(),
             preferences: preferences.clone(),
@@ -308,6 +315,7 @@ fn interactive_presentation_requests_bind_the_acknowledged_session() {
     assert!(matches!(
         serde_json::from_value::<WorkerOperation>(encoded).expect("preference request"),
         WorkerOperation::RunInteractive {
+            model_options: None,
             request: InteractiveWorkerRequest::PresentationSave {
                 session_id,
                 preferences: decoded,
@@ -320,6 +328,7 @@ fn interactive_presentation_requests_bind_the_acknowledged_session() {
 #[test]
 fn interactive_plan_run_binds_the_selected_revision() {
     let encoded = serde_json::to_value(WorkerOperation::RunInteractive {
+        model_options: None,
         request: InteractiveWorkerRequest::Run {
             mode: AgentRunMode::Plan(colossus_contracts::PlanDraftTarget::Update {
                 plan_id: "plan".into(),
@@ -375,6 +384,7 @@ fn interactive_plan_lifecycle_requests_round_trip_strictly() {
         },
     ] {
         let encoded = serde_json::to_value(WorkerOperation::RunInteractive {
+            model_options: None,
             request: request.clone(),
             approval_mode: None,
             sandbox_boundary_acknowledgement: None,
@@ -399,6 +409,7 @@ fn interactive_plan_lifecycle_requests_round_trip_strictly() {
 
     assert_eq!(
         operation_name(&WorkerOperation::RunInteractive {
+            model_options: None,
             request: InteractiveWorkerRequest::PlanExecute {
                 role: "primary".into(),
                 session_id: "session".into(),
@@ -1257,6 +1268,7 @@ async fn hosted_direct_plan_execute_polls_snapshot_scoped_agent_on_worker_stack(
             .client
             .call_interactive::<colossus_contracts::PlanExecutionOutcome>(
                 WorkerOperation::RunInteractive {
+                    model_options: None,
                     request: InteractiveWorkerRequest::PlanExecute {
                         role: "primary".into(),
                         session_id,

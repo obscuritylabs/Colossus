@@ -465,6 +465,7 @@ const INITIAL_DESKTOP: DesktopStatus = {
     files: FIXTURE_MODE,
     artifacts: FIXTURE_MODE,
     planContinuation: FIXTURE_MODE,
+    modelSelection: FIXTURE_MODE,
     sessionActivity: FIXTURE_MODE,
     agentInboxes: FIXTURE_MODE && FIXTURE_QUERY.get("inboxUnavailable") !== "1",
     updateAvailable: false,
@@ -891,6 +892,7 @@ interface PlanRevisionTarget {
 }
 
 interface RunSubmission {
+  modelSelection?: import("./composer-model").ComposerModelSelection;
   prompt: string;
   executionPrompt?: string;
   pluginSkillIds?: readonly string[];
@@ -982,15 +984,25 @@ export default function App() {
   const [conversationSkills, setConversationSkills] = useState<
     Record<string, readonly string[]>
   >({});
+  const [browserConversation, setBrowserConversation] = useState<{
+    targetId: string;
+    sessionId: string;
+  } | null>(null);
   const selectionSession =
     chat.activeRunId === null
-      ? undefined
+      ? browserConversation?.targetId === desktop.selectedTargetId
+        ? browserConversation.sessionId
+        : undefined
       : chat.views.get(chat.activeRunId)?.run.sessionId;
   const selectionKey = pluginSelectionKey(
     desktop.selectedTargetId,
     selectionSession,
   );
   const pluginSelections = conversationSkills[selectionKey] ?? [];
+  const [conversationModels, setConversationModels] = useState<
+    Record<string, import("./composer-model").ComposerModelSelection>
+  >({});
+  const modelSelection = conversationModels[selectionKey] ?? {};
   const [storedThreadPins, setStoredThreadPins] = useState(() => {
     const fixtureSessionId =
       FIXTURE_MODE && chat.activeRunId !== null
@@ -1153,10 +1165,6 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [approvalModeChanging, setApprovalModeChanging] = useState(false);
   const [composerError, setComposerError] = useState<CommandError | null>(null);
-  const [browserConversation, setBrowserConversation] = useState<{
-    targetId: string;
-    sessionId: string;
-  } | null>(null);
   const { dismissToast, pushToast, toasts } = useToastQueue();
   const [conversationFollowRequest, setConversationFollowRequest] = useState(0);
   const [queuedMessages, setQueuedMessages] = useState<
@@ -2396,6 +2404,11 @@ export default function App() {
       ...current,
       [pluginSelectionKey(desktop.selectedTargetId, undefined)]: [],
     }));
+    setConversationModels((current) => {
+      const next = { ...current };
+      delete next[pluginSelectionKey(desktop.selectedTargetId, undefined)];
+      return next;
+    });
     setSurface("work");
     dispatch({ type: "select_run", runId: null });
     setRunLoadError("");
@@ -2470,6 +2483,7 @@ export default function App() {
         artifactIds: submission.attachments.map(
           (attachment) => attachment.artifactId,
         ),
+        ...(submission.mode === "research" ? {} : submission.modelSelection),
         role: submission.role,
         mode: submission.mode,
         ...(submission.mode === "goal"
@@ -2557,6 +2571,13 @@ export default function App() {
         }
         targetRoutes.current.bindRun(run.runId, route);
         if (submission.sessionId === undefined) {
+          setConversationModels((current) => {
+            const next = { ...current };
+            delete next[pluginSelectionKey(route.targetId, undefined)];
+            next[pluginSelectionKey(route.targetId, run.sessionId)] =
+              submission.modelSelection ?? {};
+            return next;
+          });
           setConversationSkills((current) => ({
             ...current,
             [pluginSelectionKey(route.targetId, run.sessionId)]:
@@ -2700,6 +2721,7 @@ export default function App() {
       ...(resolved === undefined ? {} : { executionPrompt: resolved.prompt }),
       pluginSkillIds: resolved?.pluginSkillIds ?? [...pluginSelections],
       conversationSkillIds: [...pluginSelections],
+      modelSelection: { ...modelSelection },
       role: cleanRole,
       mode,
       researchDepth,
@@ -3006,6 +3028,8 @@ export default function App() {
       route.targetId,
       sessionId ?? "",
       cleanRole,
+      modelSelection.modelProfile ?? "",
+      modelSelection.reasoningEffort ?? "",
       effectiveMode,
       ...(effectiveMode === "goal" ? [goalMaxIterations] : []),
       ...(effectiveMode === "research"
@@ -3033,6 +3057,7 @@ export default function App() {
         prompt: cleanPrompt,
         pluginSkillIds: [...pluginSelections],
         attachments: [...attachments],
+        modelSelection: { ...modelSelection },
         role: cleanRole,
         mode: effectiveMode,
         ...(effectiveMode === "goal" ? { goalMaxIterations } : {}),
@@ -3108,6 +3133,7 @@ export default function App() {
               : { executionPrompt: message.executionPrompt }),
             pluginSkillIds: message.pluginSkillIds ?? [],
             attachments: message.attachments,
+            modelSelection: message.modelSelection ?? {},
             role: message.role,
             mode: message.mode,
             ...(message.mode === "goal"
@@ -3350,6 +3376,8 @@ export default function App() {
         : `Approve and run Plan revision ${revision} as a bounded Goal with ${strategy.maxIterations} iterations.`;
     const fingerprint = operationFingerprint([
       actionPrompt,
+      modelSelection.modelProfile ?? "",
+      modelSelection.reasoningEffort ?? "",
       route.targetId,
       sourceRunId,
       planId,
@@ -3372,6 +3400,7 @@ export default function App() {
       attempt,
     };
     const request: CreateRunRequest = {
+      ...modelSelection,
       prompt: actionPrompt,
       pluginSkillIds: [...pluginSelections],
       sessionId: source.run.sessionId,
@@ -3780,6 +3809,8 @@ export default function App() {
       route.targetId,
       draft.sourceRunId,
       visiblePrompt,
+      modelSelection.modelProfile ?? "",
+      modelSelection.reasoningEffort ?? "",
     ]);
     const previous =
       asideCreateAttempt.current?.targetId === route.targetId
@@ -3824,6 +3855,7 @@ export default function App() {
       } else {
         run = await createRun(route.targetId, {
           prompt: visiblePrompt,
+          ...modelSelection,
           role: sourceView.run.role,
           mode: "execute",
           maxTurns: USE_CONFIGURED_MAX_TURNS,
@@ -3838,6 +3870,12 @@ export default function App() {
       }
       targetRoutes.current.bindRun(run.runId, route);
       dispatchAside({ type: "upsert_run", run });
+      setConversationModels((current) => ({
+        ...current,
+        [pluginSelectionKey(route.targetId, run.sessionId)]: {
+          ...modelSelection,
+        },
+      }));
       dispatchAside({
         type: "record_local_prompt",
         runId: run.runId,
@@ -3880,10 +3918,16 @@ export default function App() {
     }
     setAsideBusy(true);
     setAsideError(null);
+    const asideModelSelection =
+      conversationModels[
+        pluginSelectionKey(route.targetId, current.run.sessionId)
+      ] ?? {};
     const fingerprint = operationFingerprint([
       route.targetId,
       current.run.sessionId,
       promptText,
+      asideModelSelection.modelProfile ?? "",
+      asideModelSelection.reasoningEffort ?? "",
     ]);
     const previous =
       asideCreateAttempt.current?.targetId === route.targetId
@@ -3901,6 +3945,7 @@ export default function App() {
             updatedAt: new Date().toISOString(),
           }
         : await createRun(route.targetId, {
+            ...asideModelSelection,
             prompt: promptText,
             sessionId: current.run.sessionId,
             role: current.run.role,
@@ -5586,6 +5631,16 @@ export default function App() {
         targetKind: selectedTarget?.kind ?? null,
         configuration: desktop.managedModelConfiguration,
       }}
+      modelSelection={modelSelection}
+      onModelSelectionChange={
+        desktop.capabilities.modelSelection === true
+          ? (selection) =>
+              setConversationModels((current) => ({
+                ...current,
+                [selectionKey]: selection,
+              }))
+          : undefined
+      }
       onOpenModelSettings={() => {
         setSettingsStartTab("models");
         setWorkNavigationOpen(false);

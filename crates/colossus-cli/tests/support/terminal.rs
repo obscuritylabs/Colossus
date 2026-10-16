@@ -154,7 +154,7 @@ impl Terminal {
         // the closing border at the new width before sending any more input.
         self.wait_until_visual_rows("resized composer border", |_, rows| {
             rows.iter().any(|line| {
-                line.starts_with("┌ Message")
+                (line.starts_with("┌ Message") || line.starts_with("┌ Execute"))
                     && line.ends_with('┐')
                     && line.chars().count() == usize::from(cols)
             })

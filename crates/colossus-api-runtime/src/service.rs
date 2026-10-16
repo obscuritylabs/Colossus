@@ -1307,8 +1307,16 @@ impl RuntimeAgentRunApi {
                 .interactions
                 .scope(
                     Arc::clone(&writer),
-                    self.runtime
-                        .with_plugin_skills(&request.skill_ids, execution),
+                    self.runtime.with_plugin_skills(
+                        &request.skill_ids,
+                        self.runtime.with_model_selection(
+                            colossus_contracts::WorkflowAgentOptions {
+                                model_profile: request.model_profile.clone(),
+                                reasoning_effort: request.reasoning_effort,
+                            },
+                            execution,
+                        ),
+                    ),
                 )
                 .await
             {
@@ -1386,8 +1394,16 @@ impl RuntimeAgentRunApi {
                 .interactions
                 .scope(
                     Arc::clone(&writer),
-                    self.runtime
-                        .with_plugin_skills(&request.skill_ids, execution),
+                    self.runtime.with_plugin_skills(
+                        &request.skill_ids,
+                        self.runtime.with_model_selection(
+                            colossus_contracts::WorkflowAgentOptions {
+                                model_profile: request.model_profile.clone(),
+                                reasoning_effort: request.reasoning_effort,
+                            },
+                            execution,
+                        ),
+                    ),
                 )
                 .await
             {
@@ -1448,8 +1464,16 @@ impl RuntimeAgentRunApi {
                     .interactions
                     .scope(
                         Arc::clone(&writer),
-                        self.runtime
-                            .with_plugin_skills(&request.skill_ids, execution),
+                        self.runtime.with_plugin_skills(
+                            &request.skill_ids,
+                            self.runtime.with_model_selection(
+                                colossus_contracts::WorkflowAgentOptions {
+                                    model_profile: request.model_profile.clone(),
+                                    reasoning_effort: request.reasoning_effort,
+                                },
+                                execution,
+                            ),
+                        ),
                     )
                     .await
                 {
@@ -1498,8 +1522,16 @@ impl RuntimeAgentRunApi {
                     .interactions
                     .scope(
                         Arc::clone(&writer),
-                        self.runtime
-                            .with_plugin_skills(&request.skill_ids, execution),
+                        self.runtime.with_plugin_skills(
+                            &request.skill_ids,
+                            self.runtime.with_model_selection(
+                                colossus_contracts::WorkflowAgentOptions {
+                                    model_profile: request.model_profile.clone(),
+                                    reasoning_effort: request.reasoning_effort,
+                                },
+                                execution,
+                            ),
+                        ),
                     )
                     .await
                 {
@@ -3000,6 +3032,23 @@ impl RuntimeAgentRunApi {
             .clone()
             .unwrap_or_else(|| self.default_role.clone());
         caller.require_role(&role)?;
+        if request.model_profile.is_some() || request.reasoning_effort.is_some() {
+            self.runtime
+                .model_route_with_options(
+                    &role,
+                    &colossus_contracts::WorkflowAgentOptions {
+                        model_profile: request.model_profile.clone(),
+                        reasoning_effort: request.reasoning_effort,
+                    },
+                )
+                .map_err(|_| {
+                    ApiError::invalid(
+                        ApiErrorReason::InvalidArgument,
+                        "model_profile",
+                        "the requested model preferences are unavailable",
+                    )
+                })?;
+        }
         let (session_id, create_session) =
             self.session_id(caller, request.session_id.as_deref())?;
         let new_run = NewRun::from_request(Uuid::now_v7().to_string(), session_id, role, &request)

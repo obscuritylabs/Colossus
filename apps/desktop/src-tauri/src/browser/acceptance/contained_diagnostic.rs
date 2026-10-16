@@ -1314,6 +1314,8 @@ async fn focus(app: &tauri::AppHandle) -> anyhow::Result<()> {
 
 fn request(conversation_id: String) -> anyhow::Result<CreateRunRequest> {
     Ok(CreateRunRequest {
+        model_profile: None,
+        reasoning_effort: None,
         plugin_skill_ids: Vec::new(),
         input: vec![InputContentPart::Text(
             "Use the existing handed-off browser page. Observe its button, click it, then navigate to /agent.".into(),

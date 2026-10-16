@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { once } from "node:events";
 import {
   access,
   mkdir,
@@ -26,7 +29,7 @@ if (electron) {
 }
 const repository = fileURLToPath(new URL("../../../", import.meta.url));
 const binary = new URL(
-  "../../../target/debug/examples/sdk_ephemeral_local",
+  `../../../target/debug/examples/sdk_ephemeral_local${process.platform === "win32" ? ".exe" : ""}`,
   import.meta.url,
 );
 await access(binary);
@@ -40,6 +43,37 @@ const previous = await readFile(runner).catch((error) => {
 });
 const home = await mkdtemp(`${tmpdir()}/colossus-vscode-live-`);
 const config = `${home}/config.json`;
+const requests = [];
+async function provider(name) {
+  const server = createServer(async (request, response) => {
+    let bytes = "";
+    for await (const chunk of request) {
+      bytes += chunk;
+      if (bytes.length > 1_048_576) {
+        response.writeHead(413).end();
+        return;
+      }
+    }
+    const body = JSON.parse(bytes);
+    const users = body.messages.filter((message) => message.role === "user");
+    requests.push({
+      provider: name,
+      model: body.model,
+      effort: body.reasoning_effort,
+      history: users.length,
+    });
+    const text = String(users.at(-1).content);
+    response.setHeader("Content-Type", "text/event-stream");
+    response.end(
+      `data: ${JSON.stringify({ id: `vscode-${requests.length}`, choices: [{ index: 0, delta: { content: text }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+    );
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  return { server, origin: `http://127.0.0.1:${server.address().port}` };
+}
+const fast = await provider("fast");
+const deep = await provider("deep");
 try {
   const environment = { ...process.env, COLOSSUS_HOME: home };
   if (electron) {
@@ -64,6 +98,54 @@ try {
         path: `${home}/state`,
         keys: { kind: "none" },
       },
+      providers: {
+        profiles: {
+          fast: {
+            kind: "open_ai_compatible",
+            baseUrl: `${fast.origin}/v1`,
+            timeoutMs: 5000,
+          },
+          deep: {
+            kind: "open_ai_compatible",
+            baseUrl: `${deep.origin}/v1`,
+            timeoutMs: 5000,
+          },
+        },
+      },
+      models: {
+        profiles: {
+          fast: {
+            providerProfile: "fast",
+            model: "live-fast",
+            reasoningEffort: "low",
+            contextWindowTokens: 32000,
+            maxOutputTokens: 4000,
+            capabilities: { toolCalls: true, streaming: true },
+          },
+          deep: {
+            providerProfile: "deep",
+            model: "live-deep",
+            reasoningEffort: "high",
+            contextWindowTokens: 32000,
+            maxOutputTokens: 4000,
+            capabilities: { toolCalls: true, streaming: true },
+          },
+        },
+        roles: { primary: "fast" },
+      },
+      access: {
+        profile: "pinned",
+        tools: { include: [] },
+        actions: {
+          allow: [
+            "provider.openai.chat",
+            "presentation.history.append",
+            "context.show",
+            "plugin.list",
+          ],
+        },
+      },
+      sandbox: { networkDestinations: [fast.origin, deep.origin] },
     }),
     { mode: 0o600 },
   );
@@ -86,7 +168,19 @@ try {
     child.on("exit", resolve);
   });
   if (code !== 0) throw new Error("Live runtime acceptance failed.");
+  assert.deepEqual(requests, [
+    { provider: "deep", model: "live-deep", effort: "low", history: 1 },
+    { provider: "fast", model: "live-fast", effort: "high", history: 2 },
+    { provider: "fast", model: "live-fast", effort: "low", history: 3 },
+    { provider: "deep", model: "live-deep", effort: "high", history: 4 },
+    { provider: "fast", model: "live-fast", effort: "low", history: 5 },
+  ]);
+  console.log(
+    "VS_CODE_MODEL_SELECTION_OK: two provider endpoints, five turns, explicit effort, saved defaults and retained history",
+  );
 } finally {
+  fast.server.close();
+  deep.server.close();
   if (previous) await writeFile(runner, previous);
   else await rm(runner, { force: true });
   await rm(home, { recursive: true, force: true });

@@ -39,6 +39,10 @@ test("sharing recovery stays visible until an explicit saved choice succeeds", a
 }) => {
   await page.setViewportSize({ width: 700, height: 850 });
   await page.goto("/?fixture=cloud&state=disconnected&recovery=1");
+  const notice = page.getByRole("alert").filter({
+    hasText: "Sharing needs reconciliation",
+  });
+  await expect(notice).toBeVisible();
   await page.evaluate(() => {
     document.documentElement.dataset.theme = "dark";
     document.documentElement.dataset.palette = "neutral";
@@ -59,9 +63,6 @@ test("sharing recovery stays visible until an explicit saved choice succeeds", a
         host.sharingCalls.push({ command, parameters });
       return invoke(command, parameters);
     };
-  });
-  const notice = page.getByRole("alert").filter({
-    hasText: "Sharing needs reconciliation",
   });
   await expect(notice).toBeVisible();
   await expect(notice).toContainText("Synchronization is paused");

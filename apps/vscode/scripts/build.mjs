@@ -139,6 +139,10 @@ await cp("webview/workspace.css", "dist/workspace.css");
 await cp("node_modules/@colossus/ui/styles/theme.css", "dist/theme.css");
 await cp("node_modules/@colossus/ui/styles/composer.css", "dist/composer.css");
 await cp(
+  "node_modules/@colossus/ui/styles/model-picker.css",
+  "dist/model-picker.css",
+);
+await cp(
   "node_modules/@colossus/ui/styles/settings.css",
   "dist/settings-frame.css",
 );

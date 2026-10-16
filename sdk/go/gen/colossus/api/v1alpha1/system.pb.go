@@ -328,6 +328,97 @@ func (x *ApiDeprecation) GetRemovalNotBefore() *timestamppb.Timestamp {
 	return nil
 }
 
+// ConfiguredModelProfile is bounded, credential-free model selection metadata.
+type ConfiguredModelProfile struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// profile is an existing model profile accepted by CreateRun.
+	Profile string `protobuf:"bytes,1,opt,name=profile,proto3" json:"profile,omitempty"`
+	// model is the configured provider model identifier.
+	Model string `protobuf:"bytes,2,opt,name=model,proto3" json:"model,omitempty"`
+	// provider is the adapter kind, without a URL or credentials.
+	Provider string `protobuf:"bytes,3,opt,name=provider,proto3" json:"provider,omitempty"`
+	// provider_profile distinguishes configured connections to the same provider.
+	ProviderProfile string `protobuf:"bytes,4,opt,name=provider_profile,json=providerProfile,proto3" json:"provider_profile,omitempty"`
+	// reasoning_effort is the configured default, when explicitly set.
+	ReasoningEffort *string `protobuf:"bytes,5,opt,name=reasoning_effort,json=reasoningEffort,proto3,oneof" json:"reasoning_effort,omitempty"`
+	// default_roles lists only caller-authorized roles resolving to this profile.
+	DefaultRoles  []string `protobuf:"bytes,6,rep,name=default_roles,json=defaultRoles,proto3" json:"default_roles,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfiguredModelProfile) Reset() {
+	*x = ConfiguredModelProfile{}
+	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfiguredModelProfile) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfiguredModelProfile) ProtoMessage() {}
+
+func (x *ConfiguredModelProfile) ProtoReflect() protoreflect.Message {
+	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfiguredModelProfile.ProtoReflect.Descriptor instead.
+func (*ConfiguredModelProfile) Descriptor() ([]byte, []int) {
+	return file_colossus_api_v1alpha1_system_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ConfiguredModelProfile) GetProfile() string {
+	if x != nil {
+		return x.Profile
+	}
+	return ""
+}
+
+func (x *ConfiguredModelProfile) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *ConfiguredModelProfile) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *ConfiguredModelProfile) GetProviderProfile() string {
+	if x != nil {
+		return x.ProviderProfile
+	}
+	return ""
+}
+
+func (x *ConfiguredModelProfile) GetReasoningEffort() string {
+	if x != nil && x.ReasoningEffort != nil {
+		return *x.ReasoningEffort
+	}
+	return ""
+}
+
+func (x *ConfiguredModelProfile) GetDefaultRoles() []string {
+	if x != nil {
+		return x.DefaultRoles
+	}
+	return nil
+}
+
 // ServerInfo contains credential-free compatibility information.
 type ServerInfo struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -346,14 +437,17 @@ type ServerInfo struct {
 	// deprecations lists announced compatibility changes.
 	Deprecations []*ApiDeprecation `protobuf:"bytes,7,rep,name=deprecations,proto3" json:"deprecations,omitempty"`
 	// server_time supports diagnostics without being an authentication primitive.
-	ServerTime    *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=server_time,json=serverTime,proto3" json:"server_time,omitempty"`
+	ServerTime *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=server_time,json=serverTime,proto3" json:"server_time,omitempty"`
+	// model_profiles lists up to 256 configured choices for callers with runs:execute.
+	// Older servers can omit it; clients must not infer model-selection support.
+	ModelProfiles []*ConfiguredModelProfile `protobuf:"bytes,9,rep,name=model_profiles,json=modelProfiles,proto3" json:"model_profiles,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ServerInfo) Reset() {
 	*x = ServerInfo{}
-	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[3]
+	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -365,7 +459,7 @@ func (x *ServerInfo) String() string {
 func (*ServerInfo) ProtoMessage() {}
 
 func (x *ServerInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[3]
+	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -378,7 +472,7 @@ func (x *ServerInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerInfo.ProtoReflect.Descriptor instead.
 func (*ServerInfo) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_system_proto_rawDescGZIP(), []int{3}
+	return file_colossus_api_v1alpha1_system_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ServerInfo) GetInstanceId() string {
@@ -437,6 +531,13 @@ func (x *ServerInfo) GetServerTime() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *ServerInfo) GetModelProfiles() []*ConfiguredModelProfile {
+	if x != nil {
+		return x.ModelProfiles
+	}
+	return nil
+}
+
 // GetServerInfoRequest requests compatibility metadata.
 type GetServerInfoRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -446,7 +547,7 @@ type GetServerInfoRequest struct {
 
 func (x *GetServerInfoRequest) Reset() {
 	*x = GetServerInfoRequest{}
-	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[4]
+	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -458,7 +559,7 @@ func (x *GetServerInfoRequest) String() string {
 func (*GetServerInfoRequest) ProtoMessage() {}
 
 func (x *GetServerInfoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[4]
+	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -471,7 +572,7 @@ func (x *GetServerInfoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetServerInfoRequest.ProtoReflect.Descriptor instead.
 func (*GetServerInfoRequest) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_system_proto_rawDescGZIP(), []int{4}
+	return file_colossus_api_v1alpha1_system_proto_rawDescGZIP(), []int{5}
 }
 
 // GetServerInfoResponse returns compatibility metadata.
@@ -485,7 +586,7 @@ type GetServerInfoResponse struct {
 
 func (x *GetServerInfoResponse) Reset() {
 	*x = GetServerInfoResponse{}
-	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[5]
+	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -497,7 +598,7 @@ func (x *GetServerInfoResponse) String() string {
 func (*GetServerInfoResponse) ProtoMessage() {}
 
 func (x *GetServerInfoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[5]
+	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -510,7 +611,7 @@ func (x *GetServerInfoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetServerInfoResponse.ProtoReflect.Descriptor instead.
 func (*GetServerInfoResponse) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_system_proto_rawDescGZIP(), []int{5}
+	return file_colossus_api_v1alpha1_system_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *GetServerInfoResponse) GetServerInfo() *ServerInfo {
@@ -535,7 +636,7 @@ type ReadinessCheck struct {
 
 func (x *ReadinessCheck) Reset() {
 	*x = ReadinessCheck{}
-	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[6]
+	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -547,7 +648,7 @@ func (x *ReadinessCheck) String() string {
 func (*ReadinessCheck) ProtoMessage() {}
 
 func (x *ReadinessCheck) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[6]
+	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -560,7 +661,7 @@ func (x *ReadinessCheck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadinessCheck.ProtoReflect.Descriptor instead.
 func (*ReadinessCheck) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_system_proto_rawDescGZIP(), []int{6}
+	return file_colossus_api_v1alpha1_system_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ReadinessCheck) GetName() string {
@@ -593,7 +694,7 @@ type GetReadinessRequest struct {
 
 func (x *GetReadinessRequest) Reset() {
 	*x = GetReadinessRequest{}
-	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[7]
+	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -605,7 +706,7 @@ func (x *GetReadinessRequest) String() string {
 func (*GetReadinessRequest) ProtoMessage() {}
 
 func (x *GetReadinessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[7]
+	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -618,7 +719,7 @@ func (x *GetReadinessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetReadinessRequest.ProtoReflect.Descriptor instead.
 func (*GetReadinessRequest) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_system_proto_rawDescGZIP(), []int{7}
+	return file_colossus_api_v1alpha1_system_proto_rawDescGZIP(), []int{8}
 }
 
 // GetReadinessResponse returns caller-visible readiness.
@@ -634,7 +735,7 @@ type GetReadinessResponse struct {
 
 func (x *GetReadinessResponse) Reset() {
 	*x = GetReadinessResponse{}
-	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[8]
+	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -646,7 +747,7 @@ func (x *GetReadinessResponse) String() string {
 func (*GetReadinessResponse) ProtoMessage() {}
 
 func (x *GetReadinessResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[8]
+	mi := &file_colossus_api_v1alpha1_system_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -659,7 +760,7 @@ func (x *GetReadinessResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetReadinessResponse.ProtoReflect.Descriptor instead.
 func (*GetReadinessResponse) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_system_proto_rawDescGZIP(), []int{8}
+	return file_colossus_api_v1alpha1_system_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *GetReadinessResponse) GetStatus() ReadinessStatus {
@@ -695,7 +796,15 @@ const file_colossus_api_v1alpha1_system_proto_rawDesc = "" +
 	"capability\x18\x01 \x01(\tR\n" +
 	"capability\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12H\n" +
-	"\x12removal_not_before\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x10removalNotBefore\"\xcf\x03\n" +
+	"\x12removal_not_before\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x10removalNotBefore\"\xf9\x01\n" +
+	"\x16ConfiguredModelProfile\x12\x18\n" +
+	"\aprofile\x18\x01 \x01(\tR\aprofile\x12\x14\n" +
+	"\x05model\x18\x02 \x01(\tR\x05model\x12\x1a\n" +
+	"\bprovider\x18\x03 \x01(\tR\bprovider\x12)\n" +
+	"\x10provider_profile\x18\x04 \x01(\tR\x0fproviderProfile\x12.\n" +
+	"\x10reasoning_effort\x18\x05 \x01(\tH\x00R\x0freasoningEffort\x88\x01\x01\x12#\n" +
+	"\rdefault_roles\x18\x06 \x03(\tR\fdefaultRolesB\x13\n" +
+	"\x11_reasoning_effort\"\xa5\x04\n" +
 	"\n" +
 	"ServerInfo\x12\x1f\n" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
@@ -707,7 +816,8 @@ const file_colossus_api_v1alpha1_system_proto_rawDesc = "" +
 	"\x06limits\x18\x06 \x03(\v2\x1f.colossus.api.v1alpha1.ApiLimitR\x06limits\x12I\n" +
 	"\fdeprecations\x18\a \x03(\v2%.colossus.api.v1alpha1.ApiDeprecationR\fdeprecations\x12;\n" +
 	"\vserver_time\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"serverTime\"\x16\n" +
+	"serverTime\x12T\n" +
+	"\x0emodel_profiles\x18\t \x03(\v2-.colossus.api.v1alpha1.ConfiguredModelProfileR\rmodelProfiles\"\x16\n" +
 	"\x14GetServerInfoRequest\"[\n" +
 	"\x15GetServerInfoResponse\x12B\n" +
 	"\vserver_info\x18\x01 \x01(\v2!.colossus.api.v1alpha1.ServerInfoR\n" +
@@ -748,41 +858,43 @@ func file_colossus_api_v1alpha1_system_proto_rawDescGZIP() []byte {
 }
 
 var file_colossus_api_v1alpha1_system_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_colossus_api_v1alpha1_system_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_colossus_api_v1alpha1_system_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_colossus_api_v1alpha1_system_proto_goTypes = []any{
-	(DeploymentMode)(0),           // 0: colossus.api.v1alpha1.DeploymentMode
-	(ReadinessStatus)(0),          // 1: colossus.api.v1alpha1.ReadinessStatus
-	(*Capability)(nil),            // 2: colossus.api.v1alpha1.Capability
-	(*ApiLimit)(nil),              // 3: colossus.api.v1alpha1.ApiLimit
-	(*ApiDeprecation)(nil),        // 4: colossus.api.v1alpha1.ApiDeprecation
-	(*ServerInfo)(nil),            // 5: colossus.api.v1alpha1.ServerInfo
-	(*GetServerInfoRequest)(nil),  // 6: colossus.api.v1alpha1.GetServerInfoRequest
-	(*GetServerInfoResponse)(nil), // 7: colossus.api.v1alpha1.GetServerInfoResponse
-	(*ReadinessCheck)(nil),        // 8: colossus.api.v1alpha1.ReadinessCheck
-	(*GetReadinessRequest)(nil),   // 9: colossus.api.v1alpha1.GetReadinessRequest
-	(*GetReadinessResponse)(nil),  // 10: colossus.api.v1alpha1.GetReadinessResponse
-	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
+	(DeploymentMode)(0),            // 0: colossus.api.v1alpha1.DeploymentMode
+	(ReadinessStatus)(0),           // 1: colossus.api.v1alpha1.ReadinessStatus
+	(*Capability)(nil),             // 2: colossus.api.v1alpha1.Capability
+	(*ApiLimit)(nil),               // 3: colossus.api.v1alpha1.ApiLimit
+	(*ApiDeprecation)(nil),         // 4: colossus.api.v1alpha1.ApiDeprecation
+	(*ConfiguredModelProfile)(nil), // 5: colossus.api.v1alpha1.ConfiguredModelProfile
+	(*ServerInfo)(nil),             // 6: colossus.api.v1alpha1.ServerInfo
+	(*GetServerInfoRequest)(nil),   // 7: colossus.api.v1alpha1.GetServerInfoRequest
+	(*GetServerInfoResponse)(nil),  // 8: colossus.api.v1alpha1.GetServerInfoResponse
+	(*ReadinessCheck)(nil),         // 9: colossus.api.v1alpha1.ReadinessCheck
+	(*GetReadinessRequest)(nil),    // 10: colossus.api.v1alpha1.GetReadinessRequest
+	(*GetReadinessResponse)(nil),   // 11: colossus.api.v1alpha1.GetReadinessResponse
+	(*timestamppb.Timestamp)(nil),  // 12: google.protobuf.Timestamp
 }
 var file_colossus_api_v1alpha1_system_proto_depIdxs = []int32{
-	11, // 0: colossus.api.v1alpha1.ApiDeprecation.removal_not_before:type_name -> google.protobuf.Timestamp
+	12, // 0: colossus.api.v1alpha1.ApiDeprecation.removal_not_before:type_name -> google.protobuf.Timestamp
 	0,  // 1: colossus.api.v1alpha1.ServerInfo.deployment_mode:type_name -> colossus.api.v1alpha1.DeploymentMode
 	2,  // 2: colossus.api.v1alpha1.ServerInfo.capabilities:type_name -> colossus.api.v1alpha1.Capability
 	3,  // 3: colossus.api.v1alpha1.ServerInfo.limits:type_name -> colossus.api.v1alpha1.ApiLimit
 	4,  // 4: colossus.api.v1alpha1.ServerInfo.deprecations:type_name -> colossus.api.v1alpha1.ApiDeprecation
-	11, // 5: colossus.api.v1alpha1.ServerInfo.server_time:type_name -> google.protobuf.Timestamp
-	5,  // 6: colossus.api.v1alpha1.GetServerInfoResponse.server_info:type_name -> colossus.api.v1alpha1.ServerInfo
-	1,  // 7: colossus.api.v1alpha1.ReadinessCheck.status:type_name -> colossus.api.v1alpha1.ReadinessStatus
-	1,  // 8: colossus.api.v1alpha1.GetReadinessResponse.status:type_name -> colossus.api.v1alpha1.ReadinessStatus
-	8,  // 9: colossus.api.v1alpha1.GetReadinessResponse.checks:type_name -> colossus.api.v1alpha1.ReadinessCheck
-	6,  // 10: colossus.api.v1alpha1.SystemService.GetServerInfo:input_type -> colossus.api.v1alpha1.GetServerInfoRequest
-	9,  // 11: colossus.api.v1alpha1.SystemService.GetReadiness:input_type -> colossus.api.v1alpha1.GetReadinessRequest
-	7,  // 12: colossus.api.v1alpha1.SystemService.GetServerInfo:output_type -> colossus.api.v1alpha1.GetServerInfoResponse
-	10, // 13: colossus.api.v1alpha1.SystemService.GetReadiness:output_type -> colossus.api.v1alpha1.GetReadinessResponse
-	12, // [12:14] is the sub-list for method output_type
-	10, // [10:12] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	12, // 5: colossus.api.v1alpha1.ServerInfo.server_time:type_name -> google.protobuf.Timestamp
+	5,  // 6: colossus.api.v1alpha1.ServerInfo.model_profiles:type_name -> colossus.api.v1alpha1.ConfiguredModelProfile
+	6,  // 7: colossus.api.v1alpha1.GetServerInfoResponse.server_info:type_name -> colossus.api.v1alpha1.ServerInfo
+	1,  // 8: colossus.api.v1alpha1.ReadinessCheck.status:type_name -> colossus.api.v1alpha1.ReadinessStatus
+	1,  // 9: colossus.api.v1alpha1.GetReadinessResponse.status:type_name -> colossus.api.v1alpha1.ReadinessStatus
+	9,  // 10: colossus.api.v1alpha1.GetReadinessResponse.checks:type_name -> colossus.api.v1alpha1.ReadinessCheck
+	7,  // 11: colossus.api.v1alpha1.SystemService.GetServerInfo:input_type -> colossus.api.v1alpha1.GetServerInfoRequest
+	10, // 12: colossus.api.v1alpha1.SystemService.GetReadiness:input_type -> colossus.api.v1alpha1.GetReadinessRequest
+	8,  // 13: colossus.api.v1alpha1.SystemService.GetServerInfo:output_type -> colossus.api.v1alpha1.GetServerInfoResponse
+	11, // 14: colossus.api.v1alpha1.SystemService.GetReadiness:output_type -> colossus.api.v1alpha1.GetReadinessResponse
+	13, // [13:15] is the sub-list for method output_type
+	11, // [11:13] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_colossus_api_v1alpha1_system_proto_init() }
@@ -790,13 +902,14 @@ func file_colossus_api_v1alpha1_system_proto_init() {
 	if File_colossus_api_v1alpha1_system_proto != nil {
 		return
 	}
+	file_colossus_api_v1alpha1_system_proto_msgTypes[3].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_colossus_api_v1alpha1_system_proto_rawDesc), len(file_colossus_api_v1alpha1_system_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   9,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

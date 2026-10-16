@@ -132,7 +132,12 @@ test("prompt reflows for width and text-size changes and restores the size of an
       (element) => element.scrollHeight - element.clientHeight,
     ),
   ).toBeLessThanOrEqual(1);
-  await page.getByRole("button", { name: /^Model settings:/ }).click();
+  await page
+    .getByRole("button", { name: /^Choose model and reasoning:/ })
+    .click();
+  await page
+    .getByRole("button", { name: "Configure models", exact: true })
+    .click();
   await page.getByRole("button", { name: "Back to work", exact: true }).click();
   await expect(prompt).toHaveValue(wrappedDraft);
   await expect

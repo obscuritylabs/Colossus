@@ -29,7 +29,7 @@ jobs:
       - name: Check out exact validated source and complete history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: be0ca86f48de94fe2a9b9eadae578de9155ef4c2
+          ref: 638a86a1707840342cfeb5bbb6cb804525023784
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
@@ -38,9 +38,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = be0ca86f48de94fe2a9b9eadae578de9155ef4c2
-          git cat-file -e 52a442bd08d8f9deed9ab22ef5c87346ee04e1fd^{commit}
-          git update-ref refs/remotes/origin/main 52a442bd08d8f9deed9ab22ef5c87346ee04e1fd
+          test "$(git rev-parse HEAD)" = 638a86a1707840342cfeb5bbb6cb804525023784
+          git cat-file -e 7aec34be37fe4629a52ed1a88e9c2e5cd92eafde^{commit}
+          git update-ref refs/remotes/origin/main 7aec34be37fe4629a52ed1a88e9c2e5cd92eafde
           git merge-base --is-ancestor origin/main HEAD
           test -z "$(git status --porcelain)"
           test "$(git rev-parse v0.11.8^{})" = e8f9e9558c69398b73331953faaaf933513eed8f
@@ -51,7 +51,7 @@ jobs:
           libc = ctypes.CDLL(None, use_errno=True)
           abi = libc.syscall(444, None, 0, 1)
           capacities = {name: os.statvfs(path).f_bavail * os.statvfs(path).f_frsize for name, path in [('workspace', os.environ['GITHUB_WORKSPACE']), ('runner_temp', os.environ['RUNNER_TEMP'])]}
-          proof = {'source_head': 'be0ca86f48de94fe2a9b9eadae578de9155ef4c2', 'base_head': '52a442bd08d8f9deed9ab22ef5c87346ee04e1fd', 'kernel': platform.release(), 'landlock_abi': abi, 'probe_errno': ctypes.get_errno(), 'available_bytes': capacities, 'runner_kind': 'standard native ubuntu-24.04'}
+          proof = {'source_head': '638a86a1707840342cfeb5bbb6cb804525023784', 'base_head': '7aec34be37fe4629a52ed1a88e9c2e5cd92eafde', 'kernel': platform.release(), 'landlock_abi': abi, 'probe_errno': ctypes.get_errno(), 'available_bytes': capacities, 'runner_kind': 'standard native ubuntu-24.04'}
           (Path(os.environ['RUNNER_TEMP']) / 'native-validation-evidence' / 'native-preflight.json').write_text(json.dumps(proof, indent=2) + '\n')
           print(json.dumps(proof, indent=2))
           assert platform.machine() == 'x86_64' and abi >= 4, 'Native TCP isolation requires actual Landlock ABI4+.'
@@ -137,8 +137,8 @@ jobs:
           import sys
           import time
 
-          HEAD = 'be0ca86f48de94fe2a9b9eadae578de9155ef4c2'
-          BASE = '52a442bd08d8f9deed9ab22ef5c87346ee04e1fd'
+          HEAD = '638a86a1707840342cfeb5bbb6cb804525023784'
+          BASE = '7aec34be37fe4629a52ed1a88e9c2e5cd92eafde'
           COMMANDS = {
               'prepare-cli': ['cargo', 'build', '--locked', '-p', 'colossus-cli', '--bin', 'colossus'],
               'pr': ['cargo', 'xtask', 'pr', '--base', 'origin/main'],
@@ -324,7 +324,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: native-linux-validation-be0ca86f-${{ github.run_attempt }}
+          name: native-linux-validation-638a86a1-${{ github.run_attempt }}
           path: ${{ runner.temp }}/native-validation-evidence
           if-no-files-found: error
           retention-days: 3

@@ -187,6 +187,7 @@ impl GrpcBackend {
             credential_provider,
             closed: closed.clone(),
             plugin_selection: std::sync::atomic::AtomicBool::new(false),
+            model_selection: std::sync::atomic::AtomicBool::new(false),
         });
         let capabilities = verify_server_identity(
             agent_runs.as_ref(),
@@ -197,6 +198,10 @@ impl GrpcBackend {
         .await?;
         agent_runs.plugin_selection.store(
             capabilities.contains("plugins.skill_selection"),
+            std::sync::atomic::Ordering::Release,
+        );
+        agent_runs.model_selection.store(
+            capabilities.contains("agent_runs.model_selection"),
             std::sync::atomic::Ordering::Release,
         );
         Ok(Self {
@@ -294,6 +299,7 @@ struct GrpcAgentRunClient {
     credential_provider: Arc<dyn CredentialProvider>,
     closed: watch::Sender<bool>,
     plugin_selection: std::sync::atomic::AtomicBool,
+    model_selection: std::sync::atomic::AtomicBool,
 }
 
 struct GrpcArtifactClient {
@@ -819,6 +825,16 @@ impl AgentRunClient for GrpcAgentRunClient {
     }
 
     async fn create_run(&self, request: CreateRunRequest) -> ApiResult<CreateRunResponse> {
+        if (request.model_profile.is_some() || request.reasoning_effort.is_some())
+            && !self
+                .model_selection
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(ApiError::failed_precondition(
+                ApiErrorReason::InvalidRunTransition,
+                "the connected target does not support model selection",
+            ));
+        }
         if !request.plugin_skill_ids.is_empty()
             && !self
                 .plugin_selection
@@ -1411,6 +1427,8 @@ fn proto_create_request(value: CreateRunRequest) -> ApiResult<proto::CreateRunRe
         })
         .transpose()?;
     Ok(proto::CreateRunRequest {
+        model_profile: value.model_profile,
+        reasoning_effort: value.reasoning_effort.map(|effort| effort.as_str().into()),
         plugin_skill_ids: value.plugin_skill_ids,
         input,
         session_id: value.session_id,
@@ -3277,23 +3295,40 @@ mod tests {
         .unwrap();
         assert!(goal_backend.capabilities().contains("goal.create"));
         assert!(!backend.capabilities().contains("goal.create"));
+        let goal_request = CreateRunRequest {
+            model_profile: None,
+            reasoning_effort: None,
+            input: vec![InputContentPart::Text("Verify the outcome.".into())],
+            plugin_skill_ids: Vec::new(),
+            session_id: None,
+            end_user_id: None,
+            role: "assistant".into(),
+            mode: RunMode::Goal,
+            goal_max_iterations: 5,
+            research_depth: None,
+            research_sources: Vec::new(),
+            plan_action: None,
+            branch: None,
+            max_turns: 12,
+            idempotency_key: crate::IdempotencyKey::new("sdk-goal-transport").unwrap(),
+        };
+        for (profile, effort) in [
+            (Some("primary".to_owned()), None),
+            (None, Some(crate::ReasoningEffort::High)),
+        ] {
+            let mut explicit = goal_request.clone();
+            explicit.model_profile = profile;
+            explicit.reasoning_effort = effort;
+            let error = backend.agent_runs().create_run(explicit).await.unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("does not support model selection")
+            );
+        }
         let goal = goal_backend
             .agent_runs()
-            .create_run(CreateRunRequest {
-                input: vec![InputContentPart::Text("Verify the outcome.".into())],
-                plugin_skill_ids: Vec::new(),
-                session_id: None,
-                end_user_id: None,
-                role: "assistant".into(),
-                mode: RunMode::Goal,
-                goal_max_iterations: 5,
-                research_depth: None,
-                research_sources: Vec::new(),
-                plan_action: None,
-                branch: None,
-                max_turns: 12,
-                idempotency_key: crate::IdempotencyKey::new("sdk-goal-transport").unwrap(),
-            })
+            .create_run(goal_request)
             .await
             .unwrap()
             .run;

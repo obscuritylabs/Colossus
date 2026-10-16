@@ -726,6 +726,12 @@ button.workspace-button {
     justify-content: space-between;
     min-width: 0;
   }
+  .shared-vscode-footer .ui-model-trigger {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    justify-self: start;
+    max-width: 100%;
+  }
 }
 .research-controls {
   display: grid;

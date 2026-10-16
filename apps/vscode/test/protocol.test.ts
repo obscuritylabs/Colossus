@@ -86,6 +86,63 @@ test("only deliberate public errors cross the webview boundary", () => {
   );
 });
 
+test("model preferences accept bounded choices without granting connection or tool authority", () => {
+  const selection = { modelProfile: "deep", reasoningEffort: "high" };
+  const send = {
+    type: "send",
+    text: "Continue",
+    mode: "execute",
+    modelSelection: selection,
+  };
+  assert.deepEqual(parseAction(send), send);
+  const update = {
+    type: "setModelSelection",
+    selection,
+    context: "connection-1",
+    sessionId: "",
+    revision: 1,
+  };
+  assert.deepEqual(parseAction(update), update);
+  for (const invalid of [
+    null,
+    [],
+    { modelProfile: "" },
+    { modelProfile: "x".repeat(129) },
+    { modelProfile: "é".repeat(65) },
+    { modelProfile: "bad\nprofile" },
+    { reasoningEffort: "unlimited" },
+    { reasoningEffort: undefined },
+    { provider: "other" },
+    { model: "unconfigured" },
+    { tools: ["*"] },
+    { endpoint: "http://other" },
+    { role: "admin" },
+  ]) {
+    assert.equal(parseAction({ ...send, modelSelection: invalid }), undefined);
+    assert.equal(parseAction({ ...update, selection: invalid }), undefined);
+  }
+  for (const invalid of [
+    { revision: 0 },
+    { revision: -1 },
+    { revision: 1.5 },
+    { revision: Number.MAX_SAFE_INTEGER + 1 },
+    { context: "" },
+    { context: "x".repeat(65) },
+    { sessionId: "bad\nsession" },
+    { role: "admin" },
+  ])
+    assert.equal(parseAction({ ...update, ...invalid }), undefined);
+  assert.equal(
+    parseAction({
+      ...send,
+      mode: "research",
+      researchDepth: "quick",
+      researchSources: ["repo"],
+    }),
+    undefined,
+  );
+});
+
 test("connection diagnostics identify credential failures without exposing raw errors or retrying", async () => {
   for (const [code, reason] of [
     ["ENOENT", "missing-file"],

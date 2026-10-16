@@ -195,6 +195,9 @@ fn provider_fixture(origin: String) -> (RuntimeFixture, Arc<PublicInteractionRou
             "capabilities": {"toolCalls": true, "streaming": true}}}, "roles": {"primary": "fixture"}
     })).unwrap();
     config.sandbox.network_destinations = vec![origin];
+    let mut alternate = config.models.profiles["fixture"].clone();
+    alternate.model = "alternate-fixture".into();
+    config.models.profiles.insert("alternate".into(), alternate);
     let interactions = Arc::new(PublicInteractionRouter::new(Arc::new(DenyApproval), None));
     (
         RuntimeFixture {
@@ -211,6 +214,78 @@ fn provider_fixture(origin: String) -> (RuntimeFixture, Arc<PublicInteractionRou
         },
         interactions,
     )
+}
+
+#[tokio::test]
+async fn model_selection_switches_provider_requests_in_the_same_session() {
+    use colossus_contracts::ReasoningEffort;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let provider = tokio::spawn(async move {
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            serve(
+                listener,
+                vec![
+                    text_response("First response"),
+                    text_response("Second response"),
+                    text_response("Third response"),
+                ],
+            ),
+        )
+        .await
+        .unwrap()
+    });
+    let (fixture, _) = provider_fixture(origin);
+    let api = service(fixture.runtime.clone(), RunAdmissionConfig::default());
+    let owner =
+        caller_with_scopes_and_tools("app:model-selection", "model-selection", &[], &["echo"]);
+    let first = api
+        .create_run(&owner, request("model-first", "Remember this conversation"))
+        .await
+        .unwrap();
+    let first = wait_terminal(&api, &owner, &first.run.id).await;
+    assert_eq!(first.status, RunStatus::Completed, "{first:?}");
+    let mut next = request("model-second", "Continue using the other model");
+    next.session_id = Some(first.session_id.clone());
+    next.model_profile = Some("alternate".into());
+    next.reasoning_effort = Some(ReasoningEffort::High);
+    let second = api.create_run(&owner, next.clone()).await.unwrap();
+    let second = wait_terminal(&api, &owner, &second.run.id).await;
+    assert_eq!(second.status, RunStatus::Completed, "{second:?}");
+    assert_eq!(second.result.as_ref().unwrap().model_profile, "alternate");
+    assert_eq!(second.session_id, first.session_id);
+    let replay = api.create_run(&owner, next.clone()).await.unwrap();
+    assert_eq!(replay.run.id, second.id);
+    next.reasoning_effort = Some(ReasoningEffort::Low);
+    assert!(
+        api.create_run(&owner, next).await.is_err(),
+        "changed selection must not reuse an idempotency key"
+    );
+    let mut last = request("model-third", "Return to the configured default");
+    last.session_id = Some(first.session_id.clone());
+    let third = api.create_run(&owner, last).await.unwrap();
+    let third = wait_terminal(&api, &owner, &third.run.id).await;
+    assert_eq!(third.status, RunStatus::Completed, "{third:?}");
+    assert_eq!(third.result.unwrap().model_profile, "fixture");
+    let captured = provider.await.unwrap();
+    assert_eq!(captured[0]["model"], "goal-fixture");
+    assert_eq!(captured[1]["model"], "alternate-fixture");
+    assert_eq!(captured[1]["reasoning_effort"], "high");
+    assert_eq!(captured[2]["model"], "goal-fixture");
+    assert!(captured[2].get("reasoning_effort").is_none());
+    assert!(
+        captured[2]["messages"]
+            .to_string()
+            .contains("Remember this conversation")
+    );
+    for body in captured {
+        assert_eq!(body["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(body["tools"][0]["function"]["name"], "echo");
+    }
+    let mut invalid = request("invalid-model", "Must not run");
+    invalid.model_profile = Some("missing".into());
+    assert!(api.create_run(&owner, invalid).await.is_err());
 }
 
 #[tokio::test]
@@ -243,6 +318,8 @@ async fn standalone_goal_completes_or_blocks_early_under_each_iterations_tool_ce
             &["goal.show", "goal.update"],
         );
         let mut input = request(status, "Verify the workspace outcome.");
+        input.model_profile = Some("alternate".into());
+        input.reasoning_effort = Some(colossus_contracts::ReasoningEffort::High);
         input.mode = RunMode::Goal;
         input.goal_max_iterations = 5;
         input.max_turns = 2;
@@ -269,6 +346,8 @@ async fn standalone_goal_completes_or_blocks_early_under_each_iterations_tool_ce
         let requests = provider.await.unwrap();
         assert_eq!(requests.len(), 3);
         for request in requests {
+            assert_eq!(request["model"], "alternate-fixture");
+            assert_eq!(request["reasoning_effort"], "high");
             let mut tools = request["tools"]
                 .as_array()
                 .unwrap()

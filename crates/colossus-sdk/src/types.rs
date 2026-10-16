@@ -277,6 +277,18 @@ pub struct RunBranch {
 )]
 #[cfg_attr(feature = "serialization", serde(deny_unknown_fields))]
 pub struct CreateRunRequest {
+    /// Existing configured model profile; absent uses the logical role's route.
+    #[cfg_attr(
+        feature = "serialization",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub model_profile: Option<String>,
+    /// Per-operation reasoning preference; absent uses the configured model default.
+    #[cfg_attr(
+        feature = "serialization",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub reasoning_effort: Option<colossus_api::ReasoningEffort>,
     /// Qualified Agent Plugin skills selected for this message; never a tool grant.
     pub plugin_skill_ids: Vec<String>,
     /// Ordered initial visible content.

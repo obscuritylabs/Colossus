@@ -463,6 +463,8 @@ async fn exercise(tab_retarget: bool) {
         .create_run(
             &caller,
             CreateRunRequest {
+                model_profile: None,
+                reasoning_effort: None,
                 input: vec![ContentPart::Text {
                     text: "pause before any tool".into(),
                 }],

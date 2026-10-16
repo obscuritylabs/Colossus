@@ -144,6 +144,14 @@ test("the inspector reads host-bound inboxes and keeps peer markup inert", async
   });
   await page.evaluate(() => document.body.classList.add("vscode-light"));
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  // Sample the settled palette rather than an intermediate button transition.
+  await inbox.evaluate(async (element) => {
+    await Promise.all(
+      element
+        .getAnimations({ subtree: true })
+        .map((animation) => animation.finished),
+    );
+  });
   expect(
     (await new AxeBuilder({ page }).include(".agent-inbox").analyze())
       .violations,

@@ -348,6 +348,13 @@ message CreateRunRequest {
 
   // goal_max_iterations must be 1..50 for Goal mode and zero otherwise.
   uint32 goal_max_iterations = 14;
+
+  // model_profile selects an existing configured model without changing role or tools.
+  optional string model_profile = 15;
+
+  // reasoning_effort is none, minimal, low, medium, high, xhigh, max, or ultra.
+  // Omission uses the configured model's default. Research uses its own model roles.
+  optional string reasoning_effort = 16;
 }
 
 // RunBranch identifies a canonical prefix without accepting transcript text.

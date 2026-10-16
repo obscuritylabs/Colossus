@@ -52,6 +52,34 @@ export interface CapabilityView {
   enabled: boolean;
   detail: string;
 }
+export const REASONING_EFFORTS = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+export interface ModelSelection {
+  modelProfile?: string;
+  reasoningEffort?: ReasoningEffort;
+}
+export interface ModelSelectionUpdate {
+  context: string;
+  sessionId: string;
+  revision: number;
+}
+export interface ModelProfileView {
+  profile: string;
+  model: string;
+  provider: string;
+  providerProfile: string;
+  reasoningEffort?: ReasoningEffort;
+  defaultRoles: string[];
+}
 export interface ActivityView {
   id: string;
   title: string;
@@ -95,6 +123,10 @@ export interface WorkView {
   runs: RunView[];
   plans: PlanView[];
   capabilities: CapabilityView[];
+  modelProfiles: ModelProfileView[];
+  modelSelection: ModelSelection;
+  modelSelectionContext: string;
+  modelSelectionRevision: number;
   historyHasMore: boolean;
   historyLoading: boolean;
   inspection?: InspectionView | undefined;
@@ -131,8 +163,17 @@ export type ViewAction =
   | {
       type: "openSettings";
     }
-  | { type: "send"; text: string; mode: "plan" | "execute" }
+  | {
+      type: "send";
+      text: string;
+      mode: "plan" | "execute";
+      modelSelection?: ModelSelection;
+    }
   | ({ type: "send"; text: string; mode: "research" } & ResearchOptions)
+  | ({
+      type: "setModelSelection";
+      selection: ModelSelection;
+    } & ModelSelectionUpdate)
   | { type: "selectSession" | "inspectRun" | "inspectPlan"; id: string }
   | { type: "respond"; id: string };
 
@@ -140,6 +181,25 @@ export function parseAction(value: unknown): ViewAction | undefined {
   if (value === null || typeof value !== "object" || !("type" in value))
     return undefined;
   const input = value as Record<string, unknown>;
+  if (
+    input.type === "setModelSelection" &&
+    Object.keys(input).length === 5 &&
+    isModelSelection(input.selection) &&
+    typeof input.context === "string" &&
+    /^[A-Za-z0-9-]{1,64}$/u.test(input.context) &&
+    typeof input.sessionId === "string" &&
+    /^[A-Za-z0-9:_-]{0,256}$/u.test(input.sessionId) &&
+    typeof input.revision === "number" &&
+    Number.isSafeInteger(input.revision) &&
+    input.revision > 0
+  )
+    return {
+      type: "setModelSelection",
+      selection: { ...input.selection },
+      context: input.context,
+      sessionId: input.sessionId,
+      revision: input.revision,
+    };
   const simple = [
     "ready",
     "connect",
@@ -172,9 +232,20 @@ export function parseAction(value: unknown): ViewAction | undefined {
   ) {
     if (
       (input.mode === "plan" || input.mode === "execute") &&
-      Object.keys(input).length === 3
+      Object.keys(input).every((key) =>
+        ["type", "text", "mode", "modelSelection"].includes(key),
+      ) &&
+      (!Object.hasOwn(input, "modelSelection") ||
+        isModelSelection(input.modelSelection))
     )
-      return { type: "send", text: input.text, mode: input.mode };
+      return {
+        type: "send",
+        text: input.text,
+        mode: input.mode,
+        ...(Object.hasOwn(input, "modelSelection")
+          ? { modelSelection: { ...(input.modelSelection as ModelSelection) } }
+          : {}),
+      };
     if (
       input.mode === "research" &&
       Object.keys(input).length === 5 &&
@@ -211,6 +282,10 @@ export function initialView(workspace: string): WorkView {
     runs: [],
     plans: [],
     capabilities: [],
+    modelProfiles: [],
+    modelSelection: {},
+    modelSelectionContext: "",
+    modelSelectionRevision: 0,
     historyHasMore: false,
     historyLoading: false,
     inspectionLoading: false,
@@ -224,6 +299,34 @@ export function initialView(workspace: string): WorkView {
     error: "",
     mode: "plan",
   };
+}
+export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return (
+    typeof value === "string" &&
+    REASONING_EFFORTS.some((effort) => effort === value)
+  );
+}
+
+export function isModelSelection(value: unknown): value is ModelSelection {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const input = value as Record<string, unknown>;
+  return Object.keys(input).every((key) =>
+    key === "modelProfile"
+      ? typeof input[key] === "string" &&
+        input[key].length > 0 &&
+        new TextEncoder().encode(input[key]).length <= 128 &&
+        !/[\u0000-\u001f\u007f]/u.test(input[key])
+      : key === "reasoningEffort" && isReasoningEffort(input[key]),
+  );
+}
+
+export function supportsModelSelection(
+  capabilities: readonly CapabilityView[],
+): boolean {
+  return capabilities.some(
+    (capability) =>
+      capability.name === "agent_runs.model_selection" && capability.enabled,
+  );
 }
 export type WorkMode = "plan" | "execute" | "research";
 export type ResearchDepth = "quick" | "standard" | "deep";
