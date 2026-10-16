@@ -16,7 +16,7 @@ use colossus_windows_process::{
     ContextShutdown, PrivatePipe, PrivateReader, SpawnRequest, WindowsProcessError,
 };
 use sha2::{Digest as _, Sha256};
-use std::{collections::BTreeMap, os::windows::fs::MetadataExt as _, time::Duration};
+use std::{cell::Cell, collections::BTreeMap, os::windows::fs::MetadataExt as _, time::Duration};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use zeroize::Zeroizing;
 
@@ -153,17 +153,22 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
     let mut profile_directory = None;
     let mut leases = Vec::new();
     let mut drains = Vec::new();
+    // Only closed static categories; cancellation must retain the last entered operation.
+    let startup_stage = Cell::new("profile-verify");
     let result = tokio::time::timeout(Duration::from_secs(45), async {
-        profile_directory = Some(
-            profile
-                .verify_process(child.process_handle())?
-                .create_directory(&profile_path)?,
-        );
+        profile_directory = Some({
+            let principal = profile.verify_process(child.process_handle())?;
+            startup_stage.set("profile-create");
+            principal.create_directory(&profile_path)?
+        });
         let directory = profile_directory
             .as_ref()
             .expect("fixture directory was assigned");
+        startup_stage.set("profile-enroll");
         let profile_handle = child.enroll_profile_directory(directory)?;
+        startup_stage.set("profile-identity");
         let profile_identity = colossus_windows_native::FileIdentity::of(directory)?;
+        startup_stage.set("channel-workers");
         let mut pipes = Vec::new();
         for channel in supervised.channels {
             let pipe = PrivatePipe::from_files(channel.reader, channel.writer).map_err(|_| {
@@ -172,6 +177,7 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
             leases.push(pipe.lease.clone());
             pipes.push(pipe);
         }
+        startup_stage.set("stdio-workers");
         for file in [child.stdout.take(), child.stderr.take()]
             .into_iter()
             .flatten()
@@ -184,6 +190,7 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
                 Ok::<_, std::io::Error>(output)
             }));
         }
+        startup_stage.set("bootstrap-prepare");
         let control = BrowserDriverControl::new(RunControl::default(), RunControl::default());
         let binding = BrowserSessionBinding {
             runtime_id: "windows-networkless-runtime".into(),
@@ -240,13 +247,18 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
         let action = pipes.next().unwrap();
         let cancellation = pipes.next().unwrap();
         let presentation = pipes.next().unwrap();
+        startup_stage.set("bootstrap-key-write");
         bootstrap.writer.write_all(key.as_ref()).await?;
+        startup_stage.set("bootstrap-length-write");
         bootstrap
             .writer
             .write_all(&(data.len() as u32).to_be_bytes())
             .await?;
+        startup_stage.set("bootstrap-body-write");
         bootstrap.writer.write_all(&data).await?;
+        startup_stage.set("bootstrap-shutdown");
         bootstrap.writer.shutdown().await?;
+        startup_stage.set("phase-1-read");
         for phase in 1..=7 {
             let mut receipt = [0; 5];
             bootstrap
@@ -260,7 +272,9 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
                 return Err(BrowserDriverError::Denied.into());
             }
             eprintln!("networkless CEF startup phase={phase}");
+            startup_stage.set("phase-receipts");
         }
+        startup_stage.set("post-receipts");
         drop(bootstrap);
         let key = BrowserBridgeKey::from_bootstrap(key);
         let presentation_key = key.derive_presentation_key();
@@ -303,9 +317,19 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
         bridge.close_session(&request.session_id).await?;
         presenter.disconnect();
         bridge.disconnect_for_shutdown();
+        startup_stage.set("complete");
         Ok::<_, Box<dyn std::error::Error>>(())
     })
     .await;
+    if result.is_err() || result.as_ref().is_ok_and(|value| value.is_err()) {
+        let category = if result.is_err() { "timeout" } else { "error" };
+        use std::io::Write as _;
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "networkless CEF parent rejection stage={} category={category}",
+            startup_stage.get()
+        );
+    }
     let cleanup = (|| -> Result<(Option<u32>, bool), Box<dyn std::error::Error>> {
         let exit = child.wait_timeout(Duration::from_secs(5))?;
         let graceful = child.wait_tree_timeout(Duration::from_secs(2))?;

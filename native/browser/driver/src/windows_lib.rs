@@ -50,6 +50,14 @@ unsafe extern "C" fn RunWinMain(
     if let Some(status) = colossus_windows_process::dispatch_browser_context_helper() {
         return status;
     }
+    #[cfg(debug_assertions)]
+    {
+        use std::io::Write as _;
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "native cef bootstrap entry_stage=client-entry"
+        );
+    }
     // SAFETY: CEF bootstrap owns each borrowed pointer through this synchronous
     // call. Native entry verifies the pinned version, sandbox, thread and loader,
     // and dispatches any helper before the private parent channels are parsed.
@@ -58,6 +66,14 @@ unsafe extern "C" fn RunWinMain(
 
 #[cfg(all(windows, colossus_cef_linked))]
 unsafe extern "C" fn run_host() -> i32 {
+    #[cfg(debug_assertions)]
+    {
+        use std::io::Write as _;
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "native cef bootstrap entry_stage=rust-host-entry"
+        );
+    }
     std::panic::catch_unwind(|| match bootstrap_windows::run() {
         Ok(()) => 0,
         Err(error) => {
