@@ -76,6 +76,22 @@ test("five-step setup preserves preferences and draft choices through Back and s
   await page
     .getByRole("option", { name: "Workspace isolated", exact: true })
     .click();
+  await page
+    .getByRole("combobox", { name: "Command isolation", exact: true })
+    .click();
+  await page.getByRole("option", { name: "Full access", exact: true }).click();
+  await expect(
+    page.locator(".onboarding-surface").getByRole("alert"),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText(
+      /confirm this level of tool access|confirm the command isolation/,
+    ),
+  ).toHaveCount(0);
+  await page.screenshot({
+    path: "output/playwright/setup-full-access.png",
+    fullPage: true,
+  });
   await back.click();
   await expect(
     page.getByRole("button", { name: /Compact Reasoner/ }),
@@ -105,7 +121,7 @@ test("five-step setup preserves preferences and draft choices through Back and s
   await next.click();
   await expect(
     page.getByRole("combobox", { name: "Command isolation", exact: true }),
-  ).toContainText("Workspace isolated");
+  ).toContainText("Full access");
   expect(await setupSaveRequests(page)).toEqual([]);
   await page.getByRole("button", { name: "Save and start" }).click();
   await expect(
@@ -116,7 +132,8 @@ test("five-step setup preserves preferences and draft choices through Back and s
       providerKind: "openai_responses",
       model: "vendor/reasoner",
       credentialId: "saved-credential",
-      executionBoundary: "workspace_isolated",
+      accessProfile: "allow_all",
+      executionBoundary: "full_access",
       modelMetadata: expect.objectContaining({
         maxOutputTokens: 2048,
         contextWindowTokens: 8192,
@@ -185,6 +202,10 @@ for (const theme of ["Light", "Dark"] as const) {
     await expect(
       page.getByRole("button", { name: "Save and start" }),
     ).toBeInViewport();
+    await page.screenshot({
+      path: `output/playwright/setup-full-access-${theme.toLowerCase()}-narrow.png`,
+      fullPage: true,
+    });
   });
 }
 

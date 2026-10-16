@@ -25,10 +25,10 @@ use crate::{
         WorkspaceSummaryDto,
     },
     desktop_settings::{
-        AccessProfileSetting, ClientIdentitySetting, DesktopSettings, ExecutionBoundarySetting,
-        ExternalTargetSetting, LOCAL_TERMINAL_CONSENT_VERSION, MAX_EXTERNAL_TARGETS,
-        MAX_PENDING_PROVIDER_CLEANUPS, ModelCapabilitiesSetting, ModelSetting, ProviderKindSetting,
-        ProviderSetting, SettingsStore, WorkspaceSetting, provider_base_url, read_ca_bundle_source,
+        AccessProfileSetting, ClientIdentitySetting, DesktopSettings, ExternalTargetSetting,
+        LOCAL_TERMINAL_CONSENT_VERSION, MAX_EXTERNAL_TARGETS, MAX_PENDING_PROVIDER_CLEANUPS,
+        ModelCapabilitiesSetting, ModelSetting, ProviderKindSetting, ProviderSetting,
+        SettingsStore, WorkspaceSetting, provider_base_url, read_ca_bundle_source,
         read_client_key_source, revalidate_workspace, validate_workspace,
     },
     dto::{CommandErrorDto, ConnectionStateDto, ConnectionStatusDto, RunDto},
@@ -1173,24 +1173,6 @@ pub(crate) async fn configure_managed_runtime(
         ));
     }
     revalidate_workspace(workspace)?;
-    if access_profile_elevation(&settings, request.access_profile)
-        && !confirm_access_profile(&app, request.access_profile).await?
-    {
-        return Err(CommandErrorDto::local_sanitized(
-            "access_profile_confirmation",
-            "The requested access profile was not enabled.",
-            false,
-        ));
-    }
-    if execution_boundary_elevation(&settings, request.execution_boundary)
-        && !confirm_execution_boundary(&app, request.execution_boundary).await?
-    {
-        return Err(CommandErrorDto::local_sanitized(
-            "execution_boundary_confirmation",
-            "The requested execution boundary was not enabled.",
-            false,
-        ));
-    }
     if request.provider_kind == ProviderKindSetting::Codex {
         return configure_managed_codex_runtime(
             &app,
@@ -1504,24 +1486,6 @@ async fn confirm_managed_model_configuration(
     revalidate_workspace(workspace)?;
     reject_active_managed_runs(state).await?;
 
-    if access_profile_elevation(settings, request.access_profile)
-        && !confirm_access_profile(app, request.access_profile).await?
-    {
-        return Err(CommandErrorDto::local_sanitized(
-            "access_profile_confirmation",
-            "The requested access profile was not enabled.",
-            false,
-        ));
-    }
-    if execution_boundary_elevation(settings, request.execution_boundary)
-        && !confirm_execution_boundary(app, request.execution_boundary).await?
-    {
-        return Err(CommandErrorDto::local_sanitized(
-            "execution_boundary_confirmation",
-            "The requested execution boundary was not enabled.",
-            false,
-        ));
-    }
     let changed_origins = request
         .providers
         .iter()
@@ -1804,35 +1768,6 @@ fn reusable_provider_credential(
             .is_some_and(|provider| provider.kind == request.provider_kind)
 }
 
-fn access_profile_elevation(settings: &DesktopSettings, requested: AccessProfileSetting) -> bool {
-    (!settings.managed_configured() && requested != AccessProfileSetting::Minimal)
-        || access_profile_rank(requested) > access_profile_rank(settings.access_profile)
-}
-
-const fn access_profile_rank(profile: AccessProfileSetting) -> u8 {
-    match profile {
-        AccessProfileSetting::Minimal | AccessProfileSetting::Pinned => 0,
-        AccessProfileSetting::Development => 1,
-        AccessProfileSetting::AllowAll => 2,
-    }
-}
-
-fn execution_boundary_elevation(
-    settings: &DesktopSettings,
-    requested: ExecutionBoundarySetting,
-) -> bool {
-    (!settings.managed_configured() && requested != ExecutionBoundarySetting::OfflineIsolated)
-        || execution_boundary_rank(requested) > execution_boundary_rank(settings.execution_boundary)
-}
-
-const fn execution_boundary_rank(boundary: ExecutionBoundarySetting) -> u8 {
-    match boundary {
-        ExecutionBoundarySetting::OfflineIsolated => 0,
-        ExecutionBoundarySetting::WorkspaceIsolated => 1,
-        ExecutionBoundarySetting::FullAccess => 2,
-    }
-}
-
 pub(crate) fn credential_parent(app: &AppHandle) -> Result<tauri::Window, CommandErrorDto> {
     app.get_window("main").ok_or_else(credential_worker_error)
 }
@@ -1855,88 +1790,6 @@ fn verify_reused_provider_credential(
         .ok_or_else(CommandErrorDto::not_configured)?;
     drop(load(credential_id)?);
     Ok(())
-}
-
-async fn confirm_access_profile(
-    app: &AppHandle,
-    profile: AccessProfileSetting,
-) -> Result<bool, CommandErrorDto> {
-    let (name, message) = match profile {
-        AccessProfileSetting::Minimal => return Ok(true),
-        AccessProfileSetting::Pinned => (
-            "Pinned",
-            "Pinned access denies every tool and action except the exact entries configured in Settings. The execution boundary and approval mode are configured separately.",
-        ),
-        AccessProfileSetting::Development => (
-            "Development",
-            "Development access lets Colossus use workspace-development tools. The execution boundary and approval mode are configured separately.",
-        ),
-        AccessProfileSetting::AllowAll => (
-            "Allow all",
-            "Allow all grants the Managed Local agent every declared built-in tool. The execution boundary and approval mode are configured separately.",
-        ),
-    };
-    let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        app.dialog()
-            .message(format!(
-                "{message}\n\nEnable {name} access for Managed Local?"
-            ))
-            .title(format!("Enable Colossus {name} access"))
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                format!("Enable {name}"),
-                "Cancel".into(),
-            ))
-            .blocking_show()
-    })
-    .await
-    .map_err(|_| {
-        CommandErrorDto::local_sanitized(
-            "access_profile_confirmation",
-            "The native access-profile confirmation could not be opened.",
-            true,
-        )
-    })
-}
-
-async fn confirm_execution_boundary(
-    app: &AppHandle,
-    boundary: ExecutionBoundarySetting,
-) -> Result<bool, CommandErrorDto> {
-    let (name, message) = match boundary {
-        ExecutionBoundarySetting::OfflineIsolated => return Ok(true),
-        ExecutionBoundarySetting::WorkspaceIsolated => (
-            "Workspace isolated",
-            "Workspace isolated confines filesystem effects to the selected workspace while allowing explicitly configured provider destinations.",
-        ),
-        ExecutionBoundarySetting::FullAccess => (
-            "Full access",
-            "Unsafe: Full access runs commands without Colossus filesystem or network isolation. They can access files, environment variables, and network destinations available to your account. Policy, permits, approvals, and audit remain active, but approval mode is a separate setting.",
-        ),
-    };
-    let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        app.dialog()
-            .message(format!(
-                "{message}\n\nEnable the {name} execution boundary for Managed Local?"
-            ))
-            .title(format!("Enable {name}"))
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                format!("Enable {name}"),
-                "Cancel".into(),
-            ))
-            .blocking_show()
-    })
-    .await
-    .map_err(|_| {
-        CommandErrorDto::local_sanitized(
-            "execution_boundary_confirmation",
-            "The native execution-boundary confirmation could not be opened.",
-            true,
-        )
-    })
 }
 
 fn persist_reused_provider_configuration(
@@ -2302,7 +2155,6 @@ pub(crate) async fn get_session_map(
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn set_approval_mode(
-    app: AppHandle,
     state: State<'_, AppState>,
     approval_mode: DesktopApprovalModeDto,
 ) -> Result<DesktopStatusDto, CommandErrorDto> {
@@ -2329,14 +2181,6 @@ pub(crate) async fn set_approval_mode(
         return desktop_status_from(&state, &settings).await;
     }
     reject_active_managed_runs(&state).await?;
-    if approval_mode.requires_native_confirmation_from(current) {
-        let _approval_guard = state.try_approval_guard().ok_or_else(|| {
-            CommandErrorDto::busy("Another native approval confirmation is already open.")
-        })?;
-        if !confirm_approval_mode(&app, approval_mode).await? {
-            return desktop_status_from(&state, &settings).await;
-        }
-    }
     let worker = state.managed_worker_for(space_id).await.ok_or_else(|| {
         CommandErrorDto::local_sanitized(
             "approval_mode_unavailable",
@@ -2364,45 +2208,6 @@ pub(crate) async fn set_approval_mode(
     }
     state.set_approval_mode_for(space_id, approval_mode).await;
     desktop_status_from(&state, &settings).await
-}
-
-async fn confirm_approval_mode(
-    app: &AppHandle,
-    approval_mode: DesktopApprovalModeDto,
-) -> Result<bool, CommandErrorDto> {
-    let (title, message, allow_label) = match approval_mode {
-        DesktopApprovalModeDto::RiskAuto => (
-            "Enable automatic low-risk approvals?",
-            "Risk auto lets the configured risk evaluator satisfy eligible low-risk approval obligations without asking. Other approval obligations still pause for confirmation. Policy denials, tool authority, and sandbox boundaries do not change.",
-            "Enable risk auto",
-        ),
-        DesktopApprovalModeDto::FullAccess => (
-            "Enable full approval access?",
-            "Full access satisfies approval obligations without asking. Allowed tools may change or delete workspace data and perform configured network actions. Policy denials, tool authority, and sandbox boundaries do not change.",
-            "Enable full access",
-        ),
-        DesktopApprovalModeDto::Deny | DesktopApprovalModeDto::Ask => return Ok(true),
-    };
-    let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        app.dialog()
-            .message(message)
-            .title(title)
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                allow_label.into(),
-                "Cancel".into(),
-            ))
-            .blocking_show()
-    })
-    .await
-    .map_err(|_| {
-        CommandErrorDto::local_sanitized(
-            "approval_mode_confirmation",
-            "The native permission-mode confirmation could not be opened.",
-            true,
-        )
-    })
 }
 
 #[tauri::command]
@@ -3631,39 +3436,6 @@ mod tests {
         assert!(!reusable_provider_credential(
             &DesktopSettings::default(),
             &provider_request(),
-        ));
-    }
-
-    #[test]
-    fn access_and_execution_authority_confirm_only_on_independent_elevation() {
-        let mut minimal = settings_with_provider(&Uuid::now_v7().to_string());
-        minimal.access_profile = AccessProfileSetting::Minimal;
-        minimal.execution_boundary = ExecutionBoundarySetting::OfflineIsolated;
-        assert!(access_profile_elevation(
-            &minimal,
-            AccessProfileSetting::Development
-        ));
-        assert!(access_profile_elevation(
-            &minimal,
-            AccessProfileSetting::AllowAll
-        ));
-        assert!(execution_boundary_elevation(
-            &minimal,
-            ExecutionBoundarySetting::WorkspaceIsolated
-        ));
-        assert!(execution_boundary_elevation(
-            &minimal,
-            ExecutionBoundarySetting::FullAccess
-        ));
-
-        let full = settings_with_provider(&Uuid::now_v7().to_string());
-        assert!(!access_profile_elevation(
-            &full,
-            AccessProfileSetting::Development
-        ));
-        assert!(!execution_boundary_elevation(
-            &full,
-            ExecutionBoundarySetting::WorkspaceIsolated
         ));
     }
 

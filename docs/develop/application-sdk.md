@@ -352,10 +352,10 @@ Same-provider model and profile edits can reuse the native keychain binding with
 opening another secret prompt. First enrollment, provider-kind changes, and explicit
 rotation never take that reuse branch. A missing reused key fails before any settings
 or runtime mutation and requires an explicit replacement retry.
-First-time non-Minimal access and every access-rank elevation, including
-Development-to-Allow-all, require a native confirmation describing the wider tool
-ceiling. Execution-boundary elevation is confirmed separately, including a move from an
-isolated boundary to Full access; renderer input alone cannot widen either axis.
+Tool access and execution-boundary choices apply through setup Save and start or
+Workspace Apply without a second native confirmation. Permission-mode selection applies
+directly between managed runs. Native validation, workspace binding, runtime lifecycle
+guards, and authenticated worker control remain responsible for applying these choices.
 
 WebView reload does not own sidecar lifetime. Provider and workspace changes request a
 graceful restart. An unexpected exit receives at most three backoff attempts; create and

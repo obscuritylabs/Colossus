@@ -1,7 +1,7 @@
 //! Adopt saved global revisions only at an idle native runtime boundary.
 use super::{
     ManagedSettingsSnapshotDto, advance_space_revision, connect_guard, persist_and_restart,
-    requires_authority_confirmation, resolved_for, settings_store, snapshot,
+    requires_explicit_apply, resolved_for, settings_store, snapshot,
 };
 use crate::{
     desktop_settings::{DesktopSettings, SettingsStore},
@@ -39,7 +39,7 @@ pub(crate) async fn pending_status(
         ),
         Some(PendingUpdate::Confirmation) => (
             "update_confirmation",
-            "Global changes saved. Applying them requires confirmation of permission or sensitive telemetry changes.",
+            "Global changes saved. Apply them in Workspace settings to update permissions or sensitive telemetry.",
         ),
         Some(PendingUpdate::Failed) => (
             "update_failed",
@@ -131,7 +131,7 @@ fn candidate(
     let mut next = settings.clone();
     advance_space_revision(&mut next, space_id)?;
     let after = resolved_for(&next, space_id)?;
-    if requires_authority_confirmation(&before, &after) {
+    if requires_explicit_apply(&before, &after) {
         return Ok(None);
     }
     Ok(Some(next))

@@ -23,7 +23,7 @@ use crate::{
     },
     managed_configuration_commands::{
         advance_unaffected_spaces, append_catalog_revision, bump_global_revision,
-        confirm_authority_elevation, persist_and_restart, resolved_for,
+        confirm_sensitive_telemetry, persist_and_restart, resolved_for,
     },
     state::AppState,
     workspace_files::read_repository_configuration,
@@ -1021,7 +1021,7 @@ pub(crate) async fn apply_repository_configuration(
     validate_configuration(&settings.global_configuration, &settings.spaces)?;
     let after = resolved_for(&settings, &request.space_id)?;
     crate::managed_runtime::preflight_runtime_configuration(&settings, &request.space_id)?;
-    confirm_authority_elevation(&app, &before, &after).await?;
+    confirm_sensitive_telemetry(&app, &before, &after).await?;
     let drain =
         crate::managed_runtime::drain_active_runs_for_configuration(&state, &request.space_id)
             .await?;
