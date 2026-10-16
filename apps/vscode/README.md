@@ -141,8 +141,8 @@ colossus --workspace /absolute/path/to/repository worker \
   --public-api-dir /absolute/private/colossus-vscode-api
 ```
 
-Open Colossus in the secondary sidebar (or select **Colossus: Connect Worker** from the
-Command Palette) and select **Connect worker**. Choose the workspace
+Select **Colossus: Connect External Worker** from the Command Palette, or open
+**Workspace → Connections** in Colossus settings and select **Connect external worker**. Choose the workspace
 (if multiple folders are open), the discovery directory, the independent enrollment ID
 and fingerprint, the OS-keyring service/account, and the enrolled model role. Review
 the native confirmation. The extension stores the connection's trust anchors in VS
