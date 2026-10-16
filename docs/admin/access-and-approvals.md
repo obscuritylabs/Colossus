@@ -94,9 +94,9 @@ does not rewrite the worker default used by other clients or background work.
 Colossus Desktop exposes the same four choices beside the Work composer when its
 app-owned **Managed Local** target is selected. That native control updates the running
 worker's default for subsequent Desktop and background work; client-scoped TUI choices
-still take precedence for requests from that TUI. Desktop requires an operating-system
-confirmation before elevation to `risk-auto` or `full-access`, rejects changes while a
-managed run is active, and resets the worker default to `ask` on runtime restart. The
+still take precedence for requests from that TUI. Desktop applies the selected mode
+directly, rejects changes while a managed run is active, and resets the worker default
+to `risk-auto` on runtime restart. The
 control is intentionally unavailable for External targets, whose approval behavior is
 administered by their owner.
 
@@ -120,7 +120,8 @@ arguments. Use the prepared approval details to inspect the command safely.
 
 In CLI prompts, enter `details` to inspect the complete command before `yes` or `no`.
 In the TUI, use the scrollable Request tab. Desktop offers expandable details and a
-native-owned full-command review window followed by the operating-system confirmation.
+native-owned full-command review window whose **Allow once**, **Always allow**, and
+**Deny** buttons submit the final decision.
 Viewing details never approves execution. Changing targets or an expired/stale request
 invalidates the native review. Older command approvals display “Task-specific reason
 unavailable”; other effect approvals keep their existing behavior.

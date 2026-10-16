@@ -47,7 +47,7 @@ fn ordinary_update_advances_defaults_and_preserves_workspace_overrides() {
 }
 
 #[test]
-fn permission_increases_require_confirmation_without_advancing() {
+fn permission_increases_require_explicit_apply_without_advancing() {
     let mut settings = changed_settings();
     let previous = &mut settings.global_configuration.defaults.revisions[0].value;
     previous.access_profile = Some(AccessProfileSetting::Minimal);
@@ -57,7 +57,7 @@ fn permission_increases_require_confirmation_without_advancing() {
 }
 
 #[test]
-fn authority_bearing_global_fields_require_confirmation() {
+fn authority_bearing_global_fields_require_explicit_apply() {
     let mut settings = changed_settings();
     settings.global_configuration.defaults.revisions[1]
         .value
@@ -134,7 +134,7 @@ async fn unknown_run_status_fails_closed_and_releases_admission() {
 }
 
 #[test]
-fn removing_a_global_restriction_requires_confirmation() {
+fn removing_a_global_restriction_requires_explicit_apply() {
     let mut settings = changed_settings();
     settings.global_configuration.defaults.revisions[0]
         .value
@@ -230,14 +230,14 @@ async fn inactive_workspace_update_persists_without_starting_a_runtime() {
 }
 
 #[test]
-fn mcp_connection_edits_are_automatic_but_tool_permission_edits_need_confirmation() {
+fn mcp_connection_edits_are_automatic_but_tool_permission_edits_need_explicit_apply() {
     let mut before = resolved_for(&settings(), "space-one").unwrap();
     before.mcp_servers.push(serde_json::from_value(json!({
         "name": "docs", "transport": "streamable_http", "url": "https://example.test/mcp", "allowedTools": ["read"]
     })).unwrap());
     let mut after = before.clone();
     after.mcp_servers[0].timeout_ms = Some(5000);
-    assert!(!requires_authority_confirmation(&before, &after));
+    assert!(!requires_explicit_apply(&before, &after));
     after.mcp_servers[0].allowed_tools.push("write".into());
-    assert!(requires_authority_confirmation(&before, &after));
+    assert!(requires_explicit_apply(&before, &after));
 }

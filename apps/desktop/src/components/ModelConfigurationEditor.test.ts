@@ -218,8 +218,10 @@ describe("ModelConfigurationEditor", () => {
     expect(markup).toContain("OpenAI-compatible");
     expect(markup).toContain("Reasoning effort");
     expect(markup).toContain("Provider default");
-    expect(markup).toContain("Full access is unsafe.");
-    expect(markup).toContain("Approval settings still apply.");
+    expect(markup).toContain(
+      '<span class="app-select-value">Full access</span>',
+    );
+    expect(markup).not.toContain('class="unsafe-execution-note"');
     expect(markup).not.toContain("Custom timeout (milliseconds)");
     expect(markup).toContain("Advanced model setup");
     expect(markup).toContain("Tool access");

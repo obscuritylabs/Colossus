@@ -137,8 +137,12 @@ describe("OnboardingSurface", () => {
     expect(markup).toContain(
       '<span class="app-select-value">Allow all — all built-in tools</span>',
     );
-    expect(markup).toContain("Full access is unsafe.");
-    expect(markup).toContain("Approval settings still apply.");
+    expect(markup).toContain(
+      '<span class="app-select-value">Full access</span>',
+    );
+    expect(markup).not.toContain('class="unsafe-execution-note"');
+    expect(markup).not.toContain("confirm this level of tool access");
+    expect(markup).not.toContain("confirm the command isolation setting");
     expect(openingButtonTag(markup, "Run check")).not.toContain("disabled");
     expect(markup).toContain(
       "Runs an offline check without setting up a provider or running a model.",

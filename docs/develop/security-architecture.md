@@ -913,9 +913,9 @@ retains inherited-channel delivery and never persists its worker bootstrap key. 
 native Desktop backend may use that same memory-only key through the narrow
 `colossus-worker-protocol` control client to read or change the worker-wide approval
 mode. The renderer receives only the four-value mode DTO and cannot access the key,
-endpoint, or generic worker operations. Elevation to `risk-auto` or `full-access`
-requires a fixed operating-system confirmation, and native code rejects mode changes
-while a managed run is active. This control changes only satisfaction of later approval
+endpoint, or generic worker operations. The permission-mode selector applies the chosen
+mode directly through the native backend, which rejects changes while a managed run is
+active. This control changes only satisfaction of later approval
 obligations; policy denials, tool grants, permits, and sandbox boundaries remain
 unchanged.
 
@@ -1101,11 +1101,12 @@ in setup exports. Workspace Access settings can clear it. Native watch/hydration
 each matching pending interaction and submits a fresh one-use answer through the same
 approval broker; normal policy re-evaluation, sandboxing, and audit still apply. Redacted,
 non-command, and External-target approvals remain one-time decisions.
-First-time non-Minimal access and every access-rank elevation, including
-Development-to-Allow-all, require a fixed native confirmation before the wider tool
-ceiling is persisted. Execution-boundary elevation is confirmed independently, including
-changes from either isolated boundary to Full access. A renderer can request key rotation
-but cannot suppress the native key prompt for first setup or a provider-kind change.
+Tool access and execution-boundary choices apply through the existing setup Save and
+start or Workspace Apply action. These explicit permission changes do not open a second
+native confirmation. Automatic adoption of broader Global permissions still waits for
+an explicit Workspace Apply action. Enabling full journal payloads in telemetry retains
+its separate sensitive-content confirmation. A renderer can request key rotation but
+cannot suppress the native key prompt for first setup or a provider-kind change.
 
 ## Evidence and uncertainty
 
