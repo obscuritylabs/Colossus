@@ -109,7 +109,7 @@ tauri-plugin-notification = "=2.4.0"
 async-trait = "0.1.89"
 keyring = "4.1.4"
 rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "pem", "ring", "zeroize"] }
-rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 tempfile = "3.23.0"
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
 
