@@ -279,6 +279,7 @@ impl PolicyDecisionPoint for BuiltInPolicy {
                 "provider.openai.responses"
                     | "provider.openai.codex"
                     | "provider.openai.chat"
+                    | "provider.anthropic.messages"
                     | "provider.models"
             )
             || request.action.starts_with("task.")

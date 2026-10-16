@@ -37,6 +37,8 @@ mod mcp_search;
 mod memory;
 mod model_selection;
 pub use mcp_diagnostics::McpHealthCheck;
+#[cfg(test)]
+mod anthropic_tests;
 mod development_journal;
 mod memory_gateway;
 mod operations;

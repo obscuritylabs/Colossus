@@ -801,6 +801,7 @@ impl SafetyKernel {
                     | "provider.openai.responses"
                     | "provider.openai.codex"
                     | "provider.openai.chat"
+                    | "provider.anthropic.messages"
                     | "provider.models"
                     | "plugin.pull"
                     | "plugin.push"

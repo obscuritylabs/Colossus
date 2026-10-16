@@ -456,6 +456,7 @@ export function ModelConfigurationEditor({
                 Chat Completions (OpenAI-compatible)
               </option>
               <option value="openai_responses">OpenAI Responses</option>
+              <option value="anthropic_messages">Anthropic Messages</option>
               <option value="open_ai_codex" disabled>
                 ChatGPT subscription (Codex)
               </option>

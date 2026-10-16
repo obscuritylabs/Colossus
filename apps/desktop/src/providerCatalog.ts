@@ -4,7 +4,7 @@ import type { ManagedModelConfiguration, ProviderKind } from "./types";
 export interface ProviderPreset {
   id: string;
   label: string;
-  protocol: "chat_completions" | "responses" | "codex";
+  protocol: "chat_completions" | "responses" | "codex" | "anthropic_messages";
   baseUrl: string | null;
   credentialEnv: string | null;
   setup?: {
@@ -29,6 +29,7 @@ export interface ProviderCatalogModel {
 }
 
 export function presetProviderKind(preset: ProviderPreset): ProviderKind {
+  if (preset.protocol === "anthropic_messages") return "anthropic_messages";
   return preset.protocol === "codex"
     ? "open_ai_codex"
     : preset.protocol === "responses"

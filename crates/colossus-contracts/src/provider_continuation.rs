@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Safe provenance bound into a permit before resolving opaque Responses state.
+/// Safe provenance bound into a permit before resolving private provider state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderContinuationPlan {
@@ -27,6 +27,9 @@ pub struct ProviderContinuationPlan {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderContinuationView {
+    /// Exact message replay overlay; never a replacement for canonical history.
+    #[serde(default)]
+    pub replay: bool,
     /// Exact immutable state identifier.
     pub id: String,
     /// Canonical messages already represented by the state.
@@ -51,7 +54,7 @@ pub struct ProviderContinuation {
     pub settled_hash: String,
     /// Last normalized assistant message, for exact settlement and tool pairing.
     pub assistant: crate::ModelMessage,
-    /// Exact wire items starting at the newest compaction item. Never display.
+    /// Responses compaction items or native Messages replay overlays. Never display.
     pub hidden_reasoning: Vec<Value>,
 }
 
