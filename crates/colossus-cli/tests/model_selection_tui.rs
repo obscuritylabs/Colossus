@@ -100,7 +100,11 @@ fn provider(replies: &'static [&'static str]) -> (String, thread::JoinHandle<Vec
 
 fn open_picker(terminal: &Terminal, command: &str, title: &str) {
     terminal.send(format!("\x1b[200~{command}\x1b[201~").as_bytes());
-    terminal.wait_for_composer("picker command is ready", |draft| draft == command);
+    // The dim completion suffix is visible in the terminal buffer, but is not
+    // part of the input that Enter submits (for example `/model` + ` default`).
+    terminal.wait_for_composer("picker command is ready", |draft| {
+        draft.starts_with(command)
+    });
     terminal.send(b"\r");
     terminal.wait(title);
 }
