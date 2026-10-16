@@ -148,7 +148,10 @@ try {
   assert.throws(() => process.kill(pid, 0));
   const next = await runtime.start(options);
   assert.equal(next.instance_id, first.instance_id);
-  assert.notEqual(next.bearer, first.bearer);
+  assert.ok(
+    next.bearer !== first.bearer,
+    "A restart must rotate transport authorization.",
+  );
   await controller.attach(
     await connectManaged(next, runtime.pid),
     "primary",

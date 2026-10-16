@@ -60,6 +60,10 @@ below. Use **Colossus: Start Managed Local** to return to the bundled runtime.
 From the repository root, with Node.js 22 or newer, Rust 1.96, and the native build
 tools in [Source setup](../../docs/develop/setup-testing.md):
 
+Native development packaging uses the repository's test profile to omit linker debug
+sections while retaining the real runtime and panic metadata. macOS staging ad-hoc
+signs local native copies before hashing them.
+
 ```sh
 cd sdk/typescript
 npm ci --ignore-scripts

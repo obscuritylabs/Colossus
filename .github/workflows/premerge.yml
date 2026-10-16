@@ -1001,7 +1001,7 @@ jobs:
           key: vscode-native-${{ runner.os }}
           cache-targets: false
       - name: Build the owned native runtime
-        run: cargo build --locked -p colossus-app-host -p colossus-sidecar
+        run: cargo build --locked --profile test -p colossus-app-host -p colossus-sidecar
       - name: Sign macOS preview executables
         if: runner.os == 'macOS'
         run: |

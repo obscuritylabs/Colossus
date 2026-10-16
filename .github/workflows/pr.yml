@@ -277,7 +277,7 @@ jobs:
           npm run test:browser
       - name: Build the VS Code managed runtime
         run: |
-          cargo build --locked -p colossus-app-host -p colossus-sidecar
+          cargo build --locked --profile test -p colossus-app-host -p colossus-sidecar
           cd apps/vscode
           node scripts/stage-native.mjs
       - name: Exercise the bundled VS Code lifecycle

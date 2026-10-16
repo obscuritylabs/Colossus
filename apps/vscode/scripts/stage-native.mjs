@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { createReadStream } from "node:fs";
 import {
   chmod,
@@ -50,9 +51,23 @@ for (const name of ["colossus-app-host", "colossus-sidecar"])
     await rm(join("native", name + extension), { force: true });
 for (const { name, binary } of sources) {
   const destination = join("native", name + suffix);
-  if (process.argv[4] === "--hardlink") await link(binary, destination);
+  if (process.argv[4] === "--hardlink" && process.platform !== "darwin")
+    await link(binary, destination);
   else await copyFile(binary, destination);
   await chmod(destination, 0o755);
+  if (
+    process.platform === "darwin" &&
+    target === `${process.platform}-${process.arch}`
+  ) {
+    const result = spawnSync("/usr/bin/codesign", [
+      "--force",
+      "--sign",
+      "-",
+      destination,
+    ]);
+    if (result.status !== 0)
+      throw new Error("Could not sign the macOS Developer Preview runtime.");
+  }
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(destination)) hash.update(chunk);
   manifest[name] = hash.digest("hex");

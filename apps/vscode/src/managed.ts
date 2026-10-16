@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { lstat, readFile, realpath } from "node:fs/promises";
-import { join, relative, isAbsolute } from "node:path";
+import { join, relative, isAbsolute, dirname } from "node:path";
 import { UserError } from "./errors.js";
 import type { ManagedConnection } from "./connection.js";
 
@@ -214,6 +214,7 @@ export class ManagedRuntime {
     const child = spawn(bundle.host.path, ["--managed-v1"], {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      cwd: dirname(bundle.host.path),
       env: environment,
     });
     this.child = child;

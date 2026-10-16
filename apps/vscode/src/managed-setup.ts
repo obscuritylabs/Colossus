@@ -73,6 +73,7 @@ export async function configureManaged(
     : { id: "model" };
   if (!action) return;
   let pendingSecret: { id: string; value: string } | undefined;
+  let clearedCredential: string | undefined;
   if (action.id === "workspace") {
     const selected = await vscode.window.showWarningMessage(
       "Use this folder for Managed Local?",
@@ -144,6 +145,8 @@ export async function configureManaged(
     });
     if (value === undefined) return;
     const id = selected.provider.credential_id ?? randomUUID();
+    if (!value && selected.provider.credential_id)
+      clearedCredential = selected.provider.credential_id;
     selected.provider.credential_id = value ? id : null;
     if (value) pendingSecret = { id, value };
   } else {
@@ -332,5 +335,17 @@ export async function configureManaged(
       pendingSecret.value,
     );
   await context.workspaceState.update(managedKey(workspace), setup);
+  if (clearedCredential) {
+    try {
+      await context.secrets.delete(credentialKey(clearedCredential));
+    } catch {
+      // Retain a reachable reference when OS custody refuses deletion, so the
+      // same native action can retry instead of leaving an orphaned key.
+      await context.workspaceState.update(managedKey(workspace), saved);
+      throw new UserError(
+        "The provider key could not be deleted. Retry clearing authentication in Configure Local Runtime.",
+      );
+    }
+  }
   return setup;
 }

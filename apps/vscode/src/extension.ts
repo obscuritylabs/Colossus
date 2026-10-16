@@ -43,6 +43,7 @@ import type {
 
 const KEYRING_SERVICE = "dev.obscuritylabs.colossus.vscode";
 const KEYRING_ACCOUNT = "local";
+const SELECTED_WORKSPACE = "colossus.selectedWorkspace.v1";
 
 function storageKey(path: string) {
   return `colossus.connection.v1.${createHash("sha256").update(path).digest("hex")}`;
@@ -68,7 +69,14 @@ export function activate(context: vscode.ExtensionContext) {
         reviews.delete(document.uri.toString());
     }),
   );
-  let folder: vscode.WorkspaceFolder | undefined;
+  const availableFolders =
+    vscode.workspace.workspaceFolders?.filter(
+      (entry) => entry.uri.scheme === "file",
+    ) ?? [];
+  const savedWorkspace = context.workspaceState.get<string>(SELECTED_WORKSPACE);
+  let folder =
+    availableFolders.find((entry) => entry.uri.toString() === savedWorkspace) ??
+    (availableFolders.length === 1 ? availableFolders[0] : undefined);
   let profile: ConnectionProfile | ManagedProfile | undefined;
   const managed = new ManagedRuntime();
   let disposed = false;
@@ -87,7 +95,7 @@ export function activate(context: vscode.ExtensionContext) {
   let preferenceError = "";
   let connecting = false;
   let configuringCredential = false;
-  let controller = makeController("Select a workspace");
+  let controller = makeController(folder?.name ?? "Select a workspace");
   let publishTimer: ReturnType<typeof setTimeout> | undefined;
   let lastView: WorkView = controller.view;
   const status = vscode.window.createStatusBarItem(
@@ -147,7 +155,13 @@ export function activate(context: vscode.ExtensionContext) {
           ? "managed"
           : profile
             ? "external"
-            : "managed",
+            : folder &&
+                context.workspaceState.get(
+                  `colossus.external:${folder.uri.fsPath}`,
+                  false,
+                )
+              ? "external"
+              : "managed",
       error: lastView.error,
     };
     void settingsPanel?.webview.postMessage({
@@ -681,6 +695,10 @@ export function activate(context: vscode.ExtensionContext) {
       if (!enrolled) return;
       await managed.stop();
       folder = selected;
+      await context.workspaceState.update(
+        SELECTED_WORKSPACE,
+        selected.uri.toString(),
+      );
       profile = enrolled;
       controller.detach();
       controller = makeController(selected.name);
@@ -786,6 +804,10 @@ export function activate(context: vscode.ExtensionContext) {
         await managed.stop();
       }
       folder = selected;
+      await context.workspaceState.update(
+        SELECTED_WORKSPACE,
+        selected.uri.toString(),
+      );
       profile = {
         kind: "managed",
         workspacePath: canonical.path,
@@ -1031,15 +1053,15 @@ export function activate(context: vscode.ExtensionContext) {
               switch (action.type) {
                 case "ready":
                   controller.publish();
-                  if (
-                    !profile &&
-                    !connecting &&
-                    vscode.workspace.workspaceFolders?.length === 1
-                  ) {
-                    const selected = vscode.workspace.workspaceFolders[0]!;
+                  if (!profile && !connecting && folder) {
+                    const selected = folder;
                     if (
                       selected.uri.scheme === "file" &&
-                      vscode.workspace.isTrusted
+                      vscode.workspace.isTrusted &&
+                      !context.workspaceState.get(
+                        `colossus.external:${selected.uri.fsPath}`,
+                        false,
+                      )
                     ) {
                       const canonical = await workspaceIdentity(
                         selected.uri.fsPath,
