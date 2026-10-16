@@ -55,6 +55,8 @@ Enter a slash command in the composer. These are useful starting points:
 | `/help` | The command list for your running version |
 | `/session show` | The current session |
 | `/resume` | Searchable past sessions |
+| `/model` | Choose a configured model for the next turn |
+| `/effort` | Choose the next turn's reasoning effort |
 | `/context status` | Current context budget and snapshot |
 | `/tools` | Tools available to the agent |
 | `/work` | Current work records |
@@ -68,6 +70,15 @@ See [Context and snapshots](sessions-context.md) to read the budget and manage
 long-session history.
 
 ## Write and review a turn
+
+Use `/model` and `/effort` to change the next turn without leaving the current
+conversation. Up/Down selects a choice, Enter applies it, and Esc keeps the current
+selection. You can also enter `/model PROFILE` or `/effort high` directly.
+`/model default` restores the configured role, and `/effort default` restores the
+selected model's saved reasoning setting. Changing models resets the reasoning
+override. Choices stay with this session for the current TUI process. Research
+keeps its independently configured model roles; `/reasoning` controls the display
+of safe reasoning summaries.
 
 Enter sends the current prompt. Shift-Enter adds a new line when your terminal
 reports that key combination. Ctrl-J also adds a new line, including in terminals

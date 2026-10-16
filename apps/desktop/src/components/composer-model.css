@@ -3,15 +3,28 @@
   flex: 0 1 auto;
   min-width: 0;
   max-width: 100%;
-  min-height: 28px;
+  min-height: var(--icon-control-size);
   align-items: center;
   gap: 6px;
   padding: 3px 4px;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
   text-align: left;
+}
+
+.composer-model-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.composer-header:has(.composer-model-controls) .composer-context {
+  display: contents;
 }
 
 button.composer-model-chip:hover {

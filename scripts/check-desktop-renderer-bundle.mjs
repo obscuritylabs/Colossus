@@ -12,7 +12,10 @@ const maximumJavaScriptChunkBytes = 700_000;
 // per-chunk limit and production fixture exclusions remain unchanged.
 // Shared inbox inspection exceeds the previous ceiling by about 4 KB. Reserve
 // 10 KB for this feature across platform bundler output, retaining chunk bounds.
-const maximumRendererBytes = 4_170_000;
+// The shared model popover and discrete reasoning slider reuse the shipped Radix
+// foundations. Reserve 40 KB for these controls and their token-based styles;
+// retain the per-chunk bound and production fixture exclusions.
+const maximumRendererBytes = 4_210_000;
 const forbiddenFixtureStrings = [
   "Offline dictation preview",
   "fixture-run-desktop-release",

@@ -26,6 +26,19 @@ Pasting more than 1,000 characters into the message box shows a short **Pasted C
 
 For a first task, try asking the agent to explain the repository without changing files. To inspect its response and evidence, open [Session views](session-views.md).
 
+## Choose a model and reasoning level
+
+For a managed local workspace, select the model bubble above your draft. Search the
+configured models by model, provider, or profile, then select a model. The same popover
+keeps a reasoning slider below the list; use the arrow keys to choose a level, or return
+to **Model default**. **Done** or **Escape** closes the picker and keeps your draft.
+
+The choice applies to later messages in the current conversation while Desktop is open.
+Changing models resets reasoning to that model's saved default. A queued message keeps
+the choices captured when you queued it, and an active response keeps its original
+model. **Role default** restores workspace routing. **Configure models** opens the
+workspace model settings. External connections and Research use their configured routes.
+
 ## Guide a run in progress
 
 When Colossus is working, you can type another message without losing your draft:

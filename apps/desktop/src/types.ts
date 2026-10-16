@@ -293,6 +293,7 @@ export interface DesktopCapabilities {
   delegation: boolean;
   plugins: boolean;
   pluginSkillSelection?: boolean;
+  modelSelection?: boolean;
   tui: boolean;
   shellTerminal: boolean;
   processSessions?: boolean;
@@ -1249,6 +1250,8 @@ export interface SessionActivityPage {
 export const USE_CONFIGURED_MAX_TURNS = 0;
 
 export interface CreateRunRequest {
+  modelProfile?: string;
+  reasoningEffort?: ReasoningEffort;
   prompt: string;
   pluginMentionsResolved?: boolean;
   pluginSkillIds?: string[];

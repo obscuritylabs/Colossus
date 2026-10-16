@@ -4,6 +4,7 @@ import {
   mkdtemp,
   mkdir,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -20,7 +21,9 @@ import {
 import { ConnectionError, type ConnectionDiagnostic } from "../src/errors.js";
 
 test("discovery substitution, unsafe files, and workspace replacement fail before credential access", async () => {
-  const home = await mkdtemp(join(tmpdir(), "colossus-vscode-discovery-"));
+  const home = await realpath(
+    await mkdtemp(join(tmpdir(), "colossus-vscode-discovery-")),
+  );
   const workspace = join(home, "workspace");
   const discovery = join(home, "api");
   await mkdir(workspace);

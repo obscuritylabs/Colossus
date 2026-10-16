@@ -4,6 +4,7 @@ use super::*;
 pub(crate) struct EmbeddedInteractiveHost {
     runtime: Arc<Runtime>,
     themes: ThemeLibrary,
+    model_selections: ModelSelections,
     router: Arc<TuiPromptRouter>,
     approvals: Arc<TuiApprovalProvider>,
 }
@@ -18,9 +19,19 @@ impl EmbeddedInteractiveHost {
         Self {
             runtime,
             themes,
+            model_selections: ModelSelections::default(),
             router,
             approvals,
         }
+    }
+
+    async fn configured_models(&self) -> Result<Vec<ProviderRoute>, String> {
+        Ok(self.runtime.model_profiles())
+    }
+    async fn default_model_route(&self) -> Result<ProviderRoute, String> {
+        self.runtime
+            .provider_route("primary")
+            .map_err(|error| error.to_string())
     }
 
     async fn footer(&self, session_id: &str, status: &str) -> Result<FooterState, String> {
@@ -28,6 +39,11 @@ impl EmbeddedInteractiveHost {
             .runtime
             .provider_route("primary")
             .map_err(|error| error.to_string())?;
+        let route = selected_route(
+            route,
+            &self.configured_models().await?,
+            &self.model_selections.get(session_id)?,
+        )?;
         let context = self.runtime.context_status(session_id).await.ok();
         let summary = self
             .runtime
@@ -35,14 +51,11 @@ impl EmbeddedInteractiveHost {
             .map_err(|error| error.to_string())?
             .ok_or_else(|| format!("session not found: {session_id}"))?;
         Ok(FooterState {
-            role: route.role,
-            route: format!(
-                "{}@{} via {}",
-                route.model, route.model_profile, route.provider_profile
-            ),
+            role: route.role.clone(),
+            route: route_label(&route),
             context: context
                 .as_ref()
-                .map(|context| (context.token_estimate, context.input_budget_tokens)),
+                .map(|context| (context.token_estimate, route.limits.input_budget_tokens)),
             message_count: summary.message_count,
             status: status.into(),
             approval_mode: self.approvals.mode().as_str().into(),
@@ -205,6 +218,21 @@ impl EmbeddedInteractiveHost {
         if let Some(result) = self.presentation_command(name, arguments, events).await? {
             return Ok(result);
         }
+        if name == "model" || name == "effort" {
+            let models = self.configured_models().await?;
+            let current = self.model_selections.get(session_id)?;
+            if let Some(next) =
+                select_model_options(name, arguments, current, &models, events).await?
+            {
+                let default = self.default_model_route().await?;
+                selected_route(default, &models, &next)?;
+                self.model_selections.set(session_id, next)?;
+            }
+            return Ok(HostCommandResult {
+                footer: Some(self.footer(session_id, "ready").await?),
+                ..HostCommandResult::document(PresentationDocument::new())
+            });
+        }
         match name {
             "clear" => Ok(HostCommandResult {
                 document: PresentationDocument::new(),
@@ -231,11 +259,12 @@ impl EmbeddedInteractiveHost {
                     Some("Status"),
                 )
             }
-            "model" | "agent" => self.result(
-                &self
-                    .runtime
-                    .provider_route("primary")
-                    .map_err(|error| error.to_string())?,
+            "agent" => self.result(
+                &selected_route(
+                    self.default_model_route().await?,
+                    &self.configured_models().await?,
+                    &self.model_selections.get(session_id)?,
+                )?,
                 Some("Active model route"),
             ),
             "models" => {
@@ -1231,15 +1260,19 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         self.router.install(Some(events.clone()));
         let result = match command {
             RuntimeCommand::Known { name, arguments } => {
-                self.execute_known(
-                    &name,
-                    &arguments,
-                    session_id,
-                    sticky_skills,
-                    &events,
-                    &control,
-                )
-                .await
+                self.runtime
+                    .with_model_selection(
+                        self.model_selections.get(session_id)?,
+                        self.execute_known(
+                            &name,
+                            &arguments,
+                            session_id,
+                            sticky_skills,
+                            &events,
+                            &control,
+                        ),
+                    )
+                    .await
             }
             RuntimeCommand::Permissions(mode) => {
                 let changed = mode.is_some();
@@ -1282,20 +1315,28 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         let content = interactive_model_content(request.prompt.clone(), request.images.clone());
         self.router.install(Some(events.clone()));
         let mut observer = ChannelRunObserver { sender: events };
+        let options = self.model_selections.get(&request.session_id)?;
+        self.runtime
+            .model_route_with_options("primary", &options)
+            .map_err(|error| error.to_string())?;
         let outcome = self
             .runtime
-            .run_with_mode_with_skills_stream_controlled_content(
-                request.mode,
-                "primary",
-                "You are Colossus.",
-                &content,
-                None,
-                Some(&request.session_id),
-                &request.explicit_skills,
-                &request.sticky_skills,
-                request.include_provider_response_diagnostics,
-                &mut observer,
-                &control,
+            .with_model_selection(
+                options,
+                self.runtime
+                    .run_with_mode_with_skills_stream_controlled_content(
+                        request.mode,
+                        "primary",
+                        "You are Colossus.",
+                        &content,
+                        None,
+                        Some(&request.session_id),
+                        &request.explicit_skills,
+                        &request.sticky_skills,
+                        request.include_provider_response_diagnostics,
+                        &mut observer,
+                        &control,
+                    ),
             )
             .await
             .map_err(|error| interactive_runtime_error(&error));
@@ -1335,17 +1376,21 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         let mut fallback_footer = self.footer(&request.session_id, "executing").await?;
         self.router.install(Some(events.clone()));
         let mut observer = ChannelRunObserver { sender: events };
+        let options = self.model_selections.get(&request.session_id)?;
         let outcome = self
             .runtime
-            .execute_plan_stream_controlled(
-                "primary",
-                &request.session_id,
-                &request.plan_id,
-                request.revision,
-                request.strategy,
-                None,
-                &mut observer,
-                &control,
+            .with_model_selection(
+                options,
+                self.runtime.execute_plan_stream_controlled(
+                    "primary",
+                    &request.session_id,
+                    &request.plan_id,
+                    request.revision,
+                    request.strategy,
+                    None,
+                    &mut observer,
+                    &control,
+                ),
             )
             .await
             .map_err(|error| interactive_runtime_error(&error));

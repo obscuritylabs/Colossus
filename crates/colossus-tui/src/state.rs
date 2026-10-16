@@ -596,7 +596,8 @@ impl TuiState {
                     | Overlay::HistorySearch(_)
                     | Overlay::SettingsPicker(_)
             )
-        ) || self.docked_decision_active()
+        ) || matches!(self.overlay.as_ref(), Some(Overlay::Prompt {request, ..}) if request.kind == InteractivePromptKind::ModelSelection)
+            || self.docked_decision_active()
             || self.structured_completion_context().is_some()
     }
 

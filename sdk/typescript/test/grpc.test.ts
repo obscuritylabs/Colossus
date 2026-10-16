@@ -34,6 +34,7 @@ function serverInfo(changed: Partial<ServerInfo> = {}): ServerInfo {
     capabilities: [],
     limits: [],
     deprecations: [],
+    modelProfiles: [],
     serverTime: undefined,
     ...changed,
   };

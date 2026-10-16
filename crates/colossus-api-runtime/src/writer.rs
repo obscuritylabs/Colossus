@@ -334,6 +334,8 @@ mod tests {
             ],
         );
         let request = CreateRunRequest {
+            model_profile: None,
+            reasoning_effort: None,
             input: vec![ContentPart::Text {
                 text: "hello".into(),
             }],
@@ -478,6 +480,8 @@ mod tests {
             ],
         );
         let request = CreateRunRequest {
+            model_profile: None,
+            reasoning_effort: None,
             input: vec![ContentPart::Text {
                 text: "hello".into(),
             }],

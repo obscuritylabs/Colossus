@@ -327,6 +327,11 @@ fn terminal_help_document(preferences: &TerminalPreferences) -> PresentationDocu
             "Run a bounded probe and show released provider error details",
         ],
         [
+            "Model selection",
+            "/model [PROFILE|default] · /effort [LEVEL|default]",
+            "Choose models and reasoning in the TUI",
+        ],
+        [
             "Appearance",
             "/theme · /stream · /events · /reasoning · /transcript · /multiline",
             "Tune the terminal experience",

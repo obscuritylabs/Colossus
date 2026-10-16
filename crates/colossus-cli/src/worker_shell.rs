@@ -657,6 +657,7 @@ pub(super) async fn worker_line_runner(
                 let outcome = client
                     .call_interactive::<AgentRunOutcome>(
                         WorkerOperation::RunInteractive {
+                            model_options: None,
                             request: InteractiveWorkerRequest::Run {
                                 mode,
                                 role: "primary".into(),
@@ -846,6 +847,7 @@ async fn run_worker_plan_command(
             let plan = client
                 .call_interactive::<PlanRecord>(
                     WorkerOperation::RunInteractive {
+                        model_options: None,
                         request: InteractiveWorkerRequest::PlanApprove {
                             session_id: active_session_id.into(),
                             plan_id: selected.id.clone(),
@@ -890,6 +892,7 @@ async fn run_worker_plan_command(
             let plan = client
                 .call_interactive::<PlanRecord>(
                     WorkerOperation::RunInteractive {
+                        model_options: None,
                         request: InteractiveWorkerRequest::PlanDiscard {
                             session_id: active_session_id.into(),
                             plan_id: selected.id.clone(),
@@ -951,6 +954,7 @@ async fn run_worker_plan_command(
             let outcome = client
                 .call_interactive::<PlanExecutionOutcome>(
                     WorkerOperation::RunInteractive {
+                        model_options: None,
                         request: InteractiveWorkerRequest::PlanExecute {
                             role: "primary".into(),
                             session_id: active_session_id.into(),
@@ -1109,6 +1113,7 @@ async fn resume_worker_goal(
     let outcome = client
         .call_interactive::<GoalRunOutcome>(
             WorkerOperation::RunInteractive {
+                model_options: None,
                 request: InteractiveWorkerRequest::GoalResume {
                     role: "primary".into(),
                     session_id: active_session_id.into(),

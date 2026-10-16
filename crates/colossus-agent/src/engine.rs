@@ -43,6 +43,12 @@ impl AgentService {
         released_observer: Option<&mut dyn RunEventObserver>,
         control: Option<&RunControl>,
     ) -> Result<AgentRunResult, AgentError> {
+        if scope.workflow_id.is_none()
+            && scope.subagent_id.is_none()
+            && let Some(options) = crate::model_selection::current_model_selection()
+        {
+            scope.agent_options = options;
+        }
         let span = tracing::info_span!(
             target: "colossus.gen_ai",
             "invoke_agent",

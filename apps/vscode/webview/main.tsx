@@ -22,6 +22,7 @@ import {
 import { DEFAULT_PREFERENCES, type Preferences } from "../src/settings.js";
 import { brandMarks, element, icon, node } from "./ui.js";
 import { Conversation } from "./conversation.js";
+import { ComposerModelPicker } from "./model-picker.js";
 
 declare function acquireVsCodeApi(): {
   postMessage(message: ViewAction): void;
@@ -131,6 +132,26 @@ function renderComposer() {
                   renderComposer();
                 }}
               />
+              {view && mode.value !== "research" ? (
+                <ComposerModelPicker
+                  view={view}
+                  onChange={(selection) => {
+                    if (!view) return;
+                    const update = {
+                      context: view.modelSelectionContext,
+                      sessionId: view.sessionId,
+                      revision: view.modelSelectionRevision + 1,
+                    };
+                    view = {
+                      ...view,
+                      modelSelection: selection,
+                      modelSelectionRevision: update.revision,
+                    };
+                    renderComposer();
+                    post({ type: "setModelSelection", selection, ...update });
+                  }}
+                />
+              ) : null}
             </div>
             <ComposerSendButton
               id="send"
@@ -279,7 +300,14 @@ function send() {
           researchDepth,
           researchSources: [...researchSources],
         }
-      : { type: "send", text: submittedText, mode: mode.value },
+      : {
+          type: "send",
+          text: submittedText,
+          mode: mode.value,
+          ...(Object.keys(view.modelSelection).length
+            ? { modelSelection: { ...view.modelSelection } }
+            : {}),
+        },
   );
 }
 const conversation = new Conversation(
@@ -288,6 +316,20 @@ const conversation = new Conversation(
 );
 let interactionSignature = "";
 function render(next: WorkView) {
+  // Keep immediate keyboard/drag feedback while older host acknowledgments arrive.
+  // A different connection or conversation always takes its own host selection.
+  if (
+    view &&
+    view.modelSelectionContext === next.modelSelectionContext &&
+    view.sessionId === next.sessionId &&
+    next.modelSelectionRevision < view.modelSelectionRevision
+  ) {
+    next = {
+      ...next,
+      modelSelection: view.modelSelection,
+      modelSelectionRevision: view.modelSelectionRevision,
+    };
+  }
   const changingSession = view?.sessionId !== next.sessionId;
   if (view?.sessionId && !next.sessionId && !next.busy) {
     mode.value = preferences.defaultMode;

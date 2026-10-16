@@ -75,7 +75,9 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area:
         let decision = match kind {
             InteractivePromptKind::Approval => "approval",
             InteractivePromptKind::SandboxBoundaryAcknowledgement => "boundary acknowledgement",
-            InteractivePromptKind::UserInput | InteractivePromptKind::Choice => "decision",
+            InteractivePromptKind::UserInput
+            | InteractivePromptKind::Choice
+            | InteractivePromptKind::ModelSelection => "decision",
         };
         format!(" Message · paused for {decision} ")
     } else {

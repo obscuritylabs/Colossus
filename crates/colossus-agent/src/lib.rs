@@ -33,6 +33,8 @@ mod events;
 use events::*;
 
 mod engine;
+mod model_selection;
+pub use model_selection::scope_model_selection;
 
 mod service;
 pub use service::*;

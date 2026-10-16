@@ -73,6 +73,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let created = client
         .create_run(colossus_sdk::CreateRunRequest {
+            model_profile: None,
+            reasoning_effort: None,
             plugin_skill_ids: Vec::new(),
             input,
             session_id: None,

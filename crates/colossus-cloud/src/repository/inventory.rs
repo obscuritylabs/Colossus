@@ -348,6 +348,8 @@ impl CloudRepository {
                         created_at: run.created_at.clone(),
                         updated_at: run.updated_at.clone(),
                         request: CreateRunRequest {
+                            model_profile: None,
+                            reasoning_effort: None,
                             plugin_skill_ids: vec![],
                             input: vec![InputContentPart::Text(run.title.clone())],
                             session_id: Some(run.session_id.clone()),

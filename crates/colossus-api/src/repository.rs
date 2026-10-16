@@ -51,6 +51,10 @@ const MAX_THREAD_STREAM_EVENTS: u64 = 4_096;
 #[derive(Serialize)]
 #[serde(deny_unknown_fields)]
 struct CreateFingerprint<'request> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_profile: Option<&'request str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<crate::ReasoningEffort>,
     input: &'request [crate::ContentPart],
     session_id: &'request Option<String>,
     end_user_id: &'request Option<String>,
@@ -338,6 +342,8 @@ impl EventSourcedRunRepository {
             .collect::<Vec<_>>();
         skill_ids.sort_unstable();
         let canonical = serde_json::to_vec(&CreateFingerprint {
+            model_profile: request.model_profile.as_deref(),
+            reasoning_effort: request.reasoning_effort,
             input: &request.input,
             session_id: &request.session_id,
             end_user_id: &request.end_user_id,

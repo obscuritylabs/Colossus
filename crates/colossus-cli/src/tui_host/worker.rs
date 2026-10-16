@@ -246,6 +246,7 @@ impl WorkerPromptHandler for TuiWorkerPromptHandler {
 pub(crate) struct WorkerInteractiveHost {
     client: Arc<WorkerClient>,
     themes: ThemeLibrary,
+    model_selections: ModelSelections,
     approval_mode: Mutex<Option<ApprovalMode>>,
     sandbox_boundary_acknowledgements: Mutex<BTreeMap<String, SandboxBoundaryAcknowledgement>>,
 }
@@ -259,6 +260,7 @@ impl WorkerInteractiveHost {
         Self {
             client: Arc::new(client),
             themes,
+            model_selections: ModelSelections::default(),
             approval_mode: Mutex::new(approval_mode),
             sandbox_boundary_acknowledgements: Mutex::new(BTreeMap::new()),
         }
@@ -328,6 +330,20 @@ impl WorkerInteractiveHost {
         )))
     }
 
+    async fn configured_models(&self) -> Result<Vec<ProviderRoute>, String> {
+        serde_json::from_value(self.value(WorkerOperation::ModelProfiles).await?)
+            .map_err(|error| error.to_string())
+    }
+    async fn default_model_route(&self) -> Result<ProviderRoute, String> {
+        serde_json::from_value(
+            self.value(WorkerOperation::ProviderRoute {
+                role: "primary".into(),
+            })
+            .await?,
+        )
+        .map_err(|error| error.to_string())
+    }
+
     async fn footer(&self, session_id: &str, status: &str) -> Result<FooterState, String> {
         let route: ProviderRoute = serde_json::from_value(
             self.value(WorkerOperation::ProviderRoute {
@@ -336,6 +352,11 @@ impl WorkerInteractiveHost {
             .await?,
         )
         .map_err(|error| error.to_string())?;
+        let route = selected_route(
+            route,
+            &self.configured_models().await?,
+            &self.model_selections.get(session_id)?,
+        )?;
         let context = serde_json::from_value::<ContextStatus>(
             self.value(WorkerOperation::ContextStatus {
                 session_id: session_id.into(),
@@ -352,12 +373,10 @@ impl WorkerInteractiveHost {
         )
         .map_err(|error| error.to_string())?;
         Ok(FooterState {
-            role: route.role,
-            route: format!(
-                "{}@{} via {}",
-                route.model, route.model_profile, route.provider_profile
-            ),
-            context: context.map(|context| (context.token_estimate, context.input_budget_tokens)),
+            role: route.role.clone(),
+            route: route_label(&route),
+            context: context
+                .map(|context| (context.token_estimate, route.limits.input_budget_tokens)),
             message_count: session.message_count,
             status: status.into(),
             approval_mode: self
@@ -601,6 +620,21 @@ impl WorkerInteractiveHost {
         if let Some(result) = self.presentation_command(name, arguments, events).await? {
             return Ok(result);
         }
+        if name == "model" || name == "effort" {
+            let models = self.configured_models().await?;
+            let current = self.model_selections.get(session_id)?;
+            if let Some(next) =
+                select_model_options(name, arguments, current, &models, events).await?
+            {
+                let default = self.default_model_route().await?;
+                selected_route(default, &models, &next)?;
+                self.model_selections.set(session_id, next)?;
+            }
+            return Ok(HostCommandResult {
+                footer: Some(self.footer(session_id, "ready").await?),
+                ..HostCommandResult::document(PresentationDocument::new())
+            });
+        }
         match name {
             "clear" => Ok(HostCommandResult {
                 document: PresentationDocument::new(),
@@ -627,14 +661,16 @@ impl WorkerInteractiveHost {
                     Some("Status"),
                 )))
             }
-            "model" | "agent" => {
-                self.document(
-                    WorkerOperation::ProviderRoute {
-                        role: "primary".into(),
-                    },
+            "agent" => {
+                let route = selected_route(
+                    self.default_model_route().await?,
+                    &self.configured_models().await?,
+                    &self.model_selections.get(session_id)?,
+                )?;
+                Ok(HostCommandResult::document(document_from_json(
+                    &serde_json::to_value(route).map_err(|error| error.to_string())?,
                     Some("Active model route"),
-                )
-                .await
+                )))
             }
             "models" => {
                 let profile = doctor_profile(arguments, "models")?;
@@ -778,6 +814,7 @@ impl WorkerInteractiveHost {
                     .client
                     .call_interactive::<GoalRunOutcome>(
                         WorkerOperation::RunInteractive {
+                            model_options: self.model_selections.for_request(session_id)?,
                             request: InteractiveWorkerRequest::GoalResume {
                                 role: "primary".into(),
                                 session_id: session_id.into(),
@@ -914,6 +951,7 @@ impl WorkerInteractiveHost {
                             .client
                             .call_interactive::<Value>(
                                 WorkerOperation::RunInteractive {
+                                    model_options: None,
                                     request: InteractiveWorkerRequest::PluginManage { request },
                                     approval_mode: self.interactive_approval_mode()?,
                                     sandbox_boundary_acknowledgement: self
@@ -1315,6 +1353,7 @@ impl WorkerInteractiveHost {
             .call_interactive::<PlanRecord>(
                 WorkerOperation::RunInteractive {
                     request,
+                    model_options: None,
                     approval_mode: self.interactive_approval_mode()?,
                     sandbox_boundary_acknowledgement: None,
                 },
@@ -1493,6 +1532,7 @@ impl InteractiveHost for WorkerInteractiveHost {
             .client
             .call_interactive::<AcknowledgementResult>(
                 WorkerOperation::RunInteractive {
+                    model_options: None,
                     request: InteractiveWorkerRequest::SandboxBoundaryAcknowledge {
                         session_id: session_id.into(),
                         mode,
@@ -1526,6 +1566,7 @@ impl InteractiveHost for WorkerInteractiveHost {
         self.client
             .call_interactive::<ModelImageReference>(
                 WorkerOperation::RunInteractive {
+                    model_options: None,
                     request: InteractiveWorkerRequest::ImageAttach {
                         path: PathBuf::from(path),
                     },
@@ -1545,6 +1586,7 @@ impl InteractiveHost for WorkerInteractiveHost {
             .client
             .call_interactive::<String>(
                 WorkerOperation::RunInteractive {
+                    model_options: None,
                     request: InteractiveWorkerRequest::ImagePreview {
                         image: image.clone(),
                     },
@@ -1638,6 +1680,7 @@ impl InteractiveHost for WorkerInteractiveHost {
             .client
             .call_interactive::<AgentRunOutcome>(
                 WorkerOperation::RunInteractive {
+                    model_options: self.model_selections.for_request(&request.session_id)?,
                     request: InteractiveWorkerRequest::Run {
                         mode: request.mode,
                         role: "primary".into(),
@@ -1705,6 +1748,7 @@ impl InteractiveHost for WorkerInteractiveHost {
             .client
             .call_interactive::<PlanExecutionOutcome>(
                 WorkerOperation::RunInteractive {
+                    model_options: self.model_selections.for_request(&request.session_id)?,
                     request: InteractiveWorkerRequest::PlanExecute {
                         role: "primary".into(),
                         session_id: request.session_id.clone(),
@@ -1803,6 +1847,7 @@ impl InteractiveHost for WorkerInteractiveHost {
         self.client
             .call_interactive::<String>(
                 WorkerOperation::RunInteractive {
+                    model_options: None,
                     request: InteractiveWorkerRequest::PresentationHistoryAppend {
                         session_id: session_id.into(),
                         entry,
@@ -1833,6 +1878,7 @@ impl InteractiveHost for WorkerInteractiveHost {
         self.client
             .call_interactive(
                 WorkerOperation::RunInteractive {
+                    model_options: None,
                     request: InteractiveWorkerRequest::PresentationSave {
                         session_id: session_id.into(),
                         preferences,

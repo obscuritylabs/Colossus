@@ -831,6 +831,11 @@ fn create_request(
         })
         .transpose()?;
     let request = CoreCreateRunRequest {
+        model_profile: request.model_profile,
+        reasoning_effort: request.reasoning_effort.map(|effort| {
+            serde_json::from_value(serde_json::Value::String(effort))
+                .map_err(|_| invalid(caller, "reasoning_effort", "unknown reasoning effort"))
+        }).transpose()?,
         input,
         session_id: request.session_id,
         end_user_id: request.end_user_id,
@@ -1714,6 +1719,8 @@ mod tests {
             let error = create_request(
                 &caller,
                 CreateRunRequest {
+                    model_profile: None,
+                    reasoning_effort: None,
                     input: Vec::new(),
                     plugin_skill_ids: Vec::new(),
                     session_id: None,
@@ -1739,6 +1746,8 @@ mod tests {
         let error = create_request(
             &caller(),
             CreateRunRequest {
+                model_profile: None,
+                reasoning_effort: None,
                 input: (0..=MAX_CREATE_INPUT_PARTS)
                     .map(|_| colossus_api_proto::v1alpha1::ContentPart { content: None })
                     .collect(),

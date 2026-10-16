@@ -158,6 +158,8 @@ fn caller_context(application_id: &str, request_id: &str, granted: &[&str]) -> C
 
 fn create_request(key: &str, text: &str) -> CreateRunRequest {
     CreateRunRequest {
+        model_profile: None,
+        reasoning_effort: None,
         input: vec![ContentPart::Text { text: text.into() }],
         session_id: None,
         end_user_id: None,

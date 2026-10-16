@@ -153,6 +153,8 @@ async fn start_run(
         .context("authenticated worker approval-mode setup failed")?;
     let run = client
         .create_run(CreateRunRequest {
+            model_profile: None,
+            reasoning_effort: None,
             input: vec![InputContentPart::Text(
                 "Verify the command approval marker.".into(),
             )],

@@ -35,6 +35,7 @@ mod managed_ripgrep;
 mod mcp_diagnostics;
 mod mcp_search;
 mod memory;
+mod model_selection;
 pub use mcp_diagnostics::McpHealthCheck;
 mod development_journal;
 mod memory_gateway;

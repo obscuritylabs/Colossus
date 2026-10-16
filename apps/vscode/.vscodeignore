@@ -19,6 +19,7 @@
 !dist/workspace.css
 !dist/theme.css
 !dist/composer.css
+!dist/model-picker.css
 !dist/settings-frame.css
 !dist/select.css
 !dist/inspector.css

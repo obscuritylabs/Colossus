@@ -265,6 +265,8 @@ async fn native_backend_process_child() {
 async fn run_roundtrip(client: &Colossus) {
     let created = client
         .create_run(CreateRunRequest {
+            model_profile: None,
+            reasoning_effort: None,
             plugin_skill_ids: Vec::new(),
             input: vec![InputContentPart::Text(
                 "Call credential_roundtrip with the large-token MCP server.".into(),

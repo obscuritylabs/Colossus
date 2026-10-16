@@ -311,6 +311,8 @@ impl RuntimeCommunicationApi {
                 .await
                 .map_err(|error| runtime_error(error, caller))?;
             let create = CreateRunRequest {
+                model_profile: None,
+                reasoning_effort: None,
                 input: vec![ContentPart::Text {
                     text: request.text.clone(),
                 }],

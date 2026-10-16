@@ -13,6 +13,12 @@ export interface ComposerModelContext {
   configuration: ManagedConfiguration;
 }
 
+/** Immutable preferences captured when a message is submitted or queued. */
+export interface ComposerModelSelection {
+  modelProfile?: string;
+  reasoningEffort?: ReasoningEffort;
+}
+
 export interface ComposerModelIdentity {
   model: string;
   providerLabel: string;
@@ -35,6 +41,7 @@ const brandLabels = {
 export function composerModelIdentity(
   context: ComposerModelContext | undefined,
   role: string,
+  selection?: ComposerModelSelection,
 ): ComposerModelIdentity {
   const unavailable = { provider: null, reasoningEffort: null };
   if (context?.targetKind === "external_daemon") {
@@ -55,7 +62,9 @@ export function composerModelIdentity(
   // The registry uses primary for an unconfigured specialized role. An explicit
   // mapping to a missing model must not display an unrelated primary model.
   const profile =
-    configuration.roles[role.trim()] ?? configuration.roles.primary;
+    selection?.modelProfile ??
+    configuration.roles[role.trim()] ??
+    configuration.roles.primary;
   const model = configuration.models.find((entry) => entry.profile === profile);
   if (!role.trim() || !model) {
     return {
@@ -99,6 +108,6 @@ export function composerModelIdentity(
     model: model.model,
     providerLabel,
     provider,
-    reasoningEffort: model.reasoningEffort,
+    reasoningEffort: selection?.reasoningEffort ?? model.reasoningEffort,
   };
 }

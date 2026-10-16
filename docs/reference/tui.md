@@ -80,6 +80,7 @@ Use `/help` for arguments and commands available in your installed version.
 | Help and exit | `/help`, `/exit` |
 | Sessions | `/sessions`, `/session show`, `/session new`, `/session resume`, `/resume` |
 | Permissions | `/permissions` opens a chooser; `/permissions deny\|ask\|risk-auto\|full-access` sets a mode directly |
+| Model selection | `/model` and `/effort` open searchable pickers; `/model PROFILE` and `/effort high` set a value directly. Use `default` to restore the configured setting. |
 | Tools and work | `/tools`, `/work`, `/tasks`, `/decisions`, `/plans`, `/goals`, `/goal`, `/goal resume GOAL_ID`, `/agents`, `/agents drain` |
 | Planning | `/plan`, `/plan on`, `/plan off`, `/plan status`, `/plan new`, `/plan list`, `/plan use PLAN_ID`, `/plan show [PLAN_ID]`, `/plan approve`, `/plan discard`, `/plan execute [direct\|goal [ITERATIONS]]` |
 | Context | `/context status`, `/context list`, `/context compact`, `/context restore` |

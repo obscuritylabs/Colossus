@@ -538,6 +538,19 @@ attachments, delegation, and typed Plan continuation. Clients must hide or disab
 optional UI until the server advertises it. In particular, the SDK refuses to encode a
 `plan_action` unless the target advertises `plans.continue`; this prevents an older
 protobuf server from ignoring the unknown field and treating it as an ordinary run.
+
+`agent_runs.model_selection` advertises optional `model_profile` and `reasoning_effort`
+on `CreateRunRequest`. Absent fields keep configured role/model defaults. The Rust SDK
+rejects explicit preferences when the target lacks this capability; Desktop exposes
+the picker only for an authenticated managed runtime advertising it. These preferences
+apply to root Execute, Plan, and Goal calls. Research, workflow steps, and delegated
+agents keep their own routes, and role authorization and tool ceilings stay intact.
+Authenticated `ServerInfo.model_profiles` exposes up to 256 configured choices only
+to callers with `runs:execute`, including model/provider labels, saved reasoning
+defaults, and caller-authorized default roles. It contains no provider endpoints or
+credentials. VS Code uses this catalog with the same shared picker as Desktop and
+validates each submitted preference against the connected worker's metadata.
+
 Artifact uploads are caller-owned, size- and digest-bound, and chunked; downloads
 revalidate the released length and digest. Run attachments contain only opaque
 artifact IDs, never client or server filesystem paths.

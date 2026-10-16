@@ -90,6 +90,12 @@ or submission logic. Buttons inside a composer form must declare their intended 
 The shared frame never selects models, grants capabilities, invokes tools, or persists
 a draft. Send shortcuts and autosizing reuse the existing shared composer behavior.
 
+`ModelPicker` from `@colossus/ui/model-picker` combines a searchable model list and
+discrete reasoning slider in one shadcn popover. Hosts supply configured profiles,
+provider labels, allowed reasoning choices, selected values, and callbacks. The picker
+keeps reasoning visible after a model selection and restores keyboard focus when closed;
+it never discovers providers, persists preferences, or changes an active request.
+
 `MarkdownContent` sanitizes generated content, omits remote images, and bounds parser
 work by character count, tree depth, and node count. Links are inert by default; hosts
 can supply a `linkComponent` that validates navigation through their own authority.

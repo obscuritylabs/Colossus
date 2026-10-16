@@ -268,6 +268,8 @@ async fn verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof() {
     assert_ne!(log_check["status"], "not_applicable");
     let created = client
         .create_run(CreateRunRequest {
+            model_profile: None,
+            reasoning_effort: None,
             plugin_skill_ids: Vec::new(),
             input: vec![InputContentPart::Text("managed sidecar self-test".into())],
             session_id: None,
@@ -302,6 +304,8 @@ async fn verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof() {
     );
     let cloud_run = connector
         .create_run(CreateRunRequest {
+            model_profile: None,
+            reasoning_effort: None,
             plugin_skill_ids: vec![],
             input: vec![InputContentPart::Text("cloud caller self-test".into())],
             session_id: None,
