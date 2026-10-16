@@ -13,7 +13,7 @@ fn allocation() -> Allocation {
         .mode(0o700)
         .create(&path)
         .unwrap();
-    Allocation(path)
+    Allocation(path.canonicalize().unwrap())
 }
 #[test]
 fn owned_directory_cleanup_is_descriptor_scoped_and_never_traverses_external_symlinks() {

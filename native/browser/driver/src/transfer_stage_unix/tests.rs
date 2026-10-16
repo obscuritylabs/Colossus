@@ -12,7 +12,7 @@ fn profile() -> Allocation {
         .mode(0o700)
         .create(&path)
         .unwrap();
-    Allocation(path)
+    Allocation(path.canonicalize().unwrap())
 }
 #[test]
 fn native_upload_names_and_bytes_are_private_bounded_and_retained_until_shutdown() {
