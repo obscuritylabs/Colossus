@@ -18,8 +18,8 @@ use windows_sys::Win32::{
     Foundation::HANDLE,
     Security::{PSID, SECURITY_CAPABILITIES},
     System::Threading::{
-        CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
-        EXTENDED_STARTUPINFO_PRESENT, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+        CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
+        CreateProcessW, EXTENDED_STARTUPINFO_PRESENT, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
         PROC_THREAD_ATTRIBUTE_JOB_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
         PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW,
     },
@@ -199,6 +199,7 @@ pub(super) fn helper(
         &arguments,
         &mut startup,
         false,
+        None,
     )
 }
 
@@ -208,6 +209,7 @@ pub(super) fn browser(
     inner: &OwnedHandle,
     package: PSID,
     endpoints: &[HANDLE],
+    primary: Option<&OwnedHandle>,
 ) -> Result<Created, WindowsProcessError> {
     identity::require(
         matches!(endpoints.len(), 9 | 11)
@@ -266,6 +268,7 @@ pub(super) fn browser(
         &arguments,
         &mut startup,
         true,
+        primary,
     )
 }
 
@@ -276,6 +279,7 @@ fn create(
     arguments: &[String],
     startup: &mut STARTUPINFOEXW,
     inherit: bool,
+    primary: Option<&OwnedHandle>,
 ) -> Result<Created, WindowsProcessError> {
     let executable_wide = wide(executable.as_os_str());
     let mut command = wide(OsStr::new(&windows_command_line(
@@ -291,25 +295,51 @@ fn create(
     // SAFETY: zero is the documented process output state; all buffers and attributes
     // are retained until this synchronous call returns. No breakaway flag is used.
     let mut info: PROCESS_INFORMATION = unsafe { zeroed() };
-    if unsafe {
-        CreateProcessW(
-            executable_wide.as_ptr(),
-            command.as_mut_ptr(),
-            null(),
-            null(),
-            i32::from(inherit),
-            CREATE_SUSPENDED
-                | CREATE_NO_WINDOW
-                | CREATE_UNICODE_ENVIRONMENT
-                | EXTENDED_STARTUPINFO_PRESENT,
-            environment.as_ptr().cast(),
-            cwd.as_ptr(),
-            &startup.StartupInfo,
-            &mut info,
-        )
-    } == 0
-    {
-        return Err(last_error("CreateProcessW(browser context)"));
+    let flags = CREATE_SUSPENDED
+        | CREATE_NO_WINDOW
+        | CREATE_UNICODE_ENVIRONMENT
+        | EXTENDED_STARTUPINFO_PRESENT;
+    let operation = if primary.is_some() {
+        "CreateProcessAsUserW(browser context)"
+    } else {
+        "CreateProcessW(browser context)"
+    };
+    let status = match primary {
+        // SAFETY: the retained restricted own primary passed identity readback; all
+        // buffers, exact inherited handles and three attributes remain live as above.
+        Some(primary) => unsafe {
+            CreateProcessAsUserW(
+                primary.raw(),
+                executable_wide.as_ptr(),
+                command.as_mut_ptr(),
+                null(),
+                null(),
+                i32::from(inherit),
+                flags,
+                environment.as_ptr().cast(),
+                cwd.as_ptr(),
+                &startup.StartupInfo,
+                &mut info,
+            )
+        },
+        // SAFETY: ordinary creation retains the same buffers, flags and startup data.
+        None => unsafe {
+            CreateProcessW(
+                executable_wide.as_ptr(),
+                command.as_mut_ptr(),
+                null(),
+                null(),
+                i32::from(inherit),
+                flags,
+                environment.as_ptr().cast(),
+                cwd.as_ptr(),
+                &startup.StartupInfo,
+                &mut info,
+            )
+        },
+    };
+    if status == 0 {
+        return Err(last_error(operation));
     }
     Created::from_raw(info)
 }

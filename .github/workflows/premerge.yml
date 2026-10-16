@@ -653,6 +653,8 @@ jobs:
             .local/windows-owned-browser-evidence/native-factory.json
             .local/windows-owned-browser-evidence/native-factory.log
             .local/windows-owned-browser-evidence/browser-component.json
+            .local/windows-owned-browser-evidence/*startup*.log
+            .local/windows-owned-browser-evidence/core-death-*.log
           if-no-files-found: warn
           retention-days: 7
       - name: Retain Windows plugin acceptance evidence

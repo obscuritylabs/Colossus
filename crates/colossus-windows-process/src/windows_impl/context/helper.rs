@@ -305,13 +305,16 @@ fn context(
     // No process creation may begin until this exact final commit frame arrives.
     fields(pipe.receive(core, None)?, 28, 0)?;
     let raw_endpoints: Vec<_> = endpoints.iter().map(OwnedHandle::raw).collect();
+    let primary = identity::restricted_browser_primary()?;
     let mut returned = ReturnedChild(Some(launch::browser(
         &values,
         executable.canonical_path(),
         &job,
         package.0,
         &raw_endpoints,
+        primary.as_ref(),
     )?));
+    drop(primary);
     let created = returned
         .0
         .as_ref()

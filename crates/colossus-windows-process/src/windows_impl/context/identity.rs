@@ -1,16 +1,22 @@
 //! Private kernel identities for the fixed browser-context transaction.
 use super::super::{OwnedHandle, WindowsProcessError, last_error};
 use colossus_windows_native::{BoundPath, FileIdentity};
-use std::{ffi::OsString, mem::size_of, os::windows::ffi::OsStringExt as _, ptr::null_mut};
+use std::{
+    ffi::OsString,
+    mem::size_of,
+    os::windows::ffi::OsStringExt as _,
+    ptr::{null, null_mut},
+};
 use windows_sys::Win32::{
     Foundation::{
         DuplicateHandle, ERROR_INSUFFICIENT_BUFFER, FILETIME, GetLastError, HANDLE, LocalFree,
     },
     Security::{
-        Authorization::ConvertSidToStringSidW, EqualSid, GetTokenInformation, IsValidSid,
-        SID_AND_ATTRIBUTES, TOKEN_ELEVATION, TOKEN_GROUPS, TOKEN_QUERY, TokenAppContainerSid,
-        TokenCapabilities, TokenElevation, TokenIntegrityLevel, TokenIsAppContainer,
-        TokenSessionId, TokenStatistics, TokenUser,
+        Authorization::ConvertSidToStringSidW, CreateRestrictedToken, DISABLE_MAX_PRIVILEGE,
+        EqualSid, GetTokenInformation, IsValidSid, LUA_TOKEN, SID_AND_ATTRIBUTES,
+        TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_ELEVATION, TOKEN_GROUPS, TOKEN_QUERY,
+        TokenAppContainerSid, TokenCapabilities, TokenElevation, TokenIntegrityLevel,
+        TokenIsAppContainer, TokenSessionId, TokenStatistics, TokenUser,
     },
     System::Threading::{
         GetCurrentProcess, GetProcessId, GetProcessTimes, OpenProcessToken,
@@ -132,7 +138,10 @@ pub(super) fn token(process: HANDLE) -> Result<Token, WindowsProcessError> {
         return Err(last_error("OpenProcessToken(browser context)"));
     }
     let guard = OwnedHandle::new(raw, "OpenProcessToken(browser context)")?;
-    let token = guard.raw();
+    token_handle(guard.raw())
+}
+
+fn token_handle(token: HANDLE) -> Result<Token, WindowsProcessError> {
     let appcontainer = integer(token, TokenIsAppContainer)?;
     require(appcontainer <= 1, "invalid AppContainer token flag")?;
     let appcontainer = appcontainer == 1;
@@ -166,6 +175,73 @@ pub(super) fn token(process: HANDLE) -> Result<Token, WindowsProcessError> {
             None
         },
     })
+}
+
+/// Attenuates only this fresh context's own browser primary when it is elevated.
+/// Core and the trusted creator retain their original tokens and cleanup authority.
+pub(super) fn restricted_browser_primary() -> Result<Option<OwnedHandle>, WindowsProcessError> {
+    // SAFETY: this fixed trusted context observes only its own process token.
+    let current = token(unsafe { GetCurrentProcess() })?;
+    if !current.elevated {
+        return Ok(None);
+    }
+    let mut raw = null_mut();
+    // CreateRestrictedToken preserves input handle rights; CreateProcessAsUser needs
+    // precisely QUERY | DUPLICATE | ASSIGN_PRIMARY on the returned primary token.
+    // SAFETY: opens only this process's own primary token with a writable output.
+    if unsafe {
+        OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY,
+            &mut raw,
+        )
+    } == 0
+    {
+        return Err(last_error("OpenProcessToken(browser primary)"));
+    }
+    let source = OwnedHandle::new(raw, "OpenProcessToken(browser primary)")?;
+    let mut raw = null_mut();
+    // SAFETY: retains the own primary token, supplies no foreign SID/privilege lists,
+    // and requests only LUA attenuation and privilege removal, never SANDBOX_INERT.
+    if unsafe {
+        CreateRestrictedToken(
+            source.raw(),
+            LUA_TOKEN | DISABLE_MAX_PRIVILEGE,
+            0,
+            null(),
+            0,
+            null(),
+            0,
+            null(),
+            &mut raw,
+        )
+    } == 0
+    {
+        return Err(last_error("CreateRestrictedToken(browser primary)"));
+    }
+    let restricted = OwnedHandle::new(raw, "CreateRestrictedToken(browser primary)")?;
+    let actual = token_handle(restricted.raw())?;
+    require(
+        same_sid(&actual.user, &current.user),
+        "restricted browser primary user changed",
+    )?;
+    require(
+        actual.session == current.session,
+        "restricted browser primary session changed",
+    )?;
+    require(
+        actual.authentication == current.authentication,
+        "restricted browser primary authentication changed",
+    )?;
+    require(
+        !actual.appcontainer,
+        "restricted browser primary is an AppContainer",
+    )?;
+    require(
+        !actual.elevated,
+        "restricted browser primary remains elevated",
+    )?;
+    Ok(Some(restricted))
 }
 
 fn elevation(token: HANDLE) -> Result<bool, WindowsProcessError> {
@@ -396,3 +472,6 @@ pub(super) fn resume(thread: &OwnedHandle) -> Result<(), WindowsProcessError> {
         "primary thread suspension count differs",
     )
 }
+
+#[cfg(test)]
+mod tests;
