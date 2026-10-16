@@ -65,6 +65,20 @@ fn setup_package_rejects_traversal_unreferenced_and_case_colliding_members() {
 }
 
 #[test]
+fn setup_package_rejects_links_before_reading_their_targets() {
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default();
+    writer.start_file("manifest.yaml", options).unwrap();
+    writer.write_all(MANIFEST.as_bytes()).unwrap();
+    writer
+        .add_symlink("config.yaml", "../external-config.yaml", options)
+        .unwrap();
+    let bytes = writer.finish().unwrap().into_inner();
+    let error = archive::read(&bytes).err().expect("reject ZIP links");
+    assert!(error.message.contains("links and special files"));
+}
+
+#[test]
 fn setup_package_rejects_unsupported_versions_and_unknown_manifest_fields() {
     for manifest in [
         MANIFEST.replace("schemaVersion: 1", "schemaVersion: 99"),
