@@ -1,0 +1,133 @@
+name: Focused Windows browser startup diagnostic v2
+
+on:
+  push:
+    branches: [codex/windows-browser-startup-diagnostic-v2-638a]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-browser-startup-diagnostic-v2-638a
+  cancel-in-progress: false
+
+jobs:
+  startup:
+    if: github.repository == 'obscuritylabs/Colossus' && github.ref == 'refs/heads/codex/windows-browser-startup-diagnostic-v2-638a'
+    runs-on: windows-latest-l
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TARGET_DIR: ${{ github.workspace }}\.local\focused-windows-target
+      COLOSSUS_DESKTOP_RELEASE_CHANNEL: development
+      COLOSSUS_DESKTOP_TEAM_ID: UNSIGNED
+    steps:
+      - name: Check out the exact diagnostic source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Admit only the reviewed patch and record categorical runner context
+        env:
+          REVIEW_STATUS: root-and-peer-reviewed
+          EXPECTED_DIAGNOSTIC_FILES: '[".github/workflows/windows-browser-startup-diagnostic.yml","crates/colossus-windows-process/src/windows_impl/context.rs","crates/colossus-windows-process/src/windows_impl/context/helper.rs","crates/colossus-windows-process/src/windows_impl/context/identity.rs","crates/colossus-windows-process/src/windows_impl/context/diagnostics.rs"]'
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          if ($env:REVIEW_STATUS -cne 'root-and-peer-reviewed') { throw 'Diagnostic review/bindings remain pending.' }
+          $base = '638a86a1707840342cfeb5bbb6cb804525023784'
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne $env:EXPECTED_HEAD) { throw 'Unexpected diagnostic checkout.' }
+          $parents = @((git rev-list --parents -n 1 HEAD).Trim() -split ' ')
+          if ($LASTEXITCODE -ne 0 -or $parents.Count -ne 2 -or $parents[1] -cne $base) { throw 'Diagnostic must be one single-parent reviewed commit above the product source.' }
+          $dirty = @(git status --porcelain=v1 --untracked-files=no)
+          if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'Diagnostic tracked source must be clean.' }
+          $expected = @($env:EXPECTED_DIAGNOSTIC_FILES | ConvertFrom-Json | Sort-Object)
+          $actual = @(git diff --name-only $base HEAD | Sort-Object)
+          if ($LASTEXITCODE -ne 0 -or (Compare-Object $expected $actual)) { throw 'Diagnostic source scope differs from review.' }
+          $drive = [IO.DriveInfo]::new('C:\')
+          if ($drive.AvailableFreeSpace -lt 30GB) { throw 'Diagnostic requires thirty GiB free before building.' }
+          $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+          $out = Join-Path $env:RUNNER_TEMP 'windows-startup-diagnostic'
+          $null = New-Item -ItemType Directory -Path $out
+          [ordered]@{
+            scope = 'diagnostic-only-not-canonical-full-acceptance'
+            source = $head; productBase = $base; runId = $env:GITHUB_RUN_ID; attempt = $env:GITHUB_RUN_ATTEMPT
+            callerAdministratorEnabled = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+            callerSession = (Get-Process -Id $PID).SessionId
+            initialFreeBytes = $drive.AvailableFreeSpace
+            changedPaths = $actual
+          } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $out 'preflight.json') -Encoding utf8NoBOM
+
+      - name: Install the repository Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20
+        with:
+          toolchain: 1.96.0
+          components: clippy
+
+      - name: Restore verified Cargo downloads
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: . -> .local/focused-windows-target
+          key: browser-startup-diagnostic-638a
+          cache-targets: false
+          save-if: false
+
+      - name: Check the fixed diagnostic catalog and existing process contracts
+        run: |
+          cargo clippy --locked -p colossus-windows-process --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p colossus-windows-process --lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run the unchanged fail-closed owned-browser acceptance script
+        id: native
+        run: |
+          ./scripts/ci/browser-windows-native.ps1
+
+      - name: Record the actual script outcome and final disk reserve
+        if: always()
+        env:
+          NATIVE_OUTCOME: ${{ steps.native.outcome }}
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'windows-startup-diagnostic'
+          if (Test-Path -LiteralPath $out -PathType Container) {
+            $head = (git rev-parse HEAD).Trim()
+            $headRead = $LASTEXITCODE -eq 0
+            $dirty = @(git status --porcelain=v1 --untracked-files=no)
+            $sourceClean = $LASTEXITCODE -eq 0 -and $dirty.Count -eq 0
+            $free = [IO.DriveInfo]::new('C:\').AvailableFreeSpace
+            $sourceUnchanged = $headRead -and $head -ceq $env:EXPECTED_HEAD
+            [ordered]@{
+              scope = 'diagnostic-only-not-canonical-full-acceptance'
+              source = $head
+              sourceUnchanged = $sourceUnchanged
+              trackedSourceClean = $sourceClean
+              nativeOutcome = $env:NATIVE_OUTCOME
+              finalFreeBytes = $free
+              finalReserveSatisfied = $free -ge 10GB
+              resourceScope = 'thirty-GiB admission, ten-GiB final reserve, thirty-five-minute job limit; no live disk-floor assertion'
+            } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'outcome.json') -Encoding utf8NoBOM
+            if (-not $sourceUnchanged -or -not $sourceClean -or $free -lt 10GB) { throw 'Diagnostic final source or reserve check failed; retained evidence is not acceptance.' }
+          }
+
+      - name: Retain only bounded startup evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-startup-diagnostic-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/windows-startup-diagnostic/*.json
+            .local/windows-owned-browser-evidence/*.json
+            .local/windows-owned-browser-evidence/*.log
+          if-no-files-found: warn
+          retention-days: 7

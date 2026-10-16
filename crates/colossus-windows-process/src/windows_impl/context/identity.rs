@@ -29,7 +29,8 @@ pub(super) fn require(value: bool, label: &'static str) -> Result<(), WindowsPro
 pub(super) fn native<T>(
     result: Result<T, colossus_windows_native::WindowsNativeError>,
 ) -> Result<T, WindowsProcessError> {
-    result.map_err(|_| {
+    result.map_err(|error| {
+        super::diagnostics::record_native(&error);
         WindowsProcessError::Invalid("native browser context identity rejected".into())
     })
 }
@@ -51,6 +52,9 @@ fn token_data(token: HANDLE, kind: i32) -> Result<(Vec<usize>, usize), WindowsPr
     let sized = unsafe { GetTokenInformation(token, kind, null_mut(), 0, &mut needed) };
     // SAFETY: capture the sizing call's thread-local error immediately.
     let error = unsafe { GetLastError() };
+    if sized == 0 && error != ERROR_INSUFFICIENT_BUFFER {
+        super::diagnostics::record_sizing(kind, error);
+    }
     require(
         sized == 0 && error == ERROR_INSUFFICIENT_BUFFER,
         "token sizing query rejected",
@@ -246,6 +250,18 @@ pub(super) fn browser(
         && actual.integrity == 4096
         && actual.capabilities == 0
         && package_matches;
+    if !admitted {
+        // One bit per original admitted clause, in the same order. No SID/LUID is recorded.
+        let mismatch = u16::from(!same_sid(&actual.user, &core.user))
+            | (u16::from(actual.session != context.session) << 1)
+            | (u16::from(actual.authentication != context.authentication) << 2)
+            | (u16::from(!actual.appcontainer) << 3)
+            | (u16::from(actual.elevated) << 4)
+            | (u16::from(actual.integrity != 4096) << 5)
+            | (u16::from(actual.capabilities != 0) << 6)
+            | (u16::from(!package_matches) << 7);
+        super::diagnostics::record_browser(mismatch);
+    }
     #[cfg(debug_assertions)]
     if !admitted {
         eprintln!(
