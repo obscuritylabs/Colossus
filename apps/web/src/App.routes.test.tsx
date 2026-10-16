@@ -93,7 +93,7 @@ const pendingInventory: { resolve: ((value: Response) => void) | null } = {
 };
 const response = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status });
-beforeEach(() => {
+beforeEach(async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   history.replaceState(null, "", "/projects/p/threads/t");
   sessionStorage.clear();
@@ -179,6 +179,14 @@ beforeEach(() => {
       return response({ error: "permission_denied" }, 403);
     }),
   );
+  // These assertions cover navigation and authorization. Settle the real lazy
+  // modules before starting their bounded UI waits, including on a cold Windows
+  // transform cache.
+  await Promise.all([
+    import("./ControlPlane"),
+    import("./ThreadDetail"),
+    import("./Administration"),
+  ]);
 });
 afterEach(async () => {
   await act(() => root.unmount());

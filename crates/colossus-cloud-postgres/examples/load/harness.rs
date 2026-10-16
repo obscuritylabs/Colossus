@@ -103,6 +103,8 @@ fn now() -> Result<u64, &'static str> {
 }
 fn request(index: usize) -> CreateRunRequest {
     CreateRunRequest {
+        model_profile: None,
+        reasoning_effort: None,
         plugin_skill_ids: vec![],
         input: vec![InputContentPart::Text(format!(
             "Load fixture conversation {index}"

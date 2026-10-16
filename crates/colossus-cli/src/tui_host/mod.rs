@@ -459,6 +459,8 @@ fn interactive_runtime_error(error: &RuntimeError) -> String {
 }
 
 mod common;
+mod model_selection;
+use model_selection::*;
 mod embedded;
 mod plugins;
 mod worker;

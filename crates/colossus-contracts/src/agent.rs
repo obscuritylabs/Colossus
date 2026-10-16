@@ -254,6 +254,22 @@ pub enum ReasoningEffort {
     Ultra,
 }
 
+impl ReasoningEffort {
+    /// Stable provider-neutral spelling used by configuration and public transports.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+            Self::Max => "max",
+            Self::Ultra => "ultra",
+        }
+    }
+}
+
 /// Declared and effective token limits for one configured model profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

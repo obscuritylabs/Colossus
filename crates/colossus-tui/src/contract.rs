@@ -695,6 +695,8 @@ pub enum InteractivePromptKind {
     UserInput,
     /// A local interface picker such as session or plan selection.
     Choice,
+    /// Searchable configured-model or reasoning picker, with no execution authority.
+    ModelSelection,
 }
 
 impl InteractivePromptKind {

@@ -147,5 +147,5 @@ mod tests;
 pub use colossus_api::{
     ListProcessSessionsRequest, ProcessLifetime, ProcessOutputChunk, ProcessSessionPage,
     ProcessSessionSnapshot, ProcessSessionStatus, ProcessSessionSummary, ReadProcessSessionRequest,
-    StopProcessSessionRequest,
+    ReasoningEffort, StopProcessSessionRequest,
 };

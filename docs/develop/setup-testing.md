@@ -339,6 +339,21 @@ Manual dispatch of a stable version instead validates the immutable SDK candidat
 requires all Desktop jobs to be skipped. See [Core release operations](releasing.md) for
 registry bootstrap, stable tag, approval, and recovery steps.
 
+## Clear local build caches
+
+The workspace and native Desktop keep separate Cargo build trees. After builds and
+tests have stopped, clear their intermediate outputs with:
+
+```bash
+cargo clean
+cargo clean --manifest-path apps/desktop/src-tauri/Cargo.toml
+```
+
+For a build using `--target-dir` or `CARGO_TARGET_DIR`, select that same directory
+when cleaning. Set `CARGO_INCREMENTAL=0` for temporary validation builds to avoid
+retaining incremental compiler state. Keep needed installers and verification evidence
+outside the build trees before cleaning them.
+
 ## Expected result
 
 The workspace builds, focused tests provide a short feedback loop, and the local

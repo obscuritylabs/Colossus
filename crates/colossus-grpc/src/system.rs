@@ -138,6 +138,7 @@ impl SystemService for SystemServiceAdapter {
         let caller = caller_context(&request)?;
         let capabilities = [
             ("agent_runs.create", scopes::RUNS_EXECUTE),
+            ("agent_runs.model_selection", scopes::RUNS_EXECUTE),
             ("agent_runs.read", scopes::RUNS_READ),
             (
                 colossus_api::AGENT_COMMUNICATION_READ_CAPABILITY,

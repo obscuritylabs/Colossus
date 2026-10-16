@@ -8,6 +8,7 @@
 @import "./conversation.css";
 @import "./workspace-sidebar.css";
 @import "./charts.css";
+@import "./model-picker.css";
 @source "../src";
 
 @custom-variant dark (&:where(:root:not([data-theme="light"]) *));

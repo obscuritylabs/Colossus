@@ -187,6 +187,8 @@ async fn run_rust_prompt(
     let client = Colossus::connect_installed(connect).await?;
     let created = client
         .create_run(CreateRunRequest {
+            model_profile: None,
+            reasoning_effort: None,
             plugin_skill_ids: Vec::new(),
             input: vec![InputContentPart::Text(prompt)],
             session_id: None,

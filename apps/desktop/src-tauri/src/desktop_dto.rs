@@ -364,6 +364,7 @@ pub(crate) struct DesktopCapabilitiesDto {
     pub(crate) delegation: bool,
     pub(crate) plugins: bool,
     pub(crate) plugin_skill_selection: bool,
+    pub(crate) model_selection: bool,
     pub(crate) tui: bool,
     pub(crate) shell_terminal: bool,
     pub(crate) process_sessions: bool,

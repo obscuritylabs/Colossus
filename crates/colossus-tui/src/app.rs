@@ -521,6 +521,11 @@ pub(super) fn handle_composer_enter(state: &mut TuiState, key: KeyEvent) -> Opti
 }
 
 pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
+    if matches!(state.overlay.as_ref(), Some(Overlay::Prompt {request, ..}) if request.kind == InteractivePromptKind::ModelSelection)
+    {
+        handle_model_picker_key(state, key);
+        return;
+    }
     if matches!(state.overlay, Some(Overlay::SessionBrowser(_))) {
         handle_session_browser_key(state, key);
         return;

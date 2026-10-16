@@ -1532,6 +1532,10 @@ impl From<RunModeInput> for RunMode {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct CreateRunInput {
+    #[serde(default)]
+    model_profile: Option<String>,
+    #[serde(default)]
+    reasoning_effort: Option<colossus_sdk::ReasoningEffort>,
     prompt: String,
     // Parsing is presentation only. This never skips SDK/runtime selection validation.
     #[serde(default)]
@@ -1668,6 +1672,8 @@ impl CreateRunInput {
             ));
         }
         Ok(CreateRunRequest {
+            model_profile: self.model_profile,
+            reasoning_effort: self.reasoning_effort,
             input,
             plugin_skill_ids: self.plugin_skill_ids,
             session_id: self.session_id,
@@ -2155,6 +2161,25 @@ mod tests {
 
         let request = input.into_sdk().expect("valid SDK request");
         assert_eq!(request.max_turns, 0);
+    }
+
+    #[test]
+    fn create_input_preserves_model_preferences_and_rejects_unknown_reasoning() {
+        let mut value = json!({
+            "prompt": "Continue this conversation", "sessionId": "session-existing",
+            "role": "primary", "mode": "execute", "modelProfile": "deep",
+            "reasoningEffort": "xhigh", "maxTurns": 0, "idempotencyKey": "model-selection",
+        });
+        let input: CreateRunInput = serde_json::from_value(value.clone()).unwrap();
+        let request = input.into_sdk().unwrap();
+        assert_eq!(request.model_profile.as_deref(), Some("deep"));
+        assert_eq!(
+            request.reasoning_effort,
+            Some(colossus_sdk::ReasoningEffort::XHigh)
+        );
+        assert_eq!(request.session_id.as_deref(), Some("session-existing"));
+        value["reasoningEffort"] = json!("unknown");
+        assert!(serde_json::from_value::<CreateRunInput>(value).is_err());
     }
 
     #[test]

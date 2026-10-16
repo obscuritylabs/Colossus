@@ -652,6 +652,8 @@ async fn probe_offline_echo(client: &Colossus) -> Result<(), CommandErrorDto> {
 
 fn offline_self_test_request(idempotency_key: IdempotencyKey) -> CreateRunRequest {
     CreateRunRequest {
+        model_profile: None,
+        reasoning_effort: None,
         input: vec![InputContentPart::Text("offline self-test".into())],
         plugin_skill_ids: Vec::new(),
         session_id: None,

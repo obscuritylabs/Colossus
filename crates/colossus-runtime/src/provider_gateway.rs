@@ -541,6 +541,7 @@ impl ModelProvider for GatewayModelProvider {
     ) -> Result<ModelRoute, ModelProviderError> {
         let resolved = self.resolve_workflow_model(role, options)?;
         let mut route = resolved.route();
+        route.role = role.into();
         if let Some(effort) = options.reasoning_effort {
             if route.provider == "echo" {
                 return Err(ModelProviderError::Configuration(
