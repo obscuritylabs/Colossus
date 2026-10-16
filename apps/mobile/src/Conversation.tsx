@@ -153,7 +153,7 @@ export function Conversation({
     }
   }
   async function cancel(task: Task) {
-    if (busy) return;
+    if (busy || !task.run_id || task.source_read_only) return;
     setBusy(true);
     setError("");
     const key = cancelKey.current.get(task.task_id) ?? crypto.randomUUID();
@@ -272,15 +272,17 @@ export function Conversation({
               "Queued on assigned host"}
           </p>
         )}
-        {active && permissions.includes("control") && (
-          <Button
-            variant="danger"
-            disabled={busy}
-            onClick={() => void cancel(active)}
-          >
-            Cancel task
-          </Button>
-        )}
+        {active &&
+          !active.source_read_only &&
+          permissions.includes("control") && (
+            <Button
+              variant="danger"
+              disabled={busy || !active.run_id}
+              onClick={() => void cancel(active)}
+            >
+              Cancel task
+            </Button>
+          )}
         {active?.snapshot?.pending_interactions.some(
           (i) => i.status === "pending",
         ) && (

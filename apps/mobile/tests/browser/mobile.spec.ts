@@ -8,7 +8,7 @@ test("server selection, local sign-in, and browser SSO remain distinct", async (
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/?fixture=login");
   await expect(
-    page.getByRole("heading", { name: "Your agents. Wherever you are." }),
+    page.getByRole("heading", { name: "Connect to Colossus" }),
   ).toBeVisible();
   await page.getByLabel("Server address").fill("https://colossus.example/api");
   await page.getByRole("button", { name: "Continue", exact: true }).click();
@@ -230,4 +230,204 @@ test("an uncertain submission reconciles the original operation after fleet chan
   );
   expect(operations).toHaveLength(2);
   expect(operations[1]).toEqual(operations[0]);
+});
+
+test("password visibility, failed login, and changing servers preserve credential custody", async ({
+  page,
+}) => {
+  await page.goto("/?fixture=login");
+  await page.getByLabel("Server address").fill("https://colossus.example");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByLabel("Username", { exact: true }).fill("invalid");
+  await page.getByLabel("Password", { exact: true }).fill("fixture-password");
+  await page
+    .getByRole("button", { name: "Show password", exact: true })
+    .click();
+  await expect(page.getByLabel("Password", { exact: true })).toHaveAttribute(
+    "type",
+    "text",
+  );
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Sign-in failed");
+  await expect(page.getByLabel("Password", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("Password", { exact: true })).toHaveAttribute(
+    "type",
+    "password",
+  );
+  await expect(page.getByLabel("Password", { exact: true })).toBeFocused();
+  await page
+    .getByRole("button", { name: "Change server", exact: true })
+    .click();
+  await expect(page.getByLabel("Server address")).toBeFocused();
+  expect(
+    await page.evaluate(() =>
+      JSON.stringify({ ...localStorage, ...sessionStorage }),
+    ),
+  ).not.toContain("fixture-password");
+});
+
+test("task inventory opens released output, event history, and its conversation", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page
+    .getByRole("button", { name: "Explore development preview" })
+    .click();
+  await page.getByRole("button", { name: "Tasks", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Recent tasks" }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: "test-results/mobile-tasks.png",
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: /Prepare.*release notes/ }).click();
+  await expect(
+    page.getByRole("heading", { name: "Run output", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Release notes ready", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Cancel task", exact: true }),
+  ).toHaveCount(0);
+  await page.getByText("Event activity · 4 events", { exact: true }).click();
+  await expect(page.locator(".mobile-task-events li")).toHaveCount(4);
+  await page.screenshot({
+    path: "test-results/mobile-task-completed.png",
+    fullPage: true,
+  });
+  await page
+    .getByRole("button", { name: "Open conversation", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Prepare release notes", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Release notes ready", exact: true }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: "test-results/mobile-messages.png",
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "Back to work", exact: true }).click();
+  await page.getByRole("button", { name: "Tasks", exact: true }).click();
+  await page
+    .getByRole("button", { name: /Investigate.*connection timeout/ })
+    .click();
+  await page.getByRole("button", { name: "Cancel task", exact: true }).click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "Cancellation requested" }),
+  ).toContainText("Cancellation requested");
+  await expect(page.getByText("Cancelled", { exact: true })).toBeVisible();
+});
+
+test("retained task output catches up across pages and keeps one canonical result", async ({
+  page,
+}) => {
+  await page.route("**/src/preview.ts*", async (route) => {
+    const response = await route.fetch();
+    const source = await response.text();
+    await route.fulfill({
+      response,
+      body:
+        source +
+        `
+const originalRequest = previewClient.request.bind(previewClient);
+previewClient.request = async (operation) => {
+  if (operation.kind !== "task_updates" || operation.task !== "task-2") return originalRequest(operation);
+  const history = Array.from({ length: 40 }, (_, index) => ({ run_id: "run-2", sequence: index + 1, created_at: new Date().toISOString(), update: index === 39 ? { result: { output: "The complete retained result." } } : { output_delta: "Partial output. " } }));
+  const remaining = history.filter((event) => event.sequence > operation.after);
+  return { updates: remaining.slice(0, 32), next_after: remaining.length > 32 ? remaining[31].sequence : null };
+};
+`,
+    });
+  });
+  await page.goto("/");
+  await page
+    .getByRole("button", { name: "Explore development preview" })
+    .click();
+  await page.getByRole("button", { name: "Tasks", exact: true }).click();
+  await page.getByRole("button", { name: /Prepare.*release notes/ }).click();
+  await expect(
+    page.getByText("The complete retained result.", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Partial output.", { exact: false })).toHaveCount(
+    0,
+  );
+  await page.getByRole("button", { name: "Refresh task", exact: true }).click();
+  await page.getByText("Event activity · 40 events", { exact: true }).click();
+  await expect(page.locator(".mobile-task-events li")).toHaveCount(40);
+});
+
+test("sign-in keeps its hierarchy at phone width with Large text across palettes", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.goto("/?fixture=login");
+  for (const [theme, palette] of [
+    ["dark", "black"],
+    ["dark", "neutral"],
+    ["dark", "colossus"],
+    ["dark", "hacker"],
+    ["light", "black"],
+  ]) {
+    await page.evaluate(
+      ({ theme, palette }) => {
+        localStorage.setItem("colossus.mobile.theme", theme!);
+        localStorage.setItem("colossus.mobile.palette", palette!);
+        localStorage.setItem("colossus.mobile.text-size", "large");
+      },
+      { theme, palette },
+    );
+    await page.reload();
+    await page.getByLabel("Server address").fill("https://colossus.example");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect(page.getByLabel("Username", { exact: true })).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-text-size",
+      "large",
+    );
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+  }
+  await page.screenshot({
+    path: "test-results/mobile-login-large-light.png",
+    fullPage: true,
+  });
+});
+
+test("queued work cannot request cancellation before native run allocation", async ({
+  page,
+}) => {
+  await page.route("**/src/preview.ts*", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      body:
+        (await response.text()) +
+        `
+tasks[0] = { ...tasks[0], request: { ...tasks[0].request, input: [{ text: "Queued before allocation" }] }, run_id: null, snapshot: null };
+activity.set("task-0", []);
+`,
+    });
+  });
+  await page.goto("/");
+  await page
+    .getByRole("button", { name: "Explore development preview" })
+    .click();
+  await page.getByRole("button", { name: "Tasks", exact: true }).click();
+  await page.getByRole("button", { name: /Queued before allocation/ }).click();
+  await expect(
+    page.getByRole("button", { name: "Cancel task", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText(
+      "Cancellation becomes available after the runtime allocates a run.",
+      { exact: true },
+    ),
+  ).toBeVisible();
 });

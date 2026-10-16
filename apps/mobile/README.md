@@ -24,3 +24,10 @@ Screenshots are written to ignored `test-results/`.
 From the repository root, `cargo xtask check mobile` checks the renderer, wrapper
 formatting, and native session-client tests. See the [mobile development guide](../../docs/develop/mobile.md)
 for native SDK setup, supported login behavior, infrastructure, and publication.
+
+Work includes separate conversation and task inventories. Task details use the existing
+bounded retained-event API, show released output, and link back to the associated
+conversation. Cancellation is disabled until a native run has been allocated.
+The browser suite covers password visibility/clearing, Large text and palettes, task
+navigation, cancellation availability, and paginated output reconciliation. Sample
+messages and tasks remain confined to the explicitly labeled development preview.

@@ -163,3 +163,35 @@ export interface CommandReceipt {
   command_id: string;
   reply: { kind: string; error?: { code: string; message: string } } | null;
 }
+
+// Shared interpretation of retained Control Plane task data; no transport or UI state.
+export function taskStatus(task: Task) {
+  return task.dispatch_error?.code === "outcome_unknown"
+    ? "outcome_unknown"
+    : task.dispatch_error
+      ? "failed"
+      : task.snapshot?.run.status || "queued";
+}
+export const terminalStatuses = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+  "outcome_unknown",
+]);
+export function statusLabel(value: string) {
+  return value
+    .split("_")
+    .map((word) => word[0]?.toUpperCase() + word.slice(1))
+    .join(" ");
+}
+export function visibleOutput(updates: Update[]): string {
+  let output = "";
+  for (const event of updates) {
+    if (typeof event.update.output_delta === "string")
+      output += event.update.output_delta;
+    const result = event.update.result as { output?: string } | undefined;
+    if (result?.output) output = result.output;
+  }
+  return output;
+}

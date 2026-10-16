@@ -12,9 +12,13 @@ import type {
   Permission,
   Task,
   Thread,
+  ThreadDetailResponse,
 } from "@colossus/control-plane-client";
 import { messageOf, type MobileClient } from "./client";
 import { Conversation } from "./Conversation";
+import { TaskDetail } from "./TaskDetail";
+import { TaskList } from "./TaskList";
+import { TaskStatus } from "./TaskStatus";
 import { usePoll } from "./usePoll";
 
 export type Tab = "work" | "fleet" | "inbox" | "settings";
@@ -33,6 +37,14 @@ export function Workspace({
 }) {
   const [selection, setSelection] = useState<Thread | "new" | null>(null);
   const [query, setQuery] = useState("");
+  const [workView, setWorkView] = useState<"conversations" | "tasks">(
+    "conversations",
+  );
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [moreTasks, setMoreTasks] = useState<Task[]>([]);
+  const [taskCursor, setTaskCursor] = useState<string | null | undefined>(
+    undefined,
+  );
   const [browserError, setBrowserError] = useState("");
   const [moreThreads, setMoreThreads] = useState<Thread[]>([]),
     [moreNodes, setMoreNodes] = useState<FleetNode[]>([]);
@@ -45,7 +57,17 @@ export function Workspace({
     client,
     { kind: "threads", project },
   );
-  const tasks = usePoll<{ tasks: Task[] }>(client, { kind: "tasks", project });
+  const tasks = usePoll<{ tasks: Task[]; next_cursor?: string | null }>(
+    client,
+    { kind: "tasks", project },
+  );
+  const inventory = [
+    ...(tasks.value?.tasks ?? []),
+    ...moreTasks.filter(
+      (task) =>
+        !tasks.value?.tasks.some((current) => current.task_id === task.task_id),
+    ),
+  ];
   const nodes = [
     ...new Map(
       [...(fleet.value?.nodes ?? []), ...moreNodes].map((n) => [
@@ -75,15 +97,24 @@ export function Workspace({
   const hosts = new Map(
     hostPage.value?.hosts.map((host) => [host.host_id, host]) ?? [],
   );
-  async function more(kind: "threads" | "fleet") {
+  async function more(kind: "threads" | "fleet" | "tasks") {
     const after =
-      kind === "threads"
-        ? (threadCursor ?? threads.value?.next_cursor)
-        : (nodeCursor ?? fleet.value?.next_cursor);
+      kind === "tasks"
+        ? (taskCursor ?? tasks.value?.next_cursor)
+        : kind === "threads"
+          ? (threadCursor ?? threads.value?.next_cursor)
+          : (nodeCursor ?? fleet.value?.next_cursor);
     if (!after || pageBusy) return;
     setPageBusy(true);
     try {
-      if (kind === "threads") {
+      if (kind === "tasks") {
+        const page = await client.request<{
+          tasks: Task[];
+          next_cursor: string | null;
+        }>({ kind, project, after });
+        setMoreTasks((all) => [...all, ...page.tasks]);
+        setTaskCursor(page.next_cursor ?? null);
+      } else if (kind === "threads") {
         const page = await client.request<{
           threads: Thread[];
           next_cursor: string | null;
@@ -104,6 +135,30 @@ export function Workspace({
       setPageBusy(false);
     }
   }
+  if (selectedTask && tab === "work")
+    return (
+      <TaskDetail
+        key={selectedTask.task_id}
+        client={client}
+        project={project}
+        initial={selectedTask}
+        nodes={nodes}
+        hosts={hosts}
+        permissions={permissions}
+        onBack={() => setSelectedTask(null)}
+        onLocked={onLocked}
+        onConversation={async (thread) => {
+          const result = await client.request<ThreadDetailResponse>({
+            kind: "thread",
+            project,
+            thread,
+          });
+          setSelection(result.thread);
+          setSelectedTask(null);
+          setWorkView("conversations");
+        }}
+      />
+    );
   if (selection !== null && tab === "work")
     return (
       <Conversation
@@ -182,7 +237,33 @@ export function Workspace({
             <IconPlus size={20} />
             New task
           </Button>
-          {pending[0] && (
+          <div
+            className="mobile-work-switch"
+            role="group"
+            aria-label="Work view"
+          >
+            <Button
+              variant="tertiary"
+              aria-pressed={workView === "conversations"}
+              onClick={() => {
+                setWorkView("conversations");
+                setQuery("");
+              }}
+            >
+              Conversations
+            </Button>
+            <Button
+              variant="tertiary"
+              aria-pressed={workView === "tasks"}
+              onClick={() => {
+                setWorkView("tasks");
+                setQuery("");
+              }}
+            >
+              Tasks
+            </Button>
+          </div>
+          {workView === "conversations" && pending[0] && (
             <div className="mobile-attention">
               <h2>Needs your review</h2>
               <p>
@@ -202,79 +283,125 @@ export function Workspace({
             </div>
           )}
           <div className="mobile-section-heading">
-            <h2>Recent work</h2>
+            <h2>{workView === "tasks" ? "Recent tasks" : "Recent work"}</h2>
           </div>
           <label className="shared-sr-only" htmlFor="work-search">
-            Search loaded conversations
+            {workView === "tasks"
+              ? "Search loaded tasks"
+              : "Search loaded conversations"}
           </label>
           <TextInput
             id="work-search"
-            placeholder="Search conversations"
+            placeholder={
+              workView === "tasks" ? "Search tasks" : "Search conversations"
+            }
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
-          {!threads.value && !threads.error && (
-            <p role="status">Loading work…</p>
-          )}
-          <div className="mobile-rows">
-            {conversations
-              .filter(
-                (t) =>
-                  !t.archived &&
-                  t.title
-                    .toLocaleLowerCase()
-                    .includes(query.toLocaleLowerCase()),
-              )
-              .map((t) => {
-                const node = nodes.find((n) => n.node.node_id === t.node_id);
-                return (
-                  <button
-                    type="button"
-                    className="mobile-row"
-                    key={t.thread_id}
-                    onClick={() => setSelection(t)}
-                  >
-                    <HostPlatformIcon platform={platform(node)} size={25} />
-                    <span>
-                      <strong>{t.title}</strong>
-                      <small>
-                        {[
-                          hosts.get(node?.node.host_id ?? "")?.label ??
-                            node?.node.label,
-                          node?.node.workspace_label,
-                        ]
-                          .filter(Boolean)
-                          .join(" · ") || "Assigned workspace"}
-                      </small>
-                      <small>
-                        {t.active_task_id
-                          ? "Working"
-                          : t.sync_status === "incomplete"
-                            ? "History incomplete"
-                            : "Open conversation"}
-                      </small>
-                    </span>
-                    <IconChevronRight size={18} />
-                  </button>
-                );
-              })}
-          </div>
-          {threads.value && !conversations.length && (
-            <div className="mobile-empty">
-              <h2>Your work starts here</h2>
-              <p>
-                {nodes.length
-                  ? "Start a task on a connected workspace."
-                  : "Enroll a workspace in Control Plane to get started."}
-              </p>
-            </div>
-          )}
-          {(threadCursor === undefined
-            ? threads.value?.next_cursor
-            : threadCursor) && (
-            <Button disabled={pageBusy} onClick={() => void more("threads")}>
-              Load older conversations
-            </Button>
+          {workView === "tasks" ? (
+            <>
+              {!tasks.value && !tasks.error && (
+                <p role="status">Loading tasks…</p>
+              )}
+              {tasks.value && (
+                <TaskList
+                  tasks={inventory}
+                  nodes={nodes}
+                  hosts={hosts}
+                  query={query}
+                  onSelect={setSelectedTask}
+                />
+              )}
+              {(taskCursor === undefined
+                ? tasks.value?.next_cursor
+                : taskCursor) && (
+                <Button disabled={pageBusy} onClick={() => void more("tasks")}>
+                  Load older tasks
+                </Button>
+              )}
+            </>
+          ) : (
+            <>
+              {!threads.value && !threads.error && (
+                <p role="status">Loading work…</p>
+              )}
+              <div className="mobile-rows">
+                {conversations
+                  .filter(
+                    (t) =>
+                      !t.archived &&
+                      t.title
+                        .toLocaleLowerCase()
+                        .includes(query.toLocaleLowerCase()),
+                  )
+                  .map((t) => {
+                    const node = nodes.find(
+                      (n) => n.node.node_id === t.node_id,
+                    );
+                    return (
+                      <button
+                        type="button"
+                        className="mobile-row"
+                        key={t.thread_id}
+                        onClick={() => setSelection(t)}
+                      >
+                        <HostPlatformIcon platform={platform(node)} size={25} />
+                        <span>
+                          <strong>{t.title}</strong>
+                          <small>
+                            {[
+                              hosts.get(node?.node.host_id ?? "")?.label ??
+                                node?.node.label,
+                              node?.node.workspace_label,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ") || "Assigned workspace"}
+                          </small>
+                          {t.active_task_id &&
+                          inventory.find(
+                            (task) => task.task_id === t.active_task_id,
+                          ) ? (
+                            <TaskStatus
+                              task={inventory.find(
+                                (task) => task.task_id === t.active_task_id,
+                              )!}
+                            />
+                          ) : (
+                            <small>
+                              {t.active_task_id
+                                ? "Working"
+                                : t.sync_status === "incomplete"
+                                  ? "History incomplete"
+                                  : "Open conversation"}
+                            </small>
+                          )}
+                        </span>
+                        <IconChevronRight size={18} />
+                      </button>
+                    );
+                  })}
+              </div>
+              {threads.value && !conversations.length && (
+                <div className="mobile-empty">
+                  <h2>Your work starts here</h2>
+                  <p>
+                    {nodes.length
+                      ? "Start a task on a connected workspace."
+                      : "Enroll a workspace in Control Plane to get started."}
+                  </p>
+                </div>
+              )}
+              {(threadCursor === undefined
+                ? threads.value?.next_cursor
+                : threadCursor) && (
+                <Button
+                  disabled={pageBusy}
+                  onClick={() => void more("threads")}
+                >
+                  Load older conversations
+                </Button>
+              )}
+            </>
           )}
         </>
       )}

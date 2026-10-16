@@ -19,6 +19,8 @@ export type Operation =
       after?: string;
     }
   | { kind: "thread"; project: string; thread: string }
+  | { kind: "task"; project: string; task: string }
+  | { kind: "task_updates"; project: string; task: string; after: number }
   | {
       kind: "create_thread";
       project: string;

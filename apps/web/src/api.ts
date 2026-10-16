@@ -1,9 +1,11 @@
-export type * from "@colossus/control-plane-client";
-import type {
-  CommandReceipt,
-  Task,
-  Update,
+export {
+  taskStatus,
+  terminalStatuses,
+  statusLabel,
+  visibleOutput,
 } from "@colossus/control-plane-client";
+export type * from "@colossus/control-plane-client";
+import type { CommandReceipt, Task } from "@colossus/control-plane-client";
 
 export class ApiFailure extends Error {
   constructor(
@@ -102,34 +104,4 @@ export function taskTitle(task: Task) {
     task.request.input.map((part) => part.text).join(" ") ||
     "Untitled task"
   );
-}
-export function taskStatus(task: Task) {
-  return task.dispatch_error?.code === "outcome_unknown"
-    ? "outcome_unknown"
-    : task.dispatch_error
-      ? "failed"
-      : task.snapshot?.run.status || "queued";
-}
-export const terminalStatuses = new Set([
-  "completed",
-  "failed",
-  "cancelled",
-  "interrupted",
-  "outcome_unknown",
-]);
-export function statusLabel(value: string) {
-  return value
-    .split("_")
-    .map((word) => word[0]?.toUpperCase() + word.slice(1))
-    .join(" ");
-}
-export function visibleOutput(updates: Update[]): string {
-  let output = "";
-  for (const event of updates) {
-    if (typeof event.update.output_delta === "string")
-      output += event.update.output_delta;
-    const result = event.update.result as { output?: string } | undefined;
-    if (result?.output) output = result.output;
-  }
-  return output;
 }

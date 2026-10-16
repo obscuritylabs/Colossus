@@ -45,6 +45,22 @@ pub enum Operation {
         /// Exact conversation identity.
         thread: String,
     },
+    /// Read one task's current runtime snapshot and dispatch outcome.
+    Task {
+        /// Exact project identity.
+        project: String,
+        /// Exact task identity.
+        task: String,
+    },
+    /// Read a bounded page of retained runtime events.
+    TaskUpdates {
+        /// Exact project identity.
+        project: String,
+        /// Exact task identity.
+        task: String,
+        /// Exclusive retained-event cursor.
+        after: u64,
+    },
     /// Allocate a new conversation and its first task.
     CreateThread {
         /// Exact project identity.
@@ -110,6 +126,33 @@ impl Operation {
                     thread,
                 ],
                 None,
+                None,
+            ),
+            Self::Task { project, task } => (
+                vec![
+                    "api".into(),
+                    "projects".into(),
+                    project,
+                    "tasks".into(),
+                    task,
+                ],
+                None,
+                None,
+            ),
+            Self::TaskUpdates {
+                project,
+                task,
+                after,
+            } => (
+                vec![
+                    "api".into(),
+                    "projects".into(),
+                    project,
+                    "tasks".into(),
+                    task,
+                    "updates".into(),
+                ],
+                Some(after.to_string()),
                 None,
             ),
             Self::CreateThread {

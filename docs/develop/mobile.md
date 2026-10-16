@@ -11,8 +11,12 @@ type: how-to
 
 `apps/mobile` is a Tauri 2 client for iOS and Android. It provides server selection,
 local-account sign-in, projects, workspace fleet, saved conversations, Execute/Plan
-submission and continuation, cancellation requests, and an inbox of pending runtime
-interactions. Requests poll while the app is visible and reconcile when it regains focus.
+submission and continuation, task inventory, retained run output and event history,
+cancellation requests, and an inbox of pending runtime interactions. Requests poll
+while the app is visible and reconcile when it regains focus. The task activity view
+catches up in bounded pages and stops at 1,000 events or 1 MiB of serialized events.
+Runtime cancellation becomes available after a task has a native run identity; a
+queued task without that identity cannot yet request cancellation through this API.
 Approvals and question responses open the exact task in the system browser's Control
 Plane. The browser requires its own authenticated session and existing permissions.
 
@@ -27,7 +31,8 @@ local grant, tools, policy, or sandbox.
 - `apps/ui`: shared presentation, brand assets, theme tokens, controls, conversation
   components, and `HostPlatformIcon`. It imports no transport or native bridge.
 - `apps/control-plane-client`: transport-neutral TypeScript response contracts shared
-  by Web and Mobile. Keep secrets and host state out of these contracts.
+  by Web and Mobile, including shared status and retained-output selectors. Keep secrets
+  and host state out of these contracts.
 - `crates/colossus-control-plane-client`: native human-session custody, origin validation,
   fixed operation routing, bounded HTTP responses, and uncertain-outcome classification.
 - `apps/mobile`: touch navigation, server/account selection, visible-page polling,

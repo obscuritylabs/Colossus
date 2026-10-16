@@ -86,3 +86,25 @@ fn continuation_uses_the_servers_expected_revision_field() {
     assert_eq!(body["expected_revision"], 17);
     assert!(body.get("revision").is_none());
 }
+
+#[test]
+fn task_activity_reads_use_the_existing_bounded_retained_event_contract() {
+    let origin = validate_origin("https://colossus.example", false).unwrap();
+    let (method, url, body) = Operation::TaskUpdates {
+        project: "engineering".into(),
+        task: "task-1".into(),
+        after: 42,
+    }
+    .route(&origin)
+    .unwrap();
+    assert_eq!(method, reqwest::Method::GET);
+    assert_eq!(url.path(), "/api/projects/engineering/tasks/task-1/updates");
+    assert_eq!(url.query(), Some("after=42"));
+    assert!(body.is_none());
+    assert!(
+        serde_json::from_value::<Operation>(serde_json::json!({
+            "kind":"task_updates","project":"engineering","task":"task-1","after":-1
+        }))
+        .is_err()
+    );
+}
