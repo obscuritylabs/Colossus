@@ -1708,7 +1708,7 @@ fn owned_windows_chromium_is_real_required_native_acceptance_with_bounded_eviden
         )
         .as_str(),
         Some(
-            ".local/windows-owned-browser-evidence/native-factory.json\n.local/windows-owned-browser-evidence/native-factory.log\n.local/windows-owned-browser-evidence/browser-component.json\n"
+            ".local/windows-owned-browser-evidence/native-factory.json\n.local/windows-owned-browser-evidence/native-factory.log\n.local/windows-owned-browser-evidence/browser-component.json\n.local/windows-owned-browser-evidence/*startup*.log\n.local/windows-owned-browser-evidence/core-death-*.log\n"
         ),
     );
     let helper =
