@@ -1,7 +1,7 @@
 # Colossus shared UI
 
 `@colossus/ui` is a private source package consumed by Desktop, the VS Code
-webviews, and the web control plane from the same checkout. It owns theme tokens
+webviews, the mobile client, and the web control plane from the same checkout. It owns theme tokens
 (Colossus blue, light, neutral dark, Black, and Hacker), the brand mark, application and
 settings frames, compact catalog inventories, shadcn foundations, data tables, composer sizing and
 keyboard behavior, and the accessible dropdown control. Each host compiles this
@@ -14,10 +14,13 @@ worker SDK, credential handling, validated message protocol, and view projection
 Shared components take presentation props and callbacks only. They cannot import a
 host bridge or transport. The web host keeps browser appearance persistence, project
 state, authentication, and control-plane requests; the Rust cloud server owns authorization and runtime connections.
+Mobile keeps touch navigation and appearance preferences in its renderer, while its
+native Rust client owns human sessions and Control Plane transport. Execution remains
+on enrolled runtimes.
 
 The app build and lockfiles remain separate. After changing this package, refresh
 all local file dependencies with `npm ci --ignore-scripts` in `apps/desktop`,
-`apps/vscode`, and `apps/web`, then run their `check`, `build`, and affected browser
+`apps/vscode`, `apps/web`, and `apps/mobile`, then run their `check`, `build`, and affected browser
 checks. CI installs the shared source afresh and selects the host gates when
 `apps/ui` changes.
 No generated UI bundle needs committing. React is pinned to the same peer version
@@ -26,11 +29,11 @@ in all consumers so each renderer has one React instance.
 Neutral dark is the VS Code default. Desktop keeps Colossus blue by default and
 offers neutral dark, Black, and Hacker in Global → Appearance → Dark palette. Desktop keeps saved
 custom palette colors while a preset palette is selected. Black uses shadcn’s near-black neutral surfaces
-with Colossus accents; it is available in all three apps. Hacker translates
+with Colossus accents; it is available in all hosts. Hacker translates
 the TUI palette from `crates/colossus-presentation/src/palette.rs`: green prompts
 and success, pale-green messages, cyan tools, amber warnings, and red errors.
 The shared CSS adds near-black graphical surfaces and retains Colossus typography
-and branding. It is selectable in all three apps; preferences remain local to each host.
+and branding. It is selectable in all hosts; preferences remain local to each host.
 Light and high contrast keep their respective token families. The native activity bar, left workspace view, and
 right chat view stay owned by VS Code.
 
@@ -162,3 +165,5 @@ support never changes the user’s requested mode into Execute.
 offer standalone Goal mode only after authenticated `goal.create` discovery, capture
 its 1–50 iteration budget in the durable run request, and retain queue, permission,
 and cancellation decisions. A Plan is not required.
+
+`HostPlatformIcon` provides shared platform decoration from host-released metadata. Hosts supply the platform and readable label; icons never establish connection state or authority. The Linux glyph uses the existing Tabler Linux-family icon.

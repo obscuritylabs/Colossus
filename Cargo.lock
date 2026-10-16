@@ -1491,6 +1491,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-control-plane-client"
+version = "0.11.8"
+dependencies = [
+ "axum",
+ "futures",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "colossus-credentials"
 version = "0.11.8"
 dependencies = [

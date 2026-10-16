@@ -42,3 +42,5 @@ operation stay in [Get started](../get-started/index.md) and
 
 Read the architecture and security pages before changing boundaries. Keep interfaces
 thin, the domain dependency-free, and behavior changes covered by tests.
+
+- [Mobile development](mobile.md) covers the iOS/Android client, sign-in boundaries, native builds and store preparation.

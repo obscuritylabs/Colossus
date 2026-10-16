@@ -1,0 +1,101 @@
+name: Colossus mobile
+
+on:
+  pull_request:
+    paths:
+      - "apps/mobile/**"
+      - "apps/ui/**"
+      - "apps/control-plane-client/**"
+      - "crates/colossus-control-plane-client/**"
+      - ".github/workflows/mobile.yml"
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Native test artifact to build
+        type: choice
+        options: [android, ios, both]
+        default: android
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  renderer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - run: npm ci --ignore-scripts --legacy-peer-deps --install-links
+        working-directory: apps/mobile
+      - run: npm run check
+        working-directory: apps/mobile
+      - run: npx playwright install --with-deps chromium
+        working-directory: apps/mobile
+      - run: npm run test:browser
+        working-directory: apps/mobile
+
+  android:
+    needs: renderer
+    if: github.event_name == 'workflow_dispatch' && inputs.platform != 'ios'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20
+        with:
+          toolchain: "1.96.0"
+          targets: aarch64-linux-android
+      - name: Configure Android toolchain
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+      - run: npm ci --ignore-scripts --legacy-peer-deps --install-links
+        working-directory: apps/mobile
+      - run: npm run android:init -- --ci
+        working-directory: apps/mobile
+      - name: Build unsigned Android bundle
+        run: npm run android:build -- --aab --target aarch64 --ci
+        working-directory: apps/mobile
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: colossus-mobile-android-unsigned
+          path: apps/mobile/src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
+          if-no-files-found: error
+
+  ios:
+    needs: renderer
+    if: github.event_name == 'workflow_dispatch' && inputs.platform != 'android'
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20
+        with:
+          toolchain: "1.96.0"
+          targets: aarch64-apple-ios-sim
+      - run: npm ci --ignore-scripts --legacy-peer-deps --install-links
+        working-directory: apps/mobile
+      - run: npm run ios:init -- --ci
+        working-directory: apps/mobile
+      - name: Build iOS Simulator app
+        run: npm run ios:build -- --target aarch64-sim --debug --ci
+        working-directory: apps/mobile
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: colossus-mobile-ios-simulator
+          path: apps/mobile/src-tauri/gen/apple/build/**/Colossus*.app/**
+          if-no-files-found: error

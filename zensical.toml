@@ -155,6 +155,7 @@ nav = [
     { "Overview" = "develop/index.md" },
     { "Contributing" = "develop/contributing.md" },
     { "Front-end development" = "develop/frontend.md" },
+    { "Mobile development" = "develop/mobile.md" },
     { "Source setup and test tiers" = "develop/setup-testing.md" },
     { "Tiered CI/CD" = "develop/ci-cd.md" },
     { "Toolchain inventory" = "develop/toolchain-inventory.md" },

@@ -1,0 +1,30 @@
+[package]
+name = "colossus-mobile"
+version = "0.1.0"
+publish = false
+edition = "2024"
+rust-version = "1.96"
+license = "Apache-2.0"
+description = "Colossus human control-plane client for iOS and Android"
+
+[workspace]
+
+[lib]
+name = "colossus_mobile_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "=2.11.5", features = [] }
+tauri-plugin-opener = "2"
+colossus-control-plane-client = { path = "../../../crates/colossus-control-plane-client" }
+serde_json = "1.0.149"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

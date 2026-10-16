@@ -15,9 +15,10 @@ Components:
   sidecar       Managed Local sidecar contract tests
   sdk           Generated API compatibility and TypeScript, Python, and Go SDKs
   desktop       Desktop renderer audit, checks, tests, and build
+  mobile        Mobile renderer, native client tests, and wrapper formatting
   web           Cloud web renderer audit, checks, tests, and build
   docs          Documentation build and verification
-  dependencies  Root, fuzz, and desktop dependency policy
+  dependencies  Root, fuzz, desktop, and mobile dependency policy
   workflows     CI classification contracts and workflow lint
 ";
 
@@ -28,6 +29,7 @@ pub(super) enum Component {
     Sdk,
     Desktop,
     Web,
+    Mobile,
     Docs,
     Dependencies,
     Workflows,
@@ -41,6 +43,7 @@ impl Component {
             "sdk" => Ok(Self::Sdk),
             "desktop" => Ok(Self::Desktop),
             "web" => Ok(Self::Web),
+            "mobile" => Ok(Self::Mobile),
             "docs" => Ok(Self::Docs),
             "dependencies" => Ok(Self::Dependencies),
             "workflows" => Ok(Self::Workflows),
@@ -57,6 +60,7 @@ impl fmt::Display for Component {
             Self::Sdk => "sdk",
             Self::Desktop => "desktop",
             Self::Web => "web",
+            Self::Mobile => "mobile",
             Self::Docs => "docs",
             Self::Dependencies => "dependencies",
             Self::Workflows => "workflows",

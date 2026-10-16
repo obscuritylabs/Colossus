@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/colossus-control-plane-client",
     "crates/colossus-cloud",
     "crates/colossus-cloud-postgres",
     "crates/colossus-cloud-server",

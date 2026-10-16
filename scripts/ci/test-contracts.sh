@@ -86,11 +86,13 @@ docs_required=false
 dependency_required=false
 sdk_required=false
 desktop_required=true' crates/colossus-cli/src/main.rs
+for mobile_surface in apps/web/src/App.tsx apps/mobile/src/App.tsx apps/control-plane-client/src/index.ts crates/colossus-control-plane-client/src/service.rs; do
 expect_classification 'rust_required=true
 docs_required=false
 dependency_required=false
 sdk_required=false
-desktop_required=true' apps/web/src/App.tsx
+desktop_required=true' "$mobile_surface"
+done
 expect_classification 'rust_required=true
 docs_required=false
 dependency_required=false

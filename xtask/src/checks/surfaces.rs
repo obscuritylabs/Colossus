@@ -29,6 +29,7 @@ pub(super) fn sidecar(repository: &Repository) -> Result<(), String> {
 }
 
 pub(super) fn desktop(repository: &Repository) -> Result<(), String> {
+    mobile(repository)?;
     web(repository)?;
     repository
         .task("node")
@@ -223,6 +224,34 @@ pub(super) fn dependencies(repository: &Repository) -> Result<(), String> {
             "--file",
             "apps/desktop/src-tauri/Cargo.lock",
         ],
+    )?;
+    cargo(
+        repository,
+        [
+            "deny",
+            "--manifest-path",
+            "apps/mobile/src-tauri/Cargo.toml",
+            "--config",
+            "deny.toml",
+            "--locked",
+            "check",
+            "-A",
+            "duplicate",
+            "-A",
+            "license-not-encountered",
+            "licenses",
+            "sources",
+            "bans",
+        ],
+    )?;
+    cargo(
+        repository,
+        [
+            "audit",
+            "--no-fetch",
+            "--file",
+            "apps/mobile/src-tauri/Cargo.lock",
+        ],
     )
 }
 
@@ -232,4 +261,47 @@ fn cargo<const N: usize>(repository: &Repository, args: [&str; N]) -> Result<(),
 
 fn cargo_program() -> OsString {
     env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"))
+}
+
+pub(super) fn mobile(repository: &Repository) -> Result<(), String> {
+    repository
+        .task("npm")
+        .args([
+            "ci",
+            "--ignore-scripts",
+            "--legacy-peer-deps",
+            "--install-links",
+        ])
+        .current_dir("apps/mobile")
+        .run()?;
+    repository
+        .task("npm")
+        .args(["audit", "--audit-level=high"])
+        .current_dir("apps/mobile")
+        .run()?;
+    repository
+        .task("npm")
+        .args(["run", "check"])
+        .current_dir("apps/mobile")
+        .run()?;
+    repository
+        .task(cargo_program())
+        .args([
+            "fmt",
+            "--manifest-path",
+            "apps/mobile/src-tauri/Cargo.toml",
+            "--",
+            "--check",
+        ])
+        .run()?;
+    cargo(
+        repository,
+        [
+            "test",
+            "--locked",
+            "-p",
+            "colossus-control-plane-client",
+            "--lib",
+        ],
+    )
 }

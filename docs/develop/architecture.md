@@ -76,6 +76,7 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 | Infrastructure | `colossus-provider`, `colossus-codex-auth`, `colossus-credentials`, journal/projection crates, `colossus-sandbox`, `colossus-integrations`, `colossus-mcp`, `colossus-plugins`, `colossus-bundles`, `colossus-search` | External systems, authentication, plugin OCI/lifecycle, release bundles, and storage adapters |
 | Public API and SDK | `colossus-api-proto`, `colossus-api`, `colossus-api-runtime`, `colossus-grpc`, `colossus-sdk` | Version public resources, authenticate applications, host durable runs, and provide transport-neutral clients |
 | Control Plane application | `colossus-cloud`, `colossus-cloud-protocol`, `colossus-cloud-server`, `colossus-connector` | Project authority, durable fixed-node placement, OIDC browser access, and native outbound connections through the public SDK |
+| Mobile human client | `colossus-control-plane-client`, `apps/mobile` | Native human-session custody and closed Control Plane operations; touch presentation shares `@colossus/ui` and never hosts runtime execution |
 | Composition and interfaces | `colossus-runtime`, `colossus-worker-protocol`, `colossus-worker`, `colossus-cli`, `colossus-tui`, `colossus-presentation` | Narrow private transport contracts, wire services, host application contracts, and released-data rendering |
 
 ## Boundary rules

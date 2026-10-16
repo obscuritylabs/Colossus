@@ -104,6 +104,7 @@
   --settings-gutter: 28px;
   --settings-section-gap: 20px;
   --control-height: 40px;
+  --control-height-touch: 44px;
 }
 
 :root[data-theme="light"] {

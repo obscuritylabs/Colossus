@@ -1,0 +1,12 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+src-tauri/target/
+src-tauri/gen/
+*.keystore
+*.jks
+*.mobileprovision
+*.p12
+*.p8
+key.properties
