@@ -73,6 +73,7 @@ import { ArtifactWorkspace } from "./ArtifactWorkspace";
 import { InteractionCard } from "./InteractionCard";
 import { PlanDetailsPanel } from "./PlanDetailsPanel";
 import { RunTimeline } from "./RunTimeline";
+import type { ImagePreviewLoader } from "../viewed-images";
 import { SessionActivityView } from "./SessionActivity";
 import { ResearchSourcesPanel } from "./ResearchSourcesPanel";
 import { SessionMapDetailsPanel } from "./SessionMapDetailsPanel";
@@ -104,6 +105,7 @@ const BrowserPane = lazy(() =>
 );
 
 interface WorkSurfaceProps {
+  onLoadViewedImage?: ImagePreviewLoader | undefined;
   onInspectSchedule?:
     import("./ScheduleActivityCard").InspectSchedule | undefined;
   gitWorkspaceId?: string | null;
@@ -200,6 +202,7 @@ const IGNORE_SESSION_WORKSPACE_VIEW = () => undefined;
 
 export function WorkSurface({
   onInspectSchedule,
+  onLoadViewedImage,
   gitWorkspaceId = null,
   gitAvailable = false,
   forkDraft = false,
@@ -1279,6 +1282,7 @@ export function WorkSurface({
                 <div className="conversation-timeline" id="work-activity">
                   {conversationViews.map((contextView) => (
                     <RunTimeline
+                      onLoadViewedImage={onLoadViewedImage}
                       key={contextView.run.runId}
                       view={contextView}
                     />
@@ -1299,6 +1303,7 @@ export function WorkSurface({
                 />
               ) : sessionWorkspaceView === "activity" ? (
                 <SessionActivityView
+                  onLoadViewedImage={onLoadViewedImage}
                   sourceRunId={view.run.runId}
                   available={sessionActivityAvailable}
                   loadPage={loadSessionActivity}
@@ -1346,6 +1351,7 @@ export function WorkSurface({
                   <div className="conversation-timeline" id="work-activity">
                     {inheritedViews.map((contextView) => (
                       <RunTimeline
+                        onLoadViewedImage={onLoadViewedImage}
                         key={`inherited-${contextView.run.runId}`}
                         view={contextView}
                       />
@@ -1357,6 +1363,7 @@ export function WorkSurface({
                         key={conversationView.run.runId}
                       >
                         <RunTimeline
+                          onLoadViewedImage={onLoadViewedImage}
                           onInspectSchedule={onInspectSchedule}
                           view={conversationView}
                           activityComparison={activityComparisonEnabled}

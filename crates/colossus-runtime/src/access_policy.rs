@@ -200,7 +200,22 @@ pub(super) fn compose_access_policy(
                 policy = policy.with_action(&action.name, outcome);
                 if action.name == "filesystem.read" {
                     policy = policy.with_action(RUN_INPUT_FILE_READ_ACTION, outcome);
+                    policy = policy.with_action("filesystem.read_image", outcome);
                 }
+            }
+            // Image reads retain any denial or approval requirement on ordinary reads.
+            match access.action_decision("filesystem.read") {
+                Some(AccessDecision::Deny) => {
+                    policy = policy.with_action("filesystem.read_image", DecisionOutcome::Deny);
+                }
+                Some(AccessDecision::RequireApproval)
+                    if access.action_decision("filesystem.read_image")
+                        == Some(AccessDecision::Allow) =>
+                {
+                    policy = policy
+                        .with_action("filesystem.read_image", DecisionOutcome::RequireApproval);
+                }
+                _ => {}
             }
             for root in [&config.workflows.repository, &config.workflows.user] {
                 if let Ok(root) = fs::canonicalize(workspace_absolute_path(workspace, root)) {
@@ -319,6 +334,12 @@ pub(super) fn compose_access_policy(
                 );
                 if restriction.action == "filesystem.read" {
                     policy = policy.with_action_restrictions(
+                        "filesystem.read_image",
+                        restriction.filesystem.clone(),
+                        restriction.allowed_environment.clone(),
+                        restriction.network_destinations.clone(),
+                    );
+                    policy = policy.with_action_restrictions(
                         RUN_INPUT_FILE_READ_ACTION,
                         restriction.filesystem.clone(),
                         restriction.allowed_environment.clone(),
@@ -328,6 +349,7 @@ pub(super) fn compose_access_policy(
             }
             policy =
                 policy.with_action_max_output_bytes(RUN_INPUT_FILE_READ_ACTION, MAX_IMAGE_BYTES);
+            policy = policy.with_action_max_output_bytes("filesystem.read_image", MAX_IMAGE_BYTES);
             let mut provider_action_timeouts = BTreeMap::<&str, u64>::new();
             for profile in config.providers.profiles.values() {
                 let generation_effect_timeout_ms = profile

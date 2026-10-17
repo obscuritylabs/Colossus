@@ -18,6 +18,7 @@ import {
   IconListDetails,
   IconLoader2,
   IconPencil,
+  IconPhoto,
   IconPlayerPlay,
   IconPlayerStop,
   IconPlug,
@@ -27,7 +28,7 @@ import {
   IconTerminal2,
   IconWorld,
 } from "@tabler/icons-react";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { RetryStatus, currentProviderRetry } from "./RetryStatus";
@@ -50,6 +51,7 @@ import type {
 } from "../types";
 import { DropdownSelect } from "./DropdownSelect";
 import { MarkdownContent } from "./MarkdownContent";
+import { viewedImages, type ImagePreviewLoader } from "../viewed-images";
 import { researchSources } from "./ResearchSourcesPanel";
 
 import {
@@ -58,6 +60,7 @@ import {
 } from "./ScheduleActivityCard";
 
 interface RunTimelineProps {
+  onLoadViewedImage?: ImagePreviewLoader | undefined;
   onInspectSchedule?: InspectSchedule | undefined;
   view: RunView;
   activityComparison?: boolean;
@@ -78,6 +81,12 @@ interface RunTimelineProps {
   ) => Promise<void>;
   onOpenResearchSources?: () => void;
 }
+
+const ViewedImageActivity = lazy(() =>
+  import("./ViewedImageActivity").then((module) => ({
+    default: module.ViewedImageActivity,
+  })),
+);
 
 type ToolActivityUpdate = RunUpdate & {
   update: Extract<RunUpdate["update"], { type: "tool_activity" }>;
@@ -422,6 +431,8 @@ function toolActivityInputValue(group: ToolActivityGroup): string | null {
 
 function ToolActivityIcon({ kind }: { kind: ActivityLabelKind }) {
   switch (kind) {
+    case "image":
+      return <IconPhoto size={16} stroke={1.7} />;
     case "read":
       return <IconBooks size={16} stroke={1.7} />;
     case "search":
@@ -468,11 +479,17 @@ function toolActivityPreview(activity: ToolActivity): string {
 function ToolActivityItem({
   group,
   onInspectSchedule,
+  onLoadViewedImage,
 }: {
   group: ToolActivityGroup;
   onInspectSchedule?: InspectSchedule | undefined;
+  onLoadViewedImage?: ImagePreviewLoader | undefined;
 }) {
   const latest = group.updates.at(-1);
+  const images = useMemo(
+    () => (latest ? viewedImages(latest.update.activity) : []),
+    [latest],
+  );
   if (latest === undefined || latest.update.type !== "tool_activity") {
     return null;
   }
@@ -481,6 +498,17 @@ function ToolActivityItem({
   const input =
     releasedInput === null ? null : formatToolActivityText(releasedInput);
   const label = presentToolActivity(activity, releasedInput);
+  if (images.length > 0) {
+    return (
+      <Suspense fallback={<p>{label.title}</p>}>
+        <ViewedImageActivity
+          images={images}
+          createdAt={latest.createdAt}
+          load={onLoadViewedImage}
+        />
+      </Suspense>
+    );
+  }
   return (
     <>
       <ScheduleActivityCard
@@ -643,15 +671,18 @@ function ActivityThought({ item }: { item: RunUpdate }) {
 function ActivityItem({
   item,
   onInspectSchedule,
+  onLoadViewedImage,
 }: {
   item: TimelineItem;
   onInspectSchedule?: InspectSchedule | undefined;
+  onLoadViewedImage?: ImagePreviewLoader | undefined;
 }) {
   if (item.type === "tool_activity") {
     return (
       <ToolActivityItem
         group={item.group}
         onInspectSchedule={onInspectSchedule}
+        onLoadViewedImage={onLoadViewedImage}
       />
     );
   }
@@ -666,11 +697,13 @@ function RunActivity({
   items,
   comparison,
   onInspectSchedule,
+  onLoadViewedImage,
 }: {
   view: RunView;
   items: readonly TimelineItem[];
   comparison: boolean;
   onInspectSchedule?: InspectSchedule | undefined;
+  onLoadViewedImage?: ImagePreviewLoader | undefined;
 }) {
   const toolActionCount = items.filter(
     (item) => item.type === "tool_activity",
@@ -718,6 +751,7 @@ function RunActivity({
       {items.map((item) => (
         <ActivityItem
           onInspectSchedule={onInspectSchedule}
+          onLoadViewedImage={onLoadViewedImage}
           item={item}
           key={
             item.type === "tool_activity"
@@ -1150,6 +1184,7 @@ function PlanResultCard({
 export function RunTimeline({
   view,
   onInspectSchedule,
+  onLoadViewedImage,
   activityComparison = false,
   planContinuationAvailable = false,
   planWorkflowAvailable = false,
@@ -1210,6 +1245,7 @@ export function RunTimeline({
           items={activityItems}
           comparison={activityComparison}
           onInspectSchedule={onInspectSchedule}
+          onLoadViewedImage={onLoadViewedImage}
         />
       ) : null}
       {showLiveStatus ? <LiveRunStatus view={view} /> : null}

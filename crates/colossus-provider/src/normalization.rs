@@ -166,10 +166,13 @@ pub(super) fn validate_model_request(
             ));
         }
         if matches!(message.content, ModelContent::Parts(_))
-            && message.role != ModelMessageRole::User
+            && !matches!(
+                message.role,
+                ModelMessageRole::User | ModelMessageRole::Tool
+            )
         {
             return Err(ProviderError::Configuration(
-                "multipart content is accepted only for user messages".into(),
+                "multipart content is accepted only for user and tool messages".into(),
             ));
         }
         for image in message.content.images() {
@@ -371,7 +374,7 @@ fn responses_messages_with_images(
             Ok(vec![json!({
                 "type": "function_call_output",
                 "call_id": call_id,
-                "output": scalar_content(message)?,
+                "output": responses_user_content(&message.content, images)?,
             })])
         }
     }
@@ -449,15 +452,37 @@ pub(super) fn chat_payload_with_images(
     if !request.instructions.is_empty() {
         messages.push(json!({"role": "system", "content": request.instructions}));
     }
-    messages.extend(
-        request
-            .messages
-            .iter()
-            .map(|message| {
-                chat_message_with_images(message, projection.tool_names, projection.images)
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-    );
+    let mut tool_images = Vec::new();
+    for (index, message) in request.messages.iter().enumerate() {
+        messages.push(chat_message_with_images(
+            message,
+            projection.tool_names,
+            projection.images,
+        )?);
+        if message.role == ModelMessageRole::Tool {
+            tool_images.extend(
+                message
+                    .content
+                    .images()
+                    .cloned()
+                    .map(|image| ModelContentPart::Image { image }),
+            );
+            // Chat Completions accepts images only in user content. Keep all function
+            // results contiguous, then add their images as a wire-only user supplement.
+            if request
+                .messages
+                .get(index + 1)
+                .is_none_or(|next| next.role != ModelMessageRole::Tool)
+                && !tool_images.is_empty()
+            {
+                let mut parts = vec![ModelContentPart::Text {
+                    text: "Images returned by image.view.".into(),
+                }];
+                parts.append(&mut tool_images);
+                messages.push(json!({"role": "user", "content": chat_user_content(&ModelContent::Parts(parts), projection.images)?}));
+            }
+        }
+    }
     let tools = request
         .tools
         .iter()
@@ -508,6 +533,8 @@ fn chat_message_with_images(
     };
     let content = if message.role == ModelMessageRole::User {
         chat_user_content(&message.content, images)?
+    } else if message.role == ModelMessageRole::Tool {
+        Value::String(message.content.plain_text().into_owned())
     } else {
         Value::String(scalar_content(message)?.to_owned())
     };

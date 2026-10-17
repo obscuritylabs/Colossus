@@ -13,10 +13,10 @@ impl ProcessSessions {
         accepted_run_id: &str,
         scopes: &[&str],
     ) -> Result<WorkflowOrigin, ToolError> {
-        let owner = self.registry_for_workflows(context)?;
+        let owner = self.active_run_owner(context)?;
         if owner.actor_type == ActorType::Application {
             let event = self
-                .journal_for_workflows()
+                .journal()
                 .read_stream_from(&format!("api-run:{accepted_run_id}"), 0, 1)
                 .map_err(|_| ToolError::Denied("application grant evidence is unavailable".into()))?
                 .into_iter()
@@ -29,12 +29,9 @@ impl ProcessSessions {
                     "application grant ownership does not match".into(),
                 ));
             }
-            let value = self
-                .journal_for_workflows()
-                .decrypt_payload(&event)
-                .map_err(|_| {
-                    ToolError::Denied("application grant evidence is unavailable".into())
-                })?;
+            let value = self.journal().decrypt_payload(&event).map_err(|_| {
+                ToolError::Denied("application grant evidence is unavailable".into())
+            })?;
             let execution = value.get("execution").ok_or_else(|| {
                 ToolError::Denied("application grant evidence is required".into())
             })?;

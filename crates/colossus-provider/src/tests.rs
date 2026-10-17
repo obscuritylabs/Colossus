@@ -36,6 +36,8 @@ use tokio_rustls::TlsAcceptor;
 mod anthropic_gateway_tests;
 #[path = "error/gateway_tests.rs"]
 mod failure_tests;
+#[path = "image_view_tests.rs"]
+mod image_view_tests;
 #[path = "retry_tests.rs"]
 mod retry_tests;
 

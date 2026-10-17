@@ -1,10 +1,12 @@
 import { mcpCallTarget } from "@colossus/ui/lib/mcp-call";
 import { safeDisplayLabel } from "./presenters";
 import type { ToolActivity, ToolActivityState } from "./types";
+import { viewedImages } from "./viewed-images";
 
 export type ActivityLabelKind =
   | "delegate"
   | "generic"
+  | "image"
   | "list"
   | "mcp"
   | "read"
@@ -216,6 +218,22 @@ export function presentToolActivity(
     safeDisplayLabel(stringList(input, "argv").join(" "), "", 96);
 
   switch (activity.toolName) {
+    case "image.view": {
+      const count = viewedImages(activity).length;
+      return {
+        kind: "image",
+        title: actionForState(activity.state, {
+          requested: "Preparing to view images",
+          active: "Viewing images",
+          completed:
+            count > 0
+              ? `Viewed ${count} ${count === 1 ? "image" : "images"}`
+              : "Image view completed",
+          cancelled: "Skipped viewing images",
+          failed: "Couldn’t view images",
+        }),
+      };
+    }
     case "mcp.call": {
       const target =
         mcpCallTarget(releasedInput) ?? mcpCallTarget(activity.preview);

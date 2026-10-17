@@ -52,6 +52,7 @@ import {
   onStatusBarAction,
   onSpaceStatusChanged,
   readArtifactContent,
+  readImageArtifact,
   readWorkspaceFile,
   renameSpace,
   restartManagedRuntime,
@@ -922,7 +923,9 @@ export default function App() {
       ? FIXTURE_SCENARIO === "provider-retry"
         ? developmentFixtures().buildProviderRetryFixture()
         : FIXTURE_SCENARIO === "activity-comparison"
-          ? developmentFixtures().buildActivityComparisonFixture()
+          ? FIXTURE_QUERY.get("imageViews") === "1"
+            ? developmentFixtures().buildImageViewFixture()
+            : developmentFixtures().buildActivityComparisonFixture()
           : FIXTURE_SCENARIO === "plan-workflow"
             ? developmentFixtures().buildPlanWorkflowFixture()
             : FIXTURE_QUERY.get("scheduleActivity") === "1"
@@ -3530,6 +3533,36 @@ export default function App() {
     }
   }
 
+  const loadViewedImage = useCallback(
+    async (artifactId: string, thumbnail: boolean) => {
+      if (FIXTURE_MODE && FIXTURE_QUERY.get("imageViews") === "1") {
+        if (FIXTURE_QUERY.get("imagePreviewError") === "1")
+          throw new Error("Image preview unavailable.");
+        return developmentFixtures().readFixtureImagePreview(
+          artifactId,
+          thumbnail,
+        );
+      }
+      const route = targetRoutes.current?.capture() ?? null;
+      if (
+        route === null ||
+        route.targetId !== desktop.selectedTargetId ||
+        targetRoutes.current?.isCurrent(route) !== true
+      ) {
+        throw new Error("Image preview unavailable.");
+      }
+      const source = await readImageArtifact(
+        route.targetId,
+        artifactId,
+        thumbnail,
+      );
+      if (targetRoutes.current?.isCurrent(route) !== true)
+        throw new Error("Image preview unavailable.");
+      return source;
+    },
+    [desktop.selectedTargetId],
+  );
+
   async function loadArtifactPreview(artifactId: string) {
     if (
       FIXTURE_MODE ||
@@ -5917,6 +5950,7 @@ export default function App() {
         </Suspense>
       ) : surface === "work" ? (
         <WorkSurface
+          onLoadViewedImage={loadViewedImage}
           onInspectSchedule={(scheduleId, showRun) => {
             if (desktop.selectedTargetId) {
               setScheduleInspection({
@@ -6039,6 +6073,10 @@ export default function App() {
           }
           loadSessionActivity={(request) => {
             if (FIXTURE_MODE) {
+              if (FIXTURE_QUERY.get("imageViews") === "1")
+                return Promise.resolve(
+                  developmentFixtures().buildImageViewActivityFixture(request),
+                );
               let liveActivityCount = 0;
               if (FIXTURE_ACTIVITY_LIVE && request.pageToken === "") {
                 const now = Date.now();

@@ -12,6 +12,109 @@ import type {
   TokenUsage,
 } from "../types";
 
+/** Explicit sample images for the real activity component's browser acceptance. */
+export function buildImageViewFixture(): ChatState {
+  const state = buildActivityComparisonFixture();
+  const view = state.views.get(state.activeRunId!)!;
+  const images = Array.from({ length: 5 }, (_, index) => ({
+    artifact_id: `artifact-${String(index + 1).padStart(64, "0")}`,
+    file_name: `sample-screen-${index + 1}.png`,
+    media_type: "image/png",
+    size_bytes: 1024,
+    sha256: "a".repeat(64),
+    width_pixels: 640,
+    height_pixels: 480,
+    detail: "auto",
+  }));
+  const sequence = view.lastSequence + 1;
+  view.updates.push({
+    runId: view.run.runId,
+    sequence,
+    createdAt: "2026-10-16T14:00:00Z",
+    update: {
+      type: "tool_activity",
+      activity: {
+        callId: "sample-image-view",
+        toolName: "image.view",
+        state: "completed",
+        summary: "Image inspection completed",
+        preview: JSON.stringify({ images }),
+      },
+    },
+  });
+  view.lastSequence = sequence;
+  view.run.lastSequence = sequence;
+  view.seenSequences = new Set([...view.seenSequences, sequence]);
+  return state;
+}
+
+export async function readFixtureImagePreview(
+  artifactId: string,
+  thumbnail: boolean,
+): Promise<string> {
+  if (!import.meta.env.DEV || !/^artifact-0{63}[1-5]$/u.test(artifactId))
+    throw new Error("Image preview unavailable.");
+  const canvas = document.createElement("canvas");
+  canvas.width = thumbnail ? 256 : 640;
+  canvas.height = thumbnail ? 192 : 480;
+  const context = canvas.getContext("2d")!;
+  context.scale(canvas.width / 640, canvas.height / 480);
+  context.fillStyle = "#18202b";
+  context.fillRect(0, 0, 640, 480);
+  context.fillStyle = "#9bbcff";
+  context.fillRect(24, 24, 592, 48);
+  context.font = "20px sans-serif";
+  context.fillStyle = "#18202b";
+  context.fillText(`Sample screen ${artifactId.at(-1)}`, 40, 56);
+  context.fillStyle = "#eef4ff";
+  context.fillText("Sample data · image activity", 32, 118);
+  for (let row = 0; row < 4; row++) {
+    context.fillStyle = row % 2 ? "#314458" : "#243447";
+    context.fillRect(32, 150 + row * 66, 576, 48);
+  }
+  return canvas.toDataURL("image/png");
+}
+
+export function buildImageViewActivityFixture(
+  request: ListSessionActivityRequest,
+): SessionActivityPage {
+  const state = buildImageViewFixture();
+  const view = state.views.get(state.activeRunId!)!;
+  const update = view.updates.at(-1)!;
+  const preview =
+    update.update.type === "tool_activity"
+      ? update.update.activity.preview
+      : null;
+  return {
+    activities: [
+      {
+        activityId: "sample-image-activity",
+        runId: request.sourceRunId,
+        turn: 1,
+        lane: "tools",
+        kind: "tool",
+        title: "image.view",
+        summary: "Image inspection completed",
+        actor: "Colossus",
+        status: "completed",
+        startedAt: update.createdAt,
+        completedAt: update.createdAt,
+        durationMs: 0,
+        input: null,
+        result: { format: "json", value: preview ?? "" },
+        attributes: {},
+        sourceEventTypes: ["api.run.updated.v1"],
+        firstSequence: update.sequence,
+        lastSequence: update.sequence,
+      },
+    ],
+    nextPageToken: "",
+    headSequence: update.sequence,
+    projectedThroughSequence: update.sequence,
+    caughtUp: true,
+  };
+}
+
 export function buildSessionMapFixture(): SessionMap {
   return {
     sessionId: SESSION_ID,

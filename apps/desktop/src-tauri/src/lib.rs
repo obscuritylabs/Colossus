@@ -79,7 +79,7 @@ use command_review::{command_review_context, finish_command_review};
 use commands::{
     archive_thread, cancel_run, choose_run_attachment, create_run, get_run, list_agent_messages,
     list_agent_participants, list_asides, list_runs, list_session_activity, read_artifact_content,
-    respond_interaction, restore_thread, watch_run,
+    read_image_artifact, respond_interaction, restore_thread, watch_run,
 };
 use configuration_import::{apply_repository_configuration, inspect_repository_configuration};
 use desktop_commands::{
@@ -331,6 +331,7 @@ pub fn run() {
             create_run,
             choose_run_attachment,
             read_artifact_content,
+            read_image_artifact,
             get_run,
             list_runs,
             list_shell_sessions,

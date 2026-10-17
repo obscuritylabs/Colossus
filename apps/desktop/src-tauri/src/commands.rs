@@ -23,6 +23,48 @@ const MAX_ATTACHMENT_BYTES: usize = 16 * 1_048_576;
 const MAX_RENDERED_ARTIFACT_BYTES: usize = 1_048_576;
 
 #[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn read_image_artifact(
+    state: State<'_, AppState>,
+    target_id: String,
+    artifact_id: String,
+    thumbnail: bool,
+) -> Result<String, CommandErrorDto> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    let target = target(&state, &target_id).await?;
+    let _unary_slot = unary_slot(&target.target)?;
+    let download = target
+        .target
+        .client
+        .download_artifact(&artifact_id)
+        .await
+        .map_err(CommandErrorDto::from_api)?;
+    if download.artifact.size_bytes == 0
+        || download.artifact.size_bytes > 16 * 1_048_576
+        || !matches!(
+            download.artifact.media_type.as_str(),
+            "image/png" | "image/jpeg" | "image/webp"
+        )
+    {
+        return Err(CommandErrorDto::invalid(
+            "artifactId",
+            "This artifact is not a supported image.",
+        ));
+    }
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        colossus_media::image_preview(
+            &download.artifact.file_name,
+            &download.artifact.media_type,
+            &download.bytes,
+            thumbnail,
+        )
+    })
+    .await
+    .map_err(|_| CommandErrorDto::invalid("artifactId", "Image preview is unavailable."))?
+    .map_err(|_| CommandErrorDto::invalid("artifactId", "Image preview is unavailable."))?;
+    Ok(format!("data:image/png;base64,{}", BASE64.encode(bytes)))
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn choose_run_attachment(
     app: AppHandle,
     state: State<'_, AppState>,

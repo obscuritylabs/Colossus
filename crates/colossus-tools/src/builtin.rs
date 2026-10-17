@@ -149,6 +149,16 @@ fn core_builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 1024 * 1024,
         },
         ToolSpec {
+            name: "image.view".into(),
+            description: "Open local PNG, JPEG, or static WebP images for visual inspection. Returns verified images to the model and records them in activity. Use workspace-relative paths; at most 16 images, 16 MiB each and 32 MiB combined.".into(),
+            input_schema: object_schema(json!({
+                "paths": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"type": "string", "minLength": 1, "maxLength": 4096}}
+            }), &["paths"]),
+            effect_action: Some("filesystem.read_image".into()),
+            capability: Some("filesystem.read_image".into()),
+            max_output_bytes: 32_768,
+        },
+        ToolSpec {
             name: "filesystem.read".into(),
             description: "Read one policy-permitted UTF-8 text file.".into(),
             input_schema: object_schema(

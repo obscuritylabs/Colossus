@@ -45,9 +45,19 @@ pub(super) fn payload(
         };
         let mut content = Vec::new();
         if message.role == ModelMessageRole::Tool {
+            let mut result_content =
+                vec![json!({"type":"text", "text":message.content.plain_text()})];
+            for image in message.content.images() {
+                let url = projection.images.data_url(image)?;
+                let (mime, data) = url
+                    .strip_prefix("data:")
+                    .and_then(|source| source.split_once(";base64,"))
+                    .ok_or_else(|| invalid("invalid verified image source"))?;
+                result_content.push(json!({"type":"image", "source":{"type":"base64", "media_type":mime, "data":data}}));
+            }
             content.push(
                 json!({"type":"tool_result", "tool_use_id":message.tool_call_id,
-                "content":message.content.plain_text()}),
+                "content": if message.content.images().next().is_some() { Value::Array(result_content) } else { Value::String(message.content.plain_text().into_owned()) }}),
             );
         } else {
             match &message.content {
