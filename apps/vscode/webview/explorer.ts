@@ -103,10 +103,10 @@ function render() {
       node("h2", "Connect your workspace"),
       node(
         "p",
-        "Connect the enrolled local worker to browse saved sessions, plans, and run states.",
+        "Start Colossus to browse saved sessions, plans, and run states.",
         "muted",
       ),
-      actionButton("Connect worker", { type: "connect" }, next.connecting),
+      actionButton("Start Colossus", { type: "connect" }, next.connecting),
     );
     if (next.error) content.append(node("p", next.error, "error"));
     return;

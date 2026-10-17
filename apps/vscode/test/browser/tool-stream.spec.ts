@@ -325,7 +325,7 @@ test("paused chat observation offers worker discovery reconnect without submitti
 }) => {
   await open(page, base);
   const reconnect = page.getByRole("button", {
-    name: "Reconnect worker",
+    name: "Reconnect",
     exact: true,
   });
   await expect(reconnect).toBeHidden();

@@ -22,6 +22,7 @@ members = [
     "crates/colossus-darwin-process",
     "crates/colossus-sidecar-protocol",
     "crates/colossus-sidecar",
+    "crates/colossus-app-host",
     "crates/colossus-ports",
     "crates/colossus-journal-redb",
     "crates/colossus-journal-postgres",
@@ -272,4 +273,10 @@ strip = "symbols"
 # bundle. Keep code and panic metadata, but do not make distribution behavior depend on
 # platform-specific linker debug-section size.
 [profile.test]
+strip = "debuginfo"
+
+# Runnable VSIX binaries keep assertions without producing large MSVC symbol files.
+[profile.vscode]
+inherits = "dev"
+debug = 0
 strip = "debuginfo"
