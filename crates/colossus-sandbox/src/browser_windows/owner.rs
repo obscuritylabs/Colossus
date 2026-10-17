@@ -88,6 +88,11 @@ impl Native {
                 .wait_tree_timeout(Duration::from_secs(2))
                 .map_err(|_| BrowserDriverError::OutcomeUnknown)?
             {
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "Windows browser shutdown tree_natural=false direct_exit={:?}",
+                    child.wait_timeout(Duration::ZERO).ok().flatten()
+                );
                 self.forced = true;
                 child
                     .terminate(1)
@@ -101,10 +106,16 @@ impl Native {
             }
         }
         if let Some(child) = &mut self.child {
-            self.forced |= child
+            let context = child
                 .close_browser_context(Duration::from_secs(2))
-                .map_err(|_| BrowserDriverError::OutcomeUnknown)?
-                == ContextShutdown::Forced;
+                .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "Windows browser shutdown context_graceful={} tree_forced={}",
+                context == ContextShutdown::Graceful,
+                self.forced
+            );
+            self.forced |= context == ContextShutdown::Forced;
             child
                 .retire_network()
                 .map_err(|_| BrowserDriverError::OutcomeUnknown)?;

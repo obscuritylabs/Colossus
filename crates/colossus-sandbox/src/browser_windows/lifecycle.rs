@@ -344,6 +344,11 @@ impl BrowserDriver for Driver {
                     .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
             }
             resources.cef_acknowledged = bridge.close_session(&session).await.is_ok();
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "Windows browser shutdown cef_acknowledged={}",
+                resources.cef_acknowledged
+            );
             resources.cleanup().await
         })
         .await

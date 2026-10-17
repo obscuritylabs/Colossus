@@ -27,7 +27,15 @@ pub(super) async fn drain(mut reader: PrivateReader) -> std::io::Result<u64> {
                             || text.starts_with("native cef startup breakpoint ")
                             || text.starts_with("native cef upload failure ")
                             || text.starts_with("native cef resource rejection ")
-                            || text.starts_with("native Windows download "))
+                            || text.starts_with("native Windows download ")
+                            || matches!(
+                                text,
+                                "native browser shutdown phase=close_all_enter"
+                                    | "native browser shutdown phase=close_all_done"
+                                    | "native browser shutdown phase=cef_done"
+                                    | "native browser shutdown phase=transfers_done"
+                                    | "native browser shutdown phase=transfers_failed"
+                            ))
                     {
                         eprintln!("{text}");
                     }

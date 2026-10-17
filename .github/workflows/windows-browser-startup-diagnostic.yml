@@ -1,19 +1,19 @@
-name: Focused Windows browser clean product repair
+name: Focused Windows browser shutdown observation
 
 on:
   push:
-    branches: [codex/windows-browser-clean-repair-8ea97317]
+    branches: [codex/windows-browser-shutdown-eac1361b]
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-browser-clean-repair-8ea97317
+  group: windows-browser-shutdown-eac1361b
   cancel-in-progress: false
 
 jobs:
   startup:
-    if: github.repository == 'obscuritylabs/Colossus' && github.ref == 'refs/heads/codex/windows-browser-clean-repair-8ea97317'
+    if: github.repository == 'obscuritylabs/Colossus' && github.ref == 'refs/heads/codex/windows-browser-shutdown-eac1361b'
     runs-on: windows-latest-l
     timeout-minutes: 35
     defaults:
@@ -30,13 +30,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 2
+          fetch-depth: 3
           persist-credentials: false
 
       - name: Admit only the reviewed patch and record categorical runner context
         env:
           REVIEW_STATUS: root-reviewed
-          EXPECTED_DIAGNOSTIC_FILES: '[".github/workflows/windows-browser-startup-diagnostic.yml","native/browser/scripts/stage_windows.py","native/browser/scripts/test_stage_windows.py","crates/colossus-windows-process/src/windows_impl/context.rs","crates/colossus-windows-process/src/windows_impl/context/helper.rs","crates/colossus-windows-process/src/windows_impl/context/token_security.rs","crates/colossus-windows-process/src/windows_impl/context/token_security/tests.rs"]'
+          EXPECTED_DIAGNOSTIC_FILES: '[".github/workflows/windows-browser-startup-diagnostic.yml","native/browser/scripts/stage_windows.py","native/browser/scripts/test_stage_windows.py","crates/colossus-windows-process/src/windows_impl/context.rs","crates/colossus-windows-process/src/windows_impl/context/helper.rs","crates/colossus-windows-process/src/windows_impl/context/token_security.rs","crates/colossus-windows-process/src/windows_impl/context/token_security/tests.rs","crates/colossus-sandbox/src/browser_windows/owner.rs","crates/colossus-sandbox/src/browser_windows/lifecycle.rs","native/browser/driver/src/cef.rs","crates/colossus-sandbox/src/browser_windows/launch/bootstrap.rs"]'
           EXPECTED_HEAD: ${{ github.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -46,7 +46,7 @@ jobs:
           $head = (git rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0 -or $head -cne $env:EXPECTED_HEAD) { throw 'Unexpected diagnostic checkout.' }
           $parents = @((git rev-list --parents -n 1 HEAD).Trim() -split ' ')
-          if ($LASTEXITCODE -ne 0 -or $parents.Count -ne 2 -or $parents[1] -cne '8ea97317e5cc7635dcb58e17de5675de0a36ef45') { throw 'Diagnostic must be one single-parent reviewed commit above the clean product base.' }
+          if ($LASTEXITCODE -ne 0 -or $parents.Count -ne 2 -or $parents[1] -cne 'eac1361ba9256787356ed3a91db77643dca32fe9') { throw 'Diagnostic must be one single-parent reviewed commit above the clean repair candidate.' }
           $dirty = @(git status --porcelain=v1 --untracked-files=no)
           if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'Diagnostic tracked source must be clean.' }
           $expected = @($env:EXPECTED_DIAGNOSTIC_FILES | ConvertFrom-Json | Sort-Object)

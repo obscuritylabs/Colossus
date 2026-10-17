@@ -1390,13 +1390,26 @@ impl Host {
         if !self.initialized {
             return self.finish_transfers();
         }
+        #[cfg(all(windows, debug_assertions))]
+        eprintln!("native browser shutdown phase=close_all_enter");
         self.close_all()?;
+        #[cfg(all(windows, debug_assertions))]
+        eprintln!("native browser shutdown phase=close_all_done");
         // SAFETY: main-thread shutdown only after all native tab close acknowledgements.
         if unsafe { ffi::colossus_cef_shutdown() } != 0 {
             return Err(BrowserDriverError::OutcomeUnknown);
         }
+        #[cfg(all(windows, debug_assertions))]
+        eprintln!("native browser shutdown phase=cef_done");
         self.initialized = false;
-        self.finish_transfers()
+        let result = self.finish_transfers();
+        #[cfg(all(windows, debug_assertions))]
+        if result.is_ok() {
+            eprintln!("native browser shutdown phase=transfers_done");
+        } else {
+            eprintln!("native browser shutdown phase=transfers_failed");
+        }
+        result
     }
     pub fn idle_pump(&mut self) -> Result<(), BrowserDriverError> {
         self.retire_capture();
