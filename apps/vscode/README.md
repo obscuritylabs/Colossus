@@ -38,7 +38,8 @@ exit close the owned runtime. An unexpected restart never resends a task.
 
 **Configure Local Runtime** under **Workspace → Connections** adds providers and model
 profiles, changes the default model, replaces a provider key, or changes access.
-Responses and Chat Completions providers support HTTPS APIs and loopback HTTP servers.
+Responses, Chat Completions, and native Anthropic Messages providers support HTTPS
+APIs and loopback HTTP servers.
 API keys are entered in native password prompts and stored in VS Code SecretStorage.
 Model capabilities start at Auto. Minimal access allows chat; Development adds the
 bounded filesystem, Git, patch, shell, question, and Plan tools after native confirmation.

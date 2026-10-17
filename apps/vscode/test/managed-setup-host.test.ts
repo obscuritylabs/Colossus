@@ -9,6 +9,97 @@ import { join } from "node:path";
 import { workspaceIdentity } from "../src/connection.js";
 import type { ManagedSetup } from "../src/managed.js";
 
+test("native Anthropic setup keeps the Messages protocol and stores its key only in native custody", async () => {
+  const bundle = await build({
+    entryPoints: ["src/managed-setup.ts"],
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    external: ["vscode"],
+    write: false,
+  });
+  const temporary = await mkdtemp(join(tmpdir(), "colossus-managed-setup-"));
+  const canonical = await workspaceIdentity(temporary);
+  let state: ManagedSetup | undefined;
+  const stored = new Map<string, string>();
+  const vscode = {
+    workspace: {
+      isTrusted: true,
+      workspaceFolders: [{ uri: { scheme: "file", fsPath: canonical.path } }],
+    },
+    window: {
+      async showQuickPick(items: { protocol?: string }[]) {
+        return items.find((item) => item.protocol === "anthropic_messages");
+      },
+      async showInputBox(options: {
+        title: string;
+        value?: string;
+        password?: boolean;
+      }) {
+        if (options.title === "Provider API base URL") {
+          assert.equal(options.value, "https://api.anthropic.com/v1");
+        }
+        if (options.title === "Provider API key") {
+          assert.equal(options.password, true);
+          return "private-anthropic-fixture-key";
+        }
+        if (options.title === "Model identifier") return "claude-fixture";
+        return options.value;
+      },
+    },
+  };
+  const module = {
+    exports: {} as {
+      configureManaged(
+        context: unknown,
+        workspace: string,
+      ): Promise<ManagedSetup>;
+    },
+  };
+  const require = createRequire(import.meta.url);
+  runInNewContext(bundle.outputFiles[0]!.text, {
+    module,
+    exports: module.exports,
+    require: (name: string) => (name === "vscode" ? vscode : require(name)),
+    process,
+    Buffer,
+    URL,
+    structuredClone,
+    setTimeout,
+    clearTimeout,
+  });
+  try {
+    const configured = await module.exports.configureManaged(
+      {
+        workspaceState: {
+          get: () => state,
+          async update(_key: string, value: ManagedSetup) {
+            state = value;
+          },
+        },
+        secrets: {
+          async store(key: string, value: string) {
+            stored.set(key, value);
+          },
+        },
+      },
+      canonical.path,
+    );
+    const provider = configured.providers[0]!;
+    assert.equal(provider.kind, "anthropic_messages");
+    assert.equal(provider.base_url, "https://api.anthropic.com/v1");
+    assert.equal(configured.models[0]!.provider_profile, provider.profile);
+    assert.equal(configured.models[0]!.model, "claude-fixture");
+    assert.equal(
+      stored.get(`colossus.provider.v1:${provider.credential_id}`),
+      "private-anthropic-fixture-key",
+    );
+    assert.ok(!JSON.stringify(state).includes("private-anthropic-fixture-key"));
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
 test("clearing provider authentication deletes custody only after saving and retains a retryable reference on failure", async () => {
   const bundle = await build({
     entryPoints: ["src/managed-setup.ts"],

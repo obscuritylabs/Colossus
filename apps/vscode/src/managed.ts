@@ -31,7 +31,8 @@ export interface ManagedModel {
 }
 export interface ManagedProvider {
   profile: string;
-  kind: "echo" | "open_ai_responses" | "open_ai_compatible";
+  kind:
+    "echo" | "open_ai_responses" | "open_ai_compatible" | "anthropic_messages";
   base_url: string | null;
   credential_id: string | null;
   timeout_ms: number;

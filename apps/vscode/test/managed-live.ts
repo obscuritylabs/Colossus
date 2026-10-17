@@ -15,6 +15,10 @@ const workspace = join(root, "workspace");
 const providerRequests: {
   model: string;
   reasoning_effort?: string;
+  output_config?: { effort: string };
+  thinking?: { type: string };
+  path: string | undefined;
+  apiKey: string | string[] | undefined;
   authorization: string | undefined;
 }[] = [];
 const provider = createServer(async (request, response) => {
@@ -30,12 +34,56 @@ const provider = createServer(async (request, response) => {
   const input = JSON.parse(body) as {
     model: string;
     reasoning_effort?: string;
+    output_config?: { effort: string };
+    thinking?: { type: string };
   };
   providerRequests.push({
     ...input,
+    path: request.url,
+    apiKey: request.headers["x-api-key"],
     authorization: request.headers.authorization,
   });
   response.setHeader("content-type", "text/event-stream");
+  if (request.url === "/v1/messages") {
+    response.end(
+      [
+        {
+          type: "message_start",
+          message: {
+            id: "managed-anthropic",
+            type: "message",
+            role: "assistant",
+            usage: { input_tokens: 4, output_tokens: 0 },
+          },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "text_delta",
+            text: `Managed Messages replied with ${input.model}`,
+          },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { output_tokens: 4 },
+        },
+        { type: "message_stop" },
+      ]
+        .map(
+          (event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+        )
+        .join(""),
+    );
+    return;
+  }
   response.end(
     `data: ${JSON.stringify({ id: "managed-live", choices: [{ index: 0, delta: { content: `Managed provider replied with ${input.model}` }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
   );
@@ -259,10 +307,72 @@ try {
         request.authorization === "Bearer managed-test-private-provider-key",
     ),
   );
+  controller.detach();
+  await runtime.stop();
+  console.log(
+    "Managed Local E2E: native Anthropic provider and reasoning selection",
+  );
+  const anthropicConnection = await runtime.start({
+    ...options,
+    setup: {
+      ...providerSetup,
+      primary: "anthropic",
+      providers: [
+        { ...providerSetup.providers[0]!, kind: "anthropic_messages" },
+      ],
+      models: [
+        {
+          ...providerSetup.models[0]!,
+          profile: "anthropic",
+          model: "live-anthropic",
+          reasoning_effort: "high",
+        },
+      ],
+    },
+    credentials: [
+      { id: "live-credential", secret: "managed-test-anthropic-key" },
+    ],
+  });
+  await controller.attach(
+    await connectManaged(anthropicConnection, runtime.pid),
+    "primary",
+  );
+  controller.setModelSelection({
+    modelProfile: "anthropic",
+    reasoningEffort: "high",
+  });
+  await controller.send(
+    "Verify native Messages selection",
+    "execute",
+    undefined,
+    controller.view.modelSelection,
+  );
+  const messagesDeadline = Date.now() + 20000;
+  while (controller.view.busy && Date.now() < messagesDeadline)
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(controller.view.error, "");
+  assert.equal(controller.view.busy, false);
+  const nativeRequest = providerRequests.at(-1)!;
+  assert.equal(nativeRequest.path, "/v1/messages");
+  assert.equal(nativeRequest.model, "live-anthropic");
+  assert.equal(nativeRequest.apiKey, "managed-test-anthropic-key");
+  assert.equal(nativeRequest.authorization, undefined);
+  assert.deepEqual(nativeRequest.thinking, { type: "adaptive" });
+  assert.deepEqual(nativeRequest.output_config, { effort: "high" });
+  assert.ok(
+    controller.view.messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        message.text.includes("Managed Messages replied with live-anthropic"),
+    ),
+  );
   const projection = JSON.stringify(controller.view);
   assert.ok(!projection.includes("managed-test-private-provider-key"));
+  assert.ok(!projection.includes("managed-test-anthropic-key"));
   assert.ok(!projection.includes(providerConnection.bearer));
   assert.ok(!projection.includes(providerConnection.approval_broker_bearer));
+  assert.ok(!projection.includes(anthropicConnection.bearer));
+  assert.ok(!projection.includes(anthropicConnection.approval_broker_bearer));
 } finally {
   controller.detach();
   await Promise.all([runtime.stop(), other.stop()]);

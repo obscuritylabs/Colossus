@@ -166,6 +166,11 @@ export async function configureManaged(
           protocol: "open_ai_responses" as const,
         },
         {
+          label: "New Anthropic provider",
+          description: "Native Messages protocol",
+          protocol: "anthropic_messages" as const,
+        },
+        {
           label: "New compatible provider",
           description: "Chat Completions protocol",
           protocol: "open_ai_compatible" as const,
@@ -189,6 +194,9 @@ export async function configureManaged(
       if (selected.protocol !== "echo") {
         baseUrl = await vscode.window.showInputBox({
           title: "Provider API base URL",
+          ...(selected.protocol === "anthropic_messages"
+            ? { value: "https://api.anthropic.com/v1" }
+            : {}),
           ignoreFocusOut: true,
           prompt:
             "Use the provider's versioned API URL. HTTPS is required except on loopback.",
