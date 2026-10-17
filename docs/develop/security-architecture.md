@@ -838,6 +838,19 @@ independent of agent tool permissions; navigation checks do not constitute a gen
 private-network firewall. It remains disabled in normal builds pending the platform
 permission, lifecycle, and cleanup gates in [ADR 0003](adr/0003-desktop-browser-boundary.md).
 
+A VS Code Managed Local sidecar uses the same native SDK executable binding and
+bootstrap protocol. The trusted VSIX contains the native lifecycle host, sidecar, and
+digest manifest; the extension checks that manifest before a no-shell host launch.
+The extension host and its installed package are the native application authority,
+with the ordinary same-user limitations of editor extensions. This package check does
+not claim Desktop's sealed native executable trust root. The Rust host independently
+verifies and binds the sidecar before releasing bootstrap secrets. Activated transport
+credentials return only over inherited bounded pipes to the TypeScript extension
+host, never through discovery, the sidebar, settings JSON, argv, environment, or logs.
+The primary and approval broker retain separate grants. Model configuration cannot
+widen these grants. Persisted folder identity and native workspace identity must both
+match before use, and the VS Code state surface never shares Desktop or CLI leases.
+
 A managed desktop sidecar is a separate signed process, not an in-process extension of
 renderer authority. Its exact signed executable and the bundled TUI CLI are named in a
 SHA-256 manifest whose exact byte digest is patched into, and then sealed by, the signed

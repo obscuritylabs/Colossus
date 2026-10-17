@@ -39,7 +39,7 @@ pub(super) fn read(bytes: &[u8]) -> Result<PackageSource, CommandErrorDto> {
             .map_err(|_| invalid("An archive entry is invalid or encrypted."))?;
         let name = entry
             .name()
-            .map_err(|_| invalid("An archive entry has an invalid filename."))?
+            .map_err(|_| invalid("A package path has invalid text encoding."))?
             .into_owned();
         let path = name.trim_end_matches('/');
         if path.is_empty()

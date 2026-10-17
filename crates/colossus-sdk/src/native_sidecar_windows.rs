@@ -453,6 +453,7 @@ async fn launch(
         None => None,
     };
     let (agent_runs_closed, _) = watch::channel(false);
+    bootstrap.notify_connection(&ready)?;
     let connector_runs = connector.as_ref().map(|transport| {
         Arc::new(WindowsAgentRuns {
             transports: AgentRunTransports {

@@ -10,6 +10,19 @@ const manifest = JSON.parse(await readFile("package.json", "utf8"));
 validateViewContributions(manifest);
 
 const target = process.argv[2] ?? `${process.platform}-${process.arch}`;
+const nativeManifest = JSON.parse(
+  await readFile("native/manifest.json", "utf8"),
+);
+if (nativeManifest.version !== 1 || nativeManifest.target !== target)
+  throw new Error(
+    "Stage the managed runtime for the exact VSIX platform before packaging.",
+  );
+for (const name of ["colossus-app-host", "colossus-sidecar"]) {
+  const suffix = target.startsWith("win32-") ? ".exe" : "";
+  const bytes = await readFile(`native/${name}${suffix}`);
+  if (createHash("sha256").update(bytes).digest("hex") !== nativeManifest[name])
+    throw new Error("The staged managed runtime does not match its manifest.");
+}
 if (
   ![
     "linux-x64",

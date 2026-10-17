@@ -969,10 +969,115 @@ jobs:
           COLOSSUS_OPENSSL_BIN: /usr/bin/openssl
         run: cargo test --locked -p colossus-policy --test opa_live -- --ignored
 
+  vscode-sdk:
+    name: Prepare VS Code SDK bindings
+    if: needs.eligibility.result == 'success'
+    needs: eligibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: |
+            sdk/package-lock.json
+            sdk/typescript/package-lock.json
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: 1.25.0
+          cache-dependency-path: sdk/go/go.sum
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: 3.10.18
+      - name: Generate and verify the pinned SDK bindings
+        run: |
+          ./sdk/scripts/install-codegen-tools
+          ./sdk/scripts/generate
+          git diff --exit-code -- sdk
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vscode-sdk-bindings
+          path: sdk/typescript/src/gen
+          if-no-files-found: error
+          retention-days: 1
+
+  vscode-native:
+    name: VS Code native lifecycle (${{ matrix.os }})
+    if: needs.eligibility.result == 'success'
+    needs: [eligibility, vscode-sdk]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: |
+            sdk/typescript/package-lock.json
+            apps/vscode/package-lock.json
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: . -> target
+          key: vscode-native-${{ runner.os }}
+          cache-targets: false
+      - name: Build the owned native runtime
+        working-directory: apps/vscode
+        run: node scripts/build-native.mjs
+      - name: Restore the exact-run SDK bindings
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vscode-sdk-bindings
+          path: sdk/typescript/src/gen
+      - name: Verify the generated SDK input and output digests
+        shell: bash
+        run: ./sdk/scripts/check-generated typescript
+      - name: Build the extension and stage the native runtime
+        shell: bash
+        run: |
+          npm --prefix sdk/typescript ci --ignore-scripts
+          npm --prefix sdk/typescript run build
+          npm --prefix apps/vscode ci --ignore-scripts
+          npm --prefix apps/vscode run build
+      - name: Retain the staged native runtime for verification
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vscode-runtime-${{ runner.os }}
+          path: apps/vscode/native
+          if-no-files-found: error
+          retention-days: 1
+      - name: Exercise the bundled lifecycle and provider selection
+        working-directory: apps/vscode
+        run: npm run test:managed
+      - name: Package the tested platform VSIX
+        working-directory: apps/vscode
+        run: node scripts/package.mjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vscode-native-${{ runner.os }}
+          path: apps/vscode/artifacts/*.vsix
+          if-no-files-found: error
+          retention-days: 7
+
   gate:
     name: Colossus pre-merge gate
     if: always()
-    needs: [eligibility, linux-rust-integration, linux-desktop, macos-native, macos-desktop-acceptance, macos-desktop-bundle, windows-runtime, windows-desktop, credential-vault, fuzz, supply-chain, chroma, storage, live-security]
+    needs: [eligibility, linux-rust-integration, linux-desktop, macos-native, macos-desktop-acceptance, macos-desktop-bundle, windows-runtime, windows-desktop, credential-vault, fuzz, supply-chain, chroma, storage, live-security, vscode-sdk, vscode-native]
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
@@ -992,6 +1097,8 @@ jobs:
             macos-desktop-bundle=${{ needs['macos-desktop-bundle'].result }}
             windows-runtime=${{ needs['windows-runtime'].result }}
             windows-desktop=${{ needs['windows-desktop'].result }}
+            vscode-sdk=${{ needs['vscode-sdk'].result }}
+            vscode-native=${{ needs['vscode-native'].result }}
             credential-vault=${{ needs['credential-vault'].result }}
             fuzz=${{ needs.fuzz.result }}
             supply-chain=${{ needs['supply-chain'].result }}

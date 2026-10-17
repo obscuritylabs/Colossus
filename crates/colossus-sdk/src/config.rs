@@ -152,7 +152,8 @@ pub struct VerifiedExecutable {
 ///
 /// Stable/default callers require a matching canonical Apple TeamIdentifier. The ad-hoc
 /// option exists only for an explicitly labeled Developer Preview whose trusted host has
-/// already bound that release channel into its sealed bundle manifest.
+/// already bound that release channel into its trusted distribution manifest (a
+/// sealed Desktop bundle or the installed VSIX package authority).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum MacosCodeSigningRequirement {
     /// Require the child and current executable to share one canonical Apple TeamIdentifier.

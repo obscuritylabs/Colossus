@@ -301,7 +301,23 @@ jobs:
       - name: Build locked release binary
         run: >-
           cargo build --locked --release --target ${{ matrix.target }}
-          --package colossus-cli --bin colossus
+          --package colossus-cli --package colossus-sidecar --package colossus-app-host
+
+      - name: Ad-hoc sign the macOS VS Code Developer Preview runtime
+        if: runner.os == 'macOS'
+        run: |
+          codesign --force --sign - target/${{ matrix.target }}/release/colossus-app-host
+          codesign --force --sign - target/${{ matrix.target }}/release/colossus-sidecar
+
+      - name: Retain the VS Code native runtime
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vscode-native-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/colossus-app-host${{ runner.os == 'Windows' && '.exe' || '' }}
+            target/${{ matrix.target }}/release/colossus-sidecar${{ runner.os == 'Windows' && '.exe' || '' }}
+          if-no-files-found: error
+          compression-level: 0
 
       - name: Prove static Linux linkage
         if: runner.os == 'Linux'
@@ -352,6 +368,12 @@ jobs:
           name: unsigned-colossus-${{ matrix.target }}
           path: unsigned
 
+      - name: Download unsigned VS Code runtime
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vscode-native-${{ matrix.target }}
+          path: vscode-native
+
       - name: Expand and inspect CLI archive
         shell: pwsh
         env:
@@ -393,7 +415,10 @@ jobs:
           endpoint: https://eus.codesigning.azure.net/
           signing-account-name: colossus-code-sign
           certificate-profile-name: colossus
-          files: ${{ github.workspace }}\stage\colossus-${{ needs.validate.outputs.version }}-${{ matrix.target }}\colossus.exe
+          files: |
+            ${{ github.workspace }}\stage\colossus-${{ needs.validate.outputs.version }}-${{ matrix.target }}\colossus.exe
+            ${{ github.workspace }}\vscode-native\colossus-app-host.exe
+            ${{ github.workspace }}\vscode-native\colossus-sidecar.exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -423,6 +448,16 @@ jobs:
           $verify = Join-Path $env:RUNNER_TEMP 'signed-cli-verify'
           Expand-Archive -LiteralPath $archive -DestinationPath $verify
           ./scripts/ci/verify-authenticode.ps1 -Path (Join-Path $verify "$name\colossus.exe")
+          ./scripts/ci/verify-authenticode.ps1 -Path (Join-Path $env:GITHUB_WORKSPACE 'vscode-native\colossus-app-host.exe')
+          ./scripts/ci/verify-authenticode.ps1 -Path (Join-Path $env:GITHUB_WORKSPACE 'vscode-native\colossus-sidecar.exe')
+
+      - name: Retain signed VS Code runtime
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vscode-native-signed-${{ matrix.target }}
+          path: vscode-native/*.exe
+          if-no-files-found: error
+          compression-level: 0
 
       - name: Upload signed CLI archive and checksum
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1262,13 +1297,26 @@ jobs:
 
   vscode:
     name: VSIX ${{ matrix.target }}
-    needs: validate
+    if: ${{ !cancelled() && needs.artifacts.result == 'success' && (needs.windows_cli_sign.result == 'success' || needs.validate.outputs.publish_draft != 'true') }}
+    needs: [validate, artifacts, windows_cli_sign]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        target: [linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64, win32-arm64]
+        include:
+          - target: linux-x64
+            rust: x86_64-unknown-linux-musl
+          - target: linux-arm64
+            rust: aarch64-unknown-linux-musl
+          - target: darwin-x64
+            rust: x86_64-apple-darwin
+          - target: darwin-arm64
+            rust: aarch64-apple-darwin
+          - target: win32-x64
+            rust: x86_64-pc-windows-msvc
+          - target: win32-arm64
+            rust: aarch64-pc-windows-msvc
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1301,13 +1349,19 @@ jobs:
           npm ci --ignore-scripts --legacy-peer-deps --install-links
           npm run check
           npm run build
-      - name: Package the locked native binding for the exact VS Code target
+      - name: Download the matching managed runtime
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vscode-native${{ startsWith(matrix.target, 'win32-') && needs.validate.outputs.publish_draft == 'true' && '-signed' || '' }}-${{ matrix.rust }}
+          path: vscode-native
+      - name: Stage and package the exact VS Code target
         env:
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           cd apps/vscode
+          node scripts/stage-native.mjs "$TARGET" ../../vscode-native
           node scripts/package.mjs "$TARGET"
           version=$(node -p "require('./package.json').version")
           output="$RUNNER_TEMP/vsix-release"
