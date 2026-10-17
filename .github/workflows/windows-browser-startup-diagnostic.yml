@@ -1,19 +1,19 @@
-name: Focused Windows browser DLL name observation
+name: Focused Windows browser component read candidate
 
 on:
   push:
-    branches: [codex/windows-browser-dll-name-masm-e44681f7]
+    branches: [codex/windows-browser-component-read-4d844892]
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-browser-dll-name-masm-e44681f7
+  group: windows-browser-component-read-4d844892
   cancel-in-progress: false
 
 jobs:
   startup:
-    if: github.repository == 'obscuritylabs/Colossus' && github.ref == 'refs/heads/codex/windows-browser-dll-name-masm-e44681f7'
+    if: github.repository == 'obscuritylabs/Colossus' && github.ref == 'refs/heads/codex/windows-browser-component-read-4d844892'
     runs-on: windows-latest-l
     timeout-minutes: 35
     defaults:
@@ -31,13 +31,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 6
+          fetch-depth: 7
           persist-credentials: false
 
       - name: Admit only the reviewed patch and record categorical runner context
         env:
           REVIEW_STATUS: root-reviewed
-          EXPECTED_DIAGNOSTIC_FILES: '[".github/workflows/windows-browser-startup-diagnostic.yml","crates/colossus-sandbox/src/browser_windows/startup_tests.rs","native/browser/driver/src/windows_io.rs","native/browser/driver/src/windows_lib.rs","crates/colossus-windows-native/src/lib.rs","crates/colossus-windows-native/src/startup_observation.rs","crates/colossus-sandbox/src/browser_windows/startup_debugger.rs"]'
+          EXPECTED_DIAGNOSTIC_FILES: '[".github/workflows/windows-browser-startup-diagnostic.yml","crates/colossus-sandbox/src/browser_windows/startup_tests.rs","native/browser/driver/src/windows_io.rs","native/browser/driver/src/windows_lib.rs","crates/colossus-windows-native/src/lib.rs","crates/colossus-windows-native/src/startup_observation.rs","crates/colossus-sandbox/src/browser_windows/startup_debugger.rs","native/browser/scripts/stage_windows.py"]'
           EXPECTED_HEAD: ${{ github.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -47,7 +47,7 @@ jobs:
           $head = (git rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0 -or $head -cne $env:EXPECTED_HEAD) { throw 'Unexpected diagnostic checkout.' }
           $parents = @((git rev-list --parents -n 1 HEAD).Trim() -split ' ')
-          if ($LASTEXITCODE -ne 0 -or $parents.Count -ne 2 -or $parents[1] -cne 'e44681f7069da90e960d3bf82bab8aeb60ab53e4') { throw 'Diagnostic must be one single-parent reviewed commit above the initial DLL name observation.' }
+          if ($LASTEXITCODE -ne 0 -or $parents.Count -ne 2 -or $parents[1] -cne '4d84489231b49d7e12306ab9860138960c99b7ac') { throw 'Diagnostic must be one single-parent reviewed commit above the verified DLL name observation.' }
           $dirty = @(git status --porcelain=v1 --untracked-files=no)
           if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'Diagnostic tracked source must be clean.' }
           $expected = @($env:EXPECTED_DIAGNOSTIC_FILES | ConvertFrom-Json | Sort-Object)

@@ -133,9 +133,11 @@ def inspect_client(path: Path) -> None:
 def grant_lpac_read(component_root: Path) -> None:
     if os.name != "nt":
         raise component.ComponentError("Windows sandbox ACL staging requires Windows")
-    # CEF's SET_LPAC_ACLS requirement applies to immutable engine bytes only.
-    # No user profile, credential, key or temporary home lives under this root.
+    # The browser uses a standard AppContainer; CEF children may use LPAC.
+    # Both receive read/execute access to immutable engine bytes only. No user
+    # profile, credential, key or temporary home lives under this root.
     subprocess.run(["icacls.exe", os.fspath(component_root), "/grant",
+                    "*S-1-15-2-1:(OI)(CI)(RX)",
                     "*S-1-15-2-2:(OI)(CI)(RX)"], check=True, timeout=30,
                    stdout=subprocess.DEVNULL)
 
