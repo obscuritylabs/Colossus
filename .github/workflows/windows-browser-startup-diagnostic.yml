@@ -1,19 +1,19 @@
-name: Focused Windows browser loader stack observation
+name: Focused Windows browser numbered loader stack observation
 
 on:
   push:
-    branches: [codex/windows-browser-loader-stack-dddc9acb]
+    branches: [codex/windows-browser-numbered-stack-8291dc70]
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-browser-loader-stack-dddc9acb
+  group: windows-browser-numbered-stack-8291dc70
   cancel-in-progress: false
 
 jobs:
   startup:
-    if: github.repository == 'obscuritylabs/Colossus' && github.ref == 'refs/heads/codex/windows-browser-loader-stack-dddc9acb'
+    if: github.repository == 'obscuritylabs/Colossus' && github.ref == 'refs/heads/codex/windows-browser-numbered-stack-8291dc70'
     runs-on: windows-latest-l
     timeout-minutes: 35
     defaults:
@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 3
+          fetch-depth: 4
           persist-credentials: false
 
       - name: Admit only the reviewed patch and record categorical runner context
@@ -47,7 +47,7 @@ jobs:
           $head = (git rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0 -or $head -cne $env:EXPECTED_HEAD) { throw 'Unexpected diagnostic checkout.' }
           $parents = @((git rev-list --parents -n 1 HEAD).Trim() -split ' ')
-          if ($LASTEXITCODE -ne 0 -or $parents.Count -ne 2 -or $parents[1] -cne 'dddc9acb66c93e714e805815ad685f110e016acd') { throw 'Diagnostic must be one single-parent reviewed commit above the entry observation.' }
+          if ($LASTEXITCODE -ne 0 -or $parents.Count -ne 2 -or $parents[1] -cne '8291dc70ab8c3d00295812401177396a4e13ac5d') { throw 'Diagnostic must be one single-parent reviewed commit above the initial stack observation.' }
           $dirty = @(git status --porcelain=v1 --untracked-files=no)
           if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'Diagnostic tracked source must be clean.' }
           $expected = @($env:EXPECTED_DIAGNOSTIC_FILES | ConvertFrom-Json | Sort-Object)

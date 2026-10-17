@@ -35,7 +35,7 @@ pub(super) async fn observe(pid: u32) {
             "-y",
             r"C:\Windows\System32",
             "-c",
-            "~* k 20; qd",
+            "~* knL 20; qd",
         ])
         .env_clear()
         .env("SystemRoot", system_root)
@@ -61,14 +61,22 @@ pub(super) async fn observe(pid: u32) {
     })
     .await;
     match result {
-        Ok(Ok((stdout, _, status))) => {
-            let frames = frames(&stdout);
+        Ok(Ok((stdout, stderr, status))) => {
+            let mut stack = frames(&stdout);
+            stack.extend(frames(&stderr));
+            stack.truncate(128);
             eprintln!(
-                "networkless CEF debugger status=completed success={} frames={}",
+                "networkless CEF debugger status=completed success={} frames={} output_bytes={} error_bytes={} access_denied={}",
                 status.success(),
-                frames.len()
+                stack.len(),
+                stdout.len(),
+                stderr.len(),
+                String::from_utf8_lossy(&stdout)
+                    .to_ascii_lowercase()
+                    .contains("access is denied")
+                    || String::from_utf8_lossy(&stdout).contains("0x80070005")
             );
-            for (ordinal, frame) in frames.iter().enumerate() {
+            for (ordinal, frame) in stack.iter().enumerate() {
                 eprintln!("networkless CEF debugger frame={ordinal} site={frame}");
             }
         }
@@ -123,17 +131,21 @@ fn frames(bytes: &[u8]) -> Vec<String> {
         .lines()
         .filter_map(|line| {
             let fields: Vec<_> = line.split_ascii_whitespace().collect();
-            if fields.len() != 4
-                || fields[0].len() != 2
-                || u8::from_str_radix(fields[0], 16).ok()? >= 32
-                || !fields[1..3].iter().all(|address| {
-                    (8..=17).contains(&address.len())
-                        && address.bytes().all(|b| b.is_ascii_hexdigit() || b == b'`')
-                })
-            {
+            let (addresses, site) = match fields.as_slice() {
+                [frame, stack, ret, site]
+                    if frame.len() == 2 && u8::from_str_radix(frame, 16).ok()? < 32 =>
+                {
+                    ([*stack, *ret], *site)
+                }
+                [stack, ret, site] => ([*stack, *ret], *site),
+                _ => return None,
+            };
+            if !addresses.iter().all(|address| {
+                (8..=17).contains(&address.len())
+                    && address.bytes().all(|b| b.is_ascii_hexdigit() || b == b'`')
+            }) {
                 return None;
             }
-            let site = fields[3];
             let (module, symbol) = site.split_once('!')?;
             if !MODULES
                 .iter()
@@ -170,4 +182,8 @@ fn debugger_frames_exclude_paths_addresses_arguments_and_unknown_modules() {
     let repeated =
         b"00 00000000`12345678 00000000`87654321 ntdll!NtWaitForSingleObject+0x14\n".repeat(200);
     assert_eq!(frames(&repeated).len(), 128);
+    assert_eq!(
+        frames(b"00000000`12345678 00000000`87654321 ntdll!NtWaitForSingleObject+0x14\n"),
+        ["ntdll!NtWaitForSingleObject+0x14"]
+    );
 }
