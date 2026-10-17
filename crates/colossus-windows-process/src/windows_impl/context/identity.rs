@@ -1,4 +1,5 @@
 //! Private kernel identities for the fixed browser-context transaction.
+mod token_security;
 use super::super::{OwnedHandle, WindowsProcessError, last_error};
 use colossus_windows_native::{BoundPath, FileIdentity};
 use std::{
@@ -220,6 +221,10 @@ pub(super) fn restricted_browser_primary() -> Result<Option<OwnedHandle>, Window
         return Err(last_error("CreateRestrictedToken(browser primary)"));
     }
     let restricted = OwnedHandle::new(raw, "CreateRestrictedToken(browser primary)")?;
+    // The elevated source's token-object ACL may grant Administrators, which LUA
+    // disables. Give only this new primary an explicit user/SYSTEM descriptor so
+    // its AppContainer derivative can open its own token for Chromium attenuation.
+    let restricted = token_security::with_user_access(&restricted, &current.user)?;
     let actual = token_handle(restricted.raw())?;
     require(
         same_sid(&actual.user, &current.user),
