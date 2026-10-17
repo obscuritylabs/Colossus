@@ -1,3 +1,7 @@
+/** @jsxRuntime classic */
+/** @jsx element */
+/** @jsxFrag Fragment */
+import { element, Fragment } from "./browser/browser-jsx";
 import { Button, TextInput } from "@colossus/ui";
 import type { ManagedFieldDescriptor } from "../types";
 import "./browser-settings.css";
@@ -42,7 +46,7 @@ export function BrowserCapabilityFields({
         <div className="browser-setting-copy">
           <label htmlFor={`${id}-control`}>{descriptor.title}</label>
           <p id={`${id}-help`}>
-            {toggle
+            {descriptor.id === "browser.enabled"
               ? "Let agents browse and interact with websites using a verified browser."
               : descriptor.description}
           </p>

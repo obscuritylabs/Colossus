@@ -266,7 +266,7 @@ export function BrowserPane({
           event.preventDefault();
           if (snapshot.available && address.trim() && !readOnly)
             void command(
-              active?.url
+              active
                 ? { type: "navigate", tabId: active.id, url: address }
                 : { type: "new", url: address },
             );

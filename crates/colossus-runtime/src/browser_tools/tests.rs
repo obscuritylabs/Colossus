@@ -350,17 +350,59 @@ fn browser_configuration_is_strict_and_recursively_defaultable() {
     let config = RuntimeConfig::from_yaml(&format!("{base}browser:\n  enabled: false\n")).unwrap();
     assert!(!config.browser.enabled);
     assert_eq!(config.browser.max_tabs, 8);
+    assert!(config.browser.public_web);
     for setting in [
         "maxSessions: 0",
         "maxSessions: 5",
         "maxTabs: 9",
         "maxSnapshotNodes: 1025",
         "executable: browser.exe",
+        "publicWeb: unrestricted",
     ] {
         assert!(
             RuntimeConfig::from_yaml(&format!("{base}browser:\n  {setting}\n")).is_err(),
             "{setting}"
         );
+    }
+}
+
+#[tokio::test]
+async fn public_browsing_requires_both_configuration_and_permit_and_cannot_be_model_selected() {
+    for (enabled, wildcard) in [(false, false), (true, false), (false, true), (true, true)] {
+        let workspace = private_tempdir();
+        let mut config = config(workspace.path());
+        config.browser.public_web = enabled;
+        if wildcard {
+            config.sandbox.network_destinations.push("*".into());
+        }
+        let runtime = runtime(
+            workspace.path(),
+            &config,
+            Some(Arc::new(Driver::verified())),
+        );
+        let context = begin(&runtime, "public-web");
+        let executor = executor(&runtime);
+        let mut forged = open_arguments();
+        forged["public_web"] = json!(true);
+        assert!(
+            call(&executor, &context, "browser.open", forged)
+                .await
+                .is_err()
+        );
+        call(&executor, &context, "browser.open", open_arguments())
+            .await
+            .unwrap();
+        let run = runtime.browser.as_ref().unwrap().run(&context).unwrap();
+        assert_eq!(
+            run.sessions.values().next().unwrap().public_web,
+            enabled && wildcard
+        );
+        runtime
+            .browser
+            .as_ref()
+            .unwrap()
+            .finish_run("public-web")
+            .await;
     }
 }
 

@@ -93,6 +93,7 @@ async fn run(user_development: bool) {
         tab_id: BrowserTabId::parse(format!("bt_{}", hex::encode(nonce))).unwrap(),
         document_id: BrowserDocumentId::parse(format!("bd_{}", hex::encode(nonce))).unwrap(),
         options: BrowserOpenOptions {
+            public_web: false,
             profile: Default::default(),
             mode: BrowserMode::Embedded,
             allowed_origins: vec![BrowserOrigin::parse(&fixture.origin).unwrap()],

@@ -42,12 +42,14 @@ test("browser configuration reaches the native runtime and cannot widen its ceil
   assert.deepEqual(
     runtimeConfiguration(setup, {
       enabled: false,
+      publicWeb: false,
       maxSessions: 1,
       maxTabs: 2,
       maxSnapshotNodes: 64,
     }).field_overrides,
     [
       { field_id: "browser.enabled", value: false },
+      { field_id: "browser.publicWeb", value: false },
       { field_id: "browser.maxSessions", value: 1 },
       { field_id: "browser.maxTabs", value: 2 },
       { field_id: "browser.maxSnapshotNodes", value: 64 },

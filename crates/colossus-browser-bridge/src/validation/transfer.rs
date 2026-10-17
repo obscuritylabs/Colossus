@@ -53,6 +53,7 @@ pub(crate) fn download(
     value: &BrowserDownloadDescriptor,
     command: &BrowserDriverCommand,
     origins: &[colossus_contracts::BrowserOrigin],
+    public_web: bool,
 ) -> Result<(), BrowserDriverError> {
     let BrowserAction::Download { max_bytes, element } = &command.action else {
         return Err(BrowserDriverError::Unsupported);
@@ -64,7 +65,7 @@ pub(crate) fn download(
         || value.size_bytes > MAX_BROWSER_TRANSFER_BYTES
         || !hex(&value.transfer_id, 32)
         || !hex(&value.sha256, 64)
-        || !origins.contains(&value.origin)
+        || !value.origin.admitted_by(origins, public_web)
         || element.document_id != command.target.document_id
     {
         return Err(BrowserDriverError::OutcomeUnknown);

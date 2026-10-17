@@ -49,6 +49,7 @@ export interface ManagedSetup {
 
 export interface BrowserSettings {
   enabled: boolean;
+  publicWeb: boolean;
   maxSessions: number;
   maxTabs: number;
   maxSnapshotNodes: number;
@@ -56,6 +57,7 @@ export interface BrowserSettings {
 
 export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
   enabled: true,
+  publicWeb: true,
   maxSessions: 4,
   maxTabs: 8,
   maxSnapshotNodes: 1024,
@@ -67,6 +69,7 @@ export function runtimeConfiguration(
 ) {
   if (
     typeof browser.enabled !== "boolean" ||
+    typeof browser.publicWeb !== "boolean" ||
     ![
       [browser.maxSessions, 4],
       [browser.maxTabs, 8],

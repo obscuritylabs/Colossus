@@ -295,8 +295,17 @@ impl BrowserManager {
         let inspections = views
             .into_iter()
             .map(|(id, view)| async move { (id, view.inspect().await) });
-        for (id, mut page) in collect_pages(inspections, SNAPSHOT_BUDGET).await {
+        for (id, page) in collect_pages(inspections, SNAPSHOT_BUDGET).await {
             let mut state = self.lock()?;
+            let mut page = match page {
+                Ok(page) => page,
+                Err(engine::BrowserError::Closed) => {
+                    state.event(&id, BrowserEvent::Crashed);
+                    continue;
+                }
+                // Navigation freshness and a slow observation do not prove a crash.
+                Err(_) => continue,
+            };
             if let Some(tab) = state.tabs.iter_mut().find(|t| t.dto.id == id) {
                 #[cfg(windows)]
                 {
@@ -358,12 +367,7 @@ impl BrowserManager {
                 }
             }
             BrowserAction::Navigate { tab_id, url } => {
-                let (view, policy) = self.tab(&tab_id, &scope)?;
-                let url = engine::parse_address(&url).map_err(engine_error)?;
-                policy.authorize(&url).map_err(engine_error)?;
-                self.reset_navigation(&tab_id, Some(url.as_str()))?;
-                view.navigate(url)
-                    .map_err(|_| error("This page could not be opened."))?;
+                self.navigate(app, &scope, &tab_id, &url).await?;
             }
             BrowserAction::Select { tab_id } => {
                 self.tab(&tab_id, &scope)?;
@@ -418,7 +422,10 @@ impl BrowserManager {
                 } else {
                     self.reset_navigation(&id, None)?;
                 }
-                view.control(action).await.map_err(engine_error)?;
+                if let Err(failure) = view.control(action).await {
+                    self.lock()?.event(&id, BrowserEvent::Failed);
+                    return Err(engine_error(failure));
+                }
             }
         }
         Ok(())
@@ -505,6 +512,70 @@ impl BrowserManager {
         }
     }
 
+    async fn navigate(
+        &self,
+        app: &AppHandle,
+        scope: &str,
+        tab_id: &str,
+        address: &str,
+    ) -> Result<(), CommandErrorDto> {
+        let (view, policy) = self.tab(tab_id, scope)?;
+        if matches!(view, BrowserView::Empty) {
+            // Release only this inert slot while allocating its real guest.
+            // Failed admission restores the address-entry tab without retrying.
+            let (index, placeholder) = {
+                let mut state = self.lock()?;
+                let index = state
+                    .tabs
+                    .iter()
+                    .position(|tab| tab.dto.id == tab_id)
+                    .ok_or_else(|| error("This tab has closed."))?;
+                (index, state.tabs.remove(index))
+            };
+            let result = self
+                .create(app, scope, address, placeholder.dto.conversation_id.clone())
+                .await;
+            if result.is_err() {
+                let mut state = self.lock()?;
+                let index = index.min(state.tabs.len());
+                state.tabs.insert(index, placeholder);
+            }
+            return result;
+        }
+        let url = engine::parse_address(address).map_err(engine_error)?;
+        policy.authorize(&url).map_err(engine_error)?;
+        self.reset_navigation(tab_id, Some(url.as_str()))?;
+        if view.navigate(url).is_err() {
+            self.lock()?.event(tab_id, BrowserEvent::Failed);
+            return Err(error("This page could not be opened."));
+        }
+        Ok(())
+    }
+
+    fn event_sink(&self, id: &str) -> EventSink {
+        let weak = Arc::downgrade(&self.data);
+        let event_id = id.to_owned();
+        Arc::new(move |event| {
+            let crashed = matches!(event, BrowserEvent::Crashed);
+            let view = weak.upgrade().and_then(|data| {
+                let mut state = data.lock().ok()?;
+                state.event(&event_id, event);
+                crashed
+                    .then(|| {
+                        state
+                            .tabs
+                            .iter()
+                            .find(|tab| tab.dto.id == event_id)
+                            .map(|tab| tab.view.clone())
+                    })
+                    .flatten()
+            });
+            if let Some(view) = view {
+                let _ = view.hide();
+            }
+        })
+    }
+
     async fn create(
         &self,
         app: &AppHandle,
@@ -523,27 +594,7 @@ impl BrowserManager {
         }
         let (directory, source) = self.profile(scope)?;
         let id = format!("browser-{}", uuid::Uuid::new_v4());
-        let weak = Arc::downgrade(&self.data);
-        let event_id = id.clone();
-        let sink: EventSink = Arc::new(move |event| {
-            let crashed = matches!(event, BrowserEvent::Crashed);
-            let view = weak.upgrade().and_then(|data| {
-                let mut state = data.lock().ok()?;
-                state.event(&event_id, event);
-                crashed
-                    .then(|| {
-                        state
-                            .tabs
-                            .iter()
-                            .find(|tab| tab.dto.id == event_id)
-                            .map(|tab| tab.view.clone())
-                    })
-                    .flatten()
-            });
-            if let Some(view) = view {
-                let _ = view.hide();
-            }
-        });
+        let sink = self.event_sink(&id);
         let generation = self.lock()?.generation;
         let view = super::guest::create(
             app,
@@ -551,7 +602,7 @@ impl BrowserManager {
                 id: id.clone(),
                 generation,
                 scope: scope.to_owned(),
-                conversation_id,
+                conversation_id: conversation_id.clone(),
                 initial_url: url.clone(),
                 directory,
                 source,
@@ -561,11 +612,16 @@ impl BrowserManager {
         )
         .await?;
         self.hide_all();
+        let conversation_id = view
+            .conversation_id()
+            .map(str::to_owned)
+            .or(conversation_id);
         {
             let mut state = self.lock()?;
             let session_id = view
                 .contained_session_id()
                 .map(str::to_owned)
+                .or_else(|| matches!(view, BrowserView::Empty).then(String::new))
                 .or_else(|| state.sessions.get(scope).cloned())
                 .ok_or_else(|| error("The browser session identity is unavailable."))?;
             state.selected.insert(scope.to_owned(), id.clone());
@@ -579,7 +635,7 @@ impl BrowserManager {
                 dto: BrowserTabDto {
                     id: id.clone(),
                     session_id,
-                    conversation_id: view.conversation_id().map(str::to_owned),
+                    conversation_id,
                     control: if view.human_control_available() {
                         "human"
                     } else {

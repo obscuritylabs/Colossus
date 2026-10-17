@@ -553,7 +553,7 @@ impl Runtime {
                     host,
                     workspace_identity.clone(),
                     repository_id.clone(),
-                    config.browser.limits(),
+                    &config.browser,
                     browser_artifacts.clone(),
                 ))
             });

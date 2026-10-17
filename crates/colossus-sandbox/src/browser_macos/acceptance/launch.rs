@@ -46,6 +46,7 @@ pub(super) async fn owned(
         return Err(BrowserDriverError::Unavailable);
     }
     let enrollment = BrowserBridgeEnrollment {
+        public_web: request.options.public_web,
         binding: request.binding.clone(),
         mode: request.options.mode,
         profile: request.options.profile.clone(),
@@ -176,11 +177,12 @@ async fn start(
     if resource.installation.tls_config.is_none() {
         startup.check()?;
         resource.egress = Some(
-            BrowserEgressLease::start_at_port(
+            BrowserEgressLease::start_at_port_with_public_web(
                 resource.request.session_id.clone(),
                 resource.request.options.allowed_origins.clone(),
                 resource.installation.egress,
                 resource.installation.proxy_port,
+                resource.request.options.public_web,
             )
             .await
             .map_err(|_| BrowserDriverError::Unavailable)?,

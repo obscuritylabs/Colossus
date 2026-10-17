@@ -51,6 +51,7 @@ async fn current_macos_supervisor_rejects_launch_without_allocating_cleanup_work
         tab_id: BrowserTabId::parse(format!("bt_{}", "2".repeat(32))).unwrap(),
         document_id: BrowserDocumentId::parse(format!("bd_{}", "3".repeat(32))).unwrap(),
         options: BrowserOpenOptions {
+            public_web: false,
             profile: Default::default(),
             mode: BrowserMode::Embedded,
             allowed_origins: Vec::new(),

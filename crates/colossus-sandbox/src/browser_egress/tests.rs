@@ -193,6 +193,61 @@ async fn session_credentials_cannot_authenticate_another_envelope() {
 }
 
 #[tokio::test]
+async fn public_web_grant_admits_https_but_still_denies_private_and_plaintext_destinations() {
+    let mut proxy = BrowserEgressLease::start_with_public_web(
+        BrowserSessionId::parse(format!("bs_{}", uuid::Uuid::now_v7().simple())).unwrap(),
+        vec![BrowserOrigin::parse("https://allowed.example").unwrap()],
+        limits(),
+        true,
+    )
+    .await
+    .unwrap();
+    for authority in [
+        "127.0.0.1:443",
+        "[::1]:443",
+        "10.0.0.1:443",
+        "169.254.169.254:443",
+        "localhost:443",
+        "metadata.google.internal:443",
+    ] {
+        let response = exchange(
+            &proxy,
+            &format!(
+                "CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n{}\r\n",
+                auth(&proxy)
+            ),
+        )
+        .await;
+        assert!(response.starts_with(b"HTTP/1.1 403"), "{authority}");
+    }
+    let response = exchange(
+        &proxy,
+        &format!(
+            "GET http://public.example/ HTTP/1.1\r\nHost: public.example\r\n{}\r\n",
+            auth(&proxy)
+        ),
+    )
+    .await;
+    assert!(response.starts_with(b"HTTP/1.1 403"));
+    let mut stream = TcpStream::connect(proxy.address()).await.unwrap();
+    stream
+        .write_all(
+            format!(
+                "CONNECT assets.example:443 HTTP/1.1\r\nHost: assets.example\r\n{}\r\n",
+                auth(&proxy)
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut ready = vec![0; b"HTTP/1.1 200 Connection Established\r\n\r\n".len()];
+    stream.read_exact(&mut ready).await.unwrap();
+    assert!(ready.starts_with(b"HTTP/1.1 200"));
+    // No TLS hello is sent, so this test never contacts the public Internet.
+    proxy.revoke().await.unwrap();
+}
+
+#[tokio::test]
 async fn revoke_drains_stalled_handshakes_and_is_idempotent() {
     let mut proxy = lease(
         vec![BrowserOrigin::parse("https://allowed.example").unwrap()],

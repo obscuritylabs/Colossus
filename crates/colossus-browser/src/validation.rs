@@ -53,7 +53,10 @@ pub(crate) fn destination(
     options: &BrowserOpenOptions,
     url: &BrowserUrl,
 ) -> Result<(), BrowserError> {
-    if options.allowed_origins.contains(&url.origin()) {
+    if url
+        .origin()
+        .admitted_by(&options.allowed_origins, options.public_web)
+    {
         Ok(())
     } else {
         Err(BrowserError::OriginDenied)
@@ -232,7 +235,7 @@ pub(crate) fn tab(
     if tab
         .origin
         .as_ref()
-        .is_some_and(|origin| !options.allowed_origins.contains(origin))
+        .is_some_and(|origin| !origin.admitted_by(&options.allowed_origins, options.public_web))
     {
         return Err(BrowserError::InvalidEvidence);
     }

@@ -53,6 +53,7 @@ import {
 } from "../session-resources";
 import type { SessionPlanReference } from "../session-resources";
 import type { RunView } from "../state";
+import { isTerminalStatus } from "../types";
 import type {
   Aside,
   CommandError,
@@ -321,6 +322,29 @@ export function WorkSurface({
     view?.run.runId,
   );
   const browserTriggerRef = useRef<HTMLButtonElement>(null);
+  const revealedBrowserRun = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      !browserScope ||
+      !view ||
+      isTerminalStatus(view.run.status) ||
+      !browser.snapshot.available
+    )
+      return;
+    const key = `${browserScope}:${view.run.runId}`;
+    if (
+      revealedBrowserRun.current !== key &&
+      view.updates.some(
+        ({ update }) =>
+          update.type === "tool_activity" &&
+          update.activity.toolName.startsWith("browser.") &&
+          ["started", "completed"].includes(update.activity.state),
+      )
+    ) {
+      revealedBrowserRun.current = key;
+      setActiveDrawer("browser");
+    }
+  }, [browserScope, view, browser.snapshot.available]);
   const [selectionLauncher, setSelectionLauncher] = useState<
     (AsideDraft & { left: number; top: number }) | null
   >(null);

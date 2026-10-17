@@ -407,6 +407,7 @@ mod tests {
             tab_id: BrowserTabId::parse(format!("bt_{}", "2".repeat(32))).unwrap(),
             document_id: BrowserDocumentId::parse(format!("bd_{}", "3".repeat(32))).unwrap(),
             options: BrowserOpenOptions {
+                public_web: false,
                 mode: BrowserMode::Embedded,
                 allowed_origins: vec![origin],
                 initial_url: Some(BrowserUrl::parse("http://127.0.0.1:60924/first").unwrap()),

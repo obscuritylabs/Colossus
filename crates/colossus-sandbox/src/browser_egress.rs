@@ -111,21 +111,43 @@ impl BrowserEgressLease {
         origins: Vec<BrowserOrigin>,
         limits: BrowserEgressLimits,
     ) -> Result<Self, BrowserEgressError> {
+        Self::start_with_public_web(session, origins, limits, false).await
+    }
+
+    /// Start with an additional permit-bound public HTTPS grant. DNS resolution,
+    /// address pinning, SNI checks, and exact private-origin admission still apply.
+    pub async fn start_with_public_web(
+        session: BrowserSessionId,
+        origins: Vec<BrowserOrigin>,
+        limits: BrowserEgressLimits,
+        public_web: bool,
+    ) -> Result<Self, BrowserEgressError> {
         validate(&origins, limits)?;
         let (listener, ipv6) = super::http_proxy::bind_proxy_loopbacks(cfg!(target_os = "macos"))
             .await
             .map_err(|_| BrowserEgressError::Unavailable)?;
-        Self::from_listeners(session, origins, limits, listener, ipv6)
+        Self::from_listeners(session, origins, limits, listener, ipv6, public_web)
     }
 
     /// Bind the exact port sealed into a macOS main/helper network policy.
     /// No alternate port may replace an occupied or unavailable policy binding.
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", test))]
     pub(crate) async fn start_at_port(
         session: BrowserSessionId,
         origins: Vec<BrowserOrigin>,
         limits: BrowserEgressLimits,
         port: u16,
+    ) -> Result<Self, BrowserEgressError> {
+        Self::start_at_port_with_public_web(session, origins, limits, port, false).await
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) async fn start_at_port_with_public_web(
+        session: BrowserSessionId,
+        origins: Vec<BrowserOrigin>,
+        limits: BrowserEgressLimits,
+        port: u16,
+        public_web: bool,
     ) -> Result<Self, BrowserEgressError> {
         validate(&origins, limits)?;
         if port == 0 {
@@ -137,7 +159,7 @@ impl BrowserEgressLease {
         let ipv6 = TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port))
             .await
             .map_err(|_| BrowserEgressError::Unavailable)?;
-        Self::from_listeners(session, origins, limits, ipv4, Some(ipv6))
+        Self::from_listeners(session, origins, limits, ipv4, Some(ipv6), public_web)
     }
 
     fn from_listeners(
@@ -146,6 +168,7 @@ impl BrowserEgressLease {
         limits: BrowserEgressLimits,
         listener: TcpListener,
         ipv6: Option<TcpListener>,
+        public_web: bool,
     ) -> Result<Self, BrowserEgressError> {
         let mut random = Zeroizing::new([0_u8; 32]);
         getrandom::fill(random.as_mut()).map_err(|_| BrowserEgressError::Unavailable)?;
@@ -158,13 +181,17 @@ impl BrowserEgressLease {
             .map_err(|_| BrowserEgressError::Unavailable)?;
         let (shutdown, shutdown_rx) = oneshot::channel();
         let state = Arc::new(AtomicU8::new(BrowserEgressState::Active as u8));
+        let mut destinations: Vec<_> = origins
+            .into_iter()
+            .map(|origin| origin.as_str().to_owned())
+            .collect();
+        if public_web {
+            destinations.push("*".into());
+        }
         let task = tokio::spawn(serve(
             listener,
             ipv6,
-            origins
-                .into_iter()
-                .map(|origin| origin.as_str().to_owned())
-                .collect(),
+            destinations,
             Arc::clone(&credential),
             limits,
             shutdown_rx,

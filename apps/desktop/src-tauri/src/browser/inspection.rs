@@ -10,7 +10,7 @@ pub(super) const SNAPSHOT_BUDGET: Duration = Duration::from_secs(1);
 pub(super) async fn collect_pages<F>(
     inspections: impl IntoIterator<Item = F>,
     budget: Duration,
-) -> Vec<(String, PageState)>
+) -> Vec<(String, Result<PageState, BrowserError>)>
 where
     F: Future<Output = (String, Result<PageState, BrowserError>)>,
 {
@@ -18,9 +18,7 @@ where
     let mut pages = Vec::new();
     let _ = tokio::time::timeout(budget, async {
         while let Some((id, result)) = pending.next().await {
-            if let Ok(page) = result {
-                pages.push((id, page));
-            }
+            pages.push((id, result));
         }
     })
     .await;
@@ -58,7 +56,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_views_do_not_discard_other_observations() {
+    async fn closed_views_are_reported_alongside_healthy_pages() {
         let pages = collect_pages(
             [false, true].map(|ready| async move {
                 (
@@ -73,7 +71,16 @@ mod tests {
             SNAPSHOT_BUDGET,
         )
         .await;
-        assert_eq!(pages.len(), 1);
-        assert_eq!(pages[0].0, "true");
+        assert_eq!(pages.len(), 2);
+        assert!(
+            pages
+                .iter()
+                .any(|(id, result)| id == "false" && matches!(result, Err(BrowserError::Closed)))
+        );
+        assert!(
+            pages
+                .iter()
+                .any(|(id, result)| id == "true" && result.is_ok())
+        );
     }
 }

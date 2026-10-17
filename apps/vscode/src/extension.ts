@@ -848,6 +848,9 @@ export function activate(context: vscode.ExtensionContext) {
                 maxSessions: vscode.workspace
                   .getConfiguration("colossus.browser", selected.uri)
                   .get("maxSessions", 4),
+                publicWeb: vscode.workspace
+                  .getConfiguration("colossus.browser", selected.uri)
+                  .get("publicWeb", true),
                 maxTabs: vscode.workspace
                   .getConfiguration("colossus.browser", selected.uri)
                   .get("maxTabs", 8),

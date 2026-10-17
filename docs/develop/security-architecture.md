@@ -895,8 +895,11 @@ fences the session and reports an unknown outcome. These internal lifecycle comm
 are fixed native operations and cannot be selected through `browser.cdp`.
 
 The Linux OCI adapter runs the entire host tree in a networkless namespace, with
-read-only verified component bytes, bounded cgroups and a private exact-origin
-egress relay. Its supervisor verifies native process identity before delivering
+read-only verified component bytes, bounded cgroups and a private permit-bound
+egress relay. The session's immutable network scope combines admitted exact origins
+with a public HTTPS grant only when both configuration and the execution permit allow
+it. Public browsing retains private-address denial, DNS pinning and TLS verification.
+Its supervisor verifies native process identity before delivering
 bootstrap secrets and retains uncertain cleanup. The standalone CEF preview does
 not establish whole-host containment. Production availability requires an accepted
 publisher-bound installed component; source fixtures cannot enable an ordinary

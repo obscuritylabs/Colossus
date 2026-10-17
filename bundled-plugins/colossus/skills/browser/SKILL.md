@@ -26,6 +26,15 @@ screenshot and use only supported coordinate actions. Browser actions may displa
 an agent cursor or highlight; do not infer completion from that animation.
 Do not reload the page as a routine observation step: snapshots and screenshots
 inspect the current page without navigation.
+`browser.screenshot` and `browser.screenshot.annotated` return a page image to an
+image-capable model automatically. Use them to inspect layout, images, and canvas
+content; no manual upload or separate local-image tool is required.
+
+Normal public HTTPS browsing can load supporting domains and redirects when the
+workspace permits public network access. List the task's initial origins in
+`browser.open`; do not ask the user to enumerate a site's image or stylesheet
+domains. Restricted workspaces and exact-origin mode can block those requests.
+Report a policy limitation accurately instead of repeatedly reloading the page.
 
 ## Recovery and boundaries
 
@@ -40,5 +49,6 @@ inspect the current page without navigation.
   permissions. `browser.evaluate` and `browser.cdp` are bounded read-only
   inspection tools, not alternate mutation or network channels.
 - Sessions are temporary. Do not promise persistent login, history, or reuse of
-  the user's personal browser. Close sessions when the task is finished unless
-  the user wants them left open for inspection.
+  the user's personal browser. Run completion and cancellation close agent-owned
+  sessions. Capture a screenshot before finishing when the user needs a visual
+  record; a later human inspection requires a fresh session.

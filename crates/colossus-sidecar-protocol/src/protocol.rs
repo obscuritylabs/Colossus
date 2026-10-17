@@ -1146,6 +1146,7 @@ fn json_value_depth(value: &Value) -> usize {
 /// Complex catalogs and host-owned invariants are intentionally absent.
 pub const MANAGED_EDITABLE_FIELD_IDS: &[&str] = &[
     "browser.enabled",
+    "browser.publicWeb",
     "browser.maxSessions",
     "browser.maxTabs",
     "browser.maxSnapshotNodes",

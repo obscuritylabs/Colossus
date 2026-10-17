@@ -248,7 +248,11 @@ pub(super) async fn inspect(owner: &Arc<Owner>) -> Result<PageState, BrowserErro
         .client
         .observe(lease)
         .await
-        .map_err(|_| BrowserError::Closed)?;
+        .map_err(|error| match error {
+            colossus_browser_presentation::PresentationError::Stale
+            | colossus_browser_presentation::PresentationError::Hidden => BrowserError::Stale,
+            _ => BrowserError::Closed,
+        })?;
     Ok(PageState {
         url: state.url,
         title: state.title,

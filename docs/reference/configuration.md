@@ -76,6 +76,7 @@ network:
   clientKeyPath: null
 browser:
   enabled: true
+  publicWeb: true
   maxSessions: 4
   maxTabs: 8
   maxSnapshotNodes: 1024

@@ -35,6 +35,9 @@ for (const [theme, palette] of [
     await expect(
       page.getByRole("switch", { name: "Browser access" }),
     ).toBeVisible();
+    await expect(
+      page.getByRole("switch", { name: "Load public websites normally" }),
+    ).toBeChecked();
     await expect(page.locator("html")).toHaveAttribute(
       "data-text-size",
       "large",

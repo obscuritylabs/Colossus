@@ -211,10 +211,12 @@ impl Host {
                 if tab.tab_id == request.tab_id
                     && tab.document_id == request.document_id
                     && tab.title.len() <= 1024
-                    && tab
-                        .origin
-                        .as_ref()
-                        .is_none_or(|origin| request.options.allowed_origins.contains(origin)) =>
+                    && tab.origin.as_ref().is_none_or(|origin| {
+                        origin.admitted_by(
+                            &request.options.allowed_origins,
+                            request.options.public_web,
+                        )
+                    }) =>
             {
                 let mut state = session
                     .state

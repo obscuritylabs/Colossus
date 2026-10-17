@@ -183,6 +183,7 @@ impl BrowserHostPool {
                     &descriptor,
                     &command,
                     &retained.request.options.allowed_origins,
+                    retained.request.options.public_web,
                 )?;
                 let mut state = retained
                     .state

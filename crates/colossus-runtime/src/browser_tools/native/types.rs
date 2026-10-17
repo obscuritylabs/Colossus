@@ -293,7 +293,10 @@ impl RuntimeNativeBrowserSession {
             .map_err(|_| RuntimeNativeBrowserError::OutcomeUnknown)?;
         let original = request.as_ref().ok_or(RuntimeNativeBrowserError::Stale)?;
         let url = BrowserUrl::parse(&page.url).map_err(|_| RuntimeNativeBrowserError::Stale)?;
-        if !original.options.allowed_origins.contains(&url.origin()) {
+        if !url.origin().admitted_by(
+            &original.options.allowed_origins,
+            original.options.public_web,
+        ) {
             return Err(RuntimeNativeBrowserError::Stale);
         }
         let mut state = self

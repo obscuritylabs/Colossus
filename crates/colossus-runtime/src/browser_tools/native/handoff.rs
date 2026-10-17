@@ -118,7 +118,7 @@ async fn handoff_owned(
         },
         "browser.open",
         format!("browser:{}", original.session_id.as_str()),
-        json!({"operation":"native_handoff","session_id":original.session_id,"lease_ms":lease_ms,"allowed_origins":original.options.allowed_origins}),
+        json!({"operation":"native_handoff","session_id":original.session_id,"lease_ms":lease_ms,"allowed_origins":original.options.allowed_origins,"public_web":original.options.public_web}),
     );
     request.capabilities = vec!["browser.open".into()];
     request.context = run.context.clone();
@@ -209,6 +209,11 @@ impl EffectExecutor for HandoffEffect<'_> {
             {
                 return Err(known(RuntimeNativeBrowserError::Denied));
             }
+        }
+        if self.original.options.public_web
+            && !super::super::service::permits_public_web(permit.obligations())
+        {
+            return Err(known(RuntimeNativeBrowserError::Denied));
         }
         let summary = self
             .browser
@@ -361,6 +366,7 @@ impl EffectExecutor for HandoffEffect<'_> {
                 super::super::service::BrowserSessionAuthority {
                     lease: lease.clone(),
                     origins: self.original.options.allowed_origins.clone(),
+                    public_web: self.original.options.public_web,
                 },
             )
             .map_err(|_| unknown(RuntimeNativeBrowserError::Denied))?;

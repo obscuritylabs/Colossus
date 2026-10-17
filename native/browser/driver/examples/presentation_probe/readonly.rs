@@ -44,6 +44,7 @@ pub async fn exercise(
                 tab_id,
                 document_id: target.document_id.clone(),
                 options: BrowserOpenOptions {
+                    public_web: false,
                     profile: Default::default(),
                     mode: BrowserMode::Embedded,
                     allowed_origins: vec![origin],

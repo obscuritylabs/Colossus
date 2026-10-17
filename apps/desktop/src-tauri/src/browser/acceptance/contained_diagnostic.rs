@@ -616,6 +616,18 @@ async fn model_response(
                         .is_some_and(|hash| hash.len() == 64),
                 "Core screenshot did not publish verified PNG artifact metadata"
             );
+            ensure!(
+                body["messages"]
+                    .as_array()
+                    .is_some_and(|messages| messages.iter().any(|message| message["content"]
+                        .as_array()
+                        .is_some_and(|parts| parts.iter().any(|part| part["type"]
+                            == "image_url"
+                            && part["image_url"]["url"].as_str().is_some_and(
+                                |url| url.starts_with("data:image/png;base64,iVBOR")
+                            ))))),
+                "Screenshot metadata reached the model but its PNG image did not"
+            );
             state.signal(&state.screenshot_seen);
             if state.native_tabs {
                 return owned_tabs::response(phase, body, origin, state).await;
@@ -686,6 +698,7 @@ fn managed_runtime(origin: &str, visual_hold: Duration) -> ManagedRuntimeConfig 
     };
     runtime.models[0].model = "mac-browser-fixture".into();
     runtime.models[0].capabilities.streaming = false.into();
+    runtime.models[0].capabilities.image_inputs = true.into();
     runtime.field_overrides = vec![
         ManagedFieldOverride {
             field_id: "access.tools.include".into(),
@@ -1381,15 +1394,46 @@ async fn exercise_owned(
 ) -> anyhow::Result<()> {
     let state = app.state::<AppState>();
     state.select_target(Some(SPACE.into())).await;
-    let snapshot = action(
+    let blank = action(
         app,
         BrowserAction::New {
             conversation_id: None,
+            url: String::new(),
+        },
+    )
+    .await?;
+    let blank_id = blank.selected_tab_id.context("blank tab missing")?;
+    let blank_record = blank
+        .tabs
+        .iter()
+        .find(|tab| tab.id == blank_id)
+        .context("blank record missing")?;
+    ensure!(
+        blank_record.session_id.is_empty()
+            && !blank_record.page.loading
+            && blank_record.error.is_none(),
+        "address-entry tab allocated a native session or reported loading"
+    );
+    ensure!(
+        app.webviews().len() == 1,
+        "blank tab allocated a guest webview"
+    );
+    let snapshot = action(
+        app,
+        BrowserAction::Navigate {
+            tab_id: blank_id,
             url: format!("{}/first", fixture.origin),
         },
     )
     .await
     .context("stage=desktop-new-native-admission")?;
+    ensure!(
+        snapshot.tabs.len() == 1,
+        "first navigation retained its empty tab"
+    );
+    println!(
+        "PASS empty new tab allocates no guest and first navigation replaces it through native admission"
+    );
     ensure!(
         snapshot.engine.kind
             == if cfg!(windows) {

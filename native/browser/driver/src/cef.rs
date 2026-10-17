@@ -54,6 +54,7 @@ struct State {
 pub struct Callbacks {
     state: Mutex<State>,
     origins: Mutex<Vec<BrowserOrigin>>,
+    public_web: AtomicBool,
     identity: Mutex<identity::Policy>,
     identity_revoked: AtomicBool,
     identity_cancellation: Mutex<Option<Arc<AtomicBool>>>,
@@ -63,6 +64,7 @@ impl Default for Callbacks {
         Self {
             state: Mutex::new(State::default()),
             origins: Mutex::new(Vec::new()),
+            public_web: AtomicBool::new(false),
             identity: Mutex::new(identity::Policy::default()),
             identity_revoked: AtomicBool::new(false),
             identity_cancellation: Mutex::new(None),
@@ -70,6 +72,12 @@ impl Default for Callbacks {
     }
 }
 impl Callbacks {
+    fn admits_origin(&self, origin: &BrowserOrigin) -> bool {
+        self.origins.lock().is_ok_and(|origins| {
+            origin.admitted_by(&origins, self.public_web.load(Ordering::Acquire))
+        })
+    }
+
     pub fn configure_identity(
         &self,
         policy: identity::Policy,
@@ -253,12 +261,7 @@ unsafe extern "C" fn allow_url(
     let Ok(url) = colossus_contracts::BrowserUrl::parse(url) else {
         return 0;
     };
-    i32::from(
-        callbacks
-            .origins
-            .lock()
-            .is_ok_and(|origins| origins.contains(&url.origin())),
-    )
+    i32::from(callbacks.admits_origin(&url.origin()))
 }
 
 unsafe extern "C" fn select_identity(
@@ -554,6 +557,9 @@ impl Host {
                 },
             );
         }
+        self.callbacks
+            .public_web
+            .store(request.options.public_web, Ordering::Release);
         *self
             .callbacks
             .origins

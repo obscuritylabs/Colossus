@@ -161,6 +161,12 @@
           "scope": "resource",
           "description": "Allow browser tools when a verified native browser is available. Disconnect and start Managed Local again after changing browser settings."
         },
+        "colossus.browser.publicWeb": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Load public HTTPS pages and their dependencies when workspace network policy permits. Turn off for exact session-origin restrictions. Restart Managed Local to apply."
+        },
         "colossus.browser.maxSessions": {
           "type": "integer",
           "default": 4,

@@ -351,13 +351,7 @@ impl Host {
         match command {
             HumanCommand::Navigate { url } => {
                 let url = BrowserUrl::parse(&url).map_err(|_| PresentationError::Invalid)?;
-                if !self
-                    .callbacks
-                    .origins
-                    .lock()
-                    .map_err(|_| PresentationError::OutcomeUnknown)?
-                    .contains(&url.origin())
-                {
+                if !self.callbacks.admits_origin(&url.origin()) {
                     return Err(PresentationError::Hidden);
                 }
                 let url = CString::new(url.as_str()).map_err(|_| PresentationError::Invalid)?;

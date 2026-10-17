@@ -12,6 +12,7 @@ type: reference
 ```yaml
 browser:
   enabled: true
+  publicWeb: true
   maxSessions: 4
   maxTabs: 8
   maxSnapshotNodes: 1024
@@ -27,6 +28,7 @@ may narrow them further.
 | Field | Default | Range |
 | --- | --- | --- |
 | `browser.enabled` | `true` | Boolean |
+| `browser.publicWeb` | `true` | Boolean; subject to workspace network policy |
 | `browser.maxSessions` | `4` | `1..=4` |
 | `browser.maxTabs` | `8` | `1..=8`, aggregated across sessions |
 | `browser.maxSnapshotNodes` | `1024` | `1..=1024` |
@@ -34,7 +36,7 @@ may narrow them further.
 In Desktop, use **Settings → Global → Browser** for defaults and
 **Settings → Workspace → Browser** for overrides. Save or apply the change.
 Global reductions wait for active work to finish; enabling a previously disabled
-browser requires applying the pending update in Workspace settings. Applying a
+browser or public browsing requires applying the pending update in Workspace settings. Applying a
 configuration restarts the runtime and closes its temporary browser sessions.
 The new-tab URL on the global Browser page is a separate device preference.
 
@@ -47,6 +49,16 @@ from their own YAML and must be restarted by their operator.
 Browser settings do not select executables, transports, profiles, or certificate
 material. Browser sessions remain temporary; this does not control ordinary web
 search or HTTP tools.
+
+Public browsing loads HTTPS pages, redirects, styles, scripts, and images across
+public origins without a per-site asset list. It requires public wildcard or
+acknowledged ambient network authority in the actual execution permit. A
+restricted workspace narrows the session to its listed origins. Set
+`browser.publicWeb: false` to require that exact-origin mode even in a workspace
+with public network access. The proxy still rejects private and metadata
+destinations unless an exact origin was independently admitted, pins validated
+DNS results, and preserves TLS verification. Plain HTTP remains limited to exact
+loopback origins. The model cannot enable public browsing through tool arguments.
 
 ## Other runtime limits
 

@@ -545,6 +545,14 @@ const FIELD_DESCRIPTORS: ManagedFieldDescriptor[] = [
     true,
     false,
   ),
+  toggleField(
+    "browser.publicWeb",
+    "Browser",
+    "Load public websites normally",
+    "Load public HTTPS pages, redirects, images, and styles when workspace network policy permits. Turn off to restrict every request to the session’s listed origins.",
+    true,
+    false,
+  ),
   field(
     "browser.maxSessions",
     "Browser",

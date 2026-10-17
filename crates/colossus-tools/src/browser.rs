@@ -10,7 +10,7 @@ pub(super) fn browser_specs() -> Vec<ToolSpec> {
     let mut specs = vec![
         tool(
             "browser.open",
-            "Create an isolated owned browser session. Requested origins are a ceiling, never a network grant; use embedded presentation in Desktop or headless execution where supported.",
+            "Create an isolated owned browser session. Workspace settings and policy govern public HTTPS browsing and page dependencies; otherwise every request is restricted to the listed origins. Use embedded presentation in Desktop to let the user watch, or headless where supported.",
             object_schema(
                 json!({
                     "mode": {"type": "string", "enum": ["embedded", "headless"]},
@@ -20,7 +20,7 @@ pub(super) fn browser_specs() -> Vec<ToolSpec> {
                             "type": "string", "minLength": 1, "maxLength": 4096,
                             "pattern": "^https?://[^/@?#\\s]+/?$"
                         },
-                        "description": "Exact canonical HTTP(S) origins, without credentials, paths, queries, or fragments."
+                        "description": "Initial task origins, without credentials, paths, queries, or fragments. These do not grant network access. Private destinations require exact policy admission; public HTTPS scope is chosen by the workspace, never tool arguments."
                     },
                     "initial_url": url_schema(),
                     "profile": {"oneOf": [
@@ -43,7 +43,7 @@ pub(super) fn browser_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "browser.tab.open",
-            "Create an owned tab under the current control generation, optionally navigating within the session's origin ceiling.",
+            "Create an owned tab under the current control generation, optionally navigating within the session's authorized network scope.",
             control_schema(json!({"url": url_schema()}), &[]),
         ),
         tool(
@@ -76,7 +76,7 @@ pub(super) fn browser_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "browser.screenshot",
-            "Capture the current viewport into an owner-only PNG artifact after output policy permits release. Returns verified artifact metadata; accepts no file path, raw protocol, or image bytes.",
+            "Capture the current viewport into an owner-only PNG artifact after output policy permits release. Returns verified artifact metadata and supplies the image to an image-capable model automatically. Accepts no file path, raw protocol, or image bytes.",
             document_schema(json!({}), &[]),
         ),
         tool(

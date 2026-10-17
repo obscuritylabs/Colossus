@@ -203,6 +203,7 @@ impl Host {
             &descriptor,
             &command,
             &self.enrollment.allowed_origins,
+            self.enrollment.public_web,
         )?;
         let mut state = session
             .state

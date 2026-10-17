@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 pub struct BrowserConfig {
     /// Allow the runtime to expose its verified browser host.
     pub enabled: bool,
+    /// Load public HTTPS sites and their dependencies when destination policy permits.
+    /// False restricts every request to the session's exact initial origins.
+    pub public_web: bool,
     /// Maximum active browser sessions (1..=4).
     pub max_sessions: u16,
     /// Maximum aggregate tabs (1..=8).
@@ -22,6 +25,7 @@ impl Default for BrowserConfig {
         let limits = BrowserLimits::default();
         Self {
             enabled: true,
+            public_web: true,
             max_sessions: limits.max_sessions,
             max_tabs: limits.max_tabs,
             max_snapshot_nodes: limits.max_snapshot_nodes,
