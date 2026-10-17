@@ -1,0 +1,171 @@
+name: Windows ARM64 release exit diagnostic
+on:
+  push:
+    branches: [codex/windows-arm64-release-exit-883fc21]
+    paths: [.github/workflows/windows-arm64-release-exit-diagnostic.yml]
+permissions:
+  contents: read
+concurrency:
+  group: windows-arm64-release-exit-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  diagnose:
+    if: github.repository == 'obscuritylabs/Colossus' && github.ref == 'refs/heads/codex/windows-arm64-release-exit-883fc21'
+    runs-on: windows-11-arm
+    timeout-minutes: 38
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      COLOSSUS_RELEASE_JOURNAL_KEY: '5555555555555555555555555555555555555555555555555555555555555555'
+      COLOSSUS_RELEASE_SIGNING_KEY: '6666666666666666666666666666666666666666666666666666666666666666'
+      COLOSSUS_BUNDLE_JOURNAL_KEY: '9999999999999999999999999999999999999999999999999999999999999999'
+      COLOSSUS_BUNDLE_CHECKPOINT_KEY: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+      COLOSSUS_BUNDLE_SIGNING_SEED: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    steps:
+      - name: Check out exact failed release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 883fc21ac43c33472df8d0b964e381206d310606
+          persist-credentials: false
+      - name: Install matching native Rust
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.96.0
+          targets: aarch64-pc-windows-msvc
+      - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
+      - name: Configure read-only compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        env:
+          R2_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+          R2_REGION: ${{ secrets.SCCACHE_REGION }}
+          R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+        run: ./scripts/ci/configure-sccache-r2.sh read
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Restore matching Cargo registry cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          workspaces: . -> target
+          key: release-aarch64-pc-windows-msvc
+          cache-targets: false
+          save-if: 'false'
+      - name: Record exact client exit status and repeat unchanged acceptance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = '883fc21ac43c33472df8d0b964e381206d310606'
+          if ((git rev-parse HEAD).Trim() -ne $source) { throw 'source mismatch' }
+          if (git status --porcelain) { throw 'source is not clean' }
+          $out = Join-Path $env:RUNNER_TEMP 'arm64-release-exit-diagnostic'
+          if (Test-Path -LiteralPath $out) { throw 'diagnostic output already exists' }
+          New-Item -ItemType Directory -Path $out | Out-Null
+          $started = [DateTime]::UtcNow
+          $receipts = [Collections.Generic.List[object]]::new()
+          function Save-HostSnapshot([string]$Name) {
+              $os = Get-CimInstance Win32_OperatingSystem
+              $cpu = @(Get-CimInstance Win32_Processor | Select-Object Name, Architecture, NumberOfCores, NumberOfLogicalProcessors)
+              $disk = Get-PSDrive -PSProvider FileSystem | Select-Object Name, Free, Used
+              @{ utc = [DateTime]::UtcNow; source = $source; os = $os.Caption; build = $os.BuildNumber;
+                 totalMemoryKiB = $os.TotalVisibleMemorySize; freeMemoryKiB = $os.FreePhysicalMemory;
+                 totalVirtualKiB = $os.TotalVirtualMemorySize; freeVirtualKiB = $os.FreeVirtualMemory;
+                 cpu = $cpu; disks = $disk; rust = (& rustc -Vv | Out-String).Trim() } |
+                  ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $out "$Name.json")
+          }
+          function Invoke-BoundedCargo([string]$Name, [string[]]$CargoArguments, [int]$Seconds, [long]$Limit) {
+              $info = [Diagnostics.ProcessStartInfo]::new((Get-Command cargo -CommandType Application | Select-Object -First 1).Source)
+              $info.UseShellExecute = $false
+              $info.CreateNoWindow = $true
+              $info.RedirectStandardOutput = $true
+              $info.RedirectStandardError = $true
+              foreach ($argument in $CargoArguments) { $info.ArgumentList.Add($argument) }
+              $process = [Diagnostics.Process]::new()
+              $process.StartInfo = $info
+              $stdout = [IO.File]::Create((Join-Path $out "$Name.stdout.log"))
+              $stderr = [IO.File]::Create((Join-Path $out "$Name.stderr.log"))
+              $timer = [Diagnostics.Stopwatch]::StartNew()
+              $reason = $null
+              $exitCode = $null
+              try {
+                  if (-not $process.Start()) { throw 'cargo did not start' }
+                  $pumps = @($process.StandardOutput.BaseStream.CopyToAsync($stdout), $process.StandardError.BaseStream.CopyToAsync($stderr))
+                  while (-not $process.WaitForExit(200)) {
+                      if ($timer.Elapsed.TotalSeconds -gt $Seconds) { $reason = 'timeout'; break }
+                      if (($stdout.Length + $stderr.Length) -gt $Limit) { $reason = 'output limit'; break }
+                      if (@($pumps | Where-Object IsFaulted).Count) { $reason = 'output pump failed'; break }
+                  }
+                  if ($reason) { $process.Kill($true); if (-not $process.WaitForExit(10000)) { throw 'owned cargo tree did not exit' } }
+                  $exitCode = $process.ExitCode
+                  if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]$pumps, 10000)) { throw 'output pumps did not finish' }
+                  if (($stdout.Length + $stderr.Length) -gt $Limit) { $reason = 'output limit' }
+              } finally {
+                  if ($process.Id -and -not $process.HasExited) { $process.Kill($true); $process.WaitForExit(10000) | Out-Null }
+                  $stdout.Dispose(); $stderr.Dispose(); $process.Dispose()
+                  $receipts.Add(@{ name = $Name; exitCode = $exitCode; reason = $reason; elapsedSeconds = $timer.Elapsed.TotalSeconds })
+                  $receipts | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $out 'commands.json')
+              }
+              Get-Content -LiteralPath (Join-Path $out "$Name.stdout.log") -Tail 35
+              Get-Content -LiteralPath (Join-Path $out "$Name.stderr.log") -Tail 35
+              if ($reason -or $exitCode -ne 0) { throw "$Name failed: exit=$exitCode reason=$reason" }
+          }
+          try {
+              Save-HostSnapshot 'host-before'
+              $path = 'crates/colossus-cli/tests/worker_smoke.rs'
+              $original = [IO.File]::ReadAllText((Join-Path $env:GITHUB_WORKSPACE $path))
+              $needle = '                    let output = run(binary, config, &["echo", &message]);'
+              if (($original.Split([string[]]@($needle), [StringSplitOptions]::None)).Length -ne 2) { throw 'diagnostic insertion is not unique' }
+              $extra = @'
+                              eprintln!(
+                                  "ARM64_CLIENT_EXIT index={index} status={} code={:?}",
+                                  output.status,
+                                  output.status.code()
+                              );
+          '@
+              $changed = $original.Replace($needle, $needle + "`n" + $extra.TrimEnd())
+              [IO.File]::WriteAllText((Join-Path $env:GITHUB_WORKSPACE $path), $changed)
+              $diff = git diff -- $path
+              if ($LASTEXITCODE -ne 0) { throw 'diff failed' }
+              $diff | Set-Content -LiteralPath (Join-Path $out 'diagnostic-only.patch')
+              Invoke-BoundedCargo 'build' @('test', '--locked', '-p', 'colossus-cli', '--test', 'worker_smoke', '--test', 'windows_sandbox', '--no-run') 1200 33554432
+              $testsStarted = [Diagnostics.Stopwatch]::StartNew()
+              for ($iteration = 1; $iteration -le 12; $iteration++) {
+                  if ($testsStarted.Elapsed.TotalSeconds -ge 720) { throw 'diagnostic total test budget exhausted' }
+                  $args = @('test', '--locked', '-p', 'colossus-cli', '--test', 'worker_smoke')
+                  if ($iteration -eq 1) { $args += @('--test', 'windows_sandbox') }
+                  $args += @('--', '--nocapture')
+                  Invoke-BoundedCargo "iteration-$iteration" $args 180 1048576
+              }
+          } finally {
+              Save-HostSnapshot 'host-after'
+              $events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000; StartTime = $started.ToLocalTime() } -MaxEvents 50 -ErrorAction SilentlyContinue | ForEach-Object {
+                  [xml]$xml = $_.ToXml()
+                  $fields = @{}
+                  foreach ($field in $xml.Event.EventData.Data) {
+                      if ($field.Name -in @('AppName', 'ModuleName', 'ExceptionCode', 'FaultingOffset', 'ProcessId')) { $fields[[string]$field.Name] = [string]$field.'#text' }
+                  }
+                  if ($fields.AppName -match '^(colossus|worker_smoke[^\\/]*)\.exe$') {
+                      @{ utc = $_.TimeCreated.ToUniversalTime(); fields = $fields }
+                  }
+              })
+              ConvertTo-Json -InputObject $events -Depth 6 | Set-Content -LiteralPath (Join-Path $out 'application-errors.json')
+              $paths = @(git diff --name-only)
+              if ($paths.Count -ne 1 -or $paths[0] -ne 'crates/colossus-cli/tests/worker_smoke.rs') { throw 'unexpected source changes' }
+              @{ source = $source; run = $env:GITHUB_RUN_ID; attempt = $env:GITHUB_RUN_ATTEMPT; started = $started;
+                 finished = [DateTime]::UtcNow; commands = $receipts; changedPaths = $paths } |
+                  ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $out 'receipt.json')
+          }
+      - name: Retain bounded diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: windows-arm64-release-exit-${{ github.run_id }}
+          path: ${{ runner.temp }}/arm64-release-exit-diagnostic
+          if-no-files-found: error
+          retention-days: 7
