@@ -332,6 +332,18 @@ fn context(
             && member != 0,
         "station child inner Job mismatch",
     )?;
+    if current.elevated {
+        // Windows creates the AppContainer token after primary attenuation, with
+        // the elevated creator's object ACL. Repair only this exact owned child,
+        // already attested and in its Job, while its sole thread is still suspended.
+        super::token_security::retain_browser_user_access(&created.process, &facts.user)?;
+        identity::browser(
+            &identity::token(created.process.raw())?,
+            &identity::token(core.raw())?,
+            &current,
+            package.0,
+        )?;
+    }
     // Retain reduced local query objects before releasing the returned full PI.
     // SAFETY: current-process pseudo handle is used only as a duplicate target.
     let own = unsafe { GetCurrentProcess() };
