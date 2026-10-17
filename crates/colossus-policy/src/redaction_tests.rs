@@ -141,6 +141,7 @@ fn provider_tool_schemas_preserve_sensitive_property_names() {
         "provider.openai.responses",
         "provider.openai.codex",
         "provider.openai.chat",
+        "provider.anthropic.messages",
     ] {
         let request = effect_request(
             system_actor("schema-test"),

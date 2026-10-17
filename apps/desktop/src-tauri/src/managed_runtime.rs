@@ -1456,6 +1456,7 @@ const fn execution_boundary(boundary: ExecutionBoundarySetting) -> ManagedExecut
 const fn provider_kind(kind: ProviderKindSetting) -> ManagedProviderKind {
     match kind {
         ProviderKindSetting::Responses => ManagedProviderKind::OpenAiResponses,
+        ProviderKindSetting::Anthropic => ManagedProviderKind::AnthropicMessages,
         ProviderKindSetting::Compatible => ManagedProviderKind::OpenAiCompatible,
         ProviderKindSetting::Codex => ManagedProviderKind::OpenAiCodex,
     }

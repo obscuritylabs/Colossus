@@ -647,6 +647,7 @@ fn managed_runtime_config(
                     ManagedProviderKind::Echo => ProviderKind::Echo,
                     ManagedProviderKind::OpenAiResponses => ProviderKind::OpenAiResponses,
                     ManagedProviderKind::OpenAiCompatible => ProviderKind::OpenAiCompatible,
+                    ManagedProviderKind::AnthropicMessages => ProviderKind::AnthropicMessages,
                     ManagedProviderKind::OpenAiCodex => ProviderKind::OpenAiCodex,
                 };
                 (

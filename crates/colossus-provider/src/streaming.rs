@@ -24,19 +24,67 @@ pub(super) fn redact_value_exact(value: &mut Value, secret: Option<&str>) {
     let Some(secret) = secret.filter(|secret| !secret.is_empty()) else {
         return;
     };
+    redact_value_at(value, secret, RedactionPosition::Root);
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RedactionPosition {
+    Root,
+    Message,
+    ContentBlock,
+    Delta,
+    Other,
+}
+
+fn redact_value_at(value: &mut Value, secret: &str, position: RedactionPosition) {
     match value {
         Value::String(text) => {
             if text.contains(secret) {
                 *text = text.replace(secret, "[REDACTED]");
             }
         }
-        Value::Array(values) => values
-            .iter_mut()
-            .for_each(|value| redact_value_exact(value, Some(secret))),
+        Value::Array(values) => {
+            let child = if position == RedactionPosition::Root {
+                RedactionPosition::Other
+            } else {
+                position
+            };
+            for value in values {
+                redact_value_at(value, secret, child);
+            }
+        }
         Value::Object(values) => {
+            let kind = values.get("type").and_then(Value::as_str);
+            if (position == RedactionPosition::ContentBlock
+                && matches!(kind, Some("thinking" | "redacted_thinking")))
+                || (position == RedactionPosition::Delta
+                    && matches!(kind, Some("thinking_delta" | "signature_delta")))
+            {
+                return;
+            }
+            let assistant = values.get("role").and_then(Value::as_str) == Some("assistant");
+            let message = kind == Some("message") && assistant;
+            let start = kind == Some("content_block_start");
+            let delta = kind == Some("content_block_delta");
             for (key, value) in values {
                 if key != "encrypted_content" {
-                    redact_value_exact(value, Some(secret));
+                    // Opaque exemptions are tied to native wire positions. Tool
+                    // arguments cannot gain one by spoofing a block's type field.
+                    let child = match (position, key.as_str()) {
+                        (RedactionPosition::Root, "messages") => RedactionPosition::Message,
+                        (RedactionPosition::Root, "content") if message => {
+                            RedactionPosition::ContentBlock
+                        }
+                        (RedactionPosition::Root, "content_block") if start => {
+                            RedactionPosition::ContentBlock
+                        }
+                        (RedactionPosition::Root, "delta") if delta => RedactionPosition::Delta,
+                        (RedactionPosition::Message, "content") if assistant => {
+                            RedactionPosition::ContentBlock
+                        }
+                        _ => RedactionPosition::Other,
+                    };
+                    redact_value_at(value, secret, child);
                 }
             }
         }
@@ -132,6 +180,7 @@ impl SseDecoder {
 pub(super) enum ProviderStreamState {
     Responses(ResponsesStreamState),
     Chat(ChatStreamState),
+    Anthropic(crate::anthropic::AnthropicStream),
 }
 
 impl ProviderStreamState {
@@ -147,6 +196,9 @@ impl ProviderStreamState {
                 tool_names,
                 ..ChatStreamState::default()
             }),
+            ProviderKind::AnthropicMessages => {
+                Self::Anthropic(crate::anthropic::AnthropicStream::new(tool_names))
+            }
             ProviderKind::Echo => unreachable!("echo streaming is handled without SSE"),
         }
     }
@@ -155,6 +207,7 @@ impl ProviderStreamState {
         match self {
             Self::Responses(state) => state.done_marker = true,
             Self::Chat(state) => state.done_marker = true,
+            Self::Anthropic(_) => {}
         }
     }
 
@@ -162,6 +215,7 @@ impl ProviderStreamState {
         match self {
             Self::Responses(state) => state.ingest(value),
             Self::Chat(state) => state.ingest(value),
+            Self::Anthropic(state) => state.ingest(value),
         }
     }
 
@@ -169,6 +223,7 @@ impl ProviderStreamState {
         match self {
             Self::Responses(state) => state.finish(),
             Self::Chat(state) => state.finish(),
+            Self::Anthropic(state) => state.finish(),
         }
     }
 
@@ -176,6 +231,7 @@ impl ProviderStreamState {
         match self {
             Self::Responses(state) => &state.output_items,
             Self::Chat(_) => &[],
+            Self::Anthropic(state) => state.blocks(),
         }
     }
 
@@ -183,6 +239,7 @@ impl ProviderStreamState {
         match self {
             Self::Responses(state) => state.response_id.as_deref(),
             Self::Chat(state) => state.response_id.as_deref(),
+            Self::Anthropic(state) => state.response_id(),
         }
     }
 }

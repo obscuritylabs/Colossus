@@ -101,6 +101,7 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "provider.openai.responses",
             "provider.openai.codex",
             "provider.openai.chat",
+            "provider.anthropic.messages",
             "provider.models",
             "provider.call",
         ],

@@ -203,6 +203,13 @@ fn native_catalog_recreated_home_does_not_reuse_previous_secure_anchor() {
 fn catalog_fixture(
     responses: Vec<CatalogResponse>,
 ) -> (ProviderSetting, std::thread::JoinHandle<()>) {
+    catalog_fixture_for_protocol(responses, false)
+}
+
+fn catalog_fixture_for_protocol(
+    responses: Vec<CatalogResponse>,
+    anthropic: bool,
+) -> (ProviderSetting, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
     listener.set_nonblocking(true).expect("bounded listener");
     let provider = ProviderSetting {
@@ -250,13 +257,28 @@ fn catalog_fixture(
             let request = String::from_utf8_lossy(&request);
             let authorization = request.lines().find_map(|line| {
                 let (name, value) = line.split_once(':')?;
-                name.eq_ignore_ascii_case("authorization")
-                    .then(|| value.trim())
+                name.eq_ignore_ascii_case(if anthropic {
+                    "x-api-key"
+                } else {
+                    "authorization"
+                })
+                .then(|| value.trim())
             });
             assert_eq!(
                 authorization.map(str::to_owned),
-                bearer.map(|value| format!("Bearer {value}"))
+                bearer.map(|value| if anthropic {
+                    value.to_owned()
+                } else {
+                    format!("Bearer {value}")
+                })
             );
+            if anthropic {
+                assert!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains("anthropic-version: 2023-06-01")
+                );
+            }
             write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).expect("fixture response");
         }
     });
@@ -323,62 +345,68 @@ fn native_catalog_forwards_vault_credentials_and_recovers_after_unauthorized() {
     use std::sync::Arc;
 
     const TEST_KEY: &str = "catalog-disposable-fixture-key";
-    let mut home = CatalogTestHome::new();
-    let store = home.open_store();
-    let state = AppState::default();
-    let keys = Arc::new(NativeTestKeyStore::default());
-    let vault = DesktopCredentials::with_test_key_store(&store, keys.clone());
-    *state.credential_vault.lock().expect("test vault slot") = Some(vault.clone());
-    let settings = DesktopSettings::default();
-    let (mut provider, server) = catalog_fixture(
+    for kind in [
+        ProviderKindSetting::Responses,
+        ProviderKindSetting::Anthropic,
+    ] {
+        let mut home = CatalogTestHome::new();
+        let store = home.open_store();
+        let state = AppState::default();
+        let keys = Arc::new(NativeTestKeyStore::default());
+        let vault = DesktopCredentials::with_test_key_store(&store, keys.clone());
+        *state.credential_vault.lock().expect("test vault slot") = Some(vault.clone());
+        let settings = DesktopSettings::default();
+        let (mut provider, server) = catalog_fixture_for_protocol(
         [401, 200]
             .into_iter()
             .map(|status| CatalogResponse {
                 status,
-                body: MODEL_CARD,
+                body: if kind == ProviderKindSetting::Anthropic { r#"{"data":[{"id":"fixture-model","max_input_tokens":32768,"max_tokens":4096}],"has_more":false}"# } else { MODEL_CARD },
                 bearer: Some(TEST_KEY),
             })
             .collect(),
+        kind == ProviderKindSetting::Anthropic,
     );
-    provider.credential_id = Some("fixture-provider-key".into());
-    provider.kind = ProviderKindSetting::Responses;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("native runtime");
-    runtime.block_on(async {
-        vault
-            .write(
-                "fixture-provider-key",
-                colossus_contracts::HostSecret::new(TEST_KEY.to_owned()).expect("test secret"),
-            )
-            .await
-            .expect("encrypted native vault write");
-        assert!(
-            discover_provider_models(&state, &store, &settings, &provider)
+        provider.credential_id = Some("fixture-provider-key".into());
+        provider.kind = kind;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("native runtime");
+        runtime.block_on(async {
+            vault
+                .write(
+                    "fixture-provider-key",
+                    colossus_contracts::HostSecret::new(TEST_KEY.to_owned()).expect("test secret"),
+                )
                 .await
-                .is_err()
+                .expect("encrypted native vault write");
+            assert!(
+                discover_provider_models(&state, &store, &settings, &provider)
+                    .await
+                    .is_err()
+            );
+            let models = discover_provider_models(&state, &store, &settings, &provider)
+                .await
+                .expect("retry with saved credential");
+            assert_eq!(models[0].id, "fixture-model");
+            vault
+                .delete("fixture-provider-key")
+                .await
+                .expect("delete fixture credential");
+        });
+        server.join().expect("catalog fixture completed");
+        drop(vault);
+        drop(state);
+        drop(keys);
+        drop(store);
+        let generated_path = home.path.clone();
+        drop(home);
+        assert!(
+            !generated_path.exists(),
+            "catalog test home must be removed"
         );
-        let models = discover_provider_models(&state, &store, &settings, &provider)
-            .await
-            .expect("retry with saved credential");
-        assert_eq!(models[0].id, "fixture-model");
-        vault
-            .delete("fixture-provider-key")
-            .await
-            .expect("delete fixture credential");
-    });
-    server.join().expect("catalog fixture completed");
-    drop(vault);
-    drop(state);
-    drop(keys);
-    drop(store);
-    let generated_path = home.path.clone();
-    drop(home);
-    assert!(
-        !generated_path.exists(),
-        "catalog test home must be removed"
-    );
+    }
 }
 
 #[cfg(any(windows, target_os = "macos"))]

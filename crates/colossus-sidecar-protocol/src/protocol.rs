@@ -378,6 +378,8 @@ pub enum ManagedProviderKind {
     OpenAiResponses,
     /// OpenAI-compatible chat completions API.
     OpenAiCompatible,
+    /// Native Anthropic Messages API.
+    AnthropicMessages,
     /// Fixed ChatGPT Codex subscription backend using the official Codex credential store.
     OpenAiCodex,
 }
@@ -460,7 +462,9 @@ impl ManagedProviderConfig {
                     return Err(ProtocolError::InvalidFrame);
                 }
             }
-            ManagedProviderKind::OpenAiResponses | ManagedProviderKind::OpenAiCompatible => {
+            ManagedProviderKind::OpenAiResponses
+            | ManagedProviderKind::OpenAiCompatible
+            | ManagedProviderKind::AnthropicMessages => {
                 if self
                     .base_url
                     .as_deref()
