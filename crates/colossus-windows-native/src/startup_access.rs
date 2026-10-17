@@ -12,19 +12,21 @@ use windows_sys::Win32::{
         Authorization::{
             ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
             ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SE_FILE_OBJECT,
+            SE_KERNEL_OBJECT,
         },
         DACL_SECURITY_INFORMATION, DuplicateTokenEx, GENERIC_MAPPING, GROUP_SECURITY_INFORMATION,
-        GetSecurityDescriptorLength, GetTokenInformation, LookupPrivilegeValueW,
-        OWNER_SECURITY_INFORMATION, PRIVILEGE_SET, PSECURITY_DESCRIPTOR, PrivilegeCheck,
-        SE_PRIVILEGE_ENABLED, SecurityIdentification, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_QUERY,
-        TOKEN_USER, TokenImpersonation, TokenRestrictedSids, TokenUser,
+        GetSecurityDescriptorLength, GetTokenInformation, LABEL_SECURITY_INFORMATION,
+        LookupPrivilegeValueW, OWNER_SECURITY_INFORMATION, PRIVILEGE_SET, PSECURITY_DESCRIPTOR,
+        PrivilegeCheck, SE_PRIVILEGE_ENABLED, SecurityIdentification, TOKEN_ALL_ACCESS,
+        TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_QUERY, TOKEN_USER, TokenImpersonation,
+        TokenRestrictedSids, TokenUser,
     },
     Storage::FileSystem::{
         FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
     },
     System::{
         SystemServices::MAXIMUM_ALLOWED,
-        Threading::{OpenProcessToken, WaitForSingleObject},
+        Threading::{GetCurrentProcess, OpenProcessToken, WaitForSingleObject},
     },
 };
 
@@ -615,4 +617,133 @@ fn token_user_text(token: &OwnedHandle) -> Result<String, (&'static str, u32)> {
         .map_err(|_| ("user_text_encoding", 0));
     drop(allocation);
     result
+}
+
+/// Observe this process's own primary-token opens, matching Chromium's first
+/// sandbox operation. Successful handles are only queried and closed: no token
+/// adjustment, assignment, impersonation, process creation, or ACL write occurs.
+#[must_use]
+pub fn observe_current_primary_access() -> Vec<StartupAccessObservation> {
+    let mut records = Vec::with_capacity(4);
+    for (category, rights) in [
+        ("query", TOKEN_QUERY),
+        ("query_duplicate", TOKEN_QUERY | TOKEN_DUPLICATE),
+        ("query_descriptor", TOKEN_QUERY | 0x0002_0000),
+        ("chromium_all", TOKEN_ALL_ACCESS),
+    ] {
+        let mut raw = null_mut();
+        // SAFETY: own process pseudo handle, fixed access mask and writable output.
+        // ALL is intentionally probed because pinned Chromium requests precisely it;
+        // the returned handle is never used to modify the live token.
+        let opened = unsafe { OpenProcessToken(GetCurrentProcess(), rights, &mut raw) };
+        if opened == 0 {
+            // SAFETY: immediate error from the failed owned-token open.
+            records.push(record(
+                "self_primary",
+                category,
+                Err(("open", unsafe { GetLastError() })),
+            ));
+            continue;
+        }
+        // SAFETY: this successful open transfers one owned token handle.
+        let token = unsafe { OwnedHandle::from_raw_handle(raw.cast()) };
+        let mut observation = record("self_primary", category, Ok(rights));
+        if category == "query_descriptor" {
+            let mut raw_descriptor = null_mut();
+            // SAFETY: retained own token with READ_CONTROL; bounded metadata only.
+            let status = unsafe {
+                GetSecurityInfo(
+                    raw,
+                    SE_KERNEL_OBJECT,
+                    OWNER_SECURITY_INFORMATION
+                        | GROUP_SECURITY_INFORMATION
+                        | DACL_SECURITY_INFORMATION
+                        | LABEL_SECURITY_INFORMATION,
+                    null_mut(),
+                    null_mut(),
+                    null_mut(),
+                    null_mut(),
+                    &mut raw_descriptor,
+                )
+            };
+            if status == 0 && !raw_descriptor.is_null() {
+                let descriptor = Descriptor(raw_descriptor);
+                // SAFETY: valid allocated descriptor retained through the read.
+                let length = unsafe { GetSecurityDescriptorLength(descriptor.0) };
+                if length > 0
+                    && length <= 65_536
+                    && let (Ok(text), Ok(user)) =
+                        (descriptor_text(&descriptor), token_user_text(&token))
+                {
+                    let user_present = text.split('(').skip(1).any(|entry| {
+                        entry
+                            .split(')')
+                            .next()
+                            .and_then(|ace| ace.split(';').nth(5))
+                            == Some(user.as_str())
+                    });
+                    observation.detail = Some(format!(
+                        "user_ace_present={user_present};{};{}",
+                        descriptor_categories(&text),
+                        token_object_label(&descriptor)
+                    ));
+                }
+            } else {
+                observation.stage = "read_descriptor";
+                observation.os_code = status;
+            }
+        }
+        records.push(observation);
+    }
+    records
+}
+
+fn token_object_label(descriptor: &Descriptor) -> &'static str {
+    let mut raw = null_mut();
+    let mut count = 0;
+    // SAFETY: retained descriptor and writable LocalAlloc string output.
+    if unsafe {
+        ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            descriptor.0,
+            1,
+            LABEL_SECURITY_INFORMATION,
+            &mut raw,
+            &mut count,
+        )
+    } == 0
+    {
+        return "label_unavailable";
+    }
+    let _allocation = Descriptor(raw.cast());
+    if raw.is_null() || count == 0 || count > 1024 {
+        return "label_unavailable";
+    }
+    // SAFETY: API reports the allocated UTF-16 count including terminating NUL.
+    let units = unsafe { std::slice::from_raw_parts(raw, count as usize) };
+    if units.last() != Some(&0) {
+        return "label_unavailable";
+    }
+    let text = String::from_utf16_lossy(&units[..units.len() - 1]);
+    if text.contains(";;;LW)") {
+        "label_low"
+    } else if text.contains(";;;ME)") {
+        "label_medium"
+    } else if text.contains(";;;HI)") {
+        "label_high"
+    } else if text.contains(";;;SI)") {
+        "label_system"
+    } else {
+        "label_other"
+    }
+}
+
+#[test]
+fn own_token_observation_queries_real_metadata_without_identity_output() {
+    let records = observe_current_primary_access();
+    assert_eq!(records.len(), 4);
+    assert_eq!(records[0].stage, "complete");
+    assert_eq!(records[0].granted, Some(TOKEN_QUERY));
+    for record in records {
+        assert!(!record.detail.unwrap_or_default().contains("S-1-"));
+    }
 }

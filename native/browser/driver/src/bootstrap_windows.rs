@@ -96,6 +96,13 @@ pub fn run() -> Result<(), BrowserDriverError> {
     if unsafe { ffi::colossus_cef_windows_startup_diagnostics() } != 0 {
         return Err(BrowserDriverError::Denied);
     }
+    #[cfg(debug_assertions)]
+    for access in colossus_windows_native::observe_current_primary_access() {
+        eprintln!(
+            "native cef bootstrap token_access={} stage={} os_code={} granted={:?} detail={:?}",
+            access.policy, access.stage, access.os_code, access.granted, access.detail
+        );
+    }
     receipt(&mut bootstrap.writer, 6)?;
     // SAFETY: native main-thread entry; boxed callbacks, retained paths, sandbox
     // and profile cache strings live through actual CefShutdown below.
