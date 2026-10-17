@@ -176,6 +176,7 @@ pub(super) fn plan_mode_tool(name: &str, target: &PlanDraftTarget) -> bool {
                 | "session.set_title"
                 | "filesystem.list"
                 | "filesystem.read"
+                | "image.view"
                 | "filesystem.search"
                 | "git.status"
                 | "git.diff"

@@ -364,6 +364,89 @@ export async function connectWorker(
   }
 }
 
+/** Private native-supervisor handoff. This object must never enter a webview or storage. */
+export interface ManagedConnection {
+  instance_id: string;
+  api_major: number;
+  deployment_mode: string;
+  endpoint: string;
+  certificate_pem: string;
+  certificate_sha256: string;
+  bearer: string;
+  approval_broker_bearer: string;
+}
+
+export async function connectManaged(
+  connection: ManagedConnection,
+  supervisorPid: number,
+): Promise<WorkerClient> {
+  if (
+    connection.api_major !== 1 ||
+    connection.deployment_mode !== "sidecar" ||
+    typeof connection.bearer !== "string" ||
+    !connection.bearer ||
+    connection.bearer.length > 65536 ||
+    typeof connection.approval_broker_bearer !== "string" ||
+    !connection.approval_broker_bearer ||
+    connection.approval_broker_bearer.length > 65536 ||
+    typeof connection.certificate_pem !== "string" ||
+    connection.certificate_pem.length > 262144
+  )
+    throw new UserError("The managed runtime returned an invalid connection.");
+  const descriptor = parseEndpointDescriptor({
+    schema_version: 1,
+    api_version: "colossus.api.v1alpha1",
+    instance_id: connection.instance_id,
+    endpoint: connection.endpoint,
+    certificate_sha256: connection.certificate_sha256,
+    pid: supervisorPid,
+  });
+  const certificate = Buffer.from(connection.certificate_pem);
+  const connect = (token: string) =>
+    createSecureGrpcClient(
+      AgentRunServiceClient,
+      descriptor,
+      certificate,
+      connection.instance_id,
+      connection.certificate_sha256,
+      DeploymentMode.DEPLOYMENT_MODE_SIDECAR,
+      new StaticBearerCredential(token),
+    );
+  const runs = await connect(connection.bearer);
+  let approval: AgentRunServiceClient | undefined;
+  let system: SystemServiceClient | undefined;
+  try {
+    approval = await connect(connection.approval_broker_bearer);
+    system = new SystemServiceClient(
+      descriptor.target,
+      grpc.credentials.createInsecure(),
+      { channelOverride: runs.getChannel() },
+    );
+    const response = await rpc<GetServerInfoResponse>((callback) =>
+      system!.getServerInfo(
+        {},
+        new grpc.Metadata(),
+        { deadline: Date.now() + 5000 },
+        callback,
+      ),
+    );
+    if (!response.serverInfo)
+      throw new UserError("Missing managed runtime information.");
+    return new WorkerClient(
+      runs,
+      system,
+      response.serverInfo,
+      undefined,
+      approval,
+    );
+  } catch (error) {
+    approval?.close();
+    system?.close();
+    runs.close();
+    throw error;
+  }
+}
+
 export function rpc<T>(
   invoke: (
     callback: (error: grpc.ServiceError | null, response: T) => void,
@@ -402,6 +485,7 @@ export class WorkerClient {
     private readonly system: SystemServiceClient,
     readonly info: ServerInfo,
     readonly communicationClient?: AgentCommunicationServiceClient,
+    private readonly approvalClient?: AgentRunServiceClient,
   ) {}
   communication(): AgentCommunication {
     if (
@@ -527,7 +611,10 @@ export class WorkerClient {
   }
   respond(request: RespondInteractionRequest) {
     return rpc<RespondInteractionResponse>((cb) =>
-      this.runs.respondInteraction(
+      (request.response?.$case === "approvalAnswer"
+        ? (this.approvalClient ?? this.runs)
+        : this.runs
+      ).respondInteraction(
         request,
         new grpc.Metadata(),
         { deadline: Date.now() + 30_000 },
@@ -585,6 +672,7 @@ export class WorkerClient {
   }
   close() {
     this.closed = true;
+    this.approvalClient?.close();
     this.communicationClient?.close();
     this.system.close();
     this.runs.close();

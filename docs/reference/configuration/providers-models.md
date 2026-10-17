@@ -87,6 +87,7 @@ nonempty and are referenced by model profiles.
 | `open_ai_codex` | Subscription-backed OpenAI Responses API | Forbids `baseUrl`; requires `credentialReference: codex:default`; uses the fixed ChatGPT Codex backend |
 | `open_ai_responses` | OpenAI Responses API | Requires `baseUrl`; Colossus appends `/responses` and `/models` |
 | `open_ai_compatible` | OpenAI-compatible Chat Completions API | Requires `baseUrl`; Colossus appends `/chat/completions` and `/models` |
+| `anthropic_messages` | Native Anthropic Messages API | Requires `baseUrl`; Colossus appends `/messages` and paginated `/models`; use an Anthropic workspace-scoped API key |
 
 The built-in `echo` route is useful for configuration, storage, policy, and terminal
 smoke tests. It does not validate a network provider or real model behavior.
@@ -114,7 +115,7 @@ The URL must:
   provider credential and request content in transit.
 - Contain no username, password, query, or fragment.
 - Include any required API prefix, such as `/v1`.
-- Omit `/responses`, `/chat/completions`, and `/models`; Colossus adds those paths.
+- Omit `/responses`, `/chat/completions`, `/messages`, and `/models`; Colossus adds those paths.
 
 `open_ai_codex` is the exception: omit `baseUrl`. Colossus pins that adapter to
 `https://chatgpt.com/backend-api/codex` so a ChatGPT bearer and account identifier cannot

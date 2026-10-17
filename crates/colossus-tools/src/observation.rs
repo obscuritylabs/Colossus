@@ -1,5 +1,5 @@
 use colossus_contracts::{
-    ModelContent, ModelContentPart, ModelMessage, ModelMessageRole, ToolResult,
+    ImageViewOutput, ModelContent, ModelContentPart, ModelMessage, ModelMessageRole, ToolResult,
     validate_model_message_content,
 };
 use serde_json::{Map, Value, json};
@@ -80,7 +80,21 @@ pub fn tool_result_observation_messages(results: &[ToolResult]) -> Vec<ModelMess
         .map(|result| ModelMessage {
             agent_message_origin: None,
             role: ModelMessageRole::Tool,
-            content: result.output.clone().into(),
+            content: match ImageViewOutput::from_tool_result(result) {
+                Some(output) => ModelContent::Parts(
+                    std::iter::once(ModelContentPart::Text {
+                        text: result.output.clone(),
+                    })
+                    .chain(
+                        output
+                            .images
+                            .into_iter()
+                            .map(|image| ModelContentPart::Image { image }),
+                    )
+                    .collect(),
+                ),
+                None => result.output.clone().into(),
+            },
             tool_call_id: Some(result.call_id.clone()),
             tool_calls: Vec::new(),
         })
@@ -264,7 +278,10 @@ fn project_tool_messages(
         .collect::<Vec<_>>();
     let minimum = serialized
         .iter()
-        .map(|size| (*size).min(MIN_TOOL_MESSAGE_BUDGET_BYTES))
+        .zip(messages)
+        .map(|(size, message)| {
+            (*size).min(MIN_TOOL_MESSAGE_BUDGET_BYTES.saturating_add(image_metadata_bytes(message)))
+        })
         .collect::<Vec<_>>();
     let budgets = waterfill_budgets(&desired, &minimum, MAX_MODEL_TOOL_TURN_BYTES);
 
@@ -335,6 +352,32 @@ fn project_tool_message(
     message_budget: usize,
     existing_observation_handling: ExistingObservationHandling,
 ) -> ModelMessage {
+    if message.content.images().next().is_some() {
+        // Image references are indivisible evidence. Bound only the text observation;
+        // reserve metadata in the shared turn budget and retain every exact reference.
+        let mut scalar = message.clone();
+        scalar.content = message.content.plain_text().into_owned().into();
+        let mut projected = project_tool_message(
+            &scalar,
+            metadata,
+            message_budget.saturating_sub(image_metadata_bytes(message)),
+            existing_observation_handling,
+        );
+        projected.content = ModelContent::Parts(
+            std::iter::once(ModelContentPart::Text {
+                text: projected.content.plain_text().into_owned(),
+            })
+            .chain(
+                message
+                    .content
+                    .images()
+                    .cloned()
+                    .map(|image| ModelContentPart::Image { image }),
+            )
+            .collect(),
+        );
+        return projected;
+    }
     let output = message.content.plain_text();
     let output = output.as_ref();
 
@@ -399,6 +442,15 @@ fn project_tool_message(
         "the structural tool-result message exceeds its aggregate allocation"
     );
     candidate
+}
+
+fn image_metadata_bytes(message: &ModelMessage) -> usize {
+    if message.content.images().next().is_none() {
+        return 0;
+    }
+    let mut scalar = message.clone();
+    scalar.content = message.content.plain_text().into_owned().into();
+    serialized_message_bytes(message).saturating_sub(serialized_message_bytes(&scalar))
 }
 
 fn existing_observation(value: &Value) -> Option<ExistingObservation<'_>> {

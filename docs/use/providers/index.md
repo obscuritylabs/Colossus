@@ -24,6 +24,7 @@ guided setup.
 | --- | --- | --- | --- | --- |
 | ChatGPT/Codex subscription | Codex-managed ChatGPT sign-in | `open_ai_codex` | Use an eligible subscription without an OpenAI API key | [Codex or ChatGPT subscription](codex-chatgpt.md) |
 | OpenAI public API | Environment-backed OpenAI API key | `open_ai_responses` | Call the public Responses API with separate API billing | [OpenAI API](openai-api.md) |
+| Anthropic API | Environment- or host-backed workspace API key | `anthropic_messages` | Use native Messages, tools, streaming, images, and private thinking replay | [Anthropic API](anthropic.md) |
 | OpenRouter | Environment-backed OpenRouter API key | `open_ai_compatible` | Route an exact OpenRouter model through Chat Completions | [OpenRouter](openrouter.md) |
 | Local server | None, or a credential injected by an embedding host | `open_ai_compatible` | Use a loopback server that implements the required OpenAI-compatible contracts | [Local models](local-models.md) |
 | Another compatible endpoint | Environment- or host-backed credential | `open_ai_compatible` | Connect a gateway or hosted Chat Completions service | [Other OpenAI-compatible endpoints](openai-compatible.md) |

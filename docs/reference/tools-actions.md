@@ -16,6 +16,7 @@ and output bounds.
 | --- | --- | --- |
 | Utility | `echo`, `user.ask`, `tool.search`, `trace.show` | Pure; `user.ask` requires an interactive interface |
 | Filesystem | `filesystem.list`, `filesystem.read`, `filesystem.search`, `filesystem.write`, `filesystem.replace` | Declared canonical roots under isolation; exact host paths under ambient authority; reads quarantined and writes atomic |
+| Images | `image.view` | `filesystem.read_image` retains confinement and release rules; built-in policy inherits ordinary read decisions and restrictions; bounded static images become owner-bound immutable artifacts and model-visible tool image parts |
 | Git and process | `git.status`, `git.diff`, `git.show`, `shell.run` | Normally an exact executable, workspace cwd, isolated environment, and enforced resource limits; acknowledged `danger_full_access` uses ambient host resources with supervised timeout/output and best-effort Unix detached-descendant cleanup/accounting |
 | Patch | `patch.preview`, `patch.apply`, `patch.reverse` | Preview read; apply/reverse write; declared roots or ambient host paths |
 | Trace export | `trace.export` | Bounded metadata-only write; workspace-confined under isolation and host-wide under ambient authority |
@@ -380,7 +381,7 @@ from the active run snapshot and workspace overlay.
 
 | Class | Exact action names |
 | --- | --- |
-| Provider | `provider.echo`, `provider.openai.responses`, `provider.openai.codex`, `provider.openai.chat`, `provider.models`, `provider.call` |
+| Provider | `provider.echo`, `provider.openai.responses`, `provider.openai.codex`, `provider.openai.chat`, `provider.anthropic.messages`, `provider.models`, `provider.call` |
 | Read | `filesystem.read`, `filesystem.list`, `filesystem.metadata`, `filesystem.search`, `git.status`, `git.diff`, `git.show`, `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary`, `context.show`, `context.snapshots`, `patch.preview`, `task.list`, `decision.list`, `plan.show`, `goal.show`, `subagent.read`, `subagent.list`, `memory.read`, `memory.list`, `memory.search`, `memory.index.status`, `plugin.list`, `plugin.inspect`, `plugin.skill.read`, `plugin.resource.list`, `plugin.resource.read`, `plugin.validate`, `plugin.verify`, `bundle.verify`, `bundle.key.inspect`, `mcp.tools`, `browser.status`, `browser.tabs`, `browser.snapshot`, `browser.wait` |
 | Local state | `session.set_title`, `context.compact`, `context.restore`, `presentation.preferences.update`, `presentation.history.append`, `task.create`, `task.update`, `decision.create`, `decision.update`, `decision.archive`, `decision.supersede`, `plan.create`, `plan.update`, `plan.discard`, `goal.create`, `goal.update`, `goal.iteration.record`, `subagent.create`, `subagent.start`, `subagent.complete`, `subagent.fail`, `subagent.cancel`, `subagent.interrupt`, `subagent.requeue`, `memory.create`, `memory.update`, `memory.archive`, `memory.supersede`, `memory.index.sync`, `memory.index.rebuild`, `workflow.webhook.ingest`, `workflow.subscription.dispatch`, `browser.tab.select`, `browser.tab.close`, `browser.stop`, `browser.close` |
 | Workspace mutation | `filesystem.write`, `patch.apply`, `patch.reverse`, `trace.export`, `audit.export.write` |

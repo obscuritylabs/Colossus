@@ -1,7 +1,12 @@
 //! Bounded validation and late resolution for encrypted inputs and released tool images.
 
+mod import;
+mod preview;
 mod resolver;
 mod validation;
+
+pub use import::import_released_images;
+pub use preview::image_preview;
 
 pub use resolver::JournalRunInputMediaResolver;
 pub use validation::{

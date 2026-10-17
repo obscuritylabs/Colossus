@@ -67,6 +67,7 @@ protects a current boundary; it does not mean every future assertion is permanen
 | `colossus-runtime` | Keep composition and cross-service security tests; obsolete `research.search` compatibility assertions were removed. |
 | `colossus-sandbox` | Keep native/OCI/Windows contract, broker, cleanup, and hostile-input tests. |
 | `colossus-sdk` | Keep embedded/native-sidecar/gRPC parity and subprocess lifecycle tests. |
+| `colossus-app-host` | Keep bounded private framing checks; VS Code's `test:managed` exercises the bundled native lifecycle, authenticated turns, provider credentials, restart, writer conflicts, and recovery. |
 | `colossus-search` | Keep SearXNG/SerpAPI parsing, credentials, bounds, and role-routing tests. |
 | `colossus-session` | Keep message, branch, restore, and context-view repository tests. |
 | `colossus-sidecar-protocol` | Keep authenticated framing and workspace-identity compatibility tests; they protect deployed sidecars. |

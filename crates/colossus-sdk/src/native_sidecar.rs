@@ -1859,6 +1859,7 @@ async fn launch_child(
             ),
             None => None,
         };
+        bootstrap.notify_connection(&ready)?;
         Ok(ConnectedTransports {
             connector,
             primary,

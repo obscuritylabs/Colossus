@@ -41,7 +41,7 @@ impl EffectExecutor for FilesystemExecutor {
         let max_output =
             usize::try_from(permit.obligations().max_output_bytes).map_err(adapter_failure)?;
         let result = match request.action.as_str() {
-            "filesystem.read" | "filesystem.read_run_input" => {
+            "filesystem.read" | "filesystem.read_run_input" | "filesystem.read_image" => {
                 let file = fs::File::open(&target).map_err(adapter_failure)?;
                 protected.check_file(&file)?;
                 let metadata = file.metadata().map_err(adapter_failure)?;
@@ -124,6 +124,7 @@ pub(super) fn filesystem_mode(action: &str) -> Result<&'static str, ExecutionErr
     match action {
         "filesystem.read"
         | "filesystem.read_run_input"
+        | "filesystem.read_image"
         | "filesystem.list"
         | "filesystem.search"
         | "patch.preview" => Ok("read"),

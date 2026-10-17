@@ -164,11 +164,13 @@ export function ImportedProviderPicker({
             <div>
               <dt>API format</dt>
               <dd>
-                {provider.kind === "openai_responses"
-                  ? "Responses"
-                  : provider.kind === "open_ai_codex"
-                    ? "Codex / ChatGPT"
-                    : "Chat Completions"}
+                {provider.kind === "anthropic_messages"
+                  ? "Anthropic Messages"
+                  : provider.kind === "openai_responses"
+                    ? "Responses"
+                    : provider.kind === "open_ai_codex"
+                      ? "Codex / ChatGPT"
+                      : "Chat Completions"}
               </dd>
             </div>
             {provider.timeoutMs ? (

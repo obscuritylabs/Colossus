@@ -12,6 +12,83 @@ use serde_json::json;
 use sha2::{Digest as _, Sha256};
 use std::{io::Cursor, sync::Arc};
 
+#[path = "tests/import_failure.rs"]
+mod import_failure;
+
+#[tokio::test]
+async fn released_images_retain_exact_bytes_and_previews_are_bounded_static_pngs() {
+    let journal = Arc::new(InMemoryEventJournal::default());
+    let bytes = encoded(ImageFormat::Png);
+    let references = import_released_images(
+        journal.as_ref(),
+        Actor {
+            actor_type: ActorType::Application,
+            id: "app:image-owner".into(),
+        },
+        ExecutionContext::default(),
+        vec![("viewed.png".into(), bytes.clone())],
+    )
+    .unwrap();
+    let resolver = JournalRunInputMediaResolver::new(journal.clone());
+    assert_eq!(
+        resolver.resolve_image(&references[0]).await.unwrap().bytes,
+        bytes
+    );
+    assert_eq!(
+        resolver
+            .image_reference("app:image-owner", &references[0].artifact_id)
+            .unwrap(),
+        references[0]
+    );
+    assert!(
+        resolver
+            .image_reference("app:foreign", &references[0].artifact_id)
+            .is_err()
+    );
+    for thumbnail in [true, false] {
+        let preview = image_preview("viewed.png", "image/png", &bytes, thumbnail).unwrap();
+        let decoded = image::load_from_memory(&preview).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (2, 3));
+        assert_eq!(image::guess_format(&preview).unwrap(), ImageFormat::Png);
+    }
+    assert!(image_preview("viewed.svg", "image/svg+xml", b"<svg></svg>", true).is_err());
+    assert!(image_preview("viewed.png", "image/jpeg", &bytes, true).is_err());
+    let head = journal.head().unwrap();
+    assert!(
+        import_released_images(
+            journal.as_ref(),
+            Actor {
+                actor_type: ActorType::Application,
+                id: "app:image-owner".into()
+            },
+            ExecutionContext::default(),
+            vec![
+                ("valid.png".into(), bytes),
+                ("bad.png".into(), b"invalid".to_vec())
+            ]
+        )
+        .is_err()
+    );
+    assert_eq!(
+        journal.head().unwrap(),
+        head,
+        "a partially invalid batch retains no images"
+    );
+}
+
+#[test]
+fn image_previews_preserve_aspect_ratio_and_bound_large_decodes_for_display() {
+    let mut bytes = Cursor::new(Vec::new());
+    DynamicImage::new_rgba8(3000, 1500)
+        .write_to(&mut bytes, ImageFormat::Png)
+        .unwrap();
+    for (thumbnail, dimensions) in [(true, (256, 128)), (false, (2048, 1024))] {
+        let preview = image_preview("wide.png", "image/png", bytes.get_ref(), thumbnail).unwrap();
+        let image = image::load_from_memory(&preview).unwrap();
+        assert_eq!((image.width(), image.height()), dimensions);
+    }
+}
+
 fn encoded(format: ImageFormat) -> Vec<u8> {
     let mut bytes = Cursor::new(Vec::new());
     DynamicImage::new_rgba8(2, 3)

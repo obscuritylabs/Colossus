@@ -1,10 +1,11 @@
 import { parseInboxInspectionRequest } from "./model.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
-import { isAbsolute, relative, sep } from "node:path";
+import { isAbsolute, relative, sep, join } from "node:path";
 import * as vscode from "vscode";
 import {
   connectWorker,
+  connectManaged,
   connectionStep,
   parseProfile,
   safeError,
@@ -25,6 +26,16 @@ import {
   readPreferences,
   type SettingsView,
 } from "./settings.js";
+import {
+  ManagedRuntime,
+  type ManagedProfile,
+  type ManagedSetup,
+} from "./managed.js";
+import {
+  configureManaged,
+  managedCredentials,
+  managedKey,
+} from "./managed-setup.js";
 import type {
   Interaction,
   RespondInteractionRequest,
@@ -32,6 +43,7 @@ import type {
 
 const KEYRING_SERVICE = "dev.obscuritylabs.colossus.vscode";
 const KEYRING_ACCOUNT = "local";
+const SELECTED_WORKSPACE = "colossus.selectedWorkspace.v1";
 
 function storageKey(path: string) {
   return `colossus.connection.v1.${createHash("sha256").update(path).digest("hex")}`;
@@ -57,8 +69,17 @@ export function activate(context: vscode.ExtensionContext) {
         reviews.delete(document.uri.toString());
     }),
   );
-  let folder: vscode.WorkspaceFolder | undefined;
-  let profile: ConnectionProfile | undefined;
+  const availableFolders =
+    vscode.workspace.workspaceFolders?.filter(
+      (entry) => entry.uri.scheme === "file",
+    ) ?? [];
+  const savedWorkspace = context.workspaceState.get<string>(SELECTED_WORKSPACE);
+  let folder =
+    availableFolders.find((entry) => entry.uri.toString() === savedWorkspace) ??
+    (availableFolders.length === 1 ? availableFolders[0] : undefined);
+  let profile: ConnectionProfile | ManagedProfile | undefined;
+  const managed = new ManagedRuntime();
+  let disposed = false;
   let webview: vscode.WebviewView | undefined;
   let explorerView: vscode.WebviewView | undefined;
   let inspectionPanel: vscode.WebviewPanel | undefined;
@@ -74,7 +95,7 @@ export function activate(context: vscode.ExtensionContext) {
   let preferenceError = "";
   let connecting = false;
   let configuringCredential = false;
-  let controller = makeController("Select a workspace");
+  let controller = makeController(folder?.name ?? "Select a workspace");
   let publishTimer: ReturnType<typeof setTimeout> | undefined;
   let lastView: WorkView = controller.view;
   const status = vscode.window.createStatusBarItem(
@@ -128,6 +149,19 @@ export function activate(context: vscode.ExtensionContext) {
       hasSavedConnection: !!profile,
       version: lastView.version,
       role: profile?.role ?? "",
+      runtimePreview: process.platform === "darwin",
+      runtimeKind:
+        profile && "kind" in profile
+          ? "managed"
+          : profile
+            ? "external"
+            : folder &&
+                context.workspaceState.get(
+                  `colossus.external:${folder.uri.fsPath}`,
+                  false,
+                )
+              ? "external"
+              : "managed",
       error: lastView.error,
     };
     void settingsPanel?.webview.postMessage({
@@ -532,8 +566,9 @@ export function activate(context: vscode.ExtensionContext) {
       current.identity !== profile.workspaceIdentity
     ) {
       controller.detach();
+      await managed.stop();
       throw new UserError(
-        "The workspace was replaced. Reconnect and enroll the folder again.",
+        "The workspace was replaced. Select this folder again in the runtime connection settings.",
       );
     }
   }
@@ -632,7 +667,7 @@ export function activate(context: vscode.ExtensionContext) {
     }
   }
 
-  async function connect() {
+  async function connectExternal() {
     if (connecting || configuringCredential || !controller.canReconnect) return;
     const recovering = controller.view.busy;
     connecting = true;
@@ -647,7 +682,9 @@ export function activate(context: vscode.ExtensionContext) {
         report,
       );
       const enrolled = recovering
-        ? profile
+        ? profile && !("kind" in profile)
+          ? profile
+          : undefined
         : stored
           ? await connectionStep(
               "saved-profile",
@@ -656,7 +693,12 @@ export function activate(context: vscode.ExtensionContext) {
             )
           : await configure(selected);
       if (!enrolled) return;
+      await managed.stop();
       folder = selected;
+      await context.workspaceState.update(
+        SELECTED_WORKSPACE,
+        selected.uri.toString(),
+      );
       profile = enrolled;
       controller.detach();
       controller = makeController(selected.name);
@@ -703,6 +745,128 @@ export function activate(context: vscode.ExtensionContext) {
         client.close();
         throw error;
       }
+    } finally {
+      connecting = false;
+      controller.view.connecting = false;
+      controller.publish();
+    }
+  }
+
+  async function connect() {
+    const selected = await chooseFolder();
+    if (!selected) return;
+    folder = selected;
+    if (
+      context.workspaceState.get(
+        `colossus.external:${selected.uri.fsPath}`,
+        false,
+      )
+    )
+      return connectExternal();
+    return startManaged(false);
+  }
+
+  async function startManaged(configureFirst: boolean) {
+    if (
+      connecting ||
+      configuringCredential ||
+      !controller.canReconnect ||
+      disposed
+    )
+      return;
+    connecting = true;
+    publishViews();
+    let client: Awaited<ReturnType<typeof connectManaged>> | undefined;
+    try {
+      const selected = await chooseFolder();
+      if (!selected) return;
+      const canonical = await workspaceIdentity(selected.uri.fsPath);
+      let setup = context.workspaceState.get<ManagedSetup>(
+        managedKey(canonical.path),
+      );
+      if (!setup || configureFirst) {
+        const updated = await configureManaged(context, canonical.path);
+        if (!updated) return;
+        setup = updated;
+      }
+      if (setup.workspaceIdentity !== canonical.identity)
+        throw new UserError(
+          "The saved workspace was replaced. Use Configure Local Runtime to select this folder again.",
+        );
+      if (disposed || !vscode.workspace.isTrusted) return;
+      const same =
+        profile &&
+        "kind" in profile &&
+        profile.workspacePath === canonical.path &&
+        profile.workspaceIdentity === canonical.identity;
+      if (!same || configureFirst) {
+        controller.detach();
+        await managed.stop();
+      }
+      folder = selected;
+      await context.workspaceState.update(
+        SELECTED_WORKSPACE,
+        selected.uri.toString(),
+      );
+      profile = {
+        kind: "managed",
+        workspacePath: canonical.path,
+        workspaceIdentity: canonical.identity,
+        instanceId: "",
+        role: "primary",
+      };
+      controller.view.workspace = selected.name;
+      controller.view.connecting = true;
+      controller.view.status = "Starting Managed Local";
+      controller.publish();
+      const lost = () => {
+        if (!disposed && profile && "kind" in profile) {
+          controller.detach();
+          controller.view.status =
+            "Managed Local stopped. Start it again to continue.";
+          controller.publish();
+        }
+      };
+      const connection =
+        managed.alive && managed.connection
+          ? managed.connection
+          : await managed.start({
+              bundle: join(context.extensionUri.fsPath, "native"),
+              workspace: canonical.path,
+              home: join(context.globalStorageUri.fsPath, "managed-home"),
+              setup,
+              credentials: await managedCredentials(context, setup),
+              stopped: lost,
+              restarted: () => {
+                lost();
+                controller.view.status =
+                  "Managed Local restarted. Reconnect to restore the conversation; tasks are never resent.";
+                controller.publish();
+              },
+            });
+      await guard();
+      if (disposed) throw new UserError("The extension is closing.");
+      client = await connectManaged(connection, managed.pid);
+      await guard();
+      profile.instanceId = connection.instance_id;
+      if (managed.workspaceIdentity) {
+        setup.nativeWorkspaceIdentity = managed.workspaceIdentity;
+        await context.workspaceState.update(managedKey(canonical.path), setup);
+      }
+      const session = context.workspaceState.get<string>(
+        `session:${profile.instanceId}:${canonical.path}`,
+        "",
+      );
+      await controller.attach(client, "primary", session);
+      await context.workspaceState.update(
+        `colossus.external:${selected.uri.fsPath}`,
+        false,
+      );
+    } catch (error) {
+      controller.detach();
+      client?.close();
+      await managed.stop();
+      throw error;
     } finally {
       connecting = false;
       controller.view.connecting = false;
@@ -780,12 +944,23 @@ export function activate(context: vscode.ExtensionContext) {
 
   const commands: Record<string, () => Promise<unknown> | unknown> = {
     "colossus.connect": connect,
-    "colossus.disconnect": () => {
+    "colossus.configureManaged": () => startManaged(true),
+    "colossus.startManaged": () => startManaged(false),
+    "colossus.connectExternal": async () => {
+      await connectExternal();
+      if (folder && profile && !("kind" in profile))
+        await context.workspaceState.update(
+          `colossus.external:${folder.uri.fsPath}`,
+          true,
+        );
+    },
+    "colossus.disconnect": async () => {
       if (connecting || configuringCredential || !controller.canReconnect)
         throw new UserError(
           "Wait for the current action or pause observation before disconnecting.",
         );
       controller.detach();
+      await managed.stop();
     },
     "colossus.openSettings": openSettings,
     "colossus.openWorkspace": () =>
@@ -804,6 +979,7 @@ export function activate(context: vscode.ExtensionContext) {
       controller.detach();
       await context.secrets.delete(storageKey(path));
       profile = undefined;
+      await managed.stop();
     },
     "colossus.newSession": async () => {
       await guard();
@@ -877,6 +1053,25 @@ export function activate(context: vscode.ExtensionContext) {
               switch (action.type) {
                 case "ready":
                   controller.publish();
+                  if (!profile && !connecting && folder) {
+                    const selected = folder;
+                    if (
+                      selected.uri.scheme === "file" &&
+                      vscode.workspace.isTrusted &&
+                      !context.workspaceState.get(
+                        `colossus.external:${selected.uri.fsPath}`,
+                        false,
+                      )
+                    ) {
+                      const canonical = await workspaceIdentity(
+                        selected.uri.fsPath,
+                      );
+                      if (
+                        context.workspaceState.get(managedKey(canonical.path))
+                      )
+                        await startManaged(false);
+                    }
+                  }
                   break;
                 case "connect":
                   await connect();
@@ -971,6 +1166,7 @@ export function activate(context: vscode.ExtensionContext) {
         )
       ) {
         controller.detach();
+        void managed.stop();
         folder = undefined;
         profile = undefined;
       }
@@ -978,10 +1174,38 @@ export function activate(context: vscode.ExtensionContext) {
   );
   context.subscriptions.push({
     dispose: () => {
+      disposed = true;
       controller.detach();
+      void managed.stop();
       if (publishTimer) clearTimeout(publishTimer);
     },
   });
+  shutdownManaged = async () => {
+    disposed = true;
+    controller.detach();
+    await managed.stop();
+  };
+  // First installation makes the contributed sidebar discoverable once. Later windows
+  // retain VS Code's own saved placement and visibility.
+  if (
+    context.globalState &&
+    !context.globalState.get("colossus.sidebarShown.v1", false)
+  ) {
+    void (async () => {
+      try {
+        await vscode.commands.executeCommand("colossus.work.focus");
+        await context.globalState.update("colossus.sidebarShown.v1", true);
+      } catch {
+        /* Retain the first-open action for the next successful activation. */
+      }
+    })();
+  }
+}
+
+let shutdownManaged: (() => Promise<void>) | undefined;
+export async function deactivate() {
+  await shutdownManaged?.();
+  shutdownManaged = undefined;
 }
 
 async function presentInteraction(

@@ -296,6 +296,7 @@ async fn server_continuation_reserves_budget_and_falls_back_at_local_threshold()
     ];
     let mut request = preparation_request(messages, false);
     request.continuation = Some(ProviderContinuationView {
+        replay: false,
         context_binding_hash: hex::encode(<sha2::Sha256 as sha2::Digest>::digest(b"[]")),
         id: "safe-reference".into(),
         covered_count: 2,
@@ -421,6 +422,37 @@ fn image_compaction_deterministically_keeps_newest_images_without_mutating_histo
         &parts[16],
         ModelContentPart::Image { image } if image.file_name == "image-16.png"
     ));
+}
+
+#[test]
+fn tool_image_compaction_keeps_a_new_batch_without_mutating_canonical_views() {
+    let mut earlier = image_message((0..16).map(|index| image(index, 1)));
+    earlier.role = ModelMessageRole::Tool;
+    earlier.tool_call_id = Some("earlier-view".into());
+    let mut newer = image_message([image(16, 1)]);
+    newer.role = ModelMessageRole::Tool;
+    newer.tool_call_id = Some("newer-view".into());
+    let canonical = vec![earlier, newer];
+    let prepared = compact_excess_images(&canonical);
+    assert_eq!(
+        canonical
+            .iter()
+            .flat_map(|message| message.content.images())
+            .count(),
+        17
+    );
+    assert_eq!(
+        prepared
+            .iter()
+            .flat_map(|message| message.content.images())
+            .count(),
+        16
+    );
+    assert_eq!(
+        prepared[1].content.images().next().unwrap().file_name,
+        "image-16.png"
+    );
+    assert!(prepared[0].content.plain_text().contains("image-0.png"));
 }
 
 #[tokio::test]
@@ -1283,6 +1315,7 @@ async fn active_decision_from_another_session_invalidates_continuation_when_arch
     assert!(prepared.messages[0].content.contains(&decision.id));
     assert!(prepared.messages[0].content.contains(&decision.decision));
     request.continuation = Some(ProviderContinuationView {
+        replay: false,
         id: "before-archive".into(),
         covered_count: 1,
         context_binding_hash: prepared.context_binding_hash.clone(),
@@ -1312,6 +1345,32 @@ async fn active_decision_from_another_session_invalidates_continuation_when_arch
         after_archive.context_binding_hash,
         prepared.context_binding_hash
     );
+}
+
+#[tokio::test]
+async fn anthropic_replay_reserves_budget_without_replacing_canonical_messages() {
+    let provider: Arc<dyn ModelProvider> = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let (_, _, _, service) = fixture(ContextConfig::default(), provider);
+    let messages = vec![message(ModelMessageRole::User, "keep canonical input")];
+    let mut request = preparation_request(messages.clone(), false);
+    let original = service.prepare(request.clone()).await.unwrap();
+    request.continuation = Some(ProviderContinuationView {
+        replay: true,
+        id: "replay".into(),
+        covered_count: 1,
+        context_binding_hash: original.context_binding_hash,
+        reserved_tokens: 100,
+        bytes: 300,
+    });
+    let prepared = service.prepare(request.clone()).await.unwrap();
+    assert_eq!(prepared.messages, messages);
+    assert_eq!(prepared.continuation_id.as_deref(), Some("replay"));
+    assert!(!prepared.compacted);
+    request.continuation.as_mut().unwrap().reserved_tokens = u64::MAX;
+    assert!(service.prepare(request).await.is_err());
 }
 
 struct QueryMemories;
@@ -1354,6 +1413,7 @@ async fn changed_retrieved_memories_rebuild_context_without_opaque_continuation(
         preparation_request(vec![message(ModelMessageRole::User, "first query")], false);
     let prepared = service.prepare(request.clone()).await.unwrap();
     request.continuation = Some(ProviderContinuationView {
+        replay: false,
         id: "first-memory".into(),
         covered_count: 1,
         context_binding_hash: prepared.context_binding_hash.clone(),

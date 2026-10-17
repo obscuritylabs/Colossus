@@ -12,6 +12,8 @@ pub enum ProviderKind {
     OpenAiCodex,
     /// OpenAI-compatible Chat Completions API.
     OpenAiCompatible,
+    /// Native Anthropic Messages API.
+    AnthropicMessages,
 }
 
 impl ProviderKind {
@@ -22,6 +24,7 @@ impl ProviderKind {
             Self::OpenAiResponses => "openai_responses",
             Self::OpenAiCodex => "openai_codex",
             Self::OpenAiCompatible => "openai_compatible",
+            Self::AnthropicMessages => "anthropic_messages",
         }
     }
 
@@ -32,6 +35,7 @@ impl ProviderKind {
             Self::OpenAiResponses => "provider.openai.responses",
             Self::OpenAiCodex => "provider.openai.codex",
             Self::OpenAiCompatible => "provider.openai.chat",
+            Self::AnthropicMessages => "provider.anthropic.messages",
         }
     }
 }
@@ -119,7 +123,9 @@ impl ProviderProfile {
                 }
                 None
             }
-            ProviderKind::OpenAiResponses | ProviderKind::OpenAiCompatible => {
+            ProviderKind::OpenAiResponses
+            | ProviderKind::OpenAiCompatible
+            | ProviderKind::AnthropicMessages => {
                 let raw = base_url.ok_or_else(|| {
                     ProviderError::Configuration("network providers require baseUrl".into())
                 })?;
@@ -184,6 +190,7 @@ impl ProviderProfile {
             ProviderKind::Echo => Ok(format!("provider:{}", self.name)),
             ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => self.endpoint("responses"),
             ProviderKind::OpenAiCompatible => self.endpoint("chat/completions"),
+            ProviderKind::AnthropicMessages => self.endpoint("messages"),
         }
     }
 
@@ -194,9 +201,9 @@ impl ProviderProfile {
             ProviderKind::OpenAiCodex => self
                 .endpoint(&format!("models?client_version={CODEX_PROTOCOL_VERSION}"))
                 .map(Some),
-            ProviderKind::OpenAiResponses | ProviderKind::OpenAiCompatible => {
-                self.endpoint("models").map(Some)
-            }
+            ProviderKind::OpenAiResponses
+            | ProviderKind::OpenAiCompatible
+            | ProviderKind::AnthropicMessages => self.endpoint("models").map(Some),
         }
     }
 
@@ -216,9 +223,10 @@ impl ProviderProfile {
     pub fn authentication_origins(&self) -> &'static [&'static str] {
         match self.kind {
             ProviderKind::OpenAiCodex => &[CODEX_AUTH_ORIGIN],
-            ProviderKind::Echo | ProviderKind::OpenAiResponses | ProviderKind::OpenAiCompatible => {
-                &[]
-            }
+            ProviderKind::Echo
+            | ProviderKind::OpenAiResponses
+            | ProviderKind::OpenAiCompatible
+            | ProviderKind::AnthropicMessages => &[],
         }
     }
 

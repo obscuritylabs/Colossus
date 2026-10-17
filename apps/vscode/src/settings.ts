@@ -33,6 +33,8 @@ export interface SettingsView {
   version: string;
   role: string;
   error: string;
+  runtimeKind?: "managed" | "external";
+  runtimePreview?: boolean;
 }
 
 export type SettingsAction =
@@ -40,6 +42,9 @@ export type SettingsAction =
       type:
         | "ready"
         | "connect"
+        | "configureManaged"
+        | "startManaged"
+        | "connectExternal"
         | "disconnect"
         | "forgetConnection"
         | "configureCredential"
@@ -64,6 +69,9 @@ export function parseSettingsAction(
     [
       "ready",
       "connect",
+      "configureManaged",
+      "startManaged",
+      "connectExternal",
       "disconnect",
       "forgetConnection",
       "configureCredential",

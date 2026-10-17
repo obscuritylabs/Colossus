@@ -686,6 +686,7 @@ pub(super) fn export_current(
         let kind = match provider.kind {
             ProviderKindSetting::Compatible => "open_ai_compatible",
             ProviderKindSetting::Responses => "open_ai_responses",
+            ProviderKindSetting::Anthropic => "anthropic_messages",
             ProviderKindSetting::Codex => "open_ai_codex",
         };
         let reference = if provider.kind == ProviderKindSetting::Codex {

@@ -245,7 +245,7 @@ pub fn validate_model_message_content(message: &ModelMessage) -> Result<(), Mode
         };
         if !matches!(
             message.role,
-            ModelMessageRole::User | ModelMessageRole::ToolObservation
+            ModelMessageRole::User | ModelMessageRole::Tool | ModelMessageRole::ToolObservation
         ) {
             return Err(content_error(
                 "image parts require user or released tool provenance",

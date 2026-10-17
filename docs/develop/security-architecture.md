@@ -639,6 +639,25 @@ history contains only verified image metadata. Exact bytes remain encrypted arti
 and are re-resolved and reverified only after the provider permit is issued; policy,
 audit, diagnostics, logs, and released errors never receive the bytes or data URL.
 
+`image.view` reads local images through `filesystem.read_image`, retaining native
+confinement, protected-state exclusions, and mandatory post-effect release. Built-in
+policy also inherits filesystem read denials, approval requirements, and plugin read
+restrictions; OPA evaluates the dedicated action and its bounded read obligations.
+After every file in
+the batch is released and validated, exact bytes are retained as immutable
+owner-bound `run_input` artifacts. The active run registry supplies the owner; tool
+arguments cannot select an owner. Durable tool messages contain verified image
+references, and adapters resolve their bytes only after the provider permit. The
+agent loop supplies a non-durable image budget shared by pending tool calls;
+normal context preparation compacts older images into metadata markers to keep
+the next provider context within its image limits. Failed calls release no
+image-view metadata.
+
+Desktop image previews use the selected target's authenticated artifact service,
+which verifies ownership and the exact artifact digest. Native code decodes bounded
+static formats and returns PNG previews at 256 px or 2048 px. The renderer receives
+no file-read capability, arbitrary URL fetch, or source path from this operation.
+
 Public run listing is owner-indexed and never scans the shared global journal. The
 idempotency claim, run creation, and per-application index entry commit atomically.
 Newest-first reads, run reconstruction, and filter traversal have independent hard
@@ -883,6 +902,19 @@ not establish whole-host containment. Production availability requires an accept
 publisher-bound installed component; source fixtures cannot enable an ordinary
 distribution. Certificate import remains native, discloses its actual store scope,
 and never disables server verification or supplies private keys through tool input.
+
+A VS Code Managed Local sidecar uses the same native SDK executable binding and
+bootstrap protocol. The trusted VSIX contains the native lifecycle host, sidecar, and
+digest manifest; the extension checks that manifest before a no-shell host launch.
+The extension host and its installed package are the native application authority,
+with the ordinary same-user limitations of editor extensions. This package check does
+not claim Desktop's sealed native executable trust root. The Rust host independently
+verifies and binds the sidecar before releasing bootstrap secrets. Activated transport
+credentials return only over inherited bounded pipes to the TypeScript extension
+host, never through discovery, the sidebar, settings JSON, argv, environment, or logs.
+The primary and approval broker retain separate grants. Model configuration cannot
+widen these grants. Persisted folder identity and native workspace identity must both
+match before use, and the VS Code state surface never shares Desktop or CLI leases.
 
 A managed desktop sidecar is a separate signed process, not an in-process extension of
 renderer authority. Its exact signed executable and the bundled TUI CLI are named in a

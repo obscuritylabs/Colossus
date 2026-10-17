@@ -1,5 +1,10 @@
 **
 !package.json
+!native/manifest.json
+!native/colossus-app-host
+!native/colossus-app-host.exe
+!native/colossus-sidecar
+!native/colossus-sidecar.exe
 !README.md
 !LICENSE
 !media/**

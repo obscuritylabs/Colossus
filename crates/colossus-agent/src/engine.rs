@@ -288,8 +288,9 @@ impl AgentService {
         // later browser handoff cannot infer it from a tool that has not run yet.
         let mut definitions = model_definitions(self.tools.as_ref());
         definitions.retain(|definition| {
-            (scope.goal_id.is_some()
-                || !matches!(definition.name.as_str(), "goal.show" | "goal.update"))
+            (definition.name != "image.view" || route.capabilities.image_inputs)
+                && (scope.goal_id.is_some()
+                    || !matches!(definition.name.as_str(), "goal.show" | "goal.update"))
                 && (scope.subagent_id.is_none() || definition.name != "agent.delegate")
                 && plan_target
                     .as_ref()
@@ -520,21 +521,17 @@ impl AgentService {
                 if let Some(batch) = &inbox_batch {
                     messages.extend(colossus_ports::agent_input_messages(batch));
                 }
-                let mut continuation_plan =
-                    if scope.agent_options == colossus_contracts::WorkflowAgentOptions::default() {
-                        self.provider.continuation_plan(
-                            role,
-                            &ModelRequest {
-                                instructions: instructions.clone(),
-                                messages: messages.clone(),
-                                tools: turn_definitions.clone(),
-                                max_output_tokens: None,
-                            },
-                            &context,
-                        )?
-                    } else {
-                        None
-                    };
+                let mut continuation_plan = self.provider.continuation_plan_with_options(
+                    role,
+                    &ModelRequest {
+                        instructions: instructions.clone(),
+                        messages: messages.clone(),
+                        tools: turn_definitions.clone(),
+                        max_output_tokens: None,
+                    },
+                    &context,
+                    &scope.agent_options,
+                )?;
                 let prepared = if let Some(preparer) = &self.context_preparer {
                     let prepared = preparer
                         .prepare(ContextPreparationRequest {
@@ -1269,6 +1266,22 @@ impl AgentService {
                 if let Some(end_user_id) = scope.end_user_id {
                     tool_span.record("enduser.id", end_user_id);
                 }
+                // Reserve the whole pending batch. Context preparation may compact
+                // older images, but every image returned in this tool turn must fit.
+                let used_images = tool_results
+                    .iter()
+                    .filter_map(colossus_contracts::ImageViewOutput::from_tool_result)
+                    .flat_map(|output| output.images)
+                    .collect::<Vec<_>>();
+                context.image_input_budget = Some(colossus_contracts::ImageInputBudget {
+                    remaining_count: 16_usize.saturating_sub(used_images.len()),
+                    remaining_bytes: (32_u64 * 1_048_576).saturating_sub(
+                        used_images
+                            .iter()
+                            .map(|image| image.size_bytes)
+                            .sum::<u64>(),
+                    ),
+                });
                 let validation = if turn_offered_tools.contains(call.name.as_str()) {
                     self.tools.validate(&call).and_then(|_| {
                         validate_plan_write_once(&call, plan_target.as_ref(), written_plan.as_ref())

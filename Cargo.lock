@@ -1164,6 +1164,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-app-host"
+version = "0.11.8"
+dependencies = [
+ "colossus-api",
+ "colossus-home",
+ "colossus-sdk",
+ "colossus-sidecar-protocol",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "colossus-audit"
 version = "0.11.8"
 dependencies = [
@@ -1794,7 +1810,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "time",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

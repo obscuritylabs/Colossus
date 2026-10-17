@@ -122,6 +122,7 @@ const COMMANDS: &[&str] = &[
     "create_run",
     "choose_run_attachment",
     "read_artifact_content",
+    "read_image_artifact",
     "get_run",
     "list_runs",
     "list_shell_sessions",

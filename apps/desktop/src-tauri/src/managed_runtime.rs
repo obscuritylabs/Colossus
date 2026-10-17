@@ -137,6 +137,7 @@ const TRUSTED_BUILTIN_TOOL_GRANT: &[&str] = &[
     "echo",
     "filesystem.list",
     "filesystem.read",
+    "image.view",
     "filesystem.replace",
     "filesystem.search",
     "filesystem.write",
@@ -1506,6 +1507,7 @@ const fn execution_boundary(boundary: ExecutionBoundarySetting) -> ManagedExecut
 const fn provider_kind(kind: ProviderKindSetting) -> ManagedProviderKind {
     match kind {
         ProviderKindSetting::Responses => ManagedProviderKind::OpenAiResponses,
+        ProviderKindSetting::Anthropic => ManagedProviderKind::AnthropicMessages,
         ProviderKindSetting::Compatible => ManagedProviderKind::OpenAiCompatible,
         ProviderKindSetting::Codex => ManagedProviderKind::OpenAiCodex,
     }

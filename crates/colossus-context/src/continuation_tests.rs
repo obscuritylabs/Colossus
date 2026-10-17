@@ -5,11 +5,122 @@ use colossus_contracts::{
 use colossus_ports::ProviderContinuationRepository;
 use colossus_testkit::InMemoryEventJournal;
 
+fn anthropic_candidate() -> ProviderContinuation {
+    let mut state = candidate();
+    state.view.replay = true;
+    state
+        .assistant
+        .tool_calls
+        .push(colossus_contracts::ModelToolCall {
+            call_id: "call-1".into(),
+            name: "test.lookup".into(),
+            arguments: json!({}),
+        });
+    state.hidden_reasoning = vec![
+        json!({"type":"anthropic_replay"}),
+        json!({
+            "message":state.assistant,
+            "content":[{"type":"thinking","thinking":"private-thought","signature":"private-signature"},
+                {"type":"tool_use","id":"call-1","name":"test_lookup","input":{}}]
+        }),
+    ];
+    state.view.bytes = serde_json::to_vec(&state.hidden_reasoning).unwrap().len();
+    state.view.reserved_tokens = (state.view.bytes as u64).div_ceil(3) + 64;
+    state
+}
+
+#[test]
+fn anthropic_replay_is_staged_privately_and_keyless_restart_loses_it() {
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let repository = EventSourcedProviderContinuations::new(journal.clone(), false);
+    repository.stage(anthropic_candidate()).unwrap();
+    assert!(repository.load("session").unwrap().is_none());
+    let mut state = repository.take_staged("candidate").unwrap().unwrap();
+    state.settled_hash = "settled".into();
+    repository
+        .save(state, &ExecutionContext::default())
+        .unwrap();
+    assert!(repository.load("session").unwrap().unwrap().view.replay);
+    assert!(
+        journal
+            .read_stream("provider-continuation:session")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        EventSourcedProviderContinuations::new(journal, false)
+            .load("session")
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn anthropic_replay_cannot_be_misclassified_as_responses_compaction() {
+    let repository =
+        EventSourcedProviderContinuations::new(Arc::new(InMemoryEventJournal::default()), false);
+    let mut state = anthropic_candidate();
+    state.view.replay = false;
+    assert!(repository.stage(state).is_err());
+    let mut legacy = serde_json::to_value(candidate()).unwrap();
+    legacy["view"].as_object_mut().unwrap().remove("replay");
+    let state: ProviderContinuation = serde_json::from_value(legacy).unwrap();
+    assert!(!state.view.replay);
+    repository.stage(state).unwrap();
+}
+
+#[test]
+fn anthropic_protected_replay_reopens_without_exposing_signed_blocks() {
+    use colossus_journal_redb::{Ed25519CheckpointSigner, RedbEventJournal, StaticKeyProvider};
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("anthropic.redb");
+    let open = || -> Arc<dyn EventJournal> {
+        Arc::new(
+            RedbEventJournal::open(
+                &path,
+                Arc::new(StaticKeyProvider::new("test", [31; 32])),
+                Arc::new(Ed25519CheckpointSigner::new("test", [32; 32])),
+            )
+            .unwrap(),
+        )
+    };
+    {
+        let journal = open();
+        let repository = EventSourcedProviderContinuations::new(journal.clone(), true);
+        let mut state = anthropic_candidate();
+        state.settled_hash = "settled".into();
+        repository
+            .save(state, &ExecutionContext::default())
+            .unwrap();
+        let events = journal
+            .read_stream("provider-continuation:session")
+            .unwrap();
+        let encoded = serde_json::to_string(&events).unwrap();
+        assert!(!encoded.contains("private-signature"));
+        assert!(!encoded.contains("private-thought"));
+        assert!(
+            !format!("{:?}", repository.load("session").unwrap()).contains("private-signature")
+        );
+    }
+    let repository = EventSourcedProviderContinuations::new(open(), true);
+    let state = repository.load("session").unwrap().unwrap();
+    assert!(state.view.replay);
+    assert_eq!(
+        state.hidden_reasoning[1]["content"][0]["signature"],
+        "private-signature"
+    );
+    repository
+        .clear("session", &ExecutionContext::default())
+        .unwrap();
+    assert!(repository.load("session").unwrap().is_none());
+}
+
 fn candidate() -> ProviderContinuation {
     let items = vec![json!({"type":"compaction","encrypted_content":"opaque-private-sentinel"})];
     let bytes = serde_json::to_vec(&items).unwrap().len();
     ProviderContinuation {
         view: ProviderContinuationView {
+            replay: false,
             id: "candidate".into(),
             covered_count: 2,
             context_binding_hash: "0".repeat(64),

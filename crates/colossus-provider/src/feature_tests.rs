@@ -156,6 +156,7 @@ fn responses_continuation_preserves_tool_ids_without_duplicate_assistant_calls()
     }];
     let state = ProviderContinuation {
         view: ProviderContinuationView {
+            replay: false,
             id: "state".into(),
             covered_count: 2,
             context_binding_hash: "0".repeat(64),

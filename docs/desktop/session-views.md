@@ -24,6 +24,17 @@ Open a thread from **Work**. Above the conversation, Desktop shows views for the
 
 The right-side **Thread details** tool shows the run type, status, duration, selected workspace, participants, and resource counts. Its resource links open the matching session view. Delegated agents appear when the runtime releases them for the thread.
 
+## Review image views
+
+In the conversation's activity, **Viewed N images** records successful `image.view`
+calls. Expand it to see thumbnails, then select an image for a larger preview. Use
+Enter to expand or open it and Escape to close the preview. Filenames stay visible
+if the preview is unavailable. Thumbnails are bounded to 256 px and larger previews
+to 2048 px; the model receives the verified original image bytes. See
+[Tools](../use/tools.md) for supported image formats and limits.
+The **Activity** session view also shows image previews in the selected call's
+**Result** inspector.
+
 ## Review a plan
 
 Start in **Plan** mode from the Work composer. When the result is released, open **Plans** and choose **Read plan**. The plan view shows its current revision and status. Choose **Revise** to continue planning when that action is available, or **Open workflow** to work through its authenticated approval and execution controls. Those actions are separate from merely reading the plan text.

@@ -575,6 +575,7 @@ fn imported_providers(
                 Some("open_ai_responses" | "openai_responses") => ProviderKindSetting::Responses,
                 Some("open_ai_compatible" | "openai_compatible") => ProviderKindSetting::Compatible,
                 Some("open_ai_codex") => ProviderKindSetting::Codex,
+                Some("anthropic_messages") => ProviderKindSetting::Anthropic,
                 _ => return Err(invalid_repository_config()),
             };
             let base_url = if kind == ProviderKindSetting::Codex {

@@ -43,6 +43,7 @@ use uuid::Uuid;
 
 mod communication;
 mod context_failures;
+mod image_views;
 mod plan_interaction;
 mod process_sessions;
 mod schedule_approval;

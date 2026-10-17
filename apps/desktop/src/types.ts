@@ -154,7 +154,10 @@ export interface ProviderSummary {
 }
 
 export type ProviderKind =
-  "openai_responses" | "openai_compatible" | "open_ai_codex";
+  | "openai_responses"
+  | "openai_compatible"
+  | "open_ai_codex"
+  | "anthropic_messages";
 
 export type ReasoningEffort =
   "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
