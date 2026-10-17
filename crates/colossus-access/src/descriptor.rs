@@ -78,6 +78,8 @@ pub enum ToolPrerequisite {
     Interactive,
     /// At least one configured and allowlisted MCP server.
     McpConfigured,
+    /// Trusted host composition provides a verified browser backend.
+    BrowserAvailable,
 }
 
 /// One model-visible tool's source, family, and static prerequisites.
@@ -131,4 +133,6 @@ pub struct AccessContext {
     pub interactive: bool,
     /// At least one trusted MCP server is configured.
     pub mcp_configured: bool,
+    /// A trusted browser backend is available; this fact never grants browser authority.
+    pub browser_available: bool,
 }

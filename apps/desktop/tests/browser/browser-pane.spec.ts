@@ -7,6 +7,38 @@ test.beforeEach(async ({ page }) => {
   await page.getByRole("button", { name: "Open browser", exact: true }).click();
 });
 
+test("certificate setup hides the native viewport and reports native capability limits", async ({
+  page,
+}) => {
+  const address = page.getByRole("textbox", { name: "Web address" });
+  await address.fill("https://example.com/");
+  await address.press("Enter");
+  async function viewport() {
+    return page.evaluate(async () => {
+      // Development-only fixture module observes the production viewport hook.
+      const modulePath = "/src/dev/browser-fixture.ts";
+      const module = await import(modulePath);
+      return module.latestBrowserFixtureViewport();
+    });
+  }
+  await expect.poll(async () => (await viewport())?.rect !== null).toBe(true);
+  await page.getByRole("button", { name: "Certificates", exact: true }).click();
+  const panel = page.getByRole("dialog", { name: "Browser certificates" });
+  await expect(panel).toBeVisible();
+  await expect.poll(async () => (await viewport())?.rect).toBeNull();
+  await expect(
+    panel.getByRole("button", { name: "Import CA certificate" }),
+  ).toBeDisabled();
+  await expect(
+    panel.getByRole("button", { name: "Import PKCS#12 identity" }),
+  ).toBeDisabled();
+  await expect(panel).toContainText("outside browser profile isolation");
+  await panel
+    .getByRole("button", { name: "Close", exact: true })
+    .press("Escape");
+  await expect(panel).not.toBeVisible();
+});
+
 test("browser loading leaves the composer usable and exposes stop", async ({
   page,
 }) => {
@@ -93,6 +125,19 @@ test("browser pane expands, resizes, and has accessible controls", async ({
   await expect(
     page.getByRole("separator", { name: "Resize browser pane" }),
   ).toBeVisible();
+  await page.setViewportSize({ width: 1920, height: 950 });
+  const divider = page.getByRole("separator", { name: "Resize browser pane" });
+  await divider.press("End");
+  await expect
+    .poll(async () => (await pane.boundingBox())?.width ?? 0)
+    .toBeGreaterThan(760);
+  await expect(
+    page.getByRole("region", { name: "Work conversation" }),
+  ).toBeInViewport();
+  const maximum = Number(await divider.getAttribute("aria-valuemax"));
+  await expect(divider).toHaveAttribute("aria-valuenow", String(maximum));
+  await divider.press("ArrowRight");
+  await expect(divider).toHaveAttribute("aria-valuenow", String(maximum - 8));
   await page.getByRole("button", { name: "Expand tool pane" }).click();
   await expect(
     page.getByRole("region", { name: "Work conversation" }),

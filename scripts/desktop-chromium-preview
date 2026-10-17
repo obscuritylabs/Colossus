@@ -1,0 +1,82 @@
+#!/bin/sh
+# Internal launcher for desktop-dev's explicitly selected native macOS preview.
+set -eu
+umask 077
+
+fail() {
+    printf 'desktop-chromium-preview: %s\n' "$*" >&2
+    exit 1
+}
+
+[ "$(uname -s)" = Darwin ] || fail "the embedded Chromium development launcher requires macOS"
+case "$(uname -m)" in
+    arm64) platform=macosarm64 ;;
+    x86_64) platform=macosx64 ;;
+    *) fail "unsupported macOS architecture" ;;
+esac
+development_custody=false
+case "$#" in
+    0) ;;
+    1) [ "$1" = --dev-credentials ] || fail "usage: scripts/desktop-chromium-preview [--dev-credentials]"; development_custody=true ;;
+    *) fail "usage: scripts/desktop-chromium-preview [--dev-credentials]" ;;
+esac
+for command in npm node cargo rustc python3 cmake; do
+    command -v "$command" >/dev/null 2>&1 || fail "$command is not installed or not on PATH"
+done
+[ -x /usr/bin/codesign ] && [ -x /usr/bin/lipo ] || fail "Apple development signing tools are unavailable"
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+repository=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
+desktop="$repository/apps/desktop"
+cd "$repository"
+cef_root=$(node "$script_dir/development-launch.mjs" -- python3 -B \
+    native/browser/scripts/component.py fetch --platform "$platform")
+native_build=${COLOSSUS_CEF_NATIVE_LIB_DIR:-$repository/.local/cef-build-$platform}
+case "$native_build" in /*) ;; *) native_build="$repository/$native_build" ;; esac
+node "$script_dir/development-launch.mjs" -- cmake -S native/browser -B "$native_build" \
+    -DCMAKE_BUILD_TYPE=Release "-DCEF_ROOT=$cef_root"
+node "$script_dir/development-launch.mjs" -- cmake --build "$native_build" --parallel 4
+export COLOSSUS_CEF_ROOT="$cef_root"
+export COLOSSUS_CEF_NATIVE_LIB_DIR="$native_build"
+printf 'Verified CEF source (COLOSSUS_CEF_ROOT): %s\n' "$cef_root" >&2
+printf 'Native CEF build (COLOSSUS_CEF_NATIVE_LIB_DIR): %s\n' "$native_build" >&2
+
+node "$script_dir/development-launch.mjs" -- cargo xtask desktop prepare --profile debug
+target=$(rustc --print host-tuple)
+cli="$desktop/src-tauri/binaries/colossus-$target"
+[ -x "$cli" ] || fail "prepared development CLI is unavailable"
+# Separate Tauri's external-binary output from the runtime's target directory.
+if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+    case "$CARGO_TARGET_DIR" in /*) ;; *) CARGO_TARGET_DIR="$repository/$CARGO_TARGET_DIR" ;; esac
+    export CARGO_TARGET_DIR="$CARGO_TARGET_DIR/desktop-acceptance"
+else
+    export CARGO_TARGET_DIR="$desktop/src-tauri/target"
+fi
+cd "$desktop"
+node "$script_dir/development-launch.mjs" -- npm ci --ignore-scripts
+# `tauri build --debug` embeds the renderer through custom-protocol while keeping
+# Rust's debug-only preview. A flat tauri-dev executable cannot load macOS CEF.
+node "$script_dir/development-launch.mjs" -- npm run tauri -- build --debug \
+    --no-bundle --features embedded-chromium-preview -- --locked
+cd "$repository"
+stage=$(mktemp -d "$repository/.local/cef-desktop-preview.XXXXXX")
+app="$stage/Colossus Chromium Preview.app"
+if ! executable=$(node "$script_dir/development-launch.mjs" -- python3 -B \
+    native/browser/scripts/stage_macos.py \
+    --cef-root "$cef_root" --native-build "$native_build" \
+    --executable "$CARGO_TARGET_DIR/debug/colossus-desktop" \
+    --dictation-resources "$desktop/src-tauri/dictation-assets" \
+    --app "$app" --platform "$platform"); then
+    rmdir "$stage" 2>/dev/null || true
+    fail "macOS development app staging failed"
+fi
+printf 'Chromium development app: %s\n' "$app" >&2
+printf 'Component consistency inventory: %s.browser-component.json\n' "$app" >&2
+printf 'Native Desktop logs: %s/desktop.stdout.log and %s/desktop.stderr.log\n' "$stage" "$stage" >&2
+export MallocNanoZone=0
+if [ "$development_custody" = true ]; then
+    [ -n "${COLOSSUS_HOME:-}" ] || fail "--dev-credentials requires an explicit private COLOSSUS_HOME"
+    exec node "$script_dir/development-launch.mjs" --authority-home "$COLOSSUS_HOME" \
+        --workspace "$repository" --cli "$cli" -- "$script_dir/open-desktop-chromium-preview" "$app" "$stage"
+fi
+exec node "$script_dir/development-launch.mjs" -- "$script_dir/open-desktop-chromium-preview" "$app" "$stage"

@@ -35,6 +35,8 @@ mod linux_credential_session;
 mod macos_code_identity;
 #[cfg(all(feature = "sidecar", target_os = "macos"))]
 mod macos_verified_process;
+#[cfg(feature = "sidecar")]
+mod native_browser;
 #[cfg(feature = "daemon")]
 mod native_daemon;
 #[cfg(all(feature = "sidecar", unix))]
@@ -106,6 +108,11 @@ pub use macos_code_identity::MacosCodeIdentity;
 pub use macos_verified_process::{
     spawn_suspended_tty as spawn_suspended_macos_tty,
     validate_suspended_process as validate_suspended_macos_process,
+};
+#[cfg(feature = "sidecar")]
+pub use native_browser::{
+    NativeBrowserAttachment, NativeBrowserClient, NativeBrowserHandoff, NativeBrowserOpenRequest,
+    NativeBrowserSessionOwner,
 };
 #[cfg(feature = "daemon")]
 pub use native_daemon::NativeDaemonLifecycle;

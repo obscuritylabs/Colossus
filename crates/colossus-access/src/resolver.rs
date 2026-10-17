@@ -150,7 +150,12 @@ pub fn resolve_access(
                 "profile does not select tool".into(),
             )
         } else if let Some(requirement) = unmet {
-            if exactly_included && requirement != ToolPrerequisite::Interactive {
+            if exactly_included
+                && !matches!(
+                    requirement,
+                    ToolPrerequisite::Interactive | ToolPrerequisite::BrowserAvailable
+                )
+            {
                 return Err(AccessError::Invalid(format!(
                     "explicitly included tool {} has unmet prerequisite {}",
                     spec.name,
@@ -259,6 +264,7 @@ fn prerequisite_met(requirement: ToolPrerequisite, context: &AccessContext) -> b
         ToolPrerequisite::AgentSearchRoute => context.agent_search_route,
         ToolPrerequisite::Interactive => context.interactive,
         ToolPrerequisite::McpConfigured => context.mcp_configured,
+        ToolPrerequisite::BrowserAvailable => context.browser_available,
     }
 }
 
@@ -273,5 +279,6 @@ fn prerequisite_label(requirement: ToolPrerequisite) -> &'static str {
         ToolPrerequisite::AgentSearchRoute => "agent search route",
         ToolPrerequisite::Interactive => "interactive user interface",
         ToolPrerequisite::McpConfigured => "configured MCP server",
+        ToolPrerequisite::BrowserAvailable => "verified browser backend",
     }
 }

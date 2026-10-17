@@ -229,6 +229,7 @@ async fn image_views_reach_the_model_and_replay_owner_authorized_artifacts() {
         call_id: completed.call_id.clone(),
         output: completed.preview.clone().unwrap(),
         exit_code: 0,
+        images: Vec::new(),
     })
     .unwrap();
     assert_eq!(output.images.len(), 2);

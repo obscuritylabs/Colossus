@@ -1,0 +1,72 @@
+//! Private native pixel-view ABI; pointers are never web IPC values.
+use std::ffi::c_void;
+#[repr(C)]
+pub(super) struct Bounds {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+#[repr(C)]
+pub(super) struct Input {
+    pub version: u32,
+    pub kind: u32,
+    pub modifiers: u32,
+    pub x: i32,
+    pub y: i32,
+    pub button: i32,
+    pub wheel_x: i32,
+    pub wheel_y: i32,
+    pub key_code: i32,
+    pub text: *const u16,
+    pub text_units: usize,
+}
+#[cfg(all(windows, feature = "native-test-driver"))]
+#[derive(Default)]
+#[repr(C)]
+pub(super) struct WindowsScreen {
+    pub width: u32,
+    pub height: u32,
+    pub dpi: u32,
+    pub foreground: u32,
+    pub visible: u32,
+    pub hit_test: u32,
+    pub center_bgra: [u8; 4],
+}
+unsafe extern "C" {
+    pub(super) fn colossus_presenter_create(
+        parent: usize,
+        owner: *mut c_void,
+        input: unsafe extern "C" fn(*mut c_void, *const Input),
+        focus: unsafe extern "C" fn(*mut c_void, i32),
+    ) -> usize;
+    pub(super) fn colossus_presenter_frame(
+        view: usize,
+        width: u32,
+        height: u32,
+        pixels: *const u8,
+        bytes: usize,
+    ) -> i32;
+    pub(super) fn colossus_presenter_bounds(view: usize, bounds: Bounds) -> i32;
+    pub(super) fn colossus_presenter_visible(view: usize, visible: i32) -> i32;
+    pub(super) fn colossus_presenter_lease(view: usize, epoch: u64, lease_ms: u32) -> i32;
+    pub(super) fn colossus_presenter_destroy(view: usize) -> i32;
+    #[cfg(all(windows, feature = "native-test-driver"))]
+    pub(super) fn colossus_presenter_screen_probe(view: usize, screen: *mut WindowsScreen) -> i32;
+    #[cfg(all(windows, feature = "native-test-driver"))]
+    pub(super) fn colossus_presenter_screen_capture(
+        view: usize,
+        width: u32,
+        height: u32,
+        pixels: *mut u8,
+        bytes: usize,
+    ) -> i32;
+    #[cfg(all(windows, feature = "native-test-driver"))]
+    pub(super) fn colossus_presenter_fixture_input(view: usize) -> i32;
+    #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+    pub(super) fn colossus_presenter_acceptance_activate_parent(parent: usize) -> i32;
+    #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+    pub(super) fn colossus_presenter_acceptance_focus_state(parent: usize, flags: *mut u32) -> i32;
+    #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+    pub(super) fn colossus_presenter_acceptance_hidden(view: usize) -> i32;
+}

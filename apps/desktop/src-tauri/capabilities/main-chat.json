@@ -37,6 +37,7 @@
     "allow-browser-context",
     "allow-browser-command",
     "allow-browser-viewport",
+    "allow-browser-certificates",
     "allow-get-plugin-inventory",
     "allow-resolve-plugin-selection",
     "allow-read-plugin-preview",

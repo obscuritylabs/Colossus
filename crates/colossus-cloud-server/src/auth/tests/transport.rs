@@ -25,6 +25,7 @@ use std::{
 use tokio::sync::watch;
 use zeroize::Zeroizing;
 
+mod isolated;
 mod managed;
 mod resources;
 mod retained;
@@ -211,18 +212,32 @@ async fn provider(
 
 #[tokio::test]
 async fn oidc_to_runtime_prompt_approval_cancel_rotate_and_recover() {
-    acceptance(false).await;
+    if !isolated::run(
+        "auth::tests::transport::oidc_to_runtime_prompt_approval_cancel_rotate_and_recover",
+        false,
+    )
+    .await
+    {
+        acceptance(false).await;
+    }
 }
 
 #[tokio::test]
 #[ignore = "operator-owned: local PostgreSQL plus COLOSSUS_CLOUD_TEST_DATABASE"]
 async fn postgres_oidc_to_runtime_and_recover() {
-    acceptance(true).await;
+    if !isolated::run(
+        "auth::tests::transport::postgres_oidc_to_runtime_and_recover",
+        true,
+    )
+    .await
+    {
+        acceptance(true).await;
+    }
 }
 
 async fn acceptance(postgres: bool) {
     let (auth, issuer, oidc) = fixture().await;
-    let directory = tempfile::tempdir().unwrap();
+    let directory = isolated::directory();
     let root = directory.path().canonicalize().unwrap();
     let home = ColossusHome::ensure_at(root.join("native")).unwrap();
     let browser = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -35,11 +35,11 @@ import { useShellSessions, shellIsActive } from "../shellSessions";
 import { WorkWelcome } from "@colossus/ui";
 import { WorkSurfaceHeader } from "@colossus/ui/conversation";
 import {
-  MAX_ASIDE_PANE_WIDTH,
   MIN_ASIDE_PANE_WIDTH,
   clampAsidePaneWidth,
   clearStoredAsidePaneWidth,
   defaultAsidePaneWidth,
+  maximumAsidePaneWidth,
   readStoredAsidePaneWidth,
   storeAsidePaneWidth,
 } from "../aside-pane-width";
@@ -111,6 +111,8 @@ interface WorkSurfaceProps {
   gitWorkspaceId?: string | null;
   gitAvailable?: boolean;
   browserScope?: string | null;
+  browserConversationId?: string | undefined;
+  onUseBrowserConversation?: ((sessionId: string) => void) | undefined;
   processSessionsAvailable?: boolean;
   browserFixture?: boolean;
   terminalSupported?: boolean;
@@ -231,6 +233,8 @@ export function WorkSurface({
   filesPanel,
   filesAvailable,
   browserScope = null,
+  browserConversationId,
+  onUseBrowserConversation,
   processSessionsAvailable = false,
   browserFixture = false,
   terminalSupported = false,
@@ -313,6 +317,8 @@ export function WorkSurface({
     browserScope,
     activeDrawer === "browser",
     browserFixture,
+    view?.run.sessionId ?? browserConversationId,
+    view?.run.runId,
   );
   const browserTriggerRef = useRef<HTMLButtonElement>(null);
   const [selectionLauncher, setSelectionLauncher] = useState<
@@ -326,6 +332,8 @@ export function WorkSurface({
     null,
   );
   const [browserPaneWidth, setBrowserPaneWidth] = useState<number | null>(null);
+  const [asidePaneMaximum, setAsidePaneMaximum] =
+    useState(MIN_ASIDE_PANE_WIDTH);
   const [filesPaneWidth, setFilesPaneWidth] = useState<number | null>(null);
   const [filesExpanded, setFilesExpanded] = useState(false);
   const [gitPaneWidth, setGitPaneWidth] = useState<number | null>(null);
@@ -595,6 +603,7 @@ export function WorkSurface({
       if (layoutWidth <= 0) {
         return;
       }
+      setAsidePaneMaximum(maximumAsidePaneWidth(layoutWidth));
       setAsidePaneWidth((current) =>
         clampAsidePaneWidth(
           current ??
@@ -1478,7 +1487,7 @@ export function WorkSurface({
             }
             aria-orientation="vertical"
             aria-valuemin={MIN_ASIDE_PANE_WIDTH}
-            aria-valuemax={MAX_ASIDE_PANE_WIDTH}
+            aria-valuemax={asidePaneMaximum}
             aria-valuenow={asidePaneWidth ?? MIN_ASIDE_PANE_WIDTH}
             title="Drag to resize. Double-click to reset."
             tabIndex={0}
@@ -1531,7 +1540,7 @@ export function WorkSurface({
               } else if (event.key === "Home") {
                 nextWidth = MIN_ASIDE_PANE_WIDTH;
               } else if (event.key === "End") {
-                nextWidth = MAX_ASIDE_PANE_WIDTH;
+                nextWidth = maximumAsidePaneWidth(layoutWidth);
               }
               if (nextWidth !== null) {
                 event.preventDefault();
@@ -1693,6 +1702,12 @@ export function WorkSurface({
               >
                 <BrowserPane
                   controller={browser}
+                  run={
+                    run
+                      ? { runId: run.runId, sessionId: run.sessionId }
+                      : undefined
+                  }
+                  onUseConversation={onUseBrowserConversation}
                   docked
                   expanded={browserExpanded}
                   onExpand={() => setBrowserExpanded((expanded) => !expanded)}

@@ -12,8 +12,9 @@ use std::{
     ptr::{null, null_mut},
 };
 use windows_sys::Wdk::Storage::FileSystem::{
-    FILE_RENAME_INFORMATION, FILE_RENAME_POSIX_SEMANTICS, FILE_RENAME_REPLACE_IF_EXISTS,
-    FileRenameInformationEx, NtSetInformationFile,
+    FILE_DISPOSITION_INFORMATION_EX, FILE_RENAME_INFORMATION, FILE_RENAME_POSIX_SEMANTICS,
+    FILE_RENAME_REPLACE_IF_EXISTS, FileDispositionInformationEx, FileRenameInformationEx,
+    NtSetInformationFile,
 };
 use windows_sys::Win32::{
     Foundation::{GENERIC_READ, INVALID_HANDLE_VALUE, LocalFree, NO_ERROR, RtlNtStatusToDosError},
@@ -21,22 +22,24 @@ use windows_sys::Win32::{
         ACCESS_ALLOWED_ACE, ACE_FLAGS, ACE_HEADER,
         Authorization::{
             EXPLICIT_ACCESS_W, GetSecurityInfo, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, SET_ACCESS,
-            SetEntriesInAclW, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+            SetEntriesInAclW, SetSecurityInfo, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
         },
-        CreateWellKnownSid, DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetTokenInformation,
-        InitializeSecurityDescriptor, IsValidSid, NO_INHERITANCE, OWNER_SECURITY_INFORMATION, PSID,
-        SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SECURITY_MAX_SID_SIZE,
-        SUB_CONTAINERS_AND_OBJECTS_INHERIT, SetSecurityDescriptorControl,
-        SetSecurityDescriptorDacl, SetSecurityDescriptorOwner, TOKEN_QUERY, TOKEN_USER, TokenUser,
-        WinBuiltinAdministratorsSid, WinLocalSystemSid,
+        CreateWellKnownSid, DACL_SECURITY_INFORMATION, EqualSid, GetAce,
+        GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetTokenInformation,
+        InitializeSecurityDescriptor, IsValidSid, NO_INHERITANCE, OWNER_SECURITY_INFORMATION,
+        PROTECTED_DACL_SECURITY_INFORMATION, PSID, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
+        SECURITY_DESCRIPTOR, SECURITY_MAX_SID_SIZE, SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+        SetSecurityDescriptorControl, SetSecurityDescriptorDacl, SetSecurityDescriptorOwner,
+        TOKEN_QUERY, TOKEN_USER, TokenUser, WinBuiltinAdministratorsSid, WinCreatorOwnerRightsSid,
+        WinLocalSystemSid,
     },
     Storage::FileSystem::{
         BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE,
         FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
         FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_GENERIC_WRITE, FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
-        FILE_SHARE_WRITE, FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
-        READ_CONTROL,
+        FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_ID_INFO, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileIdInfo,
+        GetFileInformationByHandle, GetFileInformationByHandleEx, READ_CONTROL, SYNCHRONIZE,
     },
     System::{
         Console::{STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle},
@@ -59,6 +62,18 @@ use windows_sys::Win32::{
         },
     },
 };
+
+mod appcontainer;
+pub use appcontainer::AppContainerPrincipal;
+mod package;
+pub use package::{ExclusiveAppContainerProfile, system_windows_directory};
+mod directory_creation;
+pub use directory_creation::PrivateDirectoryCreation;
+pub(super) mod enrolled;
+mod file_retirement;
+mod mandatory;
+mod window_station;
+pub use window_station::OwnedAppContainerWindowStation;
 
 pub(super) fn configure_suspended_process(command: &mut std::process::Command) {
     command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
@@ -183,17 +198,33 @@ fn with_private_security_attributes<T>(
     inheritance: ACE_FLAGS,
     action: impl FnOnce(&SECURITY_ATTRIBUTES) -> Result<T, WindowsNativeError>,
 ) -> Result<T, WindowsNativeError> {
+    with_security_attributes(labels, inheritance, None, action)
+}
+
+fn with_security_attributes<T>(
+    labels: PrivateSecurityLabels,
+    inheritance: ACE_FLAGS,
+    package: Option<PSID>,
+    action: impl FnOnce(&SECURITY_ATTRIBUTES) -> Result<T, WindowsNativeError>,
+) -> Result<T, WindowsNativeError> {
     let current_user_storage = current_user_sid()?;
     let local_system_storage = well_known_sid(WinLocalSystemSid)?;
     let administrators_storage = well_known_sid(WinBuiltinAdministratorsSid)?;
     let current_user = current_user_storage.as_ptr().cast_mut().cast();
     let local_system = local_system_storage.as_ptr().cast_mut().cast();
     let administrators = administrators_storage.as_ptr().cast_mut().cast();
-    let mut entries = [
+    let mut entries = vec![
         private_access_entry(current_user, inheritance),
         private_access_entry(local_system, inheritance),
         private_access_entry(administrators, inheritance),
     ];
+    if let Some(package) = package {
+        let mut entry = private_access_entry(package, inheritance);
+        // The enrolled browser may manage its cache, but cannot grant another
+        // principal access or change ownership of the trusted profile root.
+        entry.grfAccessPermissions = appcontainer::PACKAGE_PROFILE_RIGHTS;
+        entries.push(entry);
+    }
     let mut acl = null_mut();
     // SAFETY: all three trustee SIDs remain valid until the allocated ACL is built.
     let result = unsafe {
@@ -227,6 +258,9 @@ fn with_private_security_attributes<T>(
     } {
         return Err(last_error(labels.descriptor));
     }
+    // A general creation SACL requires the unrelated auditing privilege. The
+    // native owner sets LABEL information on the retained profile allocation
+    // before package admission; AppContainer-created descendants inherit Low.
     let attributes = SECURITY_ATTRIBUTES {
         nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>())
             .expect("security attributes size fits u32"),
@@ -257,6 +291,7 @@ pub(super) fn replace_private_file(
         source_path,
         BoundKind::File,
         GENERIC_READ | FILE_GENERIC_WRITE | DELETE,
+        false,
     )?;
     source.validate_ancestor_namespace_authority()?;
     source.validate_private_owner_dacl()?;
@@ -397,6 +432,9 @@ pub(super) struct BoundPathInner {
     pub(super) identity: FileIdentity,
     ancestors: Vec<File>,
     kind: BoundKind,
+    immutable: bool,
+    pub(super) appcontainer: bool,
+    appcontainer_scope: Option<std::sync::Arc<enrolled::Root>>,
 }
 
 pub(super) struct KillOnCloseJob {
@@ -590,7 +628,7 @@ impl BoundPathInner {
     }
 
     pub(super) fn revalidate(&self) -> Result<(), WindowsNativeError> {
-        let current = open_bound(&self.canonical_path, self.kind)?;
+        let current = enrolled::reopen(self, &self.canonical_path, self.kind, GENERIC_READ)?;
         if current.identity != self.identity || file_identity(&self.file)? != self.identity {
             return Err(WindowsNativeError::IdentityChanged);
         }
@@ -599,7 +637,7 @@ impl BoundPathInner {
         }
         for (index, (actual, expected)) in current.ancestors.iter().zip(&self.ancestors).enumerate()
         {
-            let unchanged = if index == 0 {
+            let unchanged = if index == 0 && self.appcontainer_scope.is_none() {
                 root_file_identity(actual)? == root_file_identity(expected)?
             } else {
                 file_identity(actual)? == file_identity(expected)?
@@ -625,26 +663,109 @@ impl BoundPathInner {
         self.validate_ancestor_namespace_authority()?;
         validate_namespace_owner_dacl(&self.file)
     }
+
+    pub(super) fn validate_immutable_directory_dacl(&self) -> Result<(), WindowsNativeError> {
+        if !matches!(self.kind, BoundKind::Directory) {
+            return Err(WindowsNativeError::InvalidInput);
+        }
+        // Ancestors must protect the existing path from replacement. Requiring
+        // them to forbid creation of unrelated siblings rejects ordinary Windows
+        // volume roots (Authenticated Users may create new directories there).
+        // The actual component root and every inventoried child directory retain
+        // the stricter rule that forbids untrusted additions within the payload.
+        self.validate_ancestor_namespace_authority()?;
+        validate_owner_dacl(&self.file, DaclValidation::ImmutableDirectory)
+    }
 }
 
 pub(super) fn open_bound(
     path: &Path,
     kind: BoundKind,
 ) -> Result<BoundPathInner, WindowsNativeError> {
-    open_bound_with_access(path, kind, GENERIC_READ)
+    open_bound_with_access(path, kind, GENERIC_READ, false)
+}
+
+pub(super) fn open_bound_immutable_file(path: &Path) -> Result<BoundPathInner, WindowsNativeError> {
+    open_bound_with_access(path, BoundKind::File, GENERIC_READ, true)
 }
 
 pub(super) fn open_bound_file_read_write(
     path: &Path,
 ) -> Result<BoundPathInner, WindowsNativeError> {
-    open_bound_with_access(path, BoundKind::File, GENERIC_READ | FILE_GENERIC_WRITE)
+    open_bound_with_access(
+        path,
+        BoundKind::File,
+        GENERIC_READ | FILE_GENERIC_WRITE,
+        false,
+    )
 }
 
 fn open_bound_with_access(
     path: &Path,
     kind: BoundKind,
     file_access: u32,
+    immutable: bool,
 ) -> Result<BoundPathInner, WindowsNativeError> {
+    open_bound_with_mode(path, kind, file_access, immutable, false)
+}
+
+pub(super) fn open_bound_appcontainer_directory(
+    path: &Path,
+) -> Result<BoundPathInner, WindowsNativeError> {
+    open_bound_with_mode(path, BoundKind::Directory, GENERIC_READ, false, true)
+}
+
+pub(super) fn open_bound_appcontainer_file(
+    path: &Path,
+) -> Result<BoundPathInner, WindowsNativeError> {
+    let bound = open_bound_with_mode(path, BoundKind::File, GENERIC_READ, false, true)?;
+    if file_link_count(&bound.file)? != 1 {
+        return Err(WindowsNativeError::UnsafePermissions);
+    }
+    Ok(bound)
+}
+
+pub(super) fn remove_bound_appcontainer_file(
+    bound: &BoundPathInner,
+) -> Result<(), WindowsNativeError> {
+    if !bound.appcontainer || !matches!(bound.kind, BoundKind::File) {
+        return Err(WindowsNativeError::InvalidInput);
+    }
+    let package = AppContainerPrincipal::of_current()?;
+    validate_owner_dacl(
+        &bound.file,
+        DaclValidation::PrivateAppContainerFile(package.package_sid()),
+    )?;
+    if file_identity(&bound.file)? != bound.identity {
+        return Err(WindowsNativeError::IdentityChanged);
+    }
+    // A previously acknowledged POSIX unlink remains repeatable while the exact
+    // file handle is retained. Zero links is kernel evidence, not path absence.
+    if file_information(&bound.file)?.nNumberOfLinks == 0 {
+        return Ok(());
+    }
+    bound.revalidate()?;
+    let deletion = enrolled::reopen(
+        bound,
+        &bound.canonical_path,
+        BoundKind::File,
+        GENERIC_READ | DELETE,
+    )?;
+    file_retirement::unlink(bound, deletion)
+}
+
+fn open_bound_with_mode(
+    path: &Path,
+    kind: BoundKind,
+    file_access: u32,
+    immutable: bool,
+    appcontainer: bool,
+) -> Result<BoundPathInner, WindowsNativeError> {
+    let principal = if appcontainer {
+        Some(AppContainerPrincipal::of_current()?)
+    } else {
+        None
+    };
     if !path.is_absolute()
         || path.parent().is_none()
         || path.components().any(|component| {
@@ -673,8 +794,28 @@ fn open_bound_with_access(
             &candidate,
             component_kind,
             if leaf { file_access } else { 0 },
-        )?;
+            immutable,
+            !appcontainer || leaf,
+        )
+        .inspect_err(|_| {
+            #[cfg(debug_assertions)]
+            if appcontainer {
+                eprintln!(
+                    "native Windows profile rejection phase=walk component_index={index} leaf={leaf}"
+                );
+            }
+        })?;
         if leaf {
+            if let Some(principal) = &principal {
+                validate_owner_dacl(
+                    &opened,
+                    if matches!(kind, BoundKind::File) {
+                        DaclValidation::PrivateAppContainerFile(principal.package_sid())
+                    } else {
+                        DaclValidation::PrivateAppContainer(principal.package_sid())
+                    },
+                )?;
+            }
             let canonical_path =
                 fs::canonicalize(path).map_err(|source| WindowsNativeError::Io {
                     operation: "canonicalize bound path",
@@ -687,6 +828,9 @@ fn open_bound_with_access(
                 identity,
                 ancestors,
                 kind,
+                immutable,
+                appcontainer,
+                appcontainer_scope: None,
             });
         }
         ancestors.push(opened);
@@ -694,16 +838,34 @@ fn open_bound_with_access(
     Err(WindowsNativeError::InvalidInput)
 }
 
-fn open_exact(path: &Path, kind: BoundKind, file_access: u32) -> Result<File, WindowsNativeError> {
+fn open_exact(
+    path: &Path,
+    kind: BoundKind,
+    file_access: u32,
+    immutable: bool,
+    metadata_access: bool,
+) -> Result<File, WindowsNativeError> {
     let mut options = OpenOptions::new();
-    let data_access = if matches!(kind, BoundKind::File) {
+    let data_access = if matches!(kind, BoundKind::File) || file_access != GENERIC_READ {
         file_access
     } else {
         0
     };
     options
-        .access_mode(FILE_READ_ATTRIBUTES | READ_CONTROL | data_access)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .access_mode(if metadata_access {
+            FILE_READ_ATTRIBUTES | READ_CONTROL | data_access
+        } else {
+            0
+        })
+        .share_mode(if immutable {
+            if matches!(kind, BoundKind::File) {
+                FILE_SHARE_READ
+            } else {
+                FILE_SHARE_READ | FILE_SHARE_WRITE
+            }
+        } else {
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+        })
         .custom_flags(
             FILE_FLAG_OPEN_REPARSE_POINT
                 | if matches!(kind, BoundKind::Directory) {
@@ -760,7 +922,10 @@ impl Drop for LocalAcl {
 #[derive(Clone, Copy)]
 enum DaclValidation {
     Private,
+    PrivateAppContainer(PSID),
+    PrivateAppContainerFile(PSID),
     NamespaceAuthority,
+    ImmutableDirectory,
 }
 
 const NAMESPACE_MUTATION_RIGHTS: u32 = 0x0000_0040 // FILE_DELETE_CHILD
@@ -769,6 +934,12 @@ const NAMESPACE_MUTATION_RIGHTS: u32 = 0x0000_0040 // FILE_DELETE_CHILD
     | 0x0008_0000 // WRITE_OWNER
     | 0x1000_0000; // GENERIC_ALL
 const INHERIT_ONLY_ACE_FLAG: u8 = 0x08;
+const DIRECTORY_MUTATION_RIGHTS: u32 = NAMESPACE_MUTATION_RIGHTS
+    | 0x0000_0002 // FILE_ADD_FILE
+    | 0x0000_0004 // FILE_ADD_SUBDIRECTORY
+    | 0x0000_0010 // FILE_WRITE_EA
+    | 0x0000_0100 // FILE_WRITE_ATTRIBUTES
+    | 0x4000_0000; // GENERIC_WRITE
 
 fn validate_private_owner_dacl(file: &File) -> Result<(), WindowsNativeError> {
     validate_owner_dacl(file, DaclValidation::Private)
@@ -805,9 +976,20 @@ fn validate_owner_dacl(file: &File, validation: DaclValidation) -> Result<(), Wi
         });
     }
     let _descriptor = LocalSecurityDescriptor(descriptor);
+    if matches!(validation, DaclValidation::PrivateAppContainer(_)) {
+        let mut control = 0;
+        let mut revision = 0;
+        // SAFETY: the queried descriptor is retained and outputs are valid.
+        if unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } == 0
+            || control & SE_DACL_PROTECTED == 0
+        {
+            return Err(WindowsNativeError::UnsafePermissions);
+        }
+    }
     let local_system = well_known_sid(WinLocalSystemSid)?;
     let administrators = well_known_sid(WinBuiltinAdministratorsSid)?;
     let trusted_installer = trusted_installer_sid();
+    let owner_rights = well_known_sid(WinCreatorOwnerRightsSid)?;
     // Elevated Windows tokens can use BUILTIN\Administrators as the default owner
     // for newly inherited child objects. All accepted owners are already the only
     // principals permitted by the private DACL.
@@ -819,14 +1001,17 @@ fn validate_owner_dacl(file: &File, validation: DaclValidation) -> Result<(), Wi
             current_user,
             local_system.as_ptr().cast_mut().cast(),
             administrators.as_ptr().cast_mut().cast(),
-        ) || matches!(validation, DaclValidation::NamespaceAuthority)
-            && sid_matches(owner, trusted_installer.as_ptr().cast_mut().cast()))
+        ) || matches!(
+            validation,
+            DaclValidation::NamespaceAuthority | DaclValidation::ImmutableDirectory
+        ) && sid_matches(owner, trusted_installer.as_ptr().cast_mut().cast()))
     {
         return Err(WindowsNativeError::UnsafePermissions);
     }
     // SAFETY: dacl points inside the live security descriptor and therefore its
     // fixed header can be read for the descriptor lifetime.
     let ace_count = unsafe { (*dacl).AceCount };
+    let mut package_granted = false;
     for index in 0..u32::from(ace_count) {
         let mut ace = null_mut();
         // SAFETY: the DACL is valid and GetAce bounds-checks the requested index.
@@ -849,17 +1034,59 @@ fn validate_owner_dacl(file: &File, validation: DaclValidation) -> Result<(), Wi
                 // SidStart is the documented start of its variable-size SID.
                 let allowed = unsafe { &*ace.cast::<ACCESS_ALLOWED_ACE>() };
                 let sid = std::ptr::addr_of!(allowed.SidStart).cast_mut().cast();
+                if let DaclValidation::PrivateAppContainer(package)
+                | DaclValidation::PrivateAppContainerFile(package) = validation
+                    && unsafe { IsValidSid(sid) } != 0
+                    && sid_matches(sid, package)
+                {
+                    if allowed.Mask & (0x0004_0000 | 0x0008_0000 | 0x1000_0000) != 0 {
+                        return Err(WindowsNativeError::UnsafePermissions);
+                    }
+                    let required =
+                        if matches!(validation, DaclValidation::PrivateAppContainerFile(_)) {
+                            GENERIC_READ | 0x0002_0000
+                        } else {
+                            appcontainer::PACKAGE_PROFILE_RIGHTS
+                        };
+                    let read_granted = allowed.Mask & FILE_GENERIC_READ == FILE_GENERIC_READ
+                        || allowed.Mask & GENERIC_READ != 0;
+                    package_granted |= header.AceFlags & INHERIT_ONLY_ACE_FLAG == 0
+                        && if matches!(validation, DaclValidation::PrivateAppContainerFile(_)) {
+                            read_granted
+                                && (allowed.Mask & 0x0002_0000 != 0
+                                    || allowed.Mask & GENERIC_READ != 0)
+                        } else {
+                            allowed.Mask & required == required
+                        };
+                    continue;
+                }
                 let trusted = unsafe { IsValidSid(sid) } != 0
                     && (sid_is_one_of(
                         sid,
                         current_user,
                         local_system.as_ptr().cast_mut().cast(),
                         administrators.as_ptr().cast_mut().cast(),
-                    ) || matches!(validation, DaclValidation::NamespaceAuthority)
-                        && sid_matches(sid, trusted_installer.as_ptr().cast_mut().cast()));
+                    ) || matches!(
+                        validation,
+                        DaclValidation::NamespaceAuthority | DaclValidation::ImmutableDirectory
+                    ) && (sid_matches(sid, trusted_installer.as_ptr().cast_mut().cast())
+                        // OWNER RIGHTS represents only the file's current owner,
+                        // already validated above. Python's private Windows stage
+                        // uses this SID; it is not a grant to an arbitrary user.
+                        || sid_matches(sid, owner_rights.as_ptr().cast_mut().cast())));
                 if !trusted
-                    && (matches!(validation, DaclValidation::Private)
-                        || allowed.Mask & NAMESPACE_MUTATION_RIGHTS != 0)
+                    && (matches!(
+                        validation,
+                        DaclValidation::Private
+                            | DaclValidation::PrivateAppContainer(_)
+                            | DaclValidation::PrivateAppContainerFile(_)
+                    ) || allowed.Mask
+                        & if matches!(validation, DaclValidation::ImmutableDirectory) {
+                            DIRECTORY_MUTATION_RIGHTS
+                        } else {
+                            NAMESPACE_MUTATION_RIGHTS
+                        }
+                        != 0)
                 {
                     return Err(WindowsNativeError::UnsafePermissions);
                 }
@@ -868,7 +1095,28 @@ fn validate_owner_dacl(file: &File, validation: DaclValidation) -> Result<(), Wi
             _ => return Err(WindowsNativeError::UnsafePermissions),
         }
     }
+    if matches!(
+        validation,
+        DaclValidation::PrivateAppContainer(_) | DaclValidation::PrivateAppContainerFile(_)
+    ) {
+        if !package_granted {
+            return Err(WindowsNativeError::UnsafePermissions);
+        }
+        mandatory::validate_low_label(file)?;
+    }
     Ok(())
+}
+
+pub(super) fn validate_private_appcontainer_dacl(file: &File) -> Result<(), WindowsNativeError> {
+    let principal = AppContainerPrincipal::of_current()?;
+    validate_owner_dacl(
+        file,
+        DaclValidation::PrivateAppContainer(principal.package_sid()),
+    )
+}
+
+pub(super) fn validate_low_integrity_label(file: &File) -> Result<(), WindowsNativeError> {
+    mandatory::validate_low_label(file)
 }
 
 fn current_user_sid() -> Result<Box<[u8; SECURITY_MAX_SID_SIZE as usize]>, WindowsNativeError> {

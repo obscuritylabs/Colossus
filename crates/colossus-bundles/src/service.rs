@@ -21,6 +21,22 @@ impl BundleService {
         Self { trusted_publishers }
     }
 
+    /// Authenticate an in-memory publisher manifest without inspecting payload files.
+    /// Native distributors can seal this manifest into a binary and independently
+    /// verify its exact file bindings. This alone does not verify an installation.
+    pub fn verify_manifest_signature(
+        &self,
+        manifest: &BundleManifest,
+    ) -> Result<String, BundleError> {
+        validate_manifest(manifest)?;
+        verify_signatures(
+            &manifest.publisher,
+            &manifest.signatures,
+            &canonical_bundle_signing_bytes(manifest)?,
+            &self.trusted_publishers,
+        )
+    }
+
     /// Verify a release-bundle directory and its configured publisher signature.
     pub fn verify(&self, root: &Path) -> Result<BundleVerification, BundleError> {
         let root = verified_root(root)?;

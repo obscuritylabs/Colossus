@@ -153,6 +153,7 @@ impl ToolExecutor for ContextToolExecutor {
         .await
         .map_err(tool_gateway_error)?;
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: bounded_tool_text(&output, 1024 * 1024),

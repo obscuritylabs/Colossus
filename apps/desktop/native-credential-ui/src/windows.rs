@@ -9,8 +9,10 @@ mod painting;
 mod tests;
 mod visuals;
 
-use crate::{DialogAppearance, PromptError, lifecycle::Completion, validation};
-use colossus_contracts::HostSecret;
+use crate::{
+    DialogAppearance, NativePassword, PromptError, lifecycle::Completion, purpose::Purpose,
+    validation,
+};
 use std::{
     cell::{Cell, RefCell},
     ptr::{null, null_mut},
@@ -56,12 +58,13 @@ struct Session {
     save: HWND,
     cancel: HWND,
     visuals: visuals::Visuals,
+    purpose: Purpose,
     has_error: Cell<bool>,
     hovered: Cell<HWND>,
     cancelled: Arc<AtomicBool>,
     created: Arc<AtomicBool>,
     completion: RefCell<Option<Completion>>,
-    result: RefCell<Option<Result<HostSecret, PromptError>>>,
+    result: RefCell<Option<Result<NativePassword, PromptError>>>,
 }
 
 pub(crate) fn open(
@@ -69,6 +72,7 @@ pub(crate) fn open(
     cancelled: Arc<AtomicBool>,
     completion: Completion,
     appearance: DialogAppearance,
+    purpose: Purpose,
 ) {
     let Ok(handle) = parent.hwnd() else {
         completion.finish(Err(PromptError::Unavailable));
@@ -78,16 +82,37 @@ pub(crate) fn open(
     // SAFETY: Called on Tauri's UI thread with a live native parent. The owned
     // window retains the boxed session until WM_NCDESTROY. No callback blocks.
     unsafe {
-        create(parent, cancelled, completion, true, appearance);
+        create_for(parent, cancelled, completion, true, appearance, purpose);
     }
 }
 
+#[cfg(any(test, feature = "native-test-driver"))]
 unsafe fn create(
     parent: HWND,
     cancelled: Arc<AtomicBool>,
     completion: Completion,
     visible: bool,
     appearance: DialogAppearance,
+) -> Option<HWND> {
+    unsafe {
+        create_for(
+            parent,
+            cancelled,
+            completion,
+            visible,
+            appearance,
+            Purpose::Token,
+        )
+    }
+}
+
+unsafe fn create_for(
+    parent: HWND,
+    cancelled: Arc<AtomicBool>,
+    completion: Completion,
+    visible: bool,
+    appearance: DialogAppearance,
+    purpose: Purpose,
 ) -> Option<HWND> {
     if cancelled.load(Ordering::Acquire) || unsafe { IsWindow(parent) } == 0 {
         completion.finish(Err(PromptError::Cancelled));
@@ -125,6 +150,7 @@ unsafe fn create(
         save: null_mut(),
         cancel: null_mut(),
         visuals,
+        purpose,
         has_error: Cell::new(false),
         hovered: Cell::new(null_mut()),
         cancelled,
@@ -138,7 +164,7 @@ unsafe fn create(
         CreateWindowExW(
             WS_EX_DLGMODALFRAME,
             class.as_ptr(),
-            wide("Save a Colossus credential").as_ptr(),
+            wide(purpose.title()).as_ptr(),
             WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN,
             left,
             top,
@@ -331,12 +357,24 @@ unsafe fn release_session(window: HWND, pointer: *mut Session) {
 
 unsafe fn update_count(pointer: *const Session) {
     let length = unsafe { GetWindowTextLengthW((*pointer).input) }.max(0);
-    let message = format!("{length} / 65,536 bytes");
+    let purpose = unsafe { (*pointer).purpose };
+    let byte_count = if purpose == Purpose::Pkcs12Password {
+        unsafe { input::current_password_bytes((*pointer).input) }.ok()
+    } else {
+        usize::try_from(length).ok()
+    };
+    let message = byte_count.map_or_else(
+        || "Incomplete passphrase character".into(),
+        |bytes| format!("{bytes} / 65,536 bytes"),
+    );
     unsafe {
         (*pointer).has_error.set(false);
         SetWindowTextW((*pointer).status, wide(&message).as_ptr());
         SetWindowTextW((*pointer).error, wide("").as_ptr());
-        EnableWindow((*pointer).save, i32::from(length > 0));
+        EnableWindow(
+            (*pointer).save,
+            i32::from(byte_count.is_some() && (length > 0 || purpose == Purpose::Pkcs12Password)),
+        );
         painting::invalidate_input(pointer);
     }
 }
@@ -344,9 +382,16 @@ unsafe fn update_count(pointer: *const Session) {
 unsafe fn save(window: HWND, pointer: *const Session) {
     let length = unsafe { GetWindowTextLengthW((*pointer).input) };
     let count = usize::try_from(length).unwrap_or(0);
-    if count == 0 || count > colossus_contracts::MAX_HOST_SECRET_BYTES {
+    let purpose = unsafe { (*pointer).purpose };
+    if count == 0 && purpose == Purpose::Token {
         unsafe {
             input::error(pointer, validation::InputError::Empty);
+        }
+        return;
+    }
+    if count > colossus_contracts::MAX_HOST_SECRET_BYTES {
+        unsafe {
+            input::error(pointer, validation::InputError::PasswordTooLong);
         }
         return;
     }
@@ -359,13 +404,13 @@ unsafe fn save(window: HWND, pointer: *const Session) {
         return;
     };
     let mut secret = Zeroizing::new(decoded);
-    if let Err(error) = validation::validate(&secret) {
+    if let Err(error) = purpose.validate(&secret) {
         unsafe {
             input::error(pointer, error);
         }
         return;
     }
-    if let Ok(secret) = HostSecret::new(std::mem::take(&mut *secret)) {
+    if let Ok(secret) = NativePassword::new(std::mem::take(&mut *secret)) {
         unsafe {
             (*pointer).result.replace(Some(Ok(secret)));
             DestroyWindow(window);

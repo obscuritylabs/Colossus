@@ -1,0 +1,16 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Core Mac transfer fixture</title></head>
+<body><h1>Core Mac transfer fixture</h1>
+<form id="owned-upload" action="/upload" method="post" enctype="multipart/form-data">
+  <input type="file" name="owned_file" aria-label="Owned native file input">
+  <button type="submit">Submit owned upload</button>
+</form>
+<a href="/download-redirect">Owned binary download</a>
+<a href="/cross-origin-redirect">Forbidden redirect download</a>
+<output id="owned-upload-result">Owned upload waiting</output>
+<script>
+document.querySelector('#owned-upload').addEventListener('submit', async event => {
+  event.preventDefault();
+  const response = await fetch('/upload', {method: 'POST', body: new FormData(event.target)});
+  document.querySelector('#owned-upload-result').textContent = response.ok ? 'Owned upload received' : 'Owned upload rejected';
+});
+</script></body></html>

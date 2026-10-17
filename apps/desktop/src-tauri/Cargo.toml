@@ -16,7 +16,14 @@ default = ["dictation"]
 plugin-test-bridge = []
 approval-test-bridge = []
 browser-preview = []
+embedded-chromium-preview = ["browser-preview", "colossus-native-browser/cef-preview"]
 browser-test-bridge = ["browser-preview", "colossus-native-browser/native-test-driver"]
+# Separate-host Debug lane: link only the native pixel adapter; never bootstrap
+# an in-process CEF guest or fall back to a system webview for this lane.
+# This standalone example has no Vite server. Embed the built renderer at compile
+# time; clearing devUrl at runtime cannot restore assets omitted by Tauri codegen.
+macos-contained-browser-diagnostic = ["browser-test-bridge", "colossus-native-browser/cef-preview", "tauri/custom-protocol"]
+windows-browser-development = ["browser-test-bridge", "colossus-native-browser/cef-preview", "tauri/custom-protocol"]
 dictation = ["dep:colossus-native-dictation", "colossus-native-dictation/download"]
 dictation-preview = ["dictation"]
 dictation-metal = ["dictation", "colossus-native-dictation/metal"]
@@ -49,6 +56,7 @@ sha2 = "0.10.9"
 tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
+async-trait = "0.1.89"
 colossus-connector = { version = "=0.11.8", path = "../../../crates/colossus-connector" }
 anyhow = "1.0.104"
 base64 = "0.22.1"
@@ -107,7 +115,6 @@ tauri = { version = "=2.11.5", features = ["tray-icon", "image-png"] }
 tauri-plugin-notification = "=2.4.0"
 
 [dev-dependencies]
-async-trait = "0.1.89"
 keyring = "4.1.4"
 rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "pem", "ring", "zeroize"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
@@ -124,3 +131,7 @@ unsafe_code = "forbid"
 [lints.clippy]
 all = "warn"
 pedantic = "warn"
+
+# Match Core's authenticated Retina-frame hashing within the existing lease.
+[profile.dev.package.sha2]
+opt-level = 3

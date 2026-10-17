@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn image_tool_results_keep_pairing_and_exact_images_on_responses_codex_and_chat() {
+fn viewed_images_and_browser_screenshots_keep_pairing_on_all_provider_wires() {
     let (mut request, image, images) = multipart_model_request();
     request.messages = vec![
         ModelMessage {
@@ -24,7 +24,7 @@ fn image_tool_results_keep_pairing_and_exact_images_on_responses_codex_and_chat(
                 },
                 ModelToolCall {
                     call_id: "other".into(),
-                    name: "echo".into(),
+                    name: "browser.screenshot".into(),
                     arguments: json!({"text": "ok"}),
                 },
             ],
@@ -36,7 +36,9 @@ fn image_tool_results_keep_pairing_and_exact_images_on_responses_codex_and_chat(
                 ModelContentPart::Text {
                     text: "Image retained".into(),
                 },
-                ModelContentPart::Image { image },
+                ModelContentPart::Image {
+                    image: image.clone(),
+                },
             ]),
             tool_call_id: Some("view".into()),
             tool_calls: vec![],
@@ -45,6 +47,18 @@ fn image_tool_results_keep_pairing_and_exact_images_on_responses_codex_and_chat(
             agent_message_origin: None,
             role: ModelMessageRole::Tool,
             content: "ok".into(),
+            tool_call_id: Some("other".into()),
+            tool_calls: vec![],
+        },
+        ModelMessage {
+            agent_message_origin: None,
+            role: ModelMessageRole::ToolObservation,
+            content: ModelContent::Parts(vec![
+                ModelContentPart::Text {
+                    text: "Policy-released browser screenshot".into(),
+                },
+                ModelContentPart::Image { image },
+            ]),
             tool_call_id: Some("other".into()),
             tool_calls: vec![],
         },
@@ -67,6 +81,12 @@ fn image_tool_results_keep_pairing_and_exact_images_on_responses_codex_and_chat(
             wire["input"][3]["output"][1]["image_url"],
             "data:image/png;base64,cG5n"
         );
+        let screenshot = wire["input"].as_array().unwrap().last().unwrap();
+        assert_eq!(screenshot["role"], "user");
+        assert_eq!(
+            screenshot["content"][1]["image_url"],
+            "data:image/png;base64,cG5n"
+        );
     }
     let wire = chat_payload_with_images(
         &request,
@@ -86,6 +106,11 @@ fn image_tool_results_keep_pairing_and_exact_images_on_responses_codex_and_chat(
     assert_eq!(messages[5]["role"], "user");
     assert_eq!(
         messages[5]["content"][1]["image_url"]["url"],
+        "data:image/png;base64,cG5n"
+    );
+    assert_eq!(messages[6]["role"], "user");
+    assert_eq!(
+        messages[6]["content"][1]["image_url"]["url"],
         "data:image/png;base64,cG5n"
     );
 
@@ -115,7 +140,7 @@ fn image_tool_results_keep_pairing_and_exact_images_on_responses_codex_and_chat(
         assistant: assistant.clone(),
         hidden_reasoning: vec![json!({"message": assistant, "content": [
             {"type": "tool_use", "id": "view", "name": "image_view", "input": {"paths": ["diagram.png"]}},
-            {"type": "tool_use", "id": "other", "name": "echo", "input": {"text": "ok"}}
+            {"type": "tool_use", "id": "other", "name": "browser_screenshot", "input": {"text": "ok"}}
         ]})],
     };
     let wire = crate::anthropic::payload(
@@ -133,6 +158,13 @@ fn image_tool_results_keep_pairing_and_exact_images_on_responses_codex_and_chat(
         wire["messages"][2]["content"][0]["content"][1]["source"]["data"],
         "cG5n"
     );
+    let screenshot = wire["messages"][2]["content"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap();
+    assert_eq!(screenshot["type"], "image");
+    assert_eq!(screenshot["source"]["data"], "cG5n");
     let diagnostics = crate::executor::redacted_image_payload(&wire).to_string();
     assert!(!diagnostics.contains("cG5n"));
 }

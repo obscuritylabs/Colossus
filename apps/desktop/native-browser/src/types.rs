@@ -13,7 +13,7 @@ pub enum NavigationAction {
 }
 
 /// Native observations. Titles and URLs are untrusted display data.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PageState {
     pub url: String,
@@ -32,6 +32,10 @@ pub enum BrowserEvent {
     Blocked,
     Download,
     Popup(String),
+    /// Chromium rejected a certificate; no TLS-error override is available.
+    TlsFailed,
+    /// No reviewed, exact-origin native client identity was selected.
+    AuthenticationRequired,
 }
 
 /// The manager owns the sink and validates the tab's lifecycle on delivery.
@@ -43,7 +47,12 @@ pub enum BrowserError {
     InvalidAddress,
     Unavailable,
     Closed,
+    /// The native owner is changing the document; hide pixels until a fresh target is admitted.
+    Stale,
     TimedOut,
+    ComponentMissing,
+    BootstrapRequired,
+    NativeAcceptanceRequired,
 }
 
 impl std::fmt::Display for BrowserError {
@@ -52,7 +61,11 @@ impl std::fmt::Display for BrowserError {
             Self::InvalidAddress => "Enter an HTTP or HTTPS address without embedded credentials.",
             Self::Unavailable => "The embedded browser is unavailable on this device.",
             Self::Closed => "This browser tab is no longer available.",
+            Self::Stale => "The browser page is changing. Waiting for its current document.",
             Self::TimedOut => "The browser did not respond. Close the tab and try again.",
+            Self::ComponentMissing => "The verified Chromium component is not included in this build.",
+            Self::BootstrapRequired => "Embedded Chromium requires the supported sandboxed native bootstrap on this platform.",
+            Self::NativeAcceptanceRequired => "Embedded Chromium has not passed native acceptance on this platform.",
         })
     }
 }

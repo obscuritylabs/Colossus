@@ -364,6 +364,24 @@ operation uses the primary client. Both credentials are revoked together during
 shutdown or a failed bootstrap, and neither transport replays an operation after a
 restart.
 
+Native browser attachment uses an additional independent parent/sidecar bootstrap
+key, separate from both API credentials. Its private transport attests the managed
+workspace, application and parent/child process identities and rechecks the active
+primary grant for every admission and presentation operation. Native SDK attachments
+retain cleanup ownership and authoritative presentation state; neither this key nor
+native leases, host paths or input-fence receipts enter renderer IPC. A new human
+page owns a canonical conversation, and human-to-agent handoff accepts only a run
+in that conversation through the runtime effect gateway. This connected source
+also supports read-only attachment to an existing active run's Embedded page,
+after its first gateway-authorized native action establishes the writer generation.
+Runtime verifies the enrolled application and canonical conversation; attachment
+allocates no browser and grants no writer. `browser.status` without `session_id`
+discovers only the active run's already granted sessions, including a handed-off
+human page. Its observations still pass through the effect gateway and release policy.
+Production attachment remains unavailable without an accepted Embedded supervisor and installed
+package. See [owned browser readiness](adr/0008-owned-chromium-browser.md#current-enablement-and-remaining-work)
+for functional gaps and the distinct native acceptance requirements.
+
 Provider YAML for Managed Local contains a validated `host:<opaque-id>` reference. The
 key remains in the desktop keychain and is copied into a zeroizing, in-memory sidecar
 resolver during bootstrap. The provider adapter can resolve it only after policy has

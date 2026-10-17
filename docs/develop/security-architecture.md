@@ -838,6 +838,71 @@ independent of agent tool permissions; navigation checks do not constitute a gen
 private-network firewall. It remains disabled in normal builds pending the platform
 permission, lifecycle, and cleanup gates in [ADR 0003](adr/0003-desktop-browser-boundary.md).
 
+Owned Chromium automation has a separate typed effect boundary described in
+[ADR 0008](adr/0008-owned-chromium-browser.md). Core derives the application,
+workspace, scope and run from authenticated state; each effect consumes its permit
+before native dispatch, and observations require post-effect release. Private
+authenticated action, cancellation and presentation channels carry only closed
+typed browser contracts. Each allocation retains an independently supervised process
+and egress obligation before launch. Context-destroying cancellation interrupts the
+session and requires a fresh allocation rather than renewing control of a closed page.
+
+The contained Windows launcher keeps its process Jobs, completion ports, egress fence
+and profile authority in Core. Two fixed trusted helper roles run before CEF: one
+obtains a fresh logon context, and that context creates one suspended AppContainer
+browser with the exact private pipe handles and inner Job. Core pulls and verifies the
+returned process and primary thread, including the fresh logon identity, package SID,
+Low integrity, absent capabilities and both Job memberships, before it alone resumes
+the browser. The context holds only reduced inner-Job authority and a query handle for
+the browser while it owns the token-derived window station; it receives no Core
+mutation handle or outer-Job handle.
+
+Failed startup returns an opaque cleanup owner that retains the same native resources.
+Cleanup stops and positively waits the browser's creator before accepting the final
+inner-Job drain, then joins private I/O before retiring the egress fence and profile.
+A pending logon-service creation result cannot be discharged by observing an empty
+Job or by terminating its launcher. Normal shutdown also requires the context's
+station-close receipt and exit. These source checks do not enable publisher release
+modes or establish whole-host network and parent-death containment.
+
+The explicitly selected Windows Debug development composition admits functional
+automation without AppContainer/WFP containment. It retains Chromium's built-in
+sandbox, an owned Job and the authenticated boundaries above, while reporting
+`restrictive_egress: false` and no owned CA/client-identity capability. It never
+retries a failed contained launch in this mode. Standard installation and app use
+remain non-admin; the executable requests `asInvoker`. Source acceptance cannot
+enable publisher release modes or substitute for installed signed-package and
+certificate-custody acceptance.
+
+That Windows development composition also supports snapshot-bound developer
+inspection through the same effect gateway. `browser.evaluate` accepts an expression
+of at most 8 KiB with Chromium's mandatory native side-effect checking, a one-second
+evaluation deadline and JSON value output. `browser.cdp` accepts only the closed DOM,
+layout, style and performance inspection methods in the browser contract, with
+method-specific parameter admission. Neither tool grants target or network control,
+file access or a debugging endpoint. Inspection results are bounded to 32 KiB and
+remain quarantined until post-effect policy releases them. Host capability advertisement
+and the application's tool ceiling independently govern their availability.
+
+Before either inspection read, the native driver requires an observed private
+`Debugger.paused` receipt and checks the document's complete native attribute
+snapshot while page JavaScript is paused. Protected fields, including hidden and
+shadow-tree fields, are rejected. Child documents and `iframe`, `frame`, `object`
+or `embed` elements are also rejected because one renderer pause does not establish
+cross-process coverage. Every exit requires acknowledged `Debugger.disable`
+cleanup before any result can return. Uncertain restoration releases no value,
+fences the session and reports an unknown outcome. These internal lifecycle commands
+are fixed native operations and cannot be selected through `browser.cdp`.
+
+The Linux OCI adapter runs the entire host tree in a networkless namespace, with
+read-only verified component bytes, bounded cgroups and a private exact-origin
+egress relay. Its supervisor verifies native process identity before delivering
+bootstrap secrets and retains uncertain cleanup. The standalone CEF preview does
+not establish whole-host containment. Production availability requires an accepted
+publisher-bound installed component; source fixtures cannot enable an ordinary
+distribution. Certificate import remains native, discloses its actual store scope,
+and never disables server verification or supplies private keys through tool input.
+
 A VS Code Managed Local sidecar uses the same native SDK executable binding and
 bootstrap protocol. The trusted VSIX contains the native lifecycle host, sidecar, and
 digest manifest; the extension checks that manifest before a no-shell host launch.

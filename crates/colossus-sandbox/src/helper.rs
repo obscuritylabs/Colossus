@@ -229,11 +229,36 @@ pub(super) fn native_command(job: &SandboxJob) -> Result<Command, SandboxHelperE
     } else {
         capabilities.block_network()
     };
+    #[cfg(target_os = "linux")]
+    reject_uninstalled_proxy_fallback(
+        Sandbox::apply_auto(&capabilities)
+            .map_err(|error| SandboxHelperError::Setup(format!("native apply: {error}")))?,
+    )?;
+    #[cfg(target_os = "macos")]
     Sandbox::apply_auto(&capabilities)
         .map_err(|error| SandboxHelperError::Setup(format!("native apply: {error}")))?;
     let mut command = Command::new(&job.executable);
     configure_command(&mut command, job);
     Ok(command)
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn reject_uninstalled_proxy_fallback(
+    fallback: nono::sandbox::SeccompNetFallback,
+) -> Result<(), SandboxHelperError> {
+    // apply_auto installs BlockAll itself. ProxyOnly instead requires a trusted
+    // post-fork seccomp-notify supervisor. This helper does not own that channel;
+    // accepting the result would start a process without its requested boundary.
+    match fallback {
+        nono::sandbox::SeccompNetFallback::None | nono::sandbox::SeccompNetFallback::BlockAll => {
+            Ok(())
+        }
+        nono::sandbox::SeccompNetFallback::ProxyOnly { .. } => Err(SandboxHelperError::Setup(
+            "native proxy-only TCP isolation requires Landlock network support; \
+             the seccomp proxy fallback is not installed by this helper"
+                .into(),
+        )),
+    }
 }
 
 #[cfg(target_os = "macos")]

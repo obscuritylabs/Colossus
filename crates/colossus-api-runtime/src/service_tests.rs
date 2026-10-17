@@ -518,34 +518,41 @@ async fn caller_owned_text_artifacts_are_rendered_as_bounded_run_input(runtime: 
         )
         .await
         .expect("upload artifact");
-    let created = service
-        .create_run(
-            &owner,
-            CreateRunRequest {
-                model_profile: None,
-                reasoning_effort: None,
-                input: vec![
-                    ContentPart::Text {
-                        text: "Inspect the attachment".into(),
-                    },
-                    ContentPart::Artifact {
-                        artifact_id: artifact.artifact_id,
-                    },
-                ],
-                session_id: None,
-                end_user_id: None,
-                role: Some("primary".into()),
-                mode: RunMode::Execute,
-                goal_max_iterations: 0,
-                research_depth: None,
-                research_sources: Vec::new(),
-                skill_ids: Vec::new(),
-                plan_action: None,
-                branch: None,
-                max_turns: 1,
-                idempotency_key: IdempotencyKey::new("attachment-run").expect("run key"),
+    let request = CreateRunRequest {
+        model_profile: None,
+        reasoning_effort: None,
+        input: vec![
+            ContentPart::Text {
+                text: "Inspect the attachment".into(),
             },
-        )
+            ContentPart::Artifact {
+                artifact_id: artifact.artifact_id.clone(),
+            },
+        ],
+        session_id: None,
+        end_user_id: None,
+        role: Some("primary".into()),
+        mode: RunMode::Execute,
+        goal_max_iterations: 0,
+        research_depth: None,
+        research_sources: Vec::new(),
+        skill_ids: Vec::new(),
+        plan_action: None,
+        branch: None,
+        max_turns: 1,
+        idempotency_key: IdempotencyKey::new("attachment-run").expect("run key"),
+    };
+    let rendered = service
+        .rendered_input_for_test(&owner, &request)
+        .await
+        .expect("rendered attachment");
+    let ModelContent::Text(text) = rendered else {
+        panic!("text attachment should remain text input");
+    };
+    assert!(text.contains(&format!("[RunInput artifact: {}]", artifact.artifact_id)));
+    assert!(text.contains("# Review\nrelease boundary"));
+    let created = service
+        .create_run(&owner, request)
         .await
         .expect("create attached run")
         .run;

@@ -18,7 +18,10 @@ done < <(
     'crates/*/src/lib.rs' \
     'crates/*/src/main.rs' \
     'xtask/src/lib.rs' \
-    'xtask/src/main.rs'
+    'xtask/src/main.rs' \
+    'native/browser/driver/src/lib.rs' \
+    'native/browser/driver/src/main.rs' \
+    'native/browser/pki/src/lib.rs'
 )
 
 if (( failed != 0 )); then

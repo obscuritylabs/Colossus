@@ -25,6 +25,13 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot};
 
+// ConPTY decodes this Win32-input-mode record into a real Ctrl+J key event.
+// A bare LF is translated into Enter before crossterm's Windows backend reads it.
+#[cfg(windows)]
+const WINDOWS_CTRL_J: &[u8] = b"\x1b[74;36;10;1;8;1_\x1b[74;36;10;0;8;1_";
+
+const MULTILINE_DRAFT: &str = "# Heading\n\n  - **nested**\nunicode 👩‍💻 界 e\u{301}";
+
 struct FixtureHost;
 
 struct FixtureDictation;
@@ -106,7 +113,9 @@ impl InteractiveHost for FixtureHost {
                 has_more: inline && !empty,
             },
             preferences: TerminalPreferences::default(),
-            history: if history_navigation_fixture {
+            history: if std::env::var_os("COLOSSUS_TUI_INLINE_DRAFT_FIXTURE").is_some() {
+                vec![MULTILINE_DRAFT.into()]
+            } else if history_navigation_fixture {
                 vec![
                     "first prompt".into(),
                     "second prompt".into(),
@@ -262,6 +271,13 @@ impl InteractiveHost for FixtureHost {
         events: mpsc::Sender<HostEvent>,
         _control: RunControl,
     ) -> Result<HostRunResult, String> {
+        if std::env::var_os("COLOSSUS_TUI_UNICODE_ROUNDTRIP_FIXTURE").is_some() {
+            return Err(if request.prompt == MULTILINE_DRAFT {
+                "Native Unicode draft matched".into()
+            } else {
+                "Native Unicode draft differed".into()
+            });
+        }
         if std::env::var_os("COLOSSUS_TUI_STREAM_FIXTURE").is_none() {
             return Err("fixture does not run model turns".into());
         }
@@ -312,6 +328,7 @@ impl InteractiveHost for FixtureHost {
                 event: RunEvent::ToolCompleted {
                     turn: 1,
                     result: ToolResult {
+                        images: Vec::new(),
                         call_id: call.call_id,
                         name: call.name,
                         output: serde_json::json!({"matches": ["runtime.rs"]}).to_string(),
@@ -621,7 +638,10 @@ fn enhanced_shift_enter_composes_a_multiline_turn_and_restores_keyboard_mode() {
 
 #[test]
 fn legacy_newline_composes_a_multiline_turn_without_submitting() {
+    #[cfg(unix)]
     multiline_turn_and_keyboard_restoration(b"\n");
+    #[cfg(windows)]
+    multiline_turn_and_keyboard_restoration(WINDOWS_CTRL_J);
 }
 
 fn multiline_turn_and_keyboard_restoration(newline: &[u8]) {
@@ -659,7 +679,10 @@ fn multiline_turn_and_keyboard_restoration(newline: &[u8]) {
         }
     });
     let mut writer = pair.master.take_writer().expect("PTY writer");
+    #[cfg(windows)]
+    answer_cursor_position_query(&output, &mut writer);
     wait_for_screen(&output, 24, 80, "Message · Enter sends");
+    #[cfg(unix)]
     wait_for_raw(&output, b"\x1b[>1u");
 
     let composed_input = [b"first".as_slice(), newline, b"second".as_slice()].concat();
@@ -695,14 +718,23 @@ fn multiline_turn_and_keyboard_restoration(newline: &[u8]) {
             .position(|window| window == sequence)
             .expect("terminal control sequence")
     };
+    let enter_screen = offset(b"\x1b[?1049h");
+    let leave_screen = offset(b"\x1b[?1049l");
     assert!(
-        offset(b"\x1b[?1049h") < offset(b"\x1b[>1u"),
-        "keyboard enhancement must be enabled on the alternate screen"
+        enter_screen < leave_screen,
+        "alternate screen was not restored"
     );
-    assert!(
-        offset(b"\x1b[<1u") < offset(b"\x1b[?1049l"),
-        "keyboard enhancement must be removed before leaving the alternate screen"
-    );
+    #[cfg(unix)]
+    {
+        assert!(
+            enter_screen < offset(b"\x1b[>1u"),
+            "keyboard enhancement must be enabled on the alternate screen"
+        );
+        assert!(
+            offset(b"\x1b[<1u") < leave_screen,
+            "keyboard enhancement must be removed before leaving the alternate screen"
+        );
+    }
 }
 
 #[test]
@@ -723,6 +755,8 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
     command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
     command.env("COLOSSUS_TUI_MODE", "inline");
     command.env("COLOSSUS_TUI_STARTUP_SENTINEL", "1");
+    #[cfg(windows)]
+    command.env("COLOSSUS_TUI_INLINE_DRAFT_FIXTURE", "1");
     let mut child = pair.slave.spawn_command(command).expect("spawn fixture");
     drop(pair.slave);
 
@@ -771,18 +805,25 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
         latest_row + 1,
         "newest output should end directly above the composer: {rows:?}"
     );
-    writer
-        .write_all(b"\x1b[200~# Heading\r\r  - **nested**\r\nunicode ")
-        .expect("start multiline paste");
-    writer
-        .write_all("👩‍💻 界 e\u{301}".as_bytes())
-        .expect("paste Unicode text");
-    writer
-        .write_all(b"\x1b[201~")
-        .expect("finish multiline paste");
-    writer.flush().expect("flush multiline paste");
+    #[cfg(unix)]
+    {
+        writer
+            .write_all(b"\x1b[200~# Heading\r\r  - **nested**\r\nunicode ")
+            .expect("start multiline paste");
+        writer
+            .write_all("👩‍💻 界 e\u{301}".as_bytes())
+            .expect("paste Unicode text");
+        writer
+            .write_all(b"\x1b[201~")
+            .expect("finish multiline paste");
+    }
+    #[cfg(windows)]
+    // crossterm's Windows Console backend has no Paste decoder. Recall the
+    // complete UTF-8 history draft in one reducer update to verify rendering.
+    writer.write_all(b"\x1b[A").expect("recall multiline draft");
+    writer.flush().expect("flush multiline draft");
     wait_for_screen(&output, 24, 80, "- **nested**");
-    wait_for_screen(&output, 24, 80, "unicode");
+    wait_for_screen(&output, 24, 80, "界 e\u{301}");
     let pasted_rows = screen_rows(&output, 24, 80);
     let heading_row = pasted_rows
         .iter()
@@ -796,8 +837,21 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
         .iter()
         .position(|row| row.contains("unicode") && row.contains('界'))
         .expect("pasted Unicode row");
+    #[cfg(windows)]
+    {
+        writer.write_all(b"\x1b[H!").expect("edit recalled draft");
+        writer.flush().expect("flush recalled draft edit");
+        wait_for_screen(&output, 24, 80, "│!# Heading ");
+        writer
+            .write_all(&[127])
+            .expect("remove recalled draft edit");
+        writer.flush().expect("flush recalled draft edit removal");
+        // The border followed by '#' cannot match the pre-delete '!'.
+        wait_for_screen(&output, 24, 80, "│# Heading ");
+        assert!(!screen_contents(&output, 24, 80).contains("│!# Heading "));
+    }
     assert_eq!(nested_row, heading_row + 2, "blank line was not preserved");
-    assert_eq!(unicode_row, nested_row + 1, "CRLF created extra rows");
+    assert_eq!(unicode_row, nested_row + 1, "composed lines changed");
 
     writer.write_all(&[3]).expect("Ctrl-C clear draft");
     writer.flush().expect("flush draft clear");
@@ -866,6 +920,87 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
             && !raw_contains(raw.as_slice(), b"\x1b[?1003;1006h"),
         "inline mode must preserve native mouse scrollback"
     );
+    drop(raw);
+    #[cfg(windows)]
+    {
+        // ConPTY's glyph serialization cannot prove the complete ZWJ string.
+        // Verify its exact UTF-8 data through the real TUI host boundary instead.
+        unicode_history_draft_roundtrip(true);
+        unicode_history_draft_roundtrip(false);
+    }
+}
+
+#[cfg(windows)]
+fn unicode_history_draft_roundtrip(restore_edit: bool) {
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("Unicode proof PTY");
+    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    command.args(["--exact", "fixture_process", "--nocapture"]);
+    command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
+    command.env("COLOSSUS_TUI_MODE", "alternate");
+    command.env("COLOSSUS_TUI_INLINE_DRAFT_FIXTURE", "1");
+    command.env("COLOSSUS_TUI_UNICODE_ROUNDTRIP_FIXTURE", "1");
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .expect("spawn Unicode proof");
+    drop(pair.slave);
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .expect("Unicode proof reader");
+    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let reader_output = Arc::clone(&output);
+    let reader_thread = thread::spawn(move || {
+        let mut buffer = [0_u8; 8_192];
+        while let Ok(read) = reader.read(&mut buffer) {
+            if read == 0 {
+                break;
+            }
+            reader_output
+                .lock()
+                .expect("output")
+                .extend_from_slice(&buffer[..read]);
+        }
+    });
+    let mut writer = pair.master.take_writer().expect("Unicode proof writer");
+    answer_cursor_position_query(&output, &mut writer);
+    wait_for_screen(&output, 24, 80, "Message · Enter sends");
+    writer.write_all(b"\x1b[A").expect("recall Unicode draft");
+    writer.flush().expect("flush Unicode draft recall");
+    wait_for_screen(&output, 24, 80, "界 e\u{301}");
+    writer.write_all(b"\x1b[H!").expect("edit Unicode draft");
+    writer.flush().expect("flush Unicode draft edit");
+    wait_for_screen(&output, 24, 80, "│!# Heading ");
+    if restore_edit {
+        writer.write_all(&[127]).expect("restore Unicode draft");
+        writer.flush().expect("flush Unicode draft restoration");
+        wait_for_screen(&output, 24, 80, "│# Heading ");
+    }
+    writer.write_all(b"\r").expect("submit Unicode draft proof");
+    writer.flush().expect("flush Unicode draft proof");
+    let receipt = if restore_edit {
+        "Native Unicode draft matched"
+    } else {
+        "Native Unicode draft differed"
+    };
+    wait_for_screen(&output, 24, 80, receipt);
+    if !restore_edit {
+        assert!(!screen_contents(&output, 24, 80).contains("Native Unicode draft matched"));
+    }
+    writer.write_all(&[3, 3]).expect("exit Unicode proof");
+    writer.flush().expect("flush Unicode proof exit");
+    let status = child.wait().expect("Unicode proof status");
+    assert!(status.success());
+    drop(writer);
+    drop(pair.master);
+    reader_thread.join().expect("Unicode proof reader thread");
 }
 
 #[test]
@@ -1832,7 +1967,15 @@ fn wait_for_raw_count(output: &Arc<Mutex<Vec<u8>>>, needle: &[u8], expected: usi
         }
         thread::sleep(Duration::from_millis(10));
     }
-    panic!("PTY never emitted {expected} instances of expected terminal query");
+    let bytes = output.lock().expect("output").clone();
+    let tail = String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(4_096)..])
+        .escape_debug()
+        .to_string();
+    panic!(
+        "PTY never emitted {expected} instances of {:?}; raw bytes: {}; raw tail: {tail}",
+        String::from_utf8_lossy(needle).escape_debug().to_string(),
+        bytes.len()
+    );
 }
 
 fn wait_for_screen(output: &Arc<Mutex<Vec<u8>>>, rows: u16, cols: u16, needle: &str) {

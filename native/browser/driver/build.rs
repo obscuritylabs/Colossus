@@ -1,0 +1,193 @@
+//! Explicit native linkage; ordinary checks need neither CEF nor a download.
+use std::{env, path::PathBuf};
+
+fn main() {
+    println!("cargo:rustc-check-cfg=cfg(colossus_cef_linked)");
+    for name in ["COLOSSUS_CEF_NATIVE_LIB_DIR", "COLOSSUS_CEF_ROOT"] {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
+    let Some(build) = env::var_os("COLOSSUS_CEF_NATIVE_LIB_DIR") else {
+        assert!(
+            env::var_os("CARGO_FEATURE_MACOS_OWNED_PROCESS_DEVELOPMENT").is_none(),
+            "owned Main body requires explicit linked native archives and patched CEF"
+        );
+        return;
+    };
+    let target = env::var("CARGO_CFG_TARGET_OS").expect("target OS required");
+    assert!(
+        matches!(target.as_str(), "linux" | "macos" | "windows"),
+        "unsupported native host target"
+    );
+    let build = PathBuf::from(build)
+        .canonicalize()
+        .expect("native build must exist");
+    if env::var_os("CARGO_FEATURE_MACOS_OWNED_PROCESS_DEVELOPMENT").is_some() {
+        assert_eq!(target, "macos", "owned Main body requires macOS");
+        assert_eq!(
+            env::var("DEBUG").as_deref(),
+            Ok("true"),
+            "owned Main body requires Debug"
+        );
+        assert!(
+            build.join("owned-process-development-build.json").is_file(),
+            "owned Main body requires the guarded no-exec CMake lane"
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            build.join("owned-process-development-build.json").display()
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            build.join("owned-process-native-artifacts.json").display()
+        );
+    }
+    if env::var_os("CARGO_FEATURE_MACOS_SYNTHETIC_PROFILE_DIAGNOSTIC").is_some() {
+        assert_eq!(
+            target, "macos",
+            "synthetic profile diagnostic requires macOS"
+        );
+        assert_eq!(
+            env::var("DEBUG").as_deref(),
+            Ok("true"),
+            "synthetic profile diagnostic rejects release builds"
+        );
+    }
+    if env::var_os("CARGO_FEATURE_MACOS_OWNED_PROFILE_DEVELOPMENT").is_some() {
+        assert_eq!(
+            target, "macos",
+            "development profile adapter requires macOS"
+        );
+        assert_eq!(
+            env::var("DEBUG").as_deref(),
+            Ok("true"),
+            "development profile adapter rejects release builds"
+        );
+        let adapter = build.join("libcolossus_mac_profile_crypto.dylib");
+        assert!(
+            adapter.is_file(),
+            "explicit owned profile adapter build required"
+        );
+        println!("cargo:rerun-if-changed={}", adapter.display());
+        println!("cargo:rustc-link-lib=dylib=colossus_mac_profile_crypto");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
+    }
+    let cef = PathBuf::from(env::var_os("COLOSSUS_CEF_ROOT").expect("pinned CEF root required"))
+        .canonicalize()
+        .expect("CEF root must exist");
+    let header =
+        std::fs::read_to_string(cef.join("include/cef_version.h")).expect("CEF version required");
+    assert!(
+        header.contains("154.0.34+g14c5a08+chromium-154.0.8037.98"),
+        "CEF pin mismatch"
+    );
+    if env::var_os("CARGO_FEATURE_MACOS_OWNED_PROCESS_DEVELOPMENT").is_some() {
+        let script =
+            PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest directory required"))
+                .join("../scripts/owned_process_component.py");
+        let platform = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+            Ok("aarch64") => "macosarm64",
+            Ok("x86_64") => "macosx64",
+            _ => panic!("unsupported owned Main architecture"),
+        };
+        assert!(
+            std::process::Command::new("python3")
+                .arg("-B")
+                .arg(&script)
+                .arg("--cef-root")
+                .arg(&cef)
+                .arg("--platform")
+                .arg(platform)
+                .arg("--verify-build")
+                .arg(&build)
+                .status()
+                .expect("patched CEF verifier required")
+                .success(),
+            "owned Main requires actual matching patched CEF exports and build receipt"
+        );
+        println!("cargo:rerun-if-changed={}", script.display());
+        for path in [
+            cef.join(".cef-owned-process-source.json"),
+            cef.join("Release/Chromium Embedded Framework.framework/Chromium Embedded Framework"),
+        ] {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
+    if target == "windows" {
+        // Supported CEF bootstrap resolves RunWinMain in this client DLL.
+        // libcef may only load after its sandbox/version handoff succeeds.
+        for library in [
+            build.join("colossus_cef.lib"),
+            build
+                .parent()
+                .expect("native Release parent")
+                .join("libcef_dll_wrapper/Release/libcef_dll_wrapper.lib"),
+            cef.join("Release/libcef.lib"),
+        ] {
+            assert!(library.is_file(), "native Windows library required");
+            println!("cargo:rerun-if-changed={}", library.display());
+        }
+        for directory in [
+            &build,
+            &cef.join("Release"),
+            &build
+                .parent()
+                .expect("native Release parent")
+                .join("libcef_dll_wrapper/Release"),
+        ] {
+            println!("cargo:rustc-link-search=native={}", directory.display());
+        }
+        for library in [
+            "static=colossus_cef",
+            "static=libcef_dll_wrapper",
+            "libcef",
+            "delayimp",
+            "comctl32",
+            "crypt32",
+            "gdi32",
+            "rpcrt4",
+            "shell32",
+            "shlwapi",
+            "user32",
+            "wintrust",
+            "ws2_32",
+        ] {
+            println!("cargo:rustc-link-lib={library}");
+        }
+        println!("cargo:rustc-link-arg-cdylib=/DELAYLOAD:libcef.dll");
+        println!("cargo:rustc-cfg=colossus_cef_linked");
+        return;
+    }
+    let installed_wrapper = build.join("libcef_dll_wrapper.a");
+    let wrapper = if installed_wrapper.is_file() {
+        installed_wrapper
+    } else {
+        build.join("libcef_dll_wrapper/libcef_dll_wrapper.a")
+    };
+    for archive in [build.join("libcolossus_cef.a"), wrapper.clone()] {
+        assert!(archive.is_file(), "native archive required");
+        println!("cargo:rerun-if-changed={}", archive.display());
+    }
+    for directory in [
+        &build,
+        wrapper.parent().expect("wrapper parent required"),
+        &cef.join("Release"),
+    ] {
+        println!("cargo:rustc-link-search=native={}", directory.display());
+    }
+    for library in ["static=colossus_cef", "static=cef_dll_wrapper"] {
+        println!("cargo:rustc-link-lib={library}");
+    }
+    if target == "macos" {
+        // The scoped loader loads the installed framework only after native
+        // main-process entry; helpers initialize their sandbox before loading.
+        println!("cargo:rustc-link-lib=framework=Cocoa");
+        println!("cargo:rustc-link-lib=c++");
+    } else {
+        for library in ["cef", "stdc++", "dl", "pthread", "rt"] {
+            println!("cargo:rustc-link-lib={library}");
+        }
+        // The Linux installer stages the executable beside verified CEF libs.
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
+    }
+    println!("cargo:rustc-cfg=colossus_cef_linked");
+}

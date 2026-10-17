@@ -2,6 +2,11 @@ import type { BrowserApi, BrowserSnapshot, BrowserTab } from "../browser-api";
 
 const sessions = new Map<string, BrowserSnapshot>();
 let nextId = 0;
+let latestViewport: Parameters<BrowserApi["viewport"]>[0] | null = null;
+
+export function latestBrowserFixtureViewport() {
+  return latestViewport;
+}
 
 export function browserFixture(scope: string): BrowserApi {
   if (!sessions.has(scope))
@@ -59,7 +64,19 @@ export function browserFixture(scope: string): BrowserApi {
   }
   return {
     context: async () => copy(),
-    viewport: async () => {},
+    viewport: async (request) => {
+      latestViewport = structuredClone(request);
+    },
+    certificates: async () => ({
+      scope: "unsupported",
+      caImportAvailable: false,
+      pfxImportAvailable: false,
+      clientIdentitySelectionReady: false,
+      acceptancePending: true,
+      message:
+        "Native certificate import is unavailable in this browser fixture. Operating-system certificate stores are outside browser profile isolation.",
+      fingerprintsSha256: [],
+    }),
     command: async (generation, action) => {
       if (generation !== state.generation)
         throw new Error("The selected workspace changed.");

@@ -1,0 +1,402 @@
+diff --git a/base/BUILD.gn b/base/BUILD.gn
+index 4606d8c6a1..c3ecfc046b 100644
+--- a/base/BUILD.gn
++++ b/base/BUILD.gn
+@@ -2233,6 +2233,8 @@ component("base") {
+       "power_monitor/thermal_state_observer_mac.mm",
+       "process/kill_mac.cc",
+       "process/launch_mac.cc",
++      "process/colossus_owned_process_client.cc",
++      "process/colossus_owned_process_client.h",
+       "process/memory_mac.mm",
+       "process/port_provider_mac.cc",
+       "process/port_provider_mac.h",
+diff --git a/base/apple/mach_port_rendezvous_mac.cc b/base/apple/mach_port_rendezvous_mac.cc
+index 42c7323898..7f5a537523 100644
+--- a/base/apple/mach_port_rendezvous_mac.cc
++++ b/base/apple/mach_port_rendezvous_mac.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "base/apple/mach_port_rendezvous_mac.h"
++#include "base/process/colossus_owned_process_client.h"
+ 
+ #include <bsm/libbsm.h>
+ #include <mach/mig.h>
+@@ -61,11 +62,13 @@ constexpr char kPeerValidationPolicyEnvironmentVariable[] =
+ MachPortRendezvousPeerValidationPolicy GetPeerValidationPolicy();
+ 
+ bool ShouldValidateProcessRequirements() {
++  if (colossus_owned_process::Enabled()) return true;
+   return GetPeerValidationPolicy() !=
+          MachPortRendezvousPeerValidationPolicy::kNoValidation;
+ }
+ 
+ bool ShouldEnforceProcessRequirements() {
++  if (colossus_owned_process::Enabled()) return true;
+   return GetPeerValidationPolicy() ==
+          MachPortRendezvousPeerValidationPolicy::kEnforce;
+ }
+@@ -187,6 +190,9 @@ MachPortRendezvousServerMac::PortsForClient(audit_token_t audit_token) {
+     }
+   }
+ 
++  if (colossus_owned_process::Enabled() && !requirement.has_value()) {
++    return std::nullopt;
++  }
+   if (requirement.has_value() && ShouldValidateProcessRequirements()) {
+     bool client_is_valid = requirement->ValidateProcess(audit_token);
+     if (!client_is_valid && ShouldEnforceProcessRequirements()) {
+@@ -236,7 +242,10 @@ MachPortRendezvousClient* MachPortRendezvousClient::GetInstance() {
+ 
+ // static
+ std::string MachPortRendezvousClientMac::GetBootstrapName() {
+-  return StringPrintf(kBootstrapNameFormat, apple::BaseBundleID(), getppid());
++  // Supplied once by the trusted loader from a broker-created bootstrap pipe.
++  // The value never comes from argv, env, a renderer or a process census.
++  return StringPrintf(kBootstrapNameFormat, apple::BaseBundleID(),
++                      colossus_owned_process::LogicalBrowserPid());
+ }
+ 
+ MachPortRendezvousClientMac::MachPortRendezvousClientMac()
+@@ -269,6 +278,9 @@ bool MachPortRendezvousClientMac::AcquirePorts() {
+ bool MachPortRendezvousClientMac::ValidateMessage(
+     mach_msg_base_t* message,
+     BufferIterator<uint8_t> iterator) {
++  if (colossus_owned_process::Enabled() && !server_requirement_.has_value()) {
++    return false;
++  }
+   if (!server_requirement_.has_value() ||
+       !ShouldValidateProcessRequirements()) {
+     return true;
+@@ -290,6 +302,11 @@ bool MachPortRendezvousClientMac::ValidateMessage(
+ 
+   iterator.Seek(message->header.msgh_size);
+   auto* trailer = iterator.Object<mach_msg_audit_trailer_t>();
++  if (colossus_owned_process::Enabled() &&
++      audit_token_to_pid(trailer->msgh_audit) !=
++          colossus_owned_process::LogicalBrowserPid()) {
++    return false;
++  }
+   bool valid = server_requirement_->ValidateProcess(trailer->msgh_audit,
+                                                     info_plist_data);
+   if (ShouldEnforceProcessRequirements()) {
+diff --git a/base/process/kill_posix.cc b/base/process/kill_posix.cc
+index 846605f502..90c1eb6e95 100644
+--- a/base/process/kill_posix.cc
++++ b/base/process/kill_posix.cc
+@@ -16,6 +16,9 @@
+ #include "base/process/process_iterator.h"
+ #include "base/threading/platform_thread.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_MAC)
++#include "base/process/colossus_owned_process_client.h"
++#endif
+ 
+ namespace base {
+ 
+@@ -27,6 +30,24 @@ TerminationStatus GetTerminationStatusImpl(ProcessHandle handle,
+   DCHECK(exit_code);
+ 
+   int status = 0;
++#if BUILDFLAG(IS_MAC)
++  if (colossus_owned_process::Enabled()) {
++    bool exited = false;
++    const bool ok = can_block
++        ? colossus_owned_process::WaitForExit(
++              handle, std::chrono::milliseconds::max(), &status)
++        : colossus_owned_process::Status(handle, &exited, &status);
++    if (!ok) {
++      *exit_code = 0;
++      return TERMINATION_STATUS_LAUNCH_FAILED;
++    }
++    if (!can_block && !exited) {
++      *exit_code = 0;
++      return TERMINATION_STATUS_STILL_RUNNING;
++    }
++  } else
++#endif
++  {
+   const pid_t result =
+       HANDLE_EINTR(waitpid(handle, &status, can_block ? 0 : WNOHANG));
+   if (result == -1) {
+@@ -40,6 +61,7 @@ TerminationStatus GetTerminationStatusImpl(ProcessHandle handle,
+     return TERMINATION_STATUS_STILL_RUNNING;
+   }
+ 
++  }
+   *exit_code = status;
+ 
+   if (WIFSIGNALED(status)) {
+@@ -81,7 +103,15 @@ TerminationStatus GetTerminationStatus(ProcessHandle handle, int* exit_code) {
+ 
+ TerminationStatus GetKnownDeadTerminationStatus(ProcessHandle handle,
+                                                 int* exit_code) {
+-  bool result = kill(handle, SIGKILL) == 0;
++  bool result;
++#if BUILDFLAG(IS_MAC)
++  if (colossus_owned_process::Enabled()) {
++    result = colossus_owned_process::Terminate(handle);
++  } else
++#endif
++  {
++    result = kill(handle, SIGKILL) == 0;
++  }
+ 
+   if (!result) {
+     DPLOG(ERROR) << "Unable to terminate process " << handle;
+diff --git a/base/process/launch_mac.cc b/base/process/launch_mac.cc
+index 7e09a9d4a6..9e3db5f1a4 100644
+--- a/base/process/launch_mac.cc
++++ b/base/process/launch_mac.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "build/build_config.h"
++#include "base/process/colossus_owned_process_client.h"
+ 
+ #if BUILDFLAG(IS_IOS_TVOS)
+ #include <TargetConditionals.h>
+@@ -70,6 +71,7 @@ int posix_spawnattr_set_csm_np(const posix_spawnattr_t*, uint32_t)
+ #include <mach/mach.h>
+ #include <spawn.h>
+ #include <string.h>
++#include <stdio.h>
+ #include <sys/wait.h>
+ 
+ #include "base/apple/mach_port_rendezvous.h"
+@@ -402,10 +404,48 @@ Process LaunchProcess(const std::vector<std::string>& argv,
+     // which is actually mutable (`char**`). `posix_spawnp` does not modify
+     // the envp array or the strings it points to, so casting away constness
+     // to match the posix_spawnp signature is safe.
+-    rv = posix_spawnp(
+-        &pid, executable_path, file_actions.get(), attr.get(), &argv_cstr[0],
+-        owned_environ.empty() ? const_cast<char**>(new_environ.data())
+-                              : owned_environ.data());
++#if BUILDFLAG(IS_MAC)
++    if (colossus_owned_process::Enabled()) {
++      // Only typed switches go to the native broker. It selects signed images,
++      // creates its own pipes, and owns fixed environment and process attributes.
++      rv = EPERM;
++      pid = 0;
++      if (argv.size() > 1 && options.fds_to_remap.empty() &&
++          options.environment.empty() && options.real_path.empty() &&
++          options.process_requirement.has_value() &&
++          options.current_directory.empty() && !options.wait &&
++          !options.new_process_group && !options.maximize_rlimits &&
++          !options.disclaim_responsibility &&
++          !options.enable_cpu_security_mitigations) {
++        std::vector<std::string> switches(argv.begin() + 1, argv.end());
++        pid = colossus_owned_process::SpawnStopped(switches);
++        rv = pid > 0 ? 0 : EPERM;
++      }
++      if (rv != 0) {
++        // Fixed categories/counts only; the independently sealed Debug creator
++        // may retain this bounded private output. Never print paths or argv.
++        const unsigned rejected = (argv.size() <= 1 ? 1u : 0u) |
++            (!options.fds_to_remap.empty() ? 2u : 0u) |
++            (!options.environment.empty() ? 4u : 0u) |
++            (!options.real_path.empty() ? 8u : 0u) |
++            (!options.process_requirement.has_value() ? 16u : 0u) |
++            (!options.current_directory.empty() ? 32u : 0u) |
++            (options.wait ? 64u : 0u) | (options.new_process_group ? 128u : 0u) |
++            (options.maximize_rlimits ? 256u : 0u) |
++            (options.disclaim_responsibility ? 512u : 0u) |
++            (options.enable_cpu_security_mitigations ? 1024u : 0u);
++        fprintf(stderr, "owned chromium launch refused flags=%u fd_maps=%zu environment=%zu mach_ports=%zu\n",
++                rejected, options.fds_to_remap.size(), options.environment.size(),
++                options.mach_ports_for_rendezvous.size());
++      }
++    } else
++#endif
++    {
++      rv = posix_spawnp(
++          &pid, executable_path, file_actions.get(), attr.get(), &argv_cstr[0],
++          owned_environ.empty() ? const_cast<char**>(new_environ.data())
++                                : owned_environ.data());
++    }
+ 
+ #if !BUILDFLAG(IS_IOS)
+     if (needs_rendezvous_lock) {
+@@ -430,6 +470,15 @@ Process LaunchProcess(const std::vector<std::string>& argv,
+         }
+       }
+     }
++#endif
++    // The one-shot Mojo right and exact process requirement are registered
++    // while the actual child is stopped. An error never falls back to spawn.
++#if BUILDFLAG(IS_MAC)
++    if (rv == 0 && colossus_owned_process::Enabled() &&
++        !colossus_owned_process::Resume(pid)) {
++      colossus_owned_process::Terminate(pid);
++      rv = ECANCELED;
++    }
+ #endif
+   }
+ 
+diff --git a/base/process/process_posix.cc b/base/process/process_posix.cc
+index 40f0df4fce..e2377e9493 100644
+--- a/base/process/process_posix.cc
++++ b/base/process/process_posix.cc
+@@ -24,6 +24,9 @@
+ #include "base/time/time.h"
+ #include "base/trace_event/trace_event.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_MAC)
++#include "base/process/colossus_owned_process_client.h"
++#endif
+ 
+ #if BUILDFLAG(IS_MAC)
+ #include <sys/event.h>
+@@ -298,6 +301,12 @@ bool Process::Terminate(int exit_code, bool wait) const {
+ 
+ #if !BUILDFLAG(IS_IOS) || (BUILDFLAG(USE_BLINK) && TARGET_OS_SIMULATOR)
+ bool Process::TerminateInternal(int exit_code, bool wait) const {
++#if BUILDFLAG(IS_MAC)
++  if (colossus_owned_process::Enabled() && process_ != GetCurrentProcessHandle()) {
++    // Only the independently retained creator sends signals/reaps owned slots.
++    return colossus_owned_process::Terminate(process_);
++  }
++#endif
+   // |wait| is always false when terminating badly-behaved processes.
+   const bool maybe_compromised =
+       !wait && exit_code == Process::kResultCodeKilledBadMessage;
+@@ -365,6 +374,17 @@ bool Process::WaitForExitWithTimeoutImpl(base::ProcessHandle handle,
+   }
+ 
+   TRACE_EVENT0("base", "Process::WaitForExitWithTimeout");
++#if BUILDFLAG(IS_MAC)
++  if (colossus_owned_process::Enabled()) {
++    int status = 0;
++    const auto bound = timeout == TimeDelta::Max()
++        ? std::chrono::milliseconds::max()
++        : std::chrono::milliseconds(timeout.InMilliseconds());
++    if (!colossus_owned_process::WaitForExit(handle, bound, &status)) return false;
++    if (exit_code) *exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
++    return true;
++  }
++#endif
+ 
+   const base::ProcessHandle parent_pid = base::GetParentProcessId(handle);
+   const bool exited = (parent_pid < 0);
+diff --git a/base/synchronization/lock_metrics_recorder.cc b/base/synchronization/lock_metrics_recorder.cc
+index 3e2533316e..7d37cd01d9 100644
+--- a/base/synchronization/lock_metrics_recorder.cc
++++ b/base/synchronization/lock_metrics_recorder.cc
+@@ -226,7 +226,13 @@ void LockMetricsRecorder::EnableRecordingOnCurrentThread(
+ 
+ LockMetricsRecorder::LockMetricsRecorder(PassKey,
+                                          std::string_view histogram_suffix)
+-    : histogram_suffix_(histogram_suffix) {}
++    : histogram_suffix_(histogram_suffix) {
++  // CEF lazily seeds MetricsSubSampler via BoringSSL, which may allocate.
++  // Seed before tls_slot->Set publishes this recorder: allocation and locks
++  // are allowed during EnableRecordingOnCurrentThread initialization, while
++  // the later PartitionAlloc lock-metrics sampling path must not allocate.
++  (void)subsampler_.ShouldSample(0.0);
++}
+ 
+ LockMetricsRecorder::~LockMetricsRecorder() = default;
+ 
+diff --git a/chrome/common/chrome_paths_mac.mm b/chrome/common/chrome_paths_mac.mm
+index 6829c9cb92..0fdeeecefc 100644
+--- a/chrome/common/chrome_paths_mac.mm
++++ b/chrome/common/chrome_paths_mac.mm
+@@ -13,6 +13,8 @@
+ #include "base/base_paths.h"
+ #include "base/check_op.h"
+ #include "base/compiler_specific.h"
++#include "base/files/file_util.h"
++#include "base/process/colossus_owned_process_client.h"
+ #include "base/memory/free_deleter.h"
+ #include "base/path_service.h"
+ #include "base/strings/sys_string_conversions.h"
+@@ -131,6 +133,19 @@ bool GetUserVideosDirectory(base::FilePath* result) {
+ }
+ 
+ base::FilePath GetFrameworkBundlePath() {
++  if (colossus_owned_process::Enabled()) {
++    // CEF establishes this actual loaded bundle before content startup. Its
++    // owned LSUIElement Main is not a nested Chrome version-directory helper.
++    // Keep the regular Chrome layout checks below for non-owned callers.
++    const base::FilePath path = base::apple::FrameworkBundlePath();
++    base::FilePath canonical;
++    CHECK(!path.empty());
++    CHECK(base::NormalizeFilePath(path, &canonical));
++    CHECK_EQ(path, canonical);
++    CHECK_EQ(path.BaseName().value(), "Chromium Embedded Framework.framework");
++    CHECK_EQ(path.DirName().BaseName().value(), "Frameworks");
++    return path;
++  }
+   // It's tempting to use +[NSBundle bundleWithIdentifier:], but it's really
+   // slow (about 30ms on 10.5 and 10.6), despite Apple's documentation stating
+   // that it may be more efficient than +bundleForClass:.  +bundleForClass:
+diff --git a/content/browser/child_process_launcher_helper_mac.cc b/content/browser/child_process_launcher_helper_mac.cc
+index 72fb33d264..895e32f8e7 100644
+--- a/content/browser/child_process_launcher_helper_mac.cc
++++ b/content/browser/child_process_launcher_helper_mac.cc
+@@ -3,6 +3,8 @@
+ // found in the LICENSE file.
+ 
+ #include "content/browser/child_process_launcher_helper.h"
++#include <sys/wait.h>
++#include "base/process/colossus_owned_process_client.h"
+ 
+ #include "base/apple/mach_port_rendezvous.h"
+ #include "base/command_line.h"
+@@ -122,7 +124,9 @@ bool ChildProcessLauncherHelper::BeforeLaunchOnLauncherThread(
+       command_line_->HasSwitch(sandbox::policy::switches::kNoSandbox) ||
+       sandbox::policy::IsUnsandboxedSandboxType(sandbox_type);
+ 
+-  if (!no_sandbox) {
++  // The owned front applies a pinned role composite before CEF is loaded.
++  // A browser-supplied policy pipe cannot replace that native authority.
++  if (!no_sandbox && !colossus_owned_process::Enabled()) {
+     if (!LOG_IS_ON(INFO)) {
+       // Disable os logging to com.apple.diagnosticd when logging is not
+       // enabled. The system logging has a measureable performance impact.
+@@ -208,6 +212,23 @@ ChildProcessTerminationInfo ChildProcessLauncherHelper::GetTerminationInfo(
+     const ChildProcessLauncherHelper::Process& process,
+     bool known_dead) {
+   ChildProcessTerminationInfo info;
++  if (colossus_owned_process::Enabled()) {
++    bool exited = false;
++    int status = 0;
++    if ((known_dead && !colossus_owned_process::Terminate(process.process.Pid())) ||
++        !colossus_owned_process::Status(process.process.Pid(), &exited, &status)) {
++      info.status = base::TERMINATION_STATUS_LAUNCH_FAILED;
++      info.exit_code = 0;
++      return info;
++    }
++    info.exit_code = status;
++    info.status = !exited ? base::TERMINATION_STATUS_STILL_RUNNING
++        : WIFSIGNALED(status) ? base::TERMINATION_STATUS_PROCESS_WAS_KILLED
++        : (WIFEXITED(status) && WEXITSTATUS(status) == 0)
++            ? base::TERMINATION_STATUS_NORMAL_TERMINATION
++            : base::TERMINATION_STATUS_ABNORMAL_TERMINATION;
++    return info;
++  }
+   info.status = known_dead ? base::GetKnownDeadTerminationStatus(
+                                  process.process.Handle(), &info.exit_code)
+                            : base::GetTerminationStatus(
+@@ -218,6 +239,9 @@ ChildProcessTerminationInfo ChildProcessLauncherHelper::GetTerminationInfo(
+ // static
+ bool ChildProcessLauncherHelper::TerminateProcess(const base::Process& process,
+                                                   int exit_code) {
++  if (colossus_owned_process::Enabled()) {
++    return colossus_owned_process::Terminate(process.Pid());
++  }
+   // TODO(crbug.com/40565504): Determine whether we should also call
+   // EnsureProcessTerminated() to make sure of process-exit, and reap it.
+   return process.Terminate(exit_code, false);
+@@ -229,6 +253,10 @@ void ChildProcessLauncherHelper::ForceNormalProcessTerminationSync(
+   CHECK(CurrentlyOnProcessLauncherTaskRunner(), base::NotFatalUntil::M159);
+   // Client has gone away, so just kill the process.  Using exit code 0 means
+   // that UMA won't treat this as a crash.
++  if (colossus_owned_process::Enabled()) {
++    colossus_owned_process::Terminate(process.process.Pid());
++    return;
++  }
+   process.process.Terminate(RESULT_CODE_NORMAL_EXIT, false);
+   base::EnsureProcessTerminated(std::move(process.process));
+ }

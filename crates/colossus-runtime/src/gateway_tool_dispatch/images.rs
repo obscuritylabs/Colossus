@@ -96,6 +96,7 @@ impl GatewayToolExecutor {
             name: call.name,
             output,
             exit_code: 0,
+            images: Vec::new(),
         })
     }
 }

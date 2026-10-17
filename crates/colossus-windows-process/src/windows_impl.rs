@@ -60,6 +60,11 @@ use windows_sys::Win32::{
 };
 use windows_sys::core::GUID;
 
+pub(super) mod bootstrap;
+mod channels;
+pub(crate) mod context;
+pub(super) mod tree;
+
 pub(super) struct OwnedHandle(HANDLE);
 
 impl OwnedHandle {
@@ -73,6 +78,11 @@ impl OwnedHandle {
 
     fn raw(&self) -> HANDLE {
         self.0
+    }
+
+    pub(super) fn borrow(&self) -> std::os::windows::io::BorrowedHandle<'_> {
+        // SAFETY: uniquely owned kernel handle remains live for this self borrow.
+        unsafe { std::os::windows::io::BorrowedHandle::borrow_raw(self.0.cast()) }
     }
 
     fn into_file(self) -> File {
@@ -95,11 +105,29 @@ impl Drop for OwnedHandle {
 pub(super) struct NetworkGuard(HANDLE);
 
 impl NetworkGuard {
+    pub(super) fn retire(&mut self) -> Result<(), WindowsProcessError> {
+        if self.0.is_null() {
+            return Ok(());
+        }
+        // SAFETY: the guard retains this exact dynamic-session engine handle.
+        let status = unsafe { FwpmEngineClose0(self.0) };
+        if status != 0 {
+            return Err(code_error("FwpmEngineClose0", status));
+        }
+        self.0 = null_mut();
+        Ok(())
+    }
     fn install(
         appcontainer_sid: PSID,
         proxy_port: u16,
         identity: u128,
     ) -> Result<Self, WindowsProcessError> {
+        let guard = Self::open(identity)?;
+        guard.configure(appcontainer_sid, proxy_port, identity)?;
+        Ok(guard)
+    }
+
+    fn open(identity: u128) -> Result<Self, WindowsProcessError> {
         let session_name = wide(OsStr::new("Colossus AppContainer proxy-only session"));
         // SAFETY: zero is the documented initial state for an FWPM session.
         let mut session: FWPM_SESSION0 = unsafe { zeroed() };
@@ -124,9 +152,7 @@ impl NetworkGuard {
         if result != 0 {
             return Err(code_error("FwpmEngineOpen0", result));
         }
-        let guard = Self(engine);
-        guard.configure(appcontainer_sid, proxy_port, identity)?;
-        Ok(guard)
+        Ok(Self(engine))
     }
 
     fn configure(
@@ -219,9 +245,7 @@ impl Drop for NetworkGuard {
     fn drop(&mut self) {
         // SAFETY: the dynamic WFP engine handle is uniquely owned by this guard. Closing it
         // atomically removes the sublayer and every per-job filter.
-        unsafe {
-            FwpmEngineClose0(self.0);
-        }
+        let _ = self.retire();
     }
 }
 
@@ -391,6 +415,16 @@ impl PipeSet {
 }
 
 pub(super) fn spawn(request: &SpawnRequest) -> Result<SandboxedChild, WindowsProcessError> {
+    Ok(spawn_with_channels(request, 0)?.child)
+}
+
+pub(super) fn spawn_with_channels(
+    request: &SpawnRequest,
+    count: usize,
+) -> Result<crate::SupervisedChild, WindowsProcessError> {
+    if count != 0 {
+        return context::spawn(request, count);
+    }
     let sid_wide = wide(OsStr::new(&request.appcontainer_sid));
     let mut sid: PSID = null_mut();
     // SAFETY: sid_wide is NUL terminated and sid receives a LocalAlloc-owned PSID.
@@ -408,6 +442,21 @@ pub(super) fn spawn(request: &SpawnRequest) -> Result<SandboxedChild, WindowsPro
         }
     };
 
+    spawn_owned(request, count, Some(sid.0), network)
+}
+
+#[cfg(debug_assertions)]
+pub(super) fn spawn_user_browser(
+    request: &SpawnRequest,
+    count: usize,
+) -> Result<crate::SupervisedChild, WindowsProcessError> {
+    spawn_owned(request, count, None, None)
+}
+
+fn new_job(
+    request: &SpawnRequest,
+    count: usize,
+) -> Result<(OwnedHandle, OwnedHandle), WindowsProcessError> {
     // SAFETY: zero is the documented initial state for these Win32 structures.
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_ACTIVE_PROCESS
@@ -458,6 +507,11 @@ pub(super) fn spawn(request: &SpawnRequest) -> Result<SandboxedChild, WindowsPro
     {
         return Err(last_error("SetInformationJobObject"));
     }
+    // Private-channel browser hosts preserve Chromium's own alternate desktops,
+    // token restrictions and nested sandbox Jobs. Outer Job UI limits prohibit
+    // that initialization (Chromium sandbox/policy/sandbox.cc's alternate-desktop
+    // CHECK) and are incompatible with nested Jobs on Windows. Ordinary command
+    // launches keep every existing UI restriction. Neither path permits breakaway.
     let ui_restrictions = JOBOBJECT_BASIC_UI_RESTRICTIONS {
         UIRestrictionsClass: JOB_OBJECT_UILIMIT_DESKTOP
             | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS
@@ -469,39 +523,64 @@ pub(super) fn spawn(request: &SpawnRequest) -> Result<SandboxedChild, WindowsPro
             | JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
     };
     // SAFETY: ui_restrictions has the exact structure required by this information class.
-    if unsafe {
-        SetInformationJobObject(
-            job.raw(),
-            JobObjectBasicUIRestrictions,
-            (&raw const ui_restrictions).cast(),
-            u32::try_from(size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>())
-                .expect("structure size fits u32"),
-        )
-    } == 0
+    if count == 0
+        && unsafe {
+            SetInformationJobObject(
+                job.raw(),
+                JobObjectBasicUIRestrictions,
+                (&raw const ui_restrictions).cast(),
+                u32::try_from(size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>())
+                    .expect("structure size fits u32"),
+            )
+        } == 0
     {
         return Err(last_error("SetInformationJobObject(UI restrictions)"));
     }
 
+    Ok((job, completion_port))
+}
+
+fn spawn_owned(
+    request: &SpawnRequest,
+    count: usize,
+    package: Option<PSID>,
+    network: Option<NetworkGuard>,
+) -> Result<crate::SupervisedChild, WindowsProcessError> {
+    let (job, completion_port) = new_job(request, count)?;
     let pipes = PipeSet::new()?;
-    let inherited = [
+    let mut inherited = vec![
         pipes.child_stdin.raw(),
         pipes.child_stdout.raw(),
         pipes.child_stderr.raw(),
     ];
+    let private_channels = (0..count)
+        .map(|_| channels::ChannelPipes::new())
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut arguments = request.arguments.clone();
+    if count != 0 {
+        arguments.push("--inherited-browser-pipes".into());
+        for channel in &private_channels {
+            let handles = channel.child_handles();
+            inherited.extend(handles);
+            arguments.extend(handles.map(|handle| (handle as usize).to_string()));
+        }
+    }
     let mut capabilities = SECURITY_CAPABILITIES {
-        AppContainerSid: sid.0,
+        AppContainerSid: package.unwrap_or(null_mut()),
         Capabilities: null_mut(),
         CapabilityCount: 0,
         Reserved: 0,
     };
     let job_list = [job.raw()];
-    let mut attributes = AttributeList::new(3)?;
-    attributes.set(
-        PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
-        (&raw mut capabilities).cast(),
-        size_of::<SECURITY_CAPABILITIES>(),
-        "UpdateProcThreadAttribute(security capabilities)",
-    )?;
+    let mut attributes = AttributeList::new(2 + u32::from(package.is_some()))?;
+    if package.is_some() {
+        attributes.set(
+            PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
+            (&raw mut capabilities).cast(),
+            size_of::<SECURITY_CAPABILITIES>(),
+            "UpdateProcThreadAttribute(security capabilities)",
+        )?;
+    }
     attributes.set(
         PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
         job_list.as_ptr().cast(),
@@ -511,13 +590,12 @@ pub(super) fn spawn(request: &SpawnRequest) -> Result<SandboxedChild, WindowsPro
     attributes.set(
         PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
         inherited.as_ptr().cast(),
-        size_of_val(&inherited),
+        inherited.len() * size_of::<HANDLE>(),
         "UpdateProcThreadAttribute(handle list)",
     )?;
 
     let executable = wide(request.executable.as_os_str());
-    let command_line_value =
-        windows_command_line(request.executable.as_os_str(), &request.arguments);
+    let command_line_value = windows_command_line(request.executable.as_os_str(), &arguments);
     let mut command_line = wide(OsStr::new(&command_line_value));
     if command_line.len() > 32_767 {
         return Err(WindowsProcessError::Invalid(
@@ -575,7 +653,7 @@ pub(super) fn spawn(request: &SpawnRequest) -> Result<SandboxedChild, WindowsPro
     drop(child_stdin);
     drop(child_stdout);
     drop(child_stderr);
-    Ok(SandboxedChild::from_parts(SandboxedChildParts {
+    let child = SandboxedChild::from_parts(SandboxedChildParts {
         pid: process_info.dwProcessId,
         stdin: parent_stdin.into_file(),
         stdout: parent_stdout.into_file(),
@@ -584,7 +662,52 @@ pub(super) fn spawn(request: &SpawnRequest) -> Result<SandboxedChild, WindowsPro
         job,
         completion_port,
         network,
-    }))
+        context: None,
+    });
+    Ok(crate::SupervisedChild {
+        child,
+        channels: private_channels
+            .into_iter()
+            .map(channels::ChannelPipes::into_parent)
+            .collect(),
+    })
+}
+
+pub(super) fn wait_tree_timeout(
+    job: &OwnedHandle,
+    timeout: Duration,
+) -> Result<bool, WindowsProcessError> {
+    use windows_sys::Win32::System::JobObjects::{
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JobObjectBasicAccountingInformation,
+    };
+    let deadline = std::time::Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| WindowsProcessError::Invalid("Job exit deadline overflow".into()))?;
+    loop {
+        // SAFETY: zero is the documented initial state for this query structure.
+        let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { zeroed() };
+        // SAFETY: retained Job handle and exactly sized writable query buffer.
+        if unsafe {
+            QueryInformationJobObject(
+                job.raw(),
+                JobObjectBasicAccountingInformation,
+                (&raw mut accounting).cast(),
+                size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                null_mut(),
+            )
+        } == 0
+        {
+            return Err(last_error("QueryInformationJobObject(active processes)"));
+        }
+        if accounting.ActiveProcesses == 0 {
+            return Ok(true);
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return Ok(false);
+        }
+        std::thread::sleep(Duration::from_millis(10).min(deadline - now));
+    }
 }
 
 pub(super) fn wait_timeout(

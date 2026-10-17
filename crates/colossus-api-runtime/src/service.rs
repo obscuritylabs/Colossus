@@ -221,6 +221,9 @@ impl RuntimeAgentRunApi {
         instructions: impl Into<String>,
         admission: RunAdmissionConfig,
     ) -> Self {
+        runtime.install_browser_artifact_publisher(Arc::new(
+            colossus_api::ReleasedBrowserArtifactPublisher,
+        ));
         let watches = WatchAdmission::new(&admission);
         let lists = ListAdmission::new(&admission);
         let shell_queries = ListAdmission::new(&admission);
@@ -440,8 +443,11 @@ impl RuntimeAgentRunApi {
                         })?;
                         ModelContentPart::Text {
                             text: format!(
-                                "Attached file {} ({}):\n{}",
-                                download.artifact.file_name, download.artifact.media_type, text
+                                "Attached file {} ({}) [RunInput artifact: {}]:\n{}",
+                                download.artifact.file_name,
+                                download.artifact.media_type,
+                                artifact_id,
+                                text
                             ),
                         }
                     } else if artifact.media_type.starts_with("image/") {
@@ -3360,6 +3366,7 @@ mod tests {
         let update = public_event(RunEvent::ToolCompleted {
             turn: 1,
             result: ToolResult {
+                images: Vec::new(),
                 call_id: "call-map".into(),
                 name: "repo.map".into(),
                 output: output.clone(),
@@ -3382,6 +3389,7 @@ mod tests {
         let update = public_event(RunEvent::ToolCompleted {
             turn: 1,
             result: ToolResult {
+                images: Vec::new(),
                 call_id: "call-shell".into(),
                 name: "shell.run".into(),
                 output,
@@ -3414,6 +3422,7 @@ mod tests {
             "invocation": {"command": "PRIVATE_COMMAND", "environment": {"TOKEN": "PRIVATE_ENV"}},
             "resolved_argv": ["PRIVATE_ARGV"], "cwd": "PRIVATE_PATH", "observed_origins": ["PRIVATE_URL"]}).to_string();
         let result = ToolResult {
+            images: Vec::new(),
             call_id: "call".into(),
             name: "shell.run".into(),
             output: output.clone(),
@@ -3421,6 +3430,7 @@ mod tests {
         };
         let preview = released_tool_preview(&result).unwrap();
         let failed = ToolResult {
+            images: Vec::new(),
             exit_code: 1,
             ..result.clone()
         };
@@ -3469,6 +3479,7 @@ mod tests {
             let update = public_event(RunEvent::ToolCompleted {
                 turn: 1,
                 result: ToolResult {
+                    images: Vec::new(),
                     call_id: "call".into(),
                     name: "shell.run".into(),
                     output: output.clone(),
@@ -3502,12 +3513,14 @@ mod tests {
     fn unsuccessful_and_empty_outputs_do_not_release_a_public_preview() {
         for result in [
             ToolResult {
+                images: Vec::new(),
                 call_id: "call-failed".into(),
                 name: "repo.map".into(),
                 output: "failed tool detail".into(),
                 exit_code: 1,
             },
             ToolResult {
+                images: Vec::new(),
                 call_id: "call-empty".into(),
                 name: "shell.run".into(),
                 output: " \n ".into(),

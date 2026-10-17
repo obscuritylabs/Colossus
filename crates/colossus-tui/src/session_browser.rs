@@ -406,7 +406,9 @@ fn preview_lines(
             ModelMessageRole::User => ("USER", palette.user_style()),
             ModelMessageRole::Assistant => ("ASSISTANT", palette.assistant_style()),
             ModelMessageRole::System => ("SYSTEM", palette.meta_style()),
-            ModelMessageRole::Tool => ("TOOL", palette.tool_style()),
+            ModelMessageRole::Tool | ModelMessageRole::ToolObservation => {
+                ("TOOL", palette.tool_style())
+            }
         };
         let content = clean_session_browser_text(&message.content);
         for (index, content) in wrap_approval_value(&content, content_width)

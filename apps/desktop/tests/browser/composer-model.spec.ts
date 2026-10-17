@@ -146,6 +146,107 @@ test("a new thread starts with role defaults after another thread used overrides
   await expect(slider).toHaveAttribute("aria-valuetext", "Model default");
 });
 
+test("browser conversation keeps model and reasoning after its first message", async ({
+  page,
+}) => {
+  // Supply only the BrowserApi response; the real App handoff and submission
+  // state run in the existing renderer fixture without a native browser.
+  const snapshot = {
+    available: true,
+    generation: 1,
+    tabs: [
+      {
+        id: "model-handoff-tab",
+        url: "https://example.test/",
+        title: "Model handoff page",
+        canGoBack: false,
+        canGoForward: false,
+        loading: false,
+        error: null,
+        notice: null,
+        popupUrl: null,
+        control: "human",
+        conversationId: "model-handoff-conversation",
+      },
+    ],
+    selectedTabId: "model-handoff-tab",
+    engine: {
+      kind: "owned_chromium",
+      preview: false,
+      ready: true,
+      message: null,
+      agentControlAvailable: true,
+    },
+  };
+  await page.route("**/src/dev/browser-fixture.ts", (route) =>
+    route.fulfill({
+      contentType: "text/javascript",
+      body: `export function browserFixture() {
+        const snapshot = ${JSON.stringify(snapshot)};
+        return {
+          context: async () => structuredClone(snapshot),
+          command: async () => structuredClone(snapshot),
+          viewport: async () => {},
+        };
+      }`,
+    }),
+  );
+  await page.reload();
+  await page.getByRole("button", { name: "Open browser", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Use in a new conversation", exact: true })
+    .click();
+  const model = page.getByRole("button", {
+    name: "Choose model and reasoning: fixture",
+    exact: true,
+  });
+  const explicitModel = page.getByRole("option", {
+    name: "fixture OpenRouter · primary (primary-provider)",
+    exact: true,
+  });
+  const slider = page.getByRole("slider", {
+    name: "Reasoning effort for next message",
+    exact: true,
+  });
+  await model.click();
+  await explicitModel.click();
+  await slider.press("End");
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  const prompt = page.getByRole("textbox", { name: "Prompt", exact: true });
+  for (const message of [
+    "Use this browser page",
+    "Continue with the same model",
+  ]) {
+    await prompt.fill(message);
+    await page
+      .getByRole("button", { name: "Send prompt", exact: true })
+      .click();
+    await expect(prompt).toHaveValue("");
+    await expect(model).toContainText("ultra");
+    await expect(
+      page.getByRole("button", { name: "Give agent control", exact: true }),
+    ).toBeVisible();
+    await model.click();
+    await expect(explicitModel).toHaveAttribute("aria-selected", "true");
+    await expect(slider).toHaveAttribute("aria-valuetext", "ultra");
+    await page.getByRole("button", { name: "Done", exact: true }).click();
+  }
+  await page
+    .getByRole("button", { name: "Close tool pane", exact: true })
+    .click();
+  await page.setViewportSize({ width: 880, height: 950 });
+  await page.getByRole("button", { name: "Open work navigation" }).click();
+  await page.getByRole("button", { name: "New thread in Colossus" }).click();
+  await model.click();
+  await expect(
+    page.getByRole("option", {
+      name: "Role default fixture · OpenRouter",
+      exact: true,
+    }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(slider).toHaveAttribute("aria-valuetext", "Model default");
+});
+
 test("composer retains visible, accessible controls at narrow widths in both themes", async ({
   page,
 }) => {

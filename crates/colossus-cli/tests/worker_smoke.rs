@@ -181,7 +181,8 @@ fn worker_owns_lease_routes_streams_rejects_wrong_key_and_shuts_down_cleanly() {
     worker_auth_path.push(".worker-auth");
     let worker_auth_path = std::path::PathBuf::from(worker_auth_path);
     #[cfg(unix)]
-    let socket = std::path::PathBuf::from(format!("{}.worker.sock", state.display()));
+    let socket =
+        std::path::PathBuf::from(worker_ipc_endpoint(&state).expect("worker IPC endpoint"));
     let anchor = directory.path().join("anchor.json");
     let workflows = directory.path().join("workflows");
     fs::create_dir_all(&workflows).expect("workflows");

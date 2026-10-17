@@ -10,8 +10,9 @@ mod styling;
 #[path = "macos/tests.rs"]
 pub(crate) mod tests;
 
-use crate::{DialogAppearance, PromptError, lifecycle::Completion, validation};
-use colossus_contracts::HostSecret;
+use crate::{
+    DialogAppearance, NativePassword, PromptError, lifecycle::Completion, purpose::Purpose,
+};
 use formatter::TokenFormatter;
 use objc2::{
     DefinedClass, MainThreadOnly, Message, define_class, msg_send,
@@ -49,6 +50,7 @@ struct Session {
     timer: Retained<NSTimer>,
     completion: Completion,
     cancelled: Arc<AtomicBool>,
+    purpose: Purpose,
 }
 
 #[derive(Default)]
@@ -75,9 +77,11 @@ define_class!(
         fn changed(&self, _: &NSNotification) {
             if let Some(session) = self.ivars().session.borrow().as_ref() {
                 let text = current_text(&session.input);
-                session.count.setStringValue(&NSString::from_str(&format!("{} / 65,536 bytes", text.length())));
+                let bytes = formatter::native_bytes(&text, session.purpose);
+                let count = bytes.as_ref().map_or_else(|_| "Invalid passphrase character".into(), |bytes| format!("{bytes} / 65,536 bytes"));
+                session.count.setStringValue(&NSString::from_str(&count));
                 session.status.setStringValue(ns_string!(""));
-                session.save.setEnabled(text.length() > 0);
+                session.save.setEnabled(bytes.is_ok() && (text.length() > 0 || session.purpose == Purpose::Pkcs12Password));
             }
         }
     }
@@ -90,16 +94,16 @@ define_class!(
                 let borrowed = self.ivars().session.borrow();
                 let Some(session) = borrowed.as_ref() else { return; };
                 let text = current_text(&session.input);
-                if let Err(error) = formatter::validate_native(&text) {
+                if let Err(error) = formatter::native_bytes(&text, session.purpose) {
                     session.status.setStringValue(&NSString::from_str(error.message()));
                     return;
                 }
                 let mut secret = Zeroizing::new(text.to_string());
-                if let Err(error) = validation::validate(&secret) {
+                if let Err(error) = session.purpose.validate(&secret) {
                     session.status.setStringValue(&NSString::from_str(error.message()));
                     return;
                 }
-                HostSecret::new(std::mem::take(&mut *secret)).map_err(|_| PromptError::Unavailable)
+                NativePassword::new(std::mem::take(&mut *secret))
             };
             self.finish(result);
         }
@@ -126,7 +130,7 @@ impl Controller {
         unsafe { msg_send![super(this), init] }
     }
 
-    fn finish(&self, result: Result<HostSecret, PromptError>) {
+    fn finish(&self, result: Result<NativePassword, PromptError>) {
         // Keep self alive through timer invalidation and thread-local release.
         let _keep_alive = self.retain();
         let Some(session) = self.ivars().session.borrow_mut().take() else {
@@ -158,6 +162,7 @@ pub(crate) fn open(
     cancelled: Arc<AtomicBool>,
     completion: Completion,
     appearance: DialogAppearance,
+    purpose: Purpose,
 ) {
     let Some(mtm) = MainThreadMarker::new() else {
         completion.finish(Err(PromptError::Unavailable));
@@ -177,15 +182,34 @@ pub(crate) fn open(
         completion.finish(Err(PromptError::Cancelled));
         return;
     }
-    open_sheet(&parent, mtm, cancelled, completion, appearance);
+    open_sheet_for(&parent, mtm, cancelled, completion, appearance, purpose);
 }
 
+#[cfg(feature = "native-test-driver")]
 fn open_sheet(
     parent: &NSWindow,
     mtm: MainThreadMarker,
     cancelled: Arc<AtomicBool>,
     completion: Completion,
     appearance: DialogAppearance,
+) {
+    open_sheet_for(
+        parent,
+        mtm,
+        cancelled,
+        completion,
+        appearance,
+        Purpose::Token,
+    );
+}
+
+fn open_sheet_for(
+    parent: &NSWindow,
+    mtm: MainThreadMarker,
+    cancelled: Arc<AtomicBool>,
+    completion: Completion,
+    appearance: DialogAppearance,
+    purpose: Purpose,
 ) {
     let controller = Controller::new(mtm);
     let style = styling::Style::new(parent, appearance);
@@ -201,24 +225,24 @@ fn open_sheet(
     unsafe {
         panel.setReleasedWhenClosed(false);
     }
-    panel.setTitle(ns_string!("Save credential"));
+    panel.setTitle(&NSString::from_str(purpose.title()));
     style.panel(&panel);
     let Some(content) = panel.contentView() else {
         completion.finish(Err(PromptError::Unavailable));
         return;
     };
-    let [heading, description, label] = style.labels(mtm);
+    let [heading, description, label] = style.labels(mtm, purpose);
     let input = NSSecureTextField::initWithFrame(
         NSSecureTextField::alloc(mtm),
         style.rect(28.0, 145.0, 504.0, 44.0),
     );
-    input.setPlaceholderString(Some(ns_string!("Paste your credential")));
+    input.setPlaceholderString(Some(&NSString::from_str(purpose.placeholder())));
     style.input(&input);
-    accessibility::label(&input, ns_string!("Token"));
+    accessibility::label(&input, &NSString::from_str(purpose.label()));
     let [count, status] = style.feedback(mtm);
     let save = unsafe {
         NSButton::buttonWithTitle_target_action(
-            ns_string!("Save"),
+            &NSString::from_str(purpose.confirm()),
             Some(&controller),
             Some(sel!(save:)),
             mtm,
@@ -227,8 +251,8 @@ fn open_sheet(
     save.setFrame(style.rect(432.0, 24.0, 100.0, 40.0));
     style.button(&save, true);
     save.setKeyEquivalent(ns_string!("\r"));
-    accessibility::label(&save, ns_string!("Save"));
-    save.setEnabled(false);
+    accessibility::label(&save, &NSString::from_str(purpose.confirm()));
+    save.setEnabled(purpose == Purpose::Pkcs12Password);
     let cancel = unsafe {
         NSButton::buttonWithTitle_target_action(
             ns_string!("Cancel"),
@@ -241,7 +265,7 @@ fn open_sheet(
     style.button(&cancel, false);
     cancel.setKeyEquivalent(ns_string!("\u{1b}"));
     accessibility::label(&cancel, ns_string!("Cancel"));
-    let formatter = TokenFormatter::new(mtm, status.clone());
+    let formatter = TokenFormatter::new(mtm, status.clone(), purpose);
     input.setFormatter(Some(&formatter));
     unsafe {
         input.setDelegate(Some(ProtocolObject::from_ref(&*controller)));
@@ -281,6 +305,7 @@ fn open_sheet(
         timer,
         completion,
         cancelled,
+        purpose,
     }));
     DIALOG.with(|dialog| dialog.replace(Some(controller)));
     parent.beginSheet_completionHandler(&panel, None);
