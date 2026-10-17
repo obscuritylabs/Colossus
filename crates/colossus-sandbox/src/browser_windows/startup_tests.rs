@@ -118,6 +118,7 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
     ]);
     // Exercise the normal launcher from this ordinary test process. It owns the
     // fresh logon context and station, including any partially failed setup.
+    let package_sid = profile.sid_string().unwrap();
     let spawned = colossus_windows_process::spawn_with_private_channels(
         &SpawnRequest {
             executable: installation
@@ -127,7 +128,7 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
             arguments: Vec::new(),
             cwd: installation.component.canonical_path().to_owned(),
             environment,
-            appcontainer_sid: profile.sid_string().unwrap(),
+            appcontainer_sid: package_sid.clone(),
             max_processes: 64,
             max_memory_bytes: 1024 * 1024 * 1024,
             proxy_port: None,
@@ -373,10 +374,16 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
             for access in colossus_windows_native::observe_browser_dependency_access(
                 child.process_handle(),
                 &installation.component,
+                &package_sid,
             ) {
                 eprintln!(
-                    "networkless CEF access object={} stage={} os_code={} granted={:?} live_bound={}",
-                    access.object, access.stage, access.os_code, access.granted, access.live_bound
+                    "networkless CEF access object={} policy={} stage={} os_code={} granted={:?} live_bound={}",
+                    access.object,
+                    access.policy,
+                    access.stage,
+                    access.os_code,
+                    access.granted,
+                    access.live_bound
                 );
             }
             let observed =

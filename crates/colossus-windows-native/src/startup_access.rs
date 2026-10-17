@@ -9,10 +9,15 @@ use windows_sys::Win32::{
     Foundation::{GetLastError, HANDLE, LocalFree, WAIT_TIMEOUT},
     Security::{
         AccessCheck,
-        Authorization::{GetSecurityInfo, SE_FILE_OBJECT},
+        Authorization::{
+            ConvertSecurityDescriptorToStringSecurityDescriptorW,
+            ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SE_FILE_OBJECT,
+        },
         DACL_SECURITY_INFORMATION, DuplicateTokenEx, GENERIC_MAPPING, GROUP_SECURITY_INFORMATION,
-        GetSecurityDescriptorLength, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-        SecurityIdentification, TOKEN_DUPLICATE, TOKEN_QUERY, TokenImpersonation,
+        GetSecurityDescriptorLength, GetTokenInformation, LookupPrivilegeValueW,
+        OWNER_SECURITY_INFORMATION, PRIVILEGE_SET, PSECURITY_DESCRIPTOR, PrivilegeCheck,
+        SE_PRIVILEGE_ENABLED, SecurityIdentification, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_QUERY,
+        TOKEN_USER, TokenImpersonation, TokenRestrictedSids, TokenUser,
     },
     Storage::FileSystem::{
         FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
@@ -28,11 +33,13 @@ use windows_sys::Win32::{
 pub struct StartupAccessObservation {
     /// Dependency or bounded ancestor index, never an input name.
     pub object: &'static str,
+    /// Actual descriptor, hypothetical in-memory grant, or categorical token fact.
+    pub policy: &'static str,
     /// Completed or a closed native-operation category.
     pub stage: &'static str,
     /// Immediate native error, or zero when no API error occurred.
     pub os_code: u32,
-    /// Actual AccessCheck mask; None means observation unavailable.
+    /// AccessCheck mask or categorical token value; None means observation unavailable.
     pub granted: Option<u32>,
     /// The retained process remained live through the observation.
     pub live_bound: bool,
@@ -45,12 +52,14 @@ pub struct StartupAccessObservation {
 /// it is never assigned or impersonated. No process is opened by PID and no ACL,
 /// token, process, file or cleanup authority is modified. Native calls are synchronous;
 /// bounds limit object count and buffers, not native call duration.
+/// Hypothetical ACL grants modify only disposable descriptors in memory.
 /// DACL decisions do not prove actual traversal, mandatory-label or loader-policy
 /// access; this observer never loads a DLL or impersonates the browser.
 #[must_use]
 pub fn observe_browser_dependency_access(
     process: BorrowedHandle<'_>,
     component: &BoundPath,
+    package_sid: &str,
 ) -> Vec<StartupAccessObservation> {
     let raw = process.as_raw_handle().cast();
     // SAFETY: the caller retains this exact process throughout all observations.
@@ -78,7 +87,17 @@ pub fn observe_browser_dependency_access(
     {
         paths.push((label, path.to_owned(), true));
     }
-    let mut records = Vec::with_capacity(paths.len());
+    let mut records = Vec::with_capacity(32);
+    if let Ok(token) = &token {
+        for (object, result) in token_facts(token) {
+            records.push(record(object, "token_fact", result));
+        }
+    }
+    let valid_package = package_sid.starts_with("S-1-15-2-")
+        && package_sid.len() <= 184
+        && package_sid
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b == b'-' || b == b'S');
     for (object, path, directory) in paths {
         let result = match &token {
             Ok(token) => {
@@ -87,23 +106,33 @@ pub fn observe_browser_dependency_access(
                 } else {
                     BoundPath::open_file(&path)
                 };
-                bound
-                    .map_err(|_| ("bind_object", 0))
-                    .and_then(|bound| access(token, &bound))
+                bound.map_err(|_| ("bind_object", 0)).and_then(|bound| {
+                    let descriptor = descriptor(&bound)?;
+                    if valid_package {
+                        for (policy, addition) in [
+                            ("virtual_aap_rx", "(A;;0x1200a9;;;AC)".to_owned()),
+                            (
+                                "virtual_package_rx",
+                                format!("(A;;0x1200a9;;;{package_sid})"),
+                            ),
+                            (
+                                "virtual_world_aap_rx",
+                                "(A;;0x1200a9;;;WD)(A;;0x1200a9;;;AC)".to_owned(),
+                            ),
+                        ] {
+                            records.push(record(
+                                object,
+                                policy,
+                                virtual_access(token, &descriptor, &addition),
+                            ));
+                        }
+                    }
+                    check(token, &descriptor)
+                })
             }
             Err(error) => Err(*error),
         };
-        let (stage, os_code, granted) = match result {
-            Ok(granted) => ("complete", 0, Some(granted)),
-            Err((stage, code)) => (stage, code, None),
-        };
-        records.push(StartupAccessObservation {
-            object,
-            stage,
-            os_code,
-            granted,
-            live_bound: false,
-        });
+        records.push(record(object, "actual", result));
     }
     // SAFETY: the exact borrowed process still lives through this zero-duration query.
     let live_bound = live && unsafe { WaitForSingleObject(raw, 0) } == WAIT_TIMEOUT;
@@ -152,7 +181,7 @@ impl Drop for Descriptor {
     }
 }
 
-fn access(token: &OwnedHandle, bound: &BoundPath) -> Result<u32, (&'static str, u32)> {
+fn descriptor(bound: &BoundPath) -> Result<Descriptor, (&'static str, u32)> {
     let file = bound.try_clone_file().map_err(|_| ("clone_object", 0))?;
     let mut descriptor = null_mut();
     // SAFETY: retained bound file/directory handle, output allocation owned below;
@@ -181,6 +210,10 @@ fn access(token: &OwnedHandle, bound: &BoundPath) -> Result<u32, (&'static str, 
     if length == 0 || length > 65_536 {
         return Err(("descriptor_bound", 0));
     }
+    Ok(descriptor)
+}
+
+fn check(token: &OwnedHandle, descriptor: &Descriptor) -> Result<u32, (&'static str, u32)> {
     let mapping = GENERIC_MAPPING {
         GenericRead: FILE_GENERIC_READ,
         GenericWrite: FILE_GENERIC_WRITE,
@@ -225,6 +258,174 @@ fn access_check_reads_real_kernel_descriptor_with_identification_token() {
     let token =
         identification(unsafe { windows_sys::Win32::System::Threading::GetCurrentProcess() })
             .unwrap();
-    let granted = access(&token, &bound).unwrap();
+    let granted = check(&token, &descriptor(&bound).unwrap()).unwrap();
     assert_eq!(granted & FILE_GENERIC_READ, FILE_GENERIC_READ);
+}
+
+type ObservationResult = Result<u32, (&'static str, u32)>;
+
+fn record(
+    object: &'static str,
+    policy: &'static str,
+    result: ObservationResult,
+) -> StartupAccessObservation {
+    let (stage, os_code, granted) = match result {
+        Ok(granted) => ("complete", 0, Some(granted)),
+        Err((stage, code)) => (stage, code, None),
+    };
+    StartupAccessObservation {
+        object,
+        policy,
+        stage,
+        os_code,
+        granted,
+        live_bound: false,
+    }
+}
+
+// Both descriptors are disposable memory only. There is deliberately no SetSecurityInfo,
+// SetFileSecurity, token adjustment, impersonation or object write in this observer.
+fn virtual_access(
+    token: &OwnedHandle,
+    descriptor: &Descriptor,
+    addition: &str,
+) -> ObservationResult {
+    let mut text = null_mut();
+    let mut chars = 0;
+    // SAFETY: retained descriptor; returned string is LocalAlloc-owned.
+    if unsafe {
+        ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            descriptor.0,
+            1,
+            OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &mut text,
+            &mut chars,
+        )
+    } == 0
+    {
+        return Err(("descriptor_encode", unsafe { GetLastError() }));
+    }
+    let allocation = Descriptor(text.cast());
+    if text.is_null() || chars == 0 || chars > 65_536 {
+        return Err(("text_bound", 0));
+    }
+    // SAFETY: the API returned this many UTF-16 code units including the terminator.
+    let units = unsafe { std::slice::from_raw_parts(text, chars as usize) };
+    if units.last() != Some(&0) {
+        return Err(("text_terminator", 0));
+    }
+    let text = String::from_utf16(&units[..units.len() - 1]).map_err(|_| ("text_encoding", 0))?;
+    drop(allocation);
+    if !text.contains("D:") || text.contains("S:") {
+        return Err(("descriptor_shape", 0));
+    }
+    let amended = format!("{text}{addition}")
+        .encode_utf16()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let mut raw = null_mut();
+    let mut bytes = 0;
+    // SAFETY: bounded terminated in-memory descriptor; no object handle or write API.
+    if unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            amended.as_ptr(),
+            1,
+            &mut raw,
+            &mut bytes,
+        )
+    } == 0
+    {
+        return Err(("descriptor_decode", unsafe { GetLastError() }));
+    }
+    let amended = Descriptor(raw);
+    if raw.is_null() || bytes == 0 || bytes > 65_536 {
+        return Err(("virtual_descriptor_bound", 0));
+    }
+    check(token, &amended)
+}
+
+fn token_facts(token: &OwnedHandle) -> Vec<(&'static str, ObservationResult)> {
+    let mut facts = Vec::with_capacity(3);
+    for (name, class, minimum) in [
+        ("user_attributes", TokenUser, size_of::<TOKEN_USER>()),
+        ("restricted_count", TokenRestrictedSids, size_of::<u32>()),
+    ] {
+        let mut data = vec![0_usize; 65_536 / size_of::<usize>()];
+        let mut returned = 0;
+        // SAFETY: retained query-only token, aligned bounded output; no SID pointer is dereferenced.
+        let ok = unsafe {
+            GetTokenInformation(
+                token.as_raw_handle().cast(),
+                class,
+                data.as_mut_ptr().cast(),
+                65_536,
+                &mut returned,
+            )
+        };
+        let result = if ok == 0 {
+            Err(("query_token_fact", unsafe { GetLastError() }))
+        } else if (returned as usize) < minimum || returned > 65_536 {
+            Err(("token_fact_bound", 0))
+        } else {
+            // SAFETY: the fixed leading structure is within the validated aligned output.
+            Ok(unsafe {
+                if class == TokenUser {
+                    (*data.as_ptr().cast::<TOKEN_USER>()).User.Attributes
+                } else {
+                    (*data.as_ptr().cast::<TOKEN_GROUPS>()).GroupCount
+                }
+            })
+        };
+        facts.push((name, result));
+    }
+    let mut required = PRIVILEGE_SET {
+        PrivilegeCount: 1,
+        Control: 1,
+        ..Default::default()
+    };
+    required.Privilege[0].Attributes = SE_PRIVILEGE_ENABLED;
+    let name = "SeChangeNotifyPrivilege"
+        .encode_utf16()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let mut enabled = 0;
+    // SAFETY: fixed privilege name and writable LUID; reads system privilege identity only.
+    let result =
+        if unsafe { LookupPrivilegeValueW(null(), name.as_ptr(), &mut required.Privilege[0].Luid) }
+            == 0
+        {
+            Err(("lookup_traverse", unsafe { GetLastError() }))
+        // SAFETY: one-entry privilege set and retained query-only identification token.
+        } else if unsafe {
+            PrivilegeCheck(token.as_raw_handle().cast(), &mut required, &mut enabled)
+        } == 0
+        {
+            Err(("query_traverse", unsafe { GetLastError() }))
+        } else {
+            Ok(u32::from(enabled != 0))
+        };
+    facts.push(("traverse_enabled", result));
+    facts
+}
+
+#[test]
+fn virtual_acl_comparison_preserves_real_object_and_observes_kernel_decision() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("dependency.fixture");
+    std::fs::write(&path, b"never executed").unwrap();
+    let bound = BoundPath::open_file(&path).unwrap();
+    // SAFETY: observe only this process's pseudo handle.
+    let token =
+        identification(unsafe { windows_sys::Win32::System::Threading::GetCurrentProcess() })
+            .unwrap();
+    let before = descriptor(&bound).unwrap();
+    let actual = check(&token, &before).unwrap();
+    let hypothetical = virtual_access(&token, &before, "(A;;0x1200a9;;;AC)").unwrap();
+    assert_eq!(hypothetical & FILE_GENERIC_READ, FILE_GENERIC_READ);
+    assert_eq!(check(&token, &descriptor(&bound).unwrap()).unwrap(), actual);
+    assert!(
+        token_facts(&token)
+            .into_iter()
+            .all(|(_, result)| result.is_ok())
+    );
 }
