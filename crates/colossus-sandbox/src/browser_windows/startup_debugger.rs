@@ -35,7 +35,7 @@ pub(super) async fn observe(pid: u32) {
             "-y",
             r"C:\Windows\System32",
             "-c",
-            "~* knL 20; qd",
+            &hard_error_command(),
         ])
         .env_clear()
         .env("SystemRoot", system_root)
@@ -76,6 +76,17 @@ pub(super) async fn observe(pid: u32) {
                     .contains("access is denied")
                     || String::from_utf8_lossy(&stdout).contains("0x80070005")
             );
+            let missing = missing_dlls(&stdout);
+            let hard_error = String::from_utf8_lossy(&stdout)
+                .lines()
+                .any(|line| line.trim() == "COLOSSUS_LOADER_DLL_NOT_FOUND=1");
+            eprintln!(
+                "networkless CEF debugger dll_not_found={hard_error} named_dependencies={}",
+                missing.len()
+            );
+            for name in missing {
+                eprintln!("networkless CEF debugger missing_dependency={name}");
+            }
             for (ordinal, frame) in stack.iter().enumerate() {
                 eprintln!("networkless CEF debugger frame={ordinal} site={frame}");
             }
@@ -185,5 +196,67 @@ fn debugger_frames_exclude_paths_addresses_arguments_and_unknown_modules() {
     assert_eq!(
         frames(b"00000000`12345678 00000000`87654321 ntdll!NtWaitForSingleObject+0x14\n"),
         ["ntdll!NtWaitForSingleObject+0x14"]
+    );
+}
+
+// The previous exact child was parked at this exported x64 syscall. Read only
+// its four possible hard-error Unicode parameters, after checking the observed
+// instruction and STATUS_DLL_NOT_FOUND. No memory/register writes or continuation.
+// The output remains private to the existing bounded in-memory pipe; only the
+// fixed dependency names below can be emitted by the fixture.
+fn hard_error_command() -> String {
+    let mut command = String::from(
+        r#".expr /s masm; ~0s; .if (@rip == (ntdll!NtRaiseHardError + 0x14)) { .printf "\nCOLOSSUS_LOADER_DLL_NOT_FOUND=%u\n", ((@r10 & 0xffffffff) == 0xc0000135); .if (((@r10 & 0xffffffff) == 0xc0000135) && (@rdx <= 4) && (@r8 <= 0xf) && (@r9 != 0)) { "#,
+    );
+    for index in 0..4 {
+        let pointer = format!("poi(@r9 + 0x{:x})", index * 8);
+        command.push_str(&format!(
+            r#".if ((@rdx > {index}) && ((@r8 & {mask}) != 0)) {{ .if (({pointer} != 0) && (wo({pointer}) > 0) && (wo({pointer}) <= 0x200)) {{ .printf "\nCOLOSSUS_LOADER_NAME=%msu\n", {pointer}; }} }}; "#,
+            mask = 1 << index,
+        ));
+    }
+    command.push_str("} }; ~* knL 20; qd");
+    command
+}
+
+fn missing_dlls(bytes: &[u8]) -> Vec<&'static str> {
+    const KNOWN: &[&str] = &[
+        "chrome_elf.dll",
+        "kernel32.dll",
+        "ntdll.dll",
+        "version.dll",
+        "libcef.dll",
+        "colossus-native-browser-host.dll",
+        "ucrtbase.dll",
+        "vcruntime140.dll",
+        "vcruntime140_1.dll",
+        "msvcp140.dll",
+    ];
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .filter_map(|line| {
+            let value = line.strip_prefix("COLOSSUS_LOADER_NAME=")?;
+            if value.len() > 768 || value.chars().any(|c| c.is_control() || c == ';') {
+                return None;
+            }
+            let name = value.rsplit(['\\', '/']).next()?;
+            KNOWN
+                .iter()
+                .copied()
+                .find(|known| name.eq_ignore_ascii_case(known))
+        })
+        .take(4)
+        .collect()
+}
+
+#[test]
+fn missing_dll_observation_releases_only_known_dependency_basenames() {
+    assert_eq!(
+        missing_dlls(b"COLOSSUS_LOADER_NAME=C:\\private\\CHROME_ELF.DLL\nCOLOSSUS_LOADER_NAME=VERSION.dll\nCOLOSSUS_LOADER_NAME=private.dll\nCOLOSSUS_LOADER_NAME=C:\\private\\chrome_elf.dll;secret\nCOLOSSUS_LOADER_NAME=chrome_elf.dll private-argument\n0:000> COLOSSUS_LOADER_NAME=ntdll.dll\n"),
+        ["chrome_elf.dll", "version.dll"]
+    );
+    assert_eq!(
+        missing_dlls(&b"COLOSSUS_LOADER_NAME=ntdll.dll\n".repeat(8)).len(),
+        4
     );
 }
