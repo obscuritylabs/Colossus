@@ -66,7 +66,7 @@ pub(super) async fn observe(pid: u32) {
             stack.extend(frames(&stderr));
             stack.truncate(128);
             eprintln!(
-                "networkless CEF debugger status=completed success={} frames={} output_bytes={} error_bytes={} access_denied={}",
+                "networkless CEF debugger status=completed success={} frames={} output_bytes={} error_bytes={} access_denied={} command_error={}",
                 status.success(),
                 stack.len(),
                 stdout.len(),
@@ -74,7 +74,12 @@ pub(super) async fn observe(pid: u32) {
                 String::from_utf8_lossy(&stdout)
                     .to_ascii_lowercase()
                     .contains("access is denied")
-                    || String::from_utf8_lossy(&stdout).contains("0x80070005")
+                    || String::from_utf8_lossy(&stdout).contains("0x80070005"),
+                ["syntax error", "operand error", "memory access error"]
+                    .iter()
+                    .any(|label| String::from_utf8_lossy(&stdout)
+                        .to_ascii_lowercase()
+                        .contains(label))
             );
             let missing = missing_dlls(&stdout);
             let hard_error = String::from_utf8_lossy(&stdout)
@@ -206,12 +211,12 @@ fn debugger_frames_exclude_paths_addresses_arguments_and_unknown_modules() {
 // fixed dependency names below can be emitted by the fixture.
 fn hard_error_command() -> String {
     let mut command = String::from(
-        r#".expr /s masm; ~0s; .if (@rip == (ntdll!NtRaiseHardError + 0x14)) { .printf "\nCOLOSSUS_LOADER_DLL_NOT_FOUND=%u\n", ((@r10 & 0xffffffff) == 0xc0000135); .if (((@r10 & 0xffffffff) == 0xc0000135) && (@rdx <= 4) && (@r8 <= 0xf) && (@r9 != 0)) { "#,
+        r#".expr /s masm; ~0s; .if (@rip == (ntdll!NtRaiseHardError + 0x14)) { .printf "\nCOLOSSUS_LOADER_DLL_NOT_FOUND=%u\n", ((@r10 & 0xffffffff) == 0xc0000135); .if (((@r10 & 0xffffffff) == 0xc0000135) and (@rdx <= 4) and (@r8 <= 0xf) and (@r9 != 0) and $vvalid(@r9, 0x20)) { "#,
     );
     for index in 0..4 {
         let pointer = format!("poi(@r9 + 0x{:x})", index * 8);
         command.push_str(&format!(
-            r#".if ((@rdx > {index}) && ((@r8 & {mask}) != 0)) {{ .if (({pointer} != 0) && (wo({pointer}) > 0) && (wo({pointer}) <= 0x200)) {{ .printf "\nCOLOSSUS_LOADER_NAME=%msu\n", {pointer}; }} }}; "#,
+            r#".if ((@rdx > {index}) and ((@r8 & {mask}) != 0)) {{ .if ($vvalid({pointer}, 0x10)) {{ .if ((wo({pointer}) > 0) and (wo({pointer}) <= 0x200)) {{ .if ($vvalid(poi({pointer} + 8), wo({pointer}))) {{ .printf "\nCOLOSSUS_LOADER_NAME=%msu\n", {pointer}; }} }} }} }}; "#,
             mask = 1 << index,
         ));
     }

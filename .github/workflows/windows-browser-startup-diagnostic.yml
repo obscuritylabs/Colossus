@@ -1,19 +1,19 @@
-name: Focused Windows browser missing DLL observation
+name: Focused Windows browser DLL name observation
 
 on:
   push:
-    branches: [codex/windows-browser-missing-dll-881208fd]
+    branches: [codex/windows-browser-dll-name-masm-e44681f7]
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-browser-missing-dll-881208fd
+  group: windows-browser-dll-name-masm-e44681f7
   cancel-in-progress: false
 
 jobs:
   startup:
-    if: github.repository == 'obscuritylabs/Colossus' && github.ref == 'refs/heads/codex/windows-browser-missing-dll-881208fd'
+    if: github.repository == 'obscuritylabs/Colossus' && github.ref == 'refs/heads/codex/windows-browser-dll-name-masm-e44681f7'
     runs-on: windows-latest-l
     timeout-minutes: 35
     defaults:
@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 5
+          fetch-depth: 6
           persist-credentials: false
 
       - name: Admit only the reviewed patch and record categorical runner context
@@ -47,7 +47,7 @@ jobs:
           $head = (git rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0 -or $head -cne $env:EXPECTED_HEAD) { throw 'Unexpected diagnostic checkout.' }
           $parents = @((git rev-list --parents -n 1 HEAD).Trim() -split ' ')
-          if ($LASTEXITCODE -ne 0 -or $parents.Count -ne 2 -or $parents[1] -cne '881208fd4f125e2dfa158d325fee7c4b09058182') { throw 'Diagnostic must be one single-parent reviewed commit above the numbered stack observation.' }
+          if ($LASTEXITCODE -ne 0 -or $parents.Count -ne 2 -or $parents[1] -cne 'e44681f7069da90e960d3bf82bab8aeb60ab53e4') { throw 'Diagnostic must be one single-parent reviewed commit above the initial DLL name observation.' }
           $dirty = @(git status --porcelain=v1 --untracked-files=no)
           if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'Diagnostic tracked source must be clean.' }
           $expected = @($env:EXPECTED_DIAGNOSTIC_FILES | ConvertFrom-Json | Sort-Object)
