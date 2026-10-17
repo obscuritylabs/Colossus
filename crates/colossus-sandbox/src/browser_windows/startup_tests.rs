@@ -382,7 +382,9 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
                 observed.os_code,
                 observed.examined
             );
-            startup_debugger::observe(child.pid).await;
+            if observed.live_bound {
+                startup_debugger::observe(child.pid).await;
+            }
         }
     }
     let cleanup = (|| -> Result<(Option<u32>, bool), Box<dyn std::error::Error>> {

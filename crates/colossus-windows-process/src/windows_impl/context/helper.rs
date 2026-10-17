@@ -306,6 +306,18 @@ fn context(
     fields(pipe.receive(core, None)?, 28, 0)?;
     let raw_endpoints: Vec<_> = endpoints.iter().map(OwnedHandle::raw).collect();
     let primary = identity::restricted_browser_primary()?;
+    // Auxiliary diagnostic: this dedicated creator owns one noninteractive
+    // browser. Preserve existing error flags and make its child report loader
+    // failures instead of waiting for a critical-error dialog in a private station.
+    #[cfg(debug_assertions)]
+    {
+        use windows_sys::Win32::System::Diagnostics::Debug::{
+            GetErrorMode, SEM_FAILCRITICALERRORS, SetErrorMode,
+        };
+        // SAFETY: this changes only the dedicated creator's error presentation;
+        // child creation inherits it. No token, ACL, Job or sandbox flag changes.
+        unsafe { SetErrorMode(GetErrorMode() | SEM_FAILCRITICALERRORS) };
+    }
     let mut returned = ReturnedChild(Some(launch::browser(
         &values,
         executable.canonical_path(),
