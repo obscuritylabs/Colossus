@@ -17,6 +17,7 @@ import sys
 import tempfile
 
 import component
+import pki_fixture_private
 import stage_macos
 
 PROGRAM = "colossus-chromium-preview"
@@ -133,9 +134,10 @@ def inspect_client(path: Path) -> None:
 def grant_lpac_read(component_root: Path) -> None:
     if os.name != "nt":
         raise component.ComponentError("Windows sandbox ACL staging requires Windows")
-    # CEF's SET_LPAC_ACLS requirement applies to immutable engine bytes only.
-    # No user profile, credential, key or temporary home lives under this root.
+    # The main host is an AppContainer; CEF's LPAC helpers need the second SID.
+    # Both grants cover immutable engine bytes only, never user profiles or keys.
     subprocess.run(["icacls.exe", os.fspath(component_root), "/grant",
+                    "*S-1-15-2-1:(OI)(CI)(RX)",
                     "*S-1-15-2-2:(OI)(CI)(RX)"], check=True, timeout=30,
                    stdout=subprocess.DEVNULL)
 
@@ -162,7 +164,10 @@ def stage(cef_root: Path, native_build: Path, client_dll: Path, destination: Pat
         raise component.ComponentError("CEF Windows locales are absent")
     with tempfile.TemporaryDirectory(prefix=".cef-windows-stage-", dir=parent) as temporary:
         staged = Path(temporary) / destination.name
-        staged.mkdir()
+        # Windows TemporaryDirectory grants OWNER RIGHTS, whose owner can be
+        # Administrators in an elevated build. Retain the actual user's explicit
+        # access so the reduced browser token can read the published component.
+        pki_fixture_private.private_directory(staged)
         for directory in (source / "Release", source / "Resources"):
             for entry in directory.iterdir():
                 if entry.name in ("bootstrap.exe", "bootstrapc.exe") or entry.suffix in (".lib", ".pdb"):

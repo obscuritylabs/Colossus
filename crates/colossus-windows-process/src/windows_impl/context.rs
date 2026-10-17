@@ -5,6 +5,7 @@ mod ipc;
 mod launch;
 #[cfg(test)]
 mod startup_tests;
+mod token_security;
 
 use super::{
     LocalSid, NetworkGuard, OwnedHandle, PipeSet, SpawnRequest, WindowsProcessError,
