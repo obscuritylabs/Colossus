@@ -1268,6 +1268,9 @@ impl AgentService {
                 }
                 // Reserve the whole pending batch. Context preparation may compact
                 // older images, but every image returned in this tool turn must fit.
+                // Dispatch hints must not change the registered run context used
+                // by lifecycle authority checks on the next model turn.
+                let mut context = context.clone();
                 let used_images = tool_results
                     .iter()
                     .filter_map(colossus_contracts::ImageViewOutput::from_tool_result)
