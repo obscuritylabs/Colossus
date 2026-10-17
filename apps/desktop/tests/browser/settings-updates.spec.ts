@@ -143,7 +143,7 @@ test("browser settings persist globally and support workspace overrides and inhe
   await page.getByRole("button", { name: "Global", exact: true }).click();
   const sections = page.getByRole("navigation", { name: "Settings sections" });
   await sections.getByRole("button", { name: "Browser", exact: true }).click();
-  const enabled = page.getByRole("checkbox", { name: "Browser access" });
+  const enabled = page.getByRole("switch", { name: "Browser access" });
   await expect(enabled).toBeChecked();
   await enabled.focus();
   await page.keyboard.press("Space");
@@ -174,8 +174,7 @@ test("browser settings persist globally and support workspace overrides and inhe
     ),
   ).toContainEqual({ fieldId: "browser.maxTabs", value: 2 });
   await page
-    .locator(".managed-field-row")
-    .filter({ has: tabs })
+    .getByRole("group", { name: "Maximum browser tabs" })
     .getByRole("button", { name: "Inherit" })
     .click();
   await page

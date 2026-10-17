@@ -7,6 +7,7 @@ import { SetupPackagesPanel } from "./setup/SetupPackagesPanel";
 import { useSetupPackages } from "./setup/useSetupPackages";
 import { ImportedProviderActions } from "./setup/ImportedProviderActions";
 import { SettingsFrame } from "./SettingsFrame";
+import { BrowserCapabilityFields } from "./BrowserCapabilityFields";
 import { ModelRoleRouting } from "./ModelRoleRouting";
 import { ModelRoutingOverview } from "./ModelRoutingOverview";
 import { RuntimeProfileRow } from "./RuntimeProfileRow";
@@ -3841,20 +3842,14 @@ function GlobalSettingsBody({
   if (tab === "browser") {
     return (
       <BrowserSettings>
-        <p className="managed-heading-copy">
-          These global defaults apply to workspaces unless overridden in
-          Workspace → Browser. Save changes below; active work finishes before
-          the new settings apply. Enabling browser access requires applying the
-          update in Workspace settings. Type @browser in the composer to select
-          the bundled browser skill when available.
-        </p>
-        <FieldGrid
+        <BrowserCapabilityFields
           descriptors={descriptors.filter((descriptor) =>
             descriptor.id.startsWith("browser."),
           )}
           values={defaults.fields}
           effective={new Map()}
           scope="global"
+          fieldElementId={managedFieldElementId}
           onChange={(id, value) =>
             setDefaults({
               ...defaults,
@@ -5308,15 +5303,11 @@ export function SpaceSettingsBody({
     <section className="managed-settings-body">
       <div className="managed-section-heading">
         <div>
-          <p className="eyebrow">Sparse Workspace overrides</p>
+          <p className="eyebrow">Workspace overrides</p>
           <h3>{tab[0]!.toUpperCase() + tab.slice(1)}</h3>
           {tab === "browser" ? (
             <p className="managed-heading-copy">
-              Override the global browser defaults for this workspace. Apply
-              changes below to update its runtime. Browser tools and the bundled
-              skill require a verified native browser and permitted tools.
-              Disabling access closes temporary browser sessions when the
-              runtime restarts.
+              Customize browser access and limits for this workspace.
             </p>
           ) : null}
           {tab === "sandbox" ? (
@@ -5327,7 +5318,20 @@ export function SpaceSettingsBody({
           ) : null}
         </div>
       </div>
-      {tab === "advanced" ? (
+      {tab === "browser" ? (
+        <BrowserCapabilityFields
+          descriptors={filtered}
+          values={draft.fields}
+          effective={effective}
+          scope="space"
+          focusedFieldId={focusedFieldId}
+          fieldElementId={managedFieldElementId}
+          onChange={(id, value) =>
+            setDraft({ ...draft, fields: { ...draft.fields, [id]: value } })
+          }
+          onInherit={(id) => removeDraftField(draft, setDraft, id)}
+        />
+      ) : tab === "advanced" ? (
         [...new Set(filtered.map((descriptor) => descriptor.section))]
           .sort()
           .map((section) => {

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Button, TextInput } from "@colossus/ui";
 import { IconGitBranch, IconWorld, IconTerminal2 } from "@tabler/icons-react";
 import { useDesktopPreferences } from "../DesktopPreferencesProvider";
 import { validBrowserNewTabUrl } from "../desktop-preferences";
@@ -84,12 +85,14 @@ export function BrowserSettings({ children }: { children?: React.ReactNode }) {
     <section
       className="managed-settings-body desktop-settings"
       aria-labelledby="browser-settings-heading"
+      data-browser-settings
     >
       <div className="managed-section-heading">
         <div>
           <h3 id="browser-settings-heading">Browser</h3>
           <p className="managed-heading-copy">
-            Control browser access, resource limits, and the new-tab page.
+            Set browser defaults for your workspaces. Each workspace can
+            override them.
           </p>
         </div>
       </div>
@@ -106,13 +109,13 @@ export function BrowserSettings({ children }: { children?: React.ReactNode }) {
           <span>
             <strong>New-tab page</strong>
             <small id="browser-new-tab-help">
-              Leave blank for an empty tab. Use a full web address, including
-              for localhost previews.
+              Choose where new tabs open on this device. Leave blank for an
+              empty tab.
             </small>
           </span>
         </label>
         <div className="desktop-browser-url-controls">
-          <input
+          <TextInput
             id="browser-new-tab-url"
             type="url"
             value={draft}
@@ -128,12 +131,9 @@ export function BrowserSettings({ children }: { children?: React.ReactNode }) {
               setError("");
             }}
           />
-          <button className="button secondary" type="submit">
-            Save
-          </button>
+          <Button type="submit">Save</Button>
           {browserNewTabUrl ? (
-            <button
-              className="button secondary"
+            <Button
               type="button"
               onClick={() => {
                 updatePreferences({ browserNewTabUrl: "" });
@@ -142,7 +142,7 @@ export function BrowserSettings({ children }: { children?: React.ReactNode }) {
               }}
             >
               Use empty tab
-            </button>
+            </Button>
           ) : null}
         </div>
         {error ? (
@@ -151,8 +151,7 @@ export function BrowserSettings({ children }: { children?: React.ReactNode }) {
           </p>
         ) : null}
         <p className="desktop-preference-note">
-          The browser session remains temporary. This setting only affects new
-          tabs you open; it does not restore browsing history.
+          Browser sessions are temporary. Browsing history is not restored.
         </p>
       </form>
     </section>
