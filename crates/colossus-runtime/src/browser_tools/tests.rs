@@ -345,6 +345,117 @@ fn snapshot_target(opened: &Value) -> Value {
 }
 
 #[test]
+fn browser_configuration_is_strict_and_recursively_defaultable() {
+    let base = "schemaVersion: 3\nstorage:\n  adapter: ephemeral\n  path: state.redb\n";
+    let config = RuntimeConfig::from_yaml(&format!("{base}browser:\n  enabled: false\n")).unwrap();
+    assert!(!config.browser.enabled);
+    assert_eq!(config.browser.max_tabs, 8);
+    for setting in [
+        "maxSessions: 0",
+        "maxSessions: 5",
+        "maxTabs: 9",
+        "maxSnapshotNodes: 1025",
+        "executable: browser.exe",
+    ] {
+        assert!(
+            RuntimeConfig::from_yaml(&format!("{base}browser:\n  {setting}\n")).is_err(),
+            "{setting}"
+        );
+    }
+}
+
+#[test]
+fn disabled_browser_removes_tools_native_access_and_bundled_skill() {
+    for (enabled, host_available) in [(false, true), (true, false), (true, true)] {
+        let workspace = private_tempdir();
+        let home = private_tempdir();
+        let mut config = config(workspace.path());
+        config.browser.enabled = enabled;
+        config.browser.max_sessions = 1;
+        config.browser.max_tabs = 2;
+        config.browser.max_snapshot_nodes = 32;
+        let driver = Arc::new(Driver::verified());
+        let mut options = RuntimeOpenOptions::for_workspace(workspace.path())
+            .unwrap()
+            .with_colossus_home(home.path())
+            .unwrap();
+        if host_available {
+            options = options.with_browser_host(RuntimeBrowserHost::new(driver.clone()));
+        }
+        let runtime =
+            Runtime::open_with_options(&config, Arc::new(DenyApproval), None, options).unwrap();
+        let available = enabled && host_available;
+        assert_eq!(runtime.browser_capabilities().available, available);
+        assert_eq!(
+            runtime
+                .tools
+                .list_specs()
+                .iter()
+                .any(|spec| spec.name == "browser.open"),
+            available
+        );
+        let catalog = runtime.plugin_catalog.capture().unwrap();
+        let has_browser = |records: &[AgentPluginRecord]| {
+            records
+                .iter()
+                .flat_map(|record| &record.skills)
+                .any(|skill| skill.id == "colossus/browser")
+        };
+        assert_eq!(has_browser(&catalog.records), available);
+        let restored = runtime.plugin_catalog.restore(&catalog.digests()).unwrap();
+        assert_eq!(has_browser(&restored.records), available);
+        assert_eq!(
+            runtime
+                .compose_plugin_skills("", &["colossus/browser".into()], &[])
+                .is_ok(),
+            available
+        );
+        let inventory = runtime.plugin_catalog.live_inventory().unwrap();
+        assert_eq!(
+            inventory
+                .iter()
+                .flat_map(|entry| &entry.skills)
+                .any(|skill| skill.id == "colossus/browser"),
+            available
+        );
+        assert_eq!(driver.opened.load(Ordering::SeqCst), 0);
+        if available {
+            let limits = runtime.browser_capabilities().limits;
+            assert_eq!(
+                (
+                    limits.max_sessions,
+                    limits.max_tabs,
+                    limits.max_snapshot_nodes
+                ),
+                (1, 2, 32)
+            );
+        } else {
+            assert!(runtime.browser.is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn configured_session_limit_rejects_before_native_allocation() {
+    let workspace = private_tempdir();
+    let mut config = config(workspace.path());
+    config.browser.max_sessions = 1;
+    let driver = Arc::new(Driver::verified());
+    let runtime = runtime(workspace.path(), &config, Some(driver.clone()));
+    let context = begin(&runtime, "run");
+    let executor = executor(&runtime);
+    call(&executor, &context, "browser.open", open_arguments())
+        .await
+        .unwrap();
+    assert!(
+        call(&executor, &context, "browser.open", open_arguments())
+            .await
+            .is_err()
+    );
+    assert_eq!(driver.opened.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn unavailable_backend_preserves_explicit_selection_diagnostics() {
     let workspace = private_tempdir();
     let mut config = config(workspace.path());

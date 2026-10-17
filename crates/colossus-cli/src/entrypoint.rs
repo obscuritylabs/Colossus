@@ -269,7 +269,9 @@ async fn runtime_command(
                 && worker.revoke_credential.is_none() =>
         {
             #[cfg(target_os = "linux")]
-            if let Some(owner) = browser_bundle::discover(&home_workspace).await? {
+            if config.browser.enabled
+                && let Some(owner) = browser_bundle::discover(&home_workspace).await?
+            {
                 runtime_options = runtime_options.with_browser_host(owner.host());
                 *browser = Some(owner);
             }
@@ -455,7 +457,9 @@ async fn runtime_command(
         );
     }
     #[cfg(target_os = "linux")]
-    if let Some(owner) = browser_bundle::discover(&home_workspace).await? {
+    if config.browser.enabled
+        && let Some(owner) = browser_bundle::discover(&home_workspace).await?
+    {
         runtime_options = runtime_options.with_browser_host(owner.host());
         *browser = Some(owner);
     }

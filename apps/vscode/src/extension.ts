@@ -343,6 +343,12 @@ export function activate(context: vscode.ExtensionContext) {
           case "openUserSettings":
             await openUserSettings();
             break;
+          case "openBrowserSettings":
+            await vscode.commands.executeCommand(
+              "workbench.action.openSettings",
+              "colossus.browser",
+            );
+            break;
           default:
             await commands[`colossus.${action.type}`]?.();
             publishViews();
@@ -835,6 +841,20 @@ export function activate(context: vscode.ExtensionContext) {
               workspace: canonical.path,
               home: join(context.globalStorageUri.fsPath, "managed-home"),
               setup,
+              browser: {
+                enabled: vscode.workspace
+                  .getConfiguration("colossus.browser", selected.uri)
+                  .get("enabled", true),
+                maxSessions: vscode.workspace
+                  .getConfiguration("colossus.browser", selected.uri)
+                  .get("maxSessions", 4),
+                maxTabs: vscode.workspace
+                  .getConfiguration("colossus.browser", selected.uri)
+                  .get("maxTabs", 8),
+                maxSnapshotNodes: vscode.workspace
+                  .getConfiguration("colossus.browser", selected.uri)
+                  .get("maxSnapshotNodes", 1024),
+              },
               credentials: await managedCredentials(context, setup),
               stopped: lost,
               restarted: () => {

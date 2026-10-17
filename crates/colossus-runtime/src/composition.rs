@@ -244,6 +244,7 @@ impl Runtime {
         codex_auth: Option<CodexAuthStore>,
     ) -> Result<Self, RuntimeError> {
         validate_storage_config(&config.storage)?;
+        config.browser.validate()?;
         validate_builtin_plugin_trust_identity(&config.plugins)?;
         let storage_adapter = match config.storage.adapter {
             StorageAdapter::Redb => "redb",
@@ -448,6 +449,10 @@ impl Runtime {
             Arc::clone(&instruction_snapshots),
         )?);
         let plugin_catalog = Arc::new(PluginCatalogSource {
+            browser_available: config.browser.enabled
+                && browser_host.as_ref().is_some_and(|host| {
+                    crate::browser_tools::supports_tool(Some(&host.capabilities()), "browser.open")
+                }),
             store: plugin_store.clone(),
             workspace_plugins: Arc::clone(&workspace_plugins),
             configuration: Arc::new(plugin_configuration.clone()),
@@ -540,15 +545,18 @@ impl Runtime {
             &tls_roots,
             Arc::clone(&provider_credentials),
         )?);
-        let browser = browser_host.as_ref().map(|host| {
-            Arc::new(crate::browser_tools::RuntimeBrowserTools::new(
-                host,
-                workspace_identity.clone(),
-                repository_id.clone(),
-                colossus_contracts::BrowserLimits::default(),
-                browser_artifacts.clone(),
-            ))
-        });
+        let browser = browser_host
+            .as_ref()
+            .filter(|_| config.browser.enabled)
+            .map(|host| {
+                Arc::new(crate::browser_tools::RuntimeBrowserTools::new(
+                    host,
+                    workspace_identity.clone(),
+                    repository_id.clone(),
+                    config.browser.limits(),
+                    browser_artifacts.clone(),
+                ))
+            });
         let browser_capabilities = browser
             .as_ref()
             .map(|browser| browser.coordinator.capabilities());

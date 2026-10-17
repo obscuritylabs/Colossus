@@ -332,53 +332,6 @@ async fn run_with_browser_owner(
         .map_err(|_| FailureCode::InvalidBootstrap)?;
     let workspace =
         BoundWorkspace::open(Path::new(&request.workspace), &request.workspace_identity)?;
-    // Independent executable seal and fixed adjacent inventory; inherited app
-    // configuration cannot select a browser, image, transport or private profile.
-    *browser = colossus_runtime::browser_package::discover(
-        include_bytes!(concat!(env!("OUT_DIR"), "/browser-manifest.json")),
-        &instance_dir,
-    )
-    .await
-    .map_err(|_| FailureCode::InvalidConfiguration)?;
-    #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
-    {
-        if browser.is_some() {
-            return Err(FailureCode::InvalidConfiguration);
-        }
-        *windows_browser = Some(
-            colossus_runtime::browser_package::windows_development_from_compiler_selection(
-                include_bytes!(concat!(
-                    env!("OUT_DIR"),
-                    "/windows-browser-development.json"
-                )),
-            )
-            .await
-            .map_err(|_| FailureCode::InvalidConfiguration)?,
-        );
-    }
-    #[cfg(all(
-        target_os = "macos",
-        debug_assertions,
-        feature = "macos-browser-host-acceptance"
-    ))]
-    {
-        if browser.is_some() {
-            return Err(FailureCode::InvalidConfiguration);
-        }
-        *diagnostic = Some(
-            colossus_runtime::browser_package::macos_diagnostic_from_compiler_seal(include_bytes!(
-                concat!(env!("OUT_DIR"), "/mac-browser-acceptance-seal.json")
-            ))
-            .await
-            .map_err(|_| FailureCode::InvalidConfiguration)?,
-        );
-        // LaunchServices can start this sealed Debug sidecar with a 256-FD soft
-        // limit. The native profile guard retains descriptors for every regular
-        // file and directory in the signed allocation to prove inode identity.
-        // Raise only this process's soft limit before Runtime snapshots it.
-        macos_startup_diagnostic::prepare_native_profile_fd_budget(&instance_root)
-            .map_err(|_| FailureCode::InvalidConfiguration)?;
-    }
     // Bind process-relative operations to the descriptor that reproduced the native
     // parent's opaque identity. The runtime separately reopens the pathname and checks
     // the same device/inode token as part of workspace lease acquisition.
@@ -409,6 +362,59 @@ async fn run_with_browser_owner(
         .resolve_storage_paths(&workspace.canonical_path, instance_root.path())
         .map_err(|_| FailureCode::InvalidConfiguration)?;
     persist_managed_config(&instance_dir, &config)?;
+    if config.browser.enabled {
+        // Independent executable seal and fixed adjacent inventory; inherited app
+        // configuration cannot select a browser, image, transport or private profile.
+        *browser = colossus_runtime::browser_package::discover(
+            include_bytes!(concat!(env!("OUT_DIR"), "/browser-manifest.json")),
+            &instance_dir,
+        )
+        .await
+        .map_err(|_| FailureCode::InvalidConfiguration)?;
+        #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
+        {
+            if browser.is_some() {
+                return Err(FailureCode::InvalidConfiguration);
+            }
+            *windows_browser = Some(
+                colossus_runtime::browser_package::windows_development_from_compiler_selection(
+                    include_bytes!(concat!(
+                        env!("OUT_DIR"),
+                        "/windows-browser-development.json"
+                    )),
+                )
+                .await
+                .map_err(|_| FailureCode::InvalidConfiguration)?,
+            );
+        }
+        #[cfg(all(
+            target_os = "macos",
+            debug_assertions,
+            feature = "macos-browser-host-acceptance"
+        ))]
+        {
+            if browser.is_some() {
+                return Err(FailureCode::InvalidConfiguration);
+            }
+            *diagnostic = Some(
+                colossus_runtime::browser_package::macos_diagnostic_from_compiler_seal(
+                    include_bytes!(concat!(
+                        env!("OUT_DIR"),
+                        "/mac-browser-acceptance-seal.json"
+                    )),
+                )
+                .await
+                .map_err(|_| FailureCode::InvalidConfiguration)?,
+            );
+            // LaunchServices can start this sealed Debug sidecar with a 256-FD soft
+            // limit. The native profile guard retains descriptors for every regular
+            // file and directory in the signed allocation to prove inode identity.
+            // Raise only this process's soft limit before Runtime snapshots it.
+            macos_startup_diagnostic::prepare_native_profile_fd_budget(&instance_root)
+                .map_err(|_| FailureCode::InvalidConfiguration)?;
+        }
+    }
+
     let mut runtime_options = RuntimeOpenOptions::for_workspace(&workspace.canonical_path)
         .map_err(|_| FailureCode::InvalidWorkspace)?
         .with_expected_workspace_identity(workspace.runtime_identity()?);
@@ -2137,6 +2143,10 @@ mod tests {
             ("sandbox.maxMemoryBytes", serde_json::json!(134_217_728)),
             ("sandbox.maxConcurrency", serde_json::json!(1)),
             ("agent.maxTurns", serde_json::json!(4)),
+            ("browser.enabled", serde_json::json!(false)),
+            ("browser.maxSessions", serde_json::json!(1)),
+            ("browser.maxTabs", serde_json::json!(2)),
+            ("browser.maxSnapshotNodes", serde_json::json!(64)),
             ("subagents.maxConcurrent", serde_json::json!(2)),
         ];
         for (field_id, value) in overrides {

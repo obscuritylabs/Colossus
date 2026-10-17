@@ -63,7 +63,7 @@ export function GitSettings() {
   );
 }
 
-export function BrowserSettings() {
+export function BrowserSettings({ children }: { children?: React.ReactNode }) {
   const { browserNewTabUrl, updatePreferences } = useDesktopPreferences();
   const [draft, setDraft] = useState(browserNewTabUrl);
   const [error, setError] = useState("");
@@ -89,11 +89,11 @@ export function BrowserSettings() {
         <div>
           <h3 id="browser-settings-heading">Browser</h3>
           <p className="managed-heading-copy">
-            Choose the page opened by the new-tab button in Desktop's temporary
-            browser.
+            Control browser access, resource limits, and the new-tab page.
           </p>
         </div>
       </div>
+      {children}
       <form
         className="appearance-settings-card desktop-browser-settings"
         onSubmit={(event) => {

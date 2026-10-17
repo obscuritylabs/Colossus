@@ -196,8 +196,9 @@ const DESKTOP_PAGES = [
   {
     id: "browser",
     label: "Browser",
-    description: "Choose what opens in a new browser tab.",
-    keywords: "browser new tab home page url localhost preview",
+    description: "Control browser access, limits, and the new-tab page.",
+    keywords:
+      "browser enabled disabled sessions tabs snapshot skill new tab home page url localhost preview",
   },
   {
     id: "terminal",
@@ -234,6 +235,7 @@ type GlobalTab =
   | "defaults"
   | DesktopTab;
 type SpaceTab =
+  | "browser"
   | "cloud"
   | "runtime"
   | "providers"
@@ -393,10 +395,13 @@ const GLOBAL_TABS: ReadonlyArray<{
   { id: "credentials", label: "Credentials", group: "Global settings" },
   { id: "mcp", label: "MCP", group: "Global settings" },
   { id: "plugins", label: "Plugins", group: "Global settings" },
+  { id: "browser", label: "Browser", group: "Global settings" },
   { id: "search", label: "Search", group: "Global settings" },
   { id: "telemetry", label: "Telemetry", group: "Global settings" },
   { id: "defaults", label: "Defaults", group: "Global settings" },
-  ...DESKTOP_PAGES.map(({ id, label }) => ({ id, label, group: "Desktop" })),
+  ...DESKTOP_PAGES.filter(({ id }) => id !== "browser").map(
+    ({ id, label }) => ({ id, label, group: "Desktop" }),
+  ),
 ];
 
 const SPACE_TABS: ReadonlyArray<{ id: SpaceTab; label: string }> = [
@@ -407,6 +412,7 @@ const SPACE_TABS: ReadonlyArray<{ id: SpaceTab; label: string }> = [
   { id: "routing", label: "Routing" },
   { id: "mcp", label: "MCP" },
   { id: "plugins", label: "Plugins" },
+  { id: "browser", label: "Browser" },
   { id: "access", label: "Access" },
   { id: "sandbox", label: "Sandbox" },
   { id: "search", label: "Search" },
@@ -417,9 +423,12 @@ const SPACE_TABS: ReadonlyArray<{ id: SpaceTab; label: string }> = [
 ];
 
 export function managedFieldDestination(descriptor: ManagedFieldDescriptor): {
-  tab: "sandbox" | "research" | "advanced" | "runtime" | "plugins";
+  tab: "browser" | "sandbox" | "research" | "advanced" | "runtime" | "plugins";
   section: string | null;
 } {
+  if (descriptor.id.startsWith("browser.")) {
+    return { tab: "browser", section: null };
+  }
   if (descriptor.id.startsWith("plugins.")) {
     return { tab: "plugins", section: null };
   }
@@ -527,6 +536,44 @@ const EMPTY_TELEMETRY_DRAFT: TelemetryEditorDraft = {
 };
 
 const FIELD_DESCRIPTORS: ManagedFieldDescriptor[] = [
+  toggleField(
+    "browser.enabled",
+    "Browser",
+    "Browser access",
+    "Allow browser tools and the bundled browser skill when a verified browser is installed. Disabling takes effect when the saved configuration is applied.",
+    true,
+    false,
+  ),
+  field(
+    "browser.maxSessions",
+    "Browser",
+    "Maximum browser sessions",
+    "Limit simultaneous temporary browser sessions in each workspace runtime.",
+    4,
+    false,
+    1,
+    4,
+  ),
+  field(
+    "browser.maxTabs",
+    "Browser",
+    "Maximum browser tabs",
+    "Limit total tabs across browser sessions in each workspace runtime.",
+    8,
+    false,
+    1,
+    8,
+  ),
+  field(
+    "browser.maxSnapshotNodes",
+    "Browser",
+    "Maximum snapshot nodes",
+    "Limit the page elements returned by each browser snapshot.",
+    1024,
+    false,
+    1,
+    1024,
+  ),
   field(
     "network.maxRedirects",
     "Network",
@@ -2914,7 +2961,7 @@ export function ManagedSettingsPane({
   }, [descriptors, query, snapshot]);
 
   const desktopPage =
-    scope === "global"
+    scope === "global" && globalTab !== "browser"
       ? DESKTOP_PAGES.find((page) => page.id === globalTab)
       : undefined;
   const externalTargets = desktop.targets.filter(
@@ -3791,9 +3838,43 @@ function GlobalSettingsBody({
       </Suspense>
     );
   }
+  if (tab === "browser") {
+    return (
+      <BrowserSettings>
+        <p className="managed-heading-copy">
+          These global defaults apply to workspaces unless overridden in
+          Workspace → Browser. Save changes below; active work finishes before
+          the new settings apply. Enabling browser access requires applying the
+          update in Workspace settings. Type @browser in the composer to select
+          the bundled browser skill when available.
+        </p>
+        <FieldGrid
+          descriptors={descriptors.filter((descriptor) =>
+            descriptor.id.startsWith("browser."),
+          )}
+          values={defaults.fields}
+          effective={new Map()}
+          scope="global"
+          onChange={(id, value) =>
+            setDefaults({
+              ...defaults,
+              fields: { ...defaults.fields, [id]: value },
+            })
+          }
+          onInherit={(id) => {
+            const fields = { ...defaults.fields };
+            delete fields[id];
+            setDefaults({ ...defaults, fields });
+          }}
+        />
+      </BrowserSettings>
+    );
+  }
   if (tab === "defaults") {
     const defaultDescriptors = descriptors.filter(
-      (descriptor) => !descriptor.id.startsWith("plugins."),
+      (descriptor) =>
+        !descriptor.id.startsWith("plugins.") &&
+        !descriptor.id.startsWith("browser."),
     );
     return (
       <section className="managed-settings-body">
@@ -4991,6 +5072,7 @@ export function SpaceSettingsBody({
                 (descriptor) =>
                   !descriptor.advanced &&
                   !descriptor.id.startsWith("plugins.") &&
+                  !descriptor.id.startsWith("browser.") &&
                   !descriptor.id.startsWith("research."),
               )}
               values={draft.fields}
@@ -5216,6 +5298,8 @@ export function SpaceSettingsBody({
   }
   const filtered = descriptors.filter((descriptor) => {
     if (descriptor.id.startsWith("plugins.")) return false;
+    if (tab === "browser") return descriptor.id.startsWith("browser.");
+    if (descriptor.id.startsWith("browser.")) return false;
     if (tab === "sandbox") return descriptor.id.startsWith("sandbox.");
     if (tab === "research") return descriptor.id.startsWith("research.");
     return descriptor.advanced;
@@ -5226,6 +5310,15 @@ export function SpaceSettingsBody({
         <div>
           <p className="eyebrow">Sparse Workspace overrides</p>
           <h3>{tab[0]!.toUpperCase() + tab.slice(1)}</h3>
+          {tab === "browser" ? (
+            <p className="managed-heading-copy">
+              Override the global browser defaults for this workspace. Apply
+              changes below to update its runtime. Browser tools and the bundled
+              skill require a verified native browser and permitted tools.
+              Disabling access closes temporary browser sessions when the
+              runtime restarts.
+            </p>
+          ) : null}
           {tab === "sandbox" ? (
             <p className="managed-heading-copy">
               Filesystem and network rules apply to isolated execution. Select
@@ -8295,7 +8388,6 @@ function DesktopSettings(
       </Suspense>
     );
   if (section === "git") return <GitSettings />;
-  if (section === "browser") return <BrowserSettings />;
   if (section === "terminal") {
     return (
       <TerminalSettings

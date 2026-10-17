@@ -7,6 +7,49 @@ type: reference
 
 # Runtime limits configuration
 
+## Browser access and limits
+
+```yaml
+browser:
+  enabled: true
+  maxSessions: 4
+  maxTabs: 8
+  maxSnapshotNodes: 1024
+```
+
+These defaults preserve browser availability on hosts with a verified native
+component. Set `browser.enabled: false` to disable browser startup, native browser
+admission, model-visible `browser.*` tools, and the bundled `colossus/browser`
+skill. Enabling it cannot install a component, bypass platform acceptance, or
+override access policy. Each runtime enforces its own limits; native host limits
+may narrow them further.
+
+| Field | Default | Range |
+| --- | --- | --- |
+| `browser.enabled` | `true` | Boolean |
+| `browser.maxSessions` | `4` | `1..=4` |
+| `browser.maxTabs` | `8` | `1..=8`, aggregated across sessions |
+| `browser.maxSnapshotNodes` | `1024` | `1..=1024` |
+
+In Desktop, use **Settings → Global → Browser** for defaults and
+**Settings → Workspace → Browser** for overrides. Save or apply the change.
+Global reductions wait for active work to finish; enabling a previously disabled
+browser requires applying the pending update in Workspace settings. Applying a
+configuration restarts the runtime and closes its temporary browser sessions.
+The new-tab URL on the global Browser page is a separate device preference.
+
+In VS Code, **Colossus Settings → Workspace → Runtime → Browser settings** opens
+the `colossus.browser.*` settings. They support user defaults and workspace
+overrides. Finish active work, disconnect, and start Managed Local again to apply
+them. External workers (including those used by web clients) read `browser.*`
+from their own YAML and must be restarted by their operator.
+
+Browser settings do not select executables, transports, profiles, or certificate
+material. Browser sessions remain temporary; this does not control ordinary web
+search or HTTP tools.
+
+## Other runtime limits
+
 Colossus uses several independent limits rather than one global runtime budget. The
 `agent` and `subagents` blocks configure model-loop and child-scheduler bounds. Model,
 context, memory, research, sandbox, MCP, and storage limits live with their owning
