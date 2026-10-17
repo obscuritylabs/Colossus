@@ -97,6 +97,7 @@ fn serve(
     transfers: Option<(String, Arc<AtomicUsize>)>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let mut submitted = 0;
         loop {
             let Ok((mut connection, _)) = listener.accept().await else {
                 break;
@@ -136,6 +137,34 @@ fn serve(
             let path = transfers.as_ref().map_or(target, |(origin, _)| {
                 target.strip_prefix(origin).unwrap_or(target)
             });
+            if method == "GET" && path.starts_with("/keyboard") {
+                let body = if path.starts_with("/keyboard-result?") {
+                    submitted += 1;
+                    format!(
+                        "<!doctype html><title>Keyboard submission {submitted}</title><h1>Keyboard submission {submitted}</h1>"
+                    )
+                } else {
+                    let handler = if path == "/keyboard-keydown" {
+                        "onkeydown=\"if(event.key==='Enter'){event.preventDefault();location.href='/keyboard-result?q=down'}\""
+                    } else if path == "/keyboard-keyup" {
+                        "onkeydown=\"if(event.key==='Enter')event.preventDefault()\" onkeyup=\"if(event.key==='Enter')location.href='/keyboard-result?q=up'\""
+                    } else if path == "/keyboard-mousedown" {
+                        "onmousedown=\"location.href='/keyboard-result?q=mouse'\""
+                    } else {
+                        ""
+                    };
+                    format!(
+                        "<!doctype html><title>Keyboard form</title><form action='/keyboard-result'><input aria-label='Keyboard query' name='q' {handler}><button>Search</button></form>"
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = connection.write_all(response.as_bytes()).await;
+                let _ = connection.shutdown().await;
+                continue;
+            }
             if method == "GET" && path == "/download-redirect" && transfers.is_some() {
                 let _ = connection.write_all(b"HTTP/1.1 302 Found\r\nLocation: /download-final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
                 let _ = connection.shutdown().await;

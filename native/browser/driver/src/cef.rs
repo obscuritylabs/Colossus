@@ -28,6 +28,7 @@ mod annotation_windows;
 mod capture;
 #[cfg(windows)]
 mod developer_windows;
+mod devtools;
 #[cfg(windows)]
 mod interaction_windows;
 mod presentation;
@@ -44,8 +45,7 @@ struct State {
     completed: HashMap<u64, u64>,
     addresses: HashMap<u64, String>,
     history: HashMap<u64, (bool, bool)>,
-    expected: Option<i32>,
-    result: Option<Result<Value, BrowserDriverError>>,
+    pending: Vec<devtools::Pending>,
     #[cfg(windows)]
     drag_data: HashMap<u64, Value>,
     #[cfg(windows)]
@@ -187,12 +187,19 @@ unsafe extern "C" fn event(
                 state.inspection_paused.remove(&tab);
             }
         }
-        11 if state.expected == Some(command) => {
-            state.result = Some(if success != 0 {
-                serde_json::from_slice(payload).map_err(|_| BrowserDriverError::Failed)
-            } else {
-                Err(BrowserDriverError::Failed)
-            });
+        11 => {
+            if let Some(pending) = state
+                .pending
+                .iter_mut()
+                .find(|pending| pending.tab == tab && generation == 1 && pending.command == command)
+                && pending.result.is_none()
+            {
+                pending.result = Some(if success != 0 {
+                    serde_json::from_slice(payload).map_err(|_| BrowserDriverError::Failed)
+                } else {
+                    Err(BrowserDriverError::Failed)
+                });
+            }
         }
         #[cfg(windows)]
         12 if payload.len() <= 64 * 1024 && state.generations.get(&tab) == Some(&generation) => {
@@ -418,60 +425,9 @@ impl Host {
         params: Value,
         control: &BrowserDriverControl,
     ) -> Result<Value, BrowserDriverError> {
-        if self.interrupted(control) {
-            return Err(BrowserDriverError::Cancelled);
-        }
-        self.check_document_fence()?;
-        #[cfg(windows)]
-        if method.starts_with("Input.") || method == "DOM.focus" {
-            let document = self.native_document(tab)?;
-            // SAFETY: this fixed agent operation follows the current document
-            // fence on CEF's owning thread. Native human leases stay revoked.
-            status_result(unsafe { ffi::colossus_cef_automation_activate(tab, 1, document) })?;
-        }
-        let command = self.next_command;
-        self.next_command = self
-            .next_command
-            .checked_add(1)
-            .filter(|command| *command < i32::MAX)
-            .ok_or(BrowserDriverError::LimitExceeded)?;
-        {
-            let mut state = self
-                .callbacks
-                .state
-                .lock()
-                .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-            state.expected = Some(command);
-            state.result = None;
-        }
-        let params = serde_json::to_vec(&params).map_err(|_| BrowserDriverError::Failed)?;
-        let method = CString::new(method).map_err(|_| BrowserDriverError::Failed)?;
-        // SAFETY: exact private native tab and fixed method; JSON bytes remain alive for the call.
-        let status = unsafe {
-            ffi::colossus_cef_devtools(
-                tab,
-                1,
-                command,
-                method.as_ptr(),
-                params.as_ptr(),
-                params.len(),
-            )
-        };
-        status_result(status)?;
-        self.until(Some(control), Duration::from_secs(30), |state| {
-            state.result.is_some() || state.failed.contains(&tab)
-        })?;
-        let mut state = self
-            .callbacks
-            .state
-            .lock()
-            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-        state.expected = None;
-        if state.failed.contains(&tab) {
-            state.result = None;
-            return Err(BrowserDriverError::OutcomeUnknown);
-        }
-        state.result.take().ok_or(BrowserDriverError::Failed)?
+        self.dispatch(tab, method, [params], control)?
+            .pop()
+            .ok_or(BrowserDriverError::Failed)
     }
     fn metadata(
         &self,
@@ -802,16 +758,18 @@ impl Host {
             "a" => 65,
             _ => return Err(BrowserDriverError::Denied),
         };
-        self.method(
+        let text = match key {
+            "Enter" => "\r",
+            " " => " ",
+            _ => "",
+        };
+        self.dispatch(
             tab,
             "Input.dispatchKeyEvent",
-            json!({"type":"keyDown","key":key,"code":code,"modifiers":modifiers,"windowsVirtualKeyCode":virtual_key}),
-            control,
-        )?;
-        self.method(
-            tab,
-            "Input.dispatchKeyEvent",
-            json!({"type":"keyUp","key":key,"code":code,"modifiers":modifiers,"windowsVirtualKeyCode":virtual_key}),
+            [
+                json!({"type":"keyDown","key":key,"code":code,"modifiers":modifiers,"windowsVirtualKeyCode":virtual_key,"text":text,"unmodifiedText":text}),
+                json!({"type":"keyUp","key":key,"code":code,"modifiers":modifiers,"windowsVirtualKeyCode":virtual_key}),
+            ],
             control,
         )?;
         Ok(())
@@ -935,15 +893,61 @@ impl Host {
         command: BrowserDriverCommand,
         control: &BrowserDriverControl,
     ) -> Result<BrowserObservation, BrowserDriverError> {
+        let snapshot = matches!(command.action, BrowserAction::Snapshot { .. });
+        let identity = command.target.tab_id.clone();
+        let result = self.execute_inner(command, control);
+        // A read-only snapshot racing navigation has no uncertain input effect.
+        // Release no partial tree, and let Core request a fresh observation. A
+        // crashed/detached host or an unverified document still fails closed.
+        if snapshot
+            && matches!(
+                result,
+                Err(BrowserDriverError::OutcomeUnknown | BrowserDriverError::Failed)
+            )
+            && !self.interrupted(control)
+            && self.snapshot_document_changed(&identity)
+        {
+            if let Some(tab) = self.tabs.get_mut(&identity) {
+                tab.snapshot = None;
+                tab.elements.clear();
+            }
+            return Err(BrowserDriverError::Stale);
+        }
+        result
+    }
+    fn snapshot_document_changed(&self, identity: &BrowserTabId) -> bool {
+        let Some((native, revision, document)) = self.expected_revision else {
+            return false;
+        };
+        if self
+            .tabs
+            .get(identity)
+            .is_none_or(|tab| tab.native != native)
+            || self
+                .state(|state| state.failed.contains(&native) || state.closed.contains(&native))
+                .unwrap_or(true)
+        {
+            return false;
+        }
+        match (self.metadata(native), self.native_document(native)) {
+            (Ok((_, _, current_revision)), Ok(current_document)) => {
+                current_revision != revision || current_document != document
+            }
+            _ => false,
+        }
+    }
+    fn execute_inner(
+        &mut self,
+        command: BrowserDriverCommand,
+        control: &BrowserDriverControl,
+    ) -> Result<BrowserObservation, BrowserDriverError> {
         self.screenshot = None;
         self.transfer.upload = None;
         self.transfer.download = None;
         if self.session.as_ref() != Some(&command.session_id) || self.interrupted(control) {
             return Err(BrowserDriverError::Cancelled);
         }
-        self.revoke_human_presentation();
-        self.presentation.control_generation = command.control_generation;
-        self.presentation.handoff.revoke();
+        self.begin_agent_action(command.control_generation);
         let identity = command.target.tab_id.clone();
         let (native, revision, native_document, document) = self
             .tabs
@@ -1117,16 +1121,13 @@ impl Host {
                     control,
                 )?;
                 let (x, y) = center(&model, self.viewport_dimensions())?;
-                self.method(
+                self.dispatch(
                     native,
                     "Input.dispatchMouseEvent",
-                    json!({"type":"mousePressed","button":"left","clickCount":1,"x":x,"y":y}),
-                    control,
-                )?;
-                self.method(
-                    native,
-                    "Input.dispatchMouseEvent",
-                    json!({"type":"mouseReleased","button":"left","clickCount":1,"x":x,"y":y}),
+                    [
+                        json!({"type":"mousePressed","button":"left","clickCount":1,"x":x,"y":y}),
+                        json!({"type":"mouseReleased","button":"left","clickCount":1,"x":x,"y":y}),
+                    ],
                     control,
                 )?;
                 #[cfg(windows)]

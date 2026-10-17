@@ -243,7 +243,7 @@ pub(super) async fn agent_click_indicator(
     );
     save(&cleared, home, "windows-agent-cursor-expired.png")?;
     println!(
-        "PASS Core click shows agent cursor/target outline in actual foreground Windows pixels and removes it after expiry"
+        "PASS Core click keeps agent cursor/target outline through a subsequent snapshot in actual foreground Windows pixels and removes it after expiry"
     );
     Ok(())
 }

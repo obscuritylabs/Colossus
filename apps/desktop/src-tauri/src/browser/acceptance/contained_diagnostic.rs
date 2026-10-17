@@ -107,6 +107,7 @@ struct FixtureState {
     phase: AtomicUsize,
     model_seen: AtomicBool,
     handoff_done: AtomicBool,
+    post_click_snapshot: AtomicBool,
     click_observed: AtomicBool,
     navigation_observed: AtomicBool,
     screenshot_seen: AtomicBool,
@@ -361,7 +362,13 @@ async fn serve(
                     .wait(&state.handoff_done, "native human-to-agent handoff")
                     .await?;
             }
-            if phase == 3 {
+            if phase == 4 {
+                let observed = tool_result(&body, "fixture-3")?;
+                ensure!(
+                    observed["snapshot"]["snapshot_id"].is_string(),
+                    "missing post-click snapshot"
+                );
+                state.signal(&state.post_click_snapshot);
                 state
                     .wait(&state.click_observed, "visible Core click")
                     .await?;
@@ -1527,6 +1534,13 @@ async fn exercise_owned(
     println!("PASS authenticated native human-to-agent handoff");
 
     title(&view, "Agent click received").await?;
+    fixture
+        .state
+        .wait(
+            &fixture.state.post_click_snapshot,
+            "Core snapshot after click",
+        )
+        .await?;
     #[cfg(windows)]
     windows::agent_click_indicator(app, &tab, &view, rect, home).await?;
     fixture.state.signal(&fixture.state.click_observed);

@@ -8,6 +8,8 @@ mod capture;
 mod exercise;
 #[path = "browser_windows_native/fixture.rs"]
 mod fixture;
+#[path = "browser_windows_native/keyboard.rs"]
+mod keyboard;
 #[path = "browser_windows_native/transfer.rs"]
 mod transfer;
 
