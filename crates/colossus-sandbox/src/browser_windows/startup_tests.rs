@@ -26,6 +26,10 @@ use std::{
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use zeroize::Zeroizing;
 
+#[cfg(debug_assertions)]
+#[path = "startup_debugger.rs"]
+mod startup_debugger;
+
 fn no_reparse(path: &std::path::Path) -> std::io::Result<()> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_attributes() & 0x400 != 0 {
@@ -378,6 +382,7 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
                 observed.os_code,
                 observed.examined
             );
+            startup_debugger::observe(child.pid).await;
         }
     }
     let cleanup = (|| -> Result<(Option<u32>, bool), Box<dyn std::error::Error>> {
