@@ -188,6 +188,10 @@ jobs:
                       assert cumulative_size <= 8 * 1024**3
                       record['platforms'].append({'role': role, 'architecture': arch, 'manifest_digest': item['platform_digests'][arch], 'config_digest': image['Id'], 'user': image['Config']['User'], 'image_size': size})
                       save()
+                      # Classic Docker stores one architecture per index digest reference.
+                      # Remove only this check's two verified aliases before the next pull.
+                      command('image', 'rm', manifest_ref)
+                      command('image', 'rm', index_ref)
               bounds()
               assert json.loads((config / 'config.json').read_text()) == {}
               record['status'] = 'passed'
