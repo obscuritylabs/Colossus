@@ -10,7 +10,7 @@ use windows_sys::Win32::{
     Security::{
         AccessCheck,
         Authorization::{
-            ConvertSecurityDescriptorToStringSecurityDescriptorW,
+            ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
             ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SE_FILE_OBJECT,
         },
         DACL_SECURITY_INFORMATION, DuplicateTokenEx, GENERIC_MAPPING, GROUP_SECURITY_INFORMATION,
@@ -35,6 +35,8 @@ pub struct StartupAccessObservation {
     pub object: &'static str,
     /// Actual descriptor, hypothetical in-memory grant, or categorical token fact.
     pub policy: &'static str,
+    /// Closed ACL categories only; never raw descriptor text or identities.
+    pub detail: Option<String>,
     /// Completed or a closed native-operation category.
     pub stage: &'static str,
     /// Immediate native error, or zero when no API error occurred.
@@ -108,6 +110,47 @@ pub fn observe_browser_dependency_access(
                 };
                 bound.map_err(|_| ("bind_object", 0)).and_then(|bound| {
                     let descriptor = descriptor(&bound)?;
+                    if let Ok(user) = token_user_text(token) {
+                        for (policy, addition) in [
+                            (
+                                "virtual_user_aap_rx",
+                                format!("(A;;0x1200a9;;;{user})(A;;0x1200a9;;;AC)"),
+                            ),
+                            (
+                                "virtual_user_package_rx",
+                                format!("(A;;0x1200a9;;;{user})(A;;0x1200a9;;;{package_sid})"),
+                            ),
+                        ] {
+                            if valid_package {
+                                records.push(record(
+                                    object,
+                                    policy,
+                                    virtual_access(token, &descriptor, &addition),
+                                ));
+                            }
+                        }
+                    }
+
+                    if let Ok(sddl) = descriptor_text(&descriptor) {
+                        let mut summary = record(object, "descriptor_categories", Ok(0));
+                        summary.detail = Some(descriptor_categories(&sddl));
+                        records.push(summary);
+                    }
+                    records.push(record(
+                        object,
+                        "explicit_rx_actual",
+                        check_desired(token, &descriptor, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE),
+                    ));
+                    records.push(record(
+                        object,
+                        "explicit_rx_aap",
+                        virtual_access_desired(
+                            token,
+                            &descriptor,
+                            "(A;;0x1200a9;;;AC)",
+                            FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+                        ),
+                    ));
                     if valid_package {
                         for (policy, addition) in [
                             ("virtual_aap_rx", "(A;;0x1200a9;;;AC)".to_owned()),
@@ -214,6 +257,10 @@ fn descriptor(bound: &BoundPath) -> Result<Descriptor, (&'static str, u32)> {
 }
 
 fn check(token: &OwnedHandle, descriptor: &Descriptor) -> Result<u32, (&'static str, u32)> {
+    check_desired(token, descriptor, MAXIMUM_ALLOWED)
+}
+
+fn check_desired(token: &OwnedHandle, descriptor: &Descriptor, desired: u32) -> ObservationResult {
     let mapping = GENERIC_MAPPING {
         GenericRead: FILE_GENERIC_READ,
         GenericWrite: FILE_GENERIC_WRITE,
@@ -230,7 +277,7 @@ fn check(token: &OwnedHandle, descriptor: &Descriptor) -> Result<u32, (&'static 
         AccessCheck(
             descriptor.0,
             token.as_raw_handle().cast(),
-            MAXIMUM_ALLOWED,
+            desired,
             &mapping,
             privileges.as_mut_ptr().cast(),
             &mut bytes,
@@ -276,6 +323,7 @@ fn record(
     StartupAccessObservation {
         object,
         policy,
+        detail: None,
         stage,
         os_code,
         granted,
@@ -290,6 +338,10 @@ fn virtual_access(
     descriptor: &Descriptor,
     addition: &str,
 ) -> ObservationResult {
+    virtual_access_desired(token, descriptor, addition, MAXIMUM_ALLOWED)
+}
+
+fn descriptor_text(descriptor: &Descriptor) -> Result<String, (&'static str, u32)> {
     let mut text = null_mut();
     let mut chars = 0;
     // SAFETY: retained descriptor; returned string is LocalAlloc-owned.
@@ -316,6 +368,16 @@ fn virtual_access(
     }
     let text = String::from_utf16(&units[..units.len() - 1]).map_err(|_| ("text_encoding", 0))?;
     drop(allocation);
+    Ok(text)
+}
+
+fn virtual_access_desired(
+    token: &OwnedHandle,
+    descriptor: &Descriptor,
+    addition: &str,
+    desired: u32,
+) -> ObservationResult {
+    let text = descriptor_text(descriptor)?;
     if !text.contains("D:") || text.contains("S:") {
         return Err(("descriptor_shape", 0));
     }
@@ -341,7 +403,7 @@ fn virtual_access(
     if raw.is_null() || bytes == 0 || bytes > 65_536 {
         return Err(("virtual_descriptor_bound", 0));
     }
-    check(token, &amended)
+    check_desired(token, &amended, desired)
 }
 
 fn token_facts(token: &OwnedHandle) -> Vec<(&'static str, ObservationResult)> {
@@ -423,9 +485,134 @@ fn virtual_acl_comparison_preserves_real_object_and_observes_kernel_decision() {
     let hypothetical = virtual_access(&token, &before, "(A;;0x1200a9;;;AC)").unwrap();
     assert_eq!(hypothetical & FILE_GENERIC_READ, FILE_GENERIC_READ);
     assert_eq!(check(&token, &descriptor(&bound).unwrap()).unwrap(), actual);
+    assert!(token_user_text(&token).unwrap().starts_with("S-1-"));
     assert!(
         token_facts(&token)
             .into_iter()
             .all(|(_, result)| result.is_ok())
     );
+}
+
+fn descriptor_categories(text: &str) -> String {
+    let mut entries = Vec::new();
+    for entry in text.split('(').skip(1).take(16) {
+        let Some(end) = entry.find(')') else {
+            entries.push("unsupported".into());
+            break;
+        };
+        let fields = entry[..end].split(';').collect::<Vec<_>>();
+        if fields.len() != 6 {
+            entries.push("unsupported".into());
+            continue;
+        }
+        let kind = match fields[0] {
+            "A" => "allow",
+            "D" => "deny",
+            _ => "other",
+        };
+        let flags =
+            if fields[1].len() <= 16 && fields[1].bytes().all(|b| b"CIOPNHIDSFA".contains(&b)) {
+                fields[1]
+            } else {
+                "other"
+            };
+        let rights = match fields[2] {
+            "FA" => FILE_ALL_ACCESS,
+            "FR" => FILE_GENERIC_READ,
+            "FX" => FILE_GENERIC_EXECUTE,
+            "FRFX" => FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+            value => value
+                .strip_prefix("0x")
+                .and_then(|v| u32::from_str_radix(v, 16).ok())
+                .unwrap_or(0),
+        };
+        let principal = match fields[5] {
+            "SY" => "system",
+            "BA" => "administrators",
+            "BU" => "users",
+            "WD" => "world",
+            "AC" | "S-1-15-2-1" => "all_packages",
+            "S-1-15-2-2" => "restricted_packages",
+            "OW" => "owner_rights",
+            "CO" => "creator_owner",
+            "AN" => "anonymous",
+            "RC" => "restricted_code",
+            "AU" => "authenticated_users",
+            _ => "other_identity",
+        };
+        entries.push(format!(
+            "{kind}:{principal}:flags={flags}:mask={rights:08x}"
+        ));
+    }
+    entries.join(",")
+}
+
+#[test]
+fn descriptor_categories_never_include_raw_account_or_package_identity() {
+    let text = "O:S-1-5-21-111-222-333-1001G:BAD:AI(A;ID;FA;;;S-1-5-21-111-222-333-1001)(D;;FR;;;AC)(A;;0x1200a9;;;S-1-15-2-2)";
+    assert_eq!(
+        descriptor_categories(text),
+        "allow:other_identity:flags=ID:mask=001f01ff,deny:all_packages:flags=:mask=00120089,allow:restricted_packages:flags=:mask=001200a9"
+    );
+}
+
+fn token_user_text(token: &OwnedHandle) -> Result<String, (&'static str, u32)> {
+    let mut data = vec![0_usize; 65_536 / size_of::<usize>()];
+    let mut returned = 0;
+    // SAFETY: retained query-only token and aligned bounded initialized output.
+    if unsafe {
+        GetTokenInformation(
+            token.as_raw_handle().cast(),
+            TokenUser,
+            data.as_mut_ptr().cast(),
+            65_536,
+            &mut returned,
+        )
+    } == 0
+    {
+        return Err(("query_user", unsafe { GetLastError() }));
+    }
+    if (returned as usize) < size_of::<TOKEN_USER>() || returned > 65_536 {
+        return Err(("user_buffer", 0));
+    }
+    // SAFETY: fixed TOKEN_USER lies within the validated aligned allocation.
+    let sid = unsafe { (*data.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+    let start = data.as_ptr() as usize;
+    let at = sid as usize;
+    if at < start
+        || at
+            .checked_add(8)
+            .is_none_or(|end| end > start + returned as usize)
+    {
+        return Err(("user_sid_header", 0));
+    }
+    // SAFETY: the SID header is within the validated token output.
+    let count = unsafe { *sid.cast::<u8>().add(1) } as usize;
+    let bytes = 8 + count * 4;
+    if bytes > 68 || at + bytes > start + returned as usize {
+        return Err(("user_sid_bound", 0));
+    }
+    // SAFETY: the complete SID is retained in the validated token output.
+    if unsafe { windows_sys::Win32::Security::IsValidSid(sid) } == 0 {
+        return Err(("invalid_user_sid", 0));
+    }
+    let mut text = null_mut();
+    // SAFETY: validated retained SID; output is allocated by Windows.
+    if unsafe { ConvertSidToStringSidW(sid, &mut text) } == 0 {
+        return Err(("encode_user_sid", unsafe { GetLastError() }));
+    }
+    let allocation = Descriptor(text.cast());
+    let mut length = 0;
+    // SAFETY: this API supplies a terminated SID string; numeric SID text is bounded.
+    while length < 184 && unsafe { *text.add(length) } != 0 {
+        length += 1;
+    }
+    if length == 184 {
+        return Err(("user_text_bound", 0));
+    }
+    // SAFETY: measured characters are within the retained allocation.
+    let result = String::from_utf16(unsafe { std::slice::from_raw_parts(text, length) })
+        .map_err(|_| ("user_text_encoding", 0));
+    drop(allocation);
+    result
 }

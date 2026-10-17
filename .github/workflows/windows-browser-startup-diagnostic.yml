@@ -1,19 +1,19 @@
-name: Focused Windows browser access policy observation
+name: Focused Windows browser access descriptor observation
 
 on:
   push:
-    branches: [codex/windows-browser-access-policy-f68c9345]
+    branches: [codex/windows-browser-access-descriptor-41bc48f4]
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-browser-access-policy-f68c9345
+  group: windows-browser-access-descriptor-41bc48f4
   cancel-in-progress: false
 
 jobs:
   startup:
-    if: github.repository == 'obscuritylabs/Colossus' && github.ref == 'refs/heads/codex/windows-browser-access-policy-f68c9345'
+    if: github.repository == 'obscuritylabs/Colossus' && github.ref == 'refs/heads/codex/windows-browser-access-descriptor-41bc48f4'
     runs-on: windows-latest-l
     timeout-minutes: 35
     defaults:
@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 8
+          fetch-depth: 9
           persist-credentials: false
 
       - name: Admit only the reviewed patch and record categorical runner context
@@ -47,7 +47,7 @@ jobs:
           $head = (git rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0 -or $head -cne $env:EXPECTED_HEAD) { throw 'Unexpected diagnostic checkout.' }
           $parents = @((git rev-list --parents -n 1 HEAD).Trim() -split ' ')
-          if ($LASTEXITCODE -ne 0 -or $parents.Count -ne 2 -or $parents[1] -cne 'f68c934539ddc8c77a26089994079b404dcaa2ec') { throw 'Diagnostic must be one single-parent reviewed commit above the verified dependency access observation.' }
+          if ($LASTEXITCODE -ne 0 -or $parents.Count -ne 2 -or $parents[1] -cne '41bc48f47a898420c428c84aa095b5aff3f301a0') { throw 'Diagnostic must be one single-parent reviewed commit above the verified access policy observation.' }
           $dirty = @(git status --porcelain=v1 --untracked-files=no)
           if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'Diagnostic tracked source must be clean.' }
           $expected = @($env:EXPECTED_DIAGNOSTIC_FILES | ConvertFrom-Json | Sort-Object)

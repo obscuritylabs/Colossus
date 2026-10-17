@@ -377,13 +377,14 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
                 &package_sid,
             ) {
                 eprintln!(
-                    "networkless CEF access object={} policy={} stage={} os_code={} granted={:?} live_bound={}",
+                    "networkless CEF access object={} policy={} stage={} os_code={} granted={:?} live_bound={} detail={:?}",
                     access.object,
                     access.policy,
                     access.stage,
                     access.os_code,
                     access.granted,
-                    access.live_bound
+                    access.live_bound,
+                    access.detail
                 );
             }
             let observed =
