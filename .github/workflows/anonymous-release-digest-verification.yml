@@ -2,7 +2,7 @@ name: Anonymous published release image verification
 
 on:
   push:
-    branches: [codex/anonymous-release-verification-0-11-8-preview-1]
+    branches: [codex/anonymous-image-observation-0-11-8-preview-1]
 
 permissions: {}
 
@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   anonymous-digest-pulls:
-    if: github.repository == 'obscuritylabs/Colossus' && github.event_name == 'push' && github.ref == 'refs/heads/codex/anonymous-release-verification-0-11-8-preview-1'
+    if: github.repository == 'obscuritylabs/Colossus' && github.event_name == 'push' && github.ref == 'refs/heads/codex/anonymous-image-observation-0-11-8-preview-1'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -137,7 +137,14 @@ jobs:
                           assert time.monotonic() < deadline, 'Docker CLI exceeds3min bound.'
                           assert destination.stat().st_size <= 1024**2, 'Single CLI output exceeds1MiB.'
                           time.sleep(0.5)
-                      assert process.returncode == 0, 'Anonymous Docker operation failed.'
+                      if process.returncode != 0:
+                          stderr.flush()
+                          error_text = log.read_bytes()[-16384:].decode('utf-8', errors='replace')
+                          error_text = ''.join(c for c in error_text if c in '\n\t' or 32 <= ord(c) < 127)
+                          record['failed_command'] = list(arguments)
+                          record['failed_exit_code'] = process.returncode
+                          record['docker_error_tail'] = error_text
+                      assert process.returncode == 0, 'Anonymous Docker operation failed; bounded error retained in receipt.'
                   finally:
                       if process is not None and process.poll() is None:
                           os.killpg(process.pid, signal.SIGKILL)
