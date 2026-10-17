@@ -8,7 +8,7 @@ use serde_json::json;
 use sha2::{Digest as _, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-/// Retain policy-released image bytes under their trusted run owner.
+/// Validate and retain the complete policy-released image batch in one transaction.
 /// The caller must finish filesystem post-effect authorization before calling this.
 pub fn import_released_images(
     journal: &dyn EventJournal,
@@ -28,30 +28,27 @@ pub fn import_released_images(
         .iter()
         .map(|(name, bytes)| validate_image_bytes(name, None, bytes))
         .collect::<Result<Vec<_>, _>>()?;
-    images
+    let prepared = images
         .into_iter()
         .zip(validated)
         .map(|((name, bytes), validated)| {
-            retain(
-                journal,
-                owner.clone(),
-                context.clone(),
-                &name,
-                &bytes,
-                validated,
-            )
+            prepare(owner.clone(), context.clone(), &name, &bytes, validated)
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    let (references, events): (Vec<_>, Vec<_>) = prepared.into_iter().unzip();
+    journal
+        .append_batch(events)
+        .map_err(|_| RunInputMediaError::Unavailable)?;
+    Ok(references)
 }
 
-fn retain(
-    journal: &dyn EventJournal,
+fn prepare(
     owner: Actor,
     context: ExecutionContext,
     file_name: &str,
     bytes: &[u8],
     validated: ValidatedImage,
-) -> Result<ModelImageReference, RunInputMediaError> {
+) -> Result<(ModelImageReference, NewEvent), RunInputMediaError> {
     let mut hash = Sha256::new();
     hash.update(b"colossus-viewed-image-v1\0");
     hash.update(owner.id.as_bytes());
@@ -71,29 +68,27 @@ fn retain(
     let created_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .map_err(|_| RunInputMediaError::Unavailable)?;
-    journal
-        .append(NewEvent {
-            event_version: 1,
-            stream_id: format!("artifact:{}", image.artifact_id),
-            expected_stream_version: 0,
-            classification: EventClassification::System,
-            event_type: "artifact.available.v1".into(),
-            actor: owner,
-            context,
-            payload: json!({
-                "artifact": {
-                    "artifact_id": image.artifact_id,
-                    "file_name": image.file_name,
-                    "media_type": image.media_type,
-                    "size_bytes": image.size_bytes,
-                    "sha256": image.sha256,
-                    "purpose": "run_input",
-                    "state": "available",
-                    "created_at": created_at,
-                },
-                "content_base64": BASE64.encode(bytes),
-            }),
-        })
-        .map_err(|_| RunInputMediaError::Unavailable)?;
-    Ok(image)
+    let event = NewEvent {
+        event_version: 1,
+        stream_id: format!("artifact:{}", image.artifact_id),
+        expected_stream_version: 0,
+        classification: EventClassification::System,
+        event_type: "artifact.available.v1".into(),
+        actor: owner,
+        context,
+        payload: json!({
+            "artifact": {
+                "artifact_id": image.artifact_id,
+                "file_name": image.file_name,
+                "media_type": image.media_type,
+                "size_bytes": image.size_bytes,
+                "sha256": image.sha256,
+                "purpose": "run_input",
+                "state": "available",
+                "created_at": created_at,
+            },
+            "content_base64": BASE64.encode(bytes),
+        }),
+    };
+    Ok((image, event))
 }

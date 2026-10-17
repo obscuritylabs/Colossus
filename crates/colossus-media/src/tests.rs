@@ -12,6 +12,9 @@ use serde_json::json;
 use sha2::{Digest as _, Sha256};
 use std::{io::Cursor, sync::Arc};
 
+#[path = "tests/import_failure.rs"]
+mod import_failure;
+
 #[tokio::test]
 async fn released_images_retain_exact_bytes_and_previews_are_bounded_static_pngs() {
     let journal = Arc::new(InMemoryEventJournal::default());
