@@ -1,19 +1,19 @@
-name: Focused Windows browser component owner repair
+name: Focused Windows browser GPU error observation
 
 on:
   push:
-    branches: [codex/windows-browser-stage-owner-866919f1]
+    branches: [codex/windows-browser-gpu-errors-34a96311]
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-browser-stage-owner-866919f1
+  group: windows-browser-gpu-errors-34a96311
   cancel-in-progress: false
 
 jobs:
   startup:
-    if: github.repository == 'obscuritylabs/Colossus' && github.ref == 'refs/heads/codex/windows-browser-stage-owner-866919f1'
+    if: github.repository == 'obscuritylabs/Colossus' && github.ref == 'refs/heads/codex/windows-browser-gpu-errors-34a96311'
     runs-on: windows-latest-l
     timeout-minutes: 35
     defaults:
@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 10
+          fetch-depth: 11
           persist-credentials: false
 
       - name: Admit only the reviewed patch and record categorical runner context
@@ -47,7 +47,7 @@ jobs:
           $head = (git rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0 -or $head -cne $env:EXPECTED_HEAD) { throw 'Unexpected diagnostic checkout.' }
           $parents = @((git rev-list --parents -n 1 HEAD).Trim() -split ' ')
-          if ($LASTEXITCODE -ne 0 -or $parents.Count -ne 2 -or $parents[1] -cne '866919f1162f25e88e8dcc228e3f69ac0b6dcb6f') { throw 'Diagnostic must be one single-parent reviewed commit above the reviewed descriptor observation.' }
+          if ($LASTEXITCODE -ne 0 -or $parents.Count -ne 2 -or $parents[1] -cne '34a963117a89cc1793f87b518f2d35c96abac33e') { throw 'Diagnostic must be one single-parent reviewed commit above the verified component owner repair.' }
           $dirty = @(git status --porcelain=v1 --untracked-files=no)
           if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'Diagnostic tracked source must be clean.' }
           $expected = @($env:EXPECTED_DIAGNOSTIC_FILES | ConvertFrom-Json | Sort-Object)

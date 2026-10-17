@@ -30,6 +30,62 @@ use zeroize::Zeroizing;
 #[path = "startup_debugger.rs"]
 mod startup_debugger;
 
+// Diagnostic-only projection: never retain Chromium paths, command lines, or
+// arbitrary error text. Numeric codes are accepted only as complete i32 values.
+fn chromium_child_failure(line: &str) -> Option<(&'static str, Option<i32>)> {
+    let (_, message) = line.split_once("] ")?;
+    for (prefix, category) in [
+        ("GPU process launch failed: error_code=", "gpu_launch"),
+        ("GPU process exited unexpectedly: exit_code=", "gpu_exit"),
+        ("Failed to launch process. Error: ", "sandbox_launch"),
+    ] {
+        if let Some(value) = message.strip_prefix(prefix) {
+            return value.parse::<i32>().ok().map(|code| (category, Some(code)));
+        }
+    }
+    if message.starts_with("Sandbox cannot access executable ")
+        && message.contains(". Check filesystem permissions are valid.")
+    {
+        return Some(("sandbox_executable_access", None));
+    }
+    match message {
+        "GPU process failed to initialize." => Some(("gpu_initialize", None)),
+        "Failed to launch GPU process." => Some(("gpu_channel_launch", None)),
+        _ => None,
+    }
+}
+
+#[test]
+fn child_failure_projection_keeps_only_closed_categories_and_numbers() {
+    assert_eq!(
+        chromium_child_failure(
+            "[1:2:ERROR:gpu_process_host.cc:1] GPU process launch failed: error_code=18"
+        ),
+        Some(("gpu_launch", Some(18)))
+    );
+    assert_eq!(
+        chromium_child_failure(
+            "[1:2:ERROR:gpu_process_host.cc:1] GPU process exited unexpectedly: exit_code=-1073741515"
+        ),
+        Some(("gpu_exit", Some(-1073741515)))
+    );
+    assert_eq!(
+        chromium_child_failure(
+            "[1:2:ERROR:sandbox_win.cc:1] Sandbox cannot access executable C:/private/user/component.exe. Check filesystem permissions are valid. See https://bit.ly/31yqMJR.: Access denied."
+        ),
+        Some(("sandbox_executable_access", None))
+    );
+    for line in [
+        "[x] private text",
+        "[x] GPU process launch failed: error_code=18 private text",
+        "[x] GPU process launch failed: error_code=2147483648",
+        "[x] GPU process launch failed: error_code=",
+        "GPU process launch failed: error_code=18",
+    ] {
+        assert_eq!(chromium_child_failure(line), None);
+    }
+}
+
 fn no_reparse(path: &std::path::Path) -> std::io::Result<()> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_attributes() & 0x400 != 0 {
@@ -467,6 +523,8 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
                 .find(|error| line == error.to_string());
                 if let Some(error) = rejection {
                     eprintln!("networkless CEF driver rejection category={error:?}");
+                } else if let Some((category, code)) = chromium_child_failure(line) {
+                    eprintln!("networkless CEF child_failure category={category} code={code:?}");
                 } else if line.contains("FATAL:")
                     || line.starts_with("native Windows transfer rejection ")
                     || line.starts_with("native cef bootstrap ")
@@ -499,8 +557,12 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
                 .unwrap()
                 .take(64 * 1024)
                 .read_to_string(&mut output);
-            for line in output.lines().filter(|line| line.contains("FATAL:")) {
-                eprintln!("{}", line.chars().take(4096).collect::<String>());
+            for line in output.lines() {
+                if let Some((category, code)) = chromium_child_failure(line) {
+                    eprintln!("networkless CEF child_failure category={category} code={code:?}");
+                } else if line.contains("FATAL:") {
+                    eprintln!("{}", line.chars().take(4096).collect::<String>());
+                }
             }
         }
     }
