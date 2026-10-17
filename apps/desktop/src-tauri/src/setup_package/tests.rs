@@ -65,6 +65,28 @@ fn setup_package_rejects_traversal_unreferenced_and_case_colliding_members() {
 }
 
 #[test]
+fn setup_package_rejects_nonportable_member_name_encodings() {
+    for utf8 in [false, true] {
+        let mut bytes = bytes();
+        // Corrupt the same member in both ZIP headers, with either encoding flag.
+        for (signature, flags, name) in [(b"PK\x03\x04", 6, 30), (b"PK\x01\x02", 8, 46)] {
+            let header = bytes
+                .windows(4)
+                .position(|part| part == signature)
+                .expect("ZIP member header");
+            if utf8 {
+                bytes[header + flags + 1] |= 0x08;
+            }
+            bytes[header + name] = 0xff;
+        }
+        let error = archive::read(&bytes)
+            .err()
+            .expect("reject a nonportable member name");
+        assert!(error.message.contains("portable files"));
+    }
+}
+
+#[test]
 fn setup_package_rejects_links_before_reading_their_targets() {
     let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let options = zip::write::SimpleFileOptions::default();
