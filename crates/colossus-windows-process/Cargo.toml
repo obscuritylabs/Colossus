@@ -8,14 +8,20 @@ license.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "sync"] }
+zeroize.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+colossus-windows-native.workspace = true
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_WindowsFilteringPlatform",
     "Win32_Security",
     "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
     "Win32_System_JobObjects",
+    "Win32_System_LibraryLoader",
     "Win32_System_IO",
     "Win32_System_Pipes",
     "Win32_System_Rpc",
@@ -26,3 +32,6 @@ windows-sys = { workspace = true, features = [
 [lints.clippy]
 all = { level = "deny", priority = -1 }
 missing_safety_doc = "deny"
+
+[target.'cfg(windows)'.dev-dependencies]
+tempfile.workspace = true

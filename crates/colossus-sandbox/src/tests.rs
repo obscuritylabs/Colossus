@@ -1,5 +1,22 @@
 #[cfg(unix)]
 use super::host_process_limits_apply;
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_helper_rejects_proxy_fallback_without_a_notify_supervisor() {
+    use nono::sandbox::SeccompNetFallback;
+    assert!(super::reject_uninstalled_proxy_fallback(SeccompNetFallback::None).is_ok());
+    assert!(super::reject_uninstalled_proxy_fallback(SeccompNetFallback::BlockAll).is_ok());
+    for bind_ports in [vec![], vec![8080]] {
+        assert!(matches!(
+            super::reject_uninstalled_proxy_fallback(SeccompNetFallback::ProxyOnly {
+                proxy_port: 18080,
+                bind_ports,
+            }),
+            Err(super::SandboxHelperError::Setup(_))
+        ));
+    }
+}
 use super::{
     AllowlistProxy, BASE64, FilesystemExecutor, HttpExecutor, OCI_PROXY_CONFIG_VARIABLE,
     SandboxJob, SignedSandboxJob, atomic_create, atomic_write, authority,

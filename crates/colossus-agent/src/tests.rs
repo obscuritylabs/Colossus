@@ -64,6 +64,7 @@ fn plan_mode_allowlist_blocks_implementation_and_external_mutation() {
 }
 
 mod communication;
+mod image_continuation;
 
 struct ScriptedProvider {
     turns: Mutex<VecDeque<Result<ProviderTurn, ModelProviderError>>>,
@@ -366,6 +367,7 @@ impl ToolExecutor for EchoTools {
         _context: ExecutionContext,
     ) -> Result<ToolResult, ToolError> {
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: call.arguments["text"].as_str().unwrap_or_default().into(),
@@ -384,6 +386,7 @@ impl ToolExecutor for ReportedErrorTools {
         _context: ExecutionContext,
     ) -> Result<ToolResult, ToolError> {
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: json!({
@@ -427,6 +430,7 @@ impl ToolExecutor for LargeOutputTools {
         _context: ExecutionContext,
     ) -> Result<ToolResult, ToolError> {
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: self.output.clone(),
@@ -606,6 +610,7 @@ impl ToolExecutor for RecordingPlanTools {
             control.cancel();
         }
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: serde_json::to_string(&plan).expect("plan JSON"),
@@ -698,6 +703,7 @@ impl ToolExecutor for CountingTools {
     ) -> Result<ToolResult, ToolError> {
         self.calls.fetch_add(1, Ordering::AcqRel);
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: "unexpected".into(),
@@ -748,6 +754,7 @@ impl ToolExecutor for CancellingTools {
         self.calls.fetch_add(1, Ordering::AcqRel);
         self.control.cancel();
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: "first completed".into(),
@@ -1484,6 +1491,94 @@ async fn authenticated_application_is_the_immutable_run_initiator() {
         event.stream_id == format!("run:{}", result.run_id)
             && event.actor.actor_type == ActorType::Model
     }));
+}
+
+#[derive(Default)]
+struct RecordedRunAuthority(std::sync::Mutex<Vec<(ExecutionContext, Actor)>>);
+#[async_trait]
+impl colossus_ports::AgentRunLifecycle for RecordedRunAuthority {
+    fn begin_run(
+        &self,
+        context: &ExecutionContext,
+        initiator: &Actor,
+        _: RunControl,
+    ) -> Result<(), ToolError> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((context.clone(), initiator.clone()));
+        Ok(())
+    }
+    fn cancel_run(&self, _: &str) {}
+    async fn finish_run(&self, _: &str) {}
+}
+
+#[tokio::test]
+async fn public_run_registers_authenticated_actor_and_exact_offered_tools_before_first_model() {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
+        ProviderEvent::FinalOutput {
+            text: "done".into(),
+        },
+    ])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let authority = Arc::new(RecordedRunAuthority::default());
+    let service = AgentService::new(
+        journal.clone(),
+        provider.clone(),
+        Arc::new(
+            StaticToolRegistry::builtins(&[
+                "browser.open".into(),
+                "shell.run".into(),
+                "echo".into(),
+            ])
+            .unwrap(),
+        ),
+        Arc::new(EchoTools),
+        Arc::new(EventSourcedSessionRepository::new(journal)),
+    )
+    .with_run_lifecycle(authority.clone());
+    let mut observer = RecordingRunObserver::default();
+    service
+        .run_public_with_skills_stream_controlled(
+            "primary",
+            "test",
+            "hello",
+            1,
+            "public-native-run",
+            "public-native-session",
+            true,
+            &[],
+            &["browser.open".into(), "shell.run".into()],
+            false,
+            Actor {
+                actor_type: ActorType::Application,
+                id: "app:native-ui".into(),
+            },
+            &mut observer,
+            &RunControl::default(),
+        )
+        .await
+        .unwrap();
+    let registered = authority.0.lock().unwrap();
+    assert_eq!(registered.len(), 1);
+    assert_eq!(
+        registered[0].1,
+        Actor {
+            actor_type: ActorType::Application,
+            id: "app:native-ui".into()
+        }
+    );
+    assert_eq!(registered[0].0.offered_tools, ["browser.open", "shell.run"]);
+    assert_eq!(registered[0].0.run_id.as_deref(), Some("public-native-run"));
+    let requests = provider.requests.lock().unwrap();
+    assert_eq!(
+        requests[0]
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["browser.open", "shell.run"]
+    );
 }
 
 #[tokio::test]

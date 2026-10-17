@@ -71,6 +71,22 @@ pub trait ModelProvider: Send + Sync {
         Ok(None)
     }
 
+    /// Resolve continuation metadata for the same model preferences used by the turn.
+    /// Adapters without an override-aware planner retain role-default planning only.
+    fn continuation_plan_with_options(
+        &self,
+        role: &str,
+        request: &ModelRequest,
+        context: &ExecutionContext,
+        options: &colossus_contracts::WorkflowAgentOptions,
+    ) -> Result<Option<colossus_contracts::ProviderContinuationPlan>, ModelProviderError> {
+        if options == &colossus_contracts::WorkflowAgentOptions::default() {
+            self.continuation_plan(role, request, context)
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Promote private state only after the assistant and tool results are durable.
     fn settle_continuation(&self, _context: &ExecutionContext) -> Result<(), ModelProviderError> {
         Ok(())

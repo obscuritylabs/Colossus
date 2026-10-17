@@ -1002,6 +1002,14 @@ export function readArtifactContent(
   return call("read_artifact_content", { targetId, artifactId });
 }
 
+export function readImageArtifact(
+  targetId: string,
+  artifactId: string,
+  thumbnail: boolean,
+): Promise<string> {
+  return call("read_image_artifact", { targetId, artifactId, thumbnail });
+}
+
 export function getRun(
   targetId: string,
   request: GetRunRequest,

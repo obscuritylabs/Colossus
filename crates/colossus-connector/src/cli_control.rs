@@ -210,6 +210,12 @@ mod tests {
 
     #[test]
     fn restart_ignores_stale_stop_and_stale_status_is_unknown() {
+        #[cfg(windows)]
+        let temporary = tempfile::Builder::new()
+            .prefix("colossus-connector-control-")
+            .tempdir_in(std::env::var_os("USERPROFILE").expect("test user profile"))
+            .unwrap();
+        #[cfg(not(windows))]
         let temporary = tempfile::tempdir().unwrap();
         let control = Control {
             root: ConfinedRoot::bind(temporary.path().canonicalize().unwrap().join("control"))

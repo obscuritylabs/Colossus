@@ -1,6 +1,7 @@
 //! Owned GTK password entry on Tauri's existing UI thread; no nested event loop.
-use crate::{DialogAppearance, PromptError, lifecycle::Completion, validation};
-use colossus_contracts::HostSecret;
+use crate::{
+    DialogAppearance, NativePassword, PromptError, lifecycle::Completion, purpose::Purpose,
+};
 use gtk::{glib, prelude::*};
 use std::{
     cell::RefCell,
@@ -20,22 +21,40 @@ pub(crate) fn open(
     cancelled: Arc<AtomicBool>,
     completion: Completion,
     appearance: DialogAppearance,
+    purpose: Purpose,
 ) {
     let Ok(parent) = parent.gtk_window() else {
         completion.finish(Err(PromptError::Unavailable));
         return;
     };
-    let _ = create(parent.upcast_ref(), cancelled, completion, appearance);
+    let _ = create_for(
+        parent.upcast_ref(),
+        cancelled,
+        completion,
+        appearance,
+        purpose,
+    );
 }
 
+#[cfg(test)]
 fn create(
     parent: &gtk::Window,
     cancelled: Arc<AtomicBool>,
     completion: Completion,
     appearance: DialogAppearance,
 ) -> Result<(gtk::Dialog, gtk::Entry), PromptError> {
+    create_for(parent, cancelled, completion, appearance, Purpose::Token)
+}
+
+fn create_for(
+    parent: &gtk::Window,
+    cancelled: Arc<AtomicBool>,
+    completion: Completion,
+    appearance: DialogAppearance,
+    purpose: Purpose,
+) -> Result<(gtk::Dialog, gtk::Entry), PromptError> {
     let dialog = gtk::Dialog::builder()
-        .title("Save a credential")
+        .title(purpose.title())
         .transient_for(parent)
         .modal(true)
         .destroy_with_parent(true)
@@ -43,24 +62,23 @@ fn create(
         .resizable(false)
         .build();
     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
-    dialog.add_button("Save credential", gtk::ResponseType::Accept);
+    dialog.add_button(purpose.confirm(), gtk::ResponseType::Accept);
     dialog.set_default_response(gtk::ResponseType::Accept);
     let content = dialog.content_area();
     styling::content(&content, appearance);
-    let description = gtk::Label::new(Some(
-        "This token stays in native credential storage and is never sent to the app's web view.",
-    ));
+    let description = gtk::Label::new(Some(purpose.description()));
     description.set_line_wrap(true);
     description.set_xalign(0.0);
     description
         .style_context()
         .add_class("credential-description");
-    let label = gtk::Label::new(Some("_Token"));
+    let label = gtk::Label::new(Some(&format!("_{}", purpose.label())));
     label.set_use_underline(true);
     label.set_xalign(0.0);
     label.style_context().add_class("credential-label");
     let entry = gtk::Entry::new();
     entry.set_visibility(false);
+    entry.set_placeholder_text(Some(purpose.placeholder()));
     entry.set_input_purpose(gtk::InputPurpose::Password);
     entry.set_activates_default(true);
     label.set_mnemonic_widget(Some(&entry));
@@ -94,13 +112,12 @@ fn create(
             }
             if response == gtk::ResponseType::Accept {
                 let text = Zeroizing::new(entry.text().to_string());
-                if let Err(invalid) = validation::validate(&text) {
+                if let Err(invalid) = purpose.validate(&text) {
                     error.set_text(invalid.message());
                     entry.grab_focus();
                     return;
                 }
-                *result.borrow_mut() =
-                    Some(HostSecret::new(text.to_string()).map_err(|_| PromptError::Unavailable));
+                *result.borrow_mut() = Some(NativePassword::new(text.to_string()));
             } else {
                 *result.borrow_mut() = Some(Err(PromptError::Cancelled));
             }
@@ -143,8 +160,8 @@ fn create(
 mod tests {
     use super::*;
     fn wait_for_completion(
-        received: &mut tokio::sync::oneshot::Receiver<Result<HostSecret, PromptError>>,
-    ) -> Result<HostSecret, PromptError> {
+        received: &mut tokio::sync::oneshot::Receiver<Result<NativePassword, PromptError>>,
+    ) -> Result<NativePassword, PromptError> {
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         loop {
             match received.try_recv() {

@@ -12,15 +12,17 @@ const BOOTSTRAP_PARENT_FIXTURE_ENVIRONMENT: &str =
     "COLOSSUS_WINDOWS_NATIVE_BOOTSTRAP_PARENT_FIXTURE_V1";
 
 #[cfg(windows)]
-fn local_app_data_tempdir(prefix: &str) -> tempfile::TempDir {
-    let local_app_data = std::env::var_os("LOCALAPPDATA")
+fn user_profile_tempdir(prefix: &str) -> tempfile::TempDir {
+    // Packaged hosts may redirect new LocalAppData children into a different
+    // canonical hierarchy. Protected native fixtures need trusted, stable ancestry.
+    let user_profile = std::env::var_os("USERPROFILE")
         .map(std::path::PathBuf::from)
         .filter(|path| path.is_absolute())
-        .expect("absolute Windows LocalAppData");
+        .expect("absolute Windows user profile");
     tempfile::Builder::new()
         .prefix(prefix)
-        .tempdir_in(local_app_data)
-        .expect("temporary directory under LocalAppData")
+        .tempdir_in(user_profile)
+        .expect("temporary directory under the user profile")
 }
 
 #[cfg(windows)]
@@ -263,7 +265,7 @@ fn directories_directly_beneath_the_volume_root_retain_and_validate_the_root() {
 #[cfg(windows)]
 #[test]
 fn private_directory_creation_protects_the_directory_and_children() {
-    let parent = local_app_data_tempdir("colossus-native-private-directory-");
+    let parent = user_profile_tempdir("colossus-native-private-directory-");
     let directory = parent.path().join("private");
 
     create_private_directory(&directory).expect("create private directory");
@@ -287,9 +289,13 @@ fn private_directory_creation_protects_the_directory_and_children() {
 #[cfg(windows)]
 #[test]
 fn untrusted_ancestor_delete_child_authority_is_rejected() {
-    let parent = tempfile::tempdir().expect("temporary parent");
+    let parent = user_profile_tempdir("colossus-native-untrusted-ancestor-");
     let directory = parent.path().join("private");
     create_private_directory(&directory).expect("create private directory");
+    BoundPath::open_directory(&directory)
+        .expect("bind private directory before the untrusted grant")
+        .validate_ancestor_namespace_authority()
+        .expect("ancestors have safe namespace authority before the untrusted grant");
 
     let status = std::process::Command::new("icacls.exe")
         .arg(parent.path())
@@ -308,7 +314,7 @@ fn untrusted_ancestor_delete_child_authority_is_rejected() {
 #[cfg(windows)]
 #[test]
 fn private_file_creation_is_exclusive_and_owner_private() {
-    let parent = local_app_data_tempdir("colossus-native-private-file-");
+    let parent = user_profile_tempdir("colossus-native-private-file-");
     let path = parent.path().join("secret");
 
     create_private_file(&path, b"colossus").expect("create private file");
@@ -327,7 +333,7 @@ fn private_file_creation_is_exclusive_and_owner_private() {
 fn private_file_replacement_is_atomic_and_preserves_private_access() {
     use std::io::Read as _;
 
-    let parent = local_app_data_tempdir("colossus-native-private-replace-");
+    let parent = user_profile_tempdir("colossus-native-private-replace-");
     let directory = parent.path().join("private");
     create_private_directory(&directory).expect("create private directory");
     let destination = directory.join("settings.json");
@@ -381,13 +387,17 @@ fn private_file_replacement_is_atomic_and_preserves_private_access() {
 #[cfg(windows)]
 #[test]
 fn private_file_replacement_rejects_untrusted_ancestor_authority() {
-    let ancestor = tempfile::tempdir().expect("temporary ancestor");
+    let ancestor = user_profile_tempdir("colossus-native-untrusted-replace-");
     let directory = ancestor.path().join("private");
     create_private_directory(&directory).expect("create private directory");
     let destination = directory.join("settings.json");
     let source = directory.join(".settings.next");
     create_private_file(&destination, b"old").expect("private destination");
     create_private_file(&source, b"new").expect("private source");
+    BoundPath::open_directory(&directory)
+        .expect("bind private directory before the untrusted grant")
+        .validate_ancestor_namespace_authority()
+        .expect("ancestors have safe namespace authority before the untrusted grant");
 
     let status = std::process::Command::new("icacls.exe")
         .arg(ancestor.path())
@@ -499,4 +509,153 @@ fn non_windows_calls_fail_closed() {
         BoundPath::open_directory(std::path::Path::new("/tmp")),
         Err(WindowsNativeError::UnsupportedPlatform)
     ));
+}
+#[cfg(windows)]
+#[test]
+fn immutable_component_binding_blocks_byte_and_namespace_replacement_until_release() {
+    let temporary = tempfile::tempdir().expect("owned temporary root");
+    let component = temporary.path().join("component");
+    crate::create_private_directory(&component).expect("private component");
+    let executable = component.join("host.dll");
+    crate::create_private_file(&executable, b"verified publisher bytes").expect("private file");
+    let binding = crate::BoundPath::open_immutable_file(&executable).expect("immutable binding");
+    assert!(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&executable)
+            .is_err()
+    );
+    assert!(std::fs::rename(&executable, component.join("replaced.dll")).is_err());
+    let moved = temporary.path().join("moved-component");
+    assert!(std::fs::rename(&component, &moved).is_err());
+    binding
+        .revalidate()
+        .expect("same immutable inode and hierarchy");
+    drop(binding);
+    std::fs::rename(&component, &moved).expect("namespace unlocked after release");
+    std::fs::write(moved.join("host.dll"), b"new bytes").expect("file unlocked after release");
+}
+
+#[cfg(windows)]
+#[test]
+fn immutable_component_directory_accepts_protected_ancestry_on_an_ordinary_windows_volume() {
+    let user_profile = std::env::var_os("USERPROFILE").expect("native user profile");
+    let temporary = tempfile::tempdir_in(user_profile).expect("fresh native fixture parent");
+    let component = temporary.path().join("component");
+    crate::create_private_directory(&component).expect("private component");
+    let binding = crate::BoundPath::open_directory(&component).expect("component binding");
+    binding
+        .validate_immutable_directory_dacl()
+        .expect("ordinary C: volume permits siblings, never replacement of this component");
+    binding.revalidate().expect("same retained component");
+    let status = std::process::Command::new("icacls.exe")
+        .arg(&component)
+        .args(["/grant", "*S-1-3-4:(OI)(CI)(F)"])
+        .status()
+        .expect("grant fixture-only OWNER RIGHTS");
+    assert!(status.success());
+    binding
+        .validate_immutable_directory_dacl()
+        .expect("OWNER RIGHTS refers only to the already validated trusted owner");
+    let status = std::process::Command::new("icacls.exe")
+        .arg(&component)
+        .args(["/grant", "*S-1-1-0:(WD)"])
+        .status()
+        .expect("grant fixture-only Everyone add-file authority");
+    assert!(status.success());
+    assert!(
+        binding.validate_immutable_directory_dacl().is_err(),
+        "untrusted additions inside the component must remain denied"
+    );
+    let status = std::process::Command::new("icacls.exe")
+        .arg(temporary.path())
+        .args(["/grant", "*S-1-1-0:(DC)"])
+        .status()
+        .expect("grant fixture-only Everyone delete-child authority");
+    assert!(status.success());
+    assert!(
+        binding.validate_ancestor_namespace_authority().is_err(),
+        "replacement through an ancestor must remain denied"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn allocation_owner_survives_failed_binding_and_retires_only_its_original_object() {
+    let temporary = user_profile_tempdir("colossus-native-allocation-owner-");
+    let parent = temporary.path().join("owned-parent");
+    create_private_directory(&parent).unwrap();
+    let path = parent.join("new-context");
+    let mut creation = PrivateDirectoryCreation::create(&path).unwrap();
+    assert!(PrivateDirectoryCreation::create(&path).is_err());
+    let bound = creation.bind().unwrap();
+    let moved = parent.join("original-object");
+    std::fs::rename(&path, &moved).unwrap();
+    create_private_directory(&path).unwrap();
+    let marker = path.join("replacement-must-survive");
+    std::fs::write(&marker, b"different native owner").unwrap();
+    assert!(matches!(
+        creation.bind(),
+        Err(WindowsNativeError::IdentityChanged)
+    ));
+    drop(bound);
+    creation.remove_empty().unwrap();
+    assert!(
+        !moved.exists(),
+        "the exact allocation is physically retired"
+    );
+    assert_eq!(std::fs::read(&marker).unwrap(), b"different native owner");
+    creation.remove_empty().unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn package_allocation_rejects_adopting_an_existing_profile() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let name = format!("colossus.browser.{nonce:032x}");
+    let mut profile = ExclusiveAppContainerProfile::create(&name).unwrap();
+    let sid = profile.sid_string().unwrap();
+    assert!(sid.starts_with("S-1-15-2-"));
+    assert!(ExclusiveAppContainerProfile::create(&name).is_err());
+    assert_eq!(profile.sid_string().unwrap(), sid);
+    profile.close().unwrap();
+    profile.close().unwrap();
+    assert!(profile.sid_string().is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn partial_loopback_setup_is_retired_before_the_owned_package_can_be_recreated() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let name = format!("colossus.browser.{nonce:032x}");
+    let mut profile = ExclusiveAppContainerProfile::create(&name).expect("fresh exact package");
+    let sid = profile.sid_string().expect("native package SID");
+    // Non-elevated hosts normally deny this mutation. Both an acknowledged grant
+    // and a failed/uncertain attempt must keep their removal owner until close.
+    let setup = profile.enable_loopback();
+    if let Err(WindowsNativeError::Io { operation, source }) = &setup {
+        eprintln!(
+            "native loopback setup denied: operation={operation}, os_code={:?}",
+            source.raw_os_error()
+        );
+    }
+    assert!(
+        profile.enable_loopback().is_err(),
+        "no second setup attempt"
+    );
+    profile
+        .close()
+        .expect("verified exact loopback absence and package deletion");
+    profile.close().expect("idempotent acknowledged cleanup");
+    assert!(profile.sid_string().is_err());
+    let mut replacement =
+        ExclusiveAppContainerProfile::create(&name).expect("original package physically deleted");
+    assert_eq!(replacement.sid_string().unwrap(), sid);
+    replacement.close().expect("fixture replacement cleanup");
 }

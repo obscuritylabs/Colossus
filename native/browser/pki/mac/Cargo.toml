@@ -1,0 +1,40 @@
+[package]
+name = "colossus-native-browser-mac-identity"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+license = "Apache-2.0"
+workspace = "../../tls-broker"
+
+[features]
+default = []
+macos-custody-development = ["dep:colossus-bundles", "dep:colossus-contracts", "dep:colossus-darwin-process", "dep:colossus-home", "dep:serde", "dep:serde_json", "dep:sha2", "dep:hex"]
+macos-custody-native-acceptance = ["macos-custody-development"]
+
+[dependencies]
+colossus-native-browser-pki = { path = "..", version = "=0.1.0" }
+url = "2.5.8"
+zeroize = "1.9.0"
+colossus-bundles = { version = "=0.11.8", path = "../../../../crates/colossus-bundles", optional = true }
+colossus-contracts = { version = "=0.11.8", path = "../../../../crates/colossus-contracts", optional = true }
+colossus-darwin-process = { version = "=0.11.8", path = "../../../../crates/colossus-darwin-process", optional = true }
+colossus-home = { version = "=0.11.8", path = "../../../../crates/colossus-home", optional = true }
+serde = { version = "1.0.228", features = ["derive"], optional = true }
+serde_json = { version = "1.0.149", optional = true }
+sha2 = { version = "0.10.9", optional = true }
+hex = { version = "0.4.3", optional = true }
+
+[build-dependencies]
+cc = "=1.2.66"
+libc = "0.2.183"
+serde_json = "1.0.149"
+sha2 = "0.10.9"
+
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+undocumented_unsafe_blocks = "deny"

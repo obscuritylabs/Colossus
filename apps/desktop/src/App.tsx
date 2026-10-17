@@ -52,6 +52,7 @@ import {
   onStatusBarAction,
   onSpaceStatusChanged,
   readArtifactContent,
+  readImageArtifact,
   readWorkspaceFile,
   renameSpace,
   restartManagedRuntime,
@@ -922,7 +923,9 @@ export default function App() {
       ? FIXTURE_SCENARIO === "provider-retry"
         ? developmentFixtures().buildProviderRetryFixture()
         : FIXTURE_SCENARIO === "activity-comparison"
-          ? developmentFixtures().buildActivityComparisonFixture()
+          ? FIXTURE_QUERY.get("imageViews") === "1"
+            ? developmentFixtures().buildImageViewFixture()
+            : developmentFixtures().buildActivityComparisonFixture()
           : FIXTURE_SCENARIO === "plan-workflow"
             ? developmentFixtures().buildPlanWorkflowFixture()
             : FIXTURE_QUERY.get("scheduleActivity") === "1"
@@ -984,9 +987,15 @@ export default function App() {
   const [conversationSkills, setConversationSkills] = useState<
     Record<string, readonly string[]>
   >({});
+  const [browserConversation, setBrowserConversation] = useState<{
+    targetId: string;
+    sessionId: string;
+  } | null>(null);
   const selectionSession =
     chat.activeRunId === null
-      ? undefined
+      ? browserConversation?.targetId === desktop.selectedTargetId
+        ? browserConversation.sessionId
+        : undefined
       : chat.views.get(chat.activeRunId)?.run.sessionId;
   const selectionKey = pluginSelectionKey(
     desktop.selectedTargetId,
@@ -2393,6 +2402,7 @@ export default function App() {
       return;
     }
     setWorkNavigationOpen(false);
+    setBrowserConversation(null);
     setConversationSkills((current) => ({
       ...current,
       [pluginSelectionKey(desktop.selectedTargetId, undefined)]: [],
@@ -2985,7 +2995,10 @@ export default function App() {
 
     const sessionId =
       activeForkDraft === undefined
-        ? continuationView?.run.sessionId
+        ? (continuationView?.run.sessionId ??
+          (browserConversation?.targetId === route.targetId
+            ? browserConversation.sessionId
+            : undefined))
         : undefined;
     if (sessionId) setThreadQueuePaused(route.targetId, sessionId, false);
     const effectiveMode: RunMode = planRevision === null ? mode : "plan";
@@ -3529,6 +3542,36 @@ export default function App() {
       setAttachmentBusy(false);
     }
   }
+
+  const loadViewedImage = useCallback(
+    async (artifactId: string, thumbnail: boolean) => {
+      if (FIXTURE_MODE && FIXTURE_QUERY.get("imageViews") === "1") {
+        if (FIXTURE_QUERY.get("imagePreviewError") === "1")
+          throw new Error("Image preview unavailable.");
+        return developmentFixtures().readFixtureImagePreview(
+          artifactId,
+          thumbnail,
+        );
+      }
+      const route = targetRoutes.current?.capture() ?? null;
+      if (
+        route === null ||
+        route.targetId !== desktop.selectedTargetId ||
+        targetRoutes.current?.isCurrent(route) !== true
+      ) {
+        throw new Error("Image preview unavailable.");
+      }
+      const source = await readImageArtifact(
+        route.targetId,
+        artifactId,
+        thumbnail,
+      );
+      if (targetRoutes.current?.isCurrent(route) !== true)
+        throw new Error("Image preview unavailable.");
+      return source;
+    },
+    [desktop.selectedTargetId],
+  );
 
   async function loadArtifactPreview(artifactId: string) {
     if (
@@ -5917,6 +5960,7 @@ export default function App() {
         </Suspense>
       ) : surface === "work" ? (
         <WorkSurface
+          onLoadViewedImage={loadViewedImage}
           onInspectSchedule={(scheduleId, showRun) => {
             if (desktop.selectedTargetId) {
               setScheduleInspection({
@@ -5930,6 +5974,19 @@ export default function App() {
           gitWorkspaceId={desktop.workspace?.workspaceId ?? null}
           gitAvailable={desktop.capabilities.files}
           browserScope={desktop.selectedTargetId}
+          browserConversationId={
+            browserConversation?.targetId === desktop.selectedTargetId
+              ? browserConversation.sessionId
+              : undefined
+          }
+          onUseBrowserConversation={(sessionId) => {
+            if (!desktop.selectedTargetId || submitInFlight.current) return;
+            newWork();
+            setBrowserConversation({
+              targetId: desktop.selectedTargetId,
+              sessionId,
+            });
+          }}
           processSessionsAvailable={
             desktop.capabilities.processSessions === true
           }
@@ -6039,6 +6096,10 @@ export default function App() {
           }
           loadSessionActivity={(request) => {
             if (FIXTURE_MODE) {
+              if (FIXTURE_QUERY.get("imageViews") === "1")
+                return Promise.resolve(
+                  developmentFixtures().buildImageViewActivityFixture(request),
+                );
               let liveActivityCount = 0;
               if (FIXTURE_ACTIVITY_LIVE && request.pageToken === "") {
                 const now = Date.now();

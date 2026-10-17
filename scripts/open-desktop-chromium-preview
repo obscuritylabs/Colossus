@@ -1,0 +1,25 @@
+#!/bin/sh
+# Internal LaunchServices handoff after development-launch.mjs sanitizes and,
+# when selected, validates development credential authority.
+set -eu
+umask 077
+
+[ "$#" -eq 2 ] || { printf 'usage: open-desktop-chromium-preview APP LOG_DIRECTORY\n' >&2; exit 1; }
+app=$1
+logs=$2
+case "$app" in /*.app) ;; *) printf 'Chromium preview app path must be absolute\n' >&2; exit 1 ;; esac
+case "$logs" in /*) ;; *) printf 'Chromium preview log path must be absolute\n' >&2; exit 1 ;; esac
+[ -d "$app/Contents/MacOS" ] && [ -d "$logs" ] || exit 1
+: > "$logs/desktop.stdout.log"
+: > "$logs/desktop.stderr.log"
+
+open_command=/usr/bin/open
+set -- "$open_command" -n -W "$app" --stdout "$logs/desktop.stdout.log" \
+    --stderr "$logs/desktop.stderr.log" --env MallocNanoZone=0
+if [ -n "${COLOSSUS_HOME:-}" ]; then
+    set -- "$@" --env "COLOSSUS_HOME=$COLOSSUS_HOME"
+fi
+if [ -n "${COLOSSUS_DEVELOPMENT_CREDENTIAL_AUTHORITY:-}" ]; then
+    set -- "$@" --env "COLOSSUS_DEVELOPMENT_CREDENTIAL_AUTHORITY=$COLOSSUS_DEVELOPMENT_CREDENTIAL_AUTHORITY"
+fi
+exec "$@"

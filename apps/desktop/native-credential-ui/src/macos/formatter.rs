@@ -1,3 +1,4 @@
+use crate::purpose::Purpose;
 use crate::validation::{InputError, validate_units};
 use objc2::{
     DefinedClass, MainThreadOnly, Message, define_class, msg_send, rc::Retained, runtime::AnyObject,
@@ -7,6 +8,7 @@ use objc2_foundation::{MainThreadMarker, NSFormatter, NSObjectProtocol, NSString
 
 pub(super) struct FormatterIvars {
     status: Retained<NSTextField>,
+    purpose: Purpose,
 }
 
 define_class!(
@@ -28,7 +30,7 @@ define_class!(
 
         #[unsafe(method(getObjectValue:forString:errorDescription:))]
         fn parsed(&self, output: *mut *mut AnyObject, string: &NSString, _: *mut *mut NSString) -> bool {
-            if validate_native(string).is_err() { false } else {
+            if native_bytes(string, self.ivars().purpose).is_err() { false } else {
                 if !output.is_null() {
                     // SAFETY: Cocoa supplies a writable autoreleasing object out
                     // parameter. Preserve the NSString with normal +0 semantics.
@@ -40,8 +42,8 @@ define_class!(
 
         #[unsafe(method(isPartialStringValid:newEditingString:errorDescription:))]
         fn partial(&self, value: &NSString, _: *mut *mut NSString, _: *mut *mut NSString) -> bool {
-            match validate_native(value) {
-                Ok(()) => true,
+            match native_bytes(value, self.ivars().purpose) {
+                Ok(_) => true,
                 Err(error) => {
                     self.ivars().status.setStringValue(&NSString::from_str(error.message()));
                     false
@@ -52,17 +54,24 @@ define_class!(
 );
 
 impl TokenFormatter {
-    pub(super) fn new(mtm: MainThreadMarker, status: Retained<NSTextField>) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(FormatterIvars { status });
+    pub(super) fn new(
+        mtm: MainThreadMarker,
+        status: Retained<NSTextField>,
+        purpose: Purpose,
+    ) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(FormatterIvars { status, purpose });
         // SAFETY: NSFormatter's designated NSObject initializer is valid here.
         unsafe { msg_send![super(this), init] }
     }
 }
 
 /// Validate the Cocoa-owned candidate without allocating an unbounded Rust copy.
-pub(super) fn validate_native(value: &NSString) -> Result<(), InputError> {
-    validate_units(
-        (0..value.length()).map(|index| value.characterAtIndex(index)),
-        value.length(),
-    )
+pub(super) fn native_bytes(value: &NSString, purpose: Purpose) -> Result<usize, InputError> {
+    let units = (0..value.length()).map(|index| value.characterAtIndex(index));
+    match purpose {
+        Purpose::Token => validate_units(units, value.length()).map(|()| value.length()),
+        Purpose::Pkcs12Password => {
+            crate::validation::password_units_bytes(units, value.length(), false)
+        }
+    }
 }

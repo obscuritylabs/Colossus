@@ -6,6 +6,12 @@ use colossus_home::ColossusHome;
 
 #[test]
 fn sealed_authority_survives_restart_and_rejects_changed_key() {
+    #[cfg(windows)]
+    let directory = tempfile::Builder::new()
+        .prefix("colossus-headless-authority-")
+        .tempdir_in(std::env::var_os("USERPROFILE").expect("test user profile"))
+        .unwrap();
+    #[cfg(not(windows))]
     let directory = tempfile::tempdir().unwrap();
     let home =
         ColossusHome::ensure_at(directory.path().canonicalize().unwrap().join("private")).unwrap();

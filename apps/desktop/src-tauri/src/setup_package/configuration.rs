@@ -110,6 +110,7 @@ fn provider_origins(
                 | "open_ai_responses"
                 | "openai_responses"
                 | "open_ai_codex"
+                | "anthropic_messages"
         ) {
             return Err(invalid("Choose a supported Desktop provider protocol."));
         }
@@ -172,6 +173,7 @@ pub(super) fn inspected(
             Some("open_ai_compatible" | "openai_compatible") => ProviderKindSetting::Compatible,
             Some("open_ai_responses" | "openai_responses") => ProviderKindSetting::Responses,
             Some("open_ai_codex") => ProviderKindSetting::Codex,
+            Some("anthropic_messages") => ProviderKindSetting::Anthropic,
             _ => return Err(invalid("Unsupported provider protocol.")),
         };
         let connection = ProviderSetting {

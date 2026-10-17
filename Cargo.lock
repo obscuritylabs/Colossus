@@ -1105,6 +1105,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "colossus-contracts",
+ "colossus-media",
  "colossus-ports",
  "colossus-testkit",
  "futures",
@@ -1116,6 +1117,7 @@ dependencies = [
  "time",
  "tokio",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -1162,6 +1164,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-app-host"
+version = "0.11.8"
+dependencies = [
+ "colossus-api",
+ "colossus-home",
+ "colossus-sdk",
+ "colossus-sidecar-protocol",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "colossus-audit"
 version = "0.11.8"
 dependencies = [
@@ -1183,6 +1201,54 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "colossus-browser"
+version = "0.11.8"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "colossus-contracts",
+ "colossus-ports",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "colossus-browser-bridge"
+version = "0.11.8"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "colossus-contracts",
+ "colossus-ports",
+ "getrandom 0.4.3",
+ "hmac 0.12.1",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
+name = "colossus-browser-presentation"
+version = "0.11.8"
+dependencies = [
+ "async-trait",
+ "colossus-contracts",
+ "getrandom 0.4.3",
+ "hmac 0.12.1",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -1487,6 +1553,7 @@ dependencies = [
  "colossus-domain",
  "serde",
  "serde_json",
+ "url",
  "zeroize",
 ]
 
@@ -1534,7 +1601,11 @@ dependencies = [
 name = "colossus-darwin-process"
 version = "0.11.8"
 dependencies = [
+ "core-foundation",
  "libc",
+ "security-framework",
+ "sha2 0.10.9",
+ "tempfile",
 ]
 
 [[package]]
@@ -1691,6 +1762,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-mac-browser-process-broker"
+version = "0.1.0"
+dependencies = [
+ "colossus-darwin-process",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "colossus-mcp"
 version = "0.11.8"
 dependencies = [
@@ -1742,7 +1824,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "time",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -1781,6 +1865,38 @@ dependencies = [
  "tempfile",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "colossus-native-browser-pki"
+version = "0.1.0"
+dependencies = [
+ "rustls-pki-types",
+ "sha2 0.10.9",
+ "x509-parser",
+]
+
+[[package]]
+name = "colossus-native-browser-tls-broker"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "colossus-native-browser-pki",
+ "getrandom 0.4.3",
+ "hex",
+ "hmac 0.12.1",
+ "rcgen",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "socket2",
+ "subtle",
+ "time",
+ "tokio",
+ "tokio-rustls",
+ "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -1905,6 +2021,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "zeroize",
 ]
 
 [[package]]
@@ -1996,6 +2113,9 @@ dependencies = [
  "colossus-access",
  "colossus-agent",
  "colossus-audit",
+ "colossus-browser",
+ "colossus-browser-bridge",
+ "colossus-browser-presentation",
  "colossus-bundled-plugins",
  "colossus-bundles",
  "colossus-communication",
@@ -2029,21 +2149,26 @@ dependencies = [
  "colossus-work",
  "colossus-worker-protocol",
  "colossus-workflow",
+ "ed25519-dalek",
  "fs4",
  "futures",
  "getrandom 0.4.3",
  "hex",
  "ignore",
+ "image",
  "opentelemetry",
  "opentelemetry_sdk",
  "rustix 1.1.4",
+ "rustls",
  "serde",
  "serde-saphyr",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
+ "time",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -2059,19 +2184,28 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "capctl",
+ "colossus-browser-bridge",
+ "colossus-browser-presentation",
  "colossus-contracts",
+ "colossus-darwin-process",
  "colossus-home",
+ "colossus-mac-browser-process-broker",
+ "colossus-native-browser-pki",
+ "colossus-native-browser-tls-broker",
  "colossus-network",
  "colossus-policy",
  "colossus-ports",
  "colossus-testkit",
+ "colossus-windows-native",
  "colossus-windows-process",
  "command-group",
  "futures",
+ "getrandom 0.4.3",
  "globset",
  "hex",
  "hmac 0.12.1",
  "ignore",
+ "libc",
  "nix 0.31.3",
  "nono",
  "rappct",
@@ -2091,6 +2225,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -2102,6 +2237,7 @@ dependencies = [
  "colossus-api",
  "colossus-api-proto",
  "colossus-api-runtime",
+ "colossus-browser-presentation",
  "colossus-contracts",
  "colossus-darwin-process",
  "colossus-grpc",
@@ -2170,6 +2306,9 @@ version = "0.11.8"
 dependencies = [
  "colossus-access",
  "colossus-api",
+ "colossus-browser-presentation",
+ "colossus-bundles",
+ "colossus-contracts",
  "colossus-grpc",
  "colossus-home",
  "colossus-mcp",
@@ -2185,8 +2324,11 @@ dependencies = [
  "colossus-worker",
  "colossus-worker-protocol",
  "getrandom 0.4.3",
+ "hex",
  "keyring",
+ "libc",
  "rustix 1.1.4",
+ "serde",
  "serde-saphyr",
  "serde_json",
  "sha2 0.10.9",
@@ -2303,8 +2445,12 @@ dependencies = [
 name = "colossus-windows-process"
 version = "0.11.8"
 dependencies = [
+ "colossus-windows-native",
+ "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]
@@ -2330,6 +2476,7 @@ dependencies = [
  "colossus-api",
  "colossus-api-proto",
  "colossus-api-runtime",
+ "colossus-browser-presentation",
  "colossus-contracts",
  "colossus-grpc",
  "colossus-plugins",
@@ -5818,9 +5965,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.18"
+version = "0.11.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9746dbde176634f4f2f1faf2404e30a31b2bc1e9cafb5329c95d8177a18c9fc"
+checksum = "0e750cca55fe4f0439a15d0bb529da9651e79993e8e72c61a899a36d462befbe"
 dependencies = [
  "aws-lc-rs",
  "bytes",

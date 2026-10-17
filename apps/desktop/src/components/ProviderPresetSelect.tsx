@@ -50,11 +50,13 @@ export function ProviderPresetSelect({
             id: `setup:${item.id}:${provider.profile}`,
             label: provider.displayName,
             protocol:
-              provider.kind === "open_ai_codex"
-                ? "codex"
-                : provider.kind === "openai_responses"
-                  ? "responses"
-                  : "chat_completions",
+              provider.kind === "anthropic_messages"
+                ? "anthropic_messages"
+                : provider.kind === "open_ai_codex"
+                  ? "codex"
+                  : provider.kind === "openai_responses"
+                    ? "responses"
+                    : "chat_completions",
             baseUrl: provider.baseUrl,
             credentialEnv: provider.credentialRequired ? "SETUP_API_KEY" : null,
             setup: { packageId: item.id, provider },

@@ -3,7 +3,7 @@ use colossus_contracts::ProviderContinuation;
 use colossus_ports::ProviderContinuationRepository;
 use std::{collections::BTreeMap, sync::Mutex};
 
-/// Bounded Responses state with protected durability and a keyless memory fallback.
+/// Bounded private provider state with protected durability and a keyless fallback.
 pub struct EventSourcedProviderContinuations {
     journal: Option<Arc<dyn EventJournal>>,
     staged: Mutex<BTreeMap<String, ProviderContinuation>>,
@@ -42,10 +42,23 @@ impl EventSourcedProviderContinuations {
             || state.view.context_binding_hash != state.plan.context_binding_hash
             || state.view.covered_count != state.plan.source_count.saturating_add(1)
             || !state.hidden_reasoning.first().is_some_and(|item| {
-                item["type"] == "compaction"
-                    && item["encrypted_content"]
-                        .as_str()
-                        .is_some_and(|s| !s.is_empty())
+                if state.view.replay {
+                    item["type"] == "anthropic_replay"
+                        && state.hidden_reasoning.len() > 1
+                        && state.hidden_reasoning[1..].iter().all(|entry| {
+                            serde_json::from_value::<ModelMessage>(entry["message"].clone())
+                                .is_ok_and(|m| {
+                                    m.role == ModelMessageRole::Assistant
+                                        && !m.tool_calls.is_empty()
+                                })
+                                && entry["content"].is_array()
+                        })
+                } else {
+                    item["type"] == "compaction"
+                        && item["encrypted_content"]
+                            .as_str()
+                            .is_some_and(|s| !s.is_empty())
+                }
             })
         {
             return Err(StoreError::Verification(

@@ -37,6 +37,11 @@ pub trait AgentRunLifecycle: Send + Sync {
         initiator: &Actor,
         control: RunControl,
     ) -> Result<(), ToolError>;
+    /// Publish the current qualified tool ceiling after trusted turn preparation.
+    /// Run identity and ownership stay fixed; this is availability, not effect permission.
+    fn tools_offered(&self, _context: &ExecutionContext) -> Result<(), ToolError> {
+        Ok(())
+    }
     /// Signal cleanup synchronously, including when a run future is dropped.
     fn cancel_run(&self, run_id: &str);
     /// Finish run ownership and await cleanup of run-owned or unlaunched jobs.

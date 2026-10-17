@@ -27,7 +27,30 @@ impl JournalRunInputMediaResolver {
         owner_id: &str,
         artifact_id: &str,
     ) -> Result<ModelImageReference, RunInputMediaError> {
+        self.reference_for_purpose(owner_id, artifact_id, "run_input")
+    }
+
+    /// Authorize an already policy-released output image for model continuation.
+    ///
+    /// Callers must publish the exact quarantined bytes only after post-effect approval.
+    pub fn released_image_reference(
+        &self,
+        owner_id: &str,
+        artifact_id: &str,
+    ) -> Result<ModelImageReference, RunInputMediaError> {
+        self.reference_for_purpose(owner_id, artifact_id, "run_output")
+    }
+
+    fn reference_for_purpose(
+        &self,
+        owner_id: &str,
+        artifact_id: &str,
+        purpose: &str,
+    ) -> Result<ModelImageReference, RunInputMediaError> {
         let stored = self.stored(owner_id, artifact_id)?;
+        if stored.artifact.purpose != purpose {
+            return Err(RunInputMediaError::Unavailable);
+        }
         let validated = validate_image_bytes(
             &stored.artifact.file_name,
             Some(&stored.artifact.media_type),
@@ -76,7 +99,7 @@ impl JournalRunInputMediaResolver {
         )
         .map_err(|_| RunInputMediaError::Unavailable)?;
         if stored.artifact.artifact_id != artifact_id
-            || stored.artifact.purpose != "run_input"
+            || !matches!(stored.artifact.purpose.as_str(), "run_input" | "run_output")
             || stored.artifact.state != "available"
         {
             return Err(RunInputMediaError::Unavailable);

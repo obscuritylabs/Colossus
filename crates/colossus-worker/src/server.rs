@@ -7,14 +7,16 @@ const PUBLIC_TRANSPORT_FORCE_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct WorkerServer {
     endpoint: String,
     listener: Option<platform::Listener>,
-    authentication_key: WorkerAuthenticationKey,
+    pub(super) authentication_key: WorkerAuthenticationKey,
     approval_mode: WorkerApprovalModeState,
-    runtime: Arc<Runtime>,
+    pub(super) runtime: Arc<Runtime>,
     replay: Arc<Mutex<ReplayGuard>>,
     maintenance: Arc<tokio::sync::Mutex<()>>,
     observability_diagnostics: Option<Arc<dyn Fn() -> Value + Send + Sync>>,
     public_interactions: Arc<colossus_api_runtime::PublicInteractionRouter>,
     public_api: Option<public_api::PreparedPublicApi>,
+    browser_owner: Option<Arc<colossus_runtime::browser_package::InstalledBrowserOwner>>,
+    pub(super) native_browser: Option<super::native_browser::PreparedNativeBrowser>,
 }
 
 impl WorkerServer {
@@ -48,7 +50,9 @@ impl WorkerServer {
             config,
             approval_interface,
             Some(prompt_interface),
-            options,
+            options.with_browser_artifact_publisher(Arc::new(
+                colossus_api::ReleasedBrowserArtifactPublisher,
+            )),
         )?);
         Ok(Self {
             endpoint,
@@ -61,6 +65,8 @@ impl WorkerServer {
             observability_diagnostics: None,
             public_interactions: interactions,
             public_api: None,
+            browser_owner: None,
+            native_browser: None,
         })
     }
 
@@ -172,7 +178,9 @@ impl WorkerServer {
             config,
             approval_interface,
             Some(prompt_interface),
-            options,
+            options.with_browser_artifact_publisher(Arc::new(
+                colossus_api::ReleasedBrowserArtifactPublisher,
+            )),
             provider_credentials,
             codex_auth,
         )?);
@@ -187,7 +195,48 @@ impl WorkerServer {
             observability_diagnostics: None,
             public_interactions: interactions,
             public_api: None,
+            browser_owner: None,
+            native_browser: None,
         })
+    }
+
+    /// Compose one verified installed browser before the worker acquires its runtime.
+    /// Native composition keeps a startup guard until this call succeeds. The worker
+    /// then retains the independent owner across setup, serving and every error exit.
+    pub fn open_with_verified_browser(
+        config: &RuntimeConfig,
+        approval_mode: WorkerApprovalMode,
+        options: RuntimeOpenOptions,
+        provider_credentials: Arc<dyn CredentialResolver>,
+        codex_auth: Option<CodexAuthStore>,
+        authentication_key: Option<WorkerAuthenticationKey>,
+        browser_owner: Option<Arc<colossus_runtime::browser_package::InstalledBrowserOwner>>,
+    ) -> Result<Self, WorkerError> {
+        let options = match &browser_owner {
+            Some(owner) => options.with_browser_host(owner.host()),
+            None => options,
+        };
+        let mut server = match authentication_key {
+            Some(key) => {
+                Self::open_with_mode_at_workspace_provider_credentials_codex_auth_and_authentication(
+                    config,
+                    approval_mode,
+                    options,
+                    provider_credentials,
+                    codex_auth,
+                    key,
+                )
+            }
+            None => Self::open_with_mode_at_workspace_and_provider_credentials_and_codex_auth(
+                config,
+                approval_mode,
+                options,
+                provider_credentials,
+                codex_auth,
+            ),
+        }?;
+        server.browser_owner = browser_owner;
+        Ok(server)
     }
 
     /// Bind the host-owned, secret-free exporter diagnostic to authenticated IPC.
@@ -286,6 +335,30 @@ impl WorkerServer {
     }
 
     async fn serve_with_signal(
+        mut self,
+        signal: impl std::future::Future<Output = std::io::Result<()>> + Send,
+    ) -> Result<(), WorkerError> {
+        let browser_owner = self.browser_owner.take();
+        let mut native_browser = self
+            .native_browser
+            .take()
+            .map(super::native_browser::PreparedNativeBrowser::start);
+        let result = self.serve_bound_with_signal(signal).await;
+        let native_result = match native_browser.as_mut() {
+            Some(owner) => owner.shutdown().await,
+            None => Ok(()),
+        };
+        if let Some(owner) = browser_owner {
+            owner
+                .shutdown()
+                .await
+                .map_err(|_| WorkerError::BrowserCleanupUnknown)?;
+        }
+        native_result?;
+        result
+    }
+
+    async fn serve_bound_with_signal(
         mut self,
         signal: impl std::future::Future<Output = std::io::Result<()>> + Send,
     ) -> Result<(), WorkerError> {

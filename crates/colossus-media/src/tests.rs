@@ -12,6 +12,83 @@ use serde_json::json;
 use sha2::{Digest as _, Sha256};
 use std::{io::Cursor, sync::Arc};
 
+#[path = "tests/import_failure.rs"]
+mod import_failure;
+
+#[tokio::test]
+async fn released_images_retain_exact_bytes_and_previews_are_bounded_static_pngs() {
+    let journal = Arc::new(InMemoryEventJournal::default());
+    let bytes = encoded(ImageFormat::Png);
+    let references = import_released_images(
+        journal.as_ref(),
+        Actor {
+            actor_type: ActorType::Application,
+            id: "app:image-owner".into(),
+        },
+        ExecutionContext::default(),
+        vec![("viewed.png".into(), bytes.clone())],
+    )
+    .unwrap();
+    let resolver = JournalRunInputMediaResolver::new(journal.clone());
+    assert_eq!(
+        resolver.resolve_image(&references[0]).await.unwrap().bytes,
+        bytes
+    );
+    assert_eq!(
+        resolver
+            .image_reference("app:image-owner", &references[0].artifact_id)
+            .unwrap(),
+        references[0]
+    );
+    assert!(
+        resolver
+            .image_reference("app:foreign", &references[0].artifact_id)
+            .is_err()
+    );
+    for thumbnail in [true, false] {
+        let preview = image_preview("viewed.png", "image/png", &bytes, thumbnail).unwrap();
+        let decoded = image::load_from_memory(&preview).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (2, 3));
+        assert_eq!(image::guess_format(&preview).unwrap(), ImageFormat::Png);
+    }
+    assert!(image_preview("viewed.svg", "image/svg+xml", b"<svg></svg>", true).is_err());
+    assert!(image_preview("viewed.png", "image/jpeg", &bytes, true).is_err());
+    let head = journal.head().unwrap();
+    assert!(
+        import_released_images(
+            journal.as_ref(),
+            Actor {
+                actor_type: ActorType::Application,
+                id: "app:image-owner".into()
+            },
+            ExecutionContext::default(),
+            vec![
+                ("valid.png".into(), bytes),
+                ("bad.png".into(), b"invalid".to_vec())
+            ]
+        )
+        .is_err()
+    );
+    assert_eq!(
+        journal.head().unwrap(),
+        head,
+        "a partially invalid batch retains no images"
+    );
+}
+
+#[test]
+fn image_previews_preserve_aspect_ratio_and_bound_large_decodes_for_display() {
+    let mut bytes = Cursor::new(Vec::new());
+    DynamicImage::new_rgba8(3000, 1500)
+        .write_to(&mut bytes, ImageFormat::Png)
+        .unwrap();
+    for (thumbnail, dimensions) in [(true, (256, 128)), (false, (2048, 1024))] {
+        let preview = image_preview("wide.png", "image/png", bytes.get_ref(), thumbnail).unwrap();
+        let image = image::load_from_memory(&preview).unwrap();
+        assert_eq!((image.width(), image.height()), dimensions);
+    }
+}
+
 fn encoded(format: ImageFormat) -> Vec<u8> {
     let mut bytes = Cursor::new(Vec::new());
     DynamicImage::new_rgba8(2, 3)
@@ -195,4 +272,73 @@ async fn artifact_ownership_is_rechecked_after_resolver_restart() {
         .expect("late verified resolution");
     assert_eq!(resolved.bytes, bytes);
     assert_eq!(resolved.reference, reference);
+}
+
+#[tokio::test]
+async fn released_output_images_require_owner_authorization_and_exact_late_resolution() {
+    let bytes = encoded(ImageFormat::Png);
+    let digest = hex::encode(Sha256::digest(&bytes));
+    let artifact_id = format!("artifact-{}", "d".repeat(64));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    journal
+        .append(NewEvent {
+            event_version: 1,
+            stream_id: format!("artifact:{artifact_id}"),
+            expected_stream_version: 0,
+            classification: EventClassification::Domain,
+            event_type: AVAILABLE_EVENT.into(),
+            actor: Actor {
+                actor_type: ActorType::Application,
+                id: "app:browser-owner".into(),
+            },
+            context: ExecutionContext::default(),
+            payload: json!({
+                "artifact": {
+                    "artifact_id": artifact_id,
+                    "file_name": "browser-screenshot.png",
+                    "media_type": "image/png",
+                    "size_bytes": bytes.len(),
+                    "sha256": digest,
+                    "purpose": "run_output",
+                    "state": "available",
+                    "created_at": "2026-10-10T00:00:00Z"
+                },
+                "content_base64": BASE64.encode(&bytes)
+            }),
+        })
+        .unwrap();
+    let resolver = JournalRunInputMediaResolver::new(Arc::clone(&journal));
+    assert!(
+        resolver
+            .image_reference("app:browser-owner", &artifact_id)
+            .is_err()
+    );
+    assert!(
+        resolver
+            .released_image_reference("app:foreign", &artifact_id)
+            .is_err()
+    );
+    let reference = resolver
+        .released_image_reference("app:browser-owner", &artifact_id)
+        .unwrap();
+    let restarted = JournalRunInputMediaResolver::new(journal);
+    let resolved = restarted.resolve_image(&reference).await.unwrap();
+    assert_eq!(resolved.bytes, bytes);
+    assert_eq!(resolved.reference, reference);
+    for changed in [
+        ModelImageReference {
+            size_bytes: reference.size_bytes + 1,
+            ..reference.clone()
+        },
+        ModelImageReference {
+            width_pixels: reference.width_pixels + 1,
+            ..reference.clone()
+        },
+        ModelImageReference {
+            sha256: "a".repeat(64),
+            ..reference
+        },
+    ] {
+        assert!(restarted.resolve_image(&changed).await.is_err());
+    }
 }

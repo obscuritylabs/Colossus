@@ -63,15 +63,20 @@ fn digest(path: &Path) -> [u8; 32] {
 #[tokio::test]
 #[ignore = "native credential store, loopback and COLOSSUS_ACCEPTANCE_SIDECAR required"]
 async fn managed_sidecar_cloud_run_isolated_and_application_exit_disconnects() {
+    if isolated::run(
+        "auth::tests::transport::managed::managed_sidecar_cloud_run_isolated_and_application_exit_disconnects",
+        true,
+    )
+    .await
+    {
+        return;
+    }
     let sidecar = std::fs::canonicalize(
         std::env::var_os("COLOSSUS_ACCEPTANCE_SIDECAR").expect("prepared verified native sidecar"),
     )
     .unwrap();
     let (auth, issuer, oidc) = fixture().await;
-    #[cfg(windows)]
-    let directory = tempfile::tempdir_in(std::env::var_os("USERPROFILE").unwrap()).unwrap();
-    #[cfg(not(windows))]
-    let directory = tempfile::tempdir().unwrap();
+    let directory = isolated::directory();
     let root = directory.path().canonicalize().unwrap();
     let home = ColossusHome::ensure_at(root.join("native")).unwrap();
     let workspace = root.join("workspace");

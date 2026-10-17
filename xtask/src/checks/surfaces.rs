@@ -30,6 +30,7 @@ pub(super) fn sidecar(repository: &Repository) -> Result<(), String> {
 
 pub(super) fn desktop(repository: &Repository) -> Result<(), String> {
     mobile(repository)?;
+    browser_driver(repository)?;
     web(repository)?;
     repository
         .task("node")
@@ -75,6 +76,147 @@ pub(super) fn desktop(repository: &Repository) -> Result<(), String> {
         .args(["run", "build"])
         .current_dir("apps/desktop")
         .run()
+}
+
+// The native browser driver has a separate workspace so its private FFI does
+// not relax the safe runtime workspace. Its portable tier never downloads or
+// links CEF; linked native acceptance remains a separate platform operation.
+fn browser_driver(repository: &Repository) -> Result<(), String> {
+    const MANIFEST: &str = "native/browser/driver/Cargo.toml";
+    cargo(
+        repository,
+        ["fmt", "--manifest-path", MANIFEST, "--all", "--", "--check"],
+    )?;
+    repository
+        .task(cargo_program())
+        .args([
+            "metadata",
+            "--locked",
+            "--manifest-path",
+            MANIFEST,
+            "--no-deps",
+            "--format-version",
+            "1",
+        ])
+        .quiet_stdout()
+        .run()?;
+    cargo(
+        repository,
+        [
+            "test",
+            "--locked",
+            "--manifest-path",
+            MANIFEST,
+            "--all-targets",
+        ],
+    )?;
+    cargo(
+        repository,
+        [
+            "clippy",
+            "--locked",
+            "--manifest-path",
+            MANIFEST,
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ],
+    )
+}
+
+// These independent native workspaces never load Chromium or OS certificate
+// stores in their portable checks. The HTTPS entry's native peer seal and live
+// process acceptance remain separate from its ordinary socket/TLS suite.
+pub(super) fn browser_brokers(repository: &Repository) -> Result<(), String> {
+    for (manifest, feature) in [
+        ("native/browser/process-broker/Cargo.toml", None),
+        ("native/browser/process-broker/fixture/Cargo.toml", None),
+        (
+            "native/browser/tls-broker/Cargo.toml",
+            Some("macos-https-broker-development"),
+        ),
+    ] {
+        cargo(
+            repository,
+            ["fmt", "--manifest-path", manifest, "--all", "--", "--check"],
+        )?;
+        repository
+            .task(cargo_program())
+            .args([
+                "metadata",
+                "--locked",
+                "--manifest-path",
+                manifest,
+                "--no-deps",
+                "--format-version",
+                "1",
+            ])
+            .quiet_stdout()
+            .run()?;
+        for command in ["test", "clippy"] {
+            let mut arguments = vec![
+                command,
+                "--locked",
+                "--manifest-path",
+                manifest,
+                "--all-targets",
+            ];
+            if let Some(feature) = feature {
+                arguments.extend(["--features", feature]);
+            }
+            if command == "clippy" {
+                arguments.extend(["--", "-D", "warnings"]);
+            }
+            repository.task(cargo_program()).args(arguments).run()?;
+        }
+        cargo(
+            repository,
+            [
+                "check",
+                "--locked",
+                "--manifest-path",
+                manifest,
+                "--no-default-features",
+            ],
+        )?;
+    }
+    if cfg!(target_os = "macos") {
+        // Compile the narrow native Security boundary without executing store
+        // fixtures. Ordinary tests use only in-memory certificates and signers.
+        const TLS_MANIFEST: &str = "native/browser/tls-broker/Cargo.toml";
+        for command in ["test", "clippy"] {
+            let mut arguments = vec![
+                command,
+                "--locked",
+                "--manifest-path",
+                TLS_MANIFEST,
+                "--all-targets",
+                "--features",
+                "macos-native-identity-development",
+            ];
+            if command == "clippy" {
+                arguments.extend(["--", "-D", "warnings"]);
+            }
+            repository.task(cargo_program()).args(arguments).run()?;
+        }
+        cargo(
+            repository,
+            [
+                "clippy",
+                "--locked",
+                "--manifest-path",
+                TLS_MANIFEST,
+                "--package",
+                "colossus-native-browser-mac-identity",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 pub(super) fn web(repository: &Repository) -> Result<(), String> {
@@ -252,7 +394,95 @@ pub(super) fn dependencies(repository: &Repository) -> Result<(), String> {
             "--file",
             "apps/mobile/src-tauri/Cargo.lock",
         ],
-    )
+    )?;
+    cargo(
+        repository,
+        [
+            "deny",
+            "--manifest-path",
+            "native/browser/driver/Cargo.toml",
+            "--config",
+            "deny.toml",
+            "--locked",
+            "check",
+            "-A",
+            "license-not-encountered",
+            "licenses",
+            "sources",
+            "bans",
+        ],
+    )?;
+    cargo(
+        repository,
+        [
+            "deny",
+            "--manifest-path",
+            "native/browser/driver/Cargo.toml",
+            "--config",
+            "deny.toml",
+            "--locked",
+            "check",
+            "-D",
+            "warnings",
+            "-A",
+            "advisory-not-detected",
+            "advisories",
+        ],
+    )?;
+    cargo(
+        repository,
+        [
+            "audit",
+            "--no-fetch",
+            "-D",
+            "warnings",
+            "--file",
+            "native/browser/driver/Cargo.lock",
+        ],
+    )?;
+    for directory in ["process-broker", "process-broker/fixture", "tls-broker"] {
+        let manifest = format!("native/browser/{directory}/Cargo.toml");
+        let lockfile = format!("native/browser/{directory}/Cargo.lock");
+        repository
+            .task(cargo_program())
+            .args([
+                "deny",
+                "--manifest-path",
+                &manifest,
+                "--config",
+                "deny.toml",
+                "--locked",
+                "check",
+                "-D",
+                "warnings",
+                "-A",
+                "advisory-not-detected",
+                "advisories",
+            ])
+            .run()?;
+        repository
+            .task(cargo_program())
+            .args([
+                "deny",
+                "--manifest-path",
+                &manifest,
+                "--config",
+                "deny.toml",
+                "--locked",
+                "check",
+                "-A",
+                "license-not-encountered",
+                "licenses",
+                "sources",
+                "bans",
+            ])
+            .run()?;
+        repository
+            .task(cargo_program())
+            .args(["audit", "--no-fetch", "-D", "warnings", "--file", &lockfile])
+            .run()?;
+    }
+    Ok(())
 }
 
 fn cargo<const N: usize>(repository: &Repository, args: [&str; N]) -> Result<(), String> {

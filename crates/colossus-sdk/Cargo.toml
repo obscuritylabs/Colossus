@@ -30,6 +30,7 @@ keyring = ["dep:keyring"]
 sidecar = [
     "daemon",
     "dep:colossus-contracts",
+    "dep:colossus-browser-presentation",
     "dep:colossus-darwin-process",
     "dep:colossus-windows-native",
     "dep:nix",
@@ -45,6 +46,7 @@ async-trait.workspace = true
 base64 = { workspace = true, optional = true }
 colossus-api.workspace = true
 colossus-contracts = { workspace = true, optional = true }
+colossus-browser-presentation = { workspace = true, optional = true }
 colossus-api-proto = { workspace = true, optional = true }
 colossus-grpc = { workspace = true, optional = true }
 colossus-sidecar-protocol.workspace = true

@@ -1,6 +1,10 @@
 use super::*;
 
 fn isolated() -> (DictationSettings, PathBuf) {
+    #[cfg(windows)]
+    let temporary =
+        std::fs::canonicalize(std::env::var_os("USERPROFILE").expect("test user profile")).unwrap();
+    #[cfg(not(windows))]
     let temporary = std::fs::canonicalize(std::env::temp_dir()).unwrap();
     let path = temporary.join(format!(
         "colossus-dictation-settings-{}-{}",

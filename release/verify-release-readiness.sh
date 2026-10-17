@@ -59,6 +59,63 @@ esac
 legacy_python_sources=$(git ls-files -- '*.py' ':(exclude)sdk/python/**' \
     ':(exclude)deploy/documentation/build-config.py' \
     ':(exclude)scripts/ci/normalize_python_sdist.py' \
+    ':(exclude)native/browser/scripts/component.py' \
+    ':(exclude)native/browser/scripts/test_component.py' \
+    ':(exclude)native/browser/scripts/run_probe.py' \
+    ':(exclude)native/browser/scripts/test_probe.py' \
+    ':(exclude)native/browser/scripts/run_host_probe.py' \
+    ':(exclude)native/browser/scripts/test_host_probe.py' \
+    ':(exclude)native/browser/scripts/host_capture_probe.py' \
+    ':(exclude)native/browser/scripts/test_host_capture_probe.py' \
+    ':(exclude)native/browser/scripts/host_transfer_probe.py' \
+    ':(exclude)native/browser/scripts/test_host_transfer_probe.py' \
+    ':(exclude)native/browser/scripts/elf_order.py' \
+    ':(exclude)native/browser/scripts/test_elf_order.py' \
+    ':(exclude)native/browser/scripts/run_host_pki_probe.py' \
+    ':(exclude)native/browser/scripts/run_renderer_custody_probe.py' \
+    ':(exclude)native/browser/scripts/test_renderer_custody_probe.py' \
+    ':(exclude)native/browser/scripts/pki_fixture_proxy.py' \
+    ':(exclude)native/browser/scripts/stage_macos.py' \
+    ':(exclude)native/browser/scripts/stage_host_macos.py' \
+    ':(exclude)native/browser/scripts/test_stage_macos.py' \
+    ':(exclude)native/browser/scripts/test_launcher_macos.py' \
+    ':(exclude)native/browser/scripts/stage_windows.py' \
+    ':(exclude)native/browser/scripts/test_stage_windows.py' \
+    ':(exclude)native/browser/scripts/windows_development.py' \
+    ':(exclude)native/browser/scripts/pki_fixture.py' \
+    ':(exclude)native/browser/scripts/pki_fixture_material.py' \
+    ':(exclude)native/browser/scripts/pki_fixture_private.py' \
+    ':(exclude)native/browser/scripts/pki_fixture_retirement.py' \
+    ':(exclude)native/browser/scripts/test_pki_fixture_retirement.py' \
+    ':(exclude)native/browser/scripts/test_pki_fixture.py' \
+    ':(exclude)native/browser/scripts/stage_nss_tools.py' \
+    ':(exclude)native/browser/scripts/test_stage_nss_tools.py' \
+    ':(exclude)native/browser/scripts/stage_cli_browser_bundle.py' \
+    ':(exclude)native/browser/scripts/test_stage_cli_browser_bundle.py' \
+    ':(exclude)native/browser/scripts/run_core_macos_diagnostic.py' \
+    ':(exclude)native/browser/scripts/test_run_core_macos_diagnostic.py' \
+    ':(exclude)native/browser/scripts/mac_network_policies.py' \
+    ':(exclude)native/browser/scripts/test_mac_network_policies.py' \
+    ':(exclude)native/browser/scripts/macos_profile_crypto_fixture.py' \
+    ':(exclude)native/browser/scripts/test_macos_profile_crypto_fixture.py' \
+    ':(exclude)native/browser/scripts/owned_process_component.py' \
+    ':(exclude)native/browser/scripts/test_owned_process_component.py' \
+    ':(exclude)native/browser/scripts/test_owned_lock_metrics_seed.py' \
+    ':(exclude)native/browser/scripts/prepare_custody_front_probe.py' \
+    ':(exclude)native/browser/scripts/test_prepare_custody_front_probe.py' \
+    ':(exclude)native/browser/scripts/prepare_native_custody_acceptance.py' \
+    ':(exclude)native/browser/scripts/prepare_core_macos_owned.py' \
+    ':(exclude)native/browser/scripts/test_prepare_core_macos_owned.py' \
+    ':(exclude)native/browser/scripts/prepare_owned_custody_proof.py' \
+    ':(exclude)native/browser/scripts/test_prepare_owned_custody_proof.py' \
+    ':(exclude)native/browser/scripts/owned_pki_inputs.py' \
+    ':(exclude)native/browser/scripts/test_owned_pki_inputs.py' \
+    ':(exclude)native/browser/scripts/prepare_supervisor_sentinel.py' \
+    ':(exclude)native/browser/scripts/test_prepare_supervisor_sentinel.py' \
+    ':(exclude)native/browser/component/patches/macos-owned-process/verify.py' \
+    ':(exclude)native/browser/tls-broker/scripts/run_native_acceptance.py' \
+    ':(exclude)native/browser/tls-broker/scripts/test_run_native_acceptance.py' \
+    ':(exclude)crates/colossus-darwin-process/tests/audit_events/run.py' \
     ':(exclude)bundled-plugins/colossus/skills/security-review/scripts/init_review.py' \
     ':(exclude)scripts/tests/test_security_review_workspace.py' \
     ':(exclude)examples/sdk/integration/server.py' \

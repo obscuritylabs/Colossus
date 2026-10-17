@@ -35,11 +35,11 @@ import { useShellSessions, shellIsActive } from "../shellSessions";
 import { WorkWelcome } from "@colossus/ui";
 import { WorkSurfaceHeader } from "@colossus/ui/conversation";
 import {
-  MAX_ASIDE_PANE_WIDTH,
   MIN_ASIDE_PANE_WIDTH,
   clampAsidePaneWidth,
   clearStoredAsidePaneWidth,
   defaultAsidePaneWidth,
+  maximumAsidePaneWidth,
   readStoredAsidePaneWidth,
   storeAsidePaneWidth,
 } from "../aside-pane-width";
@@ -73,6 +73,7 @@ import { ArtifactWorkspace } from "./ArtifactWorkspace";
 import { InteractionCard } from "./InteractionCard";
 import { PlanDetailsPanel } from "./PlanDetailsPanel";
 import { RunTimeline } from "./RunTimeline";
+import type { ImagePreviewLoader } from "../viewed-images";
 import { SessionActivityView } from "./SessionActivity";
 import { ResearchSourcesPanel } from "./ResearchSourcesPanel";
 import { SessionMapDetailsPanel } from "./SessionMapDetailsPanel";
@@ -104,11 +105,14 @@ const BrowserPane = lazy(() =>
 );
 
 interface WorkSurfaceProps {
+  onLoadViewedImage?: ImagePreviewLoader | undefined;
   onInspectSchedule?:
     import("./ScheduleActivityCard").InspectSchedule | undefined;
   gitWorkspaceId?: string | null;
   gitAvailable?: boolean;
   browserScope?: string | null;
+  browserConversationId?: string | undefined;
+  onUseBrowserConversation?: ((sessionId: string) => void) | undefined;
   processSessionsAvailable?: boolean;
   browserFixture?: boolean;
   terminalSupported?: boolean;
@@ -200,6 +204,7 @@ const IGNORE_SESSION_WORKSPACE_VIEW = () => undefined;
 
 export function WorkSurface({
   onInspectSchedule,
+  onLoadViewedImage,
   gitWorkspaceId = null,
   gitAvailable = false,
   forkDraft = false,
@@ -228,6 +233,8 @@ export function WorkSurface({
   filesPanel,
   filesAvailable,
   browserScope = null,
+  browserConversationId,
+  onUseBrowserConversation,
   processSessionsAvailable = false,
   browserFixture = false,
   terminalSupported = false,
@@ -310,6 +317,8 @@ export function WorkSurface({
     browserScope,
     activeDrawer === "browser",
     browserFixture,
+    view?.run.sessionId ?? browserConversationId,
+    view?.run.runId,
   );
   const browserTriggerRef = useRef<HTMLButtonElement>(null);
   const [selectionLauncher, setSelectionLauncher] = useState<
@@ -323,6 +332,8 @@ export function WorkSurface({
     null,
   );
   const [browserPaneWidth, setBrowserPaneWidth] = useState<number | null>(null);
+  const [asidePaneMaximum, setAsidePaneMaximum] =
+    useState(MIN_ASIDE_PANE_WIDTH);
   const [filesPaneWidth, setFilesPaneWidth] = useState<number | null>(null);
   const [filesExpanded, setFilesExpanded] = useState(false);
   const [gitPaneWidth, setGitPaneWidth] = useState<number | null>(null);
@@ -592,6 +603,7 @@ export function WorkSurface({
       if (layoutWidth <= 0) {
         return;
       }
+      setAsidePaneMaximum(maximumAsidePaneWidth(layoutWidth));
       setAsidePaneWidth((current) =>
         clampAsidePaneWidth(
           current ??
@@ -1279,6 +1291,7 @@ export function WorkSurface({
                 <div className="conversation-timeline" id="work-activity">
                   {conversationViews.map((contextView) => (
                     <RunTimeline
+                      onLoadViewedImage={onLoadViewedImage}
                       key={contextView.run.runId}
                       view={contextView}
                     />
@@ -1299,6 +1312,7 @@ export function WorkSurface({
                 />
               ) : sessionWorkspaceView === "activity" ? (
                 <SessionActivityView
+                  onLoadViewedImage={onLoadViewedImage}
                   sourceRunId={view.run.runId}
                   available={sessionActivityAvailable}
                   loadPage={loadSessionActivity}
@@ -1346,6 +1360,7 @@ export function WorkSurface({
                   <div className="conversation-timeline" id="work-activity">
                     {inheritedViews.map((contextView) => (
                       <RunTimeline
+                        onLoadViewedImage={onLoadViewedImage}
                         key={`inherited-${contextView.run.runId}`}
                         view={contextView}
                       />
@@ -1357,6 +1372,7 @@ export function WorkSurface({
                         key={conversationView.run.runId}
                       >
                         <RunTimeline
+                          onLoadViewedImage={onLoadViewedImage}
                           onInspectSchedule={onInspectSchedule}
                           view={conversationView}
                           activityComparison={activityComparisonEnabled}
@@ -1471,7 +1487,7 @@ export function WorkSurface({
             }
             aria-orientation="vertical"
             aria-valuemin={MIN_ASIDE_PANE_WIDTH}
-            aria-valuemax={MAX_ASIDE_PANE_WIDTH}
+            aria-valuemax={asidePaneMaximum}
             aria-valuenow={asidePaneWidth ?? MIN_ASIDE_PANE_WIDTH}
             title="Drag to resize. Double-click to reset."
             tabIndex={0}
@@ -1524,7 +1540,7 @@ export function WorkSurface({
               } else if (event.key === "Home") {
                 nextWidth = MIN_ASIDE_PANE_WIDTH;
               } else if (event.key === "End") {
-                nextWidth = MAX_ASIDE_PANE_WIDTH;
+                nextWidth = maximumAsidePaneWidth(layoutWidth);
               }
               if (nextWidth !== null) {
                 event.preventDefault();
@@ -1686,6 +1702,12 @@ export function WorkSurface({
               >
                 <BrowserPane
                   controller={browser}
+                  run={
+                    run
+                      ? { runId: run.runId, sessionId: run.sessionId }
+                      : undefined
+                  }
+                  onUseConversation={onUseBrowserConversation}
                   docked
                   expanded={browserExpanded}
                   onExpand={() => setBrowserExpanded((expanded) => !expanded)}

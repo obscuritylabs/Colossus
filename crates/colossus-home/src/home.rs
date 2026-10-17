@@ -16,6 +16,8 @@ pub enum HomeSurface {
     Cli,
     /// Native Desktop state.
     Desktop,
+    /// VS Code extension-owned managed runtime state.
+    Vscode,
 }
 
 impl HomeSurface {
@@ -23,6 +25,7 @@ impl HomeSurface {
         match self {
             Self::Cli => "cli",
             Self::Desktop => "desktop",
+            Self::Vscode => "vscode",
         }
     }
 }
@@ -296,6 +299,20 @@ mod tests {
             )
             .expect("Desktop surface");
         assert_eq!(cli.parent(), desktop.parent());
+        let vscode = home
+            .workspace_surface_dir(
+                identity.canonical_path(),
+                identity.as_ref(),
+                HomeSurface::Vscode,
+            )
+            .expect("VS Code surface");
+        assert_eq!(vscode.parent(), desktop.parent());
+        assert_ne!(vscode, cli);
+        assert_ne!(vscode, desktop);
+        assert_eq!(
+            vscode.file_name().and_then(|name| name.to_str()),
+            Some("vscode")
+        );
         assert_ne!(cli, desktop);
         assert_eq!(cli.file_name().and_then(|name| name.to_str()), Some("cli"));
         assert_eq!(

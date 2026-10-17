@@ -176,6 +176,8 @@ pub(crate) async fn get_dictation_settings(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+// The IPC schema remains stable when the dictation backend is disabled.
+#[cfg_attr(not(feature = "dictation"), allow(dead_code))]
 pub(crate) struct DictationSettingsRequest {
     enabled: bool,
     model_id: String,

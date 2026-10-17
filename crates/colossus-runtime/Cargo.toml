@@ -6,7 +6,14 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# Source-only macOS composition seam for the separate-host acceptance harness. This
+# feature does not participate in installed-package discovery or release builds.
+macos-browser-host-acceptance = ["colossus-sandbox/macos-browser-tls-development"]
+windows-browser-development = []
+
 [dependencies]
+zeroize.workspace = true
 colossus-communication.workspace = true
 futures.workspace = true
 async-trait.workspace = true
@@ -14,6 +21,9 @@ base64.workspace = true
 colossus-access.workspace = true
 colossus-audit.workspace = true
 colossus-agent.workspace = true
+colossus-browser.workspace = true
+colossus-browser-bridge.workspace = true
+colossus-browser-presentation.workspace = true
 colossus-contracts.workspace = true
 colossus-credentials.workspace = true
 colossus-context.workspace = true
@@ -61,6 +71,11 @@ uuid.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+ed25519-dalek.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+time.workspace = true
+image.workspace = true
 colossus-testkit.workspace = true
 opentelemetry.workspace = true
 opentelemetry_sdk = { workspace = true, features = ["testing"] }

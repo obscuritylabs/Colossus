@@ -113,7 +113,8 @@ impl AgentService {
             )
             .instrument(span)
             .await;
-        if owns_run.load(Ordering::Acquire)
+        // Durable inbox failure cannot bypass acknowledged run-resource cleanup.
+        let inbox_closed = if owns_run.load(Ordering::Acquire)
             && let Some(inbox) = &self.inbox
         {
             let reason = match &result {
@@ -126,14 +127,17 @@ impl AgentService {
                 }
                 Err(_) => colossus_contracts::AgentMessageFailure::Failed,
             };
-            inbox.close_run(&owned_run_id, reason)?;
-        }
+            inbox.close_run(&owned_run_id, reason)
+        } else {
+            Ok(())
+        };
         if owns_run.load(Ordering::Acquire)
             && let Some(lifecycle) = &self.lifecycle
         {
             lifecycle.finish_run(&owned_run_id).await;
         }
         drop(guard);
+        inbox_closed?;
         result
     }
 
@@ -279,6 +283,33 @@ impl AgentService {
             }),
             ..ExecutionContext::default()
         };
+        // Managed resources retain their run authority before the first model
+        // request. Capture the same filtered tool ceiling before registration;
+        // later browser handoff cannot infer it from a tool that has not run yet.
+        let mut definitions = model_definitions(self.tools.as_ref());
+        definitions.retain(|definition| {
+            (definition.name != "image.view" || route.capabilities.image_inputs)
+                && (scope.goal_id.is_some()
+                    || !matches!(definition.name.as_str(), "goal.show" | "goal.update"))
+                && (scope.subagent_id.is_none() || definition.name != "agent.delegate")
+                && plan_target
+                    .as_ref()
+                    .is_none_or(|target| plan_mode_tool(&definition.name, target))
+                && scope
+                    .allowed_tools
+                    .is_none_or(|allowed| allowed.contains(&definition.name))
+        });
+        if !route.capabilities.tool_calls {
+            definitions.clear();
+        }
+        let initial_offered_tools = definitions
+            .iter()
+            .map(|definition| definition.name.as_str())
+            .collect::<BTreeSet<_>>();
+        context.offered_tools = initial_offered_tools
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
         if let Some(lifecycle) = &self.lifecycle {
             lifecycle.begin_run(&context, &initiator, control.cloned().unwrap_or_default())?;
             owns_run.store(true, Ordering::Release);
@@ -311,9 +342,15 @@ impl AgentService {
             ),
         })?;
         messages = project_model_tool_observations(&messages);
+        if !route.capabilities.image_inputs {
+            messages.retain(|message| message.role != ModelMessageRole::ToolObservation);
+        }
         if !route.capabilities.tool_calls
             && messages.iter().any(|message| {
-                message.role == ModelMessageRole::Tool || !message.tool_calls.is_empty()
+                matches!(
+                    message.role,
+                    ModelMessageRole::Tool | ModelMessageRole::ToolObservation
+                ) || !message.tool_calls.is_empty()
             })
         {
             return Err(AgentError::Configuration(format!(
@@ -361,21 +398,6 @@ impl AgentService {
             initiator.clone(),
         )?;
         messages.push(user_message);
-        let mut definitions = model_definitions(self.tools.as_ref());
-        definitions.retain(|definition| {
-            (scope.goal_id.is_some()
-                || !matches!(definition.name.as_str(), "goal.show" | "goal.update"))
-                && (scope.subagent_id.is_none() || definition.name != "agent.delegate")
-                && plan_target
-                    .as_ref()
-                    .is_none_or(|target| plan_mode_tool(&definition.name, target))
-                && scope
-                    .allowed_tools
-                    .is_none_or(|allowed| allowed.contains(&definition.name))
-        });
-        if !route.capabilities.tool_calls {
-            definitions.clear();
-        }
         let instructions = if needs_initial_title
             && definitions
                 .iter()
@@ -387,14 +409,9 @@ impl AgentService {
         } else {
             instructions.to_owned()
         };
-        let initial_offered_tools = definitions
-            .iter()
-            .map(|definition| definition.name.as_str())
-            .collect::<BTreeSet<_>>();
-        context.offered_tools = initial_offered_tools
-            .iter()
-            .map(|name| (*name).to_owned())
-            .collect();
+        if let Some(lifecycle) = &self.lifecycle {
+            lifecycle.tools_offered(&context)?;
+        }
         let mut stream_version = 0_u64;
         let mut recovery_attempts = 0_u8;
         self.append(
@@ -453,6 +470,9 @@ impl AgentService {
                 .iter()
                 .map(|name| (*name).to_owned())
                 .collect();
+            if let Some(lifecycle) = &self.lifecycle {
+                lifecycle.tools_offered(&context)?;
+            }
             if control.is_some_and(RunControl::is_cancelled) {
                 return self
                     .finish_cancelled_run(
@@ -501,21 +521,17 @@ impl AgentService {
                 if let Some(batch) = &inbox_batch {
                     messages.extend(colossus_ports::agent_input_messages(batch));
                 }
-                let mut continuation_plan =
-                    if scope.agent_options == colossus_contracts::WorkflowAgentOptions::default() {
-                        self.provider.continuation_plan(
-                            role,
-                            &ModelRequest {
-                                instructions: instructions.clone(),
-                                messages: messages.clone(),
-                                tools: turn_definitions.clone(),
-                                max_output_tokens: None,
-                            },
-                            &context,
-                        )?
-                    } else {
-                        None
-                    };
+                let mut continuation_plan = self.provider.continuation_plan_with_options(
+                    role,
+                    &ModelRequest {
+                        instructions: instructions.clone(),
+                        messages: messages.clone(),
+                        tools: turn_definitions.clone(),
+                        max_output_tokens: None,
+                    },
+                    &context,
+                    &scope.agent_options,
+                )?;
                 let prepared = if let Some(preparer) = &self.context_preparer {
                     let prepared = preparer
                         .prepare(ContextPreparationRequest {
@@ -1250,6 +1266,25 @@ impl AgentService {
                 if let Some(end_user_id) = scope.end_user_id {
                     tool_span.record("enduser.id", end_user_id);
                 }
+                // Reserve the whole pending batch. Context preparation may compact
+                // older images, but every image returned in this tool turn must fit.
+                // Dispatch hints must not change the registered run context used
+                // by lifecycle authority checks on the next model turn.
+                let mut context = context.clone();
+                let used_images = tool_results
+                    .iter()
+                    .filter_map(colossus_contracts::ImageViewOutput::from_tool_result)
+                    .flat_map(|output| output.images)
+                    .collect::<Vec<_>>();
+                context.image_input_budget = Some(colossus_contracts::ImageInputBudget {
+                    remaining_count: 16_usize.saturating_sub(used_images.len()),
+                    remaining_bytes: (32_u64 * 1_048_576).saturating_sub(
+                        used_images
+                            .iter()
+                            .map(|image| image.size_bytes)
+                            .sum::<u64>(),
+                    ),
+                });
                 let validation = if turn_offered_tools.contains(call.name.as_str()) {
                     self.tools.validate(&call).and_then(|_| {
                         validate_plan_write_once(&call, plan_target.as_ref(), written_plan.as_ref())
@@ -1672,6 +1707,7 @@ impl AgentService {
                             "name": result.name,
                             "output": result.output,
                             "exit_code": result.exit_code,
+                            "images": result.images,
                         }),
                     )
                 })?;
@@ -1680,7 +1716,15 @@ impl AgentService {
             }
 
             let tool_messages = tool_result_observation_messages(&tool_results);
-            next_messages.extend(tool_messages.iter().cloned());
+            next_messages.extend(
+                tool_messages
+                    .iter()
+                    .filter(|message| {
+                        route.capabilities.image_inputs
+                            || message.role != ModelMessageRole::ToolObservation
+                    })
+                    .cloned(),
+            );
             validate_model_transcript(&next_messages).map_err(|error| {
                 AgentError::Configuration(format!(
                     "provider returned an invalid tool transcript: {error}"

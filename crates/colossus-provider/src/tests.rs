@@ -32,8 +32,12 @@ use tokio::{
 };
 use tokio_rustls::TlsAcceptor;
 
+#[path = "anthropic/gateway_tests.rs"]
+mod anthropic_gateway_tests;
 #[path = "error/gateway_tests.rs"]
 mod failure_tests;
+#[path = "image_view_tests.rs"]
+mod image_view_tests;
 #[path = "retry_tests.rs"]
 mod retry_tests;
 
@@ -1649,6 +1653,81 @@ fn multipart_images_use_exact_responses_chat_and_codex_wire_shapes() {
 }
 
 #[test]
+fn released_tool_images_follow_settled_calls_on_both_provider_wires() {
+    let (mut request, _image, images) = multipart_model_request();
+    let mut observation = request.messages.remove(0);
+    observation.role = ModelMessageRole::ToolObservation;
+    observation.tool_call_id = Some("capture-1".into());
+    request.messages = vec![
+        ModelMessage {
+            agent_message_origin: None,
+            role: ModelMessageRole::Assistant,
+            content: String::new().into(),
+            tool_call_id: None,
+            tool_calls: vec![ModelToolCall {
+                call_id: "capture-1".into(),
+                name: "browser.screenshot".into(),
+                arguments: json!({}),
+            }],
+        },
+        ModelMessage {
+            agent_message_origin: None,
+            role: ModelMessageRole::Tool,
+            content: "Screenshot released".into(),
+            tool_call_id: Some("capture-1".into()),
+            tool_calls: Vec::new(),
+        },
+        observation,
+    ];
+    let names = ProviderToolNames::from_request(&request).unwrap();
+    let responses = responses_payload_with_images(
+        &request,
+        ProviderKind::OpenAiResponses,
+        "unit-model",
+        4096,
+        None,
+        false,
+        ProviderProjection::new(&names, &images),
+    )
+    .unwrap();
+    assert_eq!(responses["input"][1]["type"], "function_call_output");
+    assert_eq!(responses["input"][1]["call_id"], "capture-1");
+    assert_eq!(responses["input"][2]["role"], "user");
+    assert_eq!(responses["input"][2]["content"][1]["type"], "input_image");
+    assert_eq!(
+        responses["input"][2]["content"][1]["image_url"],
+        "data:image/png;base64,cG5n"
+    );
+    let chat = chat_payload_with_images(
+        &request,
+        "unit-model",
+        4096,
+        ChatCompletionsOutputTokenParameter::MaxTokens,
+        None,
+        false,
+        ProviderProjection::new(&names, &images),
+    )
+    .unwrap();
+    assert_eq!(chat["messages"][2]["role"], "tool");
+    assert_eq!(chat["messages"][2]["tool_call_id"], "capture-1");
+    assert_eq!(chat["messages"][3]["role"], "user");
+    assert_eq!(chat["messages"][3]["content"][1]["type"], "image_url");
+    request.messages.remove(1);
+    assert!(
+        responses_payload_with_images(
+            &request,
+            ProviderKind::OpenAiResponses,
+            "unit-model",
+            4096,
+            None,
+            false,
+            ProviderProjection::new(&names, &images)
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn provider_diagnostics_redact_nested_image_data_urls() {
     let payload = json!({
         "input": [{
@@ -2760,7 +2839,9 @@ async fn dense_sse_deltas_are_coalesced_before_policy_release_and_audit() {
         ));
     }
     body.push_str("data: [DONE]\n\n");
-    let (base_url, server) = one_sse_server(body).await;
+    // Deliver the dense event burst without pacing it through thousands of tiny
+    // socket writes; the other SSE fixtures cover fragmented transport frames.
+    let (base_url, server) = one_sse_server_with_chunk_size(body, 64 * 1024).await;
     let profile = ProviderProfile::new(
         "local",
         ProviderKind::OpenAiCompatible,

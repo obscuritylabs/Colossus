@@ -1191,6 +1191,8 @@ function providerAdapterLabel(
   kind: ManagedProviderCatalogValue["kind"],
 ): string {
   switch (kind) {
+    case "anthropic_messages":
+      return "Anthropic Messages";
     case "openai_responses":
       return "OpenAI Responses";
     case "openai_compatible":
@@ -6837,11 +6839,13 @@ function ProviderEditor({
     MAX_PROVIDER_DESCRIPTION_BYTES;
   const codex = draft.kind === "open_ai_codex";
   const adapterDescription =
-    draft.kind === "openai_responses"
-      ? "Use for providers that support the OpenAI Responses API."
-      : draft.kind === "openai_compatible"
-        ? "Use for providers with an OpenAI-compatible API."
-        : "Use your Codex subscription; the endpoint and sign-in are managed for you.";
+    draft.kind === "anthropic_messages"
+      ? "Use the native Anthropic Messages API."
+      : draft.kind === "openai_responses"
+        ? "Use for providers that support the OpenAI Responses API."
+        : draft.kind === "openai_compatible"
+          ? "Use for providers with an OpenAI-compatible API."
+          : "Use your Codex subscription; the endpoint and sign-in are managed for you.";
   const title = draft.resourceId
     ? `Edit ${draft.label || "provider"}`
     : "Add provider";
@@ -6957,6 +6961,7 @@ function ProviderEditor({
               }
             >
               <option value="openai_responses">OpenAI Responses</option>
+              <option value="anthropic_messages">Anthropic Messages</option>
               <option value="openai_compatible">OpenAI compatible</option>
               <option value="open_ai_codex">Codex subscription</option>
             </DropdownSelect>

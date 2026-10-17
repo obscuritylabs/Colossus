@@ -88,14 +88,11 @@ fn state(session: &ManagedSession) -> std::sync::MutexGuard<'_, SessionState> {
 }
 
 impl ProcessSessions {
-    pub(super) fn journal_for_workflows(&self) -> &dyn EventJournal {
-        self.journal.as_ref()
+    pub(super) fn journal(&self) -> &Arc<dyn EventJournal> {
+        &self.journal
     }
 
-    pub(super) fn registry_for_workflows(
-        &self,
-        context: &ExecutionContext,
-    ) -> Result<Actor, ToolError> {
+    pub(super) fn active_run_owner(&self, context: &ExecutionContext) -> Result<Actor, ToolError> {
         let registry = self.registry();
         let owner = context
             .run_id
@@ -833,6 +830,7 @@ impl GatewayToolExecutor {
             .await
             .map_err(tool_gateway_error)?;
         Ok(ToolResult {
+            images: Vec::new(),
             call_id: call.call_id,
             name: call.name,
             output: String::from_utf8(result.bytes).map_err(process_failure)?,

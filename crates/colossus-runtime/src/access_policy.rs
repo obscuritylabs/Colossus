@@ -21,6 +21,7 @@ pub(super) struct AccessPolicyInputs<'a> {
     pub(super) tls_roots: &'a AdditionalRootCertificates,
     pub(super) model_network_tools: bool,
     pub(super) interactive: bool,
+    pub(super) browser_capabilities: Option<&'a colossus_contracts::BrowserCapabilities>,
 }
 
 /// An absent configured MCP command is an unavailable source, not a usable
@@ -62,6 +63,7 @@ pub(super) fn compose_access_policy(
         tls_roots,
         model_network_tools,
         interactive,
+        browser_capabilities,
     } = inputs;
     let mut candidate_tool_specs = colossus_tools::with_process_limits(
         builtin_specs(),
@@ -147,6 +149,8 @@ pub(super) fn compose_access_policy(
         model_network_tools,
         agent_search_route: searches.resolve("agent").is_ok(),
         interactive,
+        browser_available: browser_capabilities
+            .is_some_and(|capabilities| capabilities.available && !capabilities.modes.is_empty()),
         mcp_configured: !active_plugin_extensions.mcp.servers.is_empty()
             || config
                 .plugins
@@ -154,7 +158,7 @@ pub(super) fn compose_access_policy(
                 .values()
                 .any(|overlay| overlay.enabled),
     };
-    let access = resolve_access(
+    let mut access = resolve_access(
         &config.access,
         &candidate_tool_specs,
         action_descriptors,
@@ -163,6 +167,16 @@ pub(super) fn compose_access_policy(
         matches!(&config.policy, PolicyConfig::Opa { .. }),
     )
     .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    for tool in &mut access.tools {
+        if tool.name.starts_with("browser.")
+            && tool.availability == colossus_access::ToolAvailability::Active
+            && !crate::browser_tools::supports_tool(browser_capabilities, &tool.name)
+        {
+            tool.availability = colossus_access::ToolAvailability::Hidden;
+            tool.reason = "installed browser component does not support this operation".into();
+            tool.unmet_prerequisite = Some("verified browser operation".into());
+        }
+    }
     let policy: Arc<dyn PolicyDecisionPoint> = match &config.policy {
         PolicyConfig::BuiltIn {
             require_post_effect,
@@ -200,7 +214,22 @@ pub(super) fn compose_access_policy(
                 policy = policy.with_action(&action.name, outcome);
                 if action.name == "filesystem.read" {
                     policy = policy.with_action(RUN_INPUT_FILE_READ_ACTION, outcome);
+                    policy = policy.with_action("filesystem.read_image", outcome);
                 }
+            }
+            // Image reads retain any denial or approval requirement on ordinary reads.
+            match access.action_decision("filesystem.read") {
+                Some(AccessDecision::Deny) => {
+                    policy = policy.with_action("filesystem.read_image", DecisionOutcome::Deny);
+                }
+                Some(AccessDecision::RequireApproval)
+                    if access.action_decision("filesystem.read_image")
+                        == Some(AccessDecision::Allow) =>
+                {
+                    policy = policy
+                        .with_action("filesystem.read_image", DecisionOutcome::RequireApproval);
+                }
+                _ => {}
             }
             for root in [&config.workflows.repository, &config.workflows.user] {
                 if let Ok(root) = fs::canonicalize(workspace_absolute_path(workspace, root)) {
@@ -319,6 +348,12 @@ pub(super) fn compose_access_policy(
                 );
                 if restriction.action == "filesystem.read" {
                     policy = policy.with_action_restrictions(
+                        "filesystem.read_image",
+                        restriction.filesystem.clone(),
+                        restriction.allowed_environment.clone(),
+                        restriction.network_destinations.clone(),
+                    );
+                    policy = policy.with_action_restrictions(
                         RUN_INPUT_FILE_READ_ACTION,
                         restriction.filesystem.clone(),
                         restriction.allowed_environment.clone(),
@@ -328,6 +363,7 @@ pub(super) fn compose_access_policy(
             }
             policy =
                 policy.with_action_max_output_bytes(RUN_INPUT_FILE_READ_ACTION, MAX_IMAGE_BYTES);
+            policy = policy.with_action_max_output_bytes("filesystem.read_image", MAX_IMAGE_BYTES);
             let mut provider_action_timeouts = BTreeMap::<&str, u64>::new();
             for profile in config.providers.profiles.values() {
                 let generation_effect_timeout_ms = profile

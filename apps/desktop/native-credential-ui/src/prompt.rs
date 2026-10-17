@@ -3,7 +3,7 @@ use std::sync::{Arc, atomic::AtomicBool};
 
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use crate::ColorScheme;
-use crate::DialogAppearance;
+use crate::{DialogAppearance, NativePassword, purpose::Purpose};
 use colossus_contracts::HostSecret;
 
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
@@ -44,9 +44,34 @@ pub async fn prompt(
     parent: tauri::Window,
     appearance: DialogAppearance,
 ) -> Result<HostSecret, PromptError> {
+    prompt_for(parent, appearance, Purpose::Token)
+        .await?
+        .into_token()
+}
+
+/// Enter a PKCS#12 passphrase in a native secure control without saving it.
+///
+/// Spaces, Unicode and an empty passphrase are preserved. The UTF-8 value is
+/// bounded to 65,536 bytes; NUL, line breaks and control characters are rejected.
+/// Native custody, cancellation and the exclusive dialog lease match [`prompt`].
+///
+/// # Errors
+/// Returns only categorical native entry failures, never the entered value.
+pub async fn prompt_password(
+    parent: tauri::Window,
+    appearance: DialogAppearance,
+) -> Result<NativePassword, PromptError> {
+    prompt_for(parent, appearance, Purpose::Pkcs12Password).await
+}
+
+async fn prompt_for(
+    parent: tauri::Window,
+    appearance: DialogAppearance,
+    purpose: Purpose,
+) -> Result<NativePassword, PromptError> {
     #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
-        let _ = (parent, appearance);
+        let _ = (parent, appearance, purpose);
         return Err(PromptError::Unsupported);
     }
     #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
@@ -66,11 +91,11 @@ pub async fn prompt(
         parent
             .run_on_main_thread(move || {
                 #[cfg(windows)]
-                crate::windows::open(&native_parent, cancelled, completion, appearance);
+                crate::windows::open(&native_parent, cancelled, completion, appearance, purpose);
                 #[cfg(target_os = "macos")]
-                crate::macos::open(&native_parent, cancelled, completion, appearance);
+                crate::macos::open(&native_parent, cancelled, completion, appearance, purpose);
                 #[cfg(target_os = "linux")]
-                crate::linux::open(&native_parent, cancelled, completion, appearance);
+                crate::linux::open(&native_parent, cancelled, completion, appearance, purpose);
             })
             .map_err(|_| PromptError::Unavailable)?;
         receiver.await.map_err(|_| PromptError::Cancelled)?

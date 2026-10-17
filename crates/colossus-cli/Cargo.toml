@@ -26,6 +26,7 @@ colossus-access.workspace = true
 colossus-codex-auth.workspace = true
 colossus-api.workspace = true
 colossus-contracts.workspace = true
+colossus-bundles.workspace = true
 colossus-grpc.workspace = true
 colossus-home.workspace = true
 colossus-journal-redb.workspace = true
@@ -64,6 +65,12 @@ colossus-windows-native.workspace = true
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
 
+[build-dependencies]
+colossus-bundles.workspace = true
+colossus-contracts.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
 [dev-dependencies]
 rcgen.workspace = true
 rustls.workspace = true
@@ -73,7 +80,6 @@ hmac.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 time.workspace = true
-colossus-bundles.workspace = true
 colossus-tools.workspace = true
 colossus-worker-protocol.workspace = true
 portable-pty.workspace = true

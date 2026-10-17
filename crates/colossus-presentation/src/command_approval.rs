@@ -136,6 +136,7 @@ mod tests {
                         .unwrap()
                         .unwrap_or_default();
                     let result = ToolResult {
+                        images: Vec::new(),
                         call_id: "call".into(),
                         name: "shell.run".into(),
                         output: serde_json::json!({"stdout": "safe output", "stderr": "",

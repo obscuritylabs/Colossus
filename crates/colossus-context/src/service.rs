@@ -435,12 +435,43 @@ impl ContextPreparer for ContextService {
                     && view.context_binding_hash == context_binding_hash
             })
         {
+            if view.replay {
+                let estimate = active_estimate.saturating_add(view.reserved_tokens);
+                if estimate > budget.limits.input_budget_tokens
+                    || active_bytes.saturating_add(view.bytes) > MAX_PREPARED_MODEL_REQUEST_BYTES
+                {
+                    return Err(ContextError::Configuration("Messages tool exchange exceeds its replay budget; finish or restart the turn before compacting".into()));
+                }
+                return Ok(PreparedContext {
+                    context_binding_hash,
+                    continuation_id: Some(view.id),
+                    messages: active_messages,
+                    token_estimate: estimate,
+                    original_token_estimate: original,
+                    model_profile: budget.model_profile.clone(),
+                    context_window_tokens: budget.limits.context_window_tokens,
+                    max_output_tokens: budget.limits.max_output_tokens,
+                    safety_margin_tokens: budget.limits.safety_margin_tokens,
+                    input_budget_tokens: budget.limits.input_budget_tokens,
+                    threshold_tokens: threshold,
+                    target_tokens: target,
+                    snapshot_id: active.as_ref().map(|snapshot| snapshot.id.clone()),
+                    compacted: active.is_some(),
+                    snapshot_created: false,
+                    strategy: Some("anthropic_replay".into()),
+                });
+            }
             // Settle tool calls represented by the opaque prefix before adding
             // new developer bindings; preserve result ordering and exact IDs.
             let mut suffix = messages[view.covered_count..].to_vec();
             let after_results = suffix
                 .iter()
-                .take_while(|message| message.role == ModelMessageRole::Tool)
+                .take_while(|message| {
+                    matches!(
+                        message.role,
+                        ModelMessageRole::Tool | ModelMessageRole::ToolObservation
+                    )
+                })
                 .count();
             suffix.splice(after_results..after_results, bindings.clone());
             let estimate = estimate_tokens_for_model(&budget.model, &instructions, &suffix, &tools)

@@ -53,6 +53,7 @@ denied for a specific file, command, or destination. See
 | --- | --- |
 | Explore code | `repo.map` for file paths (`rg --files` style), `filesystem.search` for regex or literal file contents, `repo.symbol_search` for structural declarations, `repo.references` for exact symbols, `repo.file_summary` for a file overview |
 | Read and search files | `filesystem.list`, `filesystem.read`, `filesystem.search` |
+| Inspect images | `image.view` opens local PNG, JPEG, and static WebP images for a model with image inputs enabled |
 | Check Git state | `git.status`, `git.diff`, `git.show` |
 | Edit and verify | `filesystem.write`, `filesystem.replace`, `patch.preview`, `patch.apply` |
 | Run a command | `shell.run` |
@@ -64,6 +65,19 @@ For exact built-in names, action mappings, and effect boundaries, use
 [Tools and action classes](../reference/tools-actions.md). Configured integrations
 and MCP servers can add tools to the active list.
 See [MCP servers](mcp-servers.md) to inspect those external sources in the TUI.
+
+## Inspect images
+
+Ask Colossus to inspect a workspace image, for example, “Open `screenshots/result.png`
+and check the layout.” The `image.view` tool accepts one or more paths and sends the
+verified original images to the model. Ordinary filesystem access rules still apply.
+It accepts at most 16 images, with a 16 MiB limit per image and 32 MiB combined in
+the model context. SVG, GIF, and animated images are unsupported.
+
+In Desktop, completed views appear in the conversation's activity as **Viewed N images**.
+Expand the row to see thumbnails and select one to open a larger preview. These
+previews remain available after reloading the conversation, even if the source file
+changes. A failed or denied read does not appear as a completed image view.
 
 ## Inspect from the CLI
 

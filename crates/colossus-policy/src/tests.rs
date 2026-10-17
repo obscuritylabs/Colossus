@@ -34,6 +34,9 @@ mod command_gateway_tests;
 #[path = "redaction_tests.rs"]
 mod redaction_tests;
 
+#[path = "browser_tests.rs"]
+mod browser_tests;
+
 #[tokio::test(flavor = "current_thread")]
 async fn disclosure_summary_preserves_the_bounded_audit_contract() {
     let request = effect_request(
@@ -714,6 +717,9 @@ async fn sensitive_disclosures_always_require_post_effect_release() {
         "filesystem.read",
         "network.http",
         "web.search",
+        "browser.snapshot",
+        "browser.click",
+        "browser.open",
         "provider.openai.responses",
         "process.spawn",
         "memory.search",

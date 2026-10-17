@@ -20,7 +20,7 @@ pub async fn inspect_sidecar_configuration(
 
 /// Portable API stub for platforms that do not yet have a native sidecar launcher.
 pub struct NativeSidecarLifecycle {
-    bootstrap: Arc<SidecarBootstrapConfig>,
+    pub(crate) bootstrap: Arc<SidecarBootstrapConfig>,
     status: watch::Sender<NativeSidecarStatus>,
 }
 

@@ -210,7 +210,7 @@ const RESTART_DELAYS: [Duration; 3] = [
 /// the delivered certificate pin, and supervises at most three restart attempts after an
 /// unexpected exit. Individual operations are never replayed across a restart.
 pub struct NativeSidecarLifecycle {
-    bootstrap: Arc<SidecarBootstrapConfig>,
+    pub(crate) bootstrap: Arc<SidecarBootstrapConfig>,
     status: watch::Sender<NativeSidecarStatus>,
 }
 
@@ -298,6 +298,7 @@ impl SidecarLifecycle for NativeSidecarLifecycle {
                 process: tokio::sync::Mutex::new(Some(running)),
                 close_guard: tokio::sync::Mutex::new(()),
                 closing: AtomicBool::new(false),
+                closed_successfully: AtomicBool::new(false),
                 monitor: Mutex::new(None),
                 status: self.status.clone(),
             });
@@ -997,6 +998,9 @@ struct ManagedSidecarState {
     process: tokio::sync::Mutex<Option<RunningChild>>,
     close_guard: tokio::sync::Mutex<()>,
     closing: AtomicBool,
+    // Only a zero-exit child followed by confirmed tree and discovery cleanup
+    // makes a later close of an absent process idempotently successful.
+    closed_successfully: AtomicBool,
     monitor: Mutex<Option<JoinHandle<()>>>,
     status: watch::Sender<NativeSidecarStatus>,
 }
@@ -1094,6 +1098,9 @@ impl Backend for ManagedSidecarBackend {
         // next caller resumes the same idempotent cleanup instead of returning while
         // a supervisor-owned process tree is still alive.
         let _close_guard = self.state.close_guard.lock().await;
+        if self.state.closed_successfully.load(Ordering::Acquire) {
+            return Ok(());
+        }
         self.state
             .status
             .send_replace(NativeSidecarStatus::Stopping);
@@ -1113,7 +1120,13 @@ impl Backend for ManagedSidecarBackend {
             return Err(error);
         }
         let Some(mut running) = running else {
-            return Ok(());
+            // A monitor may already have taken an unexpectedly exited child, or
+            // cancellation may have dropped the first close's RAII owner. Neither
+            // path supplies a positive shutdown receipt.
+            self.state.status.send_replace(NativeSidecarStatus::Failed(
+                NativeSidecarFailure::SupervisionFailed,
+            ));
+            return Err(SdkError::CloseFailed);
         };
         // Release every SDK-owned gRPC channel before guardian EOF asks the
         // sidecar's HTTP/2 server to drain. Retaining these channels makes a clean
@@ -1145,7 +1158,11 @@ impl Backend for ManagedSidecarBackend {
                 }
             }
         };
-        if outcome.is_err() {
+        if outcome.is_ok() {
+            self.state
+                .closed_successfully
+                .store(true, Ordering::Release);
+        } else {
             self.state.status.send_replace(NativeSidecarStatus::Failed(
                 NativeSidecarFailure::SupervisionFailed,
             ));
@@ -1842,6 +1859,7 @@ async fn launch_child(
             ),
             None => None,
         };
+        bootstrap.notify_connection(&ready)?;
         Ok(ConnectedTransports {
             connector,
             primary,
@@ -1868,7 +1886,11 @@ async fn launch_child(
             return Err(SdkError::SidecarFailed);
         }
     }
+    let child_pid = provisional.child().id().ok_or(SdkError::SidecarFailed)?;
     let (child, process_tree, discovery) = provisional.into_running_parts();
+    bootstrap
+        .native_browser_child
+        .store(child_pid, Ordering::Release);
     Ok(RunningChild {
         child,
         process_tree,
@@ -3441,6 +3463,127 @@ mod tests {
             .err()
             .expect("closed artifact transport");
         assert_eq!(artifact_error.code, ApiErrorCode::Unavailable);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn backend_with_absent_child(
+        status: NativeSidecarStatus,
+    ) -> (ManagedSidecarBackend, tempfile::TempDir) {
+        let root = tempfile::tempdir().expect("private test parent");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace");
+        let workspace_identity = BoundWorkspace::open(&workspace)
+            .expect("workspace binding")
+            .protocol_identity()
+            .expect("workspace identity");
+        let instance = root.path().join("instance");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&instance)
+            .expect("private instance");
+        let options = SidecarOptions::new(
+            InstanceId::from_uuid(Uuid::now_v7()),
+            AppPrivateInstanceDir::new(instance).expect("instance directory"),
+            VerifiedExecutable::new(
+                std::env::current_exe().expect("test executable"),
+                Sha256Digest::from_bytes([7; 32]),
+            )
+            .expect("executable shape"),
+            ApiMajor::new(1).expect("API major"),
+        )
+        .expect("sidecar options");
+        let agent_runs = Arc::new(SwitchingAgentRunClient::new(AgentRunTransports {
+            primary: Arc::new(UnusedAgentRuns),
+            approval_broker: None,
+        }));
+        let (status, _) = watch::channel(status);
+        let state = Arc::new(ManagedSidecarState {
+            options,
+            bootstrap: Arc::new(lifecycle_test_bootstrap(&workspace, workspace_identity)),
+            agent_runs: Arc::clone(&agent_runs),
+            connector_runs: None,
+            artifacts: None,
+            process: tokio::sync::Mutex::new(None),
+            close_guard: tokio::sync::Mutex::new(()),
+            closing: AtomicBool::new(false),
+            closed_successfully: AtomicBool::new(false),
+            monitor: Mutex::new(None),
+            status,
+        });
+        (
+            ManagedSidecarBackend {
+                state,
+                agent_runs,
+                artifacts: None,
+                capabilities: ServerCapabilities::default(),
+                connector_capabilities: ServerCapabilities::default(),
+            },
+            root,
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn close_rejects_missing_child_after_unexpected_exit() {
+        let (backend, _root) = backend_with_absent_child(NativeSidecarStatus::Restarting);
+
+        assert!(matches!(backend.close().await, Err(SdkError::CloseFailed)));
+        assert!(!backend.state.closed_successfully.load(Ordering::Acquire));
+        assert_eq!(
+            *backend.state.status.borrow(),
+            NativeSidecarStatus::Failed(NativeSidecarFailure::SupervisionFailed)
+        );
+        assert!(matches!(backend.close().await, Err(SdkError::CloseFailed)));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn close_repeats_only_after_confirmed_prior_cleanup() {
+        let (backend, _root) = backend_with_absent_child(NativeSidecarStatus::Stopping);
+        // Model the terminal state recorded only after a successful child wait,
+        // process-tree confirmation, and discovery cleanup.
+        backend
+            .state
+            .closed_successfully
+            .store(true, Ordering::Release);
+
+        backend.close().await.expect("first idempotent close");
+        backend.close().await.expect("repeated idempotent close");
+        assert_eq!(
+            *backend.state.status.borrow(),
+            NativeSidecarStatus::Stopping
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn concurrent_close_waits_for_terminal_confirmation() {
+        let (backend, _root) = backend_with_absent_child(NativeSidecarStatus::Stopping);
+        let backend = Arc::new(backend);
+        let first_close = backend.state.close_guard.lock().await;
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let waiter = Arc::clone(&backend);
+        let mut second_close = tokio::spawn(async move {
+            started_tx.send(()).expect("close attempt started");
+            waiter.close().await
+        });
+        started_rx.await.expect("close waiter started");
+        assert!(
+            timeout(Duration::from_millis(20), &mut second_close)
+                .await
+                .is_err(),
+            "concurrent close must await the first close's terminal outcome"
+        );
+        backend
+            .state
+            .closed_successfully
+            .store(true, Ordering::Release);
+        drop(first_close);
+
+        second_close
+            .await
+            .expect("close waiter joined")
+            .expect("confirmed prior close remains idempotent");
     }
 
     #[tokio::test]

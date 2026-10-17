@@ -63,7 +63,7 @@ fn legacy_model_capabilities_default_image_inputs_off() {
 }
 
 #[test]
-fn multipart_model_content_preserves_order_and_restricts_images_to_users() {
+fn multipart_model_content_preserves_order_and_requires_image_provenance() {
     let content = ModelContent::Parts(vec![
         ModelContentPart::Text {
             text: "before".into(),
@@ -105,7 +105,7 @@ fn multipart_model_content_preserves_order_and_restricts_images_to_users() {
         validate_model_message_content(&assistant)
             .expect_err("assistant images must fail")
             .to_string()
-            .contains("only user")
+            .contains("require user or released tool provenance")
     );
 }
 

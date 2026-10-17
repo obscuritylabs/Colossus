@@ -372,7 +372,7 @@ fn project_released_message(
         .and_then(Value::as_str)
         .unwrap_or("system");
     let text = released_message_text(message);
-    if role == "tool" {
+    if matches!(role, "tool" | "tool_observation") {
         return Ok(Vec::new());
     }
     if role == "assistant"

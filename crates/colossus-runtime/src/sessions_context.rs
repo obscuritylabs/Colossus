@@ -212,7 +212,8 @@ impl Runtime {
                         }
                         ModelMessageRole::System
                         | ModelMessageRole::Assistant
-                        | ModelMessageRole::Tool => None,
+                        | ModelMessageRole::Tool
+                        | ModelMessageRole::ToolObservation => None,
                     })
                     .collect()
             }

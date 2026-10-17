@@ -279,6 +279,7 @@ impl PolicyDecisionPoint for BuiltInPolicy {
                 "provider.openai.responses"
                     | "provider.openai.codex"
                     | "provider.openai.chat"
+                    | "provider.anthropic.messages"
                     | "provider.models"
             )
             || request.action.starts_with("task.")
@@ -296,6 +297,7 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             || request.action.starts_with("searxng.")
             || request.action.starts_with("mcp.")
             || request.action.starts_with("bundle.")
+            || request.action.starts_with("browser.")
             || matches!(
                 request.action.as_str(),
                 "network.http" | "web.search" | "audit.export.worm.write"

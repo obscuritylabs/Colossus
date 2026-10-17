@@ -2,6 +2,7 @@ use super::*;
 
 mod extensions;
 mod filesystem;
+mod images;
 mod network;
 mod process;
 mod repository;
@@ -17,6 +18,7 @@ impl ToolExecutor for GatewayToolExecutor {
         context: ExecutionContext,
     ) -> Result<ToolResult, ToolError> {
         match call.name.as_str() {
+            "image.view" => Box::pin(self.execute_image_view(call, context)).await,
             "echo" | "filesystem.list" | "filesystem.read" | "filesystem.search"
             | "filesystem.write" | "filesystem.replace" => {
                 Box::pin(self.execute_filesystem(call, context)).await
@@ -38,6 +40,7 @@ impl ToolExecutor for GatewayToolExecutor {
             | "workflow.schedule.delete" => {
                 let output = Box::pin(self.execute_workflow_tool(&call, context)).await?;
                 Ok(ToolResult {
+                    images: Vec::new(),
                     call_id: call.call_id,
                     name: call.name,
                     output,
@@ -86,6 +89,7 @@ impl ToolExecutor for GatewayToolExecutor {
                     .await?
                     .ok_or_else(|| ToolError::Unknown(call.name.clone()))?;
                 Ok(ToolResult {
+                    images: Vec::new(),
                     call_id: call.call_id,
                     name: call.name,
                     output,

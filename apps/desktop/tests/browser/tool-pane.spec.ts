@@ -180,6 +180,8 @@ async function mountTerminalIntentHarness(
       );
       const modulePath = "/src/components/WorkSurface.tsx";
       const { WorkSurface } = await import(modulePath);
+      const appearanceModulePath = "/src/theme/AppearanceProvider.tsx";
+      const { AppearanceProvider } = await import(appearanceModulePath);
       document.getElementById("root")!.hidden = true;
       const container = document.createElement("div");
       container.dataset.testid = "terminal-intent-harness";
@@ -286,7 +288,13 @@ async function mountTerminalIntentHarness(
           }),
         );
       }
-      ReactDOM.createRoot(container).render(React.createElement(Harness));
+      ReactDOM.createRoot(container).render(
+        React.createElement(
+          AppearanceProvider,
+          null,
+          React.createElement(Harness),
+        ),
+      );
     },
     { failFirst, initialRequest },
   );

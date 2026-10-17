@@ -77,6 +77,39 @@ const PRIMARY_SCOPES: [&str; 15] = [
 ];
 
 const TRUSTED_BUILTIN_TOOL_GRANT: &[&str] = &[
+    "browser.open",
+    "browser.status",
+    "browser.tabs",
+    "browser.tab.open",
+    "browser.tab.select",
+    "browser.tab.close",
+    "browser.navigate",
+    "browser.back",
+    "browser.forward",
+    "browser.reload",
+    "browser.stop",
+    "browser.snapshot",
+    "browser.screenshot",
+    "browser.screenshot.annotated",
+    "browser.click",
+    "browser.evaluate",
+    "browser.cdp",
+    "browser.hover",
+    "browser.double_click",
+    "browser.right_click",
+    "browser.drag",
+    "browser.click_at",
+    "browser.drag_at",
+    "browser.annotate",
+    "browser.annotation.clear",
+    "browser.fill",
+    "browser.select",
+    "browser.press",
+    "browser.scroll",
+    "browser.wait",
+    "browser.upload",
+    "browser.download",
+    "browser.close",
     "workflow.definition.list",
     "workflow.definition.get",
     "workflow.schedule.list",
@@ -104,6 +137,7 @@ const TRUSTED_BUILTIN_TOOL_GRANT: &[&str] = &[
     "echo",
     "filesystem.list",
     "filesystem.read",
+    "image.view",
     "filesystem.replace",
     "filesystem.search",
     "filesystem.write",
@@ -905,6 +939,13 @@ async fn prepare_managed_bootstrap(
         )
     })?;
     let worker_bootstrap_secret = worker_authentication.copy_secret();
+    let native_browser_key = crate::native_browser_authentication::generate().map_err(|_| {
+        classified(
+            "runtime_authentication",
+            "Managed Local browser authentication could not be created.",
+            RuntimeFailureCodeDto::Authentication,
+        )
+    })?;
     let paths = ManagedBootstrapPaths {
         ca_bundle: ca_bundle_path.as_deref(),
         codex_auth: codex_auth_path.as_deref(),
@@ -922,7 +963,9 @@ async fn prepare_managed_bootstrap(
         &paths,
         companion,
     )
-    .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
+    .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?
+    .with_native_browser_authentication(native_browser_key)
+    .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Authentication))?;
     if let Some(identity) = settings.client_identity.as_ref() {
         let (certificate, key) = credentials
             .read_client_identity(&identity.identity_id, &identity.leaf_fingerprint_sha256)
@@ -1325,6 +1368,9 @@ async fn install_managed_target(
             )
         })?
         .copy_secret();
+    let native_browser = lifecycle
+        .native_browser_client(&options)
+        .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Authentication))?;
     let client = Colossus::start_sidecar(&lifecycle, options)
         .await
         .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Internal))?;
@@ -1352,6 +1398,9 @@ async fn install_managed_target(
     debug_assert!(previous.is_none());
     state.configure_managed_worker_for(space_id, worker).await;
     state
+        .configure_managed_browser_for(space_id, native_browser)
+        .await;
+    state
         .configure_managed_terminal_for(space_id, terminal_workspace, terminal_enabled)
         .await;
     if state.selected_target_id().await.as_deref() == Some(space_id) {
@@ -1371,7 +1420,9 @@ fn managed_worker_endpoint(
     worker_ipc_endpoint(&canonical.join("state.redb"))
 }
 
-fn application_grant(profile: AccessProfileSetting) -> Result<SidecarApplicationGrant, SdkError> {
+pub(crate) fn application_grant(
+    profile: AccessProfileSetting,
+) -> Result<SidecarApplicationGrant, SdkError> {
     application_grant_for(profile, APPLICATION_ID, false)
 }
 
@@ -1456,6 +1507,7 @@ const fn execution_boundary(boundary: ExecutionBoundarySetting) -> ManagedExecut
 const fn provider_kind(kind: ProviderKindSetting) -> ManagedProviderKind {
     match kind {
         ProviderKindSetting::Responses => ManagedProviderKind::OpenAiResponses,
+        ProviderKindSetting::Anthropic => ManagedProviderKind::AnthropicMessages,
         ProviderKindSetting::Compatible => ManagedProviderKind::OpenAiCompatible,
         ProviderKindSetting::Codex => ManagedProviderKind::OpenAiCodex,
     }
@@ -1647,6 +1699,14 @@ mod tests {
         let grant = application_grant(AccessProfileSetting::Development).expect("grant");
         let debug = format!("{grant:?}");
         for required in [
+            "browser.open",
+            "browser.snapshot",
+            "browser.screenshot",
+            "browser.tab.open",
+            "browser.tab.select",
+            "browser.tab.close",
+            "browser.upload",
+            "browser.download",
             "agent.delegate",
             "filesystem.read",
             "shell.run",
@@ -1730,6 +1790,38 @@ mod tests {
         let debug = format!("{grant:?}");
         assert!(debug.contains("echo"));
         assert!(!debug.contains("filesystem.read"));
+        assert!(!debug.contains("browser."));
+    }
+
+    #[test]
+    fn nonminimal_grants_admit_rich_browser_tools() {
+        for profile in [
+            AccessProfileSetting::Pinned,
+            AccessProfileSetting::Development,
+            AccessProfileSetting::AllowAll,
+        ] {
+            for grant in [
+                application_grant(profile).expect("Desktop grant"),
+                connector_application_grant(profile).expect("connector grant"),
+            ] {
+                let debug = format!("{grant:?}");
+                for tool in [
+                    "browser.evaluate",
+                    "browser.cdp",
+                    "browser.hover",
+                    "browser.double_click",
+                    "browser.right_click",
+                    "browser.drag",
+                    "browser.click_at",
+                    "browser.drag_at",
+                    "browser.annotate",
+                    "browser.annotation.clear",
+                    "browser.screenshot.annotated",
+                ] {
+                    assert!(debug.contains(tool), "{profile:?} grant missing {tool}");
+                }
+            }
+        }
     }
 
     #[test]

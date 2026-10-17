@@ -23,6 +23,7 @@ const COMMANDS: &[&str] = &[
     "browser_context",
     "browser_command",
     "browser_viewport",
+    "browser_certificates",
     "command_review_context",
     "finish_command_review",
     "remembered_command_count",
@@ -121,6 +122,7 @@ const COMMANDS: &[&str] = &[
     "create_run",
     "choose_run_attachment",
     "read_artifact_content",
+    "read_image_artifact",
     "get_run",
     "list_runs",
     "list_shell_sessions",
@@ -173,7 +175,20 @@ fn main() {
     // including library tests and examples that use TaskDialogIndirect. Disable
     // Tauri's binary-only copy below to avoid two MANIFEST resources in the app.
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        if env::var_os("CARGO_FEATURE_EMBEDDED_CHROMIUM_PREVIEW").is_some()
+            && env::var_os("COLOSSUS_CEF_NATIVE_LIB_DIR").is_some()
+        {
+            // The bootstrap establishes sandbox services before libcef loads.
+            // Eager imports would load it before the client DLL's RunWinMain.
+            println!("cargo:rustc-link-arg=/DELAYLOAD:libcef.dll");
+        }
         println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        // Windows child compositor surfaces require an OS compatibility manifest.
+        // Explicit asInvoker preserves ordinary-user installation and app use.
+        let manifest =
+            PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("windows.manifest");
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
         println!(
             "cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
         );

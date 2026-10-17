@@ -13,6 +13,13 @@ mod access_policy;
 mod adapter_composition;
 mod agent_runs;
 mod agent_tools;
+mod browser_tools;
+pub use browser_tools::{
+    NativeBrowserOpenRequest, RuntimeBrowserHost, RuntimeBrowserPresenter,
+    RuntimeNativeBrowserAuthority, RuntimeNativeBrowserError, RuntimeNativeBrowserGranted,
+    RuntimeNativeBrowserSession,
+};
+pub mod browser_package;
 mod communication;
 mod composition;
 mod config;
@@ -37,6 +44,8 @@ mod mcp_search;
 mod memory;
 mod model_selection;
 pub use mcp_diagnostics::McpHealthCheck;
+#[cfg(test)]
+mod anthropic_tests;
 mod development_journal;
 mod memory_gateway;
 mod operations;

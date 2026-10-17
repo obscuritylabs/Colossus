@@ -398,7 +398,7 @@ impl RiskEvaluator for GatewayRiskEvaluator {
 }
 
 impl GatewayModelProvider {
-    fn resolve_workflow_model(
+    pub(super) fn resolve_workflow_model(
         &self,
         role: &str,
         options: &colossus_contracts::WorkflowAgentOptions,
@@ -520,7 +520,16 @@ impl ModelProvider for GatewayModelProvider {
         request: &ModelRequest,
         context: &ExecutionContext,
     ) -> Result<Option<colossus_contracts::ProviderContinuationPlan>, ModelProviderError> {
-        self.plan(role, request, context)
+        self.plan(role, request, context, &Default::default())
+    }
+    fn continuation_plan_with_options(
+        &self,
+        role: &str,
+        request: &ModelRequest,
+        context: &ExecutionContext,
+        options: &colossus_contracts::WorkflowAgentOptions,
+    ) -> Result<Option<colossus_contracts::ProviderContinuationPlan>, ModelProviderError> {
+        self.plan(role, request, context, options)
     }
     fn settle_continuation(&self, context: &ExecutionContext) -> Result<(), ModelProviderError> {
         self.settle(context)

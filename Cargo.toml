@@ -1,5 +1,6 @@
 [workspace]
 resolver = "3"
+exclude = ["native/browser/driver", "native/browser/pki", "native/browser/process-broker", "native/browser/tls-broker"]
 members = [
     "crates/colossus-control-plane-client",
     "crates/colossus-cloud",
@@ -11,6 +12,9 @@ members = [
     "xtask",
     "crates/colossus-domain",
     "crates/colossus-contracts",
+    "crates/colossus-browser",
+    "crates/colossus-browser-bridge",
+    "crates/colossus-browser-presentation",
     "crates/colossus-credentials",
     "crates/colossus-api-proto",
     "crates/colossus-api",
@@ -23,6 +27,7 @@ members = [
     "crates/colossus-darwin-process",
     "crates/colossus-sidecar-protocol",
     "crates/colossus-sidecar",
+    "crates/colossus-app-host",
     "crates/colossus-ports",
     "crates/colossus-journal-redb",
     "crates/colossus-journal-postgres",
@@ -77,6 +82,9 @@ repository = "https://github.com/obscuritylabs/Colossus"
 publish-sdks = false
 
 [workspace.dependencies]
+colossus-browser = { version = "=0.11.8", path = "crates/colossus-browser" }
+colossus-browser-bridge = { version = "=0.11.8", path = "crates/colossus-browser-bridge" }
+colossus-browser-presentation = { version = "=0.11.8", path = "crates/colossus-browser-presentation" }
 colossus-communication = { version = "=0.11.8", path = "crates/colossus-communication" }
 chrono = "0.4.44"
 openidconnect = { version = "4.0.1", default-features = false, features = ["reqwest", "rustls-tls"] }
@@ -273,4 +281,16 @@ strip = "symbols"
 # bundle. Keep code and panic metadata, but do not make distribution behavior depend on
 # platform-specific linker debug-section size.
 [profile.test]
+strip = "debuginfo"
+
+# Retina frames cross independently authenticated native boundaries. Unoptimized
+# SHA-256 consumed about 245ms per 6.9MiB frame on the Mac acceptance machine;
+# keep full authentication within the unchanged visibility/control deadlines.
+[profile.dev.package.sha2]
+opt-level = 3
+
+# Runnable VSIX binaries keep assertions without producing large MSVC symbol files.
+[profile.vscode]
+inherits = "dev"
+debug = 0
 strip = "debuginfo"

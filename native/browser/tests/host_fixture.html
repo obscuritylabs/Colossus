@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Colossus authenticated host fixture</title></head>
+<body>
+  <h1>Colossus authenticated host fixture</h1>
+  <label>Ordinary query <input id="query" type="text" autocomplete="off"></label>
+  <label>Protected fixture <input id="protected" type="password" value="synthetic-protected-value"></label>
+  <label>Fixture choice <select id="choice"><option value="first">First</option><optgroup label="choices"><option value="second">Second</option></optgroup><option value="third" disabled>Third</option></select></label>
+  <button id="continue" type="button">Continue</button>
+  <output id="result">Waiting</output>
+  <output id="scroll-result">Waiting for native scroll</output>
+  <div aria-hidden="true" style="height:2400px"></div>
+  <script>
+    document.querySelector('#continue').addEventListener('click', () => {
+      document.querySelector('#result').textContent = 'Native click received';
+    });
+    window.addEventListener('scroll', () => {
+      if (window.scrollY > 0) {
+        document.querySelector('#scroll-result').textContent = 'Native scroll received';
+      }
+    });
+  </script>
+</body>
+</html>

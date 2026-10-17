@@ -667,7 +667,10 @@ test("Aside context stays canonical, selected-Space scoped, and out of metadata 
   const runtime = read("crates/colossus-runtime/src/sessions_context.rs");
   assert.match(runtime, /RunBranchContextMode::Conversation/u);
   assert.match(runtime, /RunBranchContextMode::SourceRunConversation/u);
-  assert.match(runtime, /ModelMessageRole::Tool => None/u);
+  assert.match(
+    runtime,
+    /ModelMessageRole::Tool\s*\| ModelMessageRole::ToolObservation => None/u,
+  );
 
   const service = read("crates/colossus-api-runtime/src/service.rs");
   assert.match(service, /let \(source_message_count, context_mode\)/u);
@@ -867,6 +870,26 @@ test("Managed Local trusted tool ceiling exactly matches declared built-ins", ()
     ...[...read("crates/colossus-tools/src/workflows.rs").matchAll(/(?:\(|name:\s*)"(workflow\.[a-z_.]+)"/gu)]
       .map((match) => match[1]),
   );
+  assert.match(builtinSource, /specs\.extend\(super::browser::browser_specs\(\)\)/u);
+  const browserSource = read("crates/colossus-tools/src/browser.rs");
+  assert.match(
+    browserSource,
+    /#\[path = "browser_interactions\.rs"\]\s*mod interactions;/u,
+  );
+  const browserSpecs = browserSource.match(
+    /fn browser_specs\(\)[^{]*\{(?<body>[\s\S]*?)\n\}/u,
+  );
+  assert.notEqual(browserSpecs, null);
+  assert.match(browserSpecs.groups.body, /specs\.extend\(interactions::specs\(\)\)/u);
+  for (const source of [
+    browserSource,
+    read("crates/colossus-tools/src/browser_interactions.rs"),
+  ]) {
+    builtinNames.push(
+      ...[...source.matchAll(/(?:tool)?\(\s*"(browser\.[a-z_.]+)"/gu)]
+        .map((match) => match[1]),
+    );
+  }
 
   const runtimeSource = read("apps/desktop/src-tauri/src/managed_runtime.rs");
   const grantStart = runtimeSource.indexOf("const TRUSTED_BUILTIN_TOOL_GRANT");

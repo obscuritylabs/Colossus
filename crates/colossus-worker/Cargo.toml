@@ -13,6 +13,7 @@ colossus-api.workspace = true
 colossus-api-proto.workspace = true
 colossus-api-runtime.workspace = true
 colossus-contracts.workspace = true
+colossus-browser-presentation.workspace = true
 colossus-grpc.workspace = true
 colossus-policy.workspace = true
 colossus-plugins.workspace = true

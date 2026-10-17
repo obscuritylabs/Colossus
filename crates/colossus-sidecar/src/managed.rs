@@ -49,6 +49,14 @@ use zeroize::Zeroizing;
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
 
+#[cfg(all(
+    target_os = "macos",
+    debug_assertions,
+    feature = "macos-browser-host-acceptance"
+))]
+mod macos_startup_diagnostic;
+mod native_browser;
+
 const MANAGED_SIDECAR_ARGUMENT: &str = "__managed-sidecar-v1";
 const CONFIGURATION_INSPECTION_ARGUMENT: &str = "__managed-config-inspection-v1";
 const SANDBOX_HELPER_ARGUMENT: &str = "__sandbox-helper";
@@ -210,6 +218,107 @@ fn managed_session_is_established() -> bool {
 }
 
 async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<(), FailureCode> {
+    let mut browser = None;
+    #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
+    let mut windows_browser = None;
+    #[cfg(all(
+        target_os = "macos",
+        debug_assertions,
+        feature = "macos-browser-host-acceptance"
+    ))]
+    let mut diagnostic = None;
+    let result = run_with_browser_owner(
+        request,
+        input,
+        &mut browser,
+        #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
+        &mut windows_browser,
+        #[cfg(all(
+            target_os = "macos",
+            debug_assertions,
+            feature = "macos-browser-host-acceptance"
+        ))]
+        &mut diagnostic,
+    )
+    .await;
+    if let Some(owner) = browser {
+        owner
+            .shutdown()
+            .await
+            .map_err(|_| FailureCode::RuntimeFailed)?;
+    }
+    #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
+    if let Some(owner) = windows_browser {
+        owner
+            .shutdown()
+            .await
+            .map_err(|_| FailureCode::RuntimeFailed)?;
+    }
+    #[cfg(all(
+        target_os = "macos",
+        debug_assertions,
+        feature = "macos-browser-host-acceptance"
+    ))]
+    if let Some(owner) = diagnostic {
+        // This acknowledges only proxy revocation and direct-child exit.
+        // The staged allocation stays on disk because helper clearance is unproven.
+        let receipts = owner
+            .shutdown_direct_child()
+            .await
+            .map_err(|_| FailureCode::RuntimeFailed)?;
+        let graceful = if owner.is_owned_process_diagnostic() {
+            matches!(
+                receipts.as_slice(),
+                [(
+                    _,
+                    Some(colossus_sandbox::MacosBrowserShutdownReceipt::GracefulKnownChildrenExit)
+                )]
+            )
+        } else {
+            mac_diagnostic_graceful_direct_child(&receipts)
+        };
+        if result.is_ok() && !graceful {
+            return Err(FailureCode::RuntimeFailed);
+        }
+    }
+    result
+}
+
+#[cfg(all(
+    target_os = "macos",
+    debug_assertions,
+    feature = "macos-browser-host-acceptance"
+))]
+fn mac_diagnostic_graceful_direct_child<Session>(
+    receipts: &[(
+        Session,
+        Option<colossus_sandbox::MacosBrowserShutdownReceipt>,
+    )],
+) -> bool {
+    matches!(
+        receipts,
+        [(
+            _,
+            Some(colossus_sandbox::MacosBrowserShutdownReceipt::GracefulDirectChildExit)
+        )]
+    )
+}
+
+async fn run_with_browser_owner(
+    request: BootstrapRequest,
+    input: &mut std::io::Stdin,
+    browser: &mut Option<Arc<colossus_runtime::browser_package::InstalledBrowserOwner>>,
+    #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
+    windows_browser: &mut Option<Arc<colossus_runtime::browser_package::WindowsDevelopmentBrowserOwner>>,
+    #[cfg(all(
+        target_os = "macos",
+        debug_assertions,
+        feature = "macos-browser-host-acceptance"
+    ))]
+    diagnostic: &mut Option<
+        Arc<colossus_runtime::browser_package::MacosDiagnosticBrowserOwner>,
+    >,
+) -> Result<(), FailureCode> {
     let instance_id =
         Uuid::parse_str(&request.instance_id).map_err(|_| FailureCode::InvalidBootstrap)?;
     let instance_dir = private_directory(Path::new(&request.instance_dir))?;
@@ -223,6 +332,53 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         .map_err(|_| FailureCode::InvalidBootstrap)?;
     let workspace =
         BoundWorkspace::open(Path::new(&request.workspace), &request.workspace_identity)?;
+    // Independent executable seal and fixed adjacent inventory; inherited app
+    // configuration cannot select a browser, image, transport or private profile.
+    *browser = colossus_runtime::browser_package::discover(
+        include_bytes!(concat!(env!("OUT_DIR"), "/browser-manifest.json")),
+        &instance_dir,
+    )
+    .await
+    .map_err(|_| FailureCode::InvalidConfiguration)?;
+    #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
+    {
+        if browser.is_some() {
+            return Err(FailureCode::InvalidConfiguration);
+        }
+        *windows_browser = Some(
+            colossus_runtime::browser_package::windows_development_from_compiler_selection(
+                include_bytes!(concat!(
+                    env!("OUT_DIR"),
+                    "/windows-browser-development.json"
+                )),
+            )
+            .await
+            .map_err(|_| FailureCode::InvalidConfiguration)?,
+        );
+    }
+    #[cfg(all(
+        target_os = "macos",
+        debug_assertions,
+        feature = "macos-browser-host-acceptance"
+    ))]
+    {
+        if browser.is_some() {
+            return Err(FailureCode::InvalidConfiguration);
+        }
+        *diagnostic = Some(
+            colossus_runtime::browser_package::macos_diagnostic_from_compiler_seal(include_bytes!(
+                concat!(env!("OUT_DIR"), "/mac-browser-acceptance-seal.json")
+            ))
+            .await
+            .map_err(|_| FailureCode::InvalidConfiguration)?,
+        );
+        // LaunchServices can start this sealed Debug sidecar with a 256-FD soft
+        // limit. The native profile guard retains descriptors for every regular
+        // file and directory in the signed allocation to prove inode identity.
+        // Raise only this process's soft limit before Runtime snapshots it.
+        macos_startup_diagnostic::prepare_native_profile_fd_budget(&instance_root)
+            .map_err(|_| FailureCode::InvalidConfiguration)?;
+    }
     // Bind process-relative operations to the descriptor that reproduced the native
     // parent's opaque identity. The runtime separately reopens the pathname and checks
     // the same device/inode token as part of workspace lease acquisition.
@@ -267,6 +423,18 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         runtime_options,
         request.suppress_automatic_agent_instructions,
     );
+    #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
+    if let Some(owner) = windows_browser.as_ref() {
+        runtime_options = runtime_options.with_browser_host(owner.host());
+    }
+    #[cfg(all(
+        target_os = "macos",
+        debug_assertions,
+        feature = "macos-browser-host-acceptance"
+    ))]
+    if let Some(owner) = diagnostic.as_ref() {
+        runtime_options = runtime_options.with_browser_host(owner.host());
+    }
     if let (Some(certificate), Some(key)) = (
         request.client_certificate_pem.as_ref(),
         request.client_key_pem.as_ref(),
@@ -306,28 +474,35 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     } else {
         WorkerApprovalMode::Ask
     };
-    let server = if let Some(authentication) = worker_authentication {
-        WorkerServer::open_with_mode_at_workspace_provider_credentials_codex_auth_and_authentication(
-            &config,
-            approval_mode,
-            runtime_options,
-            provider_credentials,
-            codex_auth,
-            WorkerAuthenticationKey::from_zeroizing(authentication),
-        )
-    } else {
-        WorkerServer::open_with_mode_at_workspace_and_provider_credentials_and_codex_auth(
-            &config,
-            approval_mode,
-            runtime_options,
-            provider_credentials,
-            codex_auth,
-        )
-    }
-    .map_err(map_worker_open_failure)?
+    let server = WorkerServer::open_with_verified_browser(
+        &config,
+        approval_mode,
+        runtime_options,
+        provider_credentials,
+        codex_auth,
+        worker_authentication.map(WorkerAuthenticationKey::from_zeroizing),
+        browser.clone(),
+    )
+    .map_err(|error| {
+        #[cfg(all(
+            target_os = "macos",
+            debug_assertions,
+            feature = "macos-browser-host-acceptance"
+        ))]
+        macos_startup_diagnostic::record(&instance_root, &error);
+        map_worker_open_failure(error)
+    })?
     .prepare_worker_ipc()
     .await
-    .map_err(map_worker_open_failure)?;
+    .map_err(|error| {
+        #[cfg(all(
+            target_os = "macos",
+            debug_assertions,
+            feature = "macos-browser-host-acceptance"
+        ))]
+        macos_startup_diagnostic::record(&instance_root, &error);
+        map_worker_open_failure(error)
+    })?;
 
     let mut authentication_root = Zeroizing::new([0_u8; 32]);
     getrandom::fill(authentication_root.as_mut()).map_err(|_| FailureCode::PublicApiSetup)?;
@@ -371,6 +546,7 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         .map_err(|_| FailureCode::PublicApiSetup)?;
     let metadata = server
         .public_api_ready_metadata()
+        .cloned()
         .ok_or(FailureCode::PublicApiSetup)?;
     let certificate_pem = std::str::from_utf8(metadata.certificate_pem())
         .map_err(|_| FailureCode::PublicApiSetup)?
@@ -421,6 +597,23 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         Err(_) => {
             let _ = credentials.revoke_batch(&credential_ids);
             return Err(FailureCode::PublicApiSetup);
+        }
+    };
+    let server = match native_browser::prepare(
+        server,
+        request.native_browser.as_ref(),
+        &request.grant.application_id,
+        &request.workspace_identity,
+        (&instance_dir, instance_id),
+        &credential_id,
+        &credentials,
+    )
+    .await
+    {
+        Ok(server) => server,
+        Err(error) => {
+            let _ = credentials.revoke_batch(&credential_ids);
+            return Err(error);
         }
     };
     let ready = ReadyResponse {
@@ -647,6 +840,7 @@ fn managed_runtime_config(
                     ManagedProviderKind::Echo => ProviderKind::Echo,
                     ManagedProviderKind::OpenAiResponses => ProviderKind::OpenAiResponses,
                     ManagedProviderKind::OpenAiCompatible => ProviderKind::OpenAiCompatible,
+                    ManagedProviderKind::AnthropicMessages => ProviderKind::AnthropicMessages,
                     ManagedProviderKind::OpenAiCodex => ProviderKind::OpenAiCodex,
                 };
                 (
@@ -1610,6 +1804,37 @@ mod tests {
     use super::*;
     use colossus_sidecar_protocol::{ManagedMcpServerConfig, ManagedProviderConfig};
 
+    #[cfg(all(
+        target_os = "macos",
+        debug_assertions,
+        feature = "macos-browser-host-acceptance"
+    ))]
+    #[test]
+    fn mac_diagnostic_exit_requires_one_graceful_direct_child_receipt() {
+        use colossus_sandbox::MacosBrowserShutdownReceipt as Receipt;
+
+        let session = "session".to_owned();
+        assert!(!mac_diagnostic_graceful_direct_child::<String>(&[]));
+        assert!(mac_diagnostic_graceful_direct_child(&[(
+            session.clone(),
+            Some(Receipt::GracefulDirectChildExit,)
+        )]));
+        for receipt in [
+            None,
+            Some(Receipt::NoDirectChildAllocated),
+            Some(Receipt::TerminatedDirectChildExit),
+        ] {
+            assert!(!mac_diagnostic_graceful_direct_child(&[(
+                session.clone(),
+                receipt,
+            )]));
+        }
+        assert!(!mac_diagnostic_graceful_direct_child(&[
+            (session.clone(), Some(Receipt::GracefulDirectChildExit)),
+            (session, Some(Receipt::GracefulDirectChildExit)),
+        ]));
+    }
+
     #[inline(never)]
     fn managed_runtime_stack_probe(depth: usize) -> usize {
         let block = [depth as u8; 16 * 1024];
@@ -1667,6 +1892,84 @@ mod tests {
             telemetry: None,
             field_overrides: Vec::new(),
         }
+    }
+
+    #[cfg(all(
+        target_os = "macos",
+        debug_assertions,
+        feature = "macos-browser-host-acceptance"
+    ))]
+    #[test]
+    fn contained_browser_diagnostic_managed_config_compiles() {
+        let instance = tempfile::tempdir().expect("instance");
+        let origin = "http://127.0.0.1:51813";
+        let mut managed = ManagedRuntimeConfig::echo(ManagedAccessProfile::Pinned)
+            .with_execution_boundary(ManagedExecutionBoundary::OfflineIsolated);
+        managed.providers[0].kind = ManagedProviderKind::OpenAiCompatible;
+        managed.providers[0].base_url = Some(format!("{origin}/v1"));
+        managed.providers[0].timeout_ms = 30_000;
+        managed.models[0].model = "mac-browser-fixture".into();
+        managed.models[0].capabilities.streaming = false.into();
+        managed.field_overrides = vec![
+            ManagedFieldOverride {
+                field_id: "access.tools.include".into(),
+                value: serde_json::json!([
+                    "browser.open",
+                    "browser.status",
+                    "browser.snapshot",
+                    "browser.click",
+                    "browser.navigate",
+                    "browser.screenshot",
+                    "browser.close"
+                ]),
+            },
+            ManagedFieldOverride {
+                field_id: "access.actions.allow".into(),
+                value: serde_json::json!([
+                    "provider.call",
+                    "provider.openai.chat",
+                    "browser.open",
+                    "browser.status",
+                    "browser.snapshot",
+                    "browser.click",
+                    "browser.navigate",
+                    "browser.screenshot",
+                    "browser.close"
+                ]),
+            },
+            ManagedFieldOverride {
+                field_id: "sandbox.networkDestinations".into(),
+                value: serde_json::json!([origin]),
+            },
+        ];
+        managed
+            .validate()
+            .expect("diagnostic protocol configuration");
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, true)
+            .expect("diagnostic canonical runtime configuration");
+        assert_eq!(config.sandbox.network_destinations, [origin.to_owned()]);
+    }
+
+    #[cfg(all(
+        target_os = "macos",
+        debug_assertions,
+        feature = "macos-browser-host-acceptance"
+    ))]
+    #[tokio::test]
+    async fn contained_browser_diagnostic_compiler_seal_binds_without_launch() {
+        let owner =
+            colossus_runtime::browser_package::macos_diagnostic_from_compiler_seal(include_bytes!(
+                concat!(env!("OUT_DIR"), "/mac-browser-acceptance-seal.json")
+            ))
+            .await
+            .expect("sealed native browser package admission");
+        assert!(
+            owner
+                .shutdown_direct_child()
+                .await
+                .expect("empty owner cleanup")
+                .is_empty()
+        );
     }
 
     #[test]

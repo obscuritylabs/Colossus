@@ -138,7 +138,7 @@ pub async fn inspect_sidecar_configuration(
 
 /// Authenticated Windows lifecycle for one app-owned Managed Local runtime.
 pub struct NativeSidecarLifecycle {
-    bootstrap: Arc<SidecarBootstrapConfig>,
+    pub(crate) bootstrap: Arc<SidecarBootstrapConfig>,
     status: watch::Sender<NativeSidecarStatus>,
 }
 
@@ -453,6 +453,7 @@ async fn launch(
         None => None,
     };
     let (agent_runs_closed, _) = watch::channel(false);
+    bootstrap.notify_connection(&ready)?;
     let connector_runs = connector.as_ref().map(|transport| {
         Arc::new(WindowsAgentRuns {
             transports: AgentRunTransports {
@@ -469,6 +470,9 @@ async fn launch(
         },
         closed: agent_runs_closed,
     });
+    bootstrap
+        .native_browser_child
+        .store(process_id, Ordering::Release);
     Ok(WindowsSidecarBackend {
         connector,
         connector_runs,

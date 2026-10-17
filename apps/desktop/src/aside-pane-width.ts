@@ -1,10 +1,16 @@
 export const MIN_ASIDE_PANE_WIDTH = 280;
-export const MAX_ASIDE_PANE_WIDTH = 760;
 
 const MIN_WORK_THREAD_WIDTH = 390;
 const ASIDE_RESIZE_HANDLE_WIDTH = 8;
 const DEFAULT_ASIDE_PANE_RATIO = 0.53;
 const STORAGE_KEY = "colossus.aside-pane-width:v1";
+
+export function maximumAsidePaneWidth(layoutWidth: number): number {
+  return Math.max(
+    MIN_ASIDE_PANE_WIDTH,
+    Math.floor(layoutWidth - MIN_WORK_THREAD_WIDTH - ASIDE_RESIZE_HANDLE_WIDTH),
+  );
+}
 
 export function defaultAsidePaneWidth(layoutWidth: number): number {
   return clampAsidePaneWidth(
@@ -17,13 +23,7 @@ export function clampAsidePaneWidth(
   width: number,
   layoutWidth: number,
 ): number {
-  const responsiveMaximum = Math.max(
-    MIN_ASIDE_PANE_WIDTH,
-    Math.min(
-      MAX_ASIDE_PANE_WIDTH,
-      layoutWidth - MIN_WORK_THREAD_WIDTH - ASIDE_RESIZE_HANDLE_WIDTH,
-    ),
-  );
+  const responsiveMaximum = maximumAsidePaneWidth(layoutWidth);
   return Math.round(
     Math.min(responsiveMaximum, Math.max(MIN_ASIDE_PANE_WIDTH, width)),
   );

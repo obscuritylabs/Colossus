@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use colossus_contracts::HostSecret;
+use crate::NativePassword;
 use tokio::sync::oneshot;
 
 use crate::PromptError;
@@ -16,12 +16,12 @@ pub(crate) static TEST_OWNERSHIP: std::sync::Mutex<()> = std::sync::Mutex::new((
 /// Held by the native window, not the waiting future, so cancelling a caller
 /// cannot admit another dialog until the first window has cleared and closed.
 pub(crate) struct Completion {
-    sender: Option<oneshot::Sender<Result<HostSecret, PromptError>>>,
+    sender: Option<oneshot::Sender<Result<NativePassword, PromptError>>>,
 }
 
 impl Completion {
     pub(crate) fn acquire()
-    -> Result<(Self, oneshot::Receiver<Result<HostSecret, PromptError>>), PromptError> {
+    -> Result<(Self, oneshot::Receiver<Result<NativePassword, PromptError>>), PromptError> {
         ACTIVE
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| PromptError::Busy)?;
@@ -34,7 +34,7 @@ impl Completion {
         ))
     }
 
-    pub(crate) fn finish(mut self, result: Result<HostSecret, PromptError>) {
+    pub(crate) fn finish(mut self, result: Result<NativePassword, PromptError>) {
         // Release ownership before waking a caller that might immediately retry.
         ACTIVE.store(false, Ordering::Release);
         if let Some(sender) = self.sender.take() {

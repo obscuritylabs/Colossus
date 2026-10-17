@@ -48,6 +48,11 @@ pub(super) fn transcript_from_messages(
                 user_content_document(&record.message.content),
                 None,
             ),
+            ModelMessageRole::ToolObservation => (
+                TranscriptKind::Tool,
+                user_content_document(&record.message.content),
+                None,
+            ),
             ModelMessageRole::Assistant => {
                 let mut document = PresentationDocument::new();
                 if !record.message.content.is_empty() {

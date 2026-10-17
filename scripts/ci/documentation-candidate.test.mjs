@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
+  lstat,
   mkdtemp,
   mkdir,
   readFile,
@@ -148,7 +149,17 @@ test("root images, aliases, symlinks and malformed candidate requests cannot rea
     );
     await rm(join(directory, names.archive));
     await writeFile(join(directory, "elsewhere"), "not an archive");
-    await symlink(join(directory, "elsewhere"), join(directory, names.archive));
+    // A real Windows junction needs no file-symlink privilege.
+    const linkTarget = join(
+      directory,
+      process.platform === "win32" ? "stage-amd64" : "elsewhere",
+    );
+    await symlink(
+      linkTarget,
+      join(directory, names.archive),
+      process.platform === "win32" ? "junction" : "file",
+    );
+    assert.ok((await lstat(join(directory, names.archive))).isSymbolicLink());
     await assert.rejects(
       createDocumentationCandidate(directory, tag, commit, "amd64"),
       /regular archive/u,

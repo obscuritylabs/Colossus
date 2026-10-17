@@ -37,6 +37,7 @@ const initialView: SettingsView = {
   version: "",
   role: "",
   error: "",
+  runtimeKind: "managed",
 };
 const post = (action: SettingsAction) => api.postMessage(action);
 function Settings() {
@@ -137,7 +138,7 @@ function Settings() {
       }
       brandMarkUrl={document.body.dataset.colossusMark ?? ""}
       globalDescription="Preferences for this editor"
-      workspaceDescription="Connected worker & access"
+      workspaceDescription="Runtime & access"
       onReturnToWork={() => post({ type: "openWork" })}
     >
       <div ref={contentRef}>
@@ -309,7 +310,7 @@ function Settings() {
         >
           <h2 id="connections-title">Connections</h2>
           <p className="section-description">
-            Connect this workspace to your enrolled Colossus worker.
+            Start the bundled runtime or connect a worker you manage separately.
           </p>
           <div className="settings-card">
             <div
@@ -317,7 +318,11 @@ function Settings() {
               data-search="connect disconnect external worker"
             >
               <div>
-                <strong>Local worker</strong>
+                <strong>
+                  {view.runtimeKind === "managed"
+                    ? `Managed Local${view.runtimePreview ? " (Developer Preview)" : ""}`
+                    : "Local worker"}
+                </strong>
                 <p id="worker-status" role="status">
                   {view.connecting
                     ? "Connecting…"
@@ -342,29 +347,70 @@ function Settings() {
                     ? "Reconnect worker"
                     : view.connected
                       ? "Disconnect"
-                      : "Connect worker"}
+                      : view.runtimeKind === "managed"
+                        ? "Start Colossus"
+                        : "Connect worker"}
               </button>
             </div>
             <div
               className="setting-row"
-              data-search="enrollment credential keyring service account location"
+              data-search="managed local provider models setup start runtime"
             >
               <div>
-                <strong>Enrolled credential</strong>
+                <strong>Managed Local setup</strong>
                 <p>
-                  Check the OS-keyring service and account used by this
-                  connection.
+                  Configure providers, models, and workspace access. Colossus
+                  starts and stops with this extension.
                 </p>
               </div>
               <button
-                id="credential"
-                onClick={() => post({ type: "configureCredential" })}
-                disabled={view.connecting || view.busy}
+                id="configure-managed"
                 className="secondary"
+                disabled={view.connecting || view.busy}
+                onClick={() => post({ type: "configureManaged" })}
               >
-                Credential location
+                Configure Local Runtime
               </button>
             </div>
+            <div
+              className="setting-row"
+              data-search="external enrolled worker advanced connection"
+            >
+              <div>
+                <strong>External worker</strong>
+                <p>Connect a worker you administer separately.</p>
+              </div>
+              <button
+                id="connect-external"
+                className="secondary"
+                disabled={view.connecting || view.busy}
+                onClick={() => post({ type: "connectExternal" })}
+              >
+                Connect external worker
+              </button>
+            </div>
+            {view.runtimeKind !== "managed" && (
+              <div
+                className="setting-row"
+                data-search="enrollment credential keyring service account location"
+              >
+                <div>
+                  <strong>Enrolled credential</strong>
+                  <p>
+                    Check the OS-keyring service and account used by this
+                    connection.
+                  </p>
+                </div>
+                <button
+                  id="credential"
+                  onClick={() => post({ type: "configureCredential" })}
+                  disabled={view.connecting || view.busy}
+                  className="secondary"
+                >
+                  Credential location
+                </button>
+              </div>
+            )}
             <div
               className="setting-row"
               data-search="connection diagnostics troubleshooting"
@@ -381,30 +427,33 @@ function Settings() {
                 Show diagnostics
               </button>
             </div>
-            <div
-              className="setting-row"
-              data-search="forget reset enrollment trust connection"
-            >
-              <div>
-                <strong>Saved connection</strong>
-                <p>
-                  Forget this workspace’s saved trust settings, then connect
-                  again.
-                </p>
-              </div>
-              <button
-                id="forget"
-                onClick={() => post({ type: "forgetConnection" })}
-                disabled={view.connecting || view.busy}
-                className="secondary"
+            {view.runtimeKind !== "managed" && (
+              <div
+                className="setting-row"
+                data-search="forget reset enrollment trust connection"
               >
-                Forget connection
-              </button>
-            </div>
+                <div>
+                  <strong>Saved connection</strong>
+                  <p>
+                    Forget this workspace’s saved trust settings, then connect
+                    again.
+                  </p>
+                </div>
+                <button
+                  id="forget"
+                  onClick={() => post({ type: "forgetConnection" })}
+                  disabled={view.connecting || view.busy}
+                  className="secondary"
+                >
+                  Forget connection
+                </button>
+              </div>
+            )}
           </div>
           <p className="settings-note">
-            Forgetting a connection leaves the worker’s enrollment and keychain
-            credential in place.
+            {view.runtimeKind === "managed"
+              ? "Provider keys are managed by VS Code SecretStorage. The runtime keeps conversation state in this extension's private workspace partition."
+              : "Forgetting a connection leaves the worker’s enrollment and keychain credential in place."}
           </p>
         </section>
         <section
@@ -425,9 +474,17 @@ function Settings() {
             >
               <div>
                 <strong>Runtime placement</strong>
-                <p>Start the worker with the Colossus CLI before connecting.</p>
+                <p>
+                  {view.runtimeKind === "managed"
+                    ? "The bundled runtime starts inside this workspace. No CLI installation or worker enrollment is required."
+                    : "Start the worker with the Colossus CLI before connecting."}
+                </p>
               </div>
-              <span className="setting-value">External worker</span>
+              <span className="setting-value">
+                {view.runtimeKind === "managed"
+                  ? "Managed Local"
+                  : "External worker"}
+              </span>
             </div>
             <div className="setting-row" data-search="worker version runtime">
               <div>
@@ -444,7 +501,11 @@ function Settings() {
             >
               <div>
                 <strong>Model role</strong>
-                <p>The role selected during enrollment setup.</p>
+                <p>
+                  {view.runtimeKind === "managed"
+                    ? "The default role for local conversations."
+                    : "The role selected during enrollment setup."}
+                </p>
               </div>
               <span id="role" className="setting-value">
                 {view.role || "Not configured"}
@@ -453,9 +514,15 @@ function Settings() {
           </div>
           <h3>Models, providers &amp; MCP</h3>
           <p className="settings-note">
-            Manage these in the connected worker’s configuration. The current
-            worker connection supports running tasks; it does not expose runtime
-            settings editing.
+            {view.runtimeKind === "managed" ? (
+              "Use Configure Local Runtime under Connections to add providers and models, choose a default, or change access. The composer switches models and reasoning for each conversation."
+            ) : (
+              <>
+                Manage these in the connected worker’s configuration. The
+                current worker connection supports running tasks; it does not
+                expose runtime settings editing.
+              </>
+            )}
           </p>
         </section>
         <section
@@ -467,8 +534,8 @@ function Settings() {
         >
           <h2 id="access-title">Access</h2>
           <p className="section-description">
-            Colossus applies the worker’s policy and the application’s
-            enrollment to every task.
+            Colossus applies runtime policy and the application's tool grants to
+            every task.
           </p>
           <div className="settings-card">
             <div
@@ -491,8 +558,9 @@ function Settings() {
               <div>
                 <strong>Tools &amp; sandbox</strong>
                 <p>
-                  Configured by the worker and limited by this application’s
-                  enrollment.
+                  {view.runtimeKind === "managed"
+                    ? "Use Configure Local Runtime to select Minimal chat or Development tools. Development uses Full access, with native confirmation and approvals."
+                    : "Configured by the worker and limited by this application’s enrollment."}
                 </p>
               </div>
               <span className="setting-value">Worker managed</span>

@@ -17,6 +17,7 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
     let mut specs = core_builtin_specs();
     specs.extend(super::process_sessions::session_specs());
     specs.extend(super::workflows::workflow_specs());
+    specs.extend(super::browser::browser_specs());
     specs
 }
 
@@ -147,6 +148,16 @@ fn core_builtin_specs() -> Vec<ToolSpec> {
             effect_action: Some("filesystem.list".into()),
             capability: Some("filesystem.list".into()),
             max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "image.view".into(),
+            description: "Open local PNG, JPEG, or static WebP images for visual inspection. Returns verified images to the model and records them in activity. Use workspace-relative paths; at most 16 images, 16 MiB each and 32 MiB combined.".into(),
+            input_schema: object_schema(json!({
+                "paths": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"type": "string", "minLength": 1, "maxLength": 4096}}
+            }), &["paths"]),
+            effect_action: Some("filesystem.read_image".into()),
+            capability: Some("filesystem.read_image".into()),
+            max_output_bytes: 32_768,
         },
         ToolSpec {
             name: "filesystem.read".into(),

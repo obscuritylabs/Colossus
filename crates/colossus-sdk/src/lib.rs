@@ -25,10 +25,18 @@ mod grpc;
 mod keyring_provider;
 #[cfg(all(feature = "sidecar", target_os = "linux"))]
 mod linux_credential_session;
-#[cfg(all(feature = "sidecar", target_os = "macos"))]
+#[cfg(all(
+    feature = "sidecar",
+    any(
+        target_os = "macos",
+        all(test, any(target_arch = "x86_64", target_arch = "aarch64"))
+    )
+))]
 mod macos_code_identity;
 #[cfg(all(feature = "sidecar", target_os = "macos"))]
 mod macos_verified_process;
+#[cfg(feature = "sidecar")]
+mod native_browser;
 #[cfg(feature = "daemon")]
 mod native_daemon;
 #[cfg(all(feature = "sidecar", unix))]
@@ -101,6 +109,11 @@ pub use macos_verified_process::{
     spawn_suspended_tty as spawn_suspended_macos_tty,
     validate_suspended_process as validate_suspended_macos_process,
 };
+#[cfg(feature = "sidecar")]
+pub use native_browser::{
+    NativeBrowserAttachment, NativeBrowserClient, NativeBrowserHandoff, NativeBrowserOpenRequest,
+    NativeBrowserSessionOwner,
+};
 #[cfg(feature = "daemon")]
 pub use native_daemon::NativeDaemonLifecycle;
 #[cfg(feature = "sidecar")]
@@ -119,9 +132,10 @@ pub use sidecar::{
     ManagedOtlpProtocol, ManagedProviderConfig, ManagedProviderKind, ManagedReasoningEffort,
     ManagedRuntimeConfig, ManagedSearchConfig, ManagedSearchKind, ManagedTelemetryConfig,
     NativeSidecarFailure, NativeSidecarStatus, REMOTE_PROVIDER_TIMEOUT_MS, SidecarApplicationGrant,
-    SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarHostCredential, SidecarLifecycle,
-    SidecarOptions, WorkspaceIdentity, default_managed_provider_timeout_ms,
-    validate_managed_model_identifier, validate_managed_provider_base_url,
+    SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarConnectionObserver,
+    SidecarHostCredential, SidecarLifecycle, SidecarOptions, WorkspaceIdentity,
+    default_managed_provider_timeout_ms, validate_managed_model_identifier,
+    validate_managed_provider_base_url,
 };
 pub use stream::RunUpdates;
 pub use types::{

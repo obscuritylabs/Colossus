@@ -44,12 +44,13 @@ test("settings use one editor panel, persist user preferences, and never read cr
   let reveals = 0;
   let secretReads = 0;
   let savedProfile: string | undefined;
+  let externalSelected = true;
   const storedProfiles: string[] = [];
   const inputs: (string | undefined)[] = [];
   const prompts: { value: string }[] = [];
   const home = await mkdtemp(join(tmpdir(), "colossus-credential-selector-"));
   const workspace = {
-    name: "credential-fixture",
+    name: "workspace-fixture",
     uri: { scheme: "file", fsPath: home, toString: () => home },
   };
   const disposable = () => ({ dispose() {} });
@@ -171,6 +172,11 @@ test("settings use one editor panel, persist user preferences, and never read cr
   module.exports.activate({
     extensionUri: "/fixture/extension",
     subscriptions,
+    workspaceState: {
+      get: (key: string, fallback: unknown) =>
+        key.startsWith("colossus.external:") ? externalSelected : fallback,
+      update: async () => {},
+    },
     secrets: {
       get: () => {
         secretReads++;
@@ -196,6 +202,22 @@ test("settings use one editor panel, persist user preferences, and never read cr
       await new Promise<void>((resolve) => setImmediate(resolve));
     };
     await send({ type: "ready" });
+    assert.equal(
+      (messages.at(-1) as { view: { runtimeKind: string } }).view.runtimeKind,
+      "external",
+    );
+    assert.equal(
+      secretReads,
+      0,
+      "restoring placement must not read credentials",
+    );
+    externalSelected = false;
+    await send({ type: "ready" });
+    assert.equal(
+      (messages.at(-1) as { view: { runtimeKind: string } }).view.runtimeKind,
+      "managed",
+    );
+    externalSelected = true;
     await send({ type: "setPreference", name: "sendShortcut", value: "enter" });
     assert.deepEqual(updates, [["composer.sendShortcut", "enter", 1]]);
     assert.equal(

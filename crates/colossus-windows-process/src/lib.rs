@@ -12,9 +12,20 @@ use thiserror::Error;
 
 mod api;
 pub use api::*;
+mod channels;
+#[cfg(all(windows, debug_assertions))]
+pub use channels::spawn_user_browser_with_private_channels;
+pub use channels::{PrivateProcessChannel, SupervisedChild, spawn_with_private_channels};
+
+#[cfg(windows)]
+mod private_io;
+#[cfg(windows)]
+pub use private_io::{PrivateIoLease, PrivatePipe, PrivatePipeError, PrivateReader, PrivateWriter};
 
 #[cfg(windows)]
 mod windows_impl;
+#[cfg(windows)]
+pub use windows_impl::context::dispatch_browser_context_helper;
 
 #[cfg(test)]
 mod tests;

@@ -131,6 +131,10 @@ pub struct Actor {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutionContext {
+    /// Remaining verified-image capacity for this pending tool turn. This
+    /// trusted dispatch hint is recomputed from canonical messages, never journaled.
+    #[serde(skip)]
+    pub image_input_budget: Option<crate::ImageInputBudget>,
     /// Correlation identifier for the whole operation.
     pub correlation_id: String,
     /// Identifier of the event or request that caused this operation.
