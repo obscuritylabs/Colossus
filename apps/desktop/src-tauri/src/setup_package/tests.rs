@@ -82,7 +82,7 @@ fn setup_package_rejects_nonportable_member_name_encodings() {
         let error = archive::read(&bytes)
             .err()
             .expect("reject a nonportable member name");
-        assert!(error.message.contains("portable files"));
+        assert!(error.violations[0].description.contains("portable files"));
     }
 }
 
@@ -97,7 +97,11 @@ fn setup_package_rejects_links_before_reading_their_targets() {
         .unwrap();
     let bytes = writer.finish().unwrap().into_inner();
     let error = archive::read(&bytes).err().expect("reject ZIP links");
-    assert!(error.message.contains("links and special files"));
+    assert!(
+        error.violations[0]
+            .description
+            .contains("links and special files")
+    );
 }
 
 #[test]
