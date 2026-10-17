@@ -50,6 +50,13 @@ unsafe extern "C" fn RunWinMain(
     if let Some(status) = colossus_windows_process::dispatch_browser_context_helper() {
         return status;
     }
+    // Auxiliary positive entry observation only; this precedes stdio and CEF.
+    #[cfg(debug_assertions)]
+    if windows_io::diagnostic_entry_receipt(&std::env::args_os().skip(1).collect::<Vec<_>>())
+        .is_err()
+    {
+        return 1;
+    }
     // SAFETY: CEF bootstrap owns each borrowed pointer through this synchronous
     // call. Native entry verifies the pinned version, sandbox, thread and loader,
     // and dispatches any helper before the private parent channels are parsed.

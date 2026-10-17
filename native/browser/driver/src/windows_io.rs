@@ -33,10 +33,53 @@ impl Drop for Workers {
     }
 }
 
-/// Validate all handles before transferring any ownership, then clear helper inheritance.
-pub fn inherited(
+// This auxiliary probe borrows one already inherited pipe; ordinary startup
+// retains exclusive ownership and performs the original full admission later.
+#[cfg(debug_assertions)]
+pub(crate) fn diagnostic_entry_receipt(
     arguments: &[std::ffi::OsString],
-) -> Result<Vec<Pipe>, colossus_ports::BrowserDriverError> {
+) -> Result<(), colossus_ports::BrowserDriverError> {
+    use colossus_ports::BrowserDriverError as Error;
+    use windows_sys::Win32::Storage::FileSystem::WriteFile;
+
+    // Ordinary CEF subprocess arguments do not select the private host channels.
+    if arguments
+        .first()
+        .is_none_or(|value| value != "--inherited-browser-pipes")
+    {
+        return Ok(());
+    }
+    let handles = inherited_handles(arguments)?;
+    let writer = handles[1] as RawHandle;
+    // SAFETY: this query borrows a nominated handle and transfers no ownership.
+    if unsafe { GetFileType(writer) } != FILE_TYPE_PIPE {
+        return Err(Error::Denied);
+    }
+    let receipt = [b'C', b'B', b'E', 1, 0];
+    let mut written = 0;
+    // SAFETY: only the fixed receipt is written through this live borrowed pipe.
+    // No worker, owning wrapper, duplicate or stdio operation is created here.
+    // Synchronous I/O retains this buffer until return; the parent owns the
+    // whole-Job startup deadline and positive termination on a blocked write.
+    if unsafe {
+        WriteFile(
+            writer,
+            receipt.as_ptr(),
+            receipt.len() as u32,
+            &mut written,
+            std::ptr::null_mut(),
+        )
+    } == 0
+        || written as usize != receipt.len()
+    {
+        return Err(Error::Unavailable);
+    }
+    Ok(())
+}
+
+fn inherited_handles(
+    arguments: &[std::ffi::OsString],
+) -> Result<Vec<usize>, colossus_ports::BrowserDriverError> {
     use colossus_ports::BrowserDriverError as Error;
     if arguments
         .first()
@@ -63,6 +106,15 @@ pub fn inherited(
     {
         return Err(Error::Denied);
     }
+    Ok(handles)
+}
+
+/// Validate all handles before transferring any ownership, then clear helper inheritance.
+pub fn inherited(
+    arguments: &[std::ffi::OsString],
+) -> Result<Vec<Pipe>, colossus_ports::BrowserDriverError> {
+    use colossus_ports::BrowserDriverError as Error;
+    let handles = inherited_handles(arguments)?;
     for handle in &handles {
         // SAFETY: querying a nominated numeric handle cannot transfer ownership or access page content.
         if unsafe { GetFileType(*handle as RawHandle) } != FILE_TYPE_PIPE {

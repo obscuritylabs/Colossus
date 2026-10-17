@@ -46,5 +46,12 @@ pub use process::{
     validate_named_pipe_client, validate_named_pipe_server,
 };
 
+#[cfg(all(windows, debug_assertions))]
+mod startup_observation;
+#[cfg(all(windows, debug_assertions))]
+pub use startup_observation::{
+    StartupModuleObservation, StartupModuleObservationStatus, observe_browser_startup_modules,
+};
+
 #[cfg(test)]
 mod tests;

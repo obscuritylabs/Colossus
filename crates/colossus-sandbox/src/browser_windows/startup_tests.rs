@@ -16,7 +16,13 @@ use colossus_windows_process::{
     ContextShutdown, PrivatePipe, PrivateReader, SpawnRequest, WindowsProcessError,
 };
 use sha2::{Digest as _, Sha256};
-use std::{collections::BTreeMap, os::windows::fs::MetadataExt as _, time::Duration};
+use std::{
+    cell::Cell,
+    collections::BTreeMap,
+    os::windows::fs::MetadataExt as _,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use zeroize::Zeroizing;
 
@@ -153,17 +159,22 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
     let mut profile_directory = None;
     let mut leases = Vec::new();
     let mut drains = Vec::new();
+    // Only closed static categories; cancellation must retain the last entered operation.
+    let startup_stage = Cell::new("profile-verify");
     let result = tokio::time::timeout(Duration::from_secs(45), async {
-        profile_directory = Some(
-            profile
-                .verify_process(child.process_handle())?
-                .create_directory(&profile_path)?,
-        );
+        profile_directory = Some({
+            let principal = profile.verify_process(child.process_handle())?;
+            startup_stage.set("profile-create");
+            principal.create_directory(&profile_path)?
+        });
         let directory = profile_directory
             .as_ref()
             .expect("fixture directory was assigned");
+        startup_stage.set("profile-enroll");
         let profile_handle = child.enroll_profile_directory(directory)?;
+        startup_stage.set("profile-identity");
         let profile_identity = colossus_windows_native::FileIdentity::of(directory)?;
+        startup_stage.set("channel-workers");
         let mut pipes = Vec::new();
         for channel in supervised.channels {
             let pipe = PrivatePipe::from_files(channel.reader, channel.writer).map_err(|_| {
@@ -172,18 +183,41 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
             leases.push(pipe.lease.clone());
             pipes.push(pipe);
         }
-        for file in [child.stdout.take(), child.stderr.take()]
-            .into_iter()
-            .flatten()
+        startup_stage.set("stdio-workers");
+        for (stream, file) in [
+            ("stdout", child.stdout.take()),
+            ("stderr", child.stderr.take()),
+        ]
+        .into_iter()
+        .filter_map(|(stream, file)| file.map(|file| (stream, file)))
         {
             let (reader, lease) = PrivateReader::from_file(file)?;
             leases.push(lease);
-            drains.push(tokio::spawn(async move {
-                let mut output = Vec::new();
-                let _ = reader.take(64 * 1024).read_to_end(&mut output).await;
-                Ok::<_, std::io::Error>(output)
-            }));
+            // Keep bounded partial output outside the task so a timed-out join
+            // cannot silently erase observations made before cancellation.
+            let output = Arc::new(Mutex::new(Vec::new()));
+            let captured = Arc::clone(&output);
+            let drain = tokio::spawn(async move {
+                let mut reader = reader.take(64 * 1024);
+                let mut chunk = [0_u8; 4096];
+                loop {
+                    match reader.read(&mut chunk).await {
+                        Ok(0) => break "eof",
+                        Ok(size) => {
+                            let mut output =
+                                captured.lock().unwrap_or_else(|error| error.into_inner());
+                            output.extend_from_slice(&chunk[..size]);
+                            if output.len() == 64 * 1024 {
+                                break "limit";
+                            }
+                        }
+                        Err(_) => break "io-error",
+                    }
+                }
+            });
+            drains.push((stream, output, drain));
         }
+        startup_stage.set("bootstrap-prepare");
         let control = BrowserDriverControl::new(RunControl::default(), RunControl::default());
         let binding = BrowserSessionBinding {
             runtime_id: "windows-networkless-runtime".into(),
@@ -240,13 +274,26 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
         let action = pipes.next().unwrap();
         let cancellation = pipes.next().unwrap();
         let presentation = pipes.next().unwrap();
+        startup_stage.set("bootstrap-key-write");
         bootstrap.writer.write_all(key.as_ref()).await?;
+        startup_stage.set("bootstrap-length-write");
         bootstrap
             .writer
             .write_all(&(data.len() as u32).to_be_bytes())
             .await?;
+        startup_stage.set("bootstrap-body-write");
         bootstrap.writer.write_all(&data).await?;
+        startup_stage.set("bootstrap-shutdown");
         bootstrap.writer.shutdown().await?;
+        startup_stage.set("client-entry-read");
+        let mut entry = [0; 5];
+        bootstrap.reader.read_exact(&mut entry).await?;
+        if entry != [b'C', b'B', b'E', 1, 0] {
+            return Err(BrowserDriverError::Denied.into());
+        }
+        // A fixed auxiliary receipt proves entry only, not authentication or CEF.
+        eprintln!("networkless CEF startup client_entry=observed");
+        startup_stage.set("phase-1-read");
         for phase in 1..=7 {
             let mut receipt = [0; 5];
             bootstrap
@@ -260,7 +307,9 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
                 return Err(BrowserDriverError::Denied.into());
             }
             eprintln!("networkless CEF startup phase={phase}");
+            startup_stage.set("phase-receipts");
         }
+        startup_stage.set("post-receipts");
         drop(bootstrap);
         let key = BrowserBridgeKey::from_bootstrap(key);
         let presentation_key = key.derive_presentation_key();
@@ -303,9 +352,34 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
         bridge.close_session(&request.session_id).await?;
         presenter.disconnect();
         bridge.disconnect_for_shutdown();
+        startup_stage.set("complete");
         Ok::<_, Box<dyn std::error::Error>>(())
     })
     .await;
+    if result.is_err() || result.as_ref().is_ok_and(|value| value.is_err()) {
+        let category = if result.is_err() { "timeout" } else { "error" };
+        use std::io::Write as _;
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "networkless CEF parent rejection stage={} category={category}",
+            startup_stage.get()
+        );
+        #[cfg(debug_assertions)]
+        {
+            let observed =
+                colossus_windows_native::observe_browser_startup_modules(child.process_handle());
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "networkless CEF modules status={:?} completed={} live_bound={} mask={} os_code={} examined={}",
+                observed.status,
+                observed.completed,
+                observed.live_bound,
+                observed.mask,
+                observed.os_code,
+                observed.examined
+            );
+        }
+    }
     let cleanup = (|| -> Result<(Option<u32>, bool), Box<dyn std::error::Error>> {
         let exit = child.wait_timeout(Duration::from_secs(5))?;
         let graceful = child.wait_tree_timeout(Duration::from_secs(2))?;
@@ -329,45 +403,56 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
             panic!("networkless fixture retained owners after unknown cleanup: {error}");
         }
     };
-    for drain in &mut drains {
+    for (stream, output, drain) in &mut drains {
         let drain_result = tokio::time::timeout(Duration::from_secs(2), &mut *drain).await;
-        if let Ok(Ok(Ok(output))) = drain_result {
-            // Retain only fixed diagnostic categories from our Debug client.
-            // Arbitrary Chromium stderr, paths and private page bytes are omitted.
-            for line in String::from_utf8_lossy(&output).lines() {
-                if line.starts_with("native Windows profile rejection ") {
-                    eprintln!("{line}");
-                } else if result.is_err() || result.as_ref().is_ok_and(|value| value.is_err()) {
-                    // This fixture has a cleared environment, an empty owned
-                    // profile and only about:blank. No personal/browser content
-                    // is loaded. Keep the native CHECK category for diagnosis.
-                    let rejection = [
-                        BrowserDriverError::Unavailable,
-                        BrowserDriverError::Unsupported,
-                        BrowserDriverError::Denied,
-                        BrowserDriverError::Stale,
-                        BrowserDriverError::Cancelled,
-                        BrowserDriverError::LimitExceeded,
-                        BrowserDriverError::AuthenticationRequired,
-                        BrowserDriverError::Failed,
-                        BrowserDriverError::OutcomeUnknown,
-                    ]
-                    .into_iter()
-                    .find(|error| line == error.to_string());
-                    if let Some(error) = rejection {
-                        eprintln!("networkless CEF driver rejection category={error:?}");
-                    } else if line.contains("FATAL:")
-                        || line.starts_with("native Windows transfer rejection ")
-                        || line.starts_with("native cef bootstrap ")
-                        || line.starts_with("native cef startup breakpoint ")
-                    {
-                        eprintln!("{}", line.chars().take(4096).collect::<String>());
-                    }
+        let outcome = match drain_result {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(_)) => "join-error",
+            Err(_) => {
+                drain.abort();
+                let _ = drain.await;
+                "timeout"
+            }
+        };
+        let output = output.lock().unwrap_or_else(|error| error.into_inner());
+        use std::io::Write as _;
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "networkless CEF stdio stream={stream} outcome={outcome} bytes={}",
+            output.len()
+        );
+        // Retain only fixed diagnostic categories from our Debug client.
+        // Arbitrary Chromium stderr, paths and private page bytes are omitted.
+        for line in String::from_utf8_lossy(&output).lines() {
+            if line.starts_with("native Windows profile rejection ") {
+                eprintln!("{line}");
+            } else if result.is_err() || result.as_ref().is_ok_and(|value| value.is_err()) {
+                // This fixture has a cleared environment, an empty owned
+                // profile and only about:blank. No personal/browser content
+                // is loaded. Keep the native CHECK category for diagnosis.
+                let rejection = [
+                    BrowserDriverError::Unavailable,
+                    BrowserDriverError::Unsupported,
+                    BrowserDriverError::Denied,
+                    BrowserDriverError::Stale,
+                    BrowserDriverError::Cancelled,
+                    BrowserDriverError::LimitExceeded,
+                    BrowserDriverError::AuthenticationRequired,
+                    BrowserDriverError::Failed,
+                    BrowserDriverError::OutcomeUnknown,
+                ]
+                .into_iter()
+                .find(|error| line == error.to_string());
+                if let Some(error) = rejection {
+                    eprintln!("networkless CEF driver rejection category={error:?}");
+                } else if line.contains("FATAL:")
+                    || line.starts_with("native Windows transfer rejection ")
+                    || line.starts_with("native cef bootstrap ")
+                    || line.starts_with("native cef startup breakpoint ")
+                {
+                    eprintln!("{}", line.chars().take(4096).collect::<String>());
                 }
             }
-        } else {
-            drain.abort();
-            let _ = drain.await;
         }
     }
     for lease in &leases {
