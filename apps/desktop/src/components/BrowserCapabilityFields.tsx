@@ -57,7 +57,10 @@ export function BrowserCapabilityFields({
             {overridden ? (
               <Button
                 variant="tertiary"
-                onClick={() => onInherit(descriptor.id)}
+                onClick={() => {
+                  onInherit(descriptor.id);
+                  document.getElementById(`${id}-control`)?.focus();
+                }}
               >
                 Inherit
               </Button>

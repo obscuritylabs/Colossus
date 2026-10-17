@@ -97,5 +97,8 @@ for (const [theme, palette] of [
     await expect(
       page.getByRole("spinbutton", { name: "Maximum browser tabs" }),
     ).toHaveValue("8");
+    await expect(
+      page.getByRole("spinbutton", { name: "Maximum browser tabs" }),
+    ).toBeFocused();
   });
 }
