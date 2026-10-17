@@ -86,9 +86,7 @@ impl Host {
         {
             return Err(BrowserDriverError::Stale);
         }
-        self.revoke_human_presentation();
-        self.presentation.handoff.revoke();
-        self.presentation.control_generation = command.control_generation;
+        self.begin_agent_action(command.control_generation);
         self.expected_revision = Some((native, revision, document));
         let mut random = [0_u8; 16];
         getrandom::fill(&mut random).map_err(|_| BrowserDriverError::Failed)?;

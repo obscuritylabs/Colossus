@@ -84,6 +84,13 @@ impl Host {
             };
         }
     }
+    pub(super) fn begin_agent_action(&mut self, control_generation: u64) {
+        if self.presentation.human || self.presentation.control_generation != control_generation {
+            self.revoke_human_presentation();
+        }
+        self.presentation.control_generation = control_generation;
+        self.presentation.handoff.revoke();
+    }
     fn owned_viewport(&self, lease: Lease) -> Result<(), PresentationError> {
         let (configuration, guard) = self
             .presentation

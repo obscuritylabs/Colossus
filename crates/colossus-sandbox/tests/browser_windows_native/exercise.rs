@@ -201,6 +201,41 @@ pub async fn run(
         attachment.client.input(viewer, Input::ImeCancel, 0).await,
         Err(PresentationError::Hidden)
     );
+    let observed = snapshot(&*driver, &request, &configure.target, &control, 900).await;
+    configure.target.document_id = observed.tab.document_id;
+    painted(&attachment, viewer).await;
+    let field = observed
+        .snapshot
+        .unwrap()
+        .nodes
+        .into_iter()
+        .find(|node| node.name == "Ordinary native input")
+        .expect("ordinary field in agent observation")
+        .element;
+    driver
+        .execute(
+            command(
+                &request,
+                &configure.target,
+                BrowserAction::Fill {
+                    element: field,
+                    text: "viewer stays visible".into(),
+                },
+                901,
+            ),
+            &control,
+        )
+        .await
+        .expect("fill with the read-only viewer open");
+    painted(&attachment, viewer).await;
+    super::capture::check(&*driver, &request, &configure.target, &control).await;
+    painted(&attachment, viewer).await;
+    assert_eq!(
+        attachment.client.input(viewer, Input::ImeCancel, 0).await,
+        Err(PresentationError::Hidden),
+        "preserving pixels must never admit human input during agent ownership"
+    );
+    eprintln!("PASS the same read-only viewport survives snapshot, fill, and screenshot");
     attachment
         .client
         .hide(viewer)
@@ -211,6 +246,7 @@ pub async fn run(
         "hidden lease cannot revive"
     );
     attachment.client.disconnect();
+    super::keyboard::check(&*driver, &request, &mut configure.target, &control, &origin).await;
     let _ = snapshot(&*driver, &request, &configure.target, &control, 50).await;
     driver
         .close_session(&request.session_id)
@@ -232,18 +268,28 @@ pub(super) async fn snapshot(
     control: &BrowserDriverControl,
     index: u32,
 ) -> colossus_contracts::BrowserObservation {
-    driver
-        .execute(
-            command(
-                request,
-                target,
-                BrowserAction::Snapshot { max_nodes: 128 },
-                index,
-            ),
-            control,
-        )
-        .await
-        .expect("actual agent semantic observation after native input or viewer detach")
+    for attempt in 0..8 {
+        let result = driver
+            .execute(
+                command(
+                    request,
+                    target,
+                    BrowserAction::Snapshot { max_nodes: 128 },
+                    index + attempt * 10_000,
+                ),
+                control,
+            )
+            .await;
+        match result {
+            Ok(observed) => return observed,
+            Err(colossus_ports::BrowserDriverError::Stale) => {
+                eprintln!("Snapshot at step {index} raced navigation; requesting a fresh read");
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Err(error) => panic!("native semantic snapshot at step {index}: {error:?}"),
+        }
+    }
+    panic!("native semantic snapshot at step {index} never reached a stable document")
 }
 pub(super) fn command(
     request: &BrowserDriverOpenRequest,
