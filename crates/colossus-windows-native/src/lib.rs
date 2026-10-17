@@ -55,3 +55,8 @@ pub use startup_observation::{
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(windows, debug_assertions))]
+mod startup_access;
+#[cfg(all(windows, debug_assertions))]
+pub use startup_access::{StartupAccessObservation, observe_browser_dependency_access};

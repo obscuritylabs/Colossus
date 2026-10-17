@@ -370,6 +370,15 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
         );
         #[cfg(debug_assertions)]
         {
+            for access in colossus_windows_native::observe_browser_dependency_access(
+                child.process_handle(),
+                &installation.component,
+            ) {
+                eprintln!(
+                    "networkless CEF access object={} stage={} os_code={} granted={:?} live_bound={}",
+                    access.object, access.stage, access.os_code, access.granted, access.live_bound
+                );
+            }
             let observed =
                 colossus_windows_native::observe_browser_startup_modules(child.process_handle());
             let _ = writeln!(
