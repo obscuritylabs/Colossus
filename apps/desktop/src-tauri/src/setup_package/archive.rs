@@ -37,7 +37,10 @@ pub(super) fn read(bytes: &[u8]) -> Result<PackageSource, CommandErrorDto> {
         let mut entry = archive
             .by_index(i)
             .map_err(|_| invalid("An archive entry is invalid or encrypted."))?;
-        let name = entry.name().to_owned();
+        let name = entry
+            .name()
+            .map_err(|_| invalid("An archive entry has an invalid filename."))?
+            .into_owned();
         let path = name.trim_end_matches('/');
         if path.is_empty()
             || path.len() > 160
