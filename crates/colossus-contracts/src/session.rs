@@ -241,8 +241,13 @@ pub fn validate_model_message_content(message: &ModelMessage) -> Result<(), Mode
         let ModelContentPart::Image { image } = part else {
             continue;
         };
-        if message.role != ModelMessageRole::User {
-            return Err(content_error("only user messages may contain image parts"));
+        if !matches!(
+            message.role,
+            ModelMessageRole::User | ModelMessageRole::Tool
+        ) {
+            return Err(content_error(
+                "only user and tool messages may contain image parts",
+            ));
         }
         if image.artifact_id.is_empty()
             || image.file_name.is_empty()

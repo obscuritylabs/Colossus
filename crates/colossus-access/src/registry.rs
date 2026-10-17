@@ -18,7 +18,9 @@ pub fn builtin_tool_descriptor(name: &str) -> Result<ToolDescriptor, AccessError
                 Vec::new()
             },
         ),
-        "filesystem.list" | "filesystem.read" | "filesystem.search" => ("filesystem", read),
+        "filesystem.list" | "filesystem.read" | "filesystem.search" | "image.view" => {
+            ("filesystem", read)
+        }
         "filesystem.write" | "filesystem.replace" => ("filesystem", write),
         "git.status" | "git.diff" | "git.show" => (
             "git",
@@ -115,6 +117,7 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "workflow.schedule.get",
             "workflow.run.read",
             "filesystem.read",
+            "filesystem.read_image",
             "filesystem.list",
             "filesystem.metadata",
             "filesystem.search",

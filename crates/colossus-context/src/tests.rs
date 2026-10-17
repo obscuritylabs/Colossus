@@ -424,6 +424,37 @@ fn image_compaction_deterministically_keeps_newest_images_without_mutating_histo
     ));
 }
 
+#[test]
+fn tool_image_compaction_keeps_a_new_batch_without_mutating_canonical_views() {
+    let mut earlier = image_message((0..16).map(|index| image(index, 1)));
+    earlier.role = ModelMessageRole::Tool;
+    earlier.tool_call_id = Some("earlier-view".into());
+    let mut newer = image_message([image(16, 1)]);
+    newer.role = ModelMessageRole::Tool;
+    newer.tool_call_id = Some("newer-view".into());
+    let canonical = vec![earlier, newer];
+    let prepared = compact_excess_images(&canonical);
+    assert_eq!(
+        canonical
+            .iter()
+            .flat_map(|message| message.content.images())
+            .count(),
+        17
+    );
+    assert_eq!(
+        prepared
+            .iter()
+            .flat_map(|message| message.content.images())
+            .count(),
+        16
+    );
+    assert_eq!(
+        prepared[1].content.images().next().unwrap().file_name,
+        "image-16.png"
+    );
+    assert!(prepared[0].content.plain_text().contains("image-0.png"));
+}
+
 #[tokio::test]
 async fn newest_user_turn_over_image_limits_is_rejected_instead_of_compacted() {
     let provider: Arc<dyn ModelProvider> = Arc::new(SummaryProvider {

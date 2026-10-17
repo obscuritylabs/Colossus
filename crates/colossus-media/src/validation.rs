@@ -37,6 +37,14 @@ pub fn validate_image_bytes(
     declared_media_type: Option<&str>,
     bytes: &[u8],
 ) -> Result<ValidatedImage, RunInputMediaError> {
+    decode_validated_image(file_name, declared_media_type, bytes).map(|(validated, _)| validated)
+}
+
+pub(crate) fn decode_validated_image(
+    file_name: &str,
+    declared_media_type: Option<&str>,
+    bytes: &[u8],
+) -> Result<(ValidatedImage, image::DynamicImage), RunInputMediaError> {
     validate_file_name(file_name)?;
     let size_bytes = u64::try_from(bytes.len()).map_err(|_| invalid("image size overflowed"))?;
     if size_bytes == 0 || size_bytes > MAX_IMAGE_BYTES {
@@ -76,13 +84,16 @@ pub fn validate_image_bytes(
         return Err(invalid("decoded image dimensions are inconsistent"));
     }
 
-    Ok(ValidatedImage {
-        media_type: media_type.into(),
-        size_bytes,
-        sha256: hex::encode(Sha256::digest(bytes)),
-        width_pixels,
-        height_pixels,
-    })
+    Ok((
+        ValidatedImage {
+            media_type: media_type.into(),
+            size_bytes,
+            sha256: hex::encode(Sha256::digest(bytes)),
+            width_pixels,
+            height_pixels,
+        },
+        decoded,
+    ))
 }
 
 /// Reapply provider-visible aggregate image limits to ordered references.

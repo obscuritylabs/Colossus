@@ -639,6 +639,25 @@ history contains only verified image metadata. Exact bytes remain encrypted arti
 and are re-resolved and reverified only after the provider permit is issued; policy,
 audit, diagnostics, logs, and released errors never receive the bytes or data URL.
 
+`image.view` reads local images through `filesystem.read_image`, retaining native
+confinement, protected-state exclusions, and mandatory post-effect release. Built-in
+policy also inherits filesystem read denials, approval requirements, and plugin read
+restrictions; OPA evaluates the dedicated action and its bounded read obligations.
+After every file in
+the batch is released and validated, exact bytes are retained as immutable
+owner-bound `run_input` artifacts. The active run registry supplies the owner; tool
+arguments cannot select an owner. Durable tool messages contain verified image
+references, and adapters resolve their bytes only after the provider permit. The
+agent loop supplies a non-durable image budget shared by pending tool calls;
+normal context preparation compacts older images into metadata markers to keep
+the next provider context within its image limits. Failed calls release no
+image-view metadata.
+
+Desktop image previews use the selected target's authenticated artifact service,
+which verifies ownership and the exact artifact digest. Native code decodes bounded
+static formats and returns PNG previews at 256 px or 2048 px. The renderer receives
+no file-read capability, arbitrary URL fetch, or source path from this operation.
+
 Public run listing is owner-indexed and never scans the shared global journal. The
 idempotency claim, run creation, and per-application index entry commit atomically.
 Newest-first reads, run reconstruction, and filter traversal have independent hard

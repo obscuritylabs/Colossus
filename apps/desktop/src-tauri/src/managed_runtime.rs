@@ -104,6 +104,7 @@ const TRUSTED_BUILTIN_TOOL_GRANT: &[&str] = &[
     "echo",
     "filesystem.list",
     "filesystem.read",
+    "image.view",
     "filesystem.replace",
     "filesystem.search",
     "filesystem.write",

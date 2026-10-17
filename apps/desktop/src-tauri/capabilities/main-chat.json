@@ -129,6 +129,7 @@
     "allow-create-run",
     "allow-choose-run-attachment",
     "allow-read-artifact-content",
+    "allow-read-image-artifact",
     "allow-get-run",
     "allow-list-runs",
     "allow-list-session-activity",

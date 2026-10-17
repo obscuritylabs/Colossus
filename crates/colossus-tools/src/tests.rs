@@ -1,4 +1,5 @@
 use super::*;
+
 use colossus_contracts::{
     MAX_MODEL_TOOL_CALL_ID_BYTES, ModelContent, ModelContentPart, ModelMessage, ModelMessageRole,
     ModelToolCall, ToolResult,
@@ -1447,4 +1448,80 @@ fn shell_catalog_tracks_workspace_limits_and_keeps_other_tools_unchanged() {
             assert_eq!(echo.input_schema, original.input_schema);
         }
     }
+}
+
+#[test]
+fn viewed_image_references_survive_observation_reduction_without_promoting_other_tools() {
+    use colossus_contracts::{
+        ImageViewOutput, ModelImageDetail, ModelImageReference, ModelMessageRole, ModelToolCall,
+    };
+    let image = ModelImageReference {
+        artifact_id: format!("artifact-{}", "a".repeat(64)),
+        file_name: "screen.png".into(),
+        media_type: "image/png".into(),
+        size_bytes: 100,
+        sha256: "b".repeat(64),
+        width_pixels: 10,
+        height_pixels: 10,
+        detail: ModelImageDetail::Auto,
+    };
+    let output = serde_json::to_string(&ImageViewOutput {
+        images: vec![image.clone()],
+    })
+    .unwrap();
+    let result = ToolResult {
+        call_id: "view-one".into(),
+        name: "image.view".into(),
+        output,
+        exit_code: 0,
+    };
+    let projected = tool_result_observation_messages(std::slice::from_ref(&result));
+    assert_eq!(
+        projected[0].content.images().collect::<Vec<_>>(),
+        vec![&image]
+    );
+    assert_eq!(projected[0].role, ModelMessageRole::Tool);
+    for rejected in [
+        ToolResult {
+            name: "mcp.call".into(),
+            ..result.clone()
+        },
+        ToolResult {
+            exit_code: 1,
+            ..result.clone()
+        },
+    ] {
+        assert_eq!(
+            tool_result_observation_messages(&[rejected])[0]
+                .content
+                .images()
+                .count(),
+            0
+        );
+    }
+    let mut messages = vec![ModelMessage {
+        agent_message_origin: None,
+        role: ModelMessageRole::Assistant,
+        content: String::new().into(),
+        tool_call_id: None,
+        tool_calls: vec![ModelToolCall {
+            call_id: result.call_id,
+            name: result.name,
+            arguments: json!({"paths": ["screen.png"]}),
+        }],
+    }];
+    let mut oversized = projected[0].clone();
+    if let colossus_contracts::ModelContent::Parts(parts) = &mut oversized.content {
+        parts[0] = colossus_contracts::ModelContentPart::Text {
+            text: "large released text".repeat(MAX_MODEL_TOOL_TURN_BYTES),
+        };
+    }
+    messages.push(oversized);
+    let reduced = project_model_tool_observations(&messages);
+    assert_eq!(
+        reduced[1].content.images().collect::<Vec<_>>(),
+        vec![&image]
+    );
+    assert!(serde_json::to_vec(&reduced[1]).unwrap().len() <= MAX_MODEL_TOOL_MESSAGE_BYTES);
+    assert_eq!(project_model_tool_observations(&reduced), reduced);
 }

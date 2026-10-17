@@ -130,19 +130,19 @@ fn response(content: Value) -> String {
     format!("data: {content}\n\ndata: [DONE]\n\n")
 }
 
-fn text_response(text: &str) -> String {
+pub(super) fn text_response(text: &str) -> String {
     response(json!({"id": "goal-fixture", "choices": [{"index": 0,
         "delta": {"content": text}, "finish_reason": "stop"}]}))
 }
 
-fn tool_response(name: &str, arguments: Value) -> String {
+pub(super) fn tool_response(name: &str, arguments: Value) -> String {
     response(json!({"id": "goal-fixture", "choices": [{"index": 0,
         "delta": {"tool_calls": [{"index": 0, "id": format!("call-{name}"),
             "type": "function", "function": {"name": name, "arguments": arguments.to_string()}}]},
         "finish_reason": "tool_calls"}]}))
 }
 
-async fn serve(listener: TcpListener, responses: Vec<String>) -> Vec<Value> {
+pub(super) async fn serve(listener: TcpListener, responses: Vec<String>) -> Vec<Value> {
     let mut requests = Vec::new();
     for response in responses {
         let (mut stream, _) = listener.accept().await.unwrap();

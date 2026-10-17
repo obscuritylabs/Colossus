@@ -12,6 +12,7 @@ import {
   IconHandGrab,
   IconPlayerPause,
   IconPlayerPlay,
+  IconPhoto,
   IconRefresh,
   IconRobot,
   IconSearch,
@@ -23,7 +24,17 @@ import {
   IconZoomOut,
   IconZoomScan,
 } from "@tabler/icons-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { viewedImages, type ImagePreviewLoader } from "../viewed-images";
+
 import type {
   KeyboardEvent,
   PointerEvent as ReactPointerEvent,
@@ -39,6 +50,11 @@ import type {
   SessionActivityStatus,
 } from "../types";
 
+const ViewedImageGallery = lazy(() =>
+  import("./ViewedImageActivity").then((module) => ({
+    default: module.ViewedImageGallery,
+  })),
+);
 const LIVE_INTERVAL_MS = 3_000;
 const SEARCH_DEBOUNCE_MS = 250;
 const PAGE_SIZE = 100;
@@ -50,6 +66,7 @@ const TIMELINE_PAN_STEP = 0.1;
 type ActivityInspectorTab = "summary" | "input" | "result" | "timing";
 
 interface SessionActivityViewProps {
+  onLoadViewedImage?: ImagePreviewLoader | undefined;
   sourceRunId: string;
   available: boolean;
   loadPage: (
@@ -271,6 +288,7 @@ function activityIcon(activity: SessionActivity) {
     return <IconRobot {...props} />;
   }
   if (activity.kind === "tool") {
+    if (activity.title === "image.view") return <IconPhoto {...props} />;
     return <IconTool {...props} />;
   }
   return <IconSettings {...props} />;
@@ -850,8 +868,27 @@ function ActivityTimeline({
   );
 }
 
-function ActivityInspector({ activity }: { activity: SessionActivity | null }) {
+function ActivityInspector({
+  activity,
+  onLoadViewedImage,
+}: {
+  activity: SessionActivity | null;
+  onLoadViewedImage?: ImagePreviewLoader | undefined;
+}) {
   const [tab, setTab] = useState<ActivityInspectorTab>("summary");
+  const images = useMemo(
+    () =>
+      activity?.kind === "tool"
+        ? viewedImages({
+            callId: activity.activityId,
+            toolName: activity.title,
+            state: activity.status === "completed" ? "completed" : "started",
+            summary: activity.summary,
+            preview: activity.result?.value ?? null,
+          })
+        : [],
+    [activity],
+  );
   useEffect(() => setTab("summary"), [activity?.activityId]);
   if (activity === null) {
     return (
@@ -873,7 +910,11 @@ function ActivityInspector({ activity }: { activity: SessionActivity | null }) {
           {activityIcon(activity)}
         </span>
         <div>
-          <strong>{activity.title}</strong>
+          <strong>
+            {images.length > 0
+              ? `Viewed ${images.length} ${images.length === 1 ? "image" : "images"}`
+              : activity.title}
+          </strong>
           <span>{activity.status?.replaceAll("_", " ") ?? activity.kind}</span>
         </div>
       </header>
@@ -989,7 +1030,13 @@ function ActivityInspector({ activity }: { activity: SessionActivity | null }) {
                 <IconCopy size={15} stroke={1.7} aria-hidden="true" />
               </button>
             </header>
-            <pre>{content.value}</pre>
+            {tab === "result" && images.length > 0 ? (
+              <Suspense fallback={<p>Loading images…</p>}>
+                <ViewedImageGallery images={images} load={onLoadViewedImage} />
+              </Suspense>
+            ) : (
+              <pre>{content.value}</pre>
+            )}
           </section>
         )}
       </div>
@@ -1001,6 +1048,7 @@ export function SessionActivityView({
   sourceRunId,
   available,
   loadPage,
+  onLoadViewedImage,
 }: SessionActivityViewProps) {
   const [activities, setActivities] = useState<SessionActivity[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1548,7 +1596,10 @@ export function SessionActivityView({
               </footer>
             )}
           </section>
-          <ActivityInspector activity={selected} />
+          <ActivityInspector
+            activity={selected}
+            onLoadViewedImage={onLoadViewedImage}
+          />
         </div>
       )}
     </section>
