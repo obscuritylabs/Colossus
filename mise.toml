@@ -1,17 +1,21 @@
-# Optional developer toolchain for Colossus.
-#
-# mise is opt-in: without it installed this file is inert and every documented
-# `cargo`, `npm`, and `./scripts/*` workflow keeps working unchanged. With it
-# installed, `mise install` provisions the tools listed below at existing pins.
-# Native libraries, Docker, SDK generators and fuzz nightly have separate owners;
-# see docs/develop/toolchain-inventory.md. CI and devcontainer provisioning still
-# use their existing declarations; this optional bootstrap has no backend lockfile.
+# Optional local provisioning and the PR workflow's authoritative tool inventory.
+# Plain Cargo/scripts remain supported. Rust stays in rust-toolchain.toml.
+# See docs/develop/toolchain-inventory.md for verification and platform scope.
 
 [settings]
+lockfile = true
+cargo.binstall = false
+lockfile_platforms = ["linux-x64", "macos-arm64", "windows-x64"]
 # Read the Rust channel from rust-toolchain.toml rather than duplicating it
 # here. mise drives rustup under the hood, so rustup stays authoritative for
 # toolchain selection, components, and the fuzz jobs' separate nightly.
 idiomatic_version_file_enable_tools = ["rust"]
+
+[tool_alias]
+node = "core:node"
+python = "core:python"
+go = "core:go"
+rust = "core:rust"
 
 [tools]
 # SDK generation (sdk/) and the Desktop renderer (apps/desktop/).
@@ -20,9 +24,18 @@ python = "3.10.18"
 go = "1.25.0"
 
 # `cargo xtask check workflows`
-actionlint = "1.7.12"
+"aqua:rhysd/actionlint" = "1.7.12"
 
-# `cargo xtask check dependencies`. Mirrors .devcontainer/Dockerfile, which
-# installs these with `cargo install --version <v> --locked`.
-"cargo:cargo-deny" = "0.20.2"
-"cargo:cargo-audit" = "0.22.2"
+# Prebuilt upstream archives: explicit aqua backends, locked URLs and SHA-256.
+"aqua:EmbarkStudios/cargo-deny" = "0.20.2"
+"aqua:rustsec/rustsec/cargo-audit" = { version = "{{ vars.cargo_audit }}", os = ["linux", "windows"] }
+# Upstream supplies no native ARM64 macOS audit archive. Preserve source builds.
+"cargo:cargo-audit" = { version = "{{ vars.cargo_audit }}", os = ["macos"], locked = true }
+
+# Consumers awaiting migration are checked against these declarations. These tools
+# are deliberately excluded from the default contributor/PR installation.
+[vars]
+cargo_audit = "0.22.2"
+fuzz_rust = "nightly-2026-07-10"
+cargo_fuzz = "0.13.2"
+release_npm = "11.5.1"
