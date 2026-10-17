@@ -1,0 +1,244 @@
+name: Anonymous whole-release OCI verification
+
+on:
+  push:
+    branches: [codex/anonymous-release-verification-0-11-8-preview-1]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: anonymous-release-oci-verification-v0.11.8-preview.1
+  cancel-in-progress: false
+
+jobs:
+  anonymous-release-artifact:
+    if: github.repository == 'obscuritylabs/Colossus' && github.event_name == 'push' && github.ref == 'refs/heads/codex/anonymous-release-verification-0-11-8-preview-1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Bind actual immutable publication and inventory before payload access
+        id: bindings
+        shell: bash
+        env:
+          OCI_BINDINGS: |
+            {
+              "review_status": "root-reviewed",
+              "tag": "v0.11.8-preview.1",
+              "source_commit": "883fc21ac43c33472df8d0b964e381206d310606",
+              "release_run_id": 39016689686,
+              "publication_run_id": 39025385214,
+              "publication_json_base64": "ewogICJ0YWciOiAidjAuMTEuOC1wcmV2aWV3LjEiLAogICJyZWZlcmVuY2UiOiAiZG9ja2VyLmlvL29ic2N1cml0eWxhYnMvY29sb3NzdXMtcmVsZWFzZTp2MC4xMS44LXByZXZpZXcuMSIsCiAgInBpbm5lZFJlZmVyZW5jZSI6ICJkb2NrZXIuaW8vb2JzY3VyaXR5bGFicy9jb2xvc3N1cy1yZWxlYXNlQHNoYTI1NjpkZWUzNTdlOWZhMDA0NzhiZTk5NDE0NWI3Mjk5YzVmMGE2NmI5MjkxMTU5MzY0YWVkYmUxMWQ1NWNkNTg5NWI3IiwKICAiZGlnZXN0IjogInNoYTI1NjpkZWUzNTdlOWZhMDA0NzhiZTk5NDE0NWI3Mjk5YzVmMGE2NmI5MjkxMTU5MzY0YWVkYmUxMWQ1NWNkNTg5NWI3IiwKICAiYXNzZXRzIjogMzgKfQo=",
+              "publication_sha256": "f771178f357e881fc91dd7bbb831433b1c77d36587de18a2bf44387659439f1f",
+              "inventory_json_base64": "ewogICJzY2hlbWFWZXJzaW9uIjogMSwKICAicmVwb3NpdG9yeSI6ICJvYnNjdXJpdHlsYWJzL0NvbG9zc3VzIiwKICAidGFnIjogInYwLjExLjgtcHJldmlldy4xIiwKICAic291cmNlQ29tbWl0IjogIjg4M2ZjMjFhYzQzYzMzNDcyZGY4ZDBiOTY0ZTM4MTIwNmQzMTA2MDYiLAogICJyZWxlYXNlSWQiOiA0MTU3MzI5ODMsCiAgInB1Ymxpc2hlZEF0IjogIjIwMjYtMTAtMTdUMTA6MzQ6MDFaIiwKICAicHJlcmVsZWFzZSI6IHRydWUsCiAgInJlbGVhc2VVcmwiOiAiaHR0cHM6Ly9naXRodWIuY29tL29ic2N1cml0eWxhYnMvQ29sb3NzdXMvcmVsZWFzZXMvdGFnL3YwLjExLjgtcHJldmlldy4xIiwKICAiYXNzZXRzIjogWwogICAgewogICAgICAibmFtZSI6ICJDb2xvc3N1cy1Db250cm9sLVBsYW5lLXYwLjExLjgtcHJldmlldy4xLWFhcmNoNjQtdW5rbm93bi1saW51eC1nbnUuZG9ja2VyLnRhci5neiIsCiAgICAgICJpZCI6IDY1MDE2NzgzMSwKICAgICAgInNpemUiOiAzOTU4Njg5MywKICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6ZTJlMzgyNzk4Zjg5YWMyMTYwM2VkMjQ1MmI0YTQ1ZDhjZjA0NmI4MzVmY2QxNTY5MGQxNjYyZGM3MTk0ZTY1ZiIKICAgIH0sCiAgICB7CiAgICAgICJuYW1lIjogIkNvbG9zc3VzLUNvbnRyb2wtUGxhbmUtdjAuMTEuOC1wcmV2aWV3LjEtYWFyY2g2NC11bmtub3duLWxpbnV4LWdudS5kb2NrZXIudGFyLmd6LnNoYTI1NiIsCiAgICAgICJpZCI6IDY1MDE2NzgzNywKICAgICAgInNpemUiOiAxNDcsCiAgICAgICJkaWdlc3QiOiAic2hhMjU2OmViOGY2NThiNzZhNzY1NWJjNzk3ZmEwODY0ZWYyZDIwMGQyN2NiM2E3OTAyYWU3MDJmZTc4YTg3OTFjMjE5NjYiCiAgICB9LAogICAgewogICAgICAibmFtZSI6ICJDb2xvc3N1cy1Db250cm9sLVBsYW5lLXYwLjExLjgtcHJldmlldy4xLWFhcmNoNjQtdW5rbm93bi1saW51eC1nbnUudGFyLmd6IiwKICAgICAgImlkIjogNjUwMTY3ODM5LAogICAgICAic2l6ZSI6IDYyNzExODUsCiAgICAgICJkaWdlc3QiOiAic2hhMjU2OjYwYzAwMGM5YmFhMzVhNjA5Njg5OWVlNzMxYzgxNTJhODIxYWIyZTJkMzQ3YzU2ZTc1YjA0ZThhZDZmODI4OTUiCiAgICB9LAogICAgewogICAgICAibmFtZSI6ICJDb2xvc3N1cy1Db250cm9sLVBsYW5lLXYwLjExLjgtcHJldmlldy4xLWFhcmNoNjQtdW5rbm93bi1saW51eC1nbnUudGFyLmd6LnNoYTI1NiIsCiAgICAgICJpZCI6IDY1MDE2NzgzNCwKICAgICAgInNpemUiOiAxNDAsCiAgICAgICJkaWdlc3QiOiAic2hhMjU2OmZkNzVkOWRmNzU1Y2QyMzQ1NGUzODBlYThkOGViY2NiOTQ0ZDFjNTk4NDlhNmU1OWIyNmZlODM2YTAzZjIyOTQiCiAgICB9LAogICAgewogICAgICAibmFtZSI6ICJDb2xvc3N1cy1Db250cm9sLVBsYW5lLXYwLjExLjgtcHJldmlldy4xLXg4Nl82NC11bmtub3duLWxpbnV4LWdudS5kb2NrZXIudGFyLmd6IiwKICAgICAgImlkIjogNjUwMTY3ODM1LAogICAgICAic2l6ZSI6IDQwMzI5NTUzLAogICAgICAiZGlnZXN0IjogInNoYTI1Njo1YzhjM2NmYWU2YTk0NTRlNTliNjQ0ZDQ4NThjMzE0MDkyZGI4OTBjNWVlZWRjMmUwYTdlNTZjYzM5MjI1OTFjIgogICAgfSwKICAgIHsKICAgICAgIm5hbWUiOiAiQ29sb3NzdXMtQ29udHJvbC1QbGFuZS12MC4xMS44LXByZXZpZXcuMS14ODZfNjQtdW5rbm93bi1saW51eC1nbnUuZG9ja2VyLnRhci5nei5zaGEyNTYiLAogICAgICAiaWQiOiA2NTAxNjc4NTAsCiAgICAgICJzaXplIjogMTQ2LAogICAgICAiZGlnZXN0IjogInNoYTI1NjpjOGU3MjRjMGZmNmQ4NzFjYjE2YmI0MWZjYzk3OWI3OTBiYTI3YjgwYjE1YmI1ZmExMDJmN2Q5ZTRkN2UxMGQ3IgogICAgfSwKICAgIHsKICAgICAgIm5hbWUiOiAiQ29sb3NzdXMtQ29udHJvbC1QbGFuZS12MC4xMS44LXByZXZpZXcuMS14ODZfNjQtdW5rbm93bi1saW51eC1nbnUudGFyLmd6IiwKICAgICAgImlkIjogNjUwMTY3ODcxLAogICAgICAic2l6ZSI6IDY2ODc4MjQsCiAgICAgICJkaWdlc3QiOiAic2hhMjU2OmUzMDgzNzkzNjI3N2EzZDFlYzZkYTVjMjEwODQ3NmRhZGJkYzA4MTU4MmIxZTIwNjQ5ZDBkNjhkYTUzMjI4NDgiCiAgICB9LAogICAgewogICAgICAibmFtZSI6ICJDb2xvc3N1cy1Db250cm9sLVBsYW5lLXYwLjExLjgtcHJldmlldy4xLXg4Nl82NC11bmtub3duLWxpbnV4LWdudS50YXIuZ3ouc2hhMjU2IiwKICAgICAgImlkIjogNjUwMTY3ODc2LAogICAgICAic2l6ZSI6IDEzOSwKICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6NWQ5MTRiNDVhYzM4MzI2ZjZmNDc0OTNlNTRjNzQ2MTMzMDNhYmE2NWU1ZGQ4NWI5MWJmYTAwNDZiOTE4ZDk1YSIKICAgIH0sCiAgICB7CiAgICAgICJuYW1lIjogIkNvbG9zc3VzLURlc2t0b3AtREVWRUxPUEVSLVBSRVZJRVctdjAuMTEuOC1wcmV2aWV3LjEtYWFyY2g2NC1hcHBsZS1kYXJ3aW4uemlwIiwKICAgICAgImlkIjogNjUwMTY3ODc4LAogICAgICAic2l6ZSI6IDEzNjM4MjEzMCwKICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6ODVkY2IxOTAzMThiZDA3NGFlMjFmOTdiNjU3MTkzYmY0MDYyZDk0ZmUxYzFhYjEwNTE2N2RmMTkwYTkwNGI5MiIKICAgIH0sCiAgICB7CiAgICAgICJuYW1lIjogIkNvbG9zc3VzLURlc2t0b3AtREVWRUxPUEVSLVBSRVZJRVctdjAuMTEuOC1wcmV2aWV3LjEtYWFyY2g2NC1hcHBsZS1kYXJ3aW4uemlwLnNoYTI1NiIsCiAgICAgICJpZCI6IDY1MDE2Nzg5MCwKICAgICAgInNpemUiOiAxNDQsCiAgICAgICJkaWdlc3QiOiAic2hhMjU2OmZlNTRlYWE0OGZkZTQ1YTU2OGY5MDNlYTg1YzMxNzg0MzlmMDE3MDkzYTU4ZjZiMjI3OWZjODY5NjI3YmQ1OTIiCiAgICB9LAogICAgewogICAgICAibmFtZSI6ICJDb2xvc3N1cy1EZXNrdG9wLURFVkVMT1BFUi1QUkVWSUVXLXYwLjExLjgtcHJldmlldy4xLXg4Nl82NC1wYy13aW5kb3dzLW1zdmMtc2V0dXAuZXhlIiwKICAgICAgImlkIjogNjUwMTY3ODk0LAogICAgICAic2l6ZSI6IDMzODE5MzA5NiwKICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6ZGMxNjMxNDg0MDYyOTdmYTA2NDNjZjlhM2U4MmRhNDY4MjE2MDYzZTZjMTMzYTllOWI4YmJiNWE3MTlkYTg5YSIKICAgIH0sCiAgICB7CiAgICAgICJuYW1lIjogIkNvbG9zc3VzLURlc2t0b3AtREVWRUxPUEVSLVBSRVZJRVctdjAuMTEuOC1wcmV2aWV3LjEteDg2XzY0LXBjLXdpbmRvd3MtbXN2Yy1zZXR1cC5leGUuc2hhMjU2IiwKICAgICAgImlkIjogNjUwMTY3OTAxLAogICAgICAic2l6ZSI6IDE1MywKICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6NTYzMWZjMWI1MzJhZThhOTdlZjc5OTRkNGY3ODlkMGU0YmNhMDk0M2UxNGEzMzg4NjZiOTc1ZGE1YzFkNjIxOCIKICAgIH0sCiAgICB7CiAgICAgICJuYW1lIjogIkNvbG9zc3VzLURlc2t0b3AtdjAuMTEuOC1wcmV2aWV3LjEtd2luZG93cy1idW5kbGUtbWFuaWZlc3QuanNvbiIsCiAgICAgICJpZCI6IDY1MDE2NzkxMywKICAgICAgInNpemUiOiA0NTcsCiAgICAgICJkaWdlc3QiOiAic2hhMjU2OjZmMjBkZDRmMjM1NzNjMzc1ZDkxODk5NzNiNGNkNDljMDcxN2E4NWQ4OGMzNmRlNjk1ZjU2ZmZiN2U3OTI1ZTciCiAgICB9LAogICAgewogICAgICAibmFtZSI6ICJDb2xvc3N1cy1EZXNrdG9wLXYwLjExLjgtcHJldmlldy4xLXdpbmRvd3MtcHJvdmVuYW5jZS5qc29uIiwKICAgICAgImlkIjogNjUwMTY3OTE1LAogICAgICAic2l6ZSI6IDY2NSwKICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6ZThjNzg1ZGM3NTI2ZTdkZTFhNDNmOTIxYWFiZGRlOWVhYTdlODg1ODYwNDNhZGQ4MWU5YzRlNmJjODI4MTM5ZCIKICAgIH0sCiAgICB7CiAgICAgICJuYW1lIjogIkNvbG9zc3VzLVZTQ29kZS12MC4xMS44LXByZXZpZXcuMS1kYXJ3aW4tYXJtNjQudnNpeCIsCiAgICAgICJpZCI6IDY1MDE2NzkyMiwKICAgICAgInNpemUiOiAyNzIyNDA2MywKICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6YjVmMjFlMTA1YzkwYWJhYWQ4NDEzZTQ5OTg3Mzk1ZDgwYmRlYTVkZTViN2E4YTk4M2E2MWQwMGI1NWY2NDdmMyIKICAgIH0sCiAgICB7CiAgICAgICJuYW1lIjogIkNvbG9zc3VzLVZTQ29kZS12MC4xMS44LXByZXZpZXcuMS1kYXJ3aW4tYXJtNjQudnNpeC5zaGEyNTYiLAogICAgICAiaWQiOiA2NTAxNjc5MzMsCiAgICAgICJzaXplIjogMTE4LAogICAgICAiZGlnZXN0IjogInNoYTI1NjpiMzE2MzZiYTlmODE0ODhhM2RmZGExZDNjOTg5YTE3ODA1ODJhNzIyMWRkNjM3ZTlkZmQ4NmUxNTk3ZGUzZjJjIgogICAgfSwKICAgIHsKICAgICAgIm5hbWUiOiAiQ29sb3NzdXMtVlNDb2RlLXYwLjExLjgtcHJldmlldy4xLWRhcndpbi14NjQudnNpeCIsCiAgICAgICJpZCI6IDY1MDE2Nzk0MiwKICAgICAgInNpemUiOiAyOTMyMjYwNSwKICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6MzA2YjczM2NlY2Y2ZDJhN2ZlNWNhNzc1YjExNGIxN2QxMDVmYjJhZTcxYjE2ODA3ZmQ0Zjg4ZjM3NDVhNWU0YSIKICAgIH0sCiAgICB7CiAgICAgICJuYW1lIjogIkNvbG9zc3VzLVZTQ29kZS12MC4xMS44LXByZXZpZXcuMS1kYXJ3aW4teDY0LnZzaXguc2hhMjU2IiwKICAgICAgImlkIjogNjUwMTY3OTUwLAogICAgICAic2l6ZSI6IDExNiwKICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6MDlkMjU2OGRlODMyNWRiZjFiOTRjNzBmOWExZWI0ZDY4NGRiYzIyZTBiZmE2M2FiOGE1YjgzZGE4MzhkYTM4NyIKICAgIH0sCiAgICB7CiAgICAgICJuYW1lIjogIkNvbG9zc3VzLVZTQ29kZS12MC4xMS44LXByZXZpZXcuMS1saW51eC1hcm02NC52c2l4IiwKICAgICAgImlkIjogNjUwMTY3OTYyLAogICAgICAic2l6ZSI6IDMwNTA5MzIxLAogICAgICAiZGlnZXN0IjogInNoYTI1NjpmY2ZhNjIwNWE1NDEwNzBlNGMyM2UwMDdlZWEzZDdhMjE5MTI1ZTkzNzY0NWZmYTE5MmYzMTc4NGVkNmQwOTQ1IgogICAgfSwKICAgIHsKICAgICAgIm5hbWUiOiAiQ29sb3NzdXMtVlNDb2RlLXYwLjExLjgtcHJldmlldy4xLWxpbnV4LWFybTY0LnZzaXguc2hhMjU2IiwKICAgICAgImlkIjogNjUwMTY3OTY4LAogICAgICAic2l6ZSI6IDExNywKICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6MjhmMmEwMzVjZWZmZGViOTA5MDc3YzdmNzQzYWEzMWY2YTcwYjg0MTQyYzZlNmM5MDMzNThjNGQ3YTY2MTQ4YiIKICAgIH0sCiAgICB7CiAgICAgICJuYW1lIjogIkNvbG9zc3VzLVZTQ29kZS12MC4xMS44LXByZXZpZXcuMS1saW51eC14NjQudnNpeCIsCiAgICAgICJpZCI6IDY1MDE2Nzk3NywKICAgICAgInNpemUiOiAzMjczMTk3MywKICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6YmQ1N2FhZjdiZWUyZDA4NDRmNWYyNzlhMTdkZGUyMDU1NWQzNWQ1NmVhODY1YTdmMTg2MTkwNmQ0ODliNmQzMiIKICAgIH0sCiAgICB7CiAgICAgICJuYW1lIjogIkNvbG9zc3VzLVZTQ29kZS12MC4xMS44LXByZXZpZXcuMS1saW51eC14NjQudnNpeC5zaGEyNTYiLAogICAgICAiaWQiOiA2NTAxNjc5NzgsCiAgICAgICJzaXplIjogMTE1LAogICAgICAiZGlnZXN0IjogInNoYTI1Njo0YmE5YjNjNmNlMjE2NTllMDM3ODlmMTkwYTFhMmU5Njk2YWQ4ZDExNDI5M2FkZTEwNTM5ZTlmZTBjMzNmZjkwIgogICAgfSwKICAgIHsKICAgICAgIm5hbWUiOiAiQ29sb3NzdXMtVlNDb2RlLXYwLjExLjgtcHJldmlldy4xLXdpbjMyLWFybTY0LnZzaXgiLAogICAgICAiaWQiOiA2NTAxNjc5OTksCiAgICAgICJzaXplIjogMjk1Njk0NDIsCiAgICAgICJkaWdlc3QiOiAic2hhMjU2OmJiM2UzNDQ3YTQyOTM5YjIzNTgzNTE4MGRkOGRkMmNkYjI5OGJjMzdkNGNhNDBkYzgxNmFmMWU1MmRkOGZkZmMiCiAgICB9LAogICAgewogICAgICAibmFtZSI6ICJDb2xvc3N1cy1WU0NvZGUtdjAuMTEuOC1wcmV2aWV3LjEtd2luMzItYXJtNjQudnNpeC5zaGEyNTYiLAogICAgICAiaWQiOiA2NTAxNjgwMDUsCiAgICAgICJzaXplIjogMTE3LAogICAgICAiZGlnZXN0IjogInNoYTI1Njo2ZmM5ZjFjNTBkMTQ5ZDQ5MzM3MjgyNjdjZTYzNjU1ZGM3ZjBmZmMyZTRhZTAwMzhhZjYwYmZmNjQ5ZjJkMmUxIgogICAgfSwKICAgIHsKICAgICAgIm5hbWUiOiAiQ29sb3NzdXMtVlNDb2RlLXYwLjExLjgtcHJldmlldy4xLXdpbjMyLXg2NC52c2l4IiwKICAgICAgImlkIjogNjUwMTY4MDE5LAogICAgICAic2l6ZSI6IDMxNDEyNjE2LAogICAgICAiZGlnZXN0IjogInNoYTI1Njo4NzI3YWExZWIzNmU4OTI2MWM1MjZkNmE4OWJiMzQwYjY3MzYxY2MzOGJkMTEwOTc2NWNhNzg0NGRlMDMyM2M3IgogICAgfSwKICAgIHsKICAgICAgIm5hbWUiOiAiQ29sb3NzdXMtVlNDb2RlLXYwLjExLjgtcHJldmlldy4xLXdpbjMyLXg2NC52c2l4LnNoYTI1NiIsCiAgICAgICJpZCI6IDY1MDE2ODAzMSwKICAgICAgInNpemUiOiAxMTUsCiAgICAgICJkaWdlc3QiOiAic2hhMjU2OjIwZDEwMDI1ZjJlMGJlZTg4ZDQ4YzFkY2ZkM2Q0MTJhYTE2YWE0ZTNhNzE3NjgxY2EwNTBiZjhkZjAwOGFjMDciCiAgICB9LAogICAgewogICAgICAibmFtZSI6ICJjb2xvc3N1cy0wLjExLjgtYWFyY2g2NC1hcHBsZS1kYXJ3aW4udGFyLmd6IiwKICAgICAgImlkIjogNjUwMTY4MDMzLAogICAgICAic2l6ZSI6IDMwODI4MDI4LAogICAgICAiZGlnZXN0IjogInNoYTI1NjoxM2VhOWIyNDVhMTVkYWM0NTgyZTczODA5YWEyNDE1ODE4OThhYjMxYzEzNjFmM2Q0MjZjYTJjZTA0NzRlMjdmIgogICAgfSwKICAgIHsKICAgICAgIm5hbWUiOiAiY29sb3NzdXMtMC4xMS44LWFhcmNoNjQtYXBwbGUtZGFyd2luLnRhci5nei5zaGEyNTYiLAogICAgICAiaWQiOiA2NTAxNjgwNjgsCiAgICAgICJzaXplIjogMTEwLAogICAgICAiZGlnZXN0IjogInNoYTI1NjphMDZjYmRmNmFlMmY1MDViYjM2N2ZiNWJlMzgzYmNmZjFiYTIwNGMzYWY5OTRlZWNhYmYzYzhlMTJlNTFjYTViIgogICAgfSwKICAgIHsKICAgICAgIm5hbWUiOiAiY29sb3NzdXMtMC4xMS44LWFhcmNoNjQtcGMtd2luZG93cy1tc3ZjLnppcCIsCiAgICAgICJpZCI6IDY1MDE2ODA4MywKICAgICAgInNpemUiOiAzNDI1ODQ0NCwKICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6MjgyYjJiMWU4YmNhNjNkMmMzZmU0MTFjZjRmMzk0YTcyMTUzZjgwMDhkYTdjNzNjZDllMWNkOTg5YzhjNmFlNiIKICAgIH0sCiAgICB7CiAgICAgICJuYW1lIjogImNvbG9zc3VzLTAuMTEuOC1hYXJjaDY0LXBjLXdpbmRvd3MtbXN2Yy56aXAuc2hhMjU2IiwKICAgICAgImlkIjogNjUwMTY4MDg4LAogICAgICAic2l6ZSI6IDExMSwKICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6YzkzZDA3ZjJmZjNjZTIwNmFkNjdkZWMxMmM4NjY1NjI1MjE1MzcxOWJlMWU1MGU5MTZiMTUzZDczMjI1ODNkZSIKICAgIH0sCiAgICB7CiAgICAgICJuYW1lIjogImNvbG9zc3VzLTAuMTEuOC1hYXJjaDY0LXVua25vd24tbGludXgtbXVzbC50YXIuZ3oiLAogICAgICAiaWQiOiA2NTAxNjgwOTMsCiAgICAgICJzaXplIjogMzMwMjI1MjksCiAgICAgICJkaWdlc3QiOiAic2hhMjU2OjY1ZGU2NzdkMWUwMWI1NzJlZDQ4YjkyZDQwYjVjMTNjZTFmYzljYjg2MWRlNTBkNTU2YWQxZmIzYTQ1ZGI1MDAiCiAgICB9LAogICAgewogICAgICAibmFtZSI6ICJjb2xvc3N1cy0wLjExLjgtYWFyY2g2NC11bmtub3duLWxpbnV4LW11c2wudGFyLmd6LnNoYTI1NiIsCiAgICAgICJpZCI6IDY1MDE2ODA5OSwKICAgICAgInNpemUiOiAxMTYsCiAgICAgICJkaWdlc3QiOiAic2hhMjU2Ojc4MWM2YzhkYWI2YzhhYzNlZmRjYTBhMTk1MzEyZGYyNjY5MGVkM2I1ZjczNGNhOTYzOGMzZWE1ZDFmZmYzYzUiCiAgICB9LAogICAgewogICAgICAibmFtZSI6ICJjb2xvc3N1cy0wLjExLjgteDg2XzY0LWFwcGxlLWRhcndpbi50YXIuZ3oiLAogICAgICAiaWQiOiA2NTAxNjgxMDQsCiAgICAgICJzaXplIjogMzMwNDM0MjMsCiAgICAgICJkaWdlc3QiOiAic2hhMjU2Ojk2MWU5ZTkwMTI4N2ExMjNkZWZjNmViZjZiY2VjNDQwYjU4NzA5ZjBkNmVlNjdlYzdjY2U4ZjllNDYyMzI4NzEiCiAgICB9LAogICAgewogICAgICAibmFtZSI6ICJjb2xvc3N1cy0wLjExLjgteDg2XzY0LWFwcGxlLWRhcndpbi50YXIuZ3ouc2hhMjU2IiwKICAgICAgImlkIjogNjUwMTY4MTEzLAogICAgICAic2l6ZSI6IDEwOSwKICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6ZjljNzk4ZTIzZWJhM2ZjZGY0ODcxMWJhNTgwZTZhMjdhODRmYjNjYWM2YWI2YTNmZTU0MDMzMzcxY2QxZWNiNiIKICAgIH0sCiAgICB7CiAgICAgICJuYW1lIjogImNvbG9zc3VzLTAuMTEuOC14ODZfNjQtcGMtd2luZG93cy1tc3ZjLnppcCIsCiAgICAgICJpZCI6IDY1MDE2ODEyMCwKICAgICAgInNpemUiOiAzNjUwNzg3MiwKICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6YTAxYjRlZDFiMmU0ZjIwNDQzNTEzYmIyMjVmNmIxNjgwZWY4NTdkNjYwMGZhMGQxNDUzMDczOGI4NzNkZjY0NyIKICAgIH0sCiAgICB7CiAgICAgICJuYW1lIjogImNvbG9zc3VzLTAuMTEuOC14ODZfNjQtcGMtd2luZG93cy1tc3ZjLnppcC5zaGEyNTYiLAogICAgICAiaWQiOiA2NTAxNjgxMjEsCiAgICAgICJzaXplIjogMTEwLAogICAgICAiZGlnZXN0IjogInNoYTI1Njo3OTA3YzQ2Mjg1NDVmNzllNjA4NDgzMGViNmQ2ODZiNjEyOTM0YmVhZTNkNDMyZTUwZDg5MjhkZmI5Y2M3NGJlIgogICAgfSwKICAgIHsKICAgICAgIm5hbWUiOiAiY29sb3NzdXMtMC4xMS44LXg4Nl82NC11bmtub3duLWxpbnV4LW11c2wudGFyLmd6IiwKICAgICAgImlkIjogNjUwMTY4MTM4LAogICAgICAic2l6ZSI6IDM2MDc3NjYzLAogICAgICAiZGlnZXN0IjogInNoYTI1Njo1ODMwMWY4M2JkZWFkMmRiODRjNjk0ZDNhNmRmYWRmNjZmY2Q4ODYxODFlYmU3NTI3MjMwNTA2MDEzNjU2Mjk2IgogICAgfSwKICAgIHsKICAgICAgIm5hbWUiOiAiY29sb3NzdXMtMC4xMS44LXg4Nl82NC11bmtub3duLWxpbnV4LW11c2wudGFyLmd6LnNoYTI1NiIsCiAgICAgICJpZCI6IDY1MDE2ODEzNywKICAgICAgInNpemUiOiAxMTUsCiAgICAgICJkaWdlc3QiOiAic2hhMjU2OmQ2NzNjYTRlMGRmYjJmNWY2YjU3NjRkNGMyOTc0NzU4YzFlNWE5ODI4ZjUyMGQ4OTUzYzYyNzRmNTdkNGMwNzIiCiAgICB9CiAgXQp9Cg==",
+              "inventory_sha256": "85ee6dbe729fce504af39d55007c4adb452df5fc9d8fee321de5482009823624",
+              "canonical_verifier_sha256": "f9e1b0e40965a11234946c2a91cbce68562001f652040bf2ad7e057f4158aad5"
+            }
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 - <<'PY'
+          import base64, hashlib, json, os, re
+          from pathlib import Path
+          b = json.loads(os.environ['OCI_BINDINGS'])
+          assert b['review_status'] == 'root-reviewed', 'PENDING actual publication, inventory and run bindings.'
+          assert b['tag'] == 'v0.11.8-preview.1' and re.fullmatch(r'[0-9a-f]{40}', b['source_commit'])
+          assert all(type(b[key]) is int and b[key] > 0 for key in ['release_run_id', 'publication_run_id'])
+          assert re.fullmatch(r'[0-9a-f]{64}', b['canonical_verifier_sha256'])
+          raw = {}
+          for role, limit in [('publication', 16384), ('inventory', 131072)]:
+              raw[role] = base64.b64decode(b[role + '_json_base64'], validate=True)
+              assert 0 < len(raw[role]) <= limit
+              assert hashlib.sha256(raw[role]).hexdigest() == b[role + '_sha256']
+          p, inventory = json.loads(raw['publication']), json.loads(raw['inventory'])
+          assert set(p) == {'tag', 'reference', 'pinnedReference', 'digest', 'assets'}
+          assert p['tag'] == inventory['tag'] == b['tag']
+          assert inventory['schemaVersion'] == 1 and inventory['repository'] == 'obscuritylabs/Colossus'
+          assert inventory['sourceCommit'] == b['source_commit'] and inventory['prerelease'] is True
+          assert type(inventory['releaseId']) is int and inventory['releaseId'] > 0
+          assert inventory['releaseUrl'] == 'https://github.com/obscuritylabs/Colossus/releases/tag/' + b['tag']
+          assert isinstance(inventory['publishedAt'], str) and inventory['publishedAt']
+          assert re.fullmatch(r'sha256:[0-9a-f]{64}', p['digest'])
+          repositories = ['ghcr.io/obscuritylabs/colossus-release', 'docker.io/obscuritylabs/colossus-release']
+          assert p['reference'] in [value + ':' + b['tag'] for value in repositories]
+          assert p['pinnedReference'] == p['reference'].rsplit(':', 1)[0] + '@' + p['digest']
+          assets = inventory['assets']
+          assert len(assets) == p['assets'] == 38
+          names, ids, total = set(), set(), 0
+          for asset in assets:
+              assert set(asset) == {'name', 'id', 'size', 'digest'}
+              name = asset['name']
+              assert re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+-]{0,199}', name) and '..' not in name
+              assert name.lower() not in names and type(asset['id']) is int and asset['id'] > 0 and asset['id'] not in ids
+              names.add(name.lower()); ids.add(asset['id'])
+              assert type(asset['size']) is int and 0 < asset['size'] <= 2**31
+              assert re.fullmatch(r'sha256:[0-9a-f]{64}', asset['digest'])
+              total += asset['size']
+          assert total <= 8 * 1024**3
+          evidence = Path(os.environ['RUNNER_TEMP']) / 'anonymous-release-oci-evidence'
+          evidence.mkdir(mode=0o700)
+          for role, data in raw.items():
+              with (evidence / (role + '.json')).open('xb') as output:
+                  output.write(data)
+          with (evidence / 'bindings.json').open('x') as output:
+              json.dump({key: value for key, value in b.items() if not key.endswith('_json_base64')}, output)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('source_commit=' + b['source_commit'] + '\n')
+          PY
+
+      - name: Check out the exact trusted verification source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.bindings.outputs.source_commit }}
+          persist-credentials: false
+
+      - name: Install the maintained Node version
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+
+      - name: Install the maintained checksum-verified ORAS
+        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
+        with:
+          url: https://github.com/oras-project/oras/releases/download/v1.3.4/oras_1.3.4_linux_amd64.tar.gz
+          checksum: f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454
+
+      - name: Pull the data artifact once anonymously and verify every original byte
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 - <<'PY'
+          import hashlib, json, os, shutil, signal, stat, subprocess, tempfile, time
+          from pathlib import Path
+          evidence = Path(os.environ['RUNNER_TEMP']) / 'anonymous-release-oci-evidence'
+          b = json.loads((evidence / 'bindings.json').read_text())
+          p = json.loads((evidence / 'publication.json').read_text())
+          inventory_path = evidence / 'inventory.json'
+          inventory = json.loads(inventory_path.read_text())
+          for role in ['publication', 'inventory']:
+              assert hashlib.sha256((evidence / (role + '.json')).read_bytes()).hexdigest() == b[role + '_sha256']
+          verifier = Path.cwd() / 'scripts/ci/release-oci.mjs'
+          assert verifier.is_file() and not verifier.is_symlink()
+          assert hashlib.sha256(verifier.read_bytes()).hexdigest() == b['canonical_verifier_sha256']
+          config = Path(tempfile.mkdtemp(prefix='colossus-anonymous-oras-', dir=os.environ['RUNNER_TEMP']))
+          auth = config / 'config.json'
+          with auth.open('x') as output:
+              output.write('{}\n')
+          os.chmod(auth, 0o600)
+          xdg = config / 'xdg'
+          xdg.mkdir(mode=0o700)
+          payload = evidence / 'payload'
+          payload.mkdir(mode=0o700)
+          oras, node = shutil.which('oras'), shutil.which('node')
+          assert oras and node
+          # No GitHub/registry token, Docker config, context, parent HOME or
+          # auth-helper environment reaches ORAS or the Node byte verifier.
+          environment = {'PATH': os.environ['PATH'], 'LANG': 'C.UTF-8',
+                         'HOME': str(config), 'XDG_CONFIG_HOME': str(xdg)}
+          started = time.monotonic()
+          lowest = shutil.disk_usage(evidence).free
+          outputs = []
+          log = evidence / 'commands.log'
+          log.touch(mode=0o600, exist_ok=False)
+          record = {'status': 'running', 'anonymous': True, 'tag': b['tag'], 'source_commit': b['source_commit'],
+                    'release_run_id': b['release_run_id'], 'publication_run_id': b['publication_run_id'],
+                    'publication_sha256': b['publication_sha256'], 'inventory_sha256': b['inventory_sha256'],
+                    'canonical_verifier_sha256': b['canonical_verifier_sha256'], 'pinned_reference': p['pinnedReference'],
+                    'assets': len(inventory['assets']), 'asset_bytes': sum(value['size'] for value in inventory['assets']),
+                    'payload_executed': False, 'registry_writes': False, 'pull_count': 0,
+                    'fresh_owned_home': True, 'fresh_empty_registry_config': True,
+                    'manifest_identity_boundary': 'ORAS digest-only resolution and pull; parsed manifest stdout is not independently hashed.'}
+
+          def save():
+              data = (json.dumps(record, indent=2) + '\n').encode()
+              assert len(data) <= 32768
+              (evidence / 'receipt.json').write_bytes(data)
+
+          def bounds():
+              global lowest
+              lowest = min(lowest, shutil.disk_usage(evidence).free)
+              assert lowest >= 10 * 1024**3 and time.monotonic() - started < 1200
+              assert log.stat().st_size + sum(path.stat().st_size for path in outputs) <= 8 * 1024**2
+              count, size = 0, 0
+              for root, directories, files in os.walk(payload, followlinks=False):
+                  for name in directories + files:
+                      entry = Path(root) / name
+                      facts = entry.lstat()
+                      assert not stat.S_ISLNK(facts.st_mode)
+                      if stat.S_ISREG(facts.st_mode):
+                          count += 1; size += facts.st_size
+                      else:
+                          assert stat.S_ISDIR(facts.st_mode)
+              assert count <= 64 and size <= 8 * 1024**3 + 131072
+
+          def command(executable, arguments, seconds=60, input_text=None):
+              bounds()
+              destination = evidence / ('command-' + str(len(outputs) + 1) + '.stdout')
+              outputs.append(destination)
+              process = None
+              with destination.open('xb') as stdout, log.open('ab') as stderr:
+                  try:
+                      process = subprocess.Popen([executable, *arguments], env=environment, stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL, stdout=stdout, stderr=stderr, start_new_session=True)
+                      if input_text is not None:
+                          process.stdin.write(input_text.encode()); process.stdin.close()
+                      deadline = min(started + 1200, time.monotonic() + seconds)
+                      while process.poll() is None:
+                          bounds()
+                          assert destination.stat().st_size <= 1024**2 and time.monotonic() < deadline
+                          time.sleep(0.5)
+                      assert process.returncode == 0, 'Anonymous verification command failed.'
+                  finally:
+                      if process is not None and process.poll() is None:
+                          os.killpg(process.pid, signal.SIGKILL); process.wait(timeout=10)
+              bounds()
+              assert destination.stat().st_size <= 1024**2
+              return destination.read_text()
+
+          try:
+              assert lowest >= 25 * 1024**3, 'At least25GiB free required before payload access.'
+              save()
+              assert command(oras, ['resolve', '--registry-config', str(auth), p['pinnedReference']]).strip() == p['digest']
+              # The maintained round-trip contract parses manifest stdout, without
+              # promising byte-preserving output. Do not hash reserialized JSON or
+              # claim an independent raw manifest digest; use ORAS digest-only access.
+              manifest = json.loads(command(oras, ['manifest', 'fetch', '--registry-config', str(auth), p['pinnedReference']]))
+              assert manifest['schemaVersion'] == 2 and manifest['artifactType'] == 'application/vnd.colossus.release.v1'
+              assert manifest['annotations']['org.opencontainers.image.revision'] == b['source_commit']
+              assert manifest['annotations']['org.opencontainers.image.version'] == b['tag']
+              expected = {'release-inventory.json': ('sha256:' + b['inventory_sha256'], inventory_path.stat().st_size)}
+              expected.update({'assets/' + value['name']: (value['digest'], value['size']) for value in inventory['assets']})
+              assert len(manifest['layers']) == len(expected)
+              seen = set()
+              for layer in manifest['layers']:
+                  title = layer['annotations']['org.opencontainers.image.title']
+                  assert title not in seen and title in expected
+                  seen.add(title)
+                  assert (layer['digest'], layer['size']) == expected[title]
+              record['pull_count'] = 1
+              command(oras, ['pull', '--registry-config', str(auth), '--output', str(payload), p['pinnedReference']], seconds=600)
+              # The module's main entry is guarded by its own argv URL check.
+              # Importing verifyPulled does not call prepare/publish or execute assets.
+              program = "import {readFile} from 'node:fs/promises'; import {pathToFileURL} from 'node:url'; const {verifyPulled}=await import(pathToFileURL(process.argv[4]).href); await verifyPulled(process.argv[2],JSON.parse(await readFile(process.argv[3],'utf8'))); console.log('CANONICAL_RELEASE_BYTES_VERIFIED');"
+              result = command(node, ['--input-type=module', '-', str(payload), str(inventory_path), str(verifier)], seconds=180, input_text=program)
+              assert result.strip() == 'CANONICAL_RELEASE_BYTES_VERIFIED'
+              assert hashlib.sha256(verifier.read_bytes()).hexdigest() == b['canonical_verifier_sha256']
+              assert json.loads(auth.read_text()) == {}
+              bounds()
+              record['status'] = 'passed'
+          except BaseException as error:
+              record['status'] = 'failed'
+              record['error'] = (type(error).__name__ + ': ' + str(error))[:2048]
+              raise
+          finally:
+              record.update(elapsed_seconds=round(time.monotonic() - started, 1), lowest_free_bytes=lowest)
+              save()
+              print(json.dumps(record, indent=2), flush=True)
+          PY
+
+      - name: Retain only the small sanitized verification receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: anonymous-release-oci-verification-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/anonymous-release-oci-evidence/receipt.json
+          if-no-files-found: warn
+          retention-days: 14

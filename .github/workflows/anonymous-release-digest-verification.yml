@@ -1,0 +1,204 @@
+name: Anonymous published release image verification
+
+on:
+  push:
+    branches: [codex/anonymous-release-verification-0-11-8-preview-1]
+
+permissions: {}
+
+concurrency:
+  group: anonymous-release-verification-v0.11.8-preview.1
+  cancel-in-progress: false
+
+jobs:
+  anonymous-digest-pulls:
+    if: github.repository == 'obscuritylabs/Colossus' && github.event_name == 'push' && github.ref == 'refs/heads/codex/anonymous-release-verification-0-11-8-preview-1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Verify published indexes and both native image configurations anonymously
+        id: verify
+        shell: bash
+        env:
+          PUBLICATION_BINDINGS: |
+            {
+              "review_status": "root-reviewed",
+              "source_commit": "883fc21ac43c33472df8d0b964e381206d310606",
+              "release_tag": "v0.11.8-preview.1",
+              "control_plane": {
+                "publication_json_base64": "ewogICJpbWFnZSI6ICJnaGNyLmlvL29ic2N1cml0eWxhYnMvY29sb3NzdXMtY29udHJvbC1wbGFuZTp2MC4xMS44LXByZXZpZXcuMSIsCiAgImRpZ2VzdCI6ICJzaGEyNTY6ZDMxNWYxZTIwZDA1N2ZiMTBhMjU3OWEzYjZlNTc1ZWE5ZjFhMmNiMjZlMjhkMTlkNTY0ZjI4NGY3MzEwODQ5ZSIsCiAgInNvdXJjZV9jb21taXQiOiAiODgzZmMyMWFjNDNjMzM0NzJkZjhkMGI5NjRlMzgxMjA2ZDMxMDYwNiIsCiAgInBsYXRmb3JtcyI6IFsKICAgIHsKICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6ODAyMDg4NGYyZDRhYmU4ZTc3NjhkNjI0YTNkYjgzODlhNzczY2IwMzhhNjZlMjQ3MzJmZDM0ZjhmMjE5NTc3OCIsCiAgICAgICJwbGF0Zm9ybSI6IHsKICAgICAgICAiYXJjaGl0ZWN0dXJlIjogImFtZDY0IiwKICAgICAgICAib3MiOiAibGludXgiCiAgICAgIH0KICAgIH0sCiAgICB7CiAgICAgICJkaWdlc3QiOiAic2hhMjU2OjY4NjIzMTYxMzVlNTIwMTQyM2M0NDI2MDdhMjdiNjNjNDI4MzE1MmE5NTZkMzAwZGIzNjZjOTIxMDY1YjQ0MWUiLAogICAgICAicGxhdGZvcm0iOiB7CiAgICAgICAgImFyY2hpdGVjdHVyZSI6ICJhcm02NCIsCiAgICAgICAgIm9zIjogImxpbnV4IgogICAgICB9CiAgICB9CiAgXQp9Cg==",
+                "publication_sha256": "4dafd667be1078c1175ee4f006ef3099787d5e66bf8cffd26f444073541e7f66",
+                "index_digest": "sha256:d315f1e20d057fb10a2579a3b6e575ea9f1a2cb26e28d19d564f284f7310849e",
+                "platform_digests": {
+                  "amd64": "sha256:8020884f2d4abe8e7768d624a3db8389a773cb038a66e24732fd34f8f2195778",
+                  "arm64": "sha256:6862316135e5201423c442607a27b63c4283152a956d300db366c921065b441e"
+                }
+              },
+              "documentation": {
+                "publication_json_base64": "ewogICJpbWFnZSI6ICJnaGNyLmlvL29ic2N1cml0eWxhYnMvY29sb3NzdXMtZG9jdW1lbnRhdGlvbjp2MC4xMS44LXByZXZpZXcuMSIsCiAgImRpZ2VzdCI6ICJzaGEyNTY6MDdlMWNjMWUxOWVmMDhiZjE1N2M4MzQ4YWFjYmZkNTkyYTZiYjcyYjRjZmQ2MzllN2QyN2ZhYzcxZjEyNjgwMSIsCiAgInNvdXJjZV9jb21taXQiOiAiODgzZmMyMWFjNDNjMzM0NzJkZjhkMGI5NjRlMzgxMjA2ZDMxMDYwNiIsCiAgInB1Ymxpc2hlcl9jb21taXQiOiAiODgzZmMyMWFjNDNjMzM0NzJkZjhkMGI5NjRlMzgxMjA2ZDMxMDYwNiIsCiAgInJlbGVhc2VfaWQiOiA0MTU3MzI5ODMsCiAgImNhbmRpZGF0ZV9idWlsZCI6IHsKICAgICJydW5faWQiOiAzOTAxNjY4OTY5MiwKICAgICJ3b3JrZmxvdyI6ICJkb2N1bWVudGF0aW9uLWNhbmRpZGF0ZS55bWwiLAogICAgImV2ZW50IjogInB1c2giLAogICAgInRhZyI6ICJ2MC4xMS44LXByZXZpZXcuMSIsCiAgICAic291cmNlX2NvbW1pdCI6ICI4ODNmYzIxYWM0M2MzMzQ3MmRmOGQwYjk2NGUzODEyMDZkMzEwNjA2IgogIH0sCiAgInBsYXRmb3JtcyI6IFsKICAgIHsKICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6ZTljZWY2MTk1MWRiNzUzYjBhY2MwYzY5NThjYzhiZjBlOGI5YTNmMzgzZWYxZDMxNjAzMzk0OTg3YWViMWMxOSIsCiAgICAgICJwbGF0Zm9ybSI6IHsKICAgICAgICAiYXJjaGl0ZWN0dXJlIjogImFtZDY0IiwKICAgICAgICAib3MiOiAibGludXgiCiAgICAgIH0KICAgIH0sCiAgICB7CiAgICAgICJkaWdlc3QiOiAic2hhMjU2OjhkMTFlZDg1Yzk1NzU0Yzg4MjFjODQ5Y2UzYjMwM2NiYmIxZDEyN2YzYzJhNDdkOGNjYTY5YWIwMDhjMGY2ODAiLAogICAgICAicGxhdGZvcm0iOiB7CiAgICAgICAgImFyY2hpdGVjdHVyZSI6ICJhcm02NCIsCiAgICAgICAgIm9zIjogImxpbnV4IgogICAgICB9CiAgICB9CiAgXQp9Cg==",
+                "publication_sha256": "98ed69fc4d71ce6ee7dc95527c05bce2adae53439b8d051f3288f13fa4b02a5f",
+                "index_digest": "sha256:07e1cc1e19ef08bf157c8348aacbfd592a6bb72b4cfd639e7d27fac71f126801",
+                "platform_digests": {
+                  "amd64": "sha256:e9cef61951db753b0acc0c6958cc8bf0e8b9a3f383ef1d31603394987aeb1c19",
+                  "arm64": "sha256:8d11ed85c95754c8821c849ce3b303cbbb1d127f3c2a47d8cca69ab008c0f680"
+                }
+              }
+            }
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 - <<'PY'
+          import base64, hashlib, json, os, re, shutil, signal, subprocess, tempfile, time
+          from pathlib import Path
+
+          bindings = json.loads(os.environ['PUBLICATION_BINDINGS'])
+          assert bindings['review_status'] == 'root-reviewed', 'PENDING actual publication receipts and exact bindings.'
+          source, tag = bindings['source_commit'], bindings['release_tag']
+          assert re.fullmatch(r'[0-9a-f]{40}', source)
+          assert tag == 'v0.11.8-preview.1'
+          digest_pattern = r'sha256:[0-9a-f]{64}'
+          repositories = {
+              'control_plane': 'ghcr.io/obscuritylabs/colossus-control-plane',
+              'documentation': 'ghcr.io/obscuritylabs/colossus-documentation',
+          }
+          publications = {}
+          for role, repository in repositories.items():
+              item = bindings[role]
+              raw = base64.b64decode(item['publication_json_base64'], validate=True)
+              assert 0 < len(raw) <= 32768
+              assert hashlib.sha256(raw).hexdigest() == item['publication_sha256']
+              publication = json.loads(raw)
+              assert publication['image'] == repository + ':' + tag
+              assert publication['source_commit'] == source
+              assert re.fullmatch(digest_pattern, item['index_digest'])
+              assert publication['digest'] == item['index_digest']
+              assert set(item['platform_digests']) == {'amd64', 'arm64'}
+              assert all(re.fullmatch(digest_pattern, value) for value in item['platform_digests'].values())
+              assert len(set(item['platform_digests'].values())) == 2
+              descriptors = publication['platforms']
+              assert len(descriptors) == 2
+              actual = {}
+              for descriptor in descriptors:
+                  platform = descriptor['platform']
+                  assert platform['os'] == 'linux' and platform['architecture'] in {'amd64', 'arm64'}
+                  assert platform['architecture'] not in actual
+                  actual[platform['architecture']] = descriptor['digest']
+              assert actual == item['platform_digests']
+              publications[role] = item
+
+          # All literal bindings pass before allocating evidence or contacting Docker.
+          runner = Path(os.environ['RUNNER_TEMP'])
+          evidence = runner / 'anonymous-release-evidence'
+          evidence.mkdir(mode=0o700)
+          config = Path(tempfile.mkdtemp(prefix='colossus-anonymous-docker-', dir=runner))
+          os.chmod(config, 0o700)
+          descriptor = os.open(config / 'config.json', os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+          with os.fdopen(descriptor, 'w') as output:
+              output.write('{}\n')
+          docker = shutil.which('docker')
+          assert docker and Path('/var/run/docker.sock').is_socket(), 'Existing native Docker is required; never start a daemon.'
+          # No token, auth-config, credential-helper, context or builder environment is inherited.
+          environment = {'PATH': os.environ['PATH'], 'LANG': 'C.UTF-8', 'DOCKER_CONFIG': str(config), 'DOCKER_HOST': 'unix:///var/run/docker.sock'}
+          record = {'status': 'running', 'source_commit': source, 'release_tag': tag, 'anonymous': True,
+                    'fresh_empty_docker_config': True, 'images_executed': False, 'registry_writes': False,
+                    'publication_sha256': {role: item['publication_sha256'] for role, item in publications.items()},
+                    'indexes': [], 'platforms': [], 'command_count': 0}
+          started = time.monotonic()
+          lowest = shutil.disk_usage('/var/lib/docker').free
+          log = evidence / 'commands.log'
+          log.touch(mode=0o600, exist_ok=False)
+          outputs = []
+
+          def save():
+              data = (json.dumps(record, indent=2) + '\n').encode()
+              assert len(data) <= 32768
+              (evidence / 'receipt.json').write_bytes(data)
+
+          def bounds():
+              global lowest
+              lowest = min(lowest, shutil.disk_usage('/var/lib/docker').free)
+              assert lowest >= 10 * 1024**3, 'Docker filesystem below10GiB floor.'
+              assert time.monotonic() - started < 900, 'Verification exceeds15min bound.'
+              assert log.stat().st_size + sum(path.stat().st_size for path in outputs) <= 8 * 1024**2, 'Combined CLI output exceeds8MiB.'
+
+          def command(*arguments):
+              bounds()
+              record['command_count'] += 1
+              destination = evidence / ('command-' + str(record['command_count']) + '.stdout')
+              outputs.append(destination)
+              process = None
+              with destination.open('xb') as stdout, log.open('ab') as stderr:
+                  stderr.write(('docker ' + ' '.join(arguments) + '\n').encode())
+                  stderr.flush()
+                  try:
+                      process = subprocess.Popen([docker, *arguments], env=environment, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL, start_new_session=True)
+                      deadline = min(started + 900, time.monotonic() + 180)
+                      while process.poll() is None:
+                          bounds()
+                          assert time.monotonic() < deadline, 'Docker CLI exceeds3min bound.'
+                          assert destination.stat().st_size <= 1024**2, 'Single CLI output exceeds1MiB.'
+                          time.sleep(0.5)
+                      assert process.returncode == 0, 'Anonymous Docker operation failed.'
+                  finally:
+                      if process is not None and process.poll() is None:
+                          os.killpg(process.pid, signal.SIGKILL)
+                          process.wait(timeout=10)
+              bounds()
+              assert destination.stat().st_size <= 1024**2
+              return destination.read_text()
+
+          try:
+              assert lowest >= 15 * 1024**3, 'At least15GiB free required before registry access.'
+              save()
+              command('version', '--format', '{{json .Server}}')
+              cumulative_size = 0
+              for role, repository in repositories.items():
+                  item = publications[role]
+                  index_ref = repository + '@' + item['index_digest']
+                  index = json.loads(command('buildx', 'imagetools', 'inspect', index_ref, '--format', '{{json .Manifest}}'))
+                  assert index['digest'] == item['index_digest'] and len(index['manifests']) == 2
+                  descriptors = {value['platform']['architecture']: value for value in index['manifests']}
+                  assert set(descriptors) == {'amd64', 'arm64'}
+                  for arch, descriptor in descriptors.items():
+                      assert descriptor['platform']['os'] == 'linux' and descriptor['digest'] == item['platform_digests'][arch]
+                  record['indexes'].append({'role': role, 'repository': repository, 'digest': item['index_digest'], 'platform_digests': item['platform_digests']})
+                  for arch in ['amd64', 'arm64']:
+                      # Pull the published index itself. The second digest alias reuses
+                      # its layers and makes inspect unambiguous on older Docker APIs.
+                      command('pull', '--quiet', '--platform', 'linux/' + arch, index_ref)
+                      manifest_ref = repository + '@' + item['platform_digests'][arch]
+                      command('pull', '--quiet', '--platform', 'linux/' + arch, manifest_ref)
+                      images = json.loads(command('image', 'inspect', manifest_ref))
+                      assert len(images) == 1
+                      image = images[0]
+                      assert image['Os'] == 'linux' and image['Architecture'] == arch
+                      assert image['Config']['User'] == '10001:10001'
+                      assert image['Config']['Labels']['org.opencontainers.image.revision'] == source
+                      assert image['Config']['Labels']['org.opencontainers.image.version'] == tag
+                      assert re.fullmatch(digest_pattern, image['Id'])
+                      size = image['Size']
+                      assert isinstance(size, int) and 0 < size <= 2 * 1024**3
+                      cumulative_size += size
+                      assert cumulative_size <= 8 * 1024**3
+                      record['platforms'].append({'role': role, 'architecture': arch, 'manifest_digest': item['platform_digests'][arch], 'config_digest': image['Id'], 'user': image['Config']['User'], 'image_size': size})
+                      save()
+              bounds()
+              assert json.loads((config / 'config.json').read_text()) == {}
+              record['status'] = 'passed'
+          except BaseException as error:
+              record['status'] = 'failed'
+              record['error'] = (type(error).__name__ + ': ' + str(error))[:2048]
+              raise
+          finally:
+              record.update(elapsed_seconds=round(time.monotonic() - started, 1), lowest_docker_free_bytes=lowest)
+              save()
+              print(json.dumps(record, indent=2), flush=True)
+          PY
+
+      - name: Retain small anonymous verification receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: anonymous-release-image-verification-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/anonymous-release-evidence/receipt.json
+          if-no-files-found: warn
+          retention-days: 14
