@@ -70,6 +70,7 @@ pub use package::{ExclusiveAppContainerProfile, system_windows_directory};
 mod directory_creation;
 pub use directory_creation::PrivateDirectoryCreation;
 pub(super) mod enrolled;
+mod file_retirement;
 mod mandatory;
 mod window_station;
 pub use window_station::OwnedAppContainerWindowStation;
@@ -740,7 +741,7 @@ pub(super) fn remove_bound_appcontainer_file(
     }
     // A previously acknowledged POSIX unlink remains repeatable while the exact
     // file handle is retained. Zero links is kernel evidence, not path absence.
-    if file_link_count(&bound.file)? == 0 {
+    if file_information(&bound.file)?.nNumberOfLinks == 0 {
         return Ok(());
     }
     bound.revalidate()?;
@@ -750,36 +751,7 @@ pub(super) fn remove_bound_appcontainer_file(
         BoundKind::File,
         GENERIC_READ | DELETE,
     )?;
-    if deletion.identity != bound.identity || file_link_count(&deletion.file)? != 1 {
-        return Err(WindowsNativeError::IdentityChanged);
-    }
-    deletion.revalidate()?;
-    let disposition = FILE_DISPOSITION_INFORMATION_EX { Flags: 0x1 | 0x2 };
-    let mut status = IO_STATUS_BLOCK::default();
-    // SAFETY: the positively compared exact file handle includes DELETE. POSIX
-    // disposition unlinks this object only; it cannot recursively erase children
-    // or follow a changed pathname to a replacement.
-    let result = unsafe {
-        NtSetInformationFile(
-            deletion.file.as_raw_handle().cast(),
-            &mut status,
-            (&disposition as *const FILE_DISPOSITION_INFORMATION_EX).cast(),
-            size_of::<FILE_DISPOSITION_INFORMATION_EX>() as u32,
-            FileDispositionInformationEx,
-        )
-    };
-    if result < 0 {
-        // SAFETY: NTSTATUS translation borrows no memory.
-        let error = unsafe { RtlNtStatusToDosError(result) };
-        return Err(WindowsNativeError::Io {
-            operation: "retire exact AppContainer file",
-            source: std::io::Error::from_raw_os_error(error as i32),
-        });
-    }
-    if file_identity(&bound.file)? != bound.identity || file_link_count(&bound.file)? != 0 {
-        return Err(WindowsNativeError::IdentityChanged);
-    }
-    Ok(())
+    file_retirement::unlink(bound, deletion)
 }
 
 fn open_bound_with_mode(
