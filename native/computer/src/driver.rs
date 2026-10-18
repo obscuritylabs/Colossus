@@ -314,7 +314,16 @@ impl Child {
             // SAFETY: only our retained, image-verified, job-bound helper PID.
             // This forwards existing Windows foreground eligibility; refusal
             // remains a normal, transparent result of the native Focus action.
-            unsafe { windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(pid) };
+            let granted = unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(pid)
+            };
+            #[cfg(feature = "native-test-driver")]
+            eprintln!(
+                "COMPUTER_NATIVE_FOCUS phase=host_grant granted={}",
+                granted != 0
+            );
+            #[cfg(not(feature = "native-test-driver"))]
+            let _ = granted;
         }
         self.sequence = self.sequence.checked_add(1).ok_or(Error::Failed)?;
         let frame = wire::encode(

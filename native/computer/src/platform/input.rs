@@ -213,12 +213,26 @@ pub(crate) fn apply(
         return Err(Error::Busy);
     }
     if matches!(input, ComputerInput::Focus { .. }) {
-        identity::revalidate_admission(root, window, context)?;
+        #[cfg(feature = "native-test-driver")]
+        eprintln!("COMPUTER_NATIVE_FOCUS phase=admission");
+        identity::revalidate_admission(root, window, context).inspect_err(|_| {
+            #[cfg(feature = "native-test-driver")]
+            eprintln!("COMPUTER_NATIVE_FOCUS phase=admission_denied");
+        })?;
         if cancel.load(Ordering::Acquire) || signals.action.load(Ordering::Acquire) != 0 {
+            #[cfg(feature = "native-test-driver")]
+            eprintln!(
+                "COMPUTER_NATIVE_FOCUS phase=control_denied cancelled={} control_action={}",
+                cancel.load(Ordering::Acquire),
+                signals.action.load(Ordering::Acquire) != 0
+            );
             return Err(Error::Denied);
         }
         // SAFETY: explicit fresh-observation focus of the selected admitted window only.
-        if unsafe { SetForegroundWindow(window.hwnd()) } == 0 {
+        let accepted = unsafe { SetForegroundWindow(window.hwnd()) } != 0;
+        #[cfg(feature = "native-test-driver")]
+        eprintln!("COMPUTER_NATIVE_FOCUS phase=activate accepted={accepted}");
+        if !accepted {
             return Err(Error::Denied);
         }
         indicator::pump();
@@ -230,8 +244,12 @@ pub(crate) fn apply(
             || identity::revalidate_admission(root, window, context).is_err()
             || !lifetime.valid()
         {
+            #[cfg(feature = "native-test-driver")]
+            eprintln!("COMPUTER_NATIVE_FOCUS phase=postcondition_failed");
             return Err(Error::OutcomeUnknown);
         }
+        #[cfg(feature = "native-test-driver")]
+        eprintln!("COMPUTER_NATIVE_FOCUS phase=complete");
         return Ok(());
     }
     let mut gate = Gate {

@@ -172,17 +172,27 @@ mod windows {
         // child IDs are fixed and every mutation stays inside these owned windows.
         unsafe {
             if matches!(message, WM_ACTIVATE | WM_LBUTTONUP | WM_NCLBUTTONUP)
-                && GetForegroundWindow() == hwnd
                 && let Some(process) = FOREGROUND_RECIPIENT.get()
             {
+                let foreground = GetForegroundWindow() == hwnd;
                 let mut exit = 0;
-                if GetExitCodeProcess(process.as_raw_handle().cast(), &mut exit) != 0
-                    && exit == STILL_ACTIVE as u32
-                {
+                let alive = GetExitCodeProcess(process.as_raw_handle().cast(), &mut exit) != 0
+                    && exit == STILL_ACTIVE as u32;
+                let granted = if foreground && alive {
                     // Only the explicit sibling acceptance process is eligible;
                     // normal Windows restrictions still apply to this grant.
-                    AllowSetForegroundWindow(GetProcessId(process.as_raw_handle().cast()));
-                }
+                    AllowSetForegroundWindow(GetProcessId(process.as_raw_handle().cast())) != 0
+                } else {
+                    false
+                };
+                let phase = if message == WM_ACTIVATE {
+                    "activate"
+                } else {
+                    "click_release"
+                };
+                eprintln!(
+                    "COMPUTER_FIXTURE_FOREGROUND phase={phase} foreground={foreground} recipient_alive={alive} granted={granted}"
+                );
             }
             match message {
                 value if value == WM_APP + 71 => {
