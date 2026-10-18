@@ -47,6 +47,8 @@ impl Lease {
 /// Categorical errors; no page data or native key appears in diagnostics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum PresentationError {
+    /// The original supervised network/session authority reached its fixed deadline.
+    Expired,
     /// Malformed dimensions, bytes or input.
     Invalid,
     /// Ownership or sequence does not match the active lease.

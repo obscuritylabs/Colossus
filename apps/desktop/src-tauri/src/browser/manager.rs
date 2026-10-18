@@ -172,10 +172,8 @@ impl BrowserManager {
             .iter()
             .find(|tab| tab.dto.id == id && tab.scope == scope)
             .ok_or_else(|| error("This tab is no longer available in the selected workspace."))?;
-        if tab.dto.control == "completed" {
-            return Err(error(
-                "This is the agent's last view. Continue browsing in a fresh tab.",
-            ));
+        if matches!(tab.dto.control, "completed" | "expired") {
+            return Err(error("Continue browsing in a fresh browser session."));
         }
         Ok((tab.view.clone(), tab.policy.clone()))
     }
@@ -307,7 +305,10 @@ impl BrowserManager {
             state
                 .tabs
                 .iter()
-                .filter(|t| Some(&t.scope) == state.scope.as_ref() && t.dto.control != "completed")
+                .filter(|t| {
+                    Some(&t.scope) == state.scope.as_ref()
+                        && !matches!(t.dto.control, "completed" | "expired")
+                })
                 .map(|t| (t.dto.id.clone(), t.view.clone()))
                 .collect()
         };
@@ -318,6 +319,10 @@ impl BrowserManager {
             let mut state = self.lock()?;
             let mut page = match page {
                 Ok(page) => page,
+                Err(engine::BrowserError::Expired) => {
+                    state.event(&id, BrowserEvent::Expired);
+                    continue;
+                }
                 Err(engine::BrowserError::Closed) => {
                     state.event(&id, BrowserEvent::Crashed);
                     continue;
@@ -328,7 +333,7 @@ impl BrowserManager {
             if let Some(tab) = state.tabs.iter_mut().find(|t| t.dto.id == id) {
                 // A completed view may have replaced the remote while its last
                 // inspection was in flight. Never overwrite retained metadata.
-                if tab.dto.control == "completed" {
+                if matches!(tab.dto.control, "completed" | "expired") {
                     continue;
                 }
                 #[cfg(windows)]
@@ -580,7 +585,7 @@ impl BrowserManager {
         let weak = Arc::downgrade(&self.data);
         let event_id = id.to_owned();
         Arc::new(move |event| {
-            let crashed = matches!(event, BrowserEvent::Crashed);
+            let crashed = matches!(event, BrowserEvent::Crashed | BrowserEvent::Expired);
             let view = weak.upgrade().and_then(|data| {
                 let mut state = data.lock().ok()?;
                 state.event(&event_id, event);
@@ -855,6 +860,64 @@ impl BrowserManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn expired_view_preserves_address_and_cannot_be_revived_by_late_events() {
+        let manager = BrowserManager::default();
+        {
+            let mut state = manager.lock().unwrap();
+            state.scope = Some("workspace".into());
+            state.tabs.push(Tab {
+                scope: "workspace".into(),
+                view: BrowserView::Empty,
+                #[cfg(feature = "windows-browser-development")]
+                pending_completed_view: None,
+                #[cfg(feature = "windows-browser-development")]
+                close_requested: false,
+                agent_run_id: None,
+                policy: NavigationPolicy::default(),
+                heartbeat: Some(Instant::now()),
+                presentation_epoch: Arc::new(AtomicU64::new(1)),
+                dto: BrowserTabDto {
+                    id: "expired-view".into(),
+                    session_id: "expired-session".into(),
+                    conversation_id: Some("conversation".into()),
+                    control: "human",
+                    completed_snapshot: false,
+                    page: PageState {
+                        url: "https://github.com/".into(),
+                        title: "GitHub".into(),
+                        loading: true,
+                        ..PageState::default()
+                    },
+                    error: None,
+                    notice: None,
+                    popup_url: None,
+                },
+            });
+            state.event("expired-view", BrowserEvent::Expired);
+            for event in [
+                BrowserEvent::Loading(true),
+                BrowserEvent::Crashed,
+                BrowserEvent::Failed,
+            ] {
+                state.event("expired-view", event);
+            }
+            let tab = &state.tabs[0];
+            assert!(tab.heartbeat.is_none());
+            assert_eq!(tab.presentation_epoch.load(Ordering::Acquire), 2);
+        }
+        let snapshot = manager.snapshot().await.unwrap();
+        let tab = &snapshot.tabs[0];
+        assert_eq!(tab.control, "expired");
+        assert_eq!(tab.page.url, "https://github.com/");
+        assert_eq!(tab.page.title, "GitHub");
+        assert!(!tab.page.loading);
+        assert!(tab.error.as_deref().unwrap().contains("session expired"));
+        assert!(manager.mutable_tab("expired-view", "workspace").is_err());
+        manager.close("workspace", "expired-view").await.unwrap();
+        assert!(manager.lock().unwrap().tabs.is_empty());
+    }
 
     #[tokio::test]
     async fn completed_view_preserves_page_metadata_and_rejects_live_actions() {

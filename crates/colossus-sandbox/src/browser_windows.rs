@@ -69,6 +69,32 @@ pub struct WindowsBrowserSupervisor {
     stopped: Arc<AtomicBool>,
 }
 impl WindowsBrowserSupervisor {
+    /// Original egress deadline for this exact trusted native allocation.
+    /// Reattaching or changing the viewport cannot renew network authority.
+    pub async fn presentation_expires_at(
+        &self,
+        request: &BrowserDriverOpenRequest,
+    ) -> Result<std::time::Instant, BrowserDriverError> {
+        let resource = self
+            .sessions
+            .lock()
+            .await
+            .get(&request.session_id)
+            .cloned()
+            .ok_or(BrowserDriverError::Stale)?;
+        let resource = resource.lock().await;
+        if resource.request != *request
+            || resource.closed
+            || resource.fenced.load(Ordering::Acquire)
+        {
+            return Err(BrowserDriverError::Stale);
+        }
+        resource
+            .egress
+            .as_ref()
+            .map(crate::BrowserEgressLease::expires_at)
+            .ok_or(BrowserDriverError::Unavailable)
+    }
     /// Clone the separately authenticated presenter for this exact enrolled owner.
     /// This native-only seam does not allocate a host or grant browser control.
     /// Cleanup fences the retained session and disconnects every channel clone.

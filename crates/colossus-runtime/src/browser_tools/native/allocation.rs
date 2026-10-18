@@ -285,6 +285,7 @@ async fn open_owned(
         .as_ref()
         .ok_or(RuntimeNativeBrowserError::Unavailable)?;
     let (client, digest) = provider.acquire(&original).await?;
+    super::expiry::track(browser, entry, provider.expires_at(&original).await?)?;
     if entry.control.is_cancelled() || browser.native.stopped.load(Ordering::Acquire) {
         client.disconnect();
         return Err(RuntimeNativeBrowserError::Denied);

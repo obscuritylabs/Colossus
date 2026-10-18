@@ -96,11 +96,16 @@ export function BrowserPane({
     agent: "Agent control",
     paused: "Paused",
     completed: "Agent finished",
+    expired: "Session expired",
     unavailable: "Control unavailable",
   }[ready ? (active?.control ?? "human") : "unavailable"];
   const completed = active?.control === "completed";
+  const expired = active?.control === "expired";
   const readOnly =
-    active?.control === "agent" || active?.control === "paused" || completed;
+    active?.control === "agent" ||
+    active?.control === "paused" ||
+    completed ||
+    expired;
   const agentControlling =
     ready && active?.control === "agent" && !!active.url && !active.error;
 
@@ -418,18 +423,20 @@ export function BrowserPane({
             >
               <IconBrowser size={32} />
               <h3>
-                {active?.error
-                  ? readOnly
-                    ? "Agent browser unavailable"
-                    : "Unable to display this page"
-                  : !active?.url
-                    ? "Browse beside your work"
-                    : import.meta.env.DEV
-                      ? active.title
-                      : ""}
+                {expired
+                  ? "Browser session expired"
+                  : active?.error
+                    ? readOnly
+                      ? "Agent browser unavailable"
+                      : "Unable to display this page"
+                    : !active?.url
+                      ? "Browse beside your work"
+                      : import.meta.env.DEV
+                        ? active.title
+                        : ""}
               </h3>
               <p>
-                {(active?.error && readOnly
+                {(active?.error && readOnly && !expired
                   ? "The agent's browser cannot be displayed. Open a fresh copy of this page to continue browsing."
                   : active?.error) ||
                   (!active?.url
@@ -450,7 +457,11 @@ export function BrowserPane({
                     )
                   }
                 >
-                  {readOnly ? "Open page in new tab" : "Retry"}
+                  {expired
+                    ? "Continue browsing"
+                    : readOnly
+                      ? "Open page in new tab"
+                      : "Retry"}
                 </button>
               ) : (
                 <span>

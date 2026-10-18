@@ -286,6 +286,7 @@ async fn deadline_reaps_background_connections_without_renewal() {
     )
     .await;
     let mut stalled = TcpStream::connect(proxy.address()).await.unwrap();
+    let original_deadline = proxy.expires_at();
     stalled.write_all(b"CON").await.unwrap();
     let mut response = Vec::new();
     tokio::time::timeout(Duration::from_secs(2), stalled.read_to_end(&mut response))
@@ -294,6 +295,8 @@ async fn deadline_reaps_background_connections_without_renewal() {
         .unwrap();
     proxy.revoke().await.unwrap();
     assert_eq!(proxy.state(), BrowserEgressState::Revoked);
+    assert_eq!(proxy.expires_at(), original_deadline);
+    assert!(std::time::Instant::now() >= original_deadline);
     assert!(response.is_empty());
     assert!(TcpStream::connect(proxy.address()).await.is_err());
 }

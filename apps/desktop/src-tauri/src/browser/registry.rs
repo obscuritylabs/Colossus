@@ -94,10 +94,22 @@ impl Registry {
         };
         // A late callback belongs to the retired live attachment. A static
         // completed view has no page event stream and must remain inspectable.
-        if tab.dto.control == "completed" {
+        if matches!(tab.dto.control, "completed" | "expired") {
             return;
         }
         match event {
+            BrowserEvent::Expired => {
+                tab.dto.control = "expired";
+                tab.dto.page.loading = false;
+                tab.dto.error = Some(
+                    "This browser session expired. Continue in a new session to browse again."
+                        .into(),
+                );
+                tab.dto.notice = None;
+                tab.dto.popup_url = None;
+                tab.presentation_epoch.fetch_add(1, Ordering::AcqRel);
+                tab.heartbeat = None;
+            }
             BrowserEvent::Loading(loading) => {
                 tab.dto.page.loading = loading;
                 if loading {

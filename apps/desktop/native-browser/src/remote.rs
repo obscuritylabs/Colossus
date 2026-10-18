@@ -17,7 +17,11 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
-#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
 use std::time::Duration;
 use std::time::Instant;
 use tauri::{Rect, Window};
@@ -68,15 +72,24 @@ struct Owner {
 
 // Source-only, closed-vocabulary attach evidence. These enum variants contain
 // no URL, enrollment material, path, native pointer or channel payload.
-#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
 enum AttachFailure {
     Configure(PresentationError),
     NativeView(BrowserError),
 }
-#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
 impl AttachFailure {
     const fn token(self) -> &'static str {
         match self {
+            Self::Configure(PresentationError::Expired) => "configure_expired",
             Self::Configure(PresentationError::Invalid) => "configure_invalid",
             Self::Configure(PresentationError::Stale) => "configure_stale",
             Self::Configure(PresentationError::Unauthenticated) => "configure_unauthenticated",
@@ -86,6 +99,7 @@ impl AttachFailure {
             Self::NativeView(BrowserError::InvalidAddress) => "native_view_invalid_address",
             Self::NativeView(BrowserError::Unavailable) => "native_view_unavailable",
             Self::NativeView(BrowserError::Closed) => "native_view_closed",
+            Self::NativeView(BrowserError::Expired) => "native_view_expired",
             Self::NativeView(BrowserError::Stale) => "native_view_stale",
             Self::NativeView(BrowserError::TimedOut) => "native_view_timed_out",
             Self::NativeView(BrowserError::ComponentMissing) => "native_view_component_missing",
@@ -96,13 +110,22 @@ impl AttachFailure {
         }
     }
 }
-#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
 fn trace_attach_failure(failure: AttachFailure) {
-    eprintln!("EVIDENCE mac-remote-attach failure={}", failure.token());
+    eprintln!("EVIDENCE native-remote-attach failure={}", failure.token());
 }
-#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
 fn trace_frame_channel_failure(stage: &'static str, error: PresentationError, elapsed: Duration) {
     let failure = match error {
+        PresentationError::Expired => "expired",
         PresentationError::Invalid => "invalid",
         PresentationError::Stale => "stale",
         PresentationError::Unauthenticated => "unauthenticated",
@@ -115,12 +138,16 @@ fn trace_frame_channel_failure(stage: &'static str, error: PresentationError, el
     } else {
         "before_700ms"
     };
-    eprintln!("EVIDENCE mac-remote-frame stage={stage} failure={failure} timing={timing}");
+    eprintln!("EVIDENCE native-remote-frame stage={stage} failure={failure} timing={timing}");
 }
-#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
 fn trace_frame_browser_failure(stage: &'static str, error: BrowserError) {
     eprintln!(
-        "EVIDENCE mac-remote-frame stage={stage} failure={}",
+        "EVIDENCE native-remote-frame stage={stage} failure={}",
         AttachFailure::NativeView(error).token()
     );
 }
@@ -177,10 +204,10 @@ impl RemoteSurface {
     #[cfg(all(any(windows, target_os = "macos"), feature = "native-test-driver"))]
     pub async fn acceptance_probe(&self) -> Result<RemoteAcceptanceProbe, BrowserError> {
         let lease = self.0.state.lock().map_err(|_| BrowserError::Closed)?.lease;
-        #[cfg(all(target_os = "macos", debug_assertions))]
+        #[cfg(all(any(windows, target_os = "macos"), debug_assertions))]
         let observed_at = Instant::now();
         let page = self.0.client.observe(lease).await.map_err(|error| {
-            #[cfg(all(target_os = "macos", debug_assertions))]
+            #[cfg(all(any(windows, target_os = "macos"), debug_assertions))]
             trace_frame_channel_failure("probe_observe", error, observed_at.elapsed());
             match error {
                 PresentationError::Stale | PresentationError::Hidden => BrowserError::Stale,
@@ -297,10 +324,14 @@ impl RemoteSurface {
             .configure(configure.clone())
             .await
             .map_err(|failure| {
-                #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+                #[cfg(all(
+                    any(windows, target_os = "macos"),
+                    feature = "native-test-driver",
+                    debug_assertions
+                ))]
                 trace_attach_failure(AttachFailure::Configure(failure));
                 #[cfg(not(all(
-                    target_os = "macos",
+                    any(windows, target_os = "macos"),
                     feature = "native-test-driver",
                     debug_assertions
                 )))]
@@ -326,7 +357,11 @@ impl RemoteSurface {
         )
         .await
         .inspect_err(|failure| {
-            #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+            #[cfg(all(
+                any(windows, target_os = "macos"),
+                feature = "native-test-driver",
+                debug_assertions
+            ))]
             trace_attach_failure(AttachFailure::NativeView(*failure));
             #[cfg(not(all(
                 target_os = "macos",

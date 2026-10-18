@@ -21,6 +21,14 @@ use uuid::Uuid;
 /// Private presentation selected by the verified process supervisor, never a renderer.
 #[async_trait]
 pub trait RuntimeBrowserPresenter: Send + Sync {
+    /// Original host network deadline, when the supervised platform has one.
+    /// This is native composition metadata; a viewer cannot renew it.
+    async fn expires_at(
+        &self,
+        _request: &BrowserDriverOpenRequest,
+    ) -> Result<Option<std::time::Instant>, BrowserDriverError> {
+        Ok(None)
+    }
     /// Acquire the original dedicated host's private presentation channel.
     async fn acquire(
         &self,
@@ -41,6 +49,12 @@ impl RuntimeBrowserPresenter for colossus_sandbox::OciBrowserSupervisor {
 #[cfg(windows)]
 #[async_trait]
 impl RuntimeBrowserPresenter for colossus_sandbox::WindowsBrowserSupervisor {
+    async fn expires_at(
+        &self,
+        request: &BrowserDriverOpenRequest,
+    ) -> Result<Option<std::time::Instant>, BrowserDriverError> {
+        self.presentation_expires_at(request).await.map(Some)
+    }
     async fn acquire(
         &self,
         request: &BrowserDriverOpenRequest,
@@ -158,6 +172,17 @@ pub struct RuntimeNativeBrowserSession {
     pub(in crate::browser_tools) session_id: BrowserSessionId,
 }
 impl RuntimeNativeBrowserSession {
+    /// Whether the original network authority reached its immutable deadline.
+    /// This receipt remains readable after owned host cleanup for native UI recovery.
+    pub fn is_expired(&self) -> Result<bool, RuntimeNativeBrowserError> {
+        Ok(self
+            .entry
+            .view
+            .lock()
+            .map_err(|_| RuntimeNativeBrowserError::OutcomeUnknown)?
+            .expires_at
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline))
+    }
     /// Exact admitted opaque session.
     pub fn session_id(&self) -> &BrowserSessionId {
         &self.session_id
@@ -412,6 +437,7 @@ pub(in crate::browser_tools) struct Entry {
 }
 #[derive(Default)]
 pub(in crate::browser_tools) struct View {
+    pub(in crate::browser_tools) expires_at: Option<std::time::Instant>,
     pub(in crate::browser_tools) configure: Option<Configure>,
     pub(in crate::browser_tools) lease: Option<Lease>,
     pub(in crate::browser_tools) handoff_relay_lease: Option<(Configure, Lease)>,

@@ -4,7 +4,11 @@ use super::{
     lifecycle,
 };
 use crate::BrowserError;
-#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
 use std::time::Instant;
 use std::{
     future::Future,
@@ -24,16 +28,20 @@ pub(super) fn update(owner: &Arc<Owner>) {
             applied = owner.revision.load(Ordering::Acquire);
             match apply(&owner, applied).await {
                 Ok(()) => {}
+                Err(BrowserError::Expired) => {
+                    super::actor::expired(&owner);
+                    break;
+                }
                 Err(BrowserError::Stale) => {
                     if let Err(error) = wait_for_target(&owner).await {
                         #[cfg(all(
-                            target_os = "macos",
+                            any(windows, target_os = "macos"),
                             feature = "native-test-driver",
                             debug_assertions
                         ))]
                         super::trace_frame_browser_failure("viewport_target_wait", error);
                         #[cfg(not(all(
-                            target_os = "macos",
+                            any(windows, target_os = "macos"),
                             feature = "native-test-driver",
                             debug_assertions
                         )))]
@@ -44,13 +52,13 @@ pub(super) fn update(owner: &Arc<Owner>) {
                 }
                 Err(error) => {
                     #[cfg(all(
-                        target_os = "macos",
+                        any(windows, target_os = "macos"),
                         feature = "native-test-driver",
                         debug_assertions
                     ))]
                     super::trace_frame_browser_failure("viewport_apply", error);
                     #[cfg(not(all(
-                        target_os = "macos",
+                        any(windows, target_os = "macos"),
                         feature = "native-test-driver",
                         debug_assertions
                     )))]
@@ -92,29 +100,23 @@ async fn apply(owner: &Arc<Owner>, revision: u64) -> Result<(), BrowserError> {
     let Some(bounds) = bounds else {
         return Ok(());
     };
-    #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+    #[cfg(all(
+        any(windows, target_os = "macos"),
+        feature = "native-test-driver",
+        debug_assertions
+    ))]
     let observed_at = Instant::now();
     let state = owner.client.observe(lease).await.map_err(|error| {
-        #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+        #[cfg(all(
+            any(windows, target_os = "macos"),
+            feature = "native-test-driver",
+            debug_assertions
+        ))]
         super::trace_frame_channel_failure("viewport_observe", error, observed_at.elapsed());
         presentation_error(error)
     })?;
     #[cfg(windows)]
-    let page = crate::PageState {
-        url: state.url.clone(),
-        title: state.title.clone(),
-        loading: state.loading,
-        can_go_back: state.can_go_back,
-        can_go_forward: state.can_go_forward,
-    };
-    #[cfg(windows)]
-    if owner.read_only.load(Ordering::Acquire) && state.target == configure.target {
-        owner.completed.observed(lease, page.clone());
-    }
-    #[cfg(windows)]
-    if state.target != configure.target {
-        owner.completed.invalidate(lease);
-    }
+    let page = observed_page(owner, lease, &configure, &state);
     let ttl = remaining(owner, revision)
         .inspect_err(|error| trace_apply("viewport_ttl_after_observe", *error))?;
     if applied == Some(bounds)
@@ -169,6 +171,28 @@ async fn apply(owner: &Arc<Owner>, revision: u64) -> Result<(), BrowserError> {
     state.applied = (owner.revision.load(Ordering::Acquire) == revision).then_some(bounds);
     state.surface = Some(Arc::new(next));
     Ok(())
+}
+
+#[cfg(windows)]
+fn observed_page(
+    owner: &Owner,
+    lease: colossus_browser_presentation::Lease,
+    configure: &colossus_browser_presentation::Configure,
+    state: &colossus_browser_presentation::PageState,
+) -> crate::PageState {
+    let page = crate::PageState {
+        url: state.url.clone(),
+        title: state.title.clone(),
+        loading: state.loading,
+        can_go_back: state.can_go_back,
+        can_go_forward: state.can_go_forward,
+    };
+    if state.target != configure.target {
+        owner.completed.invalidate(lease);
+    } else if owner.read_only.load(Ordering::Acquire) {
+        owner.completed.observed(lease, page.clone());
+    }
+    page
 }
 
 /// Retain authenticated native ownership before any fallible UI initialization.
@@ -264,13 +288,22 @@ fn set_native_bounds(
     )
 }
 fn trace_apply(stage: &'static str, error: BrowserError) {
-    #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+    #[cfg(all(
+        any(windows, target_os = "macos"),
+        feature = "native-test-driver",
+        debug_assertions
+    ))]
     super::trace_frame_browser_failure(stage, error);
-    #[cfg(not(all(target_os = "macos", feature = "native-test-driver", debug_assertions)))]
+    #[cfg(not(all(
+        any(windows, target_os = "macos"),
+        feature = "native-test-driver",
+        debug_assertions
+    )))]
     let _ = (stage, error);
 }
 fn presentation_error(error: colossus_browser_presentation::PresentationError) -> BrowserError {
     match error {
+        colossus_browser_presentation::PresentationError::Expired => BrowserError::Expired,
         colossus_browser_presentation::PresentationError::Stale
         | colossus_browser_presentation::PresentationError::Hidden => BrowserError::Stale,
         _ => BrowserError::Closed,

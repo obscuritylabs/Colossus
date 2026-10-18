@@ -47,7 +47,7 @@ impl BrowserManager {
                 (
                     tab.dto.id.clone(),
                     tab.dto.error.as_deref() == Some(CRASHED_MESSAGE),
-                    tab.dto.control == "completed",
+                    matches!(tab.dto.control, "completed" | "expired"),
                     tab.dto.session_id.clone(),
                     tab.close_requested,
                 )

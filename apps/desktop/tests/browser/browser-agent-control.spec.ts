@@ -42,6 +42,7 @@ async function mountAgentBrowser(page: Page) {
             "human",
             "completed",
             "completed-snapshot",
+            "expired",
             "unavailable",
           ].map((next) =>
             React.createElement(
@@ -49,7 +50,7 @@ async function mountAgentBrowser(page: Page) {
               {
                 key: next,
                 onClick: () => {
-                  setFailed(next === "unavailable");
+                  setFailed(next === "unavailable" || next === "expired");
                   setCompletedSnapshot(next === "completed-snapshot");
                   setControl(
                     next === "unavailable"
@@ -85,7 +86,11 @@ async function mountAgentBrowser(page: Page) {
                   canGoBack: false,
                   canGoForward: false,
                   loading: false,
-                  error: failed ? "This browser session ended." : null,
+                  error: failed
+                    ? control === "expired"
+                      ? "This browser session expired. Continue in a new session to browse again."
+                      : "This browser session ended."
+                    : null,
                   notice: null,
                   popupUrl: null,
                   control,
@@ -166,6 +171,41 @@ test("agent control stays visible while idle and stops claiming paused or ended 
     harness.getByRole("heading", { name: "Agent browser unavailable" }),
   ).toBeVisible();
   expect(errors).toEqual([]);
+});
+
+test("expired browser preserves its address and continues only in a fresh session", async ({
+  page,
+}) => {
+  const harness = await mountAgentBrowser(page);
+  await harness.getByRole("button", { name: "expired", exact: true }).click();
+  await expect(
+    harness.getByRole("heading", { name: "Browser session expired" }),
+  ).toBeVisible();
+  await expect(
+    harness.getByRole("textbox", { name: "Web address" }),
+  ).toHaveValue("https://example.com/");
+  await expect(
+    harness.getByRole("textbox", { name: "Web address" }),
+  ).toHaveAttribute("readonly");
+  await expect(
+    harness.getByRole("button", { name: "Reload page", exact: true }),
+  ).toBeDisabled();
+  await expect(harness).toHaveAttribute("data-commands", "[]");
+  await expect
+    .poll(
+      async () =>
+        JSON.parse((await harness.getAttribute("data-viewport"))!).rect,
+    )
+    .toBeNull();
+  await harness
+    .getByRole("button", { name: "Continue browsing", exact: true })
+    .click();
+  expect(JSON.parse((await harness.getAttribute("data-commands"))!)).toEqual([
+    { type: "new", url: "https://example.com/" },
+  ]);
+  await expect(
+    harness.getByRole("heading", { name: "Browser session expired" }),
+  ).toBeVisible();
 });
 
 test("completed browser preserves a read-only last view and continues only in a fresh tab", async ({

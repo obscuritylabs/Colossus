@@ -26,6 +26,13 @@ impl NativeRelay {
         }
     }
     fn active(&self) -> Result<(), PresentationError> {
+        if self
+            .session
+            .is_expired()
+            .map_err(|_| PresentationError::OutcomeUnknown)?
+        {
+            return Err(PresentationError::Expired);
+        }
         if !self.revoked.load(Ordering::Acquire) && self.service.authorized() {
             Ok(())
         } else {
@@ -35,6 +42,13 @@ impl NativeRelay {
     fn acknowledged(&self) -> Result<(), PresentationError> {
         // Losing authority after dispatch cannot be reported as a no-effect rejection.
         self.active().map_err(|_| PresentationError::OutcomeUnknown)
+    }
+    fn read_error(&self, error: PresentationError) -> PresentationError {
+        if self.session.is_expired().unwrap_or(false) {
+            PresentationError::Expired
+        } else {
+            error
+        }
     }
     async fn configure(&self, value: Configure) -> Result<PresentationReply, PresentationError> {
         let current = self
@@ -98,7 +112,11 @@ impl PresentationHost for NativeRelay {
         match command {
             PresentationCommand::Configure(value) => self.configure(value).await,
             PresentationCommand::Observe { lease } => {
-                let state = self.client.observe(lease).await?;
+                let state = self
+                    .client
+                    .observe(lease)
+                    .await
+                    .map_err(|error| self.read_error(error))?;
                 self.session
                     .confirm_presentation_state(lease, &state)
                     .map_err(|error| match error {
@@ -110,7 +128,7 @@ impl PresentationHost for NativeRelay {
                         }
                         _ => PresentationError::OutcomeUnknown,
                     })?;
-                self.acknowledged()?;
+                self.active()?;
                 Ok(PresentationReply::State(state))
             }
             // Handoff is exclusively Runtime's gateway operation over its retained native client.
@@ -126,10 +144,15 @@ impl PresentationHost for NativeRelay {
     }
     async fn frame(&self, lease: Lease) -> Result<Option<Frame>, PresentationError> {
         self.active()?;
-        let Some(bytes) = self.client.next_frame(lease).await? else {
+        let Some(bytes) = self
+            .client
+            .next_frame(lease)
+            .await
+            .map_err(|error| self.read_error(error))?
+        else {
             return Ok(None);
         };
-        self.acknowledged()?;
+        self.active()?;
         let mut frames = self
             .frames
             .lock()

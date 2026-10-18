@@ -21,6 +21,7 @@ struct Fixture {
     hosts: StdMutex<BTreeMap<BrowserSessionId, Arc<Host>>>,
     opened: AtomicUsize,
     closed: AtomicUsize,
+    close_attempts: AtomicUsize,
     blocked: AtomicBool,
     entered: tokio::sync::Notify,
     release: tokio::sync::Notify,
@@ -28,6 +29,7 @@ struct Fixture {
     confirm_stale: AtomicBool,
     snapshot_rotates: AtomicBool,
     panic_acquire: AtomicBool,
+    deadline: StdMutex<Option<std::time::Instant>>,
 }
 #[derive(Default)]
 struct Host {
@@ -255,6 +257,7 @@ impl BrowserDriver for Fixture {
         Ok(())
     }
     async fn close_session(&self, s: &BrowserSessionId) -> Result<(), BrowserDriverError> {
+        self.close_attempts.fetch_add(1, Ordering::SeqCst);
         if self.close_unknown.load(Ordering::SeqCst) {
             return Err(BrowserDriverError::OutcomeUnknown);
         }
@@ -265,6 +268,12 @@ impl BrowserDriver for Fixture {
 }
 #[async_trait]
 impl RuntimeBrowserPresenter for Fixture {
+    async fn expires_at(
+        &self,
+        _: &BrowserDriverOpenRequest,
+    ) -> Result<Option<std::time::Instant>, BrowserDriverError> {
+        Ok(*self.deadline.lock().unwrap())
+    }
     async fn acquire(
         &self,
         r: &BrowserDriverOpenRequest,
@@ -382,6 +391,9 @@ fn role(runtime: &Runtime) -> RuntimeNativeBrowserAuthority {
         .bind_native_browser_authority("desktop", Uuid::now_v7())
         .unwrap()
 }
+
+#[path = "expiry_tests.rs"]
+mod expiry_tests;
 
 #[tokio::test]
 async fn agent_viewer_uses_existing_host_and_denies_foreign_conversations_and_human_input() {

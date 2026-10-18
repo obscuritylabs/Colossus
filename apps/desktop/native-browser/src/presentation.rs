@@ -16,7 +16,11 @@ mod windows_acceptance;
 use crate::BrowserError;
 #[cfg(feature = "native-test-driver")]
 use colossus_browser_presentation::Frame;
-#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
 use colossus_browser_presentation::PresentationError;
 use colossus_browser_presentation::{FrameCodec, Input, LatestFrames, Lease, LeaseGuard};
 use std::{
@@ -228,10 +232,14 @@ impl PresentationSurface {
             .map_err(|_| BrowserError::Closed)?
             .decode(envelope)
             .inspect_err(|error| {
-                #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+                #[cfg(all(
+                    any(windows, target_os = "macos"),
+                    feature = "native-test-driver",
+                    debug_assertions
+                ))]
                 trace_frame_rejection("decode", *error);
                 #[cfg(not(all(
-                    target_os = "macos",
+                    any(windows, target_os = "macos"),
                     feature = "native-test-driver",
                     debug_assertions
                 )))]
@@ -244,10 +252,14 @@ impl PresentationSurface {
             .map_err(|_| BrowserError::Closed)?
             .push(frame)
             .inspect_err(|error| {
-                #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+                #[cfg(all(
+                    any(windows, target_os = "macos"),
+                    feature = "native-test-driver",
+                    debug_assertions
+                ))]
                 trace_frame_rejection("queue", *error);
                 #[cfg(not(all(
-                    target_os = "macos",
+                    any(windows, target_os = "macos"),
                     feature = "native-test-driver",
                     debug_assertions
                 )))]
@@ -362,7 +374,11 @@ impl PresentationSurface {
             .map_err(|_| BrowserError::Closed)
     }
 }
-#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
 fn trace_frame_rejection(stage: &'static str, error: PresentationError) {
     let failure = match error {
         PresentationError::Invalid => "invalid",
@@ -371,8 +387,9 @@ fn trace_frame_rejection(stage: &'static str, error: PresentationError) {
         PresentationError::Hidden => "hidden",
         PresentationError::LimitExceeded => "limit_exceeded",
         PresentationError::OutcomeUnknown => "outcome_unknown",
+        PresentationError::Expired => "expired",
     };
-    eprintln!("EVIDENCE mac-remote-frame stage={stage} failure={failure}");
+    eprintln!("EVIDENCE native-remote-frame stage={stage} failure={failure}");
 }
 #[cfg(windows)]
 fn parent(window: &Window) -> Option<usize> {

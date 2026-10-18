@@ -29,6 +29,8 @@ pub enum BrowserEvent {
     Loading(bool),
     Failed,
     Crashed,
+    /// The supervised context reached its original fixed authority deadline.
+    Expired,
     Blocked,
     Download,
     Popup(String),
@@ -47,6 +49,8 @@ pub enum BrowserError {
     InvalidAddress,
     Unavailable,
     Closed,
+    /// The original supervised network/session authority expired.
+    Expired,
     /// The native owner is changing the document; hide pixels until a fresh target is admitted.
     Stale,
     TimedOut,
@@ -61,6 +65,7 @@ impl std::fmt::Display for BrowserError {
             Self::InvalidAddress => "Enter an HTTP or HTTPS address without embedded credentials.",
             Self::Unavailable => "The embedded browser is unavailable on this device.",
             Self::Closed => "This browser tab is no longer available.",
+            Self::Expired => "This browser session expired. Continue in a new session to browse again.",
             Self::Stale => "The browser page is changing. Waiting for its current document.",
             Self::TimedOut => "The browser did not respond. Close the tab and try again.",
             Self::ComponentMissing => "The verified Chromium component is not included in this build.",

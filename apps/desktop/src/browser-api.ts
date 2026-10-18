@@ -12,7 +12,8 @@ export interface BrowserTab {
   popupUrl: string | null;
   sessionId?: string;
   conversationId?: string | null;
-  control?: "human" | "agent" | "paused" | "completed" | "unavailable";
+  control?:
+    "human" | "agent" | "paused" | "completed" | "expired" | "unavailable";
   /** Desktop retains a read-only native frame after agent control ends. */
   completedSnapshot?: boolean;
 }

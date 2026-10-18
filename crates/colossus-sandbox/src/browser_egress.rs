@@ -87,6 +87,7 @@ pub struct BrowserEgressLease {
     shutdown: Option<oneshot::Sender<()>>,
     task: Option<JoinHandle<Result<(), BrowserEgressError>>>,
     terminal: Option<Result<(), BrowserEgressError>>,
+    deadline: Instant,
 }
 
 impl fmt::Debug for BrowserEgressLease {
@@ -188,14 +189,18 @@ impl BrowserEgressLease {
         if public_web {
             destinations.push("*".into());
         }
+        let deadline = Instant::now() + limits.lifetime;
         let task = tokio::spawn(serve(
             listener,
             ipv6,
             destinations,
             Arc::clone(&credential),
             limits,
-            shutdown_rx,
-            Arc::clone(&state),
+            Revocation {
+                shutdown: shutdown_rx,
+                state: Arc::clone(&state),
+                deadline,
+            },
         ));
         Ok(Self {
             session,
@@ -205,12 +210,18 @@ impl BrowserEgressLease {
             shutdown: Some(shutdown),
             task: Some(task),
             terminal: None,
+            deadline,
         })
     }
 
     /// Exact socket address to admit in the OS proxy-only process boundary.
     pub fn address(&self) -> SocketAddr {
         self.address
+    }
+
+    /// Original immutable network deadline, independent of presentation renewals.
+    pub fn expires_at(&self) -> std::time::Instant {
+        self.deadline.into_std()
     }
 
     /// Borrow the generated password only in the native proxy-auth/bootstrap path.
@@ -311,17 +322,27 @@ fn validate(
     Ok(())
 }
 
+/// One immutable authority clock and the channels that revoke its live sockets.
+struct Revocation {
+    shutdown: oneshot::Receiver<()>,
+    state: Arc<AtomicU8>,
+    deadline: Instant,
+}
+
 async fn serve(
     listener: TcpListener,
     ipv6: Option<TcpListener>,
     origins: Vec<String>,
     credential: Arc<HostSecret>,
     limits: BrowserEgressLimits,
-    mut shutdown: oneshot::Receiver<()>,
-    state: Arc<AtomicU8>,
+    revocation: Revocation,
 ) -> Result<(), BrowserEgressError> {
+    let Revocation {
+        mut shutdown,
+        state,
+        deadline,
+    } = revocation;
     let origins = Arc::new(origins);
-    let deadline = Instant::now() + limits.lifetime;
     let mut connections = JoinSet::new();
     let mut result = Ok(());
     loop {
