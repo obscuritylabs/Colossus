@@ -1990,6 +1990,7 @@ fn built_in_registry_classifies_every_tool_once() {
             interactive: true,
             mcp_configured: true,
             browser_available: true,
+            computer_available: true,
         },
         false,
     )

@@ -1273,8 +1273,7 @@ impl AgentService {
                 let mut context = context.clone();
                 let used_images = tool_results
                     .iter()
-                    .filter_map(colossus_contracts::ImageViewOutput::from_tool_result)
-                    .flat_map(|output| output.images)
+                    .flat_map(colossus_tools::released_tool_images)
                     .collect::<Vec<_>>();
                 context.image_input_budget = Some(colossus_contracts::ImageInputBudget {
                     remaining_count: 16_usize.saturating_sub(used_images.len()),

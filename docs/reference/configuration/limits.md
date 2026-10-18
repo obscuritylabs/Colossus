@@ -60,6 +60,49 @@ destinations unless an exact origin was independently admitted, pins validated
 DNS results, and preserves TLS verification. Plain HTTP remains limited to exact
 loopback origins. The model cannot enable public browsing through tool arguments.
 
+## Windows computer access and limits
+
+```yaml
+computer:
+  enabled: false
+  maxWindows: 64
+  maxSnapshotNodes: 512
+  maxScreenshotBytes: 8388608
+  maxScreenshotPixels: 8388608
+  actionTimeoutMs: 5000
+  sessionTimeoutMs: 300000
+  observationMaxAgeMs: 10000
+```
+
+Computer use is disabled by default. It requires a verified Windows CLI or managed
+sidecar and an unlocked ordinary-user desktop. It does not require administrator
+privileges or request elevation. The model cannot enable it. Enabling exposes
+permitted `computer.*` tools and the bundled `colossus/computer-use` skill;
+ordinary access policy and per-effect authorization still apply.
+
+| Field | Default | Range |
+| --- | --- | --- |
+| `computer.enabled` | `false` | Boolean |
+| `computer.maxWindows` | `64` | `1..=128` |
+| `computer.maxSnapshotNodes` | `512` | `1..=1024` |
+| `computer.maxScreenshotBytes` | `8388608` | `1..=16777216` |
+| `computer.maxScreenshotPixels` | `8388608` | `1..=16777216` |
+| `computer.actionTimeoutMs` | `5000` | `1..=10000` |
+| `computer.sessionTimeoutMs` | `300000` | `1..=900000`, nonrenewable |
+| `computer.observationMaxAgeMs` | `10000` | `1..=30000` |
+
+Desktop exposes defaults in **Settings → Global → Computer use** and overrides in
+**Settings → Workspace → Computer use**. Enabling requires explicit **Apply** in
+Workspace settings. Applying restarts the runtime and releases its automation;
+the user's apps remain open. Disabling removes both tools and skill availability.
+
+These tools can operate normal-user apps outside the workspace. Filesystem and
+network sandbox rules do not confine effects performed through another app's
+interface. Only one Colossus computer session can own physical input in the same
+Windows user session. The native control card provides Pause/Resume and Stop;
+human input pauses automation. Protected input, elevated apps, UAC, and locked or
+secure desktops require the human. Colossus's own controls are excluded targets.
+
 ## Other runtime limits
 
 Colossus uses several independent limits rather than one global runtime budget. The

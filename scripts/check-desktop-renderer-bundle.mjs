@@ -18,7 +18,10 @@ const maximumJavaScriptChunkBytes = 700_000;
 // Inbox reading states, readable delivery receipts and inline browser screenshots
 // add 5.4 KB measured against the previous build. Reserve 10 KB for this UI change;
 // keep per-chunk bounds and development fixture exclusions intact.
-const maximumRendererBytes = 4_220_000;
+// Computer access settings, released screenshot previews, and explicit browser
+// expiry recovery add 3.1 KB measured. Reserve 5 KB for platform bundler variance;
+// retain the per-chunk limit and production fixture exclusions.
+const maximumRendererBytes = 4_225_000;
 const forbiddenFixtureStrings = [
   "Offline dictation preview",
   "fixture-run-desktop-release",

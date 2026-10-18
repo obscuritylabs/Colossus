@@ -26,6 +26,28 @@ function read(relative) {
   return readFileSync(join(repository, relative), "utf8");
 }
 
+test(
+  "native computer diagnostics retain bounded stdout and stderr failure tails",
+  { skip: process.platform !== "win32" },
+  () => {
+    const result = spawnSync(
+      "pwsh",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        join(repository, "scripts/ci/computer-child-output.test.ps1"),
+      ],
+      { encoding: "utf8", timeout: 15000, maxBuffer: 32768, windowsHide: true },
+    );
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+    assert.match(
+      result.stdout,
+      /PASS bounded stdout\/stderr retain UTF-8 failure tails/u,
+    );
+  },
+);
+
 function filesUnder(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = join(directory, entry.name);
@@ -1198,6 +1220,12 @@ test("pre-merge desktop packaging declares its non-runnable trust channel", () =
   );
   assert.match(windows, /steps\.windows_sdk_path\.outcome/u);
   assert.match(windows, /steps\.worker_acceptance\.outcome/u);
+  assert.match(windows, /steps\.computer_portable\.outcome/u);
+  assert.match(windows, /"windows-computer-protocol-and-build=\$COMPUTER_OUTCOME"/u);
+  assert.match(windows, /cargo test --locked --manifest-path native\/computer\/Cargo\.toml --all-targets/u);
+  assert.match(windows, /cargo clippy --locked --manifest-path native\/computer\/Cargo\.toml --all-targets --all-features -- -D warnings/u);
+  assert.match(windows, /cargo build --locked --manifest-path native\/computer\/Cargo\.toml --features native-test-driver --examples/u);
+  assert.doesNotMatch(windows, /run: \.\/scripts\/ci\/computer-windows-native\.ps1/u);
   assert.match(windowsDesktop, /steps\.desktop_prepare\.outcome/u);
   assert.match(windowsDesktop, /steps\.native_clippy\.outcome/u);
   assert.match(windowsDesktop, /steps\.native_tests\.outcome/u);

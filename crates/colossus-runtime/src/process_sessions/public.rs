@@ -41,6 +41,7 @@ impl Runtime {
 
     /// Signal managed processes and revoke browser writers during trusted shutdown.
     pub fn stop_process_sessions(&self) {
+        self.stop_computer_sessions();
         self.stop_browser_sessions();
         self.process_sessions.stop_all();
     }
@@ -48,6 +49,7 @@ impl Runtime {
     /// Await managed process supervisors and run-owned browser context cleanup.
     pub async fn drain_process_sessions(&self) {
         self.stop_process_sessions();
+        let _ = self.drain_computer_sessions().await;
         self.drain_browser_sessions().await;
         let sessions = self
             .process_sessions

@@ -166,7 +166,10 @@ standard public Linux runner. Desktop application, launcher, and Rust SDK paths 
 sidecar and renderer checks on another standard public Linux runner and the
 native Tauri acceptance described below. Rust, npm, Go, and Python dependency manifests
 and lockfiles also run license, source, ban, and advisory policy, including the standalone
-desktop Cargo graph.
+Desktop, browser and native-computer Cargo graphs. Changes confined to
+`native/computer/` select Rust and Desktop validation independently of CLI or
+renderer changes. The Desktop PR gate runs its locked portable tests and Clippy
+on Linux; these checks do not capture a desktop or send input.
 
 Advisory exceptions must name one exact RustSec ID in every scanner that reports the
 finding, document why the affected path is unreachable, and name the upstream removal
@@ -246,15 +249,21 @@ intentionally refuses to start Managed Local. Distributable builds embed the exp
 identifiers for the app, sidecar, and CLI.
 The Windows runtime and Desktop jobs also run concurrently. Runtime uses a standard
 public Windows 2025 runner for renderer typechecking, tests, platform-sensitive contracts,
-native runtime, worker, and AppContainer sandbox acceptance. The Desktop job retains the
+native runtime, worker, AppContainer sandbox and computer protocol tests. The
+computer check also lints all native targets/features and builds its acceptance
+examples. [GitHub-hosted Windows runners run as administrators](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#administrative-privileges),
+so this lane does not execute or claim ordinary-user desktop capture/input
+acceptance. Computer-control changes additionally require a maintainer's
+[interactive acceptance receipts from the final clean commit](testing.md#windows-computer-control-acceptance).
+The Desktop job retains the
 larger GitHub Windows runner for binary preparation, native bridge, credential controls,
 WebView2, plugin, and approval acceptance. Each job reports all independent failed
 outcomes before failing; the required gate waits for both jobs. Desktop checks run only
 when their required binaries were staged.
 Portable formatting remains owned by the PR tier instead of being repeated on platform
 runners.
-Supply-chain acceptance audits both the root sidecar graph and the desktop's independent
-lockfile.
+Supply-chain acceptance audits the root sidecar graph and independent Desktop,
+browser and native-computer lockfiles.
 
 Do not push a new commit while acceptance is running. A `synchronize` event cancels the
 old run and removes `ci:full`; the old result cannot authorize the new head. After the new

@@ -215,6 +215,8 @@ impl Runtime {
             "instruction_sources": self.instruction_source_diagnostics()?,
             "security_posture": self.security_posture,
             "browser": self.browser_capabilities(),
+            "computer": self.computer_capabilities(),
+            "computer_active_work": self.computer_active_work(),
             "browser_active_work": self.browser_active_work(),
             "writer_lease": writer_lease,
             "projection_store": {

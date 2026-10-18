@@ -18,6 +18,7 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
     specs.extend(super::process_sessions::session_specs());
     specs.extend(super::workflows::workflow_specs());
     specs.extend(super::browser::browser_specs());
+    specs.extend(super::computer::computer_specs());
     specs
 }
 

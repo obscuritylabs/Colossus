@@ -508,6 +508,7 @@ pub struct SafetyKernel {
     policy_input_limit: usize,
     post_effect_policy_input_limit: usize,
     browser_upload_policy_input_limit: usize,
+    computer_screenshot_policy_input_limit: usize,
     sandbox_boundary_gate: Option<Arc<SandboxBoundaryGate>>,
 }
 
@@ -519,6 +520,7 @@ impl SafetyKernel {
             policy_input_limit: DEFAULT_POLICY_INPUT_LIMIT,
             post_effect_policy_input_limit: DEFAULT_POST_EFFECT_POLICY_INPUT_LIMIT,
             browser_upload_policy_input_limit: DEFAULT_POST_EFFECT_POLICY_INPUT_LIMIT,
+            computer_screenshot_policy_input_limit: 24 * 1024 * 1024,
             sandbox_boundary_gate: None,
         }
     }
@@ -528,6 +530,7 @@ impl SafetyKernel {
         self.policy_input_limit = bytes;
         self.post_effect_policy_input_limit = bytes;
         self.browser_upload_policy_input_limit = bytes;
+        self.computer_screenshot_policy_input_limit = bytes;
         self
     }
 
@@ -599,7 +602,13 @@ impl SafetyKernel {
 
     fn validate_policy_input_size(&self, request: &EffectRequest) -> Result<(), GatewayError> {
         let size = canonical_bytes(request)?.len();
-        let limit = if request.phase == EffectPhase::PostEffect {
+        let limit = if request.phase == EffectPhase::PostEffect
+            && request.action == "computer.screenshot"
+        {
+            // The fixed 16 MiB PNG ceiling expands under complete base64 policy disclosure.
+            // Other post-effect content and explicitly stricter deployments retain their caps.
+            self.computer_screenshot_policy_input_limit
+        } else if request.phase == EffectPhase::PostEffect {
             self.post_effect_policy_input_limit
         } else if request.action == "browser.upload" {
             // The trusted artifact adapter supplies at most four MiB of actual
@@ -787,11 +796,14 @@ impl SafetyKernel {
         }
         if decision.outcome == DecisionOutcome::Allow
             && request.phase == EffectPhase::PreEffect
-            && (request.action == "web.search" || request.action.starts_with("browser."))
+            && (request.action == "web.search"
+                || request.action.starts_with("browser.")
+                || request.action.starts_with("computer."))
             && !obligations.require_post_effect
         {
             return Err(GatewayError::Safety(
-                "browser and search effects require mandatory post-effect authorization".into(),
+                "browser, computer, and search effects require mandatory post-effect authorization"
+                    .into(),
             ));
         }
         if decision.outcome == DecisionOutcome::Allow

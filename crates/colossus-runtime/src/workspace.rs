@@ -27,9 +27,29 @@ pub struct RuntimeOpenOptions {
     /// Browser host selected only by trusted native composition; never deserialized.
     pub(super) browser_host: Option<RuntimeBrowserHost>,
     pub(super) browser_artifacts: Option<Arc<dyn colossus_ports::BrowserArtifactPublisher>>,
+    pub(super) computer_host: Option<RuntimeComputerHost>,
+    pub(super) computer_artifacts: Option<Arc<dyn colossus_ports::ComputerArtifactPublisher>>,
 }
 
 impl RuntimeOpenOptions {
+    /// Install a verified normal-user native computer supervisor from trusted composition.
+    /// Configuration and public SDK requests never nominate its executable or native identities.
+    #[must_use]
+    pub fn with_computer_host(mut self, host: RuntimeComputerHost) -> Self {
+        self.computer_host = Some(host);
+        self
+    }
+
+    /// Install the trusted publisher for actual policy-released computer screenshot PNGs.
+    #[must_use]
+    pub fn with_computer_artifact_publisher(
+        mut self,
+        publisher: Arc<dyn colossus_ports::ComputerArtifactPublisher>,
+    ) -> Self {
+        self.computer_artifacts = Some(publisher);
+        self
+    }
+
     /// Resolve one existing workspace directory without changing process state.
     pub fn for_workspace(workspace: impl AsRef<Path>) -> Result<Self, RuntimeError> {
         Self {
@@ -42,6 +62,8 @@ impl RuntimeOpenOptions {
             client_identity: None,
             browser_host: None,
             browser_artifacts: None,
+            computer_host: None,
+            computer_artifacts: None,
         }
         .canonicalized()
     }

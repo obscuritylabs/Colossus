@@ -298,6 +298,7 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             || request.action.starts_with("mcp.")
             || request.action.starts_with("bundle.")
             || request.action.starts_with("browser.")
+            || request.action.starts_with("computer.")
             || matches!(
                 request.action.as_str(),
                 "network.http" | "web.search" | "audit.export.worm.write"

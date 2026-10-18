@@ -22,6 +22,7 @@ pub(super) struct AccessPolicyInputs<'a> {
     pub(super) model_network_tools: bool,
     pub(super) interactive: bool,
     pub(super) browser_capabilities: Option<&'a colossus_contracts::BrowserCapabilities>,
+    pub(super) computer_available: bool,
 }
 
 /// An absent configured MCP command is an unavailable source, not a usable
@@ -64,6 +65,7 @@ pub(super) fn compose_access_policy(
         model_network_tools,
         interactive,
         browser_capabilities,
+        computer_available,
     } = inputs;
     let mut candidate_tool_specs = colossus_tools::with_process_limits(
         builtin_specs(),
@@ -151,6 +153,7 @@ pub(super) fn compose_access_policy(
         interactive,
         browser_available: browser_capabilities
             .is_some_and(|capabilities| capabilities.available && !capabilities.modes.is_empty()),
+        computer_available,
         mcp_configured: !active_plugin_extensions.mcp.servers.is_empty()
             || config
                 .plugins

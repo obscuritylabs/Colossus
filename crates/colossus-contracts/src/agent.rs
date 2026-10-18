@@ -546,7 +546,7 @@ pub struct ProviderResponseDiagnostic {
     pub request_url: String,
     /// Provider-facing JSON request body when the probe used one.
     pub request_body: Option<Value>,
-    /// Non-success HTTP response status.
+    /// Actual HTTP transport status; a successful status does not imply stream completion.
     pub status: u16,
     /// Bounded response content type when supplied.
     pub content_type: Option<String>,
@@ -554,7 +554,7 @@ pub struct ProviderResponseDiagnostic {
     pub body: String,
     /// `utf8` when the captured bytes were valid UTF-8, otherwise `utf8_lossy`.
     pub body_encoding: String,
-    /// Whether bytes beyond the diagnostic capture ceiling were omitted.
+    /// Whether response content was omitted or exceeded the diagnostic capture ceiling.
     pub body_truncated: bool,
 }
 

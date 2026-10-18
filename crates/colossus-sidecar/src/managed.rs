@@ -56,6 +56,8 @@ use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as 
 ))]
 mod macos_startup_diagnostic;
 mod native_browser;
+#[cfg(windows)]
+mod native_computer;
 
 const MANAGED_SIDECAR_ARGUMENT: &str = "__managed-sidecar-v1";
 const CONFIGURATION_INSPECTION_ARGUMENT: &str = "__managed-config-inspection-v1";
@@ -82,6 +84,10 @@ fn build_managed_runtime() -> std::io::Result<tokio::runtime::Runtime> {
 }
 
 pub(crate) fn main_entry() -> ExitCode {
+    #[cfg(windows)]
+    if let Some(code) = colossus_native_computer::run_if_requested() {
+        return code;
+    }
     let argument = std::env::args_os().nth(1);
     if argument.as_deref() == Some(std::ffi::OsStr::new(CONFIGURATION_INSPECTION_ARGUMENT))
         && std::env::args_os().nth(2).is_none()
@@ -418,6 +424,12 @@ async fn run_with_browser_owner(
     let mut runtime_options = RuntimeOpenOptions::for_workspace(&workspace.canonical_path)
         .map_err(|_| FailureCode::InvalidWorkspace)?
         .with_expected_workspace_identity(workspace.runtime_identity()?);
+    #[cfg(windows)]
+    if config.computer.enabled
+        && let Some(host) = native_computer::host()?
+    {
+        runtime_options = runtime_options.with_computer_host(host);
+    }
     runtime_options =
         apply_execution_boundary_tool_mode(runtime_options, request.runtime.execution_boundary);
     if let Some(home) = &colossus_home {
@@ -1801,6 +1813,7 @@ fn connect_windows_bootstrap_pipe() -> Result<File, ()> {
         .open(pipe_name)
         .map_err(|_| ())?;
     colossus_windows_native::validate_named_pipe_server(&pipe, parent_process).map_err(|_| ())?;
+    native_computer::protect_controller(parent_process)?;
     colossus_windows_native::install_bootstrap_pipe_as_standard_io(&pipe).map_err(|_| ())?;
     Ok(pipe)
 }
@@ -2147,6 +2160,14 @@ mod tests {
             ("browser.maxSessions", serde_json::json!(1)),
             ("browser.maxTabs", serde_json::json!(2)),
             ("browser.maxSnapshotNodes", serde_json::json!(64)),
+            ("computer.enabled", serde_json::json!(true)),
+            ("computer.maxWindows", serde_json::json!(32)),
+            ("computer.maxSnapshotNodes", serde_json::json!(64)),
+            ("computer.maxScreenshotBytes", serde_json::json!(1_048_576)),
+            ("computer.maxScreenshotPixels", serde_json::json!(1_048_576)),
+            ("computer.actionTimeoutMs", serde_json::json!(2_000)),
+            ("computer.sessionTimeoutMs", serde_json::json!(60_000)),
+            ("computer.observationMaxAgeMs", serde_json::json!(5_000)),
             ("subagents.maxConcurrent", serde_json::json!(2)),
         ];
         for (field_id, value) in overrides {

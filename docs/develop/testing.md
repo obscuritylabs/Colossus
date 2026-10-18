@@ -79,6 +79,7 @@ protects a current boundary; it does not mean every future assertion is permanen
 | `colossus-update` | Keep release metadata, signature, channel, and atomic-update tests. |
 | `colossus-windows-native` | Keep AppContainer/native binding tests on Windows CI. |
 | `colossus-windows-process` | Keep Job Object, memory pressure, cleanup, and process-tree tests on Windows CI. |
+| `colossus-native-computer` | Keep the isolated workspace's portable framing, target identity and geometry tests; explicit Windows acceptance owns capture, UI Automation, foreground input and helper cleanup. |
 | `colossus-work` | Keep durable task, decision, plan, and goal lifecycle tests. |
 | `colossus-worker-protocol` | Keep versioned authenticated request/prompt/cancellation/replay tests. |
 | `colossus-worker` | Keep worker composition, authentication, shutdown, and restart tests. |
@@ -202,6 +203,66 @@ and a unique application identifier, starts a real second process, and verifies 
 the process exits successfully while the original hidden or minimized window is
 restored. It never opens the installed application's settings or credential vault.
 The ordinary Windows unit suite covers startup serialization and tray click routing.
+
+### Windows computer control acceptance
+
+The native computer adapter lives in the separate `native/computer` Cargo
+workspace so Windows FFI does not relax the runtime workspace's unsafe-code
+prohibition. `cargo xtask check rust` and `cargo xtask check desktop` both run its
+locked metadata, formatting, ordinary tests and Clippy checks. The PR Desktop
+job owns the Linux run, including the unavailable-platform implementation.
+Ordinary tests never capture a desktop or send input. To run only this boundary:
+
+```bash
+cargo fmt --manifest-path native/computer/Cargo.toml --all -- --check
+cargo test --locked --manifest-path native/computer/Cargo.toml --all-targets
+cargo clippy --locked --manifest-path native/computer/Cargo.toml --all-targets --all-features -- -D warnings
+```
+
+Real Windows acceptance requires an unlocked interactive desktop under the
+ordinary user's token. Its disposable target must be a sibling process of the
+verified host: the adapter deliberately denies its host, controller and their
+descendants. Window titles and process names do not establish target authority.
+Missing Windows capture, accessibility or foreground prerequisites must fail the
+explicit acceptance command, rather than silently substitute a mock or report a
+portable test as native evidence.
+
+From an ordinary PowerShell 7 session on Windows, run:
+
+```powershell
+./scripts/ci/computer-windows-native.ps1
+```
+
+The harness builds the feature-gated `computer_window_fixture` and
+`computer_acceptance` examples, starts the green target and a magenta occluding
+window as siblings of the verified acceptance host, and requires a real capture
+of the selected target while the cover remains in front. The native receipt also
+covers accessibility, explicit focus and input, stale observations and run
+revocation, foreign-window denial, owned modal input, competing writers,
+cancellation and held-input cleanup after helper termination. If Windows does
+not activate the synthetic cover automatically, activate the exact nonce-named
+cover shown by the harness within its setup deadline. Actual capture and focus
+transition assertions remain required.
+Each child has a bounded lifetime; forced cleanup fails acceptance. Screenshots,
+JSON receipts and bounded stdout/stderr tails remain in a fresh private
+`ColossusComputerTest-*` directory under the user profile, whose path is printed
+by the harness. Remove that exact evidence directory after inspection.
+
+The **Representative Windows runtime and sandbox** pre-merge job runs default
+tests, lints all targets/features and builds the native acceptance examples.
+GitHub-hosted Windows machines run as administrators; they cannot establish the
+ordinary-user interactive acceptance contract. These hosted checks report
+protocol and compilation evidence only.
+
+Before merging computer-control changes, a maintainer must run the explicit
+desktop command on the final clean commit and retain `harness.json`,
+`acceptance.json` and the selected-window screenshot for review. Require both
+receipts to report `passed: true`, `harness.json` to name that exact commit in
+`source_revision`, and `source_dirty: false`; retain its `acceptance_sha256` and
+`fixture_sha256` with the evidence. A successful dirty-worktree
+run remains development evidence and must be repeated on the final commit.
+Physical human takeover and Pause behavior need a separate manual check; injected
+fixture input does not prove that contract.
 
 ### Desktop embedded browser preview
 

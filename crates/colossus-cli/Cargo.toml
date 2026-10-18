@@ -60,6 +60,7 @@ zeroize.workspace = true
 colossus-darwin-process.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
+colossus-native-computer = { version = "=0.1.0", path = "../../native/computer" }
 colossus-windows-native.workspace = true
 
 [target.'cfg(unix)'.dependencies]

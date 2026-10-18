@@ -224,6 +224,9 @@ impl RuntimeAgentRunApi {
         runtime.install_browser_artifact_publisher(Arc::new(
             colossus_api::ReleasedBrowserArtifactPublisher,
         ));
+        runtime.install_computer_artifact_publisher(Arc::new(
+            colossus_api::ReleasedComputerArtifactPublisher,
+        ));
         let watches = WatchAdmission::new(&admission);
         let lists = ListAdmission::new(&admission);
         let shell_queries = ListAdmission::new(&admission);

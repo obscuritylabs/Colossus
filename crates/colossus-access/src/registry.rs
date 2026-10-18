@@ -95,6 +95,19 @@ pub fn builtin_tool_descriptor(name: &str) -> Result<ToolDescriptor, AccessError
         | "browser.annotate"
         | "browser.annotation.clear"
         | "browser.screenshot.annotated" => ("browser", vec![ToolPrerequisite::BrowserAvailable]),
+        "computer.windows"
+        | "computer.open"
+        | "computer.status"
+        | "computer.snapshot"
+        | "computer.screenshot"
+        | "computer.focus"
+        | "computer.move"
+        | "computer.click"
+        | "computer.drag"
+        | "computer.scroll"
+        | "computer.type"
+        | "computer.press"
+        | "computer.close" => ("computer", vec![ToolPrerequisite::ComputerAvailable]),
         _ => return Err(AccessError::Unclassified(format!("tool {name}"))),
     };
     let source = if family == "mcp" {
@@ -178,6 +191,10 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "browser.evaluate",
             "browser.cdp",
             "browser.wait",
+            "computer.windows",
+            "computer.status",
+            "computer.snapshot",
+            "computer.screenshot",
         ],
     );
     push_actions(
@@ -224,6 +241,8 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "browser.tab.close",
             "browser.stop",
             "browser.close",
+            "computer.open",
+            "computer.close",
         ],
     );
     push_actions(
@@ -248,6 +267,13 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "workflow.start",
             "agent.run",
             "plan.execute",
+            "computer.focus",
+            "computer.move",
+            "computer.click",
+            "computer.drag",
+            "computer.scroll",
+            "computer.type",
+            "computer.press",
         ],
     );
     push_actions(

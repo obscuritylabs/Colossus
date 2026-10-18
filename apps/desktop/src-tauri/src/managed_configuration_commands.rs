@@ -1289,6 +1289,15 @@ fn risky_field_authority_changed(
         .iter()
         .map(|field| (field.field_id.as_str(), &field.value))
         .collect::<BTreeMap<_, _>>();
+    let computer_enabled = |fields: &BTreeMap<&str, &Value>| {
+        fields
+            .get("computer.enabled")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+    };
+    if !computer_enabled(&before) && computer_enabled(&after) {
+        return true;
+    }
     let browser_enabled = |fields: &BTreeMap<&str, &Value>, field: &str| {
         fields
             .get(field)
@@ -1646,6 +1655,118 @@ fn effective_yaml(
 #[allow(clippy::too_many_lines)]
 fn field_descriptors() -> Vec<FieldDescriptorDto> {
     vec![
+        descriptor(
+            "computer.enabled",
+            "Computer use",
+            "Computer access",
+            "Allow Windows computer tools and the bundled computer-use skill. Agents can operate normal user apps outside the workspace. Disabled by default; enabling requires Apply.",
+            "both",
+            "high",
+            "toggle",
+            false,
+            json!(false),
+            None,
+            None,
+            vec![],
+        ),
+        descriptor(
+            "computer.maxWindows",
+            "Computer use",
+            "Window list limit",
+            "Maximum windows returned when choosing an app.",
+            "both",
+            "low",
+            "number",
+            false,
+            json!(64),
+            Some(1),
+            Some(128),
+            vec![],
+        ),
+        descriptor(
+            "computer.maxSnapshotNodes",
+            "Computer use",
+            "Snapshot element limit",
+            "Maximum accessible elements returned from the selected window.",
+            "both",
+            "low",
+            "number",
+            false,
+            json!(512),
+            Some(1),
+            Some(1024),
+            vec![],
+        ),
+        descriptor(
+            "computer.maxScreenshotBytes",
+            "Computer use",
+            "Screenshot byte limit",
+            "Maximum PNG bytes released for one screenshot.",
+            "both",
+            "low",
+            "number",
+            false,
+            json!(8_388_608),
+            Some(1),
+            Some(16_777_216),
+            vec![],
+        ),
+        descriptor(
+            "computer.maxScreenshotPixels",
+            "Computer use",
+            "Screenshot pixel limit",
+            "Maximum pixels captured from the selected window.",
+            "both",
+            "low",
+            "number",
+            false,
+            json!(8_388_608),
+            Some(1),
+            Some(16_777_216),
+            vec![],
+        ),
+        descriptor(
+            "computer.actionTimeoutMs",
+            "Computer use",
+            "Action timeout (ms)",
+            "Maximum time for one native operation.",
+            "both",
+            "low",
+            "number",
+            false,
+            json!(5000),
+            Some(1),
+            Some(10000),
+            vec![],
+        ),
+        descriptor(
+            "computer.sessionTimeoutMs",
+            "Computer use",
+            "Session timeout (ms)",
+            "Maximum time before control expires and input stops.",
+            "both",
+            "low",
+            "number",
+            false,
+            json!(300_000),
+            Some(1),
+            Some(900_000),
+            vec![],
+        ),
+        descriptor(
+            "computer.observationMaxAgeMs",
+            "Computer use",
+            "Observation age limit (ms)",
+            "Maximum age of a screenshot or snapshot used for input.",
+            "both",
+            "low",
+            "number",
+            false,
+            json!(10000),
+            Some(1),
+            Some(30000),
+            vec![],
+        ),
         descriptor(
             "browser.enabled",
             "Browser",
@@ -2402,6 +2523,27 @@ mod tests {
             },
         });
         settings
+    }
+
+    #[test]
+    fn computer_access_starts_disabled_and_enabling_requires_explicit_apply() {
+        let disabled = resolved_for(&settings(), "space-one").expect("configuration");
+        let mut enabled = disabled.clone();
+        enabled.field_overrides.push(FieldOverrideSetting {
+            field_id: "computer.enabled".into(),
+            value: json!(true),
+        });
+        assert!(requires_explicit_apply(&disabled, &enabled));
+        assert!(!requires_explicit_apply(&enabled, &disabled));
+        let mut explicitly_disabled = disabled.clone();
+        explicitly_disabled
+            .field_overrides
+            .push(FieldOverrideSetting {
+                field_id: "computer.enabled".into(),
+                value: json!(false),
+            });
+        assert!(!requires_explicit_apply(&disabled, &explicitly_disabled));
+        assert!(requires_explicit_apply(&explicitly_disabled, &enabled));
     }
 
     #[test]

@@ -1031,6 +1031,42 @@ fn tool_text_failed_effects_and_other_tools_cannot_mint_image_observations() {
 }
 
 #[test]
+fn computer_screenshot_projection_preserves_its_image_bound_and_exact_tool_authority() {
+    for (name, maximum) in [
+        ("browser.screenshot", 4 * 1_048_576),
+        ("browser.screenshot.annotated", 4 * 1_048_576),
+        ("computer.screenshot", 16 * 1_048_576),
+    ] {
+        for size_bytes in [4 * 1_048_576, 4 * 1_048_576 + 1, maximum, maximum + 1] {
+            let image = colossus_contracts::ModelImageReference {
+                size_bytes,
+                ..screenshot_image()
+            };
+            let mut capture = result(name, "capture", "{}".into());
+            capture.images.push(image.clone());
+            let admitted = size_bytes <= maximum;
+            let projected = tool_result_observation_messages(std::slice::from_ref(&capture));
+            assert_eq!(projected.len(), if admitted { 2 } else { 1 });
+            assert_eq!(released_tool_images(&capture).len(), usize::from(admitted));
+            if admitted {
+                assert_eq!(projected[1].content.images().next(), Some(&image));
+                assert!(projected[1].content.plain_text().contains("untrusted"));
+            }
+        }
+    }
+    let mut forged = result("mcp.call", "foreign", "{}".into());
+    forged.images.push(screenshot_image());
+    assert!(released_tool_images(&forged).is_empty());
+    let text = result(
+        "computer.screenshot",
+        "page-json",
+        json!({"images":[screenshot_image()]}).to_string(),
+    );
+    assert!(released_tool_images(&text).is_empty());
+    assert_eq!(tool_result_observation_messages(&[text]).len(), 1);
+}
+
+#[test]
 fn screenshot_projection_keeps_newest_images_without_resetting_human_budgets() {
     let results = (0..17)
         .map(|index| {

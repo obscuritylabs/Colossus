@@ -10,6 +10,7 @@ mod builtin;
 pub use builtin::*;
 
 mod browser;
+mod computer;
 
 mod process_limits;
 mod process_sessions;
@@ -27,3 +28,5 @@ mod tests;
 
 #[cfg(test)]
 mod browser_tests;
+#[cfg(test)]
+mod computer_tests;

@@ -1,48 +1,8 @@
 use super::service::{BrowserRun, RuntimeBrowserTools, binding, denied};
-use crate::{ProcessSessions, prelude::*};
+use crate::prelude::*;
 use colossus_contracts::BrowserActor;
 use colossus_ports::AgentRunLifecycle;
 use std::sync::atomic::{AtomicBool, Ordering};
-
-pub(crate) struct RuntimeRunLifecycle {
-    pub(crate) processes: Arc<ProcessSessions>,
-    pub(crate) browser: Arc<RuntimeBrowserTools>,
-}
-
-#[async_trait]
-impl AgentRunLifecycle for RuntimeRunLifecycle {
-    fn tools_offered(&self, context: &ExecutionContext) -> Result<(), ToolError> {
-        self.browser.tools_offered(context)
-    }
-    fn begin_run(
-        &self,
-        context: &ExecutionContext,
-        initiator: &Actor,
-        control: RunControl,
-    ) -> Result<(), ToolError> {
-        self.processes
-            .begin_run(context, initiator, control.clone())?;
-        if let Err(error) = self.browser.begin_run(context, initiator, control) {
-            if let Some(id) = context.run_id.as_deref() {
-                self.processes.cancel_run(id);
-            }
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    fn cancel_run(&self, run_id: &str) {
-        // Revoke browser authority before process cleanup or any asynchronous work.
-        self.browser.cancel_run(run_id);
-        self.processes.cancel_run(run_id);
-    }
-
-    async fn finish_run(&self, run_id: &str) {
-        self.cancel_run(run_id);
-        self.browser.finish_run(run_id).await;
-        self.processes.finish_run(run_id).await;
-    }
-}
 
 #[async_trait]
 impl AgentRunLifecycle for RuntimeBrowserTools {

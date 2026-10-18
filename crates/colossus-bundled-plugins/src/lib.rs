@@ -57,6 +57,7 @@ mod tests {
             [
                 "colossus/browser",
                 "colossus/coding",
+                "colossus/computer-use",
                 "colossus/plugin-authoring",
                 "colossus/schedule-task",
                 "colossus/security-review"

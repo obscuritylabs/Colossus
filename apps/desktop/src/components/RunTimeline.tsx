@@ -508,7 +508,10 @@ function ToolActivityItem({
           images={images}
           createdAt={latest.createdAt}
           load={onLoadViewedImage}
-          screenshot={activity.toolName.startsWith("browser.screenshot")}
+          screenshot={
+            activity.toolName.startsWith("browser.screenshot") ||
+            activity.toolName === "computer.screenshot"
+          }
         />
       </Suspense>
     );

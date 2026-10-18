@@ -464,11 +464,22 @@ jobs:
         run: >-
           cargo test --locked -p colossus-cli --test worker_smoke
           --test windows_sandbox --test mcp_smoke --test release_install_smoke -- --nocapture
+      - name: Validate Windows computer protocol and compile native acceptance
+        id: computer_portable
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          cargo test --locked --manifest-path native/computer/Cargo.toml --all-targets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --manifest-path native/computer/Cargo.toml --all-targets --all-features -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked --manifest-path native/computer/Cargo.toml --features native-test-driver --examples
       - name: Require every Windows runtime acceptance check
         shell: bash
         env:
           CONTRACT_OUTCOME: ${{ steps.renderer_contracts.outcome }}
           CODEX_AUTH_OUTCOME: ${{ steps.windows_codex_auth.outcome }}
+          COMPUTER_OUTCOME: ${{ steps.computer_portable.outcome }}
           HOME_OUTCOME: ${{ steps.windows_home.outcome }}
           NATIVE_OUTCOME: ${{ steps.windows_native.outcome }}
           SDK_PATH_OUTCOME: ${{ steps.windows_sdk_path.outcome }}
@@ -486,6 +497,7 @@ jobs:
             "windows-sdk-path=$SDK_PATH_OUTCOME" \
             "windows-home=$HOME_OUTCOME" \
             "windows-codex-auth=$CODEX_AUTH_OUTCOME" \
+            "windows-computer-protocol-and-build=$COMPUTER_OUTCOME" \
             "worker-and-sandbox=$WORKER_OUTCOME"
           do
             if test "${result#*=}" != success; then
